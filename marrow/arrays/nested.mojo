@@ -119,6 +119,7 @@ struct ListArray(Array):
         writer.write(self.data.length)
         writer.write(")")
 
+
 struct StructArray(Array):
     var data: ArrayData
     var fields: List[Field]

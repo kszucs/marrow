@@ -161,7 +161,10 @@ struct Field(Copyable, Equatable, Writable):
         Args:
             writer: The object to write to.
         """
-        writer.write(t'Field(name="{self.name}", dtype={self.dtype}, nullable={self.nullable}, )')
+        writer.write(
+            t'Field(name="{self.name}", dtype={self.dtype},'
+            t' nullable={self.nullable}, )'
+        )
 
 
 struct DataType(Copyable, Equatable, Writable):
@@ -247,31 +250,30 @@ struct DataType(Copyable, Equatable, Writable):
         """
         name: String
         if self.code == NA:
-            name ="null"
+            name = "null"
         elif self.code == BOOL:
-            name ="bool"
+            name = "bool"
         elif self.code == UINT8:
-            name ="uint8"
+            name = "uint8"
         elif self.code == INT8:
-            name ="int8"
+            name = "int8"
         elif self.code == INT16:
-            name ="int16"
+            name = "int16"
         elif self.code == INT32:
-            name ="int32"
+            name = "int32"
         elif self.code == INT64:
-            name ="int64"
+            name = "int64"
         elif self.code == LIST:
-            name ="list"
+            name = "list"
         elif self.code == STRUCT:
-            name ="struct"
+            name = "struct"
         else:
-            name ="unknown " + String(self.code)
+            name = "unknown " + String(self.code)
 
         writer.write(t"DataType(code={name})")
 
     fn write_repr_to(self, mut writer: Some[Writer]):
         self.write_to(writer)
-
 
     fn is_bool(self) -> Bool:
         return self.code == BOOL
