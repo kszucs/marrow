@@ -187,7 +187,7 @@ struct CArrowSchema(Copyable, Writable):
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         return Field(String(name), dtype^, nullable != 0)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this CArrowSchema to the provided Writer.
 
@@ -209,12 +209,6 @@ struct CArrowSchema(Copyable, Writable):
                 self.n_children,
             )
         )
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)
 
 
 @fieldwise_init

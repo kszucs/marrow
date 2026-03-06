@@ -180,7 +180,7 @@ struct Bitmap(Movable, Writable):
         self.buffer = take.buffer^
         self.offset = take.offset
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this buffer to the provided Writer.
 
@@ -200,16 +200,6 @@ struct Bitmap(Movable, Writable):
             if i > 16:
                 writer.write("...")
                 break
-
-    fn __str__(self) -> String:
-        var output = String()
-        output.write(self)
-        return output
-
-    fn __repr__(self) -> String:
-        var output = String()
-        output.write(self)
-        return output
 
     fn unsafe_get(self, index: Int) -> Bool:
         return self.buffer.unsafe_get[DType.bool](index + self.offset)

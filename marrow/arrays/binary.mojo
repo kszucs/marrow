@@ -110,7 +110,7 @@ struct StringArray(Array):
         var src_address = value.unsafe_ptr()
         memcpy(dest=dst_address, src=src_address, count=length)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this StringArray to the provided Writer.
 
@@ -131,9 +131,3 @@ struct StringArray(Array):
             if i > 1:
                 break
         writer.write(" ])")
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)

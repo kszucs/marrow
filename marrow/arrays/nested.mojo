@@ -103,7 +103,7 @@ struct ListArray(Array):
             children=first_child.children.copy(),
         )
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this ListArray to the provided Writer.
 
@@ -118,13 +118,6 @@ struct ListArray(Array):
         writer.write("length=")
         writer.write(self.data.length)
         writer.write(")")
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)
-
 
 struct StructArray(Array):
     var data: ArrayData
@@ -171,7 +164,7 @@ struct StructArray(Array):
     fn as_data(self) -> UnsafePointer[ArrayData, ImmutAnyOrigin]:
         return UnsafePointer(to=self.data)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this StructArray to the provided Writer.
 
@@ -199,9 +192,3 @@ struct StructArray(Array):
     ) raises -> ref[self.data.children[0]] ArrayData:
         """Access the field with the given name in the struct."""
         return self.data.children[self._index_for_field_name(name)][]
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)

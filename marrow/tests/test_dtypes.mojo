@@ -28,7 +28,6 @@ def test_field() raises:
     )
     assert_equal(writer, expected)
     assert_equal(String(field), expected)
-    assert_equal(field.__repr__(), expected)
 
 
 def test_struct_type() raises:

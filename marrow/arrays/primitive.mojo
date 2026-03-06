@@ -189,7 +189,7 @@ struct PrimitiveArray[T: DataType](Array):
         var valid_count = self.bitmap()[].buffer.bit_count()
         return self.data.length - valid_count
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this PrimitiveArray to the provided Writer.
 
@@ -220,11 +220,8 @@ struct PrimitiveArray[T: DataType](Array):
                 break
         writer.write("])")
 
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)
+    fn write_repr_to(self, mut writer: Some[Writer]):
+        self.write_to(writer)
 
 
 comptime BoolArray = PrimitiveArray[bool_]

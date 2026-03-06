@@ -151,7 +151,7 @@ struct Field(Copyable, Equatable, Writable):
         self.dtype = dtype^
         self.nullable = nullable
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this Field to the provided Writer.
 
@@ -162,12 +162,6 @@ struct Field(Copyable, Equatable, Writable):
             writer: The object to write to.
         """
         writer.write(t'Field(name="{self.name}", dtype={self.dtype}, nullable={self.nullable}, )')
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)
 
 
 struct DataType(Copyable, Equatable, Writable):

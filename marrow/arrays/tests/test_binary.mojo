@@ -23,7 +23,7 @@ def test_string_builder() raises:
     assert_equal(String(a.unsafe_get(1)), "world")
 
     assert_equal(
-        a.__str__().strip(),
+        String(a).strip(),
         'StringArray( length=2, data= ["hello", "world",  ])',
     )
 

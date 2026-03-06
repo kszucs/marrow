@@ -125,7 +125,7 @@ struct ArrayData(Copyable, Writable):
         writer.write("dtype=")
         writer.write(self.dtype)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this ArrayData to the provided Writer.
 
@@ -145,12 +145,6 @@ struct ArrayData(Copyable, Writable):
             writer.write(" ")
             if i > 10:
                 break
-
-    fn __str__(self) -> String:
-        return String.write(self)
-
-    fn __repr__(self) -> String:
-        return String.write(self)
 
     fn append_to_array(
         deinit self: ArrayData, mut combined: ArrayData, start: Int
