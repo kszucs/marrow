@@ -1,14 +1,15 @@
+from std.memory import ArcPointer
+from std.testing import assert_equal
+from std.reflection import call_location
+
 from marrow.arrays import (
     BoolArray,
     ArrayData,
     ListArray,
     StructArray,
 )
-from memory import ArcPointer
 from marrow.buffers import Buffer, Bitmap
 from marrow.dtypes import uint8, DataType, list_, int32, Field, struct_
-from testing import assert_equal
-from reflection import call_location
 
 
 fn as_bool_array_scalar(value: Bool) -> BoolArray.scalar:
@@ -23,7 +24,7 @@ fn bool_array(*values: Bool) -> BoolArray:
     return a^
 
 
-def build_array_data(length: Int, nulls: Int) -> ArrayData:
+def build_array_data(length: Int, nulls: Int) raises -> ArrayData:
     """Builds an ArrayData object with nulls.
 
     Args:
@@ -33,11 +34,11 @@ def build_array_data(length: Int, nulls: Int) -> ArrayData:
     var bitmap = Bitmap.alloc(length)
     var buffer = Buffer.alloc[DType.uint8](length)
     for i in range(length):
-        buffer.unsafe_set(i, i % 256)
+        buffer.unsafe_set(i, UInt8(i % 256))
         # Check to see if the current index should be valid or null.
         var is_valid = True
         if nulls > 0:
-            if i % (Int(length / nulls)) == 0:
+            if i % (length // nulls) == 0:
                 is_valid = False
         bitmap.unsafe_set(i, is_valid)
 
@@ -55,7 +56,7 @@ def build_array_data(length: Int, nulls: Int) -> ArrayData:
 @always_inline
 def assert_bitmap_set(
     bitmap: Bitmap, expected_true_pos: List[Int], message: StringLiteral
-) -> None:
+) raises -> None:
     var list_pos = 0
     for i in range(bitmap.length()):
         var expected_value = False
@@ -81,7 +82,9 @@ fn build_list_of_int[data_type: DataType]() raises -> ListArray:
     bitmap.unsafe_range_set(0, 10, True)
     var buffer = ArcPointer(Buffer.alloc[data_type.native](10))
     for i in range(10):
-        buffer[].unsafe_set[data_type.native](i, i + 1)
+        buffer[].unsafe_set[data_type.native](
+            i, Scalar[data_type.native](i + 1)
+        )
 
     var value_data = ArrayData(
         dtype=materialize[data_type](),
@@ -122,7 +125,9 @@ fn build_list_of_list[data_type: DataType]() raises -> ListArray:
     bitmap[].unsafe_range_set(0, 10, True)
     var buffer = ArcPointer(Buffer.alloc[data_type.native](10))
     for i in range(10):
-        buffer[].unsafe_set[data_type.native](i, i + 1)
+        buffer[].unsafe_set[data_type.native](
+            i, Scalar[data_type.native](i + 1)
+        )
 
     var value_data = ArrayData(
         dtype=materialize[data_type](),
@@ -166,7 +171,7 @@ fn build_list_of_list[data_type: DataType]() raises -> ListArray:
     )
 
 
-def build_struct() -> StructArray:
+def build_struct() raises -> StructArray:
     var int_data_a = ArrayData.from_buffer[int32](
         Buffer.from_values[DType.int32](1, 2, 3, 4, 5), 5
     )

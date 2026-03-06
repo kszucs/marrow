@@ -1,4 +1,5 @@
-from memory import ArcPointer
+from std.memory import ArcPointer
+
 from ..buffers import Buffer, Bitmap
 
 
@@ -44,7 +45,7 @@ struct ListArray(Array):
         bitmap.unsafe_set(0, True)
         var offsets = Buffer.alloc[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
-        offsets.unsafe_set[DType.uint32](1, values_data.length)
+        offsets.unsafe_set[DType.uint32](1, UInt32(values_data.length))
 
         self.capacity = capacity
         self.data = ArrayData(
@@ -56,9 +57,9 @@ struct ListArray(Array):
             offset=0,
         )
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.data = existing.data^
-        self.capacity = existing.capacity
+    fn __moveinit__(out self, deinit take: Self):
+        self.data = take.data^
+        self.capacity = take.capacity
 
     fn __len__(self) -> Int:
         return self.data.length
@@ -156,10 +157,10 @@ struct StructArray(Array):
         self.capacity = data.length
         self.data = data^
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.data = existing.data^
-        self.fields = existing.fields^
-        self.capacity = existing.capacity
+    fn __moveinit__(out self, deinit take: Self):
+        self.data = take.data^
+        self.fields = take.fields^
+        self.capacity = take.capacity
 
     fn __len__(self) -> Int:
         return self.data.length
@@ -195,7 +196,7 @@ struct StructArray(Array):
 
     fn unsafe_get(
         self, name: StringSlice
-    ) raises -> ref [self.data.children[0]] ArrayData:
+    ) raises -> ref[self.data.children[0]] ArrayData:
         """Access the field with the given name in the struct."""
         return self.data.children[self._index_for_field_name(name)][]
 

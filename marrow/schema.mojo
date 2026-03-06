@@ -44,7 +44,7 @@ struct Schema(Copyable):
         *,
         index: Optional[Int] = None,
         name: Optional[StringSlice[origin=ImmutAnyOrigin]] = None,
-    ) raises -> ref [self.fields] Field:
+    ) raises -> ref[self.fields] Field:
         """Returns the field at the given index or with the given name."""
         if index and name:
             raise Error("Either an index or a name must be provided, not both.")

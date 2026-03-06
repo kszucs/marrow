@@ -1,6 +1,7 @@
 """Python interface for dtypes."""
 
-from python.bindings import PythonModuleBuilder, PythonObject
+from std.python.bindings import PythonModuleBuilder, PythonObject
+
 from marrow import dtypes
 
 
@@ -94,7 +95,7 @@ fn binary() raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
-def add_to_module(mut builder: PythonModuleBuilder) -> None:
+def add_to_module(mut builder: PythonModuleBuilder) raises:
     """Add DataType related data to the Python API."""
 
     _ = builder.add_type[dtypes.DataType]("DataType")

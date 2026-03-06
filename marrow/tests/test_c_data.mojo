@@ -1,9 +1,10 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
-from python import Python, PythonObject
+from std.python import Python, PythonObject
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
+
 from marrow.c_data import *
 
 
-def test_schema_from_pyarrow():
+def test_schema_from_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
     var pyint = pa.field("int_field", pa.int32())
     var pystring = pa.field("string_field", pa.string())
@@ -23,7 +24,7 @@ def test_schema_from_pyarrow():
     assert_equal(writer, 'CArrowSchema(name="", format="+s", n_children=2)')
 
 
-def test_primitive_array_from_pyarrow():
+def test_primitive_array_from_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
     var pyarr = pa.array(
         Python.list(1, 2, 3, 4, 5),
@@ -60,7 +61,7 @@ def test_primitive_array_from_pyarrow():
     assert_equal(String(pyarr), "[\n  10,\n  2,\n  3,\n  4,\n  null\n]")
 
 
-def test_binary_array_from_pyarrow():
+def test_binary_array_from_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(
@@ -97,7 +98,7 @@ def test_binary_array_from_pyarrow():
     assert_equal(String(pyarr), '[\n  "qux",\n  "bar",\n  null\n]')
 
 
-def test_list_array_from_pyarrow():
+def test_list_array_from_pyarrow() raises:
     var pa = Python.import_module("pyarrow")
 
     var pylist1 = Python.list(1, 2, 3)
@@ -143,7 +144,7 @@ def test_list_array_from_pyarrow():
     )
 
 
-def test_schema_from_dtype():
+def test_schema_from_dtype() raises:
     var c_schema = CArrowSchema.from_dtype(materialize[int32]())
     var dtype = c_schema.to_dtype()
     assert_equal(dtype, materialize[int32]())
@@ -161,7 +162,7 @@ def test_schema_from_dtype():
     assert_equal(dtype_float64, materialize[float64]())
 
 
-def test_schema_to_field():
+def test_schema_to_field() raises:
     var pa = Python.import_module("pyarrow")
     var pyfield = pa.field(
         "test_field", pa.int32(), nullable=PythonObject(True)
@@ -182,7 +183,7 @@ def test_schema_to_field():
     assert_equal(field_str.nullable, False)
 
 
-def test_arrow_array_stream():
+def test_arrow_array_stream() raises:
     var pa = Python.import_module("pyarrow")
     var python = Python()
     ref cpython = python.cpython()
@@ -226,7 +227,7 @@ def test_arrow_array_stream():
     assert_equal(String(col2_array.unsafe_get(4)), "e")
 
 
-def test_struct_dtype_conversion():
+def test_struct_dtype_conversion() raises:
     var pa = Python.import_module("pyarrow")
 
     var struct_fields = Python.list(
@@ -244,7 +245,7 @@ def test_struct_dtype_conversion():
     assert_equal(dtype.fields[1].dtype, materialize[float64]())
 
 
-def test_list_dtype_conversion():
+def test_list_dtype_conversion() raises:
     var pa = Python.import_module("pyarrow")
 
     var list_type = pa.list_(pa.int32())
@@ -255,7 +256,7 @@ def test_list_dtype_conversion():
     assert_equal(dtype.fields[0].dtype, materialize[int32]())
 
 
-def test_numeric_dtypes():
+def test_numeric_dtypes() raises:
     var pa = Python.import_module("pyarrow")
 
     var types_to_test = [
@@ -281,20 +282,20 @@ def test_numeric_dtypes():
         assert_equal(dtype, expected_mojo_type)
 
 
-# def test_schema_to_pyarrow():
+# def test_schema_to_pyarrow() raises:
 #     var pa = Python.import_module("pyarrow")
 
 #     var struct_type = struct_(
-#         Field("int_field", int32),
-#         Field("string_field", string),
+#         Field("int_field", materialize[int32]()),
+#         Field("string_field", materialize[string]()),
 #     )
 
 #     try:
 #         # mojo->python direction is not working yet
-#         var c_schema = CArrowSchema.from_dtype(int32)
+#         var c_schema = CArrowSchema.from_dtype(materialize[int32]())
 #     except Error:
 #         pass
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

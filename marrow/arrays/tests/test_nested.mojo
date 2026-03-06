@@ -1,4 +1,4 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 
 from marrow.arrays import *
@@ -7,7 +7,7 @@ from marrow.test_fixtures.bool_array import as_bool_array_scalar
 from marrow.test_fixtures.arrays import build_list_of_list, build_struct
 
 
-def test_list_int_array():
+def test_list_int_array() raises:
     var ints = Int64Array(
         ArrayData.from_buffer[int64](
             Buffer.from_values[DType.int64](1, 2, 3), 3
@@ -28,7 +28,7 @@ def test_list_int_array():
     assert_equal(len(arr), 1)
 
 
-def test_list_bool_array():
+def test_list_bool_array() raises:
     var bools = BoolArray()
 
     bools.append(as_bool_array_scalar(True))
@@ -48,7 +48,7 @@ def test_list_bool_array():
     assert_equal(get(2), True)
 
 
-def test_list_str():
+def test_list_str() raises:
     var strings = StringArray()
     strings.unsafe_append("hello")
     strings.unsafe_append("world")
@@ -60,7 +60,7 @@ def test_list_str():
     assert_equal(first_value.unsafe_get(1), "world")
 
 
-def test_list_of_list():
+def test_list_of_list() raises:
     list2 = build_list_of_list[int64]()
     top = ListArray(list2.unsafe_get(0))
     middle_0 = top.unsafe_get(0)
@@ -73,7 +73,7 @@ def test_list_of_list():
     assert_equal(bottom.unsafe_get(1), 4)
 
 
-def test_struct_array():
+def test_struct_array() raises:
     var fields = [
         Field("id", materialize[int64]()),
         Field("name", materialize[string]()),
@@ -93,7 +93,7 @@ def test_struct_array():
     assert_equal(data.dtype.fields[2].name, "active")
 
 
-def test_list_array_str_repr():
+def test_list_array_str_repr() raises:
     var ints = Int64Array()
     var lists = ListArray(ints^)
 
@@ -105,7 +105,7 @@ def test_list_array_str_repr():
     assert_equal(str_repr, repr_repr)
 
 
-def test_struct_array_str_repr():
+def test_struct_array_str_repr() raises:
     var fields = [
         Field("id", materialize[int64]()),
         Field("name", materialize[string]()),
@@ -121,7 +121,7 @@ def test_struct_array_str_repr():
     assert_equal(str_repr, repr_repr)
 
 
-def test_struct_array_unsafe_get():
+def test_struct_array_unsafe_get() raises:
     var struct_array = build_struct()
     ref int_data_a = struct_array.unsafe_get("int_data_a")
     var int_a = Int32Array(int_data_a.copy())
@@ -133,5 +133,5 @@ def test_struct_array_unsafe_get():
     assert_equal(int_b.unsafe_get(2), 30)
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -1,7 +1,8 @@
-from memory import ArcPointer
+from std.memory import ArcPointer
+from std.sys import size_of
+
 from ..buffers import Buffer, Bitmap
 from ..dtypes import *
-from sys import size_of
 
 
 fn drop_nulls[
@@ -99,15 +100,15 @@ struct PrimitiveArray[T: DataType](Array):
             offset=self.offset,
         )
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.data = existing.data^
-        self.capacity = existing.capacity
-        self.offset = existing.offset
+    fn __moveinit__(out self, deinit take: Self):
+        self.data = take.data^
+        self.capacity = take.capacity
+        self.offset = take.offset
 
-    fn bitmap(self) -> ref [self.data.bitmap] ArcPointer[Bitmap]:
+    fn bitmap(self) -> ref[self.data.bitmap] ArcPointer[Bitmap]:
         return self.data.bitmap
 
-    fn buffer(self) -> ref [self.data.buffers] ArcPointer[Buffer]:
+    fn buffer(self) -> ref[self.data.buffers] ArcPointer[Buffer]:
         return self.data.buffers[0]
 
     fn take_data(deinit self) -> ArrayData:

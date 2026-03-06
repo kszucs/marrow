@@ -1,4 +1,4 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import *
 from marrow.dtypes import *
@@ -10,7 +10,7 @@ from marrow.test_fixtures.arrays import (
 )
 
 
-def test_primitive_array():
+def test_primitive_array() raises:
     """Test the formatter for a primitive array."""
     var arr = array[int32](42, 84, 126)
 
@@ -23,7 +23,7 @@ def test_primitive_array():
     )
 
 
-def test_list_int_array():
+def test_list_int_array() raises:
     var arr = build_list_of_int[int64]()
     var output = String()
     var formatter = Formatter()
@@ -38,7 +38,7 @@ def test_list_int_array():
     )
 
 
-def test_list_list_array():
+def test_list_list_array() raises:
     var arr = build_list_of_list[int16]()
     var output = String()
     var formatter = Formatter()
@@ -57,7 +57,7 @@ def test_list_list_array():
     )
 
 
-def test_empty_struct():
+def test_empty_struct() raises:
     var fields = [
         Field("id", materialize[int64]()),
         Field("name", materialize[string]()),
@@ -75,7 +75,7 @@ def test_empty_struct():
     )
 
 
-def test_struct():
+def test_struct() raises:
     var struct_arr = build_struct()
 
     var output = String()
@@ -92,7 +92,7 @@ def test_struct():
     )
 
 
-def test_formatter_with_different_limits():
+def test_formatter_with_different_limits() raises:
     """Test formatter with various limit values."""
     var arr = array[int32](1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
 
@@ -118,7 +118,7 @@ def test_formatter_with_different_limits():
     )
 
 
-def test_empty_array():
+def test_empty_array() raises:
     """Test formatter with an empty array."""
     var arr = Int32Array(0)
 
@@ -128,7 +128,7 @@ def test_empty_array():
     assert_equal(output, "PrimitiveArray[DataType(code=int32)]([])")
 
 
-def test_all_null_array():
+def test_all_null_array() raises:
     """Test formatter with an array of all NULL values."""
     var arr = Int32Array(3)
     arr.data.length = 3
@@ -142,7 +142,7 @@ def test_all_null_array():
     )
 
 
-def test_array_with_nulls():
+def test_array_with_nulls() raises:
     """Test formatter with an array containing some NULL values."""
     var arr = Int32Array(5)
     arr.append(1)
@@ -159,5 +159,5 @@ def test_array_with_nulls():
     )
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

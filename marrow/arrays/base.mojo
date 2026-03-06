@@ -1,9 +1,10 @@
-from memory import ArcPointer
+from std.memory import ArcPointer
+
 from .primitive import *
 from ..buffers import Buffer, Bitmap
 
 
-trait Array(Movable, Representable, Sized, Stringable, Writable):
+trait Array(Movable, Sized, Writable):
     fn take_data(deinit self) -> ArrayData:
         """Construct an ArrayData by consuming self."""
         ...
@@ -18,7 +19,7 @@ trait Array(Movable, Representable, Sized, Stringable, Writable):
 
 
 @fieldwise_init
-struct ArrayData(Copyable, Representable, Stringable, Writable):
+struct ArrayData(Copyable, Writable):
     """ArrayData is the lower level abstraction directly usable by the library consumer.
 
     Equivalent with https://github.com/apache/arrow/blob/7184439dea96cd285e6de00e07c5114e4919a465/cpp/src/arrow/array/data.h#L62-L84.
@@ -48,13 +49,13 @@ struct ArrayData(Copyable, Representable, Stringable, Writable):
             offset=0,
         )
 
-    fn __copyinit__(out self, existing: Self):
-        self.dtype = existing.dtype.copy()
-        self.length = existing.length
-        self.bitmap = existing.bitmap
-        self.buffers = existing.buffers.copy()
-        self.children = existing.children.copy()
-        self.offset = existing.offset
+    fn __copyinit__(out self, copy: Self):
+        self.dtype = copy.dtype.copy()
+        self.length = copy.length
+        self.bitmap = copy.bitmap
+        self.buffers = copy.buffers.copy()
+        self.children = copy.children.copy()
+        self.offset = copy.offset
 
     fn is_valid(self, index: Int) -> Bool:
         return self.bitmap[].unsafe_get(index + self.offset)
@@ -101,8 +102,7 @@ struct ArrayData(Copyable, Representable, Stringable, Writable):
     fn _dynamic_write[W: Writer](self, index: Int, mut writer: W):
         """Write to the given stream dispatching on the dtype."""
 
-        @parameter
-        for known_type in [
+        comptime for known_type in [
             DType.bool,
             DType.int16,
             DType.int32,

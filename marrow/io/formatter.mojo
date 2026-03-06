@@ -67,9 +67,7 @@ struct Formatter:
     fn format[W: Writer](self, mut writer: W, array_data: ArrayData) raises:
         """Output a dynamic ArrayData to the given writer."""
         if array_data.dtype.is_numeric():
-
-            @parameter
-            for dtype in all_numeric_dtypes:
+            comptime for dtype in all_numeric_dtypes:
                 if array_data.dtype == materialize[dtype]():
                     self.format(
                         writer,

@@ -1,150 +1,145 @@
-from io.write import Writable, Writer
-from sys import size_of
+from std.io.write import Writable, Writer
+from std.sys import size_of
 
 # The following enum codes are copied from the C++ implementation of Arrow
 
-# A NULL type having no physical storage
 comptime NA: UInt8 = 0
+"""A NULL type having no physical storage."""
 
-# Boolean as 1 bit, LSB bit-packed ordering
 comptime BOOL: UInt8 = 1
+"""Boolean as 1 bit, LSB bit-packed ordering."""
 
-# Unsigned 8-bit little-endian integer
 comptime UINT8: UInt8 = 2
+"""Unsigned 8-bit little-endian integer."""
 
-# Signed 8-bit little-endian integer
 comptime INT8: UInt8 = 3
+"""Signed 8-bit little-endian integer."""
 
-# Unsigned 16-bit little-endian integer
 comptime UINT16: UInt8 = 4
+"""Unsigned 16-bit little-endian integer."""
 
-# Signed 16-bit little-endian integer
 comptime INT16: UInt8 = 5
+"""Signed 16-bit little-endian integer."""
 
-# Unsigned 32-bit little-endian integer
 comptime UINT32: UInt8 = 6
+"""Unsigned 32-bit little-endian integer."""
 
-# Signed 32-bit little-endian integer
 comptime INT32: UInt8 = 7
+"""Signed 32-bit little-endian integer."""
 
-# Unsigned 64-bit little-endian integer
 comptime UINT64: UInt8 = 8
+"""Unsigned 64-bit little-endian integer."""
 
-# Signed 64-bit little-endian integer
 comptime INT64: UInt8 = 9
+"""Signed 64-bit little-endian integer."""
 
-# 2-byte floating point value
 comptime FLOAT16: UInt8 = 10
+"""2-byte floating point value."""
 
-# 4-byte floating point value
 comptime FLOAT32: UInt8 = 11
+"""4-byte floating point value."""
 
-# 8-byte floating point value
 comptime FLOAT64: UInt8 = 12
+"""8-byte floating point value."""
 
-# UTF8 variable-length string as List<Char>
 comptime STRING: UInt8 = 13
+"""UTF8 variable-length string as List<Char>."""
 
-# Variable-length bytes (no guarantee of UTF8-ness)
 comptime BINARY: UInt8 = 14
+"""Variable-length bytes (no guarantee of UTF8-ness)."""
 
-# Fixed-size binary. Each value occupies the same number of bytes
 comptime FIXED_SIZE_BINARY: UInt8 = 15
+"""Fixed-size binary. Each value occupies the same number of bytes."""
 
-# int32_t days since the UNIX epoch
 comptime DATE32: UInt8 = 16
+"""Type int32_t days since the UNIX epoch."""
 
-# int64_t milliseconds since the UNIX epoch
 comptime DATE64: UInt8 = 17
+"""Type int64_t milliseconds since the UNIX epoch."""
 
-# Exact timestamp encoded with int64 since UNIX epoch
-# Default unit millisecond
 comptime TIMESTAMP: UInt8 = 18
+"""Exact timestamp encoded with int64 since UNIX epoch. Default unit millisecond."""
 
-# Time as signed 32-bit integer, representing either seconds or
-# milliseconds since midnight
 comptime TIME32: UInt8 = 19
+"""Time as signed 32-bit integer, representing either seconds or milliseconds since midnight."""
 
-# Time as signed 64-bit integer, representing either microseconds or
-# nanoseconds since midnight
 comptime TIME64: UInt8 = 20
+"""Time as signed 64-bit integer, representing either microseconds or nanoseconds since midnight."""
 
-# YEAR_MONTH interval in SQL style
 comptime INTERVAL_MONTHS: UInt8 = 21
+"""YEAR_MONTH interval in SQL style."""
 
-# DAY_TIME interval in SQL style
 comptime INTERVAL_DAY_TIME: UInt8 = 22
+"""DAY_TIME interval in SQL style."""
 
-# Precision- and scale-based decimal type with 128 bits.
 comptime DECIMAL128: UInt8 = 23
+"""Precision- and scale-based decimal type with 128 bits."""
 
-# Defined for backward-compatibility.
 comptime DECIMAL: UInt8 = DECIMAL128
+"""Defined for backward-compatibility."""
 
-# Precision- and scale-based decimal type with 256 bits.
 comptime DECIMAL256: UInt8 = 24
+"""Precision- and scale-based decimal type with 256 bits."""
 
-# A list of some logical data type
 comptime LIST: UInt8 = 25
+"""A list of some logical data type."""
 
-# Struct of logical types
 comptime STRUCT: UInt8 = 26
+"""Struct of logical types."""
 
-# Sparse unions of logical types
 comptime SPARSE_UNION: UInt8 = 27
+"""Sparse unions of logical types."""
 
-# Dense unions of logical types
 comptime DENSE_UNION: UInt8 = 28
+"""Dense unions of logical types."""
 
-# Dictionary-encoded type, also called "categorical" or "factor"
-# in other programming languages. Holds the dictionary value
-# type but not the dictionary itself, which is part of the
-# ArrayData struct
 comptime DICTIONARY: UInt8 = 29
+"""Dictionary-encoded type, also called "categorical" or "factor"
+in other programming languages. Holds the dictionary value
+type but not the dictionary itself, which is part of the
+ArrayData struct."""
 
-# Map, a repeated struct logical type
 comptime MAP: UInt8 = 30
+"""Map, a repeated struct logical type."""
 
-# Custom data type, implemented by user
 comptime EXTENSION: UInt8 = 31
+"""Custom data type, implemented by user."""
 
-# Fixed size list of some logical type
 comptime FIXED_SIZE_LIST: UInt8 = 32
+"""Fixed size list of some logical type."""
 
-# Measure of elapsed time in either seconds, milliseconds, microseconds
-# or nanoseconds.
 comptime DURATION: UInt8 = 33
+"""Measure of elapsed time in either seconds, milliseconds, microseconds or nanoseconds."""
 
-# Like STRING, but with 64-bit offsets
 comptime LARGE_STRING: UInt8 = 34
+"""Like STRING, but with 64-bit offsets."""
 
-# Like BINARY, but with 64-bit offsets
 comptime LARGE_BINARY: UInt8 = 35
+"""Like BINARY, but with 64-bit offsets."""
 
-# Like LIST, but with 64-bit offsets
 comptime LARGE_LIST: UInt8 = 36
+"""Like LIST, but with 64-bit offsets."""
 
-# Calendar interval type with three fields.
 comptime INTERVAL_MONTH_DAY_NANO: UInt8 = 37
+"""Calendar interval type with three fields."""
 
-# Run-end encoded data.
 comptime RUN_END_ENCODED: UInt8 = 38
+"""Run-end encoded data."""
 
-# String (UTF8) view type with 4-byte prefix and inline small string
-# optimization
 comptime STRING_VIEW: UInt8 = 39
+"""String (UTF8) view type with 4-byte prefix and inline small string optimization."""
 
-# Bytes view type with 4-byte prefix and inline small string optimization
 comptime BINARY_VIEW: UInt8 = 40
+"""Bytes view type with 4-byte prefix and inline small string optimization."""
 
-# A list of some logical data type represented by offset and size.
 comptime LIST_VIEW: UInt8 = 41
+"""A list of some logical data type represented by offset and size."""
 
-# Like LIST_VIEW, but with 64-bit offsets and sizes
 comptime LARGE_LIST_VIEW: UInt8 = 42
+"""Like LIST_VIEW, but with 64-bit offsets and sizes."""
 
 
-struct Field(Copyable, Equatable, Representable, Stringable, Writable):
+struct Field(Copyable, Equatable, Writable):
     var name: String
     var dtype: DataType
     var nullable: Bool
@@ -156,13 +151,6 @@ struct Field(Copyable, Equatable, Representable, Stringable, Writable):
         self.dtype = dtype^
         self.nullable = nullable
 
-    fn __eq__(self, other: Field) -> Bool:
-        return (
-            self.name == other.name
-            and self.dtype == other.dtype
-            and self.nullable == other.nullable
-        )
-
     fn write_to[W: Writer](self, mut writer: W):
         """
         Formats this Field to the provided Writer.
@@ -173,11 +161,7 @@ struct Field(Copyable, Equatable, Representable, Stringable, Writable):
         Args:
             writer: The object to write to.
         """
-        writer.write(
-            'Field(name="{}", dtype={}, nullable={}, )'.format(
-                self.name, self.dtype, self.nullable
-            )
-        )
+        writer.write(t'Field(name="{self.name}", dtype={self.dtype}, nullable={self.nullable}, )')
 
     fn __str__(self) -> String:
         return String.write(self)
@@ -186,7 +170,7 @@ struct Field(Copyable, Equatable, Representable, Stringable, Writable):
         return String.write(self)
 
 
-struct DataType(Copyable, Equatable, Representable, Stringable, Writable):
+struct DataType(Copyable, Equatable, Writable):
     var code: UInt8
     var native: DType
     var fields: List[Field]
@@ -234,15 +218,15 @@ struct DataType(Copyable, Equatable, Representable, Stringable, Writable):
         self.native = DType.invalid
         self.fields = fields.copy()
 
-    fn __copyinit__(out self, value: Self):
-        self.code = value.code
-        self.native = value.native
-        self.fields = value.fields.copy()
+    fn __copyinit__(out self, copy: Self):
+        self.code = copy.code
+        self.native = copy.native
+        self.fields = copy.fields.copy()
 
-    fn __moveinit__(out self, deinit value: Self):
-        self.code = value.code
-        self.native = value.native
-        self.fields = value.fields^
+    fn __moveinit__(out self, deinit take: Self):
+        self.code = take.code
+        self.native = take.native
+        self.fields = take.fields^
 
     fn __is__(self, other: DataType) -> Bool:
         return self == other
@@ -257,7 +241,7 @@ struct DataType(Copyable, Equatable, Representable, Stringable, Writable):
                 return False
         return True
 
-    fn write_to[W: Writer](self, mut writer: W):
+    fn write_to(self, mut writer: Some[Writer]):
         """
         Formats this DataType to the provided Writer.
 
@@ -267,34 +251,33 @@ struct DataType(Copyable, Equatable, Representable, Stringable, Writable):
         Args:
             writer: The object to write to.
         """
-        writer.write("DataType(code=")
+        name: String
         if self.code == NA:
-            writer.write("null")
+            name ="null"
         elif self.code == BOOL:
-            writer.write("bool")
+            name ="bool"
         elif self.code == UINT8:
-            writer.write("uint8")
+            name ="uint8"
         elif self.code == INT8:
-            writer.write("int8")
+            name ="int8"
         elif self.code == INT16:
-            writer.write("int16")
+            name ="int16"
         elif self.code == INT32:
-            writer.write("int32")
+            name ="int32"
         elif self.code == INT64:
-            writer.write("int64")
+            name ="int64"
         elif self.code == LIST:
-            writer.write("list")
+            name ="list"
         elif self.code == STRUCT:
-            writer.write("struct")
+            name ="struct"
         else:
-            writer.write("unknown " + String(self.code))
-        writer.write(")")
+            name ="unknown " + String(self.code)
 
-    fn __str__(self) -> String:
-        return String.write(self)
+        writer.write(t"DataType(code={name})")
 
-    fn __repr__(self) -> String:
-        return String.write(self)
+    fn write_repr_to(self, mut writer: Some[Writer]):
+        self.write_to(writer)
+
 
     fn is_bool(self) -> Bool:
         return self.code == BOOL

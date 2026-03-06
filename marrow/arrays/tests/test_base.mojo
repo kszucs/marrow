@@ -1,13 +1,14 @@
 """Test the base module."""
-from testing import assert_true, assert_false, assert_equal, TestSuite
-from memory import ArcPointer
+from std.testing import assert_true, assert_false, assert_equal, TestSuite
+from std.memory import ArcPointer
+
 from marrow.arrays.base import ArrayData
 from marrow.buffers import Buffer, Bitmap
 from marrow.dtypes import DType, int8, uint8, int64
 from marrow.test_fixtures.arrays import build_array_data, assert_bitmap_set
 
 
-def test_array_data_with_offset():
+def test_array_data_with_offset() raises:
     """Test ArrayData with offset functionality."""
     # Create ArrayData with offset
     var bitmap = ArcPointer(Bitmap.alloc(10))
@@ -41,7 +42,7 @@ def test_array_data_with_offset():
     assert_true(array_data.is_valid(2))  # Should check bitmap[4]
 
 
-def test_array_data_fieldwise_init():
+def test_array_data_fieldwise_init() raises:
     """Test that @fieldwise_init decorator works with offset field."""
     var bitmap = ArcPointer(Bitmap.alloc(5))
     var buffer = ArcPointer(Buffer.alloc[int8.native](5))
@@ -61,14 +62,13 @@ def test_array_data_fieldwise_init():
     assert_equal(array_data.offset, 3)
 
 
-def test_array_data_write_to_with_offset():
+def test_array_data_write_to_with_offset() raises:
     """Test ArrayData write_to method respects offset."""
 
     var bitmap = ArcPointer(Bitmap.alloc(10))
     var buffer = ArcPointer(Buffer.alloc[DType.uint8](10))
 
-    @parameter
-    for dtype in [uint8, int64]:
+    comptime for dtype in [uint8, int64]:
         # Set up data with values at positions 1,2,3
         buffer[].unsafe_set[dtype.native](1, 10)
         buffer[].unsafe_set[dtype.native](2, 11)
@@ -94,5 +94,5 @@ def test_array_data_write_to_with_offset():
         assert_equal(writer.strip(), "10 11 12")
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

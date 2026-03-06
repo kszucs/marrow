@@ -1,4 +1,4 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 
 from marrow.arrays import *
@@ -6,7 +6,7 @@ from marrow.test_fixtures.bool_array import as_bool_array_scalar
 from marrow.test_fixtures.arrays import build_array_data, assert_bitmap_set
 
 
-def test_boolean_array():
+def test_boolean_array() raises:
     var a = BoolArray()
     assert_equal(len(a), 0)
     assert_equal(a.capacity, 0)
@@ -35,7 +35,7 @@ def test_boolean_array():
     var b = d^.as_primitive[bool_]()
 
 
-def test_append():
+def test_append() raises:
     var a = Int8Array()
     assert_equal(len(a), 0)
     assert_equal(a.capacity, 0)
@@ -46,7 +46,7 @@ def test_append():
     assert_true(a.capacity >= len(a))
 
 
-def test_array_from_ints():
+def test_array_from_ints() raises:
     var g = array[int8](1, 2)
     assert_equal(len(g), 2)
     assert_equal(materialize[g.dtype](), materialize[int8]())
@@ -54,7 +54,7 @@ def test_array_from_ints():
     assert_equal(g.unsafe_get(1), 2)
 
 
-def test_drop_null() -> None:
+def test_drop_null() raises:
     """Test the drop null function."""
     var array_data = build_array_data(10, 5)
 
@@ -73,7 +73,7 @@ def test_drop_null() -> None:
     assert_bitmap_set(primitive_array.bitmap()[], [0, 1, 2, 3, 4], "after drop")
 
 
-def test_primitive_array_with_offset():
+def test_primitive_array_with_offset() raises:
     """Test PrimitiveArray with offset functionality."""
     # Create a regular array first
     var arr = Int32Array(10)
@@ -103,7 +103,7 @@ def test_primitive_array_with_offset():
     assert_equal(arr.unsafe_get(5), 999)
 
 
-def test_primitive_array_moveinit_with_offset():
+def test_primitive_array_moveinit_with_offset() raises:
     """Test __moveinit__ preserves offset."""
     var arr = Int16Array(5, offset=3)
     arr.unsafe_set(0, 123)
@@ -113,7 +113,7 @@ def test_primitive_array_moveinit_with_offset():
     assert_equal(moved_arr.unsafe_get(0), 123)
 
 
-def test_primitive_array_constructor_with_offset():
+def test_primitive_array_constructor_with_offset() raises:
     """Test PrimitiveArray constructor with offset parameter."""
     var arr1 = Int8Array(10)  # Default offset=0
     assert_equal(arr1.offset, 0)
@@ -125,7 +125,7 @@ def test_primitive_array_constructor_with_offset():
     assert_equal(arr2.data.offset, 5)
 
 
-def test_primitive_array_offset_with_validity():
+def test_primitive_array_offset_with_validity() raises:
     """Test that offset works correctly with validity bitmap."""
     var arr = UInt8Array(10, offset=1)
 
@@ -142,7 +142,7 @@ def test_primitive_array_offset_with_validity():
     assert_true(arr.is_valid(1))  # Should check bitmap[2]
 
 
-def test_primitive_array_nulls_with_offset():
+def test_primitive_array_nulls_with_offset() raises:
     """Test PrimitiveArray.nulls static method creates array with default offset.
     """
     var null_arr = Int64Array.nulls(5)
@@ -154,7 +154,7 @@ def test_primitive_array_nulls_with_offset():
         assert_false(null_arr.is_valid(i))
 
 
-def test_primitive_array_write_to():
+def test_primitive_array_write_to() raises:
     """Test write_to method formats PrimitiveArray correctly."""
     var arr = Int32Array(5)
     arr.append(10)
@@ -174,7 +174,7 @@ def test_primitive_array_write_to():
     assert_true("10" in result)  # At least first value should work
 
 
-def test_primitive_array_write_to_with_nulls():
+def test_primitive_array_write_to_with_nulls() raises:
     """Test write_to method handles null values correctly."""
     var array_data = build_array_data(5, 2)
     var arr = PrimitiveArray[uint8](array_data^)
@@ -188,7 +188,7 @@ def test_primitive_array_write_to_with_nulls():
     assert_true("NULL" in result)
 
 
-def test_primitive_array_write_to_with_offset():
+def test_primitive_array_write_to_with_offset() raises:
     """Test write_to method works correctly with offset."""
     var arr = Int16Array(10, offset=2)
     arr.append(100)
@@ -203,12 +203,12 @@ def test_primitive_array_write_to_with_offset():
     # Note: Due to offset bug in write_to, values may not appear correctly
 
 
-def test_primitive_array_write_to_large_array():
+def test_primitive_array_write_to_large_array() raises:
     """Test write_to method truncates large arrays with ellipsis."""
     var arr = Int8Array(20)  # Use capacity > 10 to trigger truncation
     # Fill with values 0, 1, 2, ..., 14
     for i in range(15):
-        arr.append(i)
+        arr.append(rebind[Scalar[int8.native]](Int8(i)))
 
     var output = String()
     arr.write_to(output)
@@ -218,7 +218,7 @@ def test_primitive_array_write_to_large_array():
     assert_true("..." in result)  # Should truncate after 10 elements
 
 
-def test_primitive_array_str():
+def test_primitive_array_str() raises:
     """Test __str__ method returns formatted string representation."""
     var arr = array[int32](42, 84, 126)
 
@@ -227,7 +227,7 @@ def test_primitive_array_str():
     assert_true("42" in result)  # At least first value should work
 
 
-def test_primitive_array_str_empty():
+def test_primitive_array_str_empty() raises:
     """Test __str__ method on empty array."""
     var arr = Float32Array(0)
 
@@ -236,7 +236,7 @@ def test_primitive_array_str_empty():
     assert_true("capacity=0" in result)
 
 
-def test_primitive_array_repr():
+def test_primitive_array_repr() raises:
     """Test __repr__ method returns same as __str__."""
     var arr = UInt8Array(5)
     arr.append(255)
@@ -268,5 +268,5 @@ def test_primitive_array_repr():
     )
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

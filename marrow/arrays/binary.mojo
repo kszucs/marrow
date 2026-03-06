@@ -1,4 +1,5 @@
-from memory import ArcPointer, memcpy
+from std.memory import ArcPointer, memcpy
+
 from ..buffers import Buffer
 from ..dtypes import *
 
@@ -18,13 +19,13 @@ struct StringArray(Array):
         self.capacity = data.length
         self.data = data^
 
-    fn bitmap(self) -> ref [self.data.bitmap] ArcPointer[Bitmap]:
+    fn bitmap(self) -> ref[self.data.bitmap] ArcPointer[Bitmap]:
         return self.data.bitmap
 
-    fn offsets(self) -> ref [self.data.buffers] ArcPointer[Buffer]:
+    fn offsets(self) -> ref[self.data.buffers] ArcPointer[Buffer]:
         return self.data.buffers[0]
 
-    fn values(self) -> ref [self.data.buffers] ArcPointer[Buffer]:
+    fn values(self) -> ref[self.data.buffers] ArcPointer[Buffer]:
         return self.data.buffers[1]
 
     fn __init__(out self, capacity: Int = 0):
@@ -44,9 +45,9 @@ struct StringArray(Array):
             offset=0,
         )
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.data = existing.data^
-        self.capacity = existing.capacity
+    fn __moveinit__(out self, deinit take: Self):
+        self.data = take.data^
+        self.capacity = take.capacity
 
     fn __len__(self) -> Int:
         return self.data.length
@@ -71,7 +72,7 @@ struct StringArray(Array):
         # todo(kszucs): use unsafe set
         var index = self.data.length
         var last_offset = self.offsets()[].unsafe_get[DType.uint32](index)
-        var next_offset = last_offset + len(value)
+        var next_offset = last_offset + UInt32(len(value))
         self.data.length += 1
         self.bitmap()[].unsafe_set(index, True)
         self.offsets()[].unsafe_set[DType.uint32](index + 1, next_offset)

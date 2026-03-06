@@ -1,15 +1,16 @@
 """Python interface for primitive array."""
 
-from os import abort
-from python.bindings import PythonModuleBuilder, PythonObject
-from marrow.dtypes import DataType
+from std.os import abort
+from std.python import Python
+from std.python.bindings import PythonModuleBuilder, PythonObject
+
+from marrow.dtypes import DataType, int64
 from marrow.arrays.base import ArrayData
 from marrow.arrays import primitive
-from python import Python
 
 
 @fieldwise_init
-struct PrimitiveArray(Movable, Representable):
+struct PrimitiveArray(Movable, Writable):
     """Type erased PrimitiveArray so that we can return to python."""
 
     var data: ArrayData
@@ -51,7 +52,7 @@ fn array(content: PythonObject) raises -> PythonObject:
     var actual = primitive.Int64Array()
 
     for v in content:
-        actual.append(Int(py=v))
+        actual.append(rebind[Scalar[int64.native]](Int64(py=v)))
 
     var result = PrimitiveArray(
         data=actual.data.copy(),
@@ -61,7 +62,7 @@ fn array(content: PythonObject) raises -> PythonObject:
     return PythonObject(alloc=result^)
 
 
-def add_to_module(mut builder: PythonModuleBuilder) -> None:
+def add_to_module(mut builder: PythonModuleBuilder) raises:
     """Add primitive array support to the python API."""
 
     _ = (

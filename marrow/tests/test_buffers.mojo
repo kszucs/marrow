@@ -1,16 +1,16 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
-from marrow.test_fixtures.arrays import assert_bitmap_set
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
+from marrow.test_fixtures.arrays import assert_bitmap_set
 from marrow.buffers import *
 
 
-def is_aligned[
+fn is_aligned[
     T: AnyType
 ](ptr: UnsafePointer[T, MutAnyOrigin], alignment: Int) -> Bool:
     return (Int(ptr) % alignment) == 0
 
 
-def test_buffer_init():
+def test_buffer_init() raises:
     var b = Buffer.alloc(10)
     assert_equal(b.size, 64)
     assert_true(is_aligned(b.ptr, 64))
@@ -24,7 +24,7 @@ def test_buffer_init():
     assert_true(is_aligned(b2.ptr, 64))
 
 
-def test_buffer_grow():
+def test_buffer_grow() raises:
     var b = Buffer.alloc(10)
     b.unsafe_set(0, 111)
     assert_equal(b.size, 64)
@@ -36,7 +36,7 @@ def test_buffer_grow():
     assert_equal(b.unsafe_get(0), 111)
 
 
-def test_buffer_set_get():
+def test_buffer_set_get() raises:
     var buf = Buffer.alloc(10)
     assert_equal(buf.size, 64)
 
@@ -56,7 +56,7 @@ def test_buffer_set_get():
     assert_equal(buf.unsafe_get[DType.uint16](1), 44)
 
 
-def test_buffer_from_values():
+def test_buffer_from_values() raises:
     var buf = Buffer.from_values[DType.int64](-3, 9, 81)
 
     assert_equal(buf.unsafe_get[DType.int64](0), -3)
@@ -64,7 +64,7 @@ def test_buffer_from_values():
     assert_equal(buf.unsafe_get[DType.int64](2), 81)
 
 
-def test_buffer_swap():
+def test_buffer_swap() raises:
     var one = Buffer.alloc(10)
     one.unsafe_set(0, 111)
     var two = Buffer.alloc(10)
@@ -76,7 +76,7 @@ def test_buffer_swap():
     assert_equal(two.unsafe_get(0), 111)
 
 
-def test_bitmap():
+def test_bitmap() raises:
     var b = Bitmap.alloc(10)
     assert_equal(b.size(), 64)
     assert_equal(b.length(), 64 * 8)
@@ -92,7 +92,7 @@ def test_bitmap():
     assert_equal(b.bit_count(), 2)
 
 
-def test_count_leading_zeros():
+def test_count_leading_zeros() raises:
     var b = Bitmap.alloc(10)
     var expected_bits = b.length()
     assert_equal(b.count_leading_zeros(), expected_bits)
@@ -114,7 +114,7 @@ def test_count_leading_zeros():
         b.unsafe_set(bit_position, False)
 
 
-def test_count_leading_ones():
+def test_count_leading_ones() raises:
     var b = Bitmap.alloc(10)
     assert_equal(b.count_leading_ones(), 0)
     b.unsafe_set(0, True)
@@ -126,12 +126,12 @@ def test_count_leading_ones():
     assert_equal(b.count_leading_ones(1), 1)
 
 
-def _reset(mut bitmap: Bitmap):
+def _reset(mut bitmap: Bitmap) raises:
     bitmap.unsafe_range_set(0, bitmap.length(), False)
     assert_bitmap_set(bitmap, [], "after _reset")
 
 
-def test_unsafe_range_set():
+def test_unsafe_range_set() raises:
     var bitmap = Bitmap.alloc(16)
 
     bitmap.unsafe_range_set(0, 10, True)
@@ -154,7 +154,7 @@ def test_unsafe_range_set():
             assert_bitmap_set(bitmap, [start_bit, start_bit + 1], "range 2")
 
 
-def test_partial_byte_set():
+def test_partial_byte_set() raises:
     var bitmap = Bitmap.alloc(16)
 
     bitmap.unsafe_range_set(0, 0, True)
@@ -177,7 +177,7 @@ def test_partial_byte_set():
     assert_bitmap_set(bitmap, [10], "reset multiple bits")
 
 
-def test_expand_bitmap() -> None:
+def test_expand_bitmap() raises:
     var bitmap = Bitmap.alloc(6)
     bitmap.unsafe_set(0, True)
     bitmap.unsafe_set(5, True)
@@ -192,7 +192,7 @@ def test_expand_bitmap() -> None:
     assert_bitmap_set(bitmap, [0, 5, 6], "after expand")
 
 
-def test_buffer_with_offset():
+def test_buffer_with_offset() raises:
     # Test Buffer with offset functionality
     var buf = Buffer.alloc(10)
     assert_equal(buf.offset, 0)  # Default offset should be 0
@@ -225,7 +225,7 @@ def test_buffer_with_offset():
     assert_true(buf_bool.unsafe_get[DType.bool](1))  # Check if buf[1] was set
 
 
-def test_buffer_moveinit_with_offset():
+def test_buffer_moveinit_with_offset() raises:
     # Test __moveinit__ preserves offset
     var buf = Buffer.alloc(5)
     buf.offset = 3
@@ -236,7 +236,7 @@ def test_buffer_moveinit_with_offset():
     assert_equal(moved_buf.unsafe_get(0), 123)
 
 
-def test_buffer_swap_with_offset():
+def test_buffer_swap_with_offset() raises:
     # Test swap preserves offsets correctly
     var buf1 = Buffer.alloc(5)
     buf1.offset = 2
@@ -257,7 +257,7 @@ def test_buffer_swap_with_offset():
     assert_equal(buf2.unsafe_get(0), 111)
 
 
-def test_bitmap_with_offset():
+def test_bitmap_with_offset() raises:
     # Test Bitmap with offset functionality
     var buffer = Buffer.alloc[DType.bool](16)
     # Set some bits in the underlying buffer
@@ -280,7 +280,7 @@ def test_bitmap_with_offset():
     assert_true(bitmap.buffer.unsafe_get[DType.bool](7))
 
 
-def test_bitmap_moveinit_with_offset():
+def test_bitmap_moveinit_with_offset() raises:
     # Test __moveinit__ preserves offset
     var buffer = Buffer.alloc[DType.bool](8)
     var bitmap = Bitmap(buffer^, offset=2)
@@ -291,5 +291,5 @@ def test_bitmap_moveinit_with_offset():
     assert_true(moved_bitmap.unsafe_get(0))
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

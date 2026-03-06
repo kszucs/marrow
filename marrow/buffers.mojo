@@ -1,22 +1,22 @@
-from memory import (
+from std.bit import pop_count, count_trailing_zeros
+from std.math import ceildiv, align_up
+from std.memory import (
     memset_zero,
     memcpy,
     memset,
 )
-from sys.info import simd_byte_width
-from sys import size_of
+from std.sys import size_of, simd_byte_width
+
 from marrow.dtypes import dynamic_size_of
-import math
-from bit import pop_count, count_trailing_zeros
 
 
 fn _required_bytes(length: Int, T: DType) -> Int:
     var size: Int
     if T == DType.bool:
-        size = math.ceildiv(length, 8)
+        size = ceildiv(length, 8)
     else:
         size = length * dynamic_size_of(T)
-    return math.align_up(size, 64)
+    return align_up(size, 64)
 
 
 comptime simd_width = simd_byte_width()
@@ -42,11 +42,11 @@ struct Buffer(Movable):
         self.owns = owns
         self.offset = offset
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.ptr = existing.ptr
-        self.size = existing.size
-        self.owns = existing.owns
-        self.offset = existing.offset
+    fn __moveinit__(out self, deinit take: Self):
+        self.ptr = take.ptr
+        self.size = take.size
+        self.owns = take.owns
+        self.offset = take.offset
 
     fn swap(mut self, mut other: Self):
         """Swap the content of this buffer with another buffer."""
@@ -105,8 +105,7 @@ struct Buffer(Movable):
 
     @always_inline
     fn length[T: DType = DType.uint8](self) -> Int:
-        @parameter
-        if T == DType.bool:
+        comptime if T == DType.bool:
             return self.size * 8
         else:
             return self.size // size_of[T]()
@@ -115,11 +114,10 @@ struct Buffer(Movable):
     fn unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         comptime output = Scalar[T]
 
-        @parameter
-        if T == DType.bool:
+        comptime if T == DType.bool:
             var adjusted_index = index + self.offset
             var byte_index = adjusted_index // 8
-            var bit_index = adjusted_index % 8
+            var bit_index = UInt8(adjusted_index % 8)
             var byte = self.ptr[byte_index]
             var wanted_bit = (byte >> bit_index) & 1
             return Scalar[T](wanted_bit)
@@ -130,16 +128,15 @@ struct Buffer(Movable):
     fn unsafe_set[
         T: DType = DType.uint8
     ](mut self, index: Int, value: Scalar[T]):
-        @parameter
-        if T == DType.bool:
+        comptime if T == DType.bool:
             var adjusted_index = index + self.offset
             var byte_index = adjusted_index // 8
             var bit_index = adjusted_index % 8
             var byte = self.ptr[byte_index]
             if value:
-                self.ptr[byte_index] = byte | (1 << bit_index)
+                self.ptr[byte_index] = byte | UInt8(1 << bit_index)
             else:
-                self.ptr[byte_index] = byte & ~(1 << bit_index)
+                self.ptr[byte_index] = byte & UInt8(~(1 << bit_index))
         else:
             comptime output = Scalar[T]
             self.ptr.bitcast[output]()[index + self.offset] = value
@@ -164,7 +161,7 @@ struct Buffer(Movable):
         return count
 
 
-struct Bitmap(Movable, Representable, Stringable, Writable):
+struct Bitmap(Movable, Writable):
 
     """Hold information about the null records in an array."""
 
@@ -179,9 +176,9 @@ struct Bitmap(Movable, Representable, Stringable, Writable):
         self.buffer = buffer^
         self.offset = offset
 
-    fn __moveinit__(out self, deinit existing: Self):
-        self.buffer = existing.buffer^
-        self.offset = existing.offset
+    fn __moveinit__(out self, deinit take: Self):
+        self.buffer = take.buffer^
+        self.offset = take.offset
 
     fn write_to[W: Writer](self, mut writer: W):
         """
@@ -279,7 +276,7 @@ struct Bitmap(Movable, Representable, Stringable, Writable):
             if value:
                 loaded = ~loaded
             var mask = (1 << bit_in_first_byte) - 1
-            loaded &= ~mask
+            loaded &= UInt8(~mask)
             leading_zeros = Int(count_trailing_zeros(loaded))
             if leading_zeros == 0:
                 return count
@@ -292,9 +289,7 @@ struct Bitmap(Movable, Representable, Stringable, Writable):
 
         # Process full bytes.
         while index < self.size():
-
-            @parameter
-            for width_index in range(len(simd_widths)):
+            comptime for width_index in range(len(simd_widths)):
                 comptime width = simd_widths[width_index]
                 if self.size() - index >= width:
                     var loaded = self.buffer.get_ptr_at(index).load[
@@ -382,8 +377,8 @@ struct Bitmap(Movable, Representable, Stringable, Writable):
         )
 
         # Process the partial byte at the start, if appropriate.
-        var mask = (1 << (bit_pos_end - bit_pos_start)) - 1
-        mask = mask << bit_pos_start
+        var mask = UInt8((1 << (bit_pos_end - bit_pos_start)) - 1)
+        mask = UInt8(mask << UInt8(bit_pos_start))
         var initial_value = self.buffer.unsafe_get[DType.uint8](byte_index)
         var buffer_value = initial_value
         if value:
@@ -425,7 +420,7 @@ struct Bitmap(Movable, Representable, Stringable, Writable):
 
         # Now take care of the full bytes.
         if end_index > start_index:
-            var byte_value = 255 if value else 0
+            var byte_value = UInt8(255 if value else 0)
             memset(
                 self.buffer.get_ptr_at(start_index),
                 value=byte_value,

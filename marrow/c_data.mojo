@@ -1,12 +1,10 @@
-from sys.ffi import external_call, c_char
-from memory import ArcPointer, memcpy
-from sys import size_of
+from std.ffi import external_call, c_char
 
-import math
-from python import Python, PythonObject
-from python._cpython import CPython, PyObjectPtr
-from sys.ffi import c_char
-from io.write import Writable, Writer
+# from std.io.write import Writable, Writer
+from std.memory import ArcPointer, memcpy
+from std.python import Python, PythonObject
+from std.python._cpython import CPython, PyObjectPtr
+from std.sys import size_of
 
 from .dtypes import *
 from .arrays import *
@@ -20,7 +18,7 @@ fn empty_release_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
 
 
 @fieldwise_init
-struct CArrowSchema(Copyable, Representable, Stringable, Writable):
+struct CArrowSchema(Copyable, Writable):
     var format: UnsafePointer[c_char, MutAnyOrigin]
     var name: UnsafePointer[c_char, MutAnyOrigin]
     var metadata: UnsafePointer[c_char, MutAnyOrigin]
@@ -90,7 +88,7 @@ struct CArrowSchema(Copyable, Representable, Stringable, Writable):
             print("EEE")
 
             fmt = "+s"
-            n_children = Int(len(dtype.fields))
+            n_children = Int64(len(dtype.fields))
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 Int(n_children)
             )
@@ -297,7 +295,7 @@ struct CArrowArray(Copyable):
 
 
 @fieldwise_init
-struct CArrowArrayStream(Copyable, TrivialRegisterType):
+struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     var get_schema: fn(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowSchema, MutAnyOrigin],
@@ -306,7 +304,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterType):
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowArray, MutAnyOrigin],
     ) -> Int32
-    var get_last_error: fn(UnsafePointer[CArrowArrayStream]) -> UnsafePointer[
+    var get_last_error: fn(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> UnsafePointer[
         UInt8, MutAnyOrigin
     ]
     var release: fn(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> None

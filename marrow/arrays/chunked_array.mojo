@@ -27,7 +27,7 @@ struct ChunkedArray:
         self.length = 0
         self._compute_length()
 
-    fn chunk(self, index: Int) -> ref [self.chunks] ArrayData:
+    fn chunk(self, index: Int) -> ref[self.chunks] ArrayData:
         """Returns the chunk at the given index.
 
         Args:

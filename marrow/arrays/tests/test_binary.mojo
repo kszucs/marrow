@@ -1,11 +1,11 @@
-from testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 
 from marrow.arrays import *
 from marrow.dtypes import *
 
 
-def test_string_builder():
+def test_string_builder() raises:
     var a = StringArray()
     assert_equal(len(a), 0)
     assert_equal(a.capacity, 0)
@@ -28,5 +28,5 @@ def test_string_builder():
     )
 
 
-def main():
+def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
