@@ -17,8 +17,11 @@ struct PrimitiveArray(Movable, Writable):
     var offset: Int
     var capacity: Int
 
-    fn __repr__(self) -> String:
-        return "PrimitiveArray"
+    fn write_to(self, mut writer: Some[Writer]):
+        writer.write("PrimitiveArray")
+    
+    fn write_repr_to(self, mut writer: Some[Writer]):
+        writer.write("PrimitiveArray")
 
     @staticmethod
     fn __len__(py_self: PythonObject) raises -> PythonObject:
@@ -65,11 +68,10 @@ fn array(content: PythonObject) raises -> PythonObject:
 def add_to_module(mut builder: PythonModuleBuilder) raises:
     """Add primitive array support to the python API."""
 
-    _ = (
-        builder.add_type[PrimitiveArray]("PrimitiveArray")
+    _ = builder.add_type[PrimitiveArray]("PrimitiveArray")
         .def_method[PrimitiveArray.__len__]("__len__")
         .def_method[PrimitiveArray.__getitem__]("__getitem__")
-    )
+    
     builder.def_function[array](
         "array",
         docstring="Build a primitive array with the given data and datatype",
