@@ -1,6 +1,10 @@
 [workspace]
 authors = ["Krisztian Szucs <szucs.krisztian@gmail.com>"]
-channels = ["conda-forge", "https://conda.modular.com/max-nightly"]
+channels = [
+  "https://prefix.dev/pontoneer",
+  "https://conda.modular.com/max-nightly/",
+  "conda-forge"
+]
 name = "marrow"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
@@ -26,15 +30,16 @@ docs_preview = { cmd = "quarto preview docs/", depends-on = [
 ], env = { PYTHONPATH = "python" } }
 
 [dependencies]
-python = ">=3.14.2,<3.15"
-pytest = ">=9.0.2,<10"
-ruff = ">=0.14.14,<0.15"
-mojo = ">=0.26.2.0.dev2026030405,<0.27"
 ipython = ">=9.11.0,<10"
-pytest-benchmark = ">=5.2.3,<6"
-quarto = ">=1.6,<2"
 jupyter = ">=1.1,<2"
 jupyter-cache = ">=1.0,<2"
+mojo = ">=0.26.2.0.dev2026030905,<0.27"
+pontoneer = ">=0.2.0,<0.3"
+pytest = ">=9.0.2,<10"
+pytest-benchmark = ">=5.2.3,<6"
+python = ">=3.14.2,<3.15"
+quarto = ">=1.6,<2"
+ruff = ">=0.14.14,<0.15"
 
 [pypi-dependencies]
 pyarrow = ">=23.0.0, <24"
