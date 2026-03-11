@@ -106,28 +106,30 @@ def test_infer_mixed_struct_scalar_error():
 def test_array_bool():
     arr = ma.array([True, None, False, None])
     assert type(arr).__name__ == "BoolArray"
-    assert arr.__len__() == 4
+    assert len(arr) == 4
     assert arr.null_count() == 2
+    assert arr[0]
+    assert not arr[2]
 
 
 def test_array_int64():
     arr = ma.array([1, None, 3, None])
     assert type(arr).__name__ == "Int64Array"
-    assert arr.__len__() == 4
+    assert len(arr) == 4
     assert arr.null_count() == 2
 
 
 def test_array_float64():
     arr = ma.array([1.5, None, 2.5, None, None])
     assert type(arr).__name__ == "Float64Array"
-    assert arr.__len__() == 5
+    assert len(arr) == 5
     assert arr.null_count() == 3
 
 
 def test_array_string():
     arr = ma.array(["foo", "bar", None, "mañana"])
     assert type(arr).__name__ == "StringArray"
-    assert arr.__len__() == 4
+    assert len(arr) == 4
     assert arr.null_count() == 1
 
 
@@ -183,35 +185,35 @@ def test_array_bytes_raises():
 def test_array_nested_list_int():
     arr = ma.array([[1, 2], [3, 4]])
     assert type(arr).__name__ == "ListArray"
-    assert arr.__len__() == 2
+    assert len(arr) == 2
     assert arr.null_count() == 0
 
 
 def test_array_nested_list_with_null_outer():
     arr = ma.array([[1, 2], None, [3]])
     assert type(arr).__name__ == "ListArray"
-    assert arr.__len__() == 3
+    assert len(arr) == 3
     assert arr.null_count() == 1
 
 
 def test_array_nested_list_string():
     arr = ma.array([["foo", "bar"], None, ["baz"]])
     assert type(arr).__name__ == "ListArray"
-    assert arr.__len__() == 3
+    assert len(arr) == 3
     assert arr.null_count() == 1
 
 
 def test_array_struct_basic():
     arr = ma.array([{"a": 5, "b": "foo", "c": True}, {"a": 6, "b": "bar", "c": False}])
     assert type(arr).__name__ == "StructArray"
-    assert arr.__len__() == 2
+    assert len(arr) == 2
     assert arr.null_count() == 0
 
 
 def test_array_struct_null_row():
     arr = ma.array([{"a": 1}, None, {"a": 3}])
     assert type(arr).__name__ == "StructArray"
-    assert arr.__len__() == 3
+    assert len(arr) == 3
     assert arr.null_count() == 1
 
 
@@ -219,7 +221,7 @@ def test_array_struct_missing_key():
     # Missing dict key → null for that field; struct row is valid
     arr = ma.array([{"a": 5, "b": "foo"}, {"a": 6}])
     assert type(arr).__name__ == "StructArray"
-    assert arr.__len__() == 2
+    assert len(arr) == 2
     assert arr.null_count() == 0
 
 
@@ -227,4 +229,40 @@ def test_array_struct_explicit_type():
     ty = ma.struct([ma.field("x", ma.int32()), ma.field("y", ma.float64())])
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
     assert type(arr).__name__ == "StructArray"
-    assert arr.__len__() == 2
+    assert len(arr) == 2
+
+
+# ── indexing ─────────────────────────────────────────────────────────────────
+
+
+def test_index_int64():
+    arr = ma.array([10, 20, 30])
+    assert arr[0] == 10
+    assert arr[1] == 20
+    assert arr[2] == 30
+
+
+def test_index_float64():
+    arr = ma.array([1.5, 2.5, 3.5])
+    assert arr[0] == 1.5
+    assert arr[2] == 3.5
+
+
+def test_index_string():
+    arr = ma.array(["hello", "world", "mañana"])
+    assert arr[0] == "hello"
+    assert arr[1] == "world"
+    assert arr[2] == "mañana"
+
+
+def test_index_list():
+    arr = ma.array([[1, 2], [3, 4, 5]])
+    child0 = arr[0]
+    child1 = arr[1]
+    assert len(child0) == 2
+    assert len(child1) == 3
+    assert child0[0] == 1
+    assert child0[1] == 2
+    assert child1[0] == 3
+    assert child1[1] == 4
+    assert child1[2] == 5
