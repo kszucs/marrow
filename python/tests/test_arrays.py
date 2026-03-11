@@ -87,17 +87,17 @@ def test_infer_mixed_types_error():
 
 def test_infer_mixed_bytes_string_error():
     with pytest.raises(Exception):
-        ma.infer_type([b"foo", "bar"])
+        ma.array([b"foo", "bar"])
 
 
 def test_infer_mixed_list_scalar_error():
     with pytest.raises(Exception):
-        ma.infer_type([[1, 2], 3])
+        ma.array([[1, 2], 3])
 
 
 def test_infer_mixed_struct_scalar_error():
     with pytest.raises(Exception):
-        ma.infer_type([{"a": 1}, 2])
+        ma.array([{"a": 1}, 2])
 
 
 # ── array() ─────────────────────────────────────────────────────────────────
@@ -229,6 +229,7 @@ def test_array_struct_explicit_type():
     ty = ma.struct([ma.field("x", ma.int32()), ma.field("y", ma.float64())])
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
     assert type(arr).__name__ == "StructArray"
+<<<<<<< HEAD
     assert len(arr) == 2
 
 
@@ -266,3 +267,184 @@ def test_index_list():
     assert child1[0] == 3
     assert child1[1] == 4
     assert child1[2] == 5
+=======
+    assert arr.__len__() == 2
+
+
+# ── error handling ──────────────────────────────────────────────────────────
+
+
+def test_array_int_overflow():
+    # int8 can only hold -128..127; 200 overflows
+    with pytest.raises(Exception):
+        ma.array([200], type=ma.int8())
+
+
+def test_array_wrong_type_in_int_array():
+    with pytest.raises(Exception):
+        ma.array(["hello"], type=ma.int64())
+
+
+def test_array_wrong_type_in_float_array():
+    with pytest.raises(Exception):
+        ma.array(["hello"], type=ma.float64())
+
+
+def test_array_wrong_type_in_string_array():
+    with pytest.raises(Exception):
+        ma.array([1, 2, 3], type=ma.string())
+
+
+def test_array_float_nan():
+    # NaN is a valid float value, not an error
+    arr = ma.array([float("nan"), 1.0])
+    assert type(arr).__name__ == "Float64Array"
+    assert arr.__len__() == 2
+
+
+def test_array_float_inf():
+    arr = ma.array([float("inf"), -float("inf"), 1.0])
+    assert type(arr).__name__ == "Float64Array"
+    assert arr.__len__() == 3
+
+
+def test_array_struct_non_dict_raises():
+    with pytest.raises(Exception):
+        ma.array([{"a": 1}, "not_a_dict", {"a": 3}])
+
+
+def test_array_nested_list_null_inner():
+    # None inside inner list — inner list has a null element
+    arr = ma.array([[1, None, 2], [3]])
+    assert type(arr).__name__ == "ListArray"
+    assert arr.__len__() == 2
+
+
+def test_array_struct_wrong_field_type():
+    ty = ma.struct([ma.field("x", ma.int64())])
+    with pytest.raises(Exception):
+        ma.array([{"x": "not_an_int"}], type=ty)
+
+
+# ── integer boundary values ──────────────────────────────────────────────────
+
+
+def test_array_int8_boundaries():
+    arr = ma.array([-128, 127, None], type=ma.int8())
+    assert arr.__len__() == 3
+    assert arr.null_count() == 1
+
+
+def test_array_int16_boundaries():
+    arr = ma.array([-32768, 32767, None], type=ma.int16())
+    assert arr.__len__() == 3
+
+
+def test_array_int32_boundaries():
+    arr = ma.array([-2147483648, 2147483647], type=ma.int32())
+    assert arr.__len__() == 2
+
+
+def test_array_uint8_boundaries():
+    arr = ma.array([0, 255, None], type=ma.uint8())
+    assert arr.__len__() == 3
+    assert arr.null_count() == 1
+
+
+def test_array_uint16_boundaries():
+    arr = ma.array([0, 65535], type=ma.uint16())
+    assert arr.__len__() == 2
+
+
+def test_array_uint32_boundaries():
+    arr = ma.array([0, 4294967295], type=ma.uint32())
+    assert arr.__len__() == 2
+
+
+def test_array_uint64_valid():
+    arr = ma.array([0, 1, 1000], type=ma.uint64())
+    assert arr.__len__() == 3
+
+
+# ── integer overflow / underflow ─────────────────────────────────────────────
+
+
+def test_array_int8_high_overflow():
+    with pytest.raises(Exception):
+        ma.array([128], type=ma.int8())
+
+
+def test_array_int8_low_overflow():
+    with pytest.raises(Exception):
+        ma.array([-129], type=ma.int8())
+
+
+def test_array_int16_overflow():
+    with pytest.raises(Exception):
+        ma.array([32768], type=ma.int16())
+
+
+def test_array_int32_overflow():
+    with pytest.raises(Exception):
+        ma.array([2147483648], type=ma.int32())
+
+
+def test_array_uint8_overflow():
+    with pytest.raises(Exception):
+        ma.array([256], type=ma.uint8())
+
+
+def test_array_uint8_underflow():
+    with pytest.raises(Exception):
+        ma.array([-1], type=ma.uint8())
+
+
+def test_array_uint16_overflow():
+    with pytest.raises(Exception):
+        ma.array([65536], type=ma.uint16())
+
+
+def test_array_uint16_underflow():
+    with pytest.raises(Exception):
+        ma.array([-1], type=ma.uint16())
+
+
+def test_array_uint32_underflow():
+    with pytest.raises(Exception):
+        ma.array([-1], type=ma.uint32())
+
+
+def test_array_uint64_underflow():
+    with pytest.raises(Exception):
+        ma.array([-1], type=ma.uint64())
+
+
+# ── type coercion ────────────────────────────────────────────────────────────
+
+
+def test_array_bool_as_int():
+    # Python bools are ints: True=1, False=0
+    arr = ma.array([True, False, None], type=ma.int64())
+    assert type(arr).__name__ == "Int64Array"
+    assert arr.__len__() == 3
+    assert arr.null_count() == 1
+
+
+def test_array_int_in_float64_explicit():
+    arr = ma.array([1, 2, 3], type=ma.float64())
+    assert type(arr).__name__ == "Float64Array"
+
+
+def test_array_int_in_float32_explicit():
+    arr = ma.array([1, 2, 3], type=ma.float32())
+    assert type(arr).__name__ == "Float32Array"
+
+
+# ── list type errors ─────────────────────────────────────────────────────────
+
+
+def test_array_list_scalar_raises():
+    # Scalar where a list element is expected should raise
+    with pytest.raises(Exception):
+        ma.array([1, 2, 3], type=ma.list_(ma.int64()))
+>>>>>>> 3cce2a3 (feat(python): add CPython error-check helpers and overflow tests)

@@ -97,6 +97,51 @@ fn pymethod[
 
 
 # ---------------------------------------------------------------------------
+# CPython error-check helpers — analogous to Arrow's RETURN_IF_PYERROR macro
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+fn _check_pylong(val: Int, ref cpy: CPython) raises -> Int:
+    """Validate PyLong_AsSsize_t result; raise the Python exception on overflow or TypeError."""
+    if val == -1 and cpy.PyErr_Occurred():
+        raise cpy.unsafe_get_error()
+    return val
+
+
+@always_inline
+fn _pylong_as_scalar[dtype: DType](val: Int, ref cpy: CPython) raises -> Scalar[dtype]:
+    """Convert PyLong_AsSsize_t result to Scalar[dtype]; raise on Python error or if the
+    value is out of range for dtype (e.g. 200 into int8)."""
+    if val == -1 and cpy.PyErr_Occurred():
+        raise cpy.unsafe_get_error()
+    # uint64 is a special case: Scalar[uint64](-1).cast[int64]() == -1 == val, so the
+    # roundtrip check below is insufficient for negatives; catch them explicitly.
+    comptime if dtype == DType.uint64:
+        if val < 0:
+            raise Error("integer value out of range for type")
+    var converted = Scalar[dtype](val)
+    if Int(converted.cast[DType.int64]()) != val:
+        raise Error("integer value out of range for type")
+    return converted
+
+
+@always_inline
+fn _check_pyfloat(val: Float64, ref cpy: CPython) raises -> Float64:
+    """Validate PyFloat_AsDouble result; raise the Python exception on TypeError."""
+    if val == -1.0 and cpy.PyErr_Occurred():
+        raise cpy.unsafe_get_error()
+    return val
+
+
+@always_inline
+fn _check_pyunicode(ref cpy: CPython) raises:
+    """Check for error after PyUnicode_AsUTF8AndSize (null pointer not exposed by the Mojo wrapper)."""
+    if cpy.PyErr_Occurred():
+        raise cpy.unsafe_get_error()
+
+
+# ---------------------------------------------------------------------------
 # Custom wrappers for methods that need special return-type handling
 # ---------------------------------------------------------------------------
 
@@ -140,7 +185,6 @@ struct PyInferrer(Copyable, Movable):
     var int_count: Int
     var float_count: Int
     var unicode_count: Int
-    var unicode_bytes: Int
     var bytes_count: Int
     var list_count: Int
     var struct_count: Int
@@ -164,7 +208,6 @@ struct PyInferrer(Copyable, Movable):
         self.int_count = 0
         self.float_count = 0
         self.unicode_count = 0
-        self.unicode_bytes = 0
         self.bytes_count = 0
         self.list_count = 0
         self.struct_count = 0
@@ -179,32 +222,43 @@ struct PyInferrer(Copyable, Movable):
         self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
         self._dict_type = cpy.PyDict_Type()
 
-    fn visit(mut self, ptr: PyObjectPtr) raises:
+    fn visit(mut self, ptr: PyObjectPtr) raises -> Bool:
         """Count one element's Python type, following PyArrow's Visit() order.
+
+        Returns False when the type is fully determined (no further widening possible),
+        allowing the caller to stop early. Mirrors PyArrow's keep_going flag.
         """
         ref cpy = Python().cpython()
         if cpy.Py_Is(ptr, self._none_ptr):
             self.none_count += 1
+            return True  # null never locks the type
         elif cpy.PyBool_Check(ptr) != 0:  # exact bool check before PyLong_Check
             self.bool_count += 1
+            return True  # bool can widen to int64 or float64
         elif cpy.PyFloat_Check(ptr) != 0:  # float before int
             self.float_count += 1
+            return False  # float64 is the widest numeric type
         elif cpy.PyLong_Check(ptr) != 0:
             self.int_count += 1
+            return True  # int can widen to float64
         elif cpy.PyObject_TypeCheck(ptr, self._unicode_type) != 0:
             self.unicode_count += 1
-            self.unicode_bytes += len(cpy.PyUnicode_AsUTF8AndSize(ptr))
+            return False  # string cannot widen further
         elif cpy.PyObject_TypeCheck(ptr, self._bytes_type) != 0:
             self.bytes_count += 1
+            return False  # bytes cannot widen further
         elif cpy.PyObject_TypeCheck(ptr, self._dict_type) != 0:
             self.struct_count += 1
             self._visit_dict(ptr)
+            return False  # struct cannot widen further
         elif cpy.PyObject_TypeCheck(ptr, self._list_type) != 0:
             self.list_count += 1
             self._visit_list(ptr)
+            return False  # list cannot widen further
         elif cpy.PyObject_TypeCheck(ptr, self._tuple_type) != 0:
             self.list_count += 1
             self._visit_tuple(ptr)
+            return False  # list cannot widen further
         else:
             raise Error(
                 "cannot include value of type: "
@@ -218,7 +272,8 @@ struct PyInferrer(Copyable, Movable):
         ref cpy = Python().cpython()
         var n = Int(cpy.PyObject_Length(ptr))
         for i in range(n):
-            self._list_child[0].visit(cpy.PyList_GetItem(ptr, i))
+            if not self._list_child[0].visit(cpy.PyList_GetItem(ptr, i)):
+                break
 
     fn _visit_tuple(mut self, ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitSequence for tuples."""
@@ -227,7 +282,8 @@ struct PyInferrer(Copyable, Movable):
         ref cpy = Python().cpython()
         var n = Int(cpy.PyObject_Length(ptr))
         for i in range(n):
-            self._list_child[0].visit(cpy.PyTuple_GetItem(ptr, i))
+            if not self._list_child[0].visit(cpy.PyTuple_GetItem(ptr, i)):
+                break
 
     fn _visit_dict(mut self, dict_ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer.
@@ -250,7 +306,7 @@ struct PyInferrer(Copyable, Movable):
                 idx = len(self._field_order)
                 self._field_order.append(name)
                 self._field_children.append(PyInferrer())
-            self._field_children[idx].visit(val_raw[])
+            _ = self._field_children[idx].visit(val_raw[])
         key_raw.free()
         val_raw.free()
 
@@ -266,34 +322,25 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    fn _get_binary_type(self) raises -> dt.DataType:
-        if self.bytes_count + self.none_count != self._total_count():
-            raise Error("cannot mix bytes and non-bytes values")
-        return dt.binary
-
-    fn _get_list_type(self) raises -> dt.DataType:
-        if self.list_count + self.none_count != self._total_count():
-            raise Error("cannot mix list and non-list values")
-        if len(self._list_child) == 0:
-            raise Error("cannot infer type: all-null list")
-        return dt.list_(self._list_child[0]._get_type())
-
-    fn _get_struct_type(self) raises -> dt.DataType:
-        if self.struct_count + self.none_count != self._total_count():
-            raise Error("cannot mix dict and non-dict values")
-        var fields: List[dt.Field] = []
-        for i in range(len(self._field_order)):
-            var child_dtype = self._field_children[i]._get_type()
-            fields.append(
-                dt.Field(self._field_order[i], child_dtype, nullable=True)
-            )
-        return dt.struct_(fields)
-
-    fn _get_primitive_type(self) raises -> dt.DataType:
-        if (
-            self.unicode_count > 0
-            and (self.bool_count + self.int_count + self.float_count) > 0
-        ):
+    fn _get_type(self) raises -> dt.DataType:
+        if self.bytes_count > 0:
+            if self.bytes_count + self.none_count != self._total_count():
+                raise Error("cannot mix bytes and non-bytes values")
+            return dt.binary
+        if self.list_count > 0:
+            if self.list_count + self.none_count != self._total_count():
+                raise Error("cannot mix list and non-list values")
+            if len(self._list_child) == 0:
+                raise Error("cannot infer type: all-null list")
+            return dt.list_(self._list_child[0]._get_type())
+        if self.struct_count > 0:
+            if self.struct_count + self.none_count != self._total_count():
+                raise Error("cannot mix dict and non-dict values")
+            var fields: List[dt.Field] = []
+            for i in range(len(self._field_order)):
+                fields.append(dt.Field(self._field_order[i], self._field_children[i]._get_type(), nullable=True))
+            return dt.struct_(fields)
+        if self.unicode_count > 0 and (self.bool_count + self.int_count + self.float_count) > 0:
             raise Error("cannot mix string and numeric types")
         if self.float_count > 0:
             return dt.float64
@@ -305,23 +352,26 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    fn _get_type(self) raises -> dt.DataType:
-        if self.bytes_count > 0:
-            return self._get_binary_type()
-        if self.list_count > 0:
-            return self._get_list_type()
-        if self.struct_count > 0:
-            return self._get_struct_type()
-        return self._get_primitive_type()
-
     fn infer(mut self, obj: PythonObject) raises -> dt.DataType:
-        """Single pass: visit all elements, then resolve to a DataType."""
+        """Visit elements until type is locked, then scan remaining elements for nulls."""
         ref cpy = Python().cpython()
         var list_ptr = obj._obj_ptr
         var n = len(obj)
+        var stopped_at = n
         for i in range(n):
             var item_ptr = cpy.PyList_GetItem(list_ptr, i)
-            self.visit(item_ptr)
+            if not self.visit(item_ptr):
+                stopped_at = i + 1
+                break
+        # If we stopped early, scan remaining elements for nulls only.
+        # This is cheap (single pointer comparison per element) and keeps
+        # none_count accurate so the converter can use the fast no-null path.
+        if stopped_at < n:
+            var none_ptr = self._none_ptr
+            for i in range(stopped_at, n):
+                if cpy.Py_Is(cpy.PyList_GetItem(list_ptr, i), none_ptr):
+                    self.none_count += 1
+                    break  # one null is enough to know has_nulls=True
         return self._get_type()
 
 
@@ -423,22 +473,30 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
                 else:
                     comptime if Self.T.native.is_floating_point():
                         b.unsafe_append(
-                            Scalar[Self.T.native](cpy.PyFloat_AsDouble(item))
+                            Scalar[Self.T.native](
+                                _check_pyfloat(cpy.PyFloat_AsDouble(item), cpy)
+                            )
                         )
                     else:
                         b.unsafe_append(
-                            Scalar[Self.T.native](cpy.PyLong_AsSsize_t(item))
+                            _pylong_as_scalar[Self.T.native](
+                                cpy.PyLong_AsSsize_t(item), cpy
+                            )
                         )
         else:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 comptime if Self.T.native.is_floating_point():
                     b.unsafe_append(
-                        Scalar[Self.T.native](cpy.PyFloat_AsDouble(item))
+                        Scalar[Self.T.native](
+                            _check_pyfloat(cpy.PyFloat_AsDouble(item), cpy)
+                        )
                     )
                 else:
                     b.unsafe_append(
-                        Scalar[Self.T.native](cpy.PyLong_AsSsize_t(item))
+                        Scalar[Self.T.native](
+                            _check_pylong(cpy.PyLong_AsSsize_t(item), cpy)
+                        )
                     )
 
     fn append(mut self, value: PyObjectPtr) raises:
@@ -448,11 +506,19 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
             b.append_null()
         else:
             comptime if Self.T == dt.bool_:
-                b.append(Bool(cpy.PyLong_AsSsize_t(value) != 0))
+                b.append(Bool(_check_pylong(cpy.PyLong_AsSsize_t(value), cpy) != 0))
             elif Self.T.native.is_floating_point():
-                b.append(Scalar[Self.T.native](cpy.PyFloat_AsDouble(value)))
+                b.append(
+                    Scalar[Self.T.native](
+                        _check_pyfloat(cpy.PyFloat_AsDouble(value), cpy)
+                    )
+                )
             else:
-                b.append(Scalar[Self.T.native](cpy.PyLong_AsSsize_t(value)))
+                b.append(
+                    _pylong_as_scalar[Self.T.native](
+                        cpy.PyLong_AsSsize_t(value), cpy
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -463,17 +529,25 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
 struct PyStringConverter(PyConverter):
     var _builder: ArcPointer[StringBuilder]
     var _has_nulls: Bool
-    var _total_bytes: Int
-
     fn __init__(
         out self,
         builder: ArcPointer[StringBuilder],
         has_nulls: Bool = True,
-        total_bytes: Int = 0,
     ):
         self._builder = builder
         self._has_nulls = has_nulls
-        self._total_bytes = total_bytes
+
+    @always_inline
+    fn _count_bytes(self, values: PyObjectPtr, n: Int, none_ptr: PyObjectPtr) raises -> Int:
+        ref cpy = Python().cpython()
+        var total = 0
+        for i in range(n):
+            var item = cpy.PyList_GetItem(values, i)
+            if not cpy.Py_Is(item, none_ptr):
+                var s = cpy.PyUnicode_AsUTF8AndSize(item)
+                _check_pyunicode(cpy)
+                total += len(s)
+        return total
 
     fn extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
@@ -482,13 +556,7 @@ struct PyStringConverter(PyConverter):
         var none_ptr = cpy.Py_None()
 
         b.reserve(n)
-        var total_bytes = self._total_bytes
-        if total_bytes == 0:
-            for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                if not cpy.Py_Is(item, none_ptr):
-                    total_bytes += len(cpy.PyUnicode_AsUTF8AndSize(item))
-        b.reserve_bytes(total_bytes)
+        b.reserve_bytes(self._count_bytes(values, n, none_ptr))
 
         if self._has_nulls:
             for i in range(n):
@@ -497,11 +565,13 @@ struct PyStringConverter(PyConverter):
                     b.unsafe_append_null()
                 else:
                     var s = cpy.PyUnicode_AsUTF8AndSize(item)
+                    _check_pyunicode(cpy)
                     b.unsafe_append(s.unsafe_ptr(), len(s))
         else:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 var s = cpy.PyUnicode_AsUTF8AndSize(item)
+                _check_pyunicode(cpy)
                 b.unsafe_append(s.unsafe_ptr(), len(s))
 
     fn append(mut self, value: PyObjectPtr) raises:
@@ -511,6 +581,7 @@ struct PyStringConverter(PyConverter):
             b.append_null()
         else:
             var s = cpy.PyUnicode_AsUTF8AndSize(value)
+            _check_pyunicode(cpy)
             b.append(s.unsafe_ptr(), len(s))
 
 
@@ -605,7 +676,8 @@ struct PyStructConverter(PyConverter):
                         item, self._field_keys[i]._obj_ptr
                     )
                     if val == PyObjectPtr():
-                        cpy.PyErr_Clear()
+                        if cpy.PyErr_Occurred():
+                            raise cpy.unsafe_get_error()
                         self._children[i].append(none_ptr)
                     else:
                         self._children[i].append(val)
@@ -625,7 +697,9 @@ struct PyStructConverter(PyConverter):
                     value, self._field_keys[i]._obj_ptr
                 )
                 if val == PyObjectPtr():
-                    cpy.PyErr_Clear()
+                    if cpy.PyErr_Occurred():
+                        cpy.PyErr_Clear()
+                        raise Error("cannot convert value to struct: expected dict")
                     self._children[i].append(none_ptr)
                 else:
                     self._children[i].append(val)
@@ -641,7 +715,6 @@ fn make_converter(
     dtype: dt.DataType,
     var builder: AnyBuilder,
     has_nulls: Bool = True,
-    total_bytes: Int = 0,
 ) raises -> PyAnyConverter:
     """Create a typed converter wrapping the given builder."""
     comptime for T in dt.primitive_dtypes:
@@ -650,7 +723,7 @@ fn make_converter(
             return PyPrimitiveConverter[T](builder, has_nulls)
     if dtype.is_string():
         var builder = builder.as_string()
-        return PyStringConverter(builder, has_nulls, total_bytes)
+        return PyStringConverter(builder, has_nulls)
     elif dtype.is_list():
         var builder = builder.as_list()
         var values = builder[].values()
@@ -684,14 +757,12 @@ fn array(
 ) raises -> PythonObject:
     var dtype: dt.DataType
     var has_nulls = True
-    var total_bytes = 0
     if opt := kwargs.find("type"):
         dtype = opt.value().downcast_value_ptr[dt.DataType]()[]
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)
         has_nulls = inferrer.none_count > 0
-        total_bytes = inferrer.unicode_bytes
 
     if dtype.is_null():
         raise Error(
@@ -701,7 +772,7 @@ fn array(
 
     var builder = make_builder(dtype, len(obj))
     var finish_builder = builder
-    var converter = make_converter(dtype, builder^, has_nulls, total_bytes)
+    var converter = make_converter(dtype, builder^, has_nulls)
     converter.extend(obj._obj_ptr)
     return finish_builder.finish().to_python_object()
 
