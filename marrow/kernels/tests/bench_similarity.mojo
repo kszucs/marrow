@@ -25,7 +25,7 @@ fn _make_vectors(n_vectors: Int, dim: Int) raises -> FixedSizeListArray:
         )
     var builder = FixedSizeListBuilder(AnyBuilder(b^), list_size=dim)
     for _ in range(n_vectors):
-        builder.append(True)
+        builder.append_valid()
     return builder.finish_typed()
 
 

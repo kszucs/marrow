@@ -247,14 +247,8 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     fn dtype(self) -> DataType:
         return Self.T
 
-    fn grow(mut self, capacity: Int) raises:
-        self._bitmap.resize(capacity)
-        self._buffer.resize[Self.T.native](capacity)
-        self._capacity = capacity
-
     fn append(mut self, value: Self.scalar) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
+        self.reserve(1)
         self.unsafe_append(value)
 
     @always_inline
@@ -272,8 +266,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
 
     @always_inline
     fn append_null(mut self) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
+        self.reserve(1)
         self.unsafe_append_null()
 
     @always_inline
@@ -284,11 +277,9 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._length += 1
 
     fn extend(mut self, values: List[Self.scalar]) raises:
-        var new_len = self._length + len(values)
-        if new_len >= self._capacity:
-            self.grow(max(self._capacity * 2, new_len))
+        self.reserve(len(values))
         for value in values:
-            self.append(value)
+            self.unsafe_append(value)
 
     fn extend(mut self, values: List[Self.scalar], valid: List[Bool]) raises:
         for i in range(len(values)):
@@ -300,18 +291,22 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
-            self.grow(needed)
-
-    fn shrink_to_fit(mut self) raises:
-        self._buffer.resize[Self.T.native](self._length)
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._buffer.resize[Self.T.native](new_cap)
+            self._capacity = new_cap
 
     fn finish_typed(mut self) raises -> PrimitiveArray[Self.T]:
-        self.shrink_to_fit()
+        # trim over-allocated buffer capacity down to actual length
+        self._buffer.resize[Self.T.native](self._length)
+        # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
+        # freeze the value buffer into an immutable Buffer
         var values = self._buffer.finish()
+        # construct the immutable result array
         var result = PrimitiveArray[Self.T](
             length=self._length,
             nulls=null_count,
@@ -319,6 +314,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             bitmap=bm^,
             buffer=values^,
         )
+        # reset builder state for potential reuse
         self.reset()
         return result^
 
@@ -372,19 +368,13 @@ struct StringBuilder(Builder, Sized):
     fn dtype(self) -> DataType:
         return string
 
-    fn grow(mut self, capacity: Int) raises:
-        self._bitmap.resize(capacity)
-        self._offsets.resize[DType.uint32](capacity + 1)
-        self._capacity = capacity
-
     fn append(mut self, value: String) raises:
         self.append(value.unsafe_ptr(), len(value))
 
     fn append(
         mut self, ptr: UnsafePointer[mut=False, Byte, _], length: Int
     ) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
+        self.reserve(1)
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
         var next_offset = last_offset + UInt32(length)
@@ -401,8 +391,7 @@ struct StringBuilder(Builder, Sized):
         )
 
     fn append_null(mut self) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
+        self.reserve(1)
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
         self._bitmap.set_bit(index, False)
@@ -420,7 +409,10 @@ struct StringBuilder(Builder, Sized):
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
-            self.grow(needed)
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._offsets.resize[DType.uint32](new_cap + 1)
+            self._capacity = new_cap
 
     fn reserve_bytes(mut self, additional: Int) raises:
         """Pre-allocate space in the byte data buffer."""
@@ -455,19 +447,21 @@ struct StringBuilder(Builder, Sized):
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
         self._length += 1
 
-    fn shrink_to_fit(mut self) raises:
+    fn finish_typed(mut self) raises -> StringArray:
+        # trim offsets buffer to length+1 entries (one past the last string)
         self._offsets.resize[DType.uint32](self._length + 1)
+        # trim byte data buffer to the actual number of bytes written
         var used = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
         self._values.resize[DType.uint8](used)
-
-    fn finish_typed(mut self) raises -> StringArray:
-        self.shrink_to_fit()
+        # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
+        # freeze offsets and byte data buffers into immutable Buffers
         var offsets = self._offsets.finish()
         var values = self._values.finish()
+        # construct the immutable result array
         var result = StringArray(
             length=self._length,
             nulls=null_count,
@@ -476,6 +470,7 @@ struct StringBuilder(Builder, Sized):
             offsets=offsets^,
             values=values^,
         )
+        # reset builder state for potential reuse
         self.reset()
         return result^
 
@@ -535,45 +530,55 @@ struct ListBuilder(Builder, Sized):
     fn values(self) -> AnyBuilder:
         return self._child
 
-    fn grow(mut self, capacity: Int) raises:
-        self._bitmap.resize(capacity)
-        self._offsets.resize[DType.uint32](capacity + 1)
-        self._capacity = capacity
+    fn append_null(mut self) raises:
+        self.reserve(1)
+        self.unsafe_append_null()
 
-    fn append(mut self, is_valid: Bool) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
-        self._bitmap.set_bit(self._length, is_valid)
-        if not is_valid:
-            self._null_count += 1
+    fn append_valid(mut self) raises:
+        self.reserve(1)
+        self.unsafe_append_valid()
+
+    @always_inline
+    fn unsafe_append_null(mut self):
+        """Append null without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, False)
+        self._null_count += 1
         var child_length = self._child.length()
         self._offsets.unsafe_set[DType.uint32](
             self._length + 1, UInt32(child_length)
         )
         self._length += 1
 
-    fn append_null(mut self) raises:
-        self.append(False)
-
-    fn append_valid(mut self) raises:
-        self.append(True)
+    @always_inline
+    fn unsafe_append_valid(mut self):
+        """Append valid without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, True)
+        var child_length = self._child.length()
+        self._offsets.unsafe_set[DType.uint32](
+            self._length + 1, UInt32(child_length)
+        )
+        self._length += 1
 
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
-            self.grow(needed)
-
-    fn shrink_to_fit(mut self) raises:
-        self._offsets.resize[DType.uint32](self._length + 1)
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._offsets.resize[DType.uint32](new_cap + 1)
+            self._capacity = new_cap
 
     fn finish_typed(mut self) raises -> ListArray:
-        self.shrink_to_fit()
+        # trim offsets buffer to length+1 entries (one past the last list)
+        self._offsets.resize[DType.uint32](self._length + 1)
+        # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
+        # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets.finish()
         var values = self._child.finish()
+        # construct the immutable result array
         var result = ListArray(
             dtype=self._dtype,
             length=self._length,
@@ -583,6 +588,7 @@ struct ListBuilder(Builder, Sized):
             offsets=offsets^,
             values=values^,
         )
+        # reset builder state for potential reuse
         self.reset()
         return result^
 
@@ -639,39 +645,44 @@ struct FixedSizeListBuilder(Builder, Sized):
     fn values(self) -> AnyBuilder:
         return self._child
 
-    fn grow(mut self, capacity: Int) raises:
-        self._bitmap.resize(capacity)
-        self._capacity = capacity
-
-    fn append(mut self, is_valid: Bool) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
-        self._bitmap.set_bit(self._length, is_valid)
-        if not is_valid:
-            self._null_count += 1
-        self._length += 1
-
     fn append_null(mut self) raises:
-        self.append(False)
+        self.reserve(1)
+        self.unsafe_append_null()
 
     fn append_valid(mut self) raises:
-        self.append(True)
+        self.reserve(1)
+        self.unsafe_append_valid()
+
+    @always_inline
+    fn unsafe_append_null(mut self):
+        """Append null without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, False)
+        self._null_count += 1
+        self._length += 1
+
+    @always_inline
+    fn unsafe_append_valid(mut self):
+        """Append valid without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, True)
+        self._length += 1
 
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
-            self.grow(needed)
-
-    fn shrink_to_fit(mut self):
-        pass
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._capacity = new_cap
 
     fn finish_typed(mut self) raises -> FixedSizeListArray:
-        self.shrink_to_fit()
+        # no offset buffer to trim — child length is implicit (length * list_size)
+        # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
+        # recursively finish the child builder
         var values = self._child.finish()
+        # construct the immutable result array
         var result = FixedSizeListArray(
             dtype=self._dtype,
             length=self._length,
@@ -680,6 +691,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             bitmap=bm^,
             values=values^,
         )
+        # reset builder state for potential reuse
         self.reset()
         return result^
 
@@ -738,43 +750,54 @@ struct StructBuilder(Builder, Sized):
     fn child(self, index: Int) -> AnyBuilder:
         return self._children[index]
 
-    fn grow(mut self, capacity: Int) raises:
-        self._bitmap.resize(capacity)
-        self._capacity = capacity
-
-    fn append(mut self, is_valid: Bool) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
-        self._bitmap.set_bit(self._length, is_valid)
-        if not is_valid:
-            self._null_count += 1
-        self._length += 1
-
     fn append_null(mut self) raises:
-        self.append(False)
+        if self._length >= self._capacity:
+            var new_cap = max(self._capacity * 2, self._length + 1)
+            self._bitmap.resize(new_cap)
+            self._capacity = new_cap
+        self.unsafe_append_null()
 
     fn append_valid(mut self) raises:
-        self.append(True)
+        if self._length >= self._capacity:
+            var new_cap = max(self._capacity * 2, self._length + 1)
+            self._bitmap.resize(new_cap)
+            self._capacity = new_cap
+        self.unsafe_append_valid()
+
+    @always_inline
+    fn unsafe_append_null(mut self):
+        """Append null without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, False)
+        self._null_count += 1
+        self._length += 1
+
+    @always_inline
+    fn unsafe_append_valid(mut self):
+        """Append valid without capacity check. Caller must ensure capacity."""
+        self._bitmap.set_bit(self._length, True)
+        self._length += 1
 
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
-            self.grow(needed)
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._capacity = new_cap
         for ref child in self._children:
             child.reserve(additional)
 
-    fn shrink_to_fit(mut self):
-        pass
-
     fn finish_typed(mut self) raises -> StructArray:
-        self.shrink_to_fit()
+        # no data buffers to trim — struct layout is encoded in child arrays
+        # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
+        # recursively finish each field builder into a frozen child array
         var frozen_children = List[Array]()
         for ref child in self._children:
             frozen_children.append(child.finish())
+        # construct the immutable result array
         var result = Array(
             dtype=self._dtype.copy(),
             length=self._length,
@@ -784,6 +807,7 @@ struct StructBuilder(Builder, Sized):
             children=frozen_children^,
             offset=0,
         )
+        # reset builder state for potential reuse
         self.reset()
         return StructArray(data=result^)
 

@@ -15,7 +15,7 @@ def _make_vectors(*values: Float64, dim: Int) raises -> FixedSizeListArray:
     var n_lists = len(values) // dim
     var builder = FixedSizeListBuilder(AnyBuilder(b^), list_size=dim)
     for _ in range(n_lists):
-        builder.append(True)
+        builder.append_valid()
     return builder.finish_typed()
 
 

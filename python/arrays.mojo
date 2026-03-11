@@ -534,12 +534,12 @@ struct PyListConverter(PyConverter):
         for i in range(n):
             var item = cpy.PyList_GetItem(values, i)
             if cpy.Py_Is(item, none_ptr):
-                builder.append_null()
+                builder.unsafe_append_null()
             else:
                 var inner_n = Int(cpy.PyObject_Length(item))
                 for j in range(inner_n):
                     self._child.append(cpy.PyList_GetItem(item, j))
-                builder.append_valid()
+                builder.unsafe_append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref cpy = Python().cpython()
@@ -588,7 +588,7 @@ struct PyStructConverter(PyConverter):
             if cpy.Py_Is(item, none_ptr):
                 for i in range(n_fields):
                     self._children[i].append(none_ptr)
-                builder.append_null()
+                builder.unsafe_append_null()
             else:
                 for i in range(n_fields):
                     var val = cpy.PyDict_GetItemWithError(
@@ -599,7 +599,7 @@ struct PyStructConverter(PyConverter):
                         self._children[i].append(none_ptr)
                     else:
                         self._children[i].append(val)
-                builder.append_valid()
+                builder.unsafe_append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref cpy = Python().cpython()
