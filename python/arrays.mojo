@@ -33,7 +33,7 @@ from marrow.arrays import (
     StructArray,
     ChunkedArray,
 )
-from marrow.builders import AnyBuilder, ListBuilder, StructBuilder, make_builder
+from marrow.builders import AnyBuilder, PrimitiveBuilder, StringBuilder, ListBuilder, StructBuilder, make_builder
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
 
@@ -398,58 +398,67 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
 
 struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
-    var _builder: AnyBuilder
+    var _builder: ArcPointer[PrimitiveBuilder[Self.T]]
     var _has_nulls: Bool
 
-    fn __init__(out self, var builder: AnyBuilder, has_nulls: Bool = True):
-        self._builder = builder^
+    fn __init__(
+        out self,
+        builder: ArcPointer[PrimitiveBuilder[Self.T]],
+        has_nulls: Bool = True,
+    ):
+        self._builder = builder
         self._has_nulls = has_nulls
 
     fn extend(mut self, values: PyObjectPtr) raises:
-        var b = self._builder.as_primitive[Self.T]()
+        ref b = self._builder[]
         ref cpy = Python().cpython()
         var n = Int(cpy.PyObject_Length(values))
         var none_ptr = cpy.Py_None()
-        b[].reserve(n)
+        b.reserve(n)
         if self._has_nulls:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 if cpy.Py_Is(item, none_ptr):
-                    b[].unsafe_append_null()
+                    b.unsafe_append_null()
                 else:
                     comptime if Self.T.native.is_floating_point():
-                        b[].unsafe_append(
+                        b.unsafe_append(
                             Scalar[Self.T.native](cpy.PyFloat_AsDouble(item))
                         )
                     else:
-                        b[].unsafe_append(
+                        b.unsafe_append(
                             Scalar[Self.T.native](cpy.PyLong_AsSsize_t(item))
                         )
         else:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 comptime if Self.T.native.is_floating_point():
-                    b[].unsafe_append(
+                    b.unsafe_append(
                         Scalar[Self.T.native](cpy.PyFloat_AsDouble(item))
                     )
                 else:
-                    b[].unsafe_append(
+                    b.unsafe_append(
                         Scalar[Self.T.native](cpy.PyLong_AsSsize_t(item))
                     )
 
     fn append(mut self, value: PyObjectPtr) raises:
-        var b = self._builder.as_primitive[Self.T]()
-        ref pb = b[]
+        ref b = self._builder[]
         ref cpy = Python().cpython()
         if cpy.Py_Is(value, cpy.Py_None()):
-            pb.append_null()
+            b.append_null()
         else:
             comptime if Self.T == dt.bool_:
-                pb.append(Bool(cpy.PyLong_AsSsize_t(value) != 0))
+                b.append(Bool(cpy.PyLong_AsSsize_t(value) != 0))
             elif Self.T.native.is_floating_point():
+<<<<<<< HEAD
                 pb.append(Scalar[Self.T.native](cpy.PyFloat_AsDouble(value)))
             else:
                 pb.append(Scalar[Self.T.native](cpy.PyLong_AsSsize_t(value)))
+=======
+                b.append(Scalar[Self.T.native](cpy.PyFloat_AsDouble(value)))
+            else:
+                b.append(Scalar[Self.T.native](cpy.PyLong_AsSsize_t(value)))
+>>>>>>> b8caf2a (refactor: store typed ArcPointer in all PyConverter structs)
 
 
 # ---------------------------------------------------------------------------
@@ -458,52 +467,51 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
 
 
 struct PyStringConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: ArcPointer[StringBuilder]
     var _has_nulls: Bool
     var _total_bytes: Int
 
     fn __init__(
         out self,
-        var builder: AnyBuilder,
+        builder: ArcPointer[StringBuilder],
         has_nulls: Bool = True,
         total_bytes: Int = 0,
     ):
-        self._builder = builder^
+        self._builder = builder
         self._has_nulls = has_nulls
         self._total_bytes = total_bytes
 
     fn extend(mut self, values: PyObjectPtr) raises:
-        var sb = self._builder.as_string()
+        ref b = self._builder[]
         ref cpy = Python().cpython()
         var n = Int(cpy.PyObject_Length(values))
         var none_ptr = cpy.Py_None()
 
-        sb[].reserve(n)
+        b.reserve(n)
         var total_bytes = self._total_bytes
         if total_bytes == 0:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 if not cpy.Py_Is(item, none_ptr):
                     total_bytes += len(cpy.PyUnicode_AsUTF8AndSize(item))
-        sb[].reserve_bytes(total_bytes)
+        b.reserve_bytes(total_bytes)
 
         if self._has_nulls:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 if cpy.Py_Is(item, none_ptr):
-                    sb[].unsafe_append_null()
+                    b.unsafe_append_null()
                 else:
                     var s = cpy.PyUnicode_AsUTF8AndSize(item)
-                    sb[].unsafe_append(s.unsafe_ptr(), len(s))
+                    b.unsafe_append(s.unsafe_ptr(), len(s))
         else:
             for i in range(n):
                 var item = cpy.PyList_GetItem(values, i)
                 var s = cpy.PyUnicode_AsUTF8AndSize(item)
-                sb[].unsafe_append(s.unsafe_ptr(), len(s))
+                b.unsafe_append(s.unsafe_ptr(), len(s))
 
     fn append(mut self, value: PyObjectPtr) raises:
-        var sb = self._builder.as_string()
-        ref b = sb[]
+        ref b = self._builder[]
         ref cpy = Python().cpython()
         if cpy.Py_Is(value, cpy.Py_None()):
             b.append_null()
@@ -636,9 +644,11 @@ fn make_converter(
     """Create a typed converter wrapping the given builder."""
     comptime for T in dt.primitive_dtypes:
         if dtype == T:
-            return PyPrimitiveConverter[T](builder^, has_nulls)
+            var builder = builder.as_primitive[T]()
+            return PyPrimitiveConverter[T](builder, has_nulls)
     if dtype.is_string():
-        return PyStringConverter(builder^, has_nulls, total_bytes)
+        var builder = builder.as_string()
+        return PyStringConverter(builder, has_nulls, total_bytes)
     elif dtype.is_list():
         var builder = builder.as_list()
         var values = builder[].values()
