@@ -450,15 +450,9 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
             comptime if Self.T == dt.bool_:
                 b.append(Bool(cpy.PyLong_AsSsize_t(value) != 0))
             elif Self.T.native.is_floating_point():
-<<<<<<< HEAD
-                pb.append(Scalar[Self.T.native](cpy.PyFloat_AsDouble(value)))
-            else:
-                pb.append(Scalar[Self.T.native](cpy.PyLong_AsSsize_t(value)))
-=======
                 b.append(Scalar[Self.T.native](cpy.PyFloat_AsDouble(value)))
             else:
                 b.append(Scalar[Self.T.native](cpy.PyLong_AsSsize_t(value)))
->>>>>>> b8caf2a (refactor: store typed ArcPointer in all PyConverter structs)
 
 
 # ---------------------------------------------------------------------------
@@ -528,36 +522,44 @@ struct PyStringConverter(PyConverter):
 struct PyListConverter(PyConverter):
     var _builder: ArcPointer[ListBuilder]
     var _child: PyAnyConverter
+    var _has_nulls: Bool
 
-    fn __init__(out self, builder: ArcPointer[ListBuilder], var child: PyAnyConverter):
+    fn __init__(
+        out self,
+        builder: ArcPointer[ListBuilder],
+        var child: PyAnyConverter,
+        has_nulls: Bool = True,
+    ):
         self._builder = builder
         self._child = child^
+        self._has_nulls = has_nulls
 
     fn extend(mut self, values: PyObjectPtr) raises:
         ref cpy = Python().cpython()
         ref builder = self._builder[]
         var n = Int(cpy.PyObject_Length(values))
-        var none_ptr = cpy.Py_None()
         builder.reserve(n)
-        for i in range(n):
-            var item = cpy.PyList_GetItem(values, i)
-            if cpy.Py_Is(item, none_ptr):
-                builder.unsafe_append_null()
-            else:
-                var inner_n = Int(cpy.PyObject_Length(item))
-                for j in range(inner_n):
-                    self._child.append(cpy.PyList_GetItem(item, j))
+        if self._has_nulls:
+            var none_ptr = cpy.Py_None()
+            for i in range(n):
+                var item = cpy.PyList_GetItem(values, i)
+                if cpy.Py_Is(item, none_ptr):
+                    builder.unsafe_append_null()
+                else:
+                    self._child.extend(item)
+                    builder.unsafe_append_valid()
+        else:
+            for i in range(n):
+                self._child.extend(cpy.PyList_GetItem(values, i))
                 builder.unsafe_append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref cpy = Python().cpython()
         ref builder = self._builder[]
-        if cpy.Py_Is(value, cpy.Py_None()):
+        if self._has_nulls and cpy.Py_Is(value, cpy.Py_None()):
             builder.append_null()
         else:
-            var n = Int(cpy.PyObject_Length(value))
-            for i in range(n):
-                self._child.append(cpy.PyList_GetItem(value, i))
+            self._child.extend(value)
             builder.append_valid()
 
 
@@ -653,7 +655,7 @@ fn make_converter(
         var builder = builder.as_list()
         var values = builder[].values()
         var child = make_converter(dtype.fields[0].dtype, values)
-        return PyListConverter(builder, child^)
+        return PyListConverter(builder, child^, has_nulls)
     elif dtype.is_struct():
         var builder = builder.as_struct()
         var children = List[PyAnyConverter]()
