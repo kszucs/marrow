@@ -61,12 +61,6 @@ trait Builder(ImplicitlyDestructible, Movable):
     fn append_null(mut self) raises:
         ...
 
-    fn append_nulls(mut self, n: Int) raises:
-        ...
-
-    fn append_valid(mut self) raises:
-        ...
-
     fn finish(mut self) raises -> Array:
         ...
 
@@ -93,8 +87,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     var _virt_dtype: fn(ArcPointer[NoneType]) -> DataType
     var _virt_reserve: fn(ArcPointer[NoneType], Int) raises
     var _virt_append_null: fn(ArcPointer[NoneType]) raises
-    var _virt_append_nulls: fn(ArcPointer[NoneType], Int) raises
-    var _virt_append_valid: fn(ArcPointer[NoneType]) raises
     var _virt_finish: fn(ArcPointer[NoneType]) raises -> Array
     var _virt_reset: fn(ArcPointer[NoneType])
     var _virt_drop: fn(var ArcPointer[NoneType])
@@ -124,16 +116,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         rebind[ArcPointer[T]](ptr)[].append_null()
 
     @staticmethod
-    fn _tramp_append_nulls[
-        T: Builder
-    ](ptr: ArcPointer[NoneType], n: Int) raises:
-        rebind[ArcPointer[T]](ptr)[].append_nulls(n)
-
-    @staticmethod
-    fn _tramp_append_valid[T: Builder](ptr: ArcPointer[NoneType]) raises:
-        rebind[ArcPointer[T]](ptr)[].append_valid()
-
-    @staticmethod
     fn _tramp_finish[
         T: Builder
     ](ptr: ArcPointer[NoneType],) raises -> Array:
@@ -159,8 +141,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._virt_dtype = Self._tramp_dtype[T]
         self._virt_reserve = Self._tramp_reserve[T]
         self._virt_append_null = Self._tramp_append_null[T]
-        self._virt_append_nulls = Self._tramp_append_nulls[T]
-        self._virt_append_valid = Self._tramp_append_valid[T]
         self._virt_finish = Self._tramp_finish[T]
         self._virt_reset = Self._tramp_reset[T]
         self._virt_drop = Self._tramp_drop[T]
@@ -172,8 +152,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._virt_dtype = copy._virt_dtype
         self._virt_reserve = copy._virt_reserve
         self._virt_append_null = copy._virt_append_null
-        self._virt_append_nulls = copy._virt_append_nulls
-        self._virt_append_valid = copy._virt_append_valid
         self._virt_finish = copy._virt_finish
         self._virt_reset = copy._virt_reset
         self._virt_drop = copy._virt_drop
@@ -192,12 +170,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     fn append_null(mut self) raises:
         self._virt_append_null(self._data)
-
-    fn append_nulls(mut self, n: Int) raises:
-        self._virt_append_nulls(self._data, n)
-
-    fn append_valid(mut self) raises:
-        self._virt_append_valid(self._data)
 
     fn finish(mut self) raises -> Array:
         return self._virt_finish(self._data)
@@ -325,16 +297,6 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             else:
                 self.append_null()
 
-    fn append_nulls(mut self, n: Int) raises:
-        for _ in range(n):
-            self.append_null()
-
-    fn append_valid(mut self) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
-        self._bitmap.set_bit(self._length, True)
-        self._length += 1
-
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional
         if needed > self._capacity:
@@ -454,19 +416,6 @@ struct StringBuilder(Builder, Sized):
                 self.append(values[i])
             else:
                 self.append_null()
-
-    fn append_nulls(mut self, n: Int) raises:
-        for _ in range(n):
-            self.append_null()
-
-    fn append_valid(mut self) raises:
-        if self._length >= self._capacity:
-            self.grow(max(self._capacity * 2, self._length + 1))
-        var index = self._length
-        var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
-        self._bitmap.set_bit(index, True)
-        self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
-        self._length += 1
 
     fn reserve(mut self, additional: Int) raises:
         var needed = self._length + additional

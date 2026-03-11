@@ -518,37 +518,39 @@ struct PyStringConverter(PyConverter):
 
 
 struct PyListConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: ArcPointer[ListBuilder]
     var _child: PyAnyConverter
 
-    fn __init__(out self, var builder: AnyBuilder, var child: PyAnyConverter):
-        self._builder = builder^
+    fn __init__(out self, builder: ArcPointer[ListBuilder], var child: PyAnyConverter):
+        self._builder = builder
         self._child = child^
 
     fn extend(mut self, values: PyObjectPtr) raises:
         ref cpy = Python().cpython()
+        ref builder = self._builder[]
         var n = Int(cpy.PyObject_Length(values))
         var none_ptr = cpy.Py_None()
-        self._builder.reserve(n)
+        builder.reserve(n)
         for i in range(n):
             var item = cpy.PyList_GetItem(values, i)
             if cpy.Py_Is(item, none_ptr):
-                self._builder.append_null()
+                builder.append_null()
             else:
                 var inner_n = Int(cpy.PyObject_Length(item))
                 for j in range(inner_n):
                     self._child.append(cpy.PyList_GetItem(item, j))
-                self._builder.append_valid()
+                builder.append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref cpy = Python().cpython()
+        ref builder = self._builder[]
         if cpy.Py_Is(value, cpy.Py_None()):
-            self._builder.append_null()
+            builder.append_null()
         else:
             var n = Int(cpy.PyObject_Length(value))
             for i in range(n):
                 self._child.append(cpy.PyList_GetItem(value, i))
-            self._builder.append_valid()
+            builder.append_valid()
 
 
 # ---------------------------------------------------------------------------
@@ -557,35 +559,36 @@ struct PyListConverter(PyConverter):
 
 
 struct PyStructConverter(PyConverter):
-    var _builder: AnyBuilder
+    var _builder: ArcPointer[StructBuilder]
     var _children: List[PyAnyConverter]
     var _field_keys: List[PythonObject]
 
     fn __init__(
         out self,
-        var builder: AnyBuilder,
+        builder: ArcPointer[StructBuilder],
         var children: List[PyAnyConverter],
         dtype: dt.DataType,
     ) raises:
         var field_keys = List[PythonObject]()
         for i in range(len(dtype.fields)):
             field_keys.append(PythonObject(dtype.fields[i].name))
-        self._builder = builder^
+        self._builder = builder
         self._children = children^
         self._field_keys = field_keys^
 
     fn extend(mut self, values: PyObjectPtr) raises:
         var n_fields = len(self._children)
         ref cpy = Python().cpython()
+        ref builder = self._builder[]
         var n = Int(cpy.PyObject_Length(values))
-        self._builder.reserve(n)
+        builder.reserve(n)
         var none_ptr = cpy.Py_None()
         for row in range(n):
             var item = cpy.PyList_GetItem(values, row)
             if cpy.Py_Is(item, none_ptr):
                 for i in range(n_fields):
                     self._children[i].append(none_ptr)
-                self._builder.append_null()
+                builder.append_null()
             else:
                 for i in range(n_fields):
                     var val = cpy.PyDict_GetItemWithError(
@@ -596,15 +599,16 @@ struct PyStructConverter(PyConverter):
                         self._children[i].append(none_ptr)
                     else:
                         self._children[i].append(val)
-                self._builder.append_valid()
+                builder.append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref cpy = Python().cpython()
+        ref builder = self._builder[]
         var none_ptr = cpy.Py_None()
         if cpy.Py_Is(value, none_ptr):
             for i in range(len(self._children)):
                 self._children[i].append(none_ptr)
-            self._builder.append_null()
+            builder.append_null()
         else:
             for i in range(len(self._children)):
                 var val = cpy.PyDict_GetItemWithError(
@@ -615,7 +619,7 @@ struct PyStructConverter(PyConverter):
                     self._children[i].append(none_ptr)
                 else:
                     self._children[i].append(val)
-            self._builder.append_valid()
+            builder.append_valid()
 
 
 # ---------------------------------------------------------------------------
@@ -636,17 +640,19 @@ fn make_converter(
     if dtype.is_string():
         return PyStringConverter(builder^, has_nulls, total_bytes)
     elif dtype.is_list():
-        var child_builder = builder.as_list()[].values()
-        var child = make_converter(dtype.fields[0].dtype, child_builder)
-        return PyListConverter(builder^, child^)
+        var builder = builder.as_list()
+        var values = builder[].values()
+        var child = make_converter(dtype.fields[0].dtype, values)
+        return PyListConverter(builder, child^)
     elif dtype.is_struct():
+        var builder = builder.as_struct()
         var children = List[PyAnyConverter]()
         for i in range(len(dtype.fields)):
-            var field_builder = builder.as_struct()[].child(i)
+            var field_builder = builder[].child(i)
             children.append(
                 make_converter(dtype.fields[i].dtype, field_builder)
             )
-        return PyStructConverter(builder^, children^, dtype)
+        return PyStructConverter(builder, children^, dtype)
     else:
         raise Error("unsupported type: {}".format(dtype))
 
