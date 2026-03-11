@@ -555,10 +555,6 @@ struct ListBuilder(Builder, Sized):
     fn append_null(mut self) raises:
         self.append(False)
 
-    fn append_nulls(mut self, n: Int) raises:
-        for _ in range(n):
-            self.append_null()
-
     fn append_valid(mut self) raises:
         self.append(True)
 
@@ -657,10 +653,6 @@ struct FixedSizeListBuilder(Builder, Sized):
 
     fn append_null(mut self) raises:
         self.append(False)
-
-    fn append_nulls(mut self, n: Int) raises:
-        for _ in range(n):
-            self.append_null()
 
     fn append_valid(mut self) raises:
         self.append(True)
@@ -761,10 +753,6 @@ struct StructBuilder(Builder, Sized):
     fn append_null(mut self) raises:
         self.append(False)
 
-    fn append_nulls(mut self, n: Int) raises:
-        for _ in range(n):
-            self.append_null()
-
     fn append_valid(mut self) raises:
         self.append(True)
 
@@ -772,8 +760,8 @@ struct StructBuilder(Builder, Sized):
         var needed = self._length + additional
         if needed > self._capacity:
             self.grow(needed)
-        for i in range(len(self._children)):
-            self._children[i].reserve(additional)
+        for ref child in self._children:
+            child.reserve(additional)
 
     fn shrink_to_fit(mut self):
         pass
@@ -785,8 +773,8 @@ struct StructBuilder(Builder, Sized):
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         var frozen_children = List[Array]()
-        for i in range(len(self._children)):
-            frozen_children.append(self._children[i].finish())
+        for ref child in self._children:
+            frozen_children.append(child.finish())
         var result = Array(
             dtype=self._dtype.copy(),
             length=self._length,

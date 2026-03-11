@@ -317,6 +317,17 @@ struct BufferBuilder(Movable):
         self._host = host
 
     @staticmethod
+    fn _aligned_size[T: DType](length: Int) -> Int:
+        """Compute the 64-byte-aligned allocation size for `length` elements of type T.
+
+        For DType.bool, `length` is the number of bits.
+        """
+        comptime if T == DType.bool:
+            return math.align_up(math.ceildiv(length, 8), 64)
+        else:
+            return math.align_up(length * size_of[T](), 64)
+
+    @staticmethod
     fn alloc[
         I: Intable, //, T: DType = DType.uint8
     ](length: I) -> BufferBuilder:
@@ -325,11 +336,7 @@ struct BufferBuilder(Movable):
         For DType.bool, `length` is the number of bits; the buffer will hold
         ceildiv(length, 8) bytes, zero-padded to a 64-byte boundary.
         """
-        var byte_size: Int
-        comptime if T == DType.bool:
-            byte_size = math.align_up(math.ceildiv(Int(length), 8), 64)
-        else:
-            byte_size = math.align_up(Int(length) * size_of[T](), 64)
+        var byte_size = Self._aligned_size[T](Int(length))
         var ptr = alloc[UInt8](byte_size, alignment=64)
         memset_zero(ptr, byte_size)
         return BufferBuilder(ptr, byte_size)
@@ -365,11 +372,7 @@ struct BufferBuilder(Movable):
         Returns:
             A BufferBuilder backed by pinned host memory.
         """
-        var byte_size: Int
-        comptime if T == DType.bool:
-            byte_size = math.align_up(math.ceildiv(Int(length), 8), 64)
-        else:
-            byte_size = math.align_up(Int(length) * size_of[T](), 64)
+        var byte_size = Self._aligned_size[T](Int(length))
         var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
         var ptr = rebind[UnsafePointer[UInt8, MutExternalOrigin]](
             host.unsafe_ptr()
@@ -415,7 +418,12 @@ struct BufferBuilder(Movable):
 
         For HOST builders the new allocation is also pinned host memory using
         the same `DeviceContext`; for CPU builders a plain heap allocation is used.
+
+        No-op if the new size maps to the same byte allocation as the current one.
         """
+        var byte_size = Self._aligned_size[T](Int(length))
+        if byte_size == self.size:
+            return
         var new: BufferBuilder
         if self._host:
             new = BufferBuilder.alloc_host[T](

@@ -241,5 +241,55 @@ def test_buffer_no_device() raises:
     assert_false(frozen.is_device())
 
 
+def test_buffer_builder_resize_noop_same_size() raises:
+    # Resize to a length that maps to the same byte allocation is a no-op:
+    # the pointer must not change.
+    var buf = BufferBuilder.alloc[DType.int64](10)
+    var ptr_before = buf.ptr
+    buf.resize[DType.int64](10)
+    assert_equal(buf.ptr, ptr_before)
+
+
+def test_buffer_builder_resize_noop_same_aligned_size() raises:
+    # Different element counts that map to the same aligned byte size are also
+    # no-ops (alignment is 64 bytes, so 1..8 int64 elements all fit in 64 bytes).
+    var buf = BufferBuilder.alloc[DType.int64](1)
+    var ptr_before = buf.ptr
+    buf.resize[DType.int64](8)  # still 64 bytes after alignment
+    assert_equal(buf.ptr, ptr_before)
+
+
+def test_buffer_builder_resize_reallocates_when_larger() raises:
+    # A resize that requires more bytes must produce a new allocation.
+    var buf = BufferBuilder.alloc[DType.int64](1)
+    var ptr_before = buf.ptr
+    buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → 128-byte aligned block
+    assert_true(buf.ptr != ptr_before)
+
+
+def test_bitmap_builder_resize_noop_same_capacity() raises:
+    # BitmapBuilder.resize delegates to BufferBuilder; same capacity is a no-op.
+    var bm = BitmapBuilder.alloc(64)
+    var ptr_before = bm._builder.ptr
+    bm.resize(64)
+    assert_equal(bm._builder.ptr, ptr_before)
+
+
+def test_bitmap_builder_resize_noop_same_aligned_capacity() raises:
+    # 1 and 511 bits both fit in a 64-byte block → no-op.
+    var bm = BitmapBuilder.alloc(1)
+    var ptr_before = bm._builder.ptr
+    bm.resize(511)
+    assert_equal(bm._builder.ptr, ptr_before)
+
+
+def test_bitmap_builder_resize_reallocates_when_larger() raises:
+    # 513 bits require a second 64-byte block → reallocation.
+    var bm = BitmapBuilder.alloc(1)
+    var ptr_before = bm._builder.ptr
+    bm.resize(513)
+    assert_true(bm._builder.ptr != ptr_before)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
