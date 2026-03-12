@@ -253,6 +253,7 @@ fn _fsl_getitem(
     return ptr[].__getitem__(index).to_python_object()
 
 
+
 # ---------------------------------------------------------------------------
 # PyInferrer — mirrors PyArrow's PyInferrer (inference.cc)
 # ---------------------------------------------------------------------------

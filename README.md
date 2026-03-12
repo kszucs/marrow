@@ -209,16 +209,16 @@ Python array construction vs PyArrow (n=100,000 elements, Apple M-series, mean t
 
 | Array type               | marrow  | PyArrow | speedup        |
 |--------------------------|--------:|--------:|---------------|
-| int64 (explicit type)    | 0.37 ms | 0.89 ms | **2.4x faster** |
-| int64 + nulls (explicit) | 0.36 ms | 0.87 ms | **2.4x faster** |
-| float64 (explicit)       | 0.34 ms | 0.48 ms | **1.4x faster** |
-| float64 + nulls          | 0.34 ms | 0.51 ms | **1.5x faster** |
-| string (explicit)        | 0.72 ms | 1.06 ms | **1.5x faster** |
-| string + nulls           | 0.70 ms | 1.04 ms | **1.5x faster** |
-| struct, primitive fields | 5.41 ms | 6.54 ms | **1.2x faster** |
-| int64 (inferred)         | 1.40 ms | 1.27 ms | 1.1x slower    |
-| string (inferred)        | 1.57 ms | 1.02 ms | 1.5x slower    |
-| nested list (inferred)   | 3.92 ms | 2.36 ms | 1.7x slower    |
+| int64 (explicit type)    | 0.30 ms | 0.92 ms | **3.0x faster** |
+| int64 + nulls (explicit) | 0.30 ms | 0.91 ms | **3.0x faster** |
+| float64 (explicit)       | 0.28 ms | 0.48 ms | **1.7x faster** |
+| float64 + nulls          | 0.28 ms | 0.52 ms | **1.8x faster** |
+| string (explicit)        | 0.81 ms | 1.07 ms | **1.3x faster** |
+| string + nulls           | 0.80 ms | 1.04 ms | **1.3x faster** |
+| struct, primitive fields | 4.64 ms | 6.35 ms | **1.4x faster** |
+| int64 (inferred)         | 1.58 ms | 1.28 ms | 1.2x slower    |
+| string (inferred)        | 0.92 ms | 1.01 ms | ~parity        |
+| nested list (inferred)   | 0.61 ms | 2.37 ms | **3.9x faster** |
 
 When the array type is provided explicitly, marrow's builder path is faster than PyArrow's for numeric and string types. Type inference involves a Python-side scan to detect the type, which adds overhead; this gap will narrow as the inference path is optimized.
 
