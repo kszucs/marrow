@@ -346,7 +346,7 @@ struct StringBuilder(Builder, Sized):
     var _offsets: BufferBuilder
     var _values: BufferBuilder
 
-    fn __init__(out self, capacity: Int = 0):
+    fn __init__(out self, capacity: Int = 0, bytes_capacity: Int = 0):
         var offsets = BufferBuilder.alloc[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
         self._length = 0
@@ -354,7 +354,7 @@ struct StringBuilder(Builder, Sized):
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
         self._offsets = offsets^
-        self._values = BufferBuilder.alloc[DType.uint8](capacity)
+        self._values = BufferBuilder.alloc[DType.uint8](bytes_capacity)
 
     fn __len__(self) -> Int:
         return self._length
@@ -369,26 +369,12 @@ struct StringBuilder(Builder, Sized):
         return string
 
     fn append(mut self, value: String) raises:
-        self.append(value.unsafe_ptr(), len(value))
+        self.append(StringSlice(value))
 
-    fn append(
-        mut self, ptr: UnsafePointer[mut=False, Byte, _], length: Int
-    ) raises:
+    fn append[origin: Origin](mut self, s: StringSlice[origin]) raises:
         self.reserve(1)
-        var index = self._length
-        var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
-        var next_offset = last_offset + UInt32(length)
-        self._length += 1
-        self._bitmap.set_bit(index, True)
-        self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
-        var needed = Int(next_offset)
-        if needed > self._values.size:
-            self._values.resize[DType.uint8](max(self._values.size * 2, needed))
-        memcpy(
-            dest=self._values.ptr + Int(last_offset),
-            src=ptr,
-            count=length,
-        )
+        self.reserve_bytes(len(s))
+        self.unsafe_append(s)
 
     fn append_null(mut self) raises:
         self.reserve(1)
@@ -420,11 +406,10 @@ struct StringBuilder(Builder, Sized):
         self._values.resize[DType.uint8](needed)
 
     @always_inline
-    fn unsafe_append(
-        mut self, ptr: UnsafePointer[mut=False, Byte, _], length: Int
-    ):
+    fn unsafe_append[origin: Origin](mut self, s: StringSlice[origin]):
         """Append string bytes without capacity checks. Caller must ensure capacity.
         """
+        var length = len(s)
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
         var next_offset = last_offset + UInt32(length)
@@ -432,7 +417,7 @@ struct StringBuilder(Builder, Sized):
         self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
         memcpy(
             dest=self._values.ptr + Int(last_offset),
-            src=ptr,
+            src=s.unsafe_ptr(),
             count=length,
         )
         self._length += 1

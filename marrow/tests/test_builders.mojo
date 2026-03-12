@@ -274,6 +274,33 @@ def test_string_builder_capacity_growth() raises:
     assert_equal(String(frozen.unsafe_get(2)), "third")
 
 
+def test_string_builder_append_string_slice() raises:
+    """append(StringSlice) stores the string correctly."""
+    var b = StringBuilder(2)
+    var s1 = StringSlice("hello")
+    var s2 = StringSlice("world")
+    b.append(s1)
+    b.append(s2)
+    var frozen = b.finish_typed()
+    assert_equal(frozen.length, 2)
+    assert_equal(String(frozen.unsafe_get(0)), "hello")
+    assert_equal(String(frozen.unsafe_get(1)), "world")
+
+
+def test_string_builder_unsafe_append_string_slice() raises:
+    """unsafe_append(StringSlice) stores the string correctly when capacity is pre-reserved.
+    """
+    var b = StringBuilder(2, bytes_capacity=10)
+    var s1 = StringSlice("hi")
+    var s2 = StringSlice("bye")
+    b.unsafe_append(s1)
+    b.unsafe_append(s2)
+    var frozen = b.finish_typed()
+    assert_equal(frozen.length, 2)
+    assert_equal(String(frozen.unsafe_get(0)), "hi")
+    assert_equal(String(frozen.unsafe_get(1)), "bye")
+
+
 def test_string_builder_as_any_builder() raises:
     var b = StringBuilder(1)
     b.append("test")

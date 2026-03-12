@@ -97,48 +97,134 @@ fn pymethod[
 
 
 # ---------------------------------------------------------------------------
-# CPython error-check helpers — analogous to Arrow's RETURN_IF_PYERROR macro
+# PyHelpers — cached CPython state for hot-path converters
 # ---------------------------------------------------------------------------
 
 
-@always_inline
-fn _check_pylong(val: Int, ref cpy: CPython) raises -> Int:
-    """Validate PyLong_AsSsize_t result; raise the Python exception on overflow or TypeError."""
-    if val == -1 and cpy.PyErr_Occurred():
-        raise cpy.unsafe_get_error()
-    return val
+struct PyHelpers(Copyable, Movable):
+    """Caches a Python instance and Py_None pointer for hot-path converters.
 
+    Create once per extend()/append() call so the tight inner loop pays only
+    a single Py_None() lookup instead of one per element.  is_none() uses a
+    direct pointer comparison — no CPython API call needed per element.
+    """
 
-@always_inline
-fn _pylong_as_scalar[dtype: DType](val: Int, ref cpy: CPython) raises -> Scalar[dtype]:
-    """Convert PyLong_AsSsize_t result to Scalar[dtype]; raise on Python error or if the
-    value is out of range for dtype (e.g. 200 into int8)."""
-    if val == -1 and cpy.PyErr_Occurred():
-        raise cpy.unsafe_get_error()
-    # uint64 is a special case: Scalar[uint64](-1).cast[int64]() == -1 == val, so the
-    # roundtrip check below is insufficient for negatives; catch them explicitly.
-    comptime if dtype == DType.uint64:
-        if val < 0:
-            raise Error("integer value out of range for type")
-    var converted = Scalar[dtype](val)
-    if Int(converted.cast[DType.int64]()) != val:
-        raise Error("integer value out of range for type")
-    return converted
+    var py: Python
+    var none_ptr: PyObjectPtr
+    var _unicode_type: PyTypeObjectPtr
+    var _bytes_type: PyTypeObjectPtr
+    var _list_type: PyTypeObjectPtr
+    var _tuple_type: PyTypeObjectPtr
+    var _dict_type: PyTypeObjectPtr
 
+    fn __init__(out self):
+        self.py = Python()
+        ref cpy = self.py.cpython()
+        self.none_ptr = cpy.Py_None()
+        self._unicode_type = cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type")
+        self._bytes_type = cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type")
+        self._list_type = cpy.lib.get_symbol[PyTypeObject]("PyList_Type")
+        self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
+        self._dict_type = cpy.PyDict_Type()
 
-@always_inline
-fn _check_pyfloat(val: Float64, ref cpy: CPython) raises -> Float64:
-    """Validate PyFloat_AsDouble result; raise the Python exception on TypeError."""
-    if val == -1.0 and cpy.PyErr_Occurred():
-        raise cpy.unsafe_get_error()
-    return val
+    fn __init__(out self, var other: Self):
+        # Python is not Movable/Copyable; re-create it. Cached pointers are process-wide constants.
+        self = PyHelpers()
 
+    fn __init__(out self, ref other: Self):
+        self = PyHelpers()
 
-@always_inline
-fn _check_pyunicode(ref cpy: CPython) raises:
-    """Check for error after PyUnicode_AsUTF8AndSize (null pointer not exposed by the Mojo wrapper)."""
-    if cpy.PyErr_Occurred():
-        raise cpy.unsafe_get_error()
+    @always_inline
+    fn cpy(mut self) -> ref [ImmutAnyOrigin] CPython:
+        return self.py.cpython()
+
+    @always_inline
+    fn is_none(self, ptr: PyObjectPtr) -> Bool:
+        return ptr == self.none_ptr
+
+    @always_inline
+    fn is_unicode(mut self, ptr: PyObjectPtr) -> Bool:
+        return self.cpy().PyObject_TypeCheck(ptr, self._unicode_type) != 0
+
+    @always_inline
+    fn is_bytes(mut self, ptr: PyObjectPtr) -> Bool:
+        return self.cpy().PyObject_TypeCheck(ptr, self._bytes_type) != 0
+
+    @always_inline
+    fn is_list(mut self, ptr: PyObjectPtr) -> Bool:
+        return self.cpy().PyObject_TypeCheck(ptr, self._list_type) != 0
+
+    @always_inline
+    fn is_tuple(mut self, ptr: PyObjectPtr) -> Bool:
+        return self.cpy().PyObject_TypeCheck(ptr, self._tuple_type) != 0
+
+    @always_inline
+    fn is_dict(mut self, ptr: PyObjectPtr) -> Bool:
+        return self.cpy().PyObject_TypeCheck(ptr, self._dict_type) != 0
+
+    @always_inline
+    fn raise_on_error(mut self) raises:
+        """Raise the current Python exception if one is set."""
+        if self.cpy().PyErr_Occurred():
+            raise self.cpy().unsafe_get_error()
+
+    @always_inline
+    fn to_scalar[dtype: DType](mut self, ptr: PyObjectPtr) raises -> Scalar[dtype]:
+        """Convert a Python int, float, or bool object to Scalar[dtype]; raises on type error or overflow."""
+        comptime if dtype == DType.bool:
+            var val = self.cpy().PyLong_AsSsize_t(ptr)
+            if val == -1:
+                self.raise_on_error()
+            return Scalar[dtype](val != 0)
+        elif dtype.is_floating_point():
+            var val = self.cpy().PyFloat_AsDouble(ptr)
+            if val == -1.0:
+                self.raise_on_error()
+            return Scalar[dtype](val)
+        else:
+            var val = self.cpy().PyLong_AsSsize_t(ptr)
+            if val == -1:
+                self.raise_on_error()
+            # uint64 is a special case: Scalar[uint64](-1).cast[int64]() == -1 == val, so the
+            # roundtrip check below is insufficient for negatives; catch them explicitly.
+            comptime if dtype == DType.uint64:
+                if val < 0:
+                    raise Error("integer value out of range for type")
+            var converted = Scalar[dtype](val)
+            if Int(converted.cast[DType.int64]()) != val:
+                raise Error("integer value out of range for type")
+            return converted
+
+    @always_inline
+    fn to_string_slice(mut self, ptr: PyObjectPtr) raises -> StringSlice[ImmutAnyOrigin]:
+        """Decode a Python str to a UTF-8 StringSlice; raises on TypeError or encoding error."""
+        var s = self.cpy().PyUnicode_AsUTF8AndSize(ptr)
+        self.raise_on_error()
+        return s
+
+    @always_inline
+    fn length(mut self, ptr: PyObjectPtr) -> Int:
+        """Return the length of a Python sequence or mapping."""
+        return Int(self.cpy().PyObject_Length(ptr))
+
+    @always_inline
+    fn dict_getitem(mut self, dict_ptr: PyObjectPtr, key: PyObjectPtr) raises -> PyObjectPtr:
+        """Look up key in a Python dict; returns none_ptr if missing, raises on error."""
+        var val = self.cpy().PyDict_GetItemWithError(dict_ptr, key)
+        if val == PyObjectPtr():
+            self.raise_on_error()
+            return self.none_ptr
+        return val
+
+    @always_inline
+    fn list_getitem(mut self, list_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
+        """Borrowed reference to list[i]; no bounds checking (mirrors PyList_GetItem)."""
+        return self.cpy().PyList_GetItem(list_ptr, i)
+
+    @always_inline
+    fn tuple_getitem(mut self, tuple_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
+        """Borrowed reference to tuple[i]; no bounds checking (mirrors PyTuple_GetItem)."""
+        return self.cpy().PyTuple_GetItem(tuple_ptr, i)
 
 
 # ---------------------------------------------------------------------------
@@ -194,13 +280,7 @@ struct PyInferrer(Copyable, Movable):
     var _field_order: List[String]
     var _field_children: List[PyInferrer]  # parallel to _field_order
 
-    # Cached CPython type pointers (obtained once at init)
-    var _none_ptr: PyObjectPtr
-    var _unicode_type: PyTypeObjectPtr  # PyUnicode_Type via lib.get_symbol
-    var _bytes_type: PyTypeObjectPtr  # PyBytes_Type via lib.get_symbol
-    var _list_type: PyTypeObjectPtr  # PyList_Type via lib.get_symbol
-    var _tuple_type: PyTypeObjectPtr  # PyTuple_Type via lib.get_symbol
-    var _dict_type: PyTypeObjectPtr  # cpython.PyDict_Type()
+    var py: PyHelpers
 
     fn __init__(out self) raises:
         self.none_count = 0
@@ -214,13 +294,7 @@ struct PyInferrer(Copyable, Movable):
         self._list_child = []
         self._field_order = []
         self._field_children = []
-        ref cpy = Python().cpython()
-        self._none_ptr = cpy.Py_None()
-        self._unicode_type = cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type")
-        self._bytes_type = cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type")
-        self._list_type = cpy.lib.get_symbol[PyTypeObject]("PyList_Type")
-        self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
-        self._dict_type = cpy.PyDict_Type()
+        self.py = PyHelpers()
 
     fn visit(mut self, ptr: PyObjectPtr) raises -> Bool:
         """Count one element's Python type, following PyArrow's Visit() order.
@@ -228,8 +302,8 @@ struct PyInferrer(Copyable, Movable):
         Returns False when the type is fully determined (no further widening possible),
         allowing the caller to stop early. Mirrors PyArrow's keep_going flag.
         """
-        ref cpy = Python().cpython()
-        if cpy.Py_Is(ptr, self._none_ptr):
+        ref cpy = self.py.cpy()
+        if self.py.is_none(ptr):
             self.none_count += 1
             return True  # null never locks the type
         elif cpy.PyBool_Check(ptr) != 0:  # exact bool check before PyLong_Check
@@ -241,21 +315,21 @@ struct PyInferrer(Copyable, Movable):
         elif cpy.PyLong_Check(ptr) != 0:
             self.int_count += 1
             return True  # int can widen to float64
-        elif cpy.PyObject_TypeCheck(ptr, self._unicode_type) != 0:
+        elif self.py.is_unicode(ptr):
             self.unicode_count += 1
             return False  # string cannot widen further
-        elif cpy.PyObject_TypeCheck(ptr, self._bytes_type) != 0:
+        elif self.py.is_bytes(ptr):
             self.bytes_count += 1
             return False  # bytes cannot widen further
-        elif cpy.PyObject_TypeCheck(ptr, self._dict_type) != 0:
+        elif self.py.is_dict(ptr):
             self.struct_count += 1
             self._visit_dict(ptr)
             return False  # struct cannot widen further
-        elif cpy.PyObject_TypeCheck(ptr, self._list_type) != 0:
+        elif self.py.is_list(ptr):
             self.list_count += 1
             self._visit_list(ptr)
             return False  # list cannot widen further
-        elif cpy.PyObject_TypeCheck(ptr, self._tuple_type) != 0:
+        elif self.py.is_tuple(ptr):
             self.list_count += 1
             self._visit_tuple(ptr)
             return False  # list cannot widen further
@@ -269,34 +343,31 @@ struct PyInferrer(Copyable, Movable):
         """Mirrors PyArrow's VisitSequence: recurse into list children."""
         if len(self._list_child) == 0:
             self._list_child.append(PyInferrer())
-        ref cpy = Python().cpython()
-        var n = Int(cpy.PyObject_Length(ptr))
+        var n = self.py.length(ptr)
         for i in range(n):
-            if not self._list_child[0].visit(cpy.PyList_GetItem(ptr, i)):
+            if not self._list_child[0].visit(self.py.list_getitem(ptr, i)):
                 break
 
     fn _visit_tuple(mut self, ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitSequence for tuples."""
         if len(self._list_child) == 0:
             self._list_child.append(PyInferrer())
-        ref cpy = Python().cpython()
-        var n = Int(cpy.PyObject_Length(ptr))
+        var n = self.py.length(ptr)
         for i in range(n):
-            if not self._list_child[0].visit(cpy.PyTuple_GetItem(ptr, i)):
+            if not self._list_child[0].visit(self.py.tuple_getitem(ptr, i)):
                 break
 
     fn _visit_dict(mut self, dict_ptr: PyObjectPtr) raises:
-        """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer.
-        """
-        ref cpy = Python().cpython()
-        var n = Int(cpy.PyObject_Length(dict_ptr))
+        """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer."""
+        ref cpy = self.py.cpy()
+        var n = self.py.length(dict_ptr)
         var pos = Int(0)
         var key_raw = alloc[PyObjectPtr](1)
         var val_raw = alloc[PyObjectPtr](1)
         var pos_ptr = UnsafePointer(to=pos)
         for _ in range(n):
             _ = cpy.PyDict_Next(dict_ptr, pos_ptr, key_raw, val_raw)
-            var name = String(cpy.PyUnicode_AsUTF8AndSize(key_raw[]))
+            var name = self.py.to_string_slice(key_raw[])
             var idx = -1
             for i in range(len(self._field_order)):
                 if self._field_order[i] == name:
@@ -304,7 +375,7 @@ struct PyInferrer(Copyable, Movable):
                     break
             if idx == -1:
                 idx = len(self._field_order)
-                self._field_order.append(name)
+                self._field_order.append(String(name))
                 self._field_children.append(PyInferrer())
             _ = self._field_children[idx].visit(val_raw[])
         key_raw.free()
@@ -354,12 +425,11 @@ struct PyInferrer(Copyable, Movable):
 
     fn infer(mut self, obj: PythonObject) raises -> dt.DataType:
         """Visit elements until type is locked, then scan remaining elements for nulls."""
-        ref cpy = Python().cpython()
         var list_ptr = obj._obj_ptr
         var n = len(obj)
         var stopped_at = n
         for i in range(n):
-            var item_ptr = cpy.PyList_GetItem(list_ptr, i)
+            var item_ptr = self.py.list_getitem(list_ptr, i)
             if not self.visit(item_ptr):
                 stopped_at = i + 1
                 break
@@ -367,9 +437,8 @@ struct PyInferrer(Copyable, Movable):
         # This is cheap (single pointer comparison per element) and keeps
         # none_count accurate so the converter can use the fast no-null path.
         if stopped_at < n:
-            var none_ptr = self._none_ptr
             for i in range(stopped_at, n):
-                if cpy.Py_Is(cpy.PyList_GetItem(list_ptr, i), none_ptr):
+                if self.py.is_none(self.py.list_getitem(list_ptr, i)):
                     self.none_count += 1
                     break  # one null is enough to know has_nulls=True
         return self._get_type()
@@ -450,6 +519,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
     var _builder: ArcPointer[PrimitiveBuilder[Self.T]]
     var _has_nulls: Bool
+    var py: PyHelpers
 
     fn __init__(
         out self,
@@ -458,67 +528,29 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
     ):
         self._builder = builder
         self._has_nulls = has_nulls
+        self.py = PyHelpers()
 
     fn extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
-        ref cpy = Python().cpython()
-        var n = Int(cpy.PyObject_Length(values))
-        var none_ptr = cpy.Py_None()
+        var n = self.py.length(values)
         b.reserve(n)
         if self._has_nulls:
             for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                if cpy.Py_Is(item, none_ptr):
+                var item = self.py.list_getitem(values, i)
+                if self.py.is_none(item):
                     b.unsafe_append_null()
                 else:
-                    comptime if Self.T.native.is_floating_point():
-                        b.unsafe_append(
-                            Scalar[Self.T.native](
-                                _check_pyfloat(cpy.PyFloat_AsDouble(item), cpy)
-                            )
-                        )
-                    else:
-                        b.unsafe_append(
-                            _pylong_as_scalar[Self.T.native](
-                                cpy.PyLong_AsSsize_t(item), cpy
-                            )
-                        )
+                    b.unsafe_append(self.py.to_scalar[Self.T.native](item))
         else:
             for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                comptime if Self.T.native.is_floating_point():
-                    b.unsafe_append(
-                        Scalar[Self.T.native](
-                            _check_pyfloat(cpy.PyFloat_AsDouble(item), cpy)
-                        )
-                    )
-                else:
-                    b.unsafe_append(
-                        Scalar[Self.T.native](
-                            _check_pylong(cpy.PyLong_AsSsize_t(item), cpy)
-                        )
-                    )
+                b.unsafe_append(self.py.to_scalar[Self.T.native](self.py.list_getitem(values, i)))
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
-        ref cpy = Python().cpython()
-        if cpy.Py_Is(value, cpy.Py_None()):
+        if self.py.is_none(value):
             b.append_null()
         else:
-            comptime if Self.T == dt.bool_:
-                b.append(Bool(_check_pylong(cpy.PyLong_AsSsize_t(value), cpy) != 0))
-            elif Self.T.native.is_floating_point():
-                b.append(
-                    Scalar[Self.T.native](
-                        _check_pyfloat(cpy.PyFloat_AsDouble(value), cpy)
-                    )
-                )
-            else:
-                b.append(
-                    _pylong_as_scalar[Self.T.native](
-                        cpy.PyLong_AsSsize_t(value), cpy
-                    )
-                )
+            b.append(self.py.to_scalar[Self.T.native](value))
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +561,7 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
 struct PyStringConverter(PyConverter):
     var _builder: ArcPointer[StringBuilder]
     var _has_nulls: Bool
+    var py: PyHelpers
     fn __init__(
         out self,
         builder: ArcPointer[StringBuilder],
@@ -536,53 +569,41 @@ struct PyStringConverter(PyConverter):
     ):
         self._builder = builder
         self._has_nulls = has_nulls
+        self.py = PyHelpers()
 
     @always_inline
-    fn _count_bytes(self, values: PyObjectPtr, n: Int, none_ptr: PyObjectPtr) raises -> Int:
-        ref cpy = Python().cpython()
+    fn _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
         var total = 0
         for i in range(n):
-            var item = cpy.PyList_GetItem(values, i)
-            if not cpy.Py_Is(item, none_ptr):
-                var s = cpy.PyUnicode_AsUTF8AndSize(item)
-                _check_pyunicode(cpy)
-                total += len(s)
+            var item = self.py.list_getitem(values, i)
+            if not self.py.is_none(item):
+                total += len(self.py.to_string_slice(item))
         return total
 
     fn extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
-        ref cpy = Python().cpython()
-        var n = Int(cpy.PyObject_Length(values))
-        var none_ptr = cpy.Py_None()
+        var n = self.py.length(values)
 
         b.reserve(n)
-        b.reserve_bytes(self._count_bytes(values, n, none_ptr))
+        b.reserve_bytes(self._count_bytes(values, n))
 
         if self._has_nulls:
             for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                if cpy.Py_Is(item, none_ptr):
+                var item = self.py.list_getitem(values, i)
+                if self.py.is_none(item):
                     b.unsafe_append_null()
                 else:
-                    var s = cpy.PyUnicode_AsUTF8AndSize(item)
-                    _check_pyunicode(cpy)
-                    b.unsafe_append(s.unsafe_ptr(), len(s))
+                    b.unsafe_append(self.py.to_string_slice(item))
         else:
             for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                var s = cpy.PyUnicode_AsUTF8AndSize(item)
-                _check_pyunicode(cpy)
-                b.unsafe_append(s.unsafe_ptr(), len(s))
+                b.unsafe_append(self.py.to_string_slice(self.py.list_getitem(values, i)))
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
-        ref cpy = Python().cpython()
-        if cpy.Py_Is(value, cpy.Py_None()):
+        if self.py.is_none(value):
             b.append_null()
         else:
-            var s = cpy.PyUnicode_AsUTF8AndSize(value)
-            _check_pyunicode(cpy)
-            b.append(s.unsafe_ptr(), len(s))
+            b.append(self.py.to_string_slice(value))
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +615,7 @@ struct PyListConverter(PyConverter):
     var _builder: ArcPointer[ListBuilder]
     var _child: PyAnyConverter
     var _has_nulls: Bool
+    var py: PyHelpers
 
     fn __init__(
         out self,
@@ -604,30 +626,28 @@ struct PyListConverter(PyConverter):
         self._builder = builder
         self._child = child^
         self._has_nulls = has_nulls
+        self.py = PyHelpers()
 
     fn extend(mut self, values: PyObjectPtr) raises:
-        ref cpy = Python().cpython()
         ref builder = self._builder[]
-        var n = Int(cpy.PyObject_Length(values))
+        var n = self.py.length(values)
         builder.reserve(n)
         if self._has_nulls:
-            var none_ptr = cpy.Py_None()
             for i in range(n):
-                var item = cpy.PyList_GetItem(values, i)
-                if cpy.Py_Is(item, none_ptr):
+                var item = self.py.list_getitem(values, i)
+                if self.py.is_none(item):
                     builder.unsafe_append_null()
                 else:
                     self._child.extend(item)
                     builder.unsafe_append_valid()
         else:
             for i in range(n):
-                self._child.extend(cpy.PyList_GetItem(values, i))
+                self._child.extend(self.py.list_getitem(values, i))
                 builder.unsafe_append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
-        ref cpy = Python().cpython()
         ref builder = self._builder[]
-        if self._has_nulls and cpy.Py_Is(value, cpy.Py_None()):
+        if self._has_nulls and self.py.is_none(value):
             builder.append_null()
         else:
             self._child.extend(value)
@@ -643,6 +663,7 @@ struct PyStructConverter(PyConverter):
     var _builder: ArcPointer[StructBuilder]
     var _children: List[PyAnyConverter]
     var _field_keys: List[PythonObject]
+    var py: PyHelpers
 
     fn __init__(
         out self,
@@ -656,53 +677,37 @@ struct PyStructConverter(PyConverter):
         self._builder = builder
         self._children = children^
         self._field_keys = field_keys^
+        self.py = PyHelpers()
 
     fn extend(mut self, values: PyObjectPtr) raises:
         var n_fields = len(self._children)
-        ref cpy = Python().cpython()
         ref builder = self._builder[]
-        var n = Int(cpy.PyObject_Length(values))
+        var n = self.py.length(values)
         builder.reserve(n)
-        var none_ptr = cpy.Py_None()
         for row in range(n):
-            var item = cpy.PyList_GetItem(values, row)
-            if cpy.Py_Is(item, none_ptr):
+            var item = self.py.list_getitem(values, row)
+            if self.py.is_none(item):
                 for i in range(n_fields):
-                    self._children[i].append(none_ptr)
+                    self._children[i].append(self.py.none_ptr)
                 builder.unsafe_append_null()
             else:
                 for i in range(n_fields):
-                    var val = cpy.PyDict_GetItemWithError(
-                        item, self._field_keys[i]._obj_ptr
+                    self._children[i].append(
+                        self.py.dict_getitem(item, self._field_keys[i]._obj_ptr)
                     )
-                    if val == PyObjectPtr():
-                        if cpy.PyErr_Occurred():
-                            raise cpy.unsafe_get_error()
-                        self._children[i].append(none_ptr)
-                    else:
-                        self._children[i].append(val)
                 builder.unsafe_append_valid()
 
     fn append(mut self, value: PyObjectPtr) raises:
-        ref cpy = Python().cpython()
         ref builder = self._builder[]
-        var none_ptr = cpy.Py_None()
-        if cpy.Py_Is(value, none_ptr):
+        if self.py.is_none(value):
             for i in range(len(self._children)):
-                self._children[i].append(none_ptr)
+                self._children[i].append(self.py.none_ptr)
             builder.append_null()
         else:
             for i in range(len(self._children)):
-                var val = cpy.PyDict_GetItemWithError(
-                    value, self._field_keys[i]._obj_ptr
+                self._children[i].append(
+                    self.py.dict_getitem(value, self._field_keys[i]._obj_ptr)
                 )
-                if val == PyObjectPtr():
-                    if cpy.PyErr_Occurred():
-                        cpy.PyErr_Clear()
-                        raise Error("cannot convert value to struct: expected dict")
-                    self._children[i].append(none_ptr)
-                else:
-                    self._children[i].append(val)
             builder.append_valid()
 
 
@@ -771,10 +776,9 @@ fn array(
         )
 
     var builder = make_builder(dtype, len(obj))
-    var finish_builder = builder
-    var converter = make_converter(dtype, builder^, has_nulls)
+    var converter = make_converter(dtype, builder, has_nulls)
     converter.extend(obj._obj_ptr)
-    return finish_builder.finish().to_python_object()
+    return builder.finish().to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

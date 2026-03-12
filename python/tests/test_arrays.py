@@ -229,7 +229,6 @@ def test_array_struct_explicit_type():
     ty = ma.struct([ma.field("x", ma.int32()), ma.field("y", ma.float64())])
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
     assert type(arr).__name__ == "StructArray"
-<<<<<<< HEAD
     assert len(arr) == 2
 
 
@@ -267,7 +266,6 @@ def test_index_list():
     assert child1[0] == 3
     assert child1[1] == 4
     assert child1[2] == 5
-=======
     assert arr.__len__() == 2
 
 
@@ -447,4 +445,3 @@ def test_array_list_scalar_raises():
     # Scalar where a list element is expected should raise
     with pytest.raises(Exception):
         ma.array([1, 2, 3], type=ma.list_(ma.int64()))
->>>>>>> 3cce2a3 (feat(python): add CPython error-check helpers and overflow tests)
