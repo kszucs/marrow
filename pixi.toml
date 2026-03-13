@@ -33,7 +33,7 @@ docs_preview = { cmd = "quarto preview docs/", depends-on = [
 rattler-build = ">=0.35,<1"
 
 [feature.package.tasks]
-package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir output"
+package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir output -c https://conda.modular.com/max-nightly/ -c conda-forge"
 
 [environments]
 package = { features = ["package"], no-default-feature = true }
