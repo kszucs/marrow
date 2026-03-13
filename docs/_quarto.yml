@@ -6,7 +6,7 @@ website:
   title: "Marrow"
   description: "Apache Arrow in Mojo"
   navbar:
-    logo: ../logo-transparent.png
+    logo: ../logo.png
     logo-alt: "marrow"
     left:
       - text: "Quickstart"
