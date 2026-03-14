@@ -20,11 +20,6 @@ from .schema import Schema
 comptime ARROW_FLAG_NULLABLE = 2
 
 
-# TODO: Fix this
-fn empty_release_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
-    pass
-
-
 @fieldwise_init
 struct CArrowSchema(Copyable):
     var format: UnsafePointer[c_char, MutAnyOrigin]
@@ -42,17 +37,6 @@ struct CArrowSchema(Copyable):
 
     fn __del__(deinit self):
         self.release(UnsafePointer(to=self))
-
-    @staticmethod
-    fn from_pyarrow(pyobj: PythonObject) raises -> CArrowSchema:
-        var ptr = alloc[CArrowSchema](1)
-        pyobj._export_to_c(Int(ptr))
-        return ptr.take_pointee()
-
-    fn to_pyarrow(self) raises -> PythonObject:
-        var pa = Python.import_module("pyarrow")
-        var ptr = UnsafePointer(to=self)
-        return pa.Schema._import_from_c(Int(ptr))
 
     @staticmethod
     fn from_dtype(dtype: DataType) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
@@ -304,12 +288,6 @@ struct CArrowArray(Movable):
 
     fn __del__(deinit self):
         self.release(UnsafePointer(to=self))
-
-    @staticmethod
-    fn from_pyarrow(pyobj: PythonObject) raises -> CArrowArray:
-        var ptr = alloc[CArrowArray](1)
-        pyobj._export_to_c(Int(ptr))
-        return ptr.take_pointee()
 
     fn _to_array(
         self, dtype: DataType, owner: ArcPointer[Allocation]

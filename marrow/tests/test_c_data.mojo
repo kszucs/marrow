@@ -1,6 +1,25 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.python import Python, PythonObject
+from std.memory import alloc
 from marrow.c_data import *
+
+
+fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
+    """Import a CArrowArray from any PyArrow object supporting _export_to_c."""
+    var ptr = alloc[CArrowArray](1)
+    pyobj._export_to_c(Int(ptr))
+    var c_array = ptr.take_pointee()
+    ptr.free()
+    return c_array^
+
+
+fn c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
+    """Import a CArrowSchema from any PyArrow object supporting _export_to_c."""
+    var ptr = alloc[CArrowSchema](1)
+    pyobj._export_to_c(Int(ptr))
+    var c_schema = ptr.take_pointee()
+    ptr.free()
+    return c_schema^
 
 
 def test_schema_from_pyarrow() raises:
@@ -11,7 +30,7 @@ def test_schema_from_pyarrow() raises:
     pyschema = pyschema.append(pyint)
     pyschema = pyschema.append(pystring)
 
-    var c_schema = CArrowSchema.from_pyarrow(pyschema)
+    var c_schema = c_schema_from_pyobj(pyschema)
     var schema = c_schema.to_dtype()
 
     assert_equal(schema.fields[0].name, "int_field")
@@ -27,8 +46,8 @@ def test_primitive_array_from_pyarrow() raises:
         mask=Python.list(False, False, False, False, True),
     )
 
-    var c_array = CArrowArray.from_pyarrow(pyarr)
-    var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
 
     var dtype = c_schema.to_dtype()
     assert_equal(dtype, int64)
@@ -61,8 +80,8 @@ def test_binary_array_from_pyarrow() raises:
         mask=Python.list(False, False, True),
     )
 
-    var c_array = CArrowArray.from_pyarrow(pyarr)
-    var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
 
     var dtype = c_schema.to_dtype()
     assert_equal(dtype, string)
@@ -97,8 +116,8 @@ def test_list_array_from_pyarrow() raises:
         mask=Python.list(False, True, False),
     )
 
-    var c_array = CArrowArray.from_pyarrow(pyarr)
-    var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
 
     var dtype = c_schema.to_dtype()
     assert_equal(dtype, list_(int64))
@@ -146,7 +165,7 @@ def test_schema_to_field() raises:
     var pyfield = pa.field(
         "test_field", pa.int32(), nullable=PythonObject(True)
     )
-    var c_schema = CArrowSchema.from_pyarrow(pyfield)
+    var c_schema = c_schema_from_pyobj(pyfield)
     var field = c_schema.to_field()
     assert_equal(field.name, "test_field")
     assert_equal(field.dtype, int32)
@@ -155,7 +174,7 @@ def test_schema_to_field() raises:
     var pyfield_str = pa.field(
         "string_field", pa.string(), nullable=PythonObject(False)
     )
-    var c_schema_str = CArrowSchema.from_pyarrow(pyfield_str)
+    var c_schema_str = c_schema_from_pyobj(pyfield_str)
     var field_str = c_schema_str.to_field()
     assert_equal(field_str.name, "string_field")
     assert_equal(field_str.dtype, string)
@@ -213,7 +232,7 @@ def test_struct_dtype_conversion() raises:
         Python.tuple("x", pa.int32()), Python.tuple("y", pa.float64())
     )
     var struct_type = pa.`struct`(struct_fields)
-    var c_schema = CArrowSchema.from_pyarrow(struct_type)
+    var c_schema = c_schema_from_pyobj(struct_type)
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_struct())
@@ -228,7 +247,7 @@ def test_list_dtype_conversion() raises:
     var pa = Python.import_module("pyarrow")
 
     var list_type = pa.list_(pa.int32())
-    var c_schema = CArrowSchema.from_pyarrow(list_type)
+    var c_schema = c_schema_from_pyobj(list_type)
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_list())
@@ -240,7 +259,7 @@ def test_fixed_size_list_dtype_conversion() raises:
     var pa = Python.import_module("pyarrow")
 
     var fsl_type = pa.list_(pa.float32(), 3)
-    var c_schema = CArrowSchema.from_pyarrow(fsl_type)
+    var c_schema = c_schema_from_pyobj(fsl_type)
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_fixed_size_list())
@@ -261,8 +280,8 @@ def test_fixed_size_list_from_pyarrow() raises:
         3,
     )
 
-    var c_array = CArrowArray.from_pyarrow(pyarr)
-    var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
 
     var dtype = c_schema.to_dtype()
     assert_true(dtype.is_fixed_size_list())
@@ -310,7 +329,7 @@ def test_numeric_dtypes() raises:
         var py_type = type_pair[0]
         ref expected_mojo_type = type_pair[1]
 
-        var c_schema = CArrowSchema.from_pyarrow(py_type)
+        var c_schema = c_schema_from_pyobj(py_type)
         var dtype = c_schema.to_dtype()
         assert_equal(dtype, expected_mojo_type)
 

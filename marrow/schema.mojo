@@ -28,7 +28,11 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
     fn from_pyarrow(pa_schema: PythonObject) raises -> Schema:
         """Initializes a schema from a PyArrow schema."""
         from .c_data import CArrowSchema
-        var c_schema = CArrowSchema.from_pyarrow(pa_schema)
+        from std.memory import alloc
+        var ptr = alloc[CArrowSchema](1)
+        pa_schema._export_to_c(Int(ptr))
+        var c_schema = ptr.take_pointee()
+        ptr.free()
         return c_schema.to_schema()
 
     fn to_pyarrow(self) raises -> PythonObject:

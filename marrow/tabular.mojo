@@ -15,16 +15,6 @@ from std.python import Python, PythonObject
 from std.memory import alloc
 
 
-fn _array_to_pyarrow(pa: PythonObject, array: Array) raises -> PythonObject:
-    """Export a Mojo Array to a PyArrow array via the C Data Interface."""
-    var c_schema = CArrowSchema.from_dtype(array.dtype)
-    var c_array = CArrowArray.from_array(array)
-    var result = pa.Array._import_from_c(Int(c_array), Int(c_schema))
-    c_array.free()
-    c_schema.free()
-    return result
-
-
 struct RecordBatch(Copyable, Writable):
     """A schema together with a list of equal-length column arrays.
 
@@ -102,7 +92,7 @@ struct RecordBatch(Copyable, Writable):
         var pa_schema = self.schema.to_pyarrow()
         var pa_arrays = Python.list()
         for col in self.columns:
-            pa_arrays.append(_array_to_pyarrow(pa, col))
+            pa_arrays.append(col.to_pyarrow())
         return pa.RecordBatch.from_arrays(pa_arrays, schema=pa_schema)
 
     fn write_to[W: Writer](self, mut writer: W):
