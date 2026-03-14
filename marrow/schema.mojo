@@ -39,23 +39,19 @@ struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
 
     fn names(self) -> List[String]:
         """Returns the names of the fields in the schema."""
-        return [field.name for field in self.fields]
-
-    fn field(
-        self,
-        *,
-        index: Optional[Int] = None,
-        name: Optional[StringSlice[origin=ImmutAnyOrigin]] = None,
-    ) raises -> ref[self.fields] Field:
-        """Returns the field at the given index or with the given name."""
-        if index and name:
-            raise Error("Either an index or a name must be provided, not both.")
-        if index:
-            return self.fields[index.value()]
-        if not name:
-            raise Error("Either an index or a name must be provided.")
+        var res = List[String](capacity=len(self.fields))
         for field in self.fields:
-            if StringSlice(field.name) == name.value():
+            res.append(field.name)
+        return res^
+
+    fn field(self, *, index: Int) raises -> ref[self.fields] Field:
+        """Returns the field at the given index."""
+        return self.fields[index]
+
+    fn field(self, *, name: StringSlice) raises -> ref[self.fields] Field:
+        """Returns the field with the given name."""
+        for field in self.fields:
+            if field.name == name:
                 return field
         raise Error(t"Field with name `{name.value()}` not found.")
 
