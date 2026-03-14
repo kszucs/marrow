@@ -651,7 +651,7 @@ struct PyStructConverter(PyConverter):
         var children: List[PyAnyConverter],
         dtype: dt.DataType,
     ) raises:
-        var field_keys = List[PythonObject]()
+        var field_keys = List[PythonObject](capacity=len(dtype.fields))
         for i in range(len(dtype.fields)):
             field_keys.append(PythonObject(dtype.fields[i].name))
         self._builder = builder
@@ -716,7 +716,7 @@ fn make_converter(
         return PyListConverter(builder, child^, has_nulls)
     elif dtype.is_struct():
         var builder = builder.as_struct()
-        var children = List[PyAnyConverter]()
+        var children = List[PyAnyConverter](capacity=len(dtype.fields))
         for i in range(len(dtype.fields)):
             var field_builder = builder[].child(i)
             children.append(

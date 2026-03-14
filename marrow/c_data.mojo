@@ -359,7 +359,7 @@ struct CArrowSchema(Copyable, Movable):
             var field = self.children[0][].to_field()
             return fixed_size_list_(field.dtype.copy(), size)
         elif fmt == "+s":
-            var fields = List[Field]()
+            var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
                 fields.append(self.children[i][].to_field())
             return struct_(fields)
@@ -515,8 +515,8 @@ struct CArrowArray(Copyable, Movable):
             # null bitmap pointer means all elements are valid
             bitmap = None
 
-        var buffers = List[Buffer]()
-        var children = List[Array]()
+        var buffers = List[Buffer](capacity=2)  # worst case scenario for string
+        var children = List[Array](capacity=Int(self.n_children))
 
         if dtype.is_bool():
             if self.n_buffers != 2:

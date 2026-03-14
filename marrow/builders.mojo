@@ -779,7 +779,7 @@ struct StructBuilder(Builder, Sized):
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # recursively finish each field builder into a frozen child array
-        var frozen_children = List[Array]()
+        var frozen_children = List[Array](capacity=len(self._children))
         for ref child in self._children:
             frozen_children.append(child.finish())
         # construct the immutable result array
@@ -788,7 +788,7 @@ struct StructBuilder(Builder, Sized):
             length=self._length,
             nulls=null_count,
             bitmap=bm^,
-            buffers=List[Buffer](),
+            buffers=[],
             children=frozen_children^,
             offset=0,
         )
@@ -841,7 +841,7 @@ fn make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
         var child = make_builder(dtype.fields[0].dtype)
         return FixedSizeListBuilder(child^, dtype.size, capacity)
     elif dtype.is_struct():
-        var children = List[AnyBuilder]()
+        var children = List[AnyBuilder](capacity=len(dtype.fields))
         for i in range(len(dtype.fields)):
             children.append(make_builder(dtype.fields[i].dtype))
         return StructBuilder(dtype.fields.copy(), children^, capacity)

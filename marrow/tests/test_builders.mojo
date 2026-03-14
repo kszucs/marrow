@@ -499,9 +499,7 @@ def test_fixed_size_list_builder_size1() raises:
 
 
 def test_struct_builder_zero_length() raises:
-    var fields = List[Field]()
-    var children = List[AnyBuilder]()
-    var sb = StructBuilder(fields^, children^)
+    var sb = StructBuilder([], [])
     var frozen = sb.finish_typed()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_struct())
@@ -518,12 +516,8 @@ def test_struct_builder_append_valid() raises:
     score_b.append(0.2)
     score_b.append(0.3)
 
-    var fields = List[Field]()
-    fields.append(Field("id", int64))
-    fields.append(Field("score", float64))
-    var children = List[AnyBuilder]()
-    children.append(id_b^)
-    children.append(score_b^)
+    var fields: List[Field] = [Field("id", int64), Field("score", float64)]
+    var children: List[AnyBuilder] = [id_b^, score_b^]
     var sb = StructBuilder(fields^, children^, capacity=3)
     sb.append_valid()
     sb.append_valid()
@@ -544,10 +538,8 @@ def test_struct_builder_append_null() raises:
     id_b.append(10)
     id_b.append(20)
 
-    var fields = List[Field]()
-    fields.append(Field("id", int32))
-    var children = List[AnyBuilder]()
-    children.append(id_b^)
+    var fields: List[Field] = [Field("id", int32)]
+    var children: List[AnyBuilder] = [id_b^]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_null()
@@ -563,10 +555,8 @@ def test_struct_builder_field_values_accessible() raises:
     x_b.append(42)
     x_b.append(99)
 
-    var fields = List[Field]()
-    fields.append(Field("x", int32))
-    var children = List[AnyBuilder]()
-    children.append(x_b^)
+    var fields: List[Field] = [Field("x", int32)]
+    var children: List[AnyBuilder] = [x_b^]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -590,14 +580,12 @@ def test_struct_builder_multi_type_fields() raises:
     active_b.append(True)
     active_b.append_null()
 
-    var fields = List[Field]()
-    fields.append(Field("id", int64))
-    fields.append(Field("name", string))
-    fields.append(Field("active", bool_))
-    var children = List[AnyBuilder]()
-    children.append(id_b^)
-    children.append(name_b^)
-    children.append(active_b^)
+    var fields: List[Field] = [
+        Field("id", int64),
+        Field("name", string),
+        Field("active", bool_),
+    ]
+    var children: List[AnyBuilder] = [id_b^, name_b^, active_b^]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -616,12 +604,8 @@ def test_struct_builder_child_accessor() raises:
     var y_b = PrimitiveBuilder[int32](1)
     y_b.append(8)
 
-    var fields = List[Field]()
-    fields.append(Field("x", int32))
-    fields.append(Field("y", int32))
-    var children = List[AnyBuilder]()
-    children.append(x_b^)
-    children.append(y_b^)
+    var fields: List[Field] = [Field("x", int32), Field("y", int32)]
+    var children: List[AnyBuilder] = [x_b^, y_b^]
     var sb = StructBuilder(fields^, children^)
     sb.append_valid()
 
@@ -637,10 +621,8 @@ def test_struct_builder_capacity_growth() raises:
     id_b.append(3)
     id_b.append(4)
 
-    var fields = List[Field]()
-    fields.append(Field("id", int32))
-    var children = List[AnyBuilder]()
-    children.append(id_b^)
+    var fields: List[Field] = [Field("id", int32)]
+    var children: List[AnyBuilder] = [id_b^]
     var sb = StructBuilder(fields^, children^)
     for _ in range(5):
         sb.append_valid()
@@ -655,12 +637,8 @@ def test_struct_builder_field_names_preserved() raises:
     var b_b = PrimitiveBuilder[int8](1)
     b_b.append(2)
 
-    var fields = List[Field]()
-    fields.append(Field("alpha", int8))
-    fields.append(Field("beta", int8))
-    var children = List[AnyBuilder]()
-    children.append(a_b^)
-    children.append(b_b^)
+    var fields: List[Field] = [Field("alpha", int8), Field("beta", int8)]
+    var children: List[AnyBuilder] = [a_b^, b_b^]
     var sb = StructBuilder(fields^, children^)
     sb.append_valid()
     var frozen = sb.finish_typed()

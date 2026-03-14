@@ -58,15 +58,13 @@ def test_array_data_with_offset() raises:
     bitmap.set_bit(4, True)
 
     # Create ArrayData with offset=2
-    var buffers = List[Buffer]()
-    buffers.append(buffer.finish())
     var array_data = Array(
         dtype=int8,
         length=3,
         nulls=0,
         bitmap=bitmap.finish(10),
-        buffers=buffers^,
-        children=List[Array](),
+        buffers=[buffer.finish()],
+        children=[],
         offset=2,
     )
 
@@ -84,15 +82,13 @@ def test_array_data_fieldwise_init() raises:
     var buffer = buffer_b.finish()
 
     # Test creating ArrayData with all fields specified including offset
-    var buffers = List[Buffer]()
-    buffers.append(buffer)
     var array_data = Array(
         dtype=int8,
         length=5,
         nulls=0,
         bitmap=None,
-        buffers=buffers^,
-        children=List[Array](),
+        buffers=[buffer],
+        children=[],
         offset=3,
     )
 
@@ -123,22 +119,20 @@ def test_array_from_list() raises:
 
 def test_array_from_struct() raises:
     var fields = [Field("x", int32)]
-    var s = StructBuilder(fields^, List[AnyBuilder](), capacity=5)
+    var s = StructBuilder(fields^, [], capacity=5)
     var a: Array = s.finish()
     assert_true(a.dtype.is_struct())
 
 
 def test_array_copy() raises:
-    var src_buffers = List[Buffer]()
     var _sb = BufferBuilder.alloc[int8.native](3)
-    src_buffers.append(_sb.finish())
     var src = Array(
         dtype=int8,
         length=3,
         nulls=0,
         bitmap=None,
-        buffers=src_buffers^,
-        children=List[Array](),
+        buffers=[_sb.finish()],
+        children=[],
         offset=0,
     )
     var copy = src.copy()
@@ -151,16 +145,14 @@ def test_array_copy() raises:
 
 
 def test_array_move() raises:
-    var a_buffers = List[Buffer]()
     var _ab = BufferBuilder.alloc[int8.native](5)
-    a_buffers.append(_ab.finish())
     var a = Array(
         dtype=int8,
         length=5,
         nulls=0,
         bitmap=None,
-        buffers=a_buffers^,
-        children=List[Array](),
+        buffers=[_ab.finish()],
+        children=[],
         offset=0,
     )
     var b = a^
@@ -571,7 +563,7 @@ def test_struct_array() raises:
         Field("active", bool_),
     ]
 
-    var struct_builder = StructBuilder(fields^, List[AnyBuilder](), capacity=10)
+    var struct_builder = StructBuilder(fields^, [], capacity=10)
     assert_equal(len(struct_builder), 0)
     assert_equal(struct_builder._capacity, 10)
 
@@ -595,12 +587,11 @@ def test_struct_array_unsafe_get() raises:
     b_b.append(10)
     b_b.append(20)
     b_b.append(30)
-    var fields = List[Field]()
-    fields.append(Field("int_data_a", int32))
-    fields.append(Field("int_data_b", int32))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
-    children.append(AnyBuilder(b_b^))
+    var fields: List[Field] = [
+        Field("int_data_a", int32),
+        Field("int_data_b", int32),
+    ]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -616,9 +607,7 @@ def test_struct_array_unsafe_get() raises:
 
 
 def test_chunked_array() raises:
-    var arrays = List[Array]()
-    arrays.append(array[uint8]([0]))
-    arrays.append(array[uint8]([0, 1]))
+    var arrays: List[Array] = [array[uint8]([0]), array[uint8]([0, 1])]
 
     var chunked_array = ChunkedArray(int8, arrays^)
     assert_equal(chunked_array.length, 3)
@@ -631,9 +620,7 @@ def test_chunked_array() raises:
 
 
 def test_combine_chunked_array() raises:
-    var arrays = List[Array]()
-    arrays.append(array[uint8]([0]))
-    arrays.append(array[uint8]([0, 1]))
+    var arrays: List[Array] = [array[uint8]([0]), array[uint8]([0, 1])]
 
     var chunked_array = ChunkedArray(int8, arrays^)
     assert_equal(chunked_array.length, 3)
@@ -840,10 +827,8 @@ def test_str_struct_array() raises:
     var a_b = PrimitiveBuilder[int32](2)
     a_b.append(1)
     a_b.append(2)
-    var fields = List[Field]()
-    fields.append(Field("x", int32))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
+    var fields: List[Field] = [Field("x", int32)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -904,10 +889,8 @@ def test_struct_array_is_valid() raises:
     a_b.append(10)
     a_b.append(20)
     a_b.append(30)
-    var fields = List[Field]()
-    fields.append(Field("val", int32))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
+    var fields: List[Field] = [Field("val", int32)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
     var sb = StructBuilder(fields^, children^, capacity=3)
     sb.append_valid()
     sb.append_null()
@@ -1037,12 +1020,8 @@ def test_struct_array_field_by_index() raises:
     var b_b = StringBuilder()
     b_b.append("x")
     b_b.append("y")
-    var fields = List[Field]()
-    fields.append(Field("id", int32))
-    fields.append(Field("name", string))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
-    children.append(AnyBuilder(b_b^))
+    var fields: List[Field] = [Field("id", int32), Field("name", string)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -1061,10 +1040,8 @@ def test_struct_array_field_by_name() raises:
     var a_b = PrimitiveBuilder[int32](2)
     a_b.append(10)
     a_b.append(20)
-    var fields = List[Field]()
-    fields.append(Field("val", int32))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
+    var fields: List[Field] = [Field("val", int32)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()
@@ -1078,10 +1055,8 @@ def test_struct_array_field_by_name() raises:
 def test_struct_array_field_bounds() raises:
     var a_b = PrimitiveBuilder[int32](1)
     a_b.append(1)
-    var fields = List[Field]()
-    fields.append(Field("x", int32))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
+    var fields: List[Field] = [Field("x", int32)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
     var sb = StructBuilder(fields^, children^, capacity=1)
     sb.append_valid()
     var sa = sb.finish_typed()
@@ -1307,12 +1282,8 @@ def test_struct_array_flatten() raises:
     var b_b = StringBuilder()
     b_b.append("x")
     b_b.append("y")
-    var fields = List[Field]()
-    fields.append(Field("id", int32))
-    fields.append(Field("name", string))
-    var children = List[AnyBuilder]()
-    children.append(AnyBuilder(a_b^))
-    children.append(AnyBuilder(b_b^))
+    var fields: List[Field] = [Field("id", int32), Field("name", string)]
+    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
     var sb = StructBuilder(fields^, children^, capacity=2)
     sb.append_valid()
     sb.append_valid()

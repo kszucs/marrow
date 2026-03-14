@@ -774,8 +774,8 @@ def test_and_different_offsets_large_byte_delta_different_shift() raises:
     """AND where byte offsets AND sub-byte shifts both differ."""
     # a at bit 100 (byte 12, shift 4); b at bit 503 (byte 62, shift 7).
     # byte_delta = 50, bit shift delta = 3.
-    var bits_a = List[Int]()
-    var bits_b = List[Int]()
+    var bits_a = List[Int](capacity=16)
+    var bits_b = List[Int](capacity=16)
     for i in range(16):
         bits_a.append(100 + i)  # all 16 bits set starting at 100
         bits_b.append(503 + i)  # all 16 bits set starting at 503
@@ -814,8 +814,8 @@ def test_or_different_offsets_large_byte_delta() raises:
 
 def test_xor_different_offsets_large_byte_delta() raises:
     """XOR where byte-level offsets differ by > 64 bytes."""
-    var bits_a = List[Int]()
-    var bits_b = List[Int]()
+    var bits_a = List[Int](capacity=16)
+    var bits_b = List[Int](capacity=16)
     for i in range(16):
         bits_a.append(80 + i)  # all set
         bits_b.append(592 + i)  # all set
@@ -832,7 +832,7 @@ def test_xor_different_offsets_large_byte_delta() raises:
 
 def test_and_not_different_offsets_large_byte_delta() raises:
     """AND-NOT where byte-level offsets differ significantly."""
-    var bits_a = List[Int]()
+    var bits_a = List[Int](capacity=16)
     for i in range(16):
         bits_a.append(100 + i)  # all set
     var full_a = _make(600, bits_a)

@@ -35,9 +35,10 @@ def test_custom_visitor() raises:
 
 def test_chunked_array_default_dispatch() raises:
     """ChunkedArray.visit default delegates to visit(Array) for each chunk."""
-    var chunks = List[Array]()
-    chunks.append(Array(array[int64]([1, 2, 3])))
-    chunks.append(Array(array[int64]([4, 5])))
+    var chunks: List[Array] = [
+        Array(array[int64]([1, 2, 3])),
+        Array(array[int64]([4, 5])),
+    ]
     var chunked = ChunkedArray(int64, chunks^)
     var counter = ElementCounter()
     counter.visit(chunked)

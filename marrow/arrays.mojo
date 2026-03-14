@@ -883,7 +883,7 @@ struct FixedSizeListArray(
 
     fn to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
-        var new_buffers = List[Buffer]()
+        var new_buffers = List[Buffer](capacity=len(self.values.buffers))
         for i in range(len(self.values.buffers)):
             new_buffers.append(self.values.buffers[i].to_device(ctx))
         var child_bm: Optional[Bitmap] = None
@@ -896,7 +896,7 @@ struct FixedSizeListArray(
             nulls=self.values.nulls,
             bitmap=child_bm^,
             buffers=new_buffers^,
-            children=List[Array](),
+            children=[],
             offset=self.values.offset,
         )
         var bm: Optional[Bitmap] = None
@@ -1103,13 +1103,25 @@ struct ChunkedArray(Copyable, Movable, Writable):
 
     fn combine_chunks(var self, out combined: Array):
         """Combines all chunks into a single array."""
-        var bm_builder = BitmapBuilder.alloc(self.length)
-        var buffers = List[Buffer]()
-        var children = List[Array]()
+
+        @parameter
+        fn _chunk_len_bufs_children() -> Tuple[Int, Int, Int]:
+            var length = 0
+            var bufs = 0
+            var children = 0
+            for chunk in self.chunks:
+                length += chunk.length
+                bufs += len(chunk.buffers)
+                children += len(chunk.children)
+            return length, bufs, children
+
+        ref length, bufs, child_count = _chunk_len_bufs_children()
+        var bm_builder = BitmapBuilder.alloc(length)
+        var buffers = List[Buffer](capacity=bufs)
+        var children = List[Array](capacity=child_count)
         var start = 0
         var total_nulls = 0
-        while self.chunks:
-            var chunk = self.chunks.pop(0)
+        for chunk in self.chunks:
             var chunk_length = chunk.length
             if chunk.nulls == 0:
                 bm_builder.set_range(start, chunk_length, True)
