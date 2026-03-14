@@ -6,6 +6,51 @@ from marrow.arrays import array, Array, PrimitiveArray, StringArray
 from marrow.schema import Schema
 from marrow.dtypes import int32, int64, float64, string, Field
 from marrow.builders import PrimitiveBuilder
+from marrow.c_data import CArrowArray, CArrowSchema
+
+
+fn batch_from_arrow(pa_batch: PythonObject) raises -> RecordBatch:
+    """Import a RecordBatch from any Arrow-compatible Python object."""
+    var py = Python()
+    ref cpy = py.cpython()
+    var capsule_tuple = pa_batch.__arrow_c_array__()
+    var schema_raw = cpy.PyCapsule_GetPointer(
+        capsule_tuple[0]._obj_ptr, "arrow_schema"
+    )
+    var array_raw = cpy.PyCapsule_GetPointer(
+        capsule_tuple[1]._obj_ptr, "arrow_array"
+    )
+    var c_schema_src = schema_raw.bitcast[CArrowSchema]()
+    var c_array_src = array_raw.bitcast[CArrowArray]()
+    var c_schema = c_schema_src[]
+    var c_array = c_array_src[]
+    UnsafePointer(to=c_schema_src[].release).bitcast[UInt64]()[0] = 0
+    UnsafePointer(to=c_array_src[].release).bitcast[UInt64]()[0] = 0
+    var schema = c_schema.to_schema()
+    var n_cols = Int(c_array.n_children)
+    var columns = List[Array]()
+    for i in range(n_cols):
+        var child_c_schema = c_schema.children[i][]
+        var child_c_array = c_array.children[i][]
+        UnsafePointer(to=c_schema.children[i][].release).bitcast[UInt64]()[0] = 0
+        UnsafePointer(to=c_array.children[i][].release).bitcast[UInt64]()[0] = 0
+        var dtype = child_c_schema.to_dtype()
+        columns.append(child_c_array^.to_array(dtype))
+    return RecordBatch(schema=schema, columns=columns^)
+
+
+fn batch_to_arrow(batch: RecordBatch) raises -> PythonObject:
+    """Export a RecordBatch to PyArrow via the C Data Interface."""
+    var pa = Python.import_module("pyarrow")
+    var arrays = Python.list()
+    var names = Python.list()
+    for i in range(batch.num_columns()):
+        var col = batch.column(i)
+        var c_schema = CArrowSchema.from_dtype(col.dtype)
+        var c_array = CArrowArray.from_array(col)
+        arrays.append(pa.Array._import_from_c(Int(c_array), Int(c_schema)))
+        names.append(String(batch.schema.fields[i].name))
+    return pa.RecordBatch.from_arrays(arrays, names=names)
 
 
 def test_record_batch_construction() raises:
@@ -81,7 +126,7 @@ def test_record_batch_from_pyarrow() raises:
             y=pa.array(Python.list(4.0, 5.0, 6.0), type=pa.float64()),
         )
     )
-    var batch = RecordBatch.from_pyarrow(pa_batch)
+    var batch = batch_from_arrow(pa_batch)
     assert_equal(batch.num_rows(), 3)
     assert_equal(batch.num_columns(), 2)
     assert_equal(batch.column("x").as_int32().unsafe_get(0), 1)
@@ -102,7 +147,7 @@ def test_record_batch_to_pyarrow() raises:
     columns.append(col_a^)
     columns.append(col_b^)
     var batch = RecordBatch(schema=schema, columns=columns^)
-    var pa_batch = batch.to_pyarrow()
+    var pa_batch = batch_to_arrow(batch)
     assert_equal(Int(py=pa_batch.num_rows), 3)
     assert_equal(Int(py=pa_batch.num_columns), 2)
     assert_equal(Int(py=pa_batch.column("a")[0].as_py()), 1)
@@ -117,8 +162,8 @@ def test_record_batch_roundtrip() raises:
             x=pa.array(Python.list(10, 20, 30), type=pa.int32()),
         )
     )
-    var batch = RecordBatch.from_pyarrow(pa_batch)
-    var pa_batch2 = batch.to_pyarrow()
+    var batch = batch_from_arrow(pa_batch)
+    var pa_batch2 = batch_to_arrow(batch)
     assert_equal(Bool(pa_batch.equals(pa_batch2)), True)
 
 

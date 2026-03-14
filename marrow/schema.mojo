@@ -3,7 +3,6 @@
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
 from .dtypes import DataType, Field
-from std.python import Python, PythonObject
 
 
 struct Schema(ImplicitlyCopyable, Sized, Writable):
@@ -23,28 +22,6 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
     fn __init__(out self, *, copy: Self):
         self.fields = List[Field](copy=copy.fields)
         self.metadata = Dict[String, String](copy=copy.metadata)
-
-    @staticmethod
-    fn from_pyarrow(pa_schema: PythonObject) raises -> Schema:
-        """Initializes a schema from a PyArrow schema."""
-        from .c_data import CArrowSchema
-        from std.memory import alloc
-
-        var ptr = alloc[CArrowSchema](1)
-        pa_schema._export_to_c(Int(ptr))
-        var c_schema = ptr.take_pointee()
-        ptr.free()
-        return c_schema.to_schema()
-
-    fn to_pyarrow(self) raises -> PythonObject:
-        """Converts this schema to a PyArrow schema via the C Data Interface."""
-        from .c_data import CArrowSchema
-
-        var pa = Python.import_module("pyarrow")
-        var c_schema = CArrowSchema.from_schema(self.fields)
-        var result = pa.Schema._import_from_c(Int(c_schema))
-        c_schema.free()
-        return result
 
     fn append(mut self, var field: Field):
         """Appends a field to the schema."""

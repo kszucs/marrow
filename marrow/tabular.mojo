@@ -9,10 +9,7 @@ References:
 """
 from .arrays import Array, ChunkedArray
 from .schema import Schema
-from .c_data import CArrowArray, CArrowSchema
 from .dtypes import struct_, Field
-from std.python import Python, PythonObject
-from std.memory import alloc
 
 
 struct RecordBatch(Copyable, Writable):
@@ -63,37 +60,6 @@ struct RecordBatch(Copyable, Writable):
     fn slice(self, offset: Int) -> RecordBatch:
         """Returns a zero-copy slice from offset to the end."""
         return self.slice(offset, self.num_rows() - offset)
-
-    @staticmethod
-    fn from_pyarrow(pa_batch: PythonObject) raises -> RecordBatch:
-        """Imports a RecordBatch from PyArrow via the C Data Interface."""
-        var c_array_ptr = alloc[CArrowArray](1)
-        var c_schema_ptr = alloc[CArrowSchema](1)
-        pa_batch._export_to_c(Int(c_array_ptr), Int(c_schema_ptr))
-
-        var c_schema = c_schema_ptr.take_pointee()
-        c_schema_ptr.free()
-        var schema = c_schema.to_schema()
-
-        # A RecordBatch exports as a struct-formatted array.
-        var struct_dtype = struct_(schema.fields)
-        var c_array = c_array_ptr.take_pointee()
-        c_array_ptr.free()
-        var main_array = c_array^.to_array(struct_dtype)
-
-        var columns = List[Array]()
-        for col in main_array.children:
-            columns.append(col.copy())
-        return RecordBatch(schema=schema, columns=columns^)
-
-    fn to_pyarrow(self) raises -> PythonObject:
-        """Exports this RecordBatch to PyArrow via the C Data Interface."""
-        var pa = Python.import_module("pyarrow")
-        var pa_schema = self.schema.to_pyarrow()
-        var pa_arrays = Python.list()
-        for col in self.columns:
-            pa_arrays.append(col.to_pyarrow())
-        return pa.RecordBatch.from_arrays(pa_arrays, schema=pa_schema)
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(

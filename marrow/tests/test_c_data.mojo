@@ -8,21 +8,27 @@ from marrow.dtypes import *
 
 
 fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
-    """Import a CArrowArray from any PyArrow object supporting _export_to_c."""
-    var ptr = alloc[CArrowArray](1)
-    pyobj._export_to_c(Int(ptr))
-    var c_array = ptr.take_pointee()
-    ptr.free()
-    return c_array^
+    """Import a CArrowArray from any Arrow-compatible Python object via PyCapsule."""
+    var py = Python()
+    ref cpy = py.cpython()
+    var capsule_tuple = pyobj.__arrow_c_array__()
+    var raw = cpy.PyCapsule_GetPointer(capsule_tuple[1]._obj_ptr, "arrow_array")
+    var src = raw.bitcast[CArrowArray]()
+    var copy = src[]
+    UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+    return copy
 
 
 fn c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
-    """Import a CArrowSchema from any PyArrow object supporting _export_to_c."""
-    var ptr = alloc[CArrowSchema](1)
-    pyobj._export_to_c(Int(ptr))
-    var c_schema = ptr.take_pointee()
-    ptr.free()
-    return c_schema^
+    """Import a CArrowSchema from any Arrow-compatible Python object via PyCapsule."""
+    var py = Python()
+    ref cpy = py.cpython()
+    var schema_capsule = pyobj.__arrow_c_schema__()
+    var raw = cpy.PyCapsule_GetPointer(schema_capsule._obj_ptr, "arrow_schema")
+    var src = raw.bitcast[CArrowSchema]()
+    var copy = src[]
+    UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+    return copy
 
 
 def test_schema_from_pyarrow() raises:
@@ -201,7 +207,8 @@ def test_arrow_array_stream() raises:
     )
     var table = pa.table(data, schema=pyschema)
 
-    var array_stream = ArrowArrayStream.from_pyarrow(table, cpython)
+    from python.c_data import arrow_array_stream_from_python
+    var array_stream = arrow_array_stream_from_python(table, cpython)
 
     var c_schema = array_stream.c_schema()
     var schema = c_schema.to_dtype()
@@ -557,15 +564,20 @@ def test_fixed_size_list_with_nulls() raises:
 
 def test_export_primitive_array_roundtrip() raises:
     """PrimitiveArray built in Mojo round-trips through PyArrow and back."""
+    var pa = Python.import_module("pyarrow")
     var b = PrimitiveBuilder[int32](3)
     b.append(7)
     b.append(42)
     b.append(-1)
     var arr: Array = b.finish_typed()
 
-    # Export to PyArrow, re-import via C Data Interface, check Mojo values.
-    var pyarr = arr.to_pyarrow()
-    var reimported = Array.from_pyarrow(pyarr)
+    # Export via C Data Interface, re-import into PyArrow, then back into Mojo.
+    var c_schema = CArrowSchema.from_dtype(arr.dtype)
+    var c_array = CArrowArray.from_array(arr)
+    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
+    c_array.free()
+    c_schema.free()
+    var reimported = c_array_from_pyobj(pyarr)^.to_array(int32)
     var result = reimported^.as_int32()
 
     assert_equal(result.length, 3)
@@ -576,14 +588,19 @@ def test_export_primitive_array_roundtrip() raises:
 
 def test_export_string_array_roundtrip() raises:
     """StringArray built in Mojo round-trips through PyArrow and back."""
+    var pa = Python.import_module("pyarrow")
     var b = StringBuilder(3)
     b.append("hello")
     b.append("world")
     b.append("mojo")
     var arr: Array = b.finish_typed()
 
-    var pyarr = arr.to_pyarrow()
-    var reimported = Array.from_pyarrow(pyarr)
+    var c_schema = CArrowSchema.from_dtype(arr.dtype)
+    var c_array = CArrowArray.from_array(arr)
+    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
+    c_array.free()
+    c_schema.free()
+    var reimported = c_array_from_pyobj(pyarr)^.to_array(string)
     var result = reimported^.as_string()
 
     assert_equal(result.length, 3)
@@ -594,6 +611,7 @@ def test_export_string_array_roundtrip() raises:
 
 def test_export_array_with_nulls_roundtrip() raises:
     """Null bitmap survives Mojo → PyArrow → Mojo roundtrip."""
+    var pa = Python.import_module("pyarrow")
     var b = PrimitiveBuilder[int64](4)
     b.append(1)
     b.append_null()
@@ -601,8 +619,12 @@ def test_export_array_with_nulls_roundtrip() raises:
     b.append_null()
     var arr: Array = b.finish_typed()
 
-    var pyarr = arr.to_pyarrow()
-    var reimported = Array.from_pyarrow(pyarr)
+    var c_schema = CArrowSchema.from_dtype(arr.dtype)
+    var c_array = CArrowArray.from_array(arr)
+    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
+    c_array.free()
+    c_schema.free()
+    var reimported = c_array_from_pyobj(pyarr)^.to_array(int64)
     var result = reimported^.as_int64()
 
     assert_equal(result.length, 4)

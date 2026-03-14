@@ -134,35 +134,6 @@ struct Array(
                 t" '{py.__class__.__name__}' to Array",
             )
 
-    @staticmethod
-    fn from_pyarrow(pyobj: PythonObject) raises -> Array:
-        """Import an Array from a PyArrow array via the C Data Interface."""
-        from .c_data import CArrowArray, CArrowSchema
-        from std.memory import alloc
-
-        var array_ptr = alloc[CArrowArray](1)
-        var schema_ptr = alloc[CArrowSchema](1)
-        pyobj._export_to_c(Int(array_ptr), Int(schema_ptr))
-        var c_schema = schema_ptr.take_pointee()
-        schema_ptr.free()
-        var dtype = c_schema.to_dtype()
-        var c_array = array_ptr.take_pointee()
-        array_ptr.free()
-        return c_array^.to_array(dtype)
-
-    fn to_pyarrow(self) raises -> PythonObject:
-        """Export this Array to a PyArrow array via the C Data Interface."""
-        from .c_data import CArrowArray, CArrowSchema
-        from std.python import Python
-
-        var pa = Python.import_module("pyarrow")
-        var c_schema = CArrowSchema.from_dtype(self.dtype)
-        var c_array = CArrowArray.from_array(self)
-        var result = pa.Array._import_from_c(Int(c_array), Int(c_schema))
-        c_array.free()
-        c_schema.free()
-        return result
-
     fn is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True

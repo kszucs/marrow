@@ -10,8 +10,6 @@ from .buffers import (
 from .bitmap import Bitmap
 
 import std.math as math
-from std.python import Python, PythonObject
-from std.python._cpython import CPython, PyObjectPtr
 
 from .dtypes import *
 from .arrays import *
@@ -729,20 +727,6 @@ struct ArrowArrayStream(Copyable):
     """Provide an fiendly interface to the C Arrow Array Stream."""
 
     var handle: UnsafePointer[CArrowArrayStream, MutAnyOrigin]
-
-    @staticmethod
-    fn from_pyarrow(
-        pyobj: PythonObject, cpython: CPython
-    ) raises -> ArrowArrayStream:
-        """Ask a PyArrow table for its arrow array stream interface."""
-        var stream = pyobj.__arrow_c_stream__()
-        var ptr = cpython.PyCapsule_GetPointer(
-            stream.steal_data(), "arrow_array_stream"
-        )
-        if not ptr:
-            raise Error("Failed to get the arrow array stream pointer")
-
-        return ArrowArrayStream(ptr.bitcast[CArrowArrayStream]())
 
     fn c_schema(self) raises -> CArrowSchema:
         """Return the C variant of the Arrow Schema."""
