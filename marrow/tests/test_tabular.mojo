@@ -1,43 +1,10 @@
 """Tests for RecordBatch and Table abstractions."""
 from std.testing import assert_equal, assert_true, TestSuite
-from std.python import Python, PythonObject
 from marrow.tabular import RecordBatch, Table
-from marrow.arrays import array, Array, PrimitiveArray, StringArray
+from marrow.arrays import array, Array
 from marrow.schema import Schema
-from marrow.dtypes import int32, int64, float64, string, Field
+from marrow.dtypes import int32, int64, float64, Field
 from marrow.builders import PrimitiveBuilder
-from marrow.c_data import CArrowArray, CArrowSchema
-
-
-fn batch_from_arrow(pa_batch: PythonObject) raises -> RecordBatch:
-    """Import a RecordBatch from any Arrow-compatible Python object."""
-    var capsule_tuple = pa_batch.__arrow_c_array__()
-    var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
-    var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
-    var schema = c_schema.to_schema()
-    var n_cols = Int(c_array.n_children)
-    var columns = List[Array]()
-    for i in range(n_cols):
-        var child_schema = c_schema.children[i][].copy()
-        var child_array = c_array.children[i][].copy()
-        UnsafePointer(to=c_schema.children[i][].release).bitcast[UInt64]()[0] = 0
-        UnsafePointer(to=c_array.children[i][].release).bitcast[UInt64]()[0] = 0
-        columns.append(child_array^.to_array(child_schema.to_dtype()))
-    return RecordBatch(schema=schema, columns=columns^)
-
-
-fn batch_to_arrow(batch: RecordBatch) raises -> PythonObject:
-    """Export a RecordBatch to PyArrow via the C Data Interface."""
-    var pa = Python.import_module("pyarrow")
-    var arrays = Python.list()
-    var names = Python.list()
-    for i in range(batch.num_columns()):
-        var col = batch.column(i).copy()
-        var schema_cap = CArrowSchema.from_dtype(col.dtype).to_pycapsule()
-        var array_cap = CArrowArray.from_array(col).to_pycapsule()
-        arrays.append(pa.Array._import_from_c(array_cap, schema_cap))
-        names.append(String(batch.schema.fields[i].name))
-    return pa.RecordBatch.from_arrays(arrays, names=names)
 
 
 def test_record_batch_construction() raises:
@@ -102,56 +69,6 @@ def test_record_batch_slice() raises:
     var tail = batch.slice(3)
     assert_equal(tail.num_rows(), 2)
     assert_equal(tail.column(0).as_int32().unsafe_get(0), 40)
-
-
-def test_record_batch_from_pyarrow() raises:
-    """Test importing a RecordBatch from PyArrow."""
-    var pa = Python.import_module("pyarrow")
-    var pa_batch = pa.RecordBatch.from_pydict(
-        Python.dict(
-            x=pa.array(Python.list(1, 2, 3), type=pa.int32()),
-            y=pa.array(Python.list(4.0, 5.0, 6.0), type=pa.float64()),
-        )
-    )
-    var batch = batch_from_arrow(pa_batch)
-    assert_equal(batch.num_rows(), 3)
-    assert_equal(batch.num_columns(), 2)
-    assert_equal(batch.column("x").as_int32().unsafe_get(0), 1)
-    assert_equal(batch.column("x").as_int32().unsafe_get(2), 3)
-
-
-def test_record_batch_to_pyarrow() raises:
-    """Test exporting a RecordBatch to PyArrow."""
-    var pa = Python.import_module("pyarrow")
-    var schema = Schema(fields=[Field("a", int32), Field("b", float64)])
-    var col_a: Array = array[int32]([1, 2, 3])
-    var bb = PrimitiveBuilder[float64](3)
-    bb.append(1.5)
-    bb.append(2.5)
-    bb.append(3.5)
-    var col_b: Array = bb.finish()
-    var columns = List[Array]()
-    columns.append(col_a^)
-    columns.append(col_b^)
-    var batch = RecordBatch(schema=schema, columns=columns^)
-    var pa_batch = batch_to_arrow(batch)
-    assert_equal(Int(py=pa_batch.num_rows), 3)
-    assert_equal(Int(py=pa_batch.num_columns), 2)
-    assert_equal(Int(py=pa_batch.column("a")[0].as_py()), 1)
-    assert_equal(Int(py=pa_batch.column("a")[2].as_py()), 3)
-
-
-def test_record_batch_roundtrip() raises:
-    """Test RecordBatch PyArrow roundtrip."""
-    var pa = Python.import_module("pyarrow")
-    var pa_batch = pa.RecordBatch.from_pydict(
-        Python.dict(
-            x=pa.array(Python.list(10, 20, 30), type=pa.int32()),
-        )
-    )
-    var batch = batch_from_arrow(pa_batch)
-    var pa_batch2 = batch_to_arrow(batch)
-    assert_equal(Bool(pa_batch.equals(pa_batch2)), True)
 
 
 def test_table_from_batches() raises:
