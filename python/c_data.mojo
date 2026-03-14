@@ -1,14 +1,15 @@
 """Python-aware Arrow C Data Interface bridge.
 
-This module owns all PyCapsule protocol logic for the Arrow C Data Interface.
-It imports from marrow.c_data (pure Mojo) and wraps the low-level structs in
-Python capsules for interoperability with any Arrow-compatible Python library.
+This module assembles PyCapsule tuples for the Arrow C Data Interface protocols.
+It delegates capsule creation to CArrowSchema.to_pycapsule() and
+CArrowArray.to_pycapsule() (defined in marrow.c_data) and handles import from
+Python objects for interoperability with any Arrow-compatible Python library.
 
 References:
   https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
 """
 from std.python import Python, PythonObject
-from std.python._cpython import CPython, PyObjectPtr
+from std.python._cpython import CPython
 from std.memory import alloc
 from marrow.c_data import (
     CArrowArray,
@@ -18,46 +19,6 @@ from marrow.c_data import (
 )
 from marrow.arrays import Array
 from marrow.dtypes import DataType
-
-
-# ---------------------------------------------------------------------------
-# Capsule destructors
-#
-# These must be module-level fn(PyObjectPtr) to match PyCapsule_Destructor.
-# They are called by Python's GC when a capsule is collected.
-# ---------------------------------------------------------------------------
-
-
-fn _release_array_capsule(capsule: PyObjectPtr):
-    """PyCapsule destructor: release CArrowArray data then free the struct."""
-    try:
-        var py = Python()
-        ref cpy = py.cpython()
-        var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_array")
-        if ptr:
-            var c_arr = ptr.bitcast[CArrowArray]()
-            # Release is nulled by _release_exported_array after it runs.
-            # Only call if non-null (consumer may have zeroed it via ArrowArrayMove).
-            if UnsafePointer(to=c_arr[].release).bitcast[UInt64]()[0] != 0:
-                c_arr[].release(c_arr)
-            c_arr.free()
-    except:
-        pass
-
-
-fn _release_schema_capsule(capsule: PyObjectPtr):
-    """PyCapsule destructor: release CArrowSchema data then free the struct."""
-    try:
-        var py = Python()
-        ref cpy = py.cpython()
-        var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_schema")
-        if ptr:
-            var c_schema = ptr.bitcast[CArrowSchema]()
-            if UnsafePointer(to=c_schema[].release).bitcast[UInt64]()[0] != 0:
-                c_schema[].release(c_schema)
-            c_schema.free()
-    except:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +35,8 @@ fn array_to_capsule_tuple(arr: Array) raises -> PythonObject:
     """
     var py = Python()
     ref cpy = py.cpython()
-    var c_schema = CArrowSchema.from_dtype(arr.dtype)
-    var c_array = CArrowArray.from_array(arr)
-    var schema_cap = cpy.PyCapsule_New(
-        c_schema.bitcast[NoneType](), "arrow_schema", _release_schema_capsule
-    )
-    var array_cap = cpy.PyCapsule_New(
-        c_array.bitcast[NoneType](), "arrow_array", _release_array_capsule
-    )
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule().steal_data()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule().steal_data()
     var tup = cpy.PyTuple_New(2)
     _ = cpy.PyTuple_SetItem(tup, 0, schema_cap)
     _ = cpy.PyTuple_SetItem(tup, 1, array_cap)
@@ -90,16 +45,7 @@ fn array_to_capsule_tuple(arr: Array) raises -> PythonObject:
 
 fn schema_to_capsule(dtype: DataType) raises -> PythonObject:
     """Return a schema_capsule for the __arrow_c_schema__ protocol."""
-    var py = Python()
-    ref cpy = py.cpython()
-    var c_schema = CArrowSchema.from_dtype(dtype)
-    return PythonObject(
-        from_owned=cpy.PyCapsule_New(
-            c_schema.bitcast[NoneType](),
-            "arrow_schema",
-            _release_schema_capsule,
-        )
-    )
+    return CArrowSchema.from_dtype(dtype).to_pycapsule()
 
 
 # ---------------------------------------------------------------------------

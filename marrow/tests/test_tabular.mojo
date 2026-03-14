@@ -48,7 +48,9 @@ fn batch_to_arrow(batch: RecordBatch) raises -> PythonObject:
         var col = batch.column(i)
         var c_schema = CArrowSchema.from_dtype(col.dtype)
         var c_array = CArrowArray.from_array(col)
-        arrays.append(pa.Array._import_from_c(Int(c_array), Int(c_schema)))
+        arrays.append(pa.Array._import_from_c(
+            Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
+        ))
         names.append(String(batch.schema.fields[i].name))
     return pa.RecordBatch.from_arrays(arrays, names=names)
 

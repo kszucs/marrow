@@ -32,7 +32,7 @@ fn schema_to_arrow(schema: Schema) raises -> PythonObject:
     """Export a Schema to a PyArrow schema via the C Data Interface."""
     var pa = Python.import_module("pyarrow")
     var c_schema = CArrowSchema.from_schema(schema.fields)
-    return pa.Schema._import_from_c(Int(c_schema))
+    return pa.Schema._import_from_c(Int(UnsafePointer(to=c_schema)))
 
 
 def test_schema_primitive_fields() raises:

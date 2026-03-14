@@ -153,19 +153,19 @@ def test_list_array_from_pyarrow() raises:
 
 def test_schema_from_dtype() raises:
     var c_schema = CArrowSchema.from_dtype(int32)
-    var dtype = c_schema[].to_dtype()
+    var dtype = c_schema.to_dtype()
     assert_equal(dtype, int32)
 
     var c_schema_str = CArrowSchema.from_dtype(string)
-    var dtype_str = c_schema_str[].to_dtype()
+    var dtype_str = c_schema_str.to_dtype()
     assert_equal(dtype_str, string)
 
     var c_schema_bool = CArrowSchema.from_dtype(bool_)
-    var dtype_bool = c_schema_bool[].to_dtype()
+    var dtype_bool = c_schema_bool.to_dtype()
     assert_equal(dtype_bool, bool_)
 
     var c_schema_float64 = CArrowSchema.from_dtype(float64)
-    var dtype_float64 = c_schema_float64[].to_dtype()
+    var dtype_float64 = c_schema_float64.to_dtype()
     assert_equal(dtype_float64, float64)
 
 
@@ -574,9 +574,9 @@ def test_export_primitive_array_roundtrip() raises:
     # Export via C Data Interface, re-import into PyArrow, then back into Mojo.
     var c_schema = CArrowSchema.from_dtype(arr.dtype)
     var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
-    c_array.free()
-    c_schema.free()
+    var pyarr = pa.Array._import_from_c(
+        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
+    )
     var reimported = c_array_from_pyobj(pyarr)^.to_array(int32)
     var result = reimported^.as_int32()
 
@@ -597,9 +597,9 @@ def test_export_string_array_roundtrip() raises:
 
     var c_schema = CArrowSchema.from_dtype(arr.dtype)
     var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
-    c_array.free()
-    c_schema.free()
+    var pyarr = pa.Array._import_from_c(
+        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
+    )
     var reimported = c_array_from_pyobj(pyarr)^.to_array(string)
     var result = reimported^.as_string()
 
@@ -621,9 +621,9 @@ def test_export_array_with_nulls_roundtrip() raises:
 
     var c_schema = CArrowSchema.from_dtype(arr.dtype)
     var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(Int(c_array), Int(c_schema))
-    c_array.free()
-    c_schema.free()
+    var pyarr = pa.Array._import_from_c(
+        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
+    )
     var reimported = c_array_from_pyobj(pyarr)^.to_array(int64)
     var result = reimported^.as_int64()
 
@@ -645,19 +645,19 @@ def test_schema_from_dtype_all_types() raises:
     for i in range(len(types)):
         var dt = types[i]
         var c_schema = CArrowSchema.from_dtype(dt)
-        var roundtripped = c_schema[].to_dtype()
+        var roundtripped = c_schema.to_dtype()
         assert_equal(roundtripped, dt)
 
     # Nested types
     var list_dt = list_(int64)
     var c_list = CArrowSchema.from_dtype(list_dt)
-    var rt_list = c_list[].to_dtype()
+    var rt_list = c_list.to_dtype()
     assert_true(rt_list.is_list())
     assert_equal(rt_list.fields[0].dtype, int64)
 
     var fsl_dt = fixed_size_list_(float32, 4)
     var c_fsl = CArrowSchema.from_dtype(fsl_dt)
-    var rt_fsl = c_fsl[].to_dtype()
+    var rt_fsl = c_fsl.to_dtype()
     assert_true(rt_fsl.is_fixed_size_list())
     assert_equal(rt_fsl.size, 4)
     assert_equal(rt_fsl.fields[0].dtype, float32)
@@ -666,7 +666,7 @@ def test_schema_from_dtype_all_types() raises:
     struct_fields.append(Field("a", int32, True))
     var struct_dt = struct_(struct_fields)
     var c_struct = CArrowSchema.from_dtype(struct_dt)
-    var rt_struct = c_struct[].to_dtype()
+    var rt_struct = c_struct.to_dtype()
     assert_true(rt_struct.is_struct())
     assert_equal(len(rt_struct.fields), 1)
     assert_equal(rt_struct.fields[0].name, "a")
@@ -676,11 +676,11 @@ def test_schema_from_dtype_all_types() raises:
 def test_schema_field_nullable_flags() raises:
     """ARROW_FLAG_NULLABLE is set iff field.nullable == True."""
     var c_nullable = CArrowSchema.from_field(Field("x", int32, True))
-    var f_nullable = c_nullable[].to_field()
+    var f_nullable = c_nullable.to_field()
     assert_true(f_nullable.nullable)
 
     var c_required = CArrowSchema.from_field(Field("y", int64, False))
-    var f_required = c_required[].to_field()
+    var f_required = c_required.to_field()
     assert_false(f_required.nullable)
 
 
