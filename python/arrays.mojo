@@ -13,11 +13,8 @@ from std.python._cpython import (
     PyTypeObjectPtr,
 )
 from std.memory import ArcPointer, alloc
-from c_data import (
-    array_to_capsule_tuple,
-    schema_to_capsule,
-    array_from_capsule_tuple,
-)
+from c_data import array_to_capsule_tuple
+from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.arrays import (
     Array,
     PrimitiveArray,
@@ -792,110 +789,49 @@ fn make_converter(
 # Arrow C Data Interface: __arrow_c_array__ and __arrow_c_schema__ wrappers
 #
 # Each typed array needs a thin wrapper because def_method requires the exact
-# pointer type.  All delegate to array_to_capsule_tuple / schema_to_capsule
-# from python.c_data, which handles all the capsule lifecycle logic.
+# pointer type.  All delegate to array_to_capsule_tuple / schema_to_capsule,
+# which handles all the capsule lifecycle logic.
 # ---------------------------------------------------------------------------
 
 
-fn _bool_arrow_c_array(ptr: UnsafePointer[BoolArray, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn arrow_c_array[T: AnyType, //, to_array_fn: fn(T) -> Array](
+    ptr: UnsafePointer[T, MutAnyOrigin]
+) raises -> PythonObject:
+    return array_to_capsule_tuple(to_array_fn(ptr[]))
 
-fn _bool_arrow_c_schema(ptr: UnsafePointer[BoolArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _int8_arrow_c_array(ptr: UnsafePointer[Int8Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](
+    ptr: UnsafePointer[T, MutAnyOrigin]
+) raises -> PythonObject:
+    return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
-fn _int8_arrow_c_schema(ptr: UnsafePointer[Int8Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _int16_arrow_c_array(ptr: UnsafePointer[Int16Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
+    return arr
 
-fn _int16_arrow_c_schema(ptr: UnsafePointer[Int16Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _int32_arrow_c_array(ptr: UnsafePointer[Int32Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn _str_to_array(arr: StringArray) -> Array:
+    return arr
 
-fn _int32_arrow_c_schema(ptr: UnsafePointer[Int32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _int64_arrow_c_array(ptr: UnsafePointer[Int64Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn _list_to_array(arr: ListArray) -> Array:
+    return arr
 
-fn _int64_arrow_c_schema(ptr: UnsafePointer[Int64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _uint8_arrow_c_array(ptr: UnsafePointer[UInt8Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn _fsl_to_array(arr: FixedSizeListArray) -> Array:
+    return arr
 
-fn _uint8_arrow_c_schema(ptr: UnsafePointer[UInt8Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _uint16_arrow_c_array(ptr: UnsafePointer[UInt16Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
+fn _struct_to_array(arr: StructArray) -> Array:
+    return arr
 
-fn _uint16_arrow_c_schema(ptr: UnsafePointer[UInt16Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
-fn _uint32_arrow_c_array(ptr: UnsafePointer[UInt32Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _uint32_arrow_c_schema(ptr: UnsafePointer[UInt32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _uint64_arrow_c_array(ptr: UnsafePointer[UInt64Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _uint64_arrow_c_schema(ptr: UnsafePointer[UInt64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _float32_arrow_c_array(ptr: UnsafePointer[Float32Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _float32_arrow_c_schema(ptr: UnsafePointer[Float32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _float64_arrow_c_array(ptr: UnsafePointer[Float64Array, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _float64_arrow_c_schema(ptr: UnsafePointer[Float64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _str_arrow_c_array(ptr: UnsafePointer[StringArray, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _str_arrow_c_schema(ptr: UnsafePointer[StringArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _list_arrow_c_array(ptr: UnsafePointer[ListArray, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _list_arrow_c_schema(ptr: UnsafePointer[ListArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _fsl_arrow_c_array(ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _fsl_arrow_c_schema(ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
-
-fn _struct_arrow_c_array(ptr: UnsafePointer[StructArray, MutAnyOrigin]) raises -> PythonObject:
-    return array_to_capsule_tuple(ptr[])
-
-fn _struct_arrow_c_schema(ptr: UnsafePointer[StructArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].type())
 
 
 # ---------------------------------------------------------------------------
 # Public Python functions
 # ---------------------------------------------------------------------------
 
-
-fn from_arrow(obj: PythonObject) raises -> PythonObject:
-    """Create a marrow array from any Arrow-compatible Python object."""
-    return array_from_capsule_tuple(obj.__arrow_c_array__()).to_python_object()
 
 
 fn infer_type(obj: PythonObject) raises -> PythonObject:
@@ -906,6 +842,13 @@ fn infer_type(obj: PythonObject) raises -> PythonObject:
 fn array(
     obj: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    if builtins.hasattr(obj, "__arrow_c_array__"):
+        var capsule_tuple = obj.__arrow_c_array__()
+        var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
+        var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
+        return c_array^.to_array(c_schema.to_dtype()).to_python_object()
+
     var dtype: dt.DataType
     var has_nulls = True
     if opt := kwargs.find("type"):
@@ -941,8 +884,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[BoolArray.slice]()]("slice")
         .def_method[pymethod[BoolArray.true_count]()]("true_count")
         .def_method[pymethod[BoolArray.false_count]()]("false_count")
-        .def_method[_bool_arrow_c_array]("__arrow_c_array__")
-        .def_method[_bool_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.bool_]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[BoolArray.type]]("__arrow_c_schema__")
     )
     var bool_array_sp = SequenceProtocolBuilder[BoolArray](bool_array_py)
     _ = bool_array_sp.def_len[BoolArray.__len__]().def_getitem[
@@ -958,8 +901,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int8Array.__str__]()]("__repr__")
         .def_method[pymethod[Int8Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int8Array.slice]()]("slice")
-        .def_method[_int8_arrow_c_array]("__arrow_c_array__")
-        .def_method[_int8_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.int8]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Int8Array.type]]("__arrow_c_schema__")
     )
     var int8_array_sp = SequenceProtocolBuilder[Int8Array](int8_array_py)
     _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[
@@ -976,8 +919,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int16Array.__str__]()]("__repr__")
         .def_method[pymethod[Int16Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int16Array.slice]()]("slice")
-        .def_method[_int16_arrow_c_array]("__arrow_c_array__")
-        .def_method[_int16_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.int16]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Int16Array.type]]("__arrow_c_schema__")
     )
     var int16_array_sp = SequenceProtocolBuilder[Int16Array](int16_array_py)
     _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[
@@ -994,8 +937,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int32Array.__str__]()]("__repr__")
         .def_method[pymethod[Int32Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int32Array.slice]()]("slice")
-        .def_method[_int32_arrow_c_array]("__arrow_c_array__")
-        .def_method[_int32_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.int32]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Int32Array.type]]("__arrow_c_schema__")
     )
     var int32_array_sp = SequenceProtocolBuilder[Int32Array](int32_array_py)
     _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[
@@ -1012,8 +955,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int64Array.__str__]()]("__repr__")
         .def_method[pymethod[Int64Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int64Array.slice]()]("slice")
-        .def_method[_int64_arrow_c_array]("__arrow_c_array__")
-        .def_method[_int64_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.int64]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Int64Array.type]]("__arrow_c_schema__")
     )
     var int64_array_sp = SequenceProtocolBuilder[Int64Array](int64_array_py)
     _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[
@@ -1030,8 +973,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt8Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt8Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt8Array.slice]()]("slice")
-        .def_method[_uint8_arrow_c_array]("__arrow_c_array__")
-        .def_method[_uint8_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.uint8]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[UInt8Array.type]]("__arrow_c_schema__")
     )
     var uint8_array_sp = SequenceProtocolBuilder[UInt8Array](uint8_array_py)
     _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[
@@ -1048,8 +991,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt16Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt16Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt16Array.slice]()]("slice")
-        .def_method[_uint16_arrow_c_array]("__arrow_c_array__")
-        .def_method[_uint16_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.uint16]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[UInt16Array.type]]("__arrow_c_schema__")
     )
     var uint16_array_sp = SequenceProtocolBuilder[UInt16Array](uint16_array_py)
     _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[
@@ -1066,8 +1009,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt32Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt32Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt32Array.slice]()]("slice")
-        .def_method[_uint32_arrow_c_array]("__arrow_c_array__")
-        .def_method[_uint32_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.uint32]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[UInt32Array.type]]("__arrow_c_schema__")
     )
     var uint32_array_sp = SequenceProtocolBuilder[UInt32Array](uint32_array_py)
     _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[
@@ -1084,8 +1027,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt64Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt64Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt64Array.slice]()]("slice")
-        .def_method[_uint64_arrow_c_array]("__arrow_c_array__")
-        .def_method[_uint64_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.uint64]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[UInt64Array.type]]("__arrow_c_schema__")
     )
     var uint64_array_sp = SequenceProtocolBuilder[UInt64Array](uint64_array_py)
     _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[
@@ -1102,8 +1045,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Float32Array.__str__]()]("__repr__")
         .def_method[pymethod[Float32Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float32Array.slice]()]("slice")
-        .def_method[_float32_arrow_c_array]("__arrow_c_array__")
-        .def_method[_float32_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.float32]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Float32Array.type]]("__arrow_c_schema__")
     )
     var float32_array_sp = SequenceProtocolBuilder[Float32Array](
         float32_array_py
@@ -1122,8 +1065,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Float64Array.__str__]()]("__repr__")
         .def_method[pymethod[Float64Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float64Array.slice]()]("slice")
-        .def_method[_float64_arrow_c_array]("__arrow_c_array__")
-        .def_method[_float64_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_to_array[dt.float64]]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[Float64Array.type]]("__arrow_c_schema__")
     )
     var float64_array_sp = SequenceProtocolBuilder[Float64Array](
         float64_array_py
@@ -1143,8 +1086,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[StringArray.__str__]()]("__repr__")
         .def_method[pymethod[StringArray.is_valid]()]("is_valid")
         .def_method[pymethod[StringArray.slice]()]("slice")
-        .def_method[_str_arrow_c_array]("__arrow_c_array__")
-        .def_method[_str_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_str_to_array]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[StringArray.type]]("__arrow_c_schema__")
     )
     var str_array_sp = SequenceProtocolBuilder[StringArray](str_array_py)
     _ = str_array_sp.def_len[StringArray.__len__]().def_getitem[_str_getitem]()
@@ -1160,8 +1103,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[ListArray.slice]()]("slice")
         .def_method[pymethod[ListArray.flatten]()]("flatten")
         .def_method[pymethod[ListArray.value_lengths]()]("value_lengths")
-        .def_method[_list_arrow_c_array]("__arrow_c_array__")
-        .def_method[_list_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_list_to_array]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[ListArray.type]]("__arrow_c_schema__")
     )
     var list_array_sp = SequenceProtocolBuilder[ListArray](list_array_py)
     _ = list_array_sp.def_len[ListArray.__len__]().def_getitem[_list_getitem]()
@@ -1178,8 +1121,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[FixedSizeListArray.is_valid]()]("is_valid")
         .def_method[pymethod[FixedSizeListArray.slice]()]("slice")
         .def_method[pymethod[FixedSizeListArray.flatten]()]("flatten")
-        .def_method[_fsl_arrow_c_array]("__arrow_c_array__")
-        .def_method[_fsl_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_fsl_to_array]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[FixedSizeListArray.type]]("__arrow_c_schema__")
     )
     var fsl_array_sp = SequenceProtocolBuilder[FixedSizeListArray](fsl_array_py)
     _ = fsl_array_sp.def_len[FixedSizeListArray.__len__]().def_getitem[
@@ -1197,16 +1140,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[StructArray.__str__]()]("__repr__")
         .def_method[pymethod[StructArray.is_valid]()]("is_valid")
         .def_method[pymethod[StructArray.field]()]("field")
-        .def_method[_struct_arrow_c_array]("__arrow_c_array__")
-        .def_method[_struct_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[arrow_c_array[_struct_to_array]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[StructArray.type]]("__arrow_c_schema__")
     )
     var struct_array_sp = SequenceProtocolBuilder[StructArray](struct_array_py)
     _ = struct_array_sp.def_len[StructArray.__len__]()
 
-    mb.def_function[from_arrow](
-        "from_arrow",
-        docstring="Create a marrow array from any Arrow-compatible Python object.",
-    )
     mb.def_function[infer_type](
         "infer_type", docstring="Infer the Arrow type of a Python sequence."
     )

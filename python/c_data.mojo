@@ -42,26 +42,6 @@ fn array_to_capsule_tuple(arr: Array) raises -> PythonObject:
     return PythonObject(from_owned=tup)
 
 
-fn schema_to_capsule(dtype: DataType) raises -> PythonObject:
-    """Return a schema_capsule for the __arrow_c_schema__ protocol."""
-    return CArrowSchema.from_dtype(dtype).to_pycapsule()
-
-
-# ---------------------------------------------------------------------------
-# Import: Python capsules → Mojo Array
-# ---------------------------------------------------------------------------
-
-
-fn array_from_capsule_tuple(capsule_tuple: PythonObject) raises -> Array:
-    """Consume a (schema_capsule, array_capsule) tuple, taking ownership.
-
-    The capsule_tuple argument must stay alive for the duration of this call
-    so that the capsule Python objects are not collected mid-call.
-    """
-    var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
-    var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
-    return c_array^.to_array(c_schema.to_dtype())
-
 
 # ---------------------------------------------------------------------------
 # Stream helper (previously ArrowArrayStream.from_pyarrow)
