@@ -793,17 +793,12 @@ fn make_converter(
 
 
 fn arrow_c_array[T: AnyType, //, to_array_fn: fn(T) -> Array](
-    ptr: UnsafePointer[T, MutAnyOrigin]
+    ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
     var arr = to_array_fn(ptr[])
-    var py = Python()
-    ref cpy = py.cpython()
-    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule().steal_data()
-    var array_cap = CArrowArray.from_array(arr).to_pycapsule().steal_data()
-    var tup = cpy.PyTuple_New(2)
-    _ = cpy.PyTuple_SetItem(tup, 0, schema_cap)
-    _ = cpy.PyTuple_SetItem(tup, 1, array_cap)
-    return PythonObject(from_owned=tup)
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule()
+    return Python.tuple(schema_cap, array_cap)
 
 
 fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](
@@ -812,6 +807,7 @@ fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
+# TODO: maybe instroduce an Array trait and rename Array struct to AnyArray
 fn _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
     return arr
 
