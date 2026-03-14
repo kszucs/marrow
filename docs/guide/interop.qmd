@@ -97,8 +97,6 @@ print(typed.is_valid(4))    # False — null
 print(typed.unsafe_get(0))  # 1
 print(typed.unsafe_get(3))  # 4
 
-# Export from Mojo back to PyArrow
-var schema_cap = CArrowSchema.from_dtype(data.dtype).to_pycapsule()
-var array_cap  = CArrowArray.from_array(data).to_pycapsule()
-var pa_result  = pa.Array._import_from_c(array_cap, schema_cap)
+# Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported
+var pa_result = pa.array(data)
 ```

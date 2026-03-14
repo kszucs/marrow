@@ -54,8 +54,8 @@ fn _release_schema_capsule(capsule: PyObjectPtr):
         var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_schema")
         if ptr:
             var c_schema = ptr.bitcast[CArrowSchema]()
-            # Guard against double-free: an Arrow importer (e.g. PyArrow's
-            # _import_from_c) zeroes the release field after taking ownership.
+            # Guard against double-free: an Arrow importer zeroes the release
+            # field after taking ownership.
             if UnsafePointer(to=c_schema[].release).bitcast[UInt64]()[0] != 0:
                 c_schema[].release(c_schema)
             c_schema.free()
@@ -460,7 +460,7 @@ struct CArrowArray(Copyable, Movable):
         3. `_release_array_capsule` calls `_release_exported_array` and frees
            the struct shell when Python GC collects the capsule.
 
-    Lifecycle for direct Arrow export (e.g. tests, pa._import_from_c):
+    Lifecycle for direct Arrow export (e.g. passing to an Arrow importer):
         1. Build the struct value.
         2. Pass `UnsafePointer(to=c_array)` to the Arrow importer.
         3. The importer copies the struct and zeroes the local release field.

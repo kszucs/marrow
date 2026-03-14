@@ -141,10 +141,8 @@ var capsules = pyarrow_array.__arrow_c_array__()
 var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()
 var data = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
 
-# To PyArrow (via Arrow C Data Interface)
-var schema_cap = CArrowSchema.from_dtype(data.dtype).to_pycapsule()
-var array_cap = CArrowArray.from_array(data).to_pycapsule()
-var pyarr = pa.Array._import_from_c(array_cap, schema_cap)
+# To PyArrow — arrays expose __arrow_c_array__, so pa.array() works directly
+var pyarr = pa.array(data)
 ```
 
 ### Null Handling
