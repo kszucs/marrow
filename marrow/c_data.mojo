@@ -1,7 +1,7 @@
 from std.ffi import external_call, c_char
 from std.memory import ArcPointer, memcpy
 from std.python import Python, PythonObject
-from std.python._cpython import PyObjectPtr
+from std.python._cpython import CPython, PyObjectPtr
 from std.sys import size_of
 from .buffers import (
     Allocation,
@@ -944,3 +944,16 @@ struct ArrowArrayStream(Copyable):
         if not arrow_array:
             raise Error("The arrow array pointer is null")
         return arrow_array.take_pointee()
+
+
+fn arrow_array_stream_from_python(
+    pyobj: PythonObject, cpython: CPython
+) raises -> ArrowArrayStream:
+    """Create an ArrowArrayStream from a Python object supporting __arrow_c_stream__."""
+    var stream = pyobj.__arrow_c_stream__()
+    var ptr = cpython.PyCapsule_GetPointer(
+        stream.steal_data(), "arrow_array_stream"
+    )
+    if not ptr:
+        raise Error("Failed to get the arrow array stream pointer")
+    return ArrowArrayStream(ptr.bitcast[CArrowArrayStream]())

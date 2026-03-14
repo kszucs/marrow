@@ -13,7 +13,6 @@ from std.python._cpython import (
     PyTypeObjectPtr,
 )
 from std.memory import ArcPointer, alloc
-from c_data import array_to_capsule_tuple
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.arrays import (
     Array,
@@ -789,15 +788,22 @@ fn make_converter(
 # Arrow C Data Interface: __arrow_c_array__ and __arrow_c_schema__ wrappers
 #
 # Each typed array needs a thin wrapper because def_method requires the exact
-# pointer type.  All delegate to array_to_capsule_tuple / schema_to_capsule,
-# which handles all the capsule lifecycle logic.
+# pointer type.
 # ---------------------------------------------------------------------------
 
 
 fn arrow_c_array[T: AnyType, //, to_array_fn: fn(T) -> Array](
     ptr: UnsafePointer[T, MutAnyOrigin]
 ) raises -> PythonObject:
-    return array_to_capsule_tuple(to_array_fn(ptr[]))
+    var arr = to_array_fn(ptr[])
+    var py = Python()
+    ref cpy = py.cpython()
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule().steal_data()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule().steal_data()
+    var tup = cpy.PyTuple_New(2)
+    _ = cpy.PyTuple_SetItem(tup, 0, schema_cap)
+    _ = cpy.PyTuple_SetItem(tup, 1, array_cap)
+    return PythonObject(from_owned=tup)
 
 
 fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](

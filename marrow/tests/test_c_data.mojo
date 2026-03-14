@@ -194,7 +194,6 @@ def test_arrow_array_stream() raises:
     )
     var table = pa.table(data, schema=pyschema)
 
-    from python.c_data import arrow_array_stream_from_python
     var array_stream = arrow_array_stream_from_python(table, cpython)
 
     var c_schema = array_stream.c_schema()
