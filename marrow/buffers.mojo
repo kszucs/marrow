@@ -242,7 +242,7 @@ struct Allocation(Movable):
             elif api == "hip":
                 return DeviceType.ROCM_HOST
             else:
-                raise Error("device_type: unsupported host API: {}".format(api))
+                raise Error("device_type: unsupported host API: ", api)
         elif self._device:
             var api = self._device.value().context().api()
             if api == "cuda":
@@ -252,9 +252,7 @@ struct Allocation(Movable):
             elif api == "metal":
                 return DeviceType.METAL
             else:
-                raise Error(
-                    "device_type: unsupported device API: {}".format(api)
-                )
+                raise Error("device_type: unsupported device API: ", api)
         else:
             return DeviceType.CPU
 
@@ -730,4 +728,4 @@ struct Buffer(ImplicitlyCopyable, Movable, Writable):
 
     fn write_to[W: Writer](self, mut writer: W):
         """Write the buffer's bytes to a Writer."""
-        writer.write("Buffer(ptr={}, size={})".format(self.ptr, self.size))
+        writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")

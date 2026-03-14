@@ -44,7 +44,7 @@ def test_schema_primitive_fields() raises:
 
     # Check the names of the fields in the schema
     for i in range(nb_fields):
-        assert_equal(schema.field(index=i).name, "field{}".format(i + 1))
+        assert_equal(schema.field(index=i).name, String("field", i + 1))
 
 
 def test_schema_names() raises -> None:
@@ -56,13 +56,13 @@ def test_schema_names() raises -> None:
     var schema = Schema(fields=fields^)
     assert_equal(
         schema.names(),
-        List[String](["field{}".format(i + 1) for i in range(2)]),
+        List[String]([String("field", i + 1) for i in range(2)]),
     )
 
     schema.append(Field("field3", int32))
     assert_equal(
         schema.names(),
-        List[String](["field{}".format(i + 1) for i in range(3)]),
+        List[String]([String("field", i + 1) for i in range(3)]),
     )
 
 

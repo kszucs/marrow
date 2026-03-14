@@ -179,20 +179,8 @@ def main() raises:
 
         comptime for si in range(5):
             var us = _bench_gpu_add[int32](gpu_sizes[si], gpu_iters[si], ctx)
-            print(
-                "gpu[int32]/"
-                + String(gpu_sizes[si])
-                + "    "
-                + String(us)
-                + " us"
-            )
+            print(t"gpu[int32]/{gpu_sizes[si]}    {us} us")
 
         comptime for si in range(5):
             var us = _bench_gpu_add[float32](gpu_sizes[si], gpu_iters[si], ctx)
-            print(
-                "gpu[float32]/"
-                + String(gpu_sizes[si])
-                + "    "
-                + String(us)
-                + " us"
-            )
+            print(t"gpu[float32]/{gpu_sizes[si]}    {us} us")

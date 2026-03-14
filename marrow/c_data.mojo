@@ -92,7 +92,7 @@ struct CArrowSchema(Copyable):
         elif dtype.is_string():
             fmt = "u"
         elif dtype.is_fixed_size_list():
-            fmt = "+w:{}".format(dtype.size)
+            fmt = {"+w:", dtype.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
             var child = CArrowSchema.from_field(dtype.fields[0])
@@ -196,7 +196,7 @@ struct CArrowSchema(Copyable):
                 fields.append(self.children[i][].to_field())
             return struct_(fields)
         else:
-            raise Error("Unknown format: {}".format(fmt))
+            raise Error("Unknown format: ", fmt)
 
     fn to_field(self) raises -> Field:
         var name = StringSlice(unsafe_from_utf8_ptr=self.name)
@@ -277,15 +277,11 @@ struct CArrowArray(Movable):
         if dtype.is_bool():
             if self.n_buffers != 2:
                 raise Error(
-                    "bool array must have 2 buffers, got {}".format(
-                        self.n_buffers
-                    )
+                    t"bool array must have 2 buffers, got {self.n_buffers}"
                 )
             if self.n_children != 0:
                 raise Error(
-                    "bool array must have 0 children, got {}".format(
-                        self.n_children
-                    )
+                    t"bool array must have 0 children, got {self.n_children}"
                 )
             var values = Buffer.from_foreign(
                 self.buffers[1],
@@ -296,15 +292,12 @@ struct CArrowArray(Movable):
         elif dtype.is_primitive():
             if self.n_buffers != 2:
                 raise Error(
-                    "numeric array must have 2 buffers, got {}".format(
-                        self.n_buffers
-                    )
+                    t"numeric array must have 2 buffers, got {self.n_buffers}"
                 )
             if self.n_children != 0:
                 raise Error(
-                    "numeric array must have 0 children, got {}.".format(
-                        self.n_children
-                    )
+                    "numeric array must have 0 children, got",
+                    t" {self.n_children}.",
                 )
             var values = Buffer.from_foreign(
                 self.buffers[1], Int(length) * dtype.byte_width(), owner
@@ -313,15 +306,11 @@ struct CArrowArray(Movable):
         elif dtype.is_list():
             if self.n_buffers != 2:
                 raise Error(
-                    "list array must have 2 buffers, got {}".format(
-                        self.n_buffers
-                    )
+                    t"list array must have 2 buffers, got {self.n_buffers}"
                 )
             if self.n_children != 1:
                 raise Error(
-                    "list array must have 1 child, got {}".format(
-                        self.n_children
-                    )
+                    t"list array must have 1 child, got {self.n_children}"
                 )
             # list has only an offsets buffer; child data lives in self.children
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -336,15 +325,11 @@ struct CArrowArray(Movable):
         elif dtype.is_string():
             if self.n_buffers != 3:
                 raise Error(
-                    "string array must have 3 buffers, got {}".format(
-                        self.n_buffers
-                    )
+                    t"string array must have 3 buffers, got {self.n_buffers}"
                 )
             if self.n_children != 0:
                 raise Error(
-                    "string array must have 0 children, got {}".format(
-                        self.n_children
-                    )
+                    t"string array must have 0 children, got {self.n_children}"
                 )
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
@@ -355,15 +340,13 @@ struct CArrowArray(Movable):
         elif dtype.is_fixed_size_list():
             if self.n_buffers != 1:
                 raise Error(
-                    "fixed_size_list array must have 1 buffer, got {}".format(
-                        self.n_buffers
-                    )
+                    "fixed_size_list array must have 1 buffer, got",
+                    t" {self.n_buffers}",
                 )
             if self.n_children != 1:
                 raise Error(
-                    "fixed_size_list array must have 1 child, got {}".format(
-                        self.n_children
-                    )
+                    "fixed_size_list array must have 1 child, got",
+                    t" {self.n_children}",
                 )
             var values_field = dtype.fields[0].copy()
             var values_array = self.children[0][]._to_array(
@@ -373,15 +356,12 @@ struct CArrowArray(Movable):
         elif dtype.is_struct():
             if self.n_buffers != 1:
                 raise Error(
-                    "struct array must have 1 buffer, got {}".format(
-                        self.n_buffers
-                    )
+                    t"struct array must have 1 buffer, got {self.n_buffers}"
                 )
             if self.n_children != Int64(len(dtype.fields)):
                 raise Error(
-                    "struct array must have {} children, got {}".format(
-                        len(dtype.fields), self.n_children
-                    )
+                    t"struct array must have {len(dtype.fields)} children, got"
+                    t" {self.n_children}"
                 )
             for i in range(self.n_children):
                 var child_field = dtype.fields[i].copy()
@@ -390,7 +370,7 @@ struct CArrowArray(Movable):
                 )
                 children.append(child_array^)
         else:
-            raise Error("unsupported dtype for buffer import: {}".format(dtype))
+            raise Error("unsupported dtype for buffer import: ", dtype)
 
         return Array(
             dtype=dtype.copy(),
@@ -581,7 +561,7 @@ struct ArrowArrayStream(Copyable):
         var schema = alloc[CArrowSchema](1)
         var err = self.handle[].get_schema(self.handle, schema)
         if err != 0:
-            raise Error("Failed to get schema {}".format(err))
+            raise Error("Failed to get schema ", err)
         if not schema:
             raise Error("The schema pointer is null")
         return schema.take_pointee()
@@ -591,7 +571,7 @@ struct ArrowArrayStream(Copyable):
         var arrow_array = alloc[CArrowArray](1)
         var err = self.handle[].get_next(self.handle, arrow_array)
         if err != 0:
-            raise Error("Failed to get next arrow array {}".format(err))
+            raise Error("Failed to get next arrow array ", err)
         if not arrow_array:
             raise Error("The arrow array pointer is null")
         return arrow_array.take_pointee()

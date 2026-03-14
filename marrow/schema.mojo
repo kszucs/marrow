@@ -55,4 +55,4 @@ struct Schema(Copyable):
         for field in self.fields:
             if StringSlice(field.name) == name.value():
                 return field
-        raise Error("Field with name `{}` not found.".format(name.value()))
+        raise Error(t"Field with name `{name.value()}` not found.")

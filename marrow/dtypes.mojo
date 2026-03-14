@@ -312,12 +312,10 @@ struct DataType(
             for i in range(len(self.fields)):
                 if i > 0:
                     writer.write(", ")
-                writer.write(self.fields[i].name)
-                writer.write(": ")
-                writer.write(String(self.fields[i].dtype))
+                writer.write(self.fields[i].name, ": ", self.fields[i].dtype)
             writer.write(">")
         else:
-            writer.write("unknown {}".format(self.code))
+            writer.write("unknown ", self.code)
 
     fn bit_width(self) -> UInt8:
         if self.code == BOOL:

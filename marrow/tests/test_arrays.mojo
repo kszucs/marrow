@@ -35,8 +35,8 @@ from std.reflection import call_location
 #             current_value,
 #             expected_value,
 #             String(
-#                 "{}: Bitmap index {} is {}, expected {} as per list position {}"
-#             ).format(message, i, current_value, expected_value, list_pos),
+#                 t"{message}: Bitmap index {i} is {current_value}, expected {expected_value} as per list position {list_pos}"
+#             )
 #             location=call_location(),
 #         )
 
@@ -361,8 +361,8 @@ def test_string_builder() raises:
     assert_equal(a._capacity, 2)
 
     var frozen = a.finish_typed()
-    assert_equal(String(frozen.unsafe_get(0)), "hello")
-    assert_equal(String(frozen.unsafe_get(1)), "world")
+    assert_equal(frozen.unsafe_get(0), "hello")
+    assert_equal(frozen.unsafe_get(1), "world")
 
 
 def test_list_bool_array() raises:
@@ -393,8 +393,8 @@ def test_list_str() raises:
     assert_equal(len(lists), 1)
 
     var first_value = StringArray(lists.unsafe_get(0))
-    assert_equal(String(first_value.unsafe_get(0)), "hello")
-    assert_equal(String(first_value.unsafe_get(1)), "world")
+    assert_equal(first_value.unsafe_get(0), "hello")
+    assert_equal(first_value.unsafe_get(1), "world")
 
 
 def test_list_of_list() raises:
@@ -733,8 +733,8 @@ def test_string_finish_zero_copy() raises:
     s.append("world")
     var frozen = s.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(String(frozen.unsafe_get(0)), "hello")
-    assert_equal(String(frozen.unsafe_get(1)), "world")
+    assert_equal(frozen.unsafe_get(0), "hello")
+    assert_equal(frozen.unsafe_get(1), "world")
 
 
 def test_string_finish_shrinks() raises:
@@ -743,7 +743,7 @@ def test_string_finish_shrinks() raises:
     s.append("hi")
     var frozen = s.finish_typed()
     assert_equal(frozen.length, 1)
-    assert_equal(String(frozen.unsafe_get(0)), "hi")
+    assert_equal(frozen.unsafe_get(0), "hi")
 
 
 def test_string_getitem_bounds_check() raises:
@@ -751,7 +751,7 @@ def test_string_getitem_bounds_check() raises:
     var s = StringBuilder()
     s.append("a")
     var frozen = s.finish_typed()
-    assert_equal(String(frozen[0]), "a")
+    assert_equal(frozen[0], "a")
     try:
         _ = frozen[1]
         assert_true(False, "should have raised")
@@ -931,9 +931,9 @@ def test_string_array_getitem() raises:
     sb.append("beta")
     sb.append("gamma")
     var a = sb.finish_typed()
-    assert_equal(String(a[0]), "alpha")
-    assert_equal(String(a[1]), "beta")
-    assert_equal(String(a[2]), "gamma")
+    assert_equal(a[0], "alpha")
+    assert_equal(a[1], "beta")
+    assert_equal(a[2], "gamma")
 
 
 def test_string_array_getitem_bounds() raises:
@@ -1053,8 +1053,8 @@ def test_struct_array_field_by_index() raises:
     assert_equal(id_arr[1], 2)
 
     var name_arr = sa.field(1).as_string()
-    assert_equal(String(name_arr[0]), "x")
-    assert_equal(String(name_arr[1]), "y")
+    assert_equal(name_arr[0], "x")
+    assert_equal(name_arr[1], "y")
 
 
 def test_struct_array_field_by_name() raises:
@@ -1112,8 +1112,8 @@ def test_string_array_slice() raises:
     var sliced = a.slice(2)
     assert_equal(len(sliced), 2)
     assert_equal(sliced.offset, 2)
-    assert_equal(String(sliced[0]), "cc")
-    assert_equal(String(sliced[1]), "dd")
+    assert_equal(sliced[0], "cc")
+    assert_equal(sliced[1], "dd")
 
 
 def test_fixed_size_list_len_and_null_count() raises:
@@ -1175,8 +1175,8 @@ def test_string_array_slice_with_length() raises:
     var a = sb.finish_typed()
     var s = a.slice(1, 2)
     assert_equal(len(s), 2)
-    assert_equal(String(s[0]), "bb")
-    assert_equal(String(s[1]), "cc")
+    assert_equal(s[0], "bb")
+    assert_equal(s[1], "cc")
 
 
 def test_list_array_slice() raises:

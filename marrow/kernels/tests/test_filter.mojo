@@ -172,8 +172,8 @@ def test_filter_strings_basic() raises:
     var a = s.finish_typed()
     var result = filter_(a, array([True, False, True]))
     assert_equal(len(result), 2)
-    assert_equal(String(result.unsafe_get(0)), "hello")
-    assert_equal(String(result.unsafe_get(1)), "foo")
+    assert_equal(result.unsafe_get(0), "hello")
+    assert_equal(result.unsafe_get(1), "foo")
 
 
 def test_filter_strings_keep_all() raises:
@@ -184,9 +184,9 @@ def test_filter_strings_keep_all() raises:
     var a = s.finish_typed()
     var result = filter_(a, array([True, True, True]))
     assert_equal(len(result), 3)
-    assert_equal(String(result.unsafe_get(0)), "a")
-    assert_equal(String(result.unsafe_get(1)), "bb")
-    assert_equal(String(result.unsafe_get(2)), "ccc")
+    assert_equal(result.unsafe_get(0), "a")
+    assert_equal(result.unsafe_get(1), "bb")
+    assert_equal(result.unsafe_get(2), "ccc")
 
 
 def test_filter_strings_keep_none() raises:
@@ -204,7 +204,7 @@ def test_filter_strings_single() raises:
     var a = s.finish_typed()
     var result = filter_(a, array([True]))
     assert_equal(len(result), 1)
-    assert_equal(String(result.unsafe_get(0)), "only")
+    assert_equal(result.unsafe_get(0), "only")
 
 
 def test_filter_strings_with_nulls() raises:
@@ -220,7 +220,7 @@ def test_filter_strings_with_nulls() raises:
     assert_equal(len(result), 3)
     assert_equal(result.nulls, 2)
     assert_true(result.is_valid(0))
-    assert_equal(String(result.unsafe_get(0)), "valid")
+    assert_equal(result.unsafe_get(0), "valid")
     assert_false(result.is_valid(1))
     assert_false(result.is_valid(2))
 
@@ -236,9 +236,9 @@ def test_filter_strings_run_merging() raises:
     # Select 0,1,2 — consecutive, single memcpy internally
     var result = filter_(a, array([True, True, True, False]))
     assert_equal(len(result), 3)
-    assert_equal(String(result.unsafe_get(0)), "aaa")
-    assert_equal(String(result.unsafe_get(1)), "bbb")
-    assert_equal(String(result.unsafe_get(2)), "ccc")
+    assert_equal(result.unsafe_get(0), "aaa")
+    assert_equal(result.unsafe_get(1), "bbb")
+    assert_equal(result.unsafe_get(2), "ccc")
 
 
 def test_filter_strings_non_consecutive() raises:
@@ -252,9 +252,9 @@ def test_filter_strings_non_consecutive() raises:
     var a = s.finish_typed()
     var result = filter_(a, array([True, False, True, False, True]))
     assert_equal(len(result), 3)
-    assert_equal(String(result.unsafe_get(0)), "first")
-    assert_equal(String(result.unsafe_get(1)), "third")
-    assert_equal(String(result.unsafe_get(2)), "fifth")
+    assert_equal(result.unsafe_get(0), "first")
+    assert_equal(result.unsafe_get(1), "third")
+    assert_equal(result.unsafe_get(2), "fifth")
 
 
 def test_filter_strings_empty_strings() raises:
@@ -266,9 +266,9 @@ def test_filter_strings_empty_strings() raises:
     var a = s.finish_typed()
     var result = filter_(a, array([True, True, True]))
     assert_equal(len(result), 3)
-    assert_equal(String(result.unsafe_get(0)), "")
-    assert_equal(String(result.unsafe_get(1)), "x")
-    assert_equal(String(result.unsafe_get(2)), "")
+    assert_equal(result.unsafe_get(0), "")
+    assert_equal(result.unsafe_get(1), "x")
+    assert_equal(result.unsafe_get(2), "")
 
 
 def test_filter_strings_offsets_correct() raises:

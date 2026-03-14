@@ -50,7 +50,7 @@ trait DataTypeVisitor:
         elif dtype.is_struct():
             self.visit_struct(dtype.fields)
         else:
-            raise Error("visit: unsupported dtype: {}".format(dtype))
+            raise Error("visit: unsupported dtype: ", dtype)
 
 
 trait ArrayVisitor:
@@ -106,4 +106,4 @@ trait ArrayVisitor:
         elif array.dtype.is_struct():
             self.visit(StructArray(data=array))
         else:
-            raise Error("visit: unsupported dtype {}".format(array.dtype))
+            raise Error("visit: unsupported dtype ", array.dtype)

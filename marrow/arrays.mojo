@@ -130,9 +130,8 @@ struct Array(
             self = Array(py.downcast_value_ptr[StructArray]()[])
         else:
             raise Error(
-                "cannot convert Python object of type '{}' to Array".format(
-                    py.__class__.__name__
-                )
+                "cannot convert Python object of type",
+                t" '{py.__class__.__name__}' to Array",
             )
 
     fn is_valid(self, index: Int) -> Bool:
@@ -183,7 +182,7 @@ struct Array(
         elif self.dtype.is_struct():
             return self.as_struct().to_python_object()
         else:
-            raise Error("unsupported type: {}".format(self.dtype))
+            raise Error("unsupported type: ", self.dtype)
 
     fn as_primitive[T: DataType](self) raises -> PrimitiveArray[T]:
         return PrimitiveArray[T](self)
@@ -259,9 +258,7 @@ struct PrimitiveArray[T: DataType](
         if data.dtype != Self.T:
             # TODO: mojo hangs if we pass data.dtype directly despite that it properly satisfies Writable
             raise Error(
-                "Unexpected dtype '{}' instead of '{}'.".format(
-                    String(data.dtype), String(Self.T)
-                )
+                t"Unexpected dtype '{data.dtype}' instead of '{Self.T}'."
             )
         elif len(data.buffers) != 1:
             raise Error("PrimitiveArray requires exactly one buffer")
@@ -330,11 +327,7 @@ struct PrimitiveArray[T: DataType](
 
     fn __getitem__(self, index: Int) raises -> Self.scalar:
         if index < 0 or index >= self.length:
-            raise Error(
-                "index {} out of bounds for length {}".format(
-                    index, self.length
-                )
-            )
+            raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
     fn null_count(self) -> Int:
@@ -435,11 +428,7 @@ struct StringArray(
             If the dtype is not string or the buffer count is wrong.
         """
         if data.dtype != string:
-            raise Error(
-                "Unexpected dtype '{}' instead of 'string'.".format(
-                    String(data.dtype)
-                )
-            )
+            raise Error(t"Unexpected dtype '{data.dtype}' instead of 'string'.")
         elif len(data.buffers) != 2:
             raise Error("StringArray requires exactly two buffers")
 
@@ -526,11 +515,7 @@ struct StringArray(
             If the index is out of bounds.
         """
         if index < 0 or index >= self.length:
-            raise Error(
-                "index {} out of bounds for length {}".format(
-                    index, self.length
-                )
-            )
+            raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(UInt(index))
 
     fn to_python_object(var self) raises -> PythonObject:
@@ -562,11 +547,7 @@ struct ListArray(
 
     fn __init__(out self, ref data: Array) raises:
         if not data.dtype.is_list():
-            raise Error(
-                "Unexpected dtype '{}' instead of 'list'.".format(
-                    String(data.dtype)
-                )
-            )
+            raise Error(t"Unexpected dtype '{data.dtype}' instead of 'list'.")
         elif len(data.buffers) != 1:
             raise Error("ListArray requires exactly one buffer")
         elif len(data.children) != 1:
@@ -636,11 +617,7 @@ struct ListArray(
 
     fn __getitem__(self, index: Int) raises -> Array:
         if index < 0 or index >= self.length:
-            raise Error(
-                "index {} out of bounds for length {}".format(
-                    index, self.length
-                )
-            )
+            raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
     fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -698,9 +675,7 @@ struct FixedSizeListArray(
     fn __init__(out self, ref data: Array) raises:
         if not data.dtype.is_fixed_size_list():
             raise Error(
-                "Unexpected dtype '{}' instead of 'fixed_size_list'.".format(
-                    String(data.dtype)
-                )
+                t"Unexpected dtype '{data.dtype}' instead of 'fixed_size_list'."
             )
         elif len(data.buffers) != 0:
             raise Error("FixedSizeListArray requires zero buffers")
@@ -770,11 +745,7 @@ struct FixedSizeListArray(
 
     fn __getitem__(self, index: Int) raises -> Array:
         if index < 0 or index >= self.length:
-            raise Error(
-                "index {} out of bounds for length {}".format(
-                    index, self.length
-                )
-            )
+            raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
     fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -894,7 +865,7 @@ struct StructArray(
             if field.name == name:
                 return idx
 
-        raise Error("Field {} does not exist in this StructArray.".format(name))
+        raise Error(t"Field {name} does not exist in this StructArray.")
 
     fn unsafe_get(
         self, name: StringSlice
@@ -909,9 +880,8 @@ struct StructArray(
         """
         if index < 0 or index >= len(self.children):
             raise Error(
-                "field index {} out of bounds for {} fields".format(
-                    index, len(self.children)
-                )
+                t"field index {index} out of bounds for"
+                t" {len(self.children)} fields"
             )
         return self.children[index].copy()
 

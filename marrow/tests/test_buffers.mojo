@@ -26,8 +26,9 @@ def assert_bitmap_set(
             current_value,
             expected_value,
             String(
-                "{}: Bitmap index {} is {}, expected {} as per list position {}"
-            ).format(message, i, current_value, expected_value, list_pos),
+                t"{message}: Bitmap index {i} is {current_value}, expected"
+                t" {expected_value} as per list position {list_pos}"
+            ),
             location=call_location(),
         )
 

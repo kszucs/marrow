@@ -207,9 +207,8 @@ fn binary_not_null[
     """
     if len(left) != len(right):
         raise Error(
-            "{} arrays must have the same length, got {} and {}".format(
-                name, len(left), len(right)
-            )
+            t"{name} arrays must have the same length, got {len(left)} and"
+            t" {len(right)}"
         )
 
     var length = len(left)
@@ -269,9 +268,8 @@ fn binary_simd[
     """
     if len(left) != len(right):
         raise Error(
-            "{} arrays must have the same length, got {} and {}".format(
-                name, len(left), len(right)
-            )
+            t"{name} arrays must have the same length, got {len(left)} and"
+            t" {len(right)}"
         )
 
     var length = len(left)
@@ -494,16 +492,11 @@ fn binary_gpu[
         A new device-resident PrimitiveArray with func applied element-wise.
     """
     comptime if not has_accelerator():
-        raise Error(
-            String(name) + ": no GPU accelerator available on this system"
-        )
+        raise Error(name, ": no GPU accelerator available on this system")
     if len(left) != len(right):
         raise Error(
-            String(name)
-            + ": arrays must have the same length, got "
-            + String(len(left))
-            + " and "
-            + String(len(right))
+            t"{name}: arrays must have the same length, ",
+            t"got {len(left)} and {len(right)}",
         )
     var length = len(left)
     comptime native = T.native
@@ -572,12 +565,7 @@ fn binary_array_dispatch[
         A new Array with the element-wise result.
     """
     if left.dtype != right.dtype:
-        # TODO: remove String() from around dtypes once mojo stops hanging when we pass them directly to format()
-        raise Error(
-            "{}: dtype mismatch: {} vs {}".format(
-                name, String(left.dtype), String(right.dtype)
-            )
-        )
+        raise Error(t"{name}: dtype mismatch: {left.dtype} vs {right.dtype}")
 
     comptime for dtype in numeric_dtypes:
         if left.dtype == dtype:
@@ -588,4 +576,4 @@ fn binary_array_dispatch[
                     ctx,
                 )
             )
-    raise Error("{}: unsupported dtype {}".format(name, String(left.dtype)))
+    raise Error(t"{name}: unsupported dtype {left.dtype}")

@@ -81,9 +81,9 @@ def test_binary_array_from_pyarrow() raises:
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), False)
 
-    assert_equal(String(array.unsafe_get(0)), "foo")
-    assert_equal(String(array.unsafe_get(1)), "bar")
-    assert_equal(String(array.unsafe_get(2)), "")
+    assert_equal(array.unsafe_get(0), "foo")
+    assert_equal(array.unsafe_get(1), "bar")
+    assert_equal(array.unsafe_get(2), "")
 
 
 def test_list_array_from_pyarrow() raises:
@@ -202,8 +202,8 @@ def test_arrow_array_stream() raises:
     assert_equal(col1_array.unsafe_get(4), 5)
 
     var col2_array = array_data.children[1].copy().as_string()
-    assert_equal(String(col2_array.unsafe_get(0)), "a")
-    assert_equal(String(col2_array.unsafe_get(4)), "e")
+    assert_equal(col2_array.unsafe_get(0), "a")
+    assert_equal(col2_array.unsafe_get(4), "e")
 
 
 def test_struct_dtype_conversion() raises:

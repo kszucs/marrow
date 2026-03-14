@@ -207,8 +207,8 @@ def test_string_builder_append_null() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_true(frozen.is_valid(2))
-    assert_equal(String(frozen.unsafe_get(0)), "hello")
-    assert_equal(String(frozen.unsafe_get(2)), "world")
+    assert_equal(frozen.unsafe_get(0), "hello")
+    assert_equal(frozen.unsafe_get(2), "world")
 
 
 def test_string_builder_null_count() raises:
@@ -232,9 +232,9 @@ def test_string_builder_empty_string() raises:
     b.append("")
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    assert_equal(String(frozen.unsafe_get(0)), "")
-    assert_equal(String(frozen.unsafe_get(1)), "x")
-    assert_equal(String(frozen.unsafe_get(2)), "")
+    assert_equal(frozen.unsafe_get(0), "")
+    assert_equal(frozen.unsafe_get(1), "x")
+    assert_equal(frozen.unsafe_get(2), "")
 
 
 def test_string_builder_offsets_correct() raises:
@@ -246,9 +246,9 @@ def test_string_builder_offsets_correct() raises:
     b.append("f")  # bytes [5..6)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 4)
-    assert_equal(String(frozen.unsafe_get(0)), "ab")
-    assert_equal(String(frozen.unsafe_get(1)), "cde")
-    assert_equal(String(frozen.unsafe_get(3)), "f")
+    assert_equal(frozen.unsafe_get(0), "ab")
+    assert_equal(frozen.unsafe_get(1), "cde")
+    assert_equal(frozen.unsafe_get(3), "f")
 
 
 def test_string_builder_all_nulls() raises:
@@ -269,9 +269,9 @@ def test_string_builder_capacity_growth() raises:
     b.append("third")
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    assert_equal(String(frozen.unsafe_get(0)), "first")
-    assert_equal(String(frozen.unsafe_get(1)), "second")
-    assert_equal(String(frozen.unsafe_get(2)), "third")
+    assert_equal(frozen.unsafe_get(0), "first")
+    assert_equal(frozen.unsafe_get(1), "second")
+    assert_equal(frozen.unsafe_get(2), "third")
 
 
 def test_string_builder_append_string_slice() raises:
@@ -283,8 +283,8 @@ def test_string_builder_append_string_slice() raises:
     b.append(s2)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(String(frozen.unsafe_get(0)), "hello")
-    assert_equal(String(frozen.unsafe_get(1)), "world")
+    assert_equal(frozen.unsafe_get(0), "hello")
+    assert_equal(frozen.unsafe_get(1), "world")
 
 
 def test_string_builder_unsafe_append_string_slice() raises:
@@ -297,8 +297,8 @@ def test_string_builder_unsafe_append_string_slice() raises:
     b.unsafe_append(s2)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(String(frozen.unsafe_get(0)), "hi")
-    assert_equal(String(frozen.unsafe_get(1)), "bye")
+    assert_equal(frozen.unsafe_get(0), "hi")
+    assert_equal(frozen.unsafe_get(1), "bye")
 
 
 def test_string_builder_as_any_builder() raises:
@@ -405,8 +405,8 @@ def test_list_builder_string_child() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     var inner = StringArray(frozen.unsafe_get(0))
-    assert_equal(String(inner.unsafe_get(0)), "hello")
-    assert_equal(String(inner.unsafe_get(1)), "world")
+    assert_equal(inner.unsafe_get(0), "hello")
+    assert_equal(inner.unsafe_get(1), "world")
 
 
 # ---------------------------------------------------------------------------

@@ -194,9 +194,7 @@ fn cosine_similarity[
 
     if len(query) != dim:
         raise Error(
-            "cosine_similarity: query length {} != vector dim {}".format(
-                len(query), dim
-            )
+            t"cosine_similarity: query length {len(query)} != vector dim {dim}"
         )
 
     if ctx:

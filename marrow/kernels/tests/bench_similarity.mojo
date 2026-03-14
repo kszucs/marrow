@@ -110,10 +110,11 @@ fn _bench_gpu_preloaded(
 fn _print_row(kernel: String, n: Int, dim: Int, us: Float64):
     var n_str = String(n)
     var dim_str = String(dim)
-    var pad1 = " " * (12 - len(kernel))
-    var pad2 = " " * (10 - len(n_str))
-    var pad3 = " " * (6 - len(dim_str))
-    print(kernel + pad1 + n_str + pad2 + dim_str + pad3 + String(us) + " us")
+    # TODO: use format specifiers once supported
+    var pad1 = " " * (12 - kernel.byte_length())
+    var pad2 = " " * (10 - n_str.byte_length())
+    var pad3 = " " * (6 - dim_str.byte_length())
+    print(kernel, pad1, n_str, pad2, dim_str, pad3, us, " us", sep="")
 
 
 def main() raises:

@@ -33,7 +33,14 @@ from marrow.arrays import (
     StructArray,
     ChunkedArray,
 )
-from marrow.builders import AnyBuilder, PrimitiveBuilder, StringBuilder, ListBuilder, StructBuilder, make_builder
+from marrow.builders import (
+    AnyBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+    ListBuilder,
+    StructBuilder,
+    make_builder,
+)
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
 
@@ -135,7 +142,7 @@ struct PyHelpers(Copyable, Movable):
         self = PyHelpers()
 
     @always_inline
-    fn cpy(mut self) -> ref [ImmutAnyOrigin] CPython:
+    fn cpy(mut self) -> ref[ImmutAnyOrigin] CPython:
         return self.py.cpython()
 
     @always_inline
@@ -169,8 +176,11 @@ struct PyHelpers(Copyable, Movable):
             raise self.cpy().unsafe_get_error()
 
     @always_inline
-    fn to_scalar[dtype: DType](mut self, ptr: PyObjectPtr) raises -> Scalar[dtype]:
-        """Convert a Python int, float, or bool object to Scalar[dtype]; raises on type error or overflow."""
+    fn to_scalar[
+        dtype: DType
+    ](mut self, ptr: PyObjectPtr) raises -> Scalar[dtype]:
+        """Convert a Python int, float, or bool object to Scalar[dtype]; raises on type error or overflow.
+        """
         comptime if dtype == DType.bool:
             var val = self.cpy().PyLong_AsSsize_t(ptr)
             if val == -1:
@@ -196,8 +206,11 @@ struct PyHelpers(Copyable, Movable):
             return converted
 
     @always_inline
-    fn to_string_slice(mut self, ptr: PyObjectPtr) raises -> StringSlice[ImmutAnyOrigin]:
-        """Decode a Python str to a UTF-8 StringSlice; raises on TypeError or encoding error."""
+    fn to_string_slice(
+        mut self, ptr: PyObjectPtr
+    ) raises -> StringSlice[ImmutAnyOrigin]:
+        """Decode a Python str to a UTF-8 StringSlice; raises on TypeError or encoding error.
+        """
         var s = self.cpy().PyUnicode_AsUTF8AndSize(ptr)
         self.raise_on_error()
         return s
@@ -208,8 +221,11 @@ struct PyHelpers(Copyable, Movable):
         return Int(self.cpy().PyObject_Length(ptr))
 
     @always_inline
-    fn dict_getitem(mut self, dict_ptr: PyObjectPtr, key: PyObjectPtr) raises -> PyObjectPtr:
-        """Look up key in a Python dict; returns none_ptr if missing, raises on error."""
+    fn dict_getitem(
+        mut self, dict_ptr: PyObjectPtr, key: PyObjectPtr
+    ) raises -> PyObjectPtr:
+        """Look up key in a Python dict; returns none_ptr if missing, raises on error.
+        """
         var val = self.cpy().PyDict_GetItemWithError(dict_ptr, key)
         if val == PyObjectPtr():
             self.raise_on_error()
@@ -218,12 +234,14 @@ struct PyHelpers(Copyable, Movable):
 
     @always_inline
     fn list_getitem(mut self, list_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
-        """Borrowed reference to list[i]; no bounds checking (mirrors PyList_GetItem)."""
+        """Borrowed reference to list[i]; no bounds checking (mirrors PyList_GetItem).
+        """
         return self.cpy().PyList_GetItem(list_ptr, i)
 
     @always_inline
     fn tuple_getitem(mut self, tuple_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
-        """Borrowed reference to tuple[i]; no bounds checking (mirrors PyTuple_GetItem)."""
+        """Borrowed reference to tuple[i]; no bounds checking (mirrors PyTuple_GetItem).
+        """
         return self.cpy().PyTuple_GetItem(tuple_ptr, i)
 
 
@@ -251,7 +269,6 @@ fn _fsl_getitem(
     index: Int,
 ) raises -> PythonObject:
     return ptr[].__getitem__(index).to_python_object()
-
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +353,8 @@ struct PyInferrer(Copyable, Movable):
             return False  # list cannot widen further
         else:
             raise Error(
-                "cannot include value of type: "
-                + String(PythonObject(from_borrowed=ptr).__class__.__name__)
+                "cannot include value of type: ",
+                PythonObject(from_borrowed=ptr).__class__.__name__,
             )
 
     fn _visit_list(mut self, ptr: PyObjectPtr) raises:
@@ -359,7 +376,8 @@ struct PyInferrer(Copyable, Movable):
                 break
 
     fn _visit_dict(mut self, dict_ptr: PyObjectPtr) raises:
-        """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer."""
+        """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer.
+        """
         ref cpy = self.py.cpy()
         var n = self.py.length(dict_ptr)
         var pos = Int(0)
@@ -410,9 +428,18 @@ struct PyInferrer(Copyable, Movable):
                 raise Error("cannot mix dict and non-dict values")
             var fields: List[dt.Field] = []
             for i in range(len(self._field_order)):
-                fields.append(dt.Field(self._field_order[i], self._field_children[i]._get_type(), nullable=True))
+                fields.append(
+                    dt.Field(
+                        self._field_order[i],
+                        self._field_children[i]._get_type(),
+                        nullable=True,
+                    )
+                )
             return dt.struct_(fields)
-        if self.unicode_count > 0 and (self.bool_count + self.int_count + self.float_count) > 0:
+        if (
+            self.unicode_count > 0
+            and (self.bool_count + self.int_count + self.float_count) > 0
+        ):
             raise Error("cannot mix string and numeric types")
         if self.float_count > 0:
             return dt.float64
@@ -425,7 +452,8 @@ struct PyInferrer(Copyable, Movable):
         return dt.null  # empty sequence or all-None
 
     fn infer(mut self, obj: PythonObject) raises -> dt.DataType:
-        """Visit elements until type is locked, then scan remaining elements for nulls."""
+        """Visit elements until type is locked, then scan remaining elements for nulls.
+        """
         var list_ptr = obj._obj_ptr
         var n = len(obj)
         var stopped_at = n
@@ -544,7 +572,11 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
                     b.unsafe_append(self.py.to_scalar[Self.T.native](item))
         else:
             for i in range(n):
-                b.unsafe_append(self.py.to_scalar[Self.T.native](self.py.list_getitem(values, i)))
+                b.unsafe_append(
+                    self.py.to_scalar[Self.T.native](
+                        self.py.list_getitem(values, i)
+                    )
+                )
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
@@ -563,6 +595,7 @@ struct PyStringConverter(PyConverter):
     var _builder: ArcPointer[StringBuilder]
     var _has_nulls: Bool
     var py: PyHelpers
+
     fn __init__(
         out self,
         builder: ArcPointer[StringBuilder],
@@ -597,7 +630,9 @@ struct PyStringConverter(PyConverter):
                     b.unsafe_append(self.py.to_string_slice(item))
         else:
             for i in range(n):
-                b.unsafe_append(self.py.to_string_slice(self.py.list_getitem(values, i)))
+                b.unsafe_append(
+                    self.py.to_string_slice(self.py.list_getitem(values, i))
+                )
 
     fn append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
@@ -745,7 +780,7 @@ fn make_converter(
             )
         return PyStructConverter(builder, children^, dtype)
     else:
-        raise Error("unsupported type: {}".format(dtype))
+        raise Error("unsupported type: ", dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -788,8 +823,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # --- BoolArray ---
     ref bool_array_py = mb.add_type[BoolArray]("BoolArray")
     _ = (
-        bool_array_py
-        .def_method[pymethod[BoolArray.null_count]()]("null_count")
+        bool_array_py.def_method[pymethod[BoolArray.null_count]()]("null_count")
         .def_method[pymethod[BoolArray.type]()]("type")
         .def_method[pymethod[BoolArray.__str__]()]("__str__")
         .def_method[pymethod[BoolArray.__str__]()]("__repr__")
@@ -806,8 +840,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # --- Numeric PrimitiveArrays ---
     ref int8_array_py = mb.add_type[Int8Array]("Int8Array")
     _ = (
-        int8_array_py
-        .def_method[pymethod[Int8Array.null_count]()]("null_count")
+        int8_array_py.def_method[pymethod[Int8Array.null_count]()]("null_count")
         .def_method[pymethod[Int8Array.type]()]("type")
         .def_method[pymethod[Int8Array.__str__]()]("__str__")
         .def_method[pymethod[Int8Array.__str__]()]("__repr__")
@@ -815,12 +848,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int8Array.slice]()]("slice")
     )
     var int8_array_sp = SequenceProtocolBuilder[Int8Array](int8_array_py)
-    _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[Int8Array.__getitem__]()
+    _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[
+        Int8Array.__getitem__
+    ]()
 
     ref int16_array_py = mb.add_type[Int16Array]("Int16Array")
     _ = (
-        int16_array_py
-        .def_method[pymethod[Int16Array.null_count]()]("null_count")
+        int16_array_py.def_method[pymethod[Int16Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[Int16Array.type]()]("type")
         .def_method[pymethod[Int16Array.__str__]()]("__str__")
         .def_method[pymethod[Int16Array.__str__]()]("__repr__")
@@ -828,12 +864,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int16Array.slice]()]("slice")
     )
     var int16_array_sp = SequenceProtocolBuilder[Int16Array](int16_array_py)
-    _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[Int16Array.__getitem__]()
+    _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[
+        Int16Array.__getitem__
+    ]()
 
     ref int32_array_py = mb.add_type[Int32Array]("Int32Array")
     _ = (
-        int32_array_py
-        .def_method[pymethod[Int32Array.null_count]()]("null_count")
+        int32_array_py.def_method[pymethod[Int32Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[Int32Array.type]()]("type")
         .def_method[pymethod[Int32Array.__str__]()]("__str__")
         .def_method[pymethod[Int32Array.__str__]()]("__repr__")
@@ -841,12 +880,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int32Array.slice]()]("slice")
     )
     var int32_array_sp = SequenceProtocolBuilder[Int32Array](int32_array_py)
-    _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[Int32Array.__getitem__]()
+    _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[
+        Int32Array.__getitem__
+    ]()
 
     ref int64_array_py = mb.add_type[Int64Array]("Int64Array")
     _ = (
-        int64_array_py
-        .def_method[pymethod[Int64Array.null_count]()]("null_count")
+        int64_array_py.def_method[pymethod[Int64Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[Int64Array.type]()]("type")
         .def_method[pymethod[Int64Array.__str__]()]("__str__")
         .def_method[pymethod[Int64Array.__str__]()]("__repr__")
@@ -854,12 +896,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Int64Array.slice]()]("slice")
     )
     var int64_array_sp = SequenceProtocolBuilder[Int64Array](int64_array_py)
-    _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[Int64Array.__getitem__]()
+    _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[
+        Int64Array.__getitem__
+    ]()
 
     ref uint8_array_py = mb.add_type[UInt8Array]("UInt8Array")
     _ = (
-        uint8_array_py
-        .def_method[pymethod[UInt8Array.null_count]()]("null_count")
+        uint8_array_py.def_method[pymethod[UInt8Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[UInt8Array.type]()]("type")
         .def_method[pymethod[UInt8Array.__str__]()]("__str__")
         .def_method[pymethod[UInt8Array.__str__]()]("__repr__")
@@ -867,12 +912,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt8Array.slice]()]("slice")
     )
     var uint8_array_sp = SequenceProtocolBuilder[UInt8Array](uint8_array_py)
-    _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[UInt8Array.__getitem__]()
+    _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[
+        UInt8Array.__getitem__
+    ]()
 
     ref uint16_array_py = mb.add_type[UInt16Array]("UInt16Array")
     _ = (
-        uint16_array_py
-        .def_method[pymethod[UInt16Array.null_count]()]("null_count")
+        uint16_array_py.def_method[pymethod[UInt16Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[UInt16Array.type]()]("type")
         .def_method[pymethod[UInt16Array.__str__]()]("__str__")
         .def_method[pymethod[UInt16Array.__str__]()]("__repr__")
@@ -880,12 +928,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt16Array.slice]()]("slice")
     )
     var uint16_array_sp = SequenceProtocolBuilder[UInt16Array](uint16_array_py)
-    _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[UInt16Array.__getitem__]()
+    _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[
+        UInt16Array.__getitem__
+    ]()
 
     ref uint32_array_py = mb.add_type[UInt32Array]("UInt32Array")
     _ = (
-        uint32_array_py
-        .def_method[pymethod[UInt32Array.null_count]()]("null_count")
+        uint32_array_py.def_method[pymethod[UInt32Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[UInt32Array.type]()]("type")
         .def_method[pymethod[UInt32Array.__str__]()]("__str__")
         .def_method[pymethod[UInt32Array.__str__]()]("__repr__")
@@ -893,12 +944,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt32Array.slice]()]("slice")
     )
     var uint32_array_sp = SequenceProtocolBuilder[UInt32Array](uint32_array_py)
-    _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[UInt32Array.__getitem__]()
+    _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[
+        UInt32Array.__getitem__
+    ]()
 
     ref uint64_array_py = mb.add_type[UInt64Array]("UInt64Array")
     _ = (
-        uint64_array_py
-        .def_method[pymethod[UInt64Array.null_count]()]("null_count")
+        uint64_array_py.def_method[pymethod[UInt64Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[UInt64Array.type]()]("type")
         .def_method[pymethod[UInt64Array.__str__]()]("__str__")
         .def_method[pymethod[UInt64Array.__str__]()]("__repr__")
@@ -906,39 +960,52 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[UInt64Array.slice]()]("slice")
     )
     var uint64_array_sp = SequenceProtocolBuilder[UInt64Array](uint64_array_py)
-    _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[UInt64Array.__getitem__]()
+    _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[
+        UInt64Array.__getitem__
+    ]()
 
     ref float32_array_py = mb.add_type[Float32Array]("Float32Array")
     _ = (
-        float32_array_py
-        .def_method[pymethod[Float32Array.null_count]()]("null_count")
+        float32_array_py.def_method[pymethod[Float32Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[Float32Array.type]()]("type")
         .def_method[pymethod[Float32Array.__str__]()]("__str__")
         .def_method[pymethod[Float32Array.__str__]()]("__repr__")
         .def_method[pymethod[Float32Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float32Array.slice]()]("slice")
     )
-    var float32_array_sp = SequenceProtocolBuilder[Float32Array](float32_array_py)
-    _ = float32_array_sp.def_len[Float32Array.__len__]().def_getitem[Float32Array.__getitem__]()
+    var float32_array_sp = SequenceProtocolBuilder[Float32Array](
+        float32_array_py
+    )
+    _ = float32_array_sp.def_len[Float32Array.__len__]().def_getitem[
+        Float32Array.__getitem__
+    ]()
 
     ref float64_array_py = mb.add_type[Float64Array]("Float64Array")
     _ = (
-        float64_array_py
-        .def_method[pymethod[Float64Array.null_count]()]("null_count")
+        float64_array_py.def_method[pymethod[Float64Array.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[Float64Array.type]()]("type")
         .def_method[pymethod[Float64Array.__str__]()]("__str__")
         .def_method[pymethod[Float64Array.__str__]()]("__repr__")
         .def_method[pymethod[Float64Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float64Array.slice]()]("slice")
     )
-    var float64_array_sp = SequenceProtocolBuilder[Float64Array](float64_array_py)
-    _ = float64_array_sp.def_len[Float64Array.__len__]().def_getitem[Float64Array.__getitem__]()
+    var float64_array_sp = SequenceProtocolBuilder[Float64Array](
+        float64_array_py
+    )
+    _ = float64_array_sp.def_len[Float64Array.__len__]().def_getitem[
+        Float64Array.__getitem__
+    ]()
 
     # --- StringArray ---
     ref str_array_py = mb.add_type[StringArray]("StringArray")
     _ = (
-        str_array_py
-        .def_method[pymethod[StringArray.null_count]()]("null_count")
+        str_array_py.def_method[pymethod[StringArray.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[StringArray.type]()]("type")
         .def_method[pymethod[StringArray.__str__]()]("__str__")
         .def_method[pymethod[StringArray.__str__]()]("__repr__")
@@ -951,8 +1018,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # --- ListArray ---
     ref list_array_py = mb.add_type[ListArray]("ListArray")
     _ = (
-        list_array_py
-        .def_method[pymethod[ListArray.null_count]()]("null_count")
+        list_array_py.def_method[pymethod[ListArray.null_count]()]("null_count")
         .def_method[pymethod[ListArray.type]()]("type")
         .def_method[pymethod[ListArray.__str__]()]("__str__")
         .def_method[pymethod[ListArray.__str__]()]("__repr__")
@@ -967,8 +1033,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     # --- FixedSizeListArray ---
     ref fsl_array_py = mb.add_type[FixedSizeListArray]("FixedSizeListArray")
     _ = (
-        fsl_array_py
-        .def_method[pymethod[FixedSizeListArray.null_count]()]("null_count")
+        fsl_array_py.def_method[pymethod[FixedSizeListArray.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[FixedSizeListArray.type]()]("type")
         .def_method[pymethod[FixedSizeListArray.__str__]()]("__str__")
         .def_method[pymethod[FixedSizeListArray.__str__]()]("__repr__")
@@ -977,13 +1044,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[FixedSizeListArray.flatten]()]("flatten")
     )
     var fsl_array_sp = SequenceProtocolBuilder[FixedSizeListArray](fsl_array_py)
-    _ = fsl_array_sp.def_len[FixedSizeListArray.__len__]().def_getitem[_fsl_getitem]()
+    _ = fsl_array_sp.def_len[FixedSizeListArray.__len__]().def_getitem[
+        _fsl_getitem
+    ]()
 
     # --- StructArray ---
     ref struct_array_py = mb.add_type[StructArray]("StructArray")
     _ = (
-        struct_array_py
-        .def_method[pymethod[StructArray.null_count]()]("null_count")
+        struct_array_py.def_method[pymethod[StructArray.null_count]()](
+            "null_count"
+        )
         .def_method[pymethod[StructArray.type]()]("type")
         .def_method[pymethod[StructArray.__str__]()]("__str__")
         .def_method[pymethod[StructArray.__str__]()]("__repr__")

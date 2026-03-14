@@ -846,7 +846,7 @@ fn make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
             children.append(make_builder(dtype.fields[i].dtype))
         return StructBuilder(dtype.fields.copy(), children^, capacity)
     else:
-        raise Error("unsupported type: {}".format(dtype))
+        raise Error("unsupported type: ", dtype)
 
 
 fn array[T: DataType]() raises -> PrimitiveArray[T]:

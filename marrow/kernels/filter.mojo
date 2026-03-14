@@ -152,9 +152,8 @@ fn filter_[
     """
     if len(array) != len(selection):
         raise Error(
-            "filter: array length {} != selection length {}".format(
-                len(array), len(selection)
-            )
+            t"filter: array length {len(array)} != selection length"
+            t" {len(selection)}"
         )
     var n = len(array)
     var out_len = count_true(selection)
@@ -303,9 +302,8 @@ fn filter_(
     """
     if len(array) != len(selection):
         raise Error(
-            "filter: array length {} != selection length {}".format(
-                len(array), len(selection)
-            )
+            t"filter: array length {len(array)} != selection length"
+            t" {len(selection)}"
         )
 
     # Step 1+2: compute and filter per-element lengths
@@ -457,7 +455,7 @@ fn filter_(array: Array, selection: Array) raises -> Array:
     if array.dtype.is_string():
         return Array(filter_(array.as_string(), mask))
 
-    raise Error("filter: unsupported dtype {}".format(array.dtype))
+    raise Error("filter: unsupported dtype ", array.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -496,4 +494,4 @@ fn drop_nulls(array: Array) raises -> Array:
         if array.dtype == dtype:
             return Array(drop_nulls[dtype](PrimitiveArray[dtype](data=array)))
 
-    raise Error("drop_nulls: unsupported dtype {}".format(array.dtype))
+    raise Error("drop_nulls: unsupported dtype ", array.dtype)

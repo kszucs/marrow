@@ -102,7 +102,7 @@ fn sum(array: Array) raises -> Scalar[DType.float64]:
             return sum[dtype](PrimitiveArray[dtype](data=array)).cast[
                 DType.float64
             ]()
-    raise Error("sum: unsupported dtype {}".format(array.dtype))
+    raise Error("sum: unsupported dtype ", array.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ fn product(array: Array) raises -> Scalar[DType.float64]:
             return product[dtype](PrimitiveArray[dtype](data=array)).cast[
                 DType.float64
             ]()
-    raise Error("product: unsupported dtype {}".format(array.dtype))
+    raise Error("product: unsupported dtype ", array.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ fn min_(array: Array) raises -> Scalar[DType.float64]:
             return min_[dtype](PrimitiveArray[dtype](data=array)).cast[
                 DType.float64
             ]()
-    raise Error("min_: unsupported dtype {}".format(array.dtype))
+    raise Error("min_: unsupported dtype ", array.dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ fn max_(array: Array) raises -> Scalar[DType.float64]:
             return max_[dtype](PrimitiveArray[dtype](data=array)).cast[
                 DType.float64
             ]()
-    raise Error("max_: unsupported dtype {}".format(array.dtype))
+    raise Error("max_: unsupported dtype ", array.dtype)
 
 
 # ---------------------------------------------------------------------------
