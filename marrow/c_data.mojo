@@ -15,6 +15,7 @@ from std.python._cpython import CPython, PyObjectPtr
 
 from .dtypes import *
 from .arrays import *
+from .schema import Schema
 
 comptime ARROW_FLAG_NULLABLE = 2
 
@@ -54,7 +55,13 @@ struct CArrowSchema(Copyable):
         return pa.Schema._import_from_c(Int(ptr))
 
     @staticmethod
-    fn from_dtype(dtype: DataType) -> CArrowSchema:
+    fn from_dtype(dtype: DataType) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+        """Build a heap-allocated CArrowSchema for a DataType.
+
+        Format strings are stored in a heap-allocated _SchemaExportData
+        (via private_data) so they outlive the struct. The release callback
+        _release_heap_c_schema frees everything.
+        """
         var fmt: String
         var n_children: Int64 = 0
         var children = UnsafePointer[
@@ -91,64 +98,94 @@ struct CArrowSchema(Copyable):
             fmt = "z"
         elif dtype.is_string():
             fmt = "u"
+        elif dtype.is_list():
+            fmt = "+l"
+            n_children = 1
+            children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
+            children[0] = CArrowSchema.from_field(dtype.fields[0])
         elif dtype.is_fixed_size_list():
             fmt = {"+w:", dtype.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
-            var child = CArrowSchema.from_field(dtype.fields[0])
-            children[0].init_pointee_move(child^)
+            children[0] = CArrowSchema.from_field(dtype.fields[0])
         elif dtype.is_struct():
             fmt = "+s"
             n_children = Int64(len(dtype.fields))
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 Int(n_children)
             )
-
-            for i in range(n_children):
-                var child = CArrowSchema.from_field(dtype.fields[i])
-                children[i].init_pointee_move(child^)
+            for i in range(Int(n_children)):
+                children[i] = CArrowSchema.from_field(dtype.fields[i])
         else:
-            fmt = ""
-            # constrained[False, "Unknown dtype"]()
+            raise Error("CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype))
 
-        return CArrowSchema(
-            format=UnsafePointer[c_char, MutAnyOrigin](
-                unsafe_from_address=Int(fmt.as_c_string_slice().unsafe_ptr())
-            ),
-            name=UnsafePointer[c_char, MutAnyOrigin](),
-            metadata=UnsafePointer[c_char, MutAnyOrigin](),
-            flags=0,
-            n_children=n_children,
-            children=children,
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
-            # TODO(kszucs): currently there is no way to pass a mojo callback to C
-            release=empty_release_schema,
-            private_data=OpaquePointer[MutAnyOrigin](),
+        var data = alloc[_SchemaExportData](1)
+        data.init_pointee_move(_SchemaExportData(fmt=fmt, name=""))
+        var c_schema = alloc[CArrowSchema](1)
+        c_schema.init_pointee_move(
+            CArrowSchema(
+                format=UnsafePointer[c_char, MutAnyOrigin](
+                    unsafe_from_address=Int(
+                        data[].fmt.as_c_string_slice().unsafe_ptr()
+                    )
+                ),
+                name=UnsafePointer[c_char, MutAnyOrigin](),
+                metadata=UnsafePointer[c_char, MutAnyOrigin](),
+                flags=0,
+                n_children=n_children,
+                children=children,
+                dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
+                release=_release_heap_c_schema,
+                private_data=data.bitcast[NoneType](),
+            )
         )
+        return c_schema
 
     @staticmethod
-    fn from_field(field: Field) -> CArrowSchema:
-        var flags: Int64 = 0  # TODO: nullable
-
-        var field_name = field.name
-        return CArrowSchema(
-            format=UnsafePointer[c_char, MutAnyOrigin](),
-            name=UnsafePointer[c_char, MutAnyOrigin](
-                unsafe_from_address=Int(
-                    field_name.as_c_string_slice().unsafe_ptr()
-                )
-            ),
-            metadata=UnsafePointer[c_char, MutAnyOrigin](),
-            flags=flags,
-            n_children=0,
-            children=UnsafePointer[
-                UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
-            ](),
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
-            # TODO(kszucs): currently there is no way to pass a mojo callback to C
-            release=empty_release_schema,
-            private_data=OpaquePointer[MutAnyOrigin](),
+    fn from_field(field: Field) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+        """Build a heap-allocated CArrowSchema for a Field."""
+        var c_schema = CArrowSchema.from_dtype(field.dtype)
+        var data = c_schema[].private_data.bitcast[_SchemaExportData]()
+        data[].name = field.name
+        c_schema[].name = UnsafePointer[c_char, MutAnyOrigin](
+            unsafe_from_address=Int(data[].name.as_c_string_slice().unsafe_ptr())
         )
+        c_schema[].flags = Int64(ARROW_FLAG_NULLABLE) if field.nullable else Int64(0)
+        return c_schema
+
+    @staticmethod
+    fn from_schema(fields: List[Field]) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+        """Build a heap-allocated CArrowSchema for a top-level struct schema."""
+        var n_fields = len(fields)
+        var children = UnsafePointer[
+            UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
+        ]()
+        if n_fields > 0:
+            children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](n_fields)
+            for i in range(n_fields):
+                children[i] = CArrowSchema.from_field(fields[i])
+
+        var data = alloc[_SchemaExportData](1)
+        data.init_pointee_move(_SchemaExportData(fmt="+s", name=""))
+        var c_schema = alloc[CArrowSchema](1)
+        c_schema.init_pointee_move(
+            CArrowSchema(
+                format=UnsafePointer[c_char, MutAnyOrigin](
+                    unsafe_from_address=Int(
+                        data[].fmt.as_c_string_slice().unsafe_ptr()
+                    )
+                ),
+                name=UnsafePointer[c_char, MutAnyOrigin](),
+                metadata=UnsafePointer[c_char, MutAnyOrigin](),
+                flags=0,
+                n_children=Int64(n_fields),
+                children=children,
+                dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
+                release=_release_heap_c_schema,
+                private_data=data.bitcast[NoneType](),
+            )
+        )
+        return c_schema
 
     fn to_dtype(self) raises -> DataType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
@@ -204,6 +241,14 @@ struct CArrowSchema(Copyable):
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         return Field(String(name), dtype^, nullable != 0)
 
+    fn to_schema(self) raises -> Schema:
+        """Build a Schema from this top-level struct CArrowSchema."""
+        var fields = List[Field]()
+        for i in range(self.n_children):
+            fields.append(self.children[i][].to_field())
+        return Schema(fields=fields^)
+
+
 
 fn _release_c_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     """Release callback for CArrowArray imported via the C Data Interface.
@@ -215,6 +260,29 @@ fn _release_c_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     var c_ptr = ptr.bitcast[CArrowArray]()
     c_ptr[].release(c_ptr)
     c_ptr.free()
+
+
+
+fn _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
+    """Release callback for CArrowArray exported from Mojo to Python.
+
+    Frees:
+    - The heap-allocated Array copy stored in private_data (releases Arc refs).
+    - The heap-allocated buffers pointer array.
+    - The heap-allocated child CArrowArray structs (their data was already
+      moved to Arrow's internal representation by _import_from_c).
+    """
+    if ptr[].n_children > 0:
+        for i in range(Int(ptr[].n_children)):
+            ptr[].children[i].free()
+        ptr[].children.free()
+    if ptr[].buffers:
+        ptr[].buffers.free()
+    var arr_ptr = ptr[].private_data.bitcast[Array]()
+    arr_ptr.destroy_pointee()
+    arr_ptr.free()
+    # Null out release per Arrow spec (offset 64 in CArrowArray)
+    (ptr.bitcast[UInt8]() + 64).bitcast[UInt64]()[0] = 0
 
 
 @fieldwise_init
@@ -403,6 +471,100 @@ struct CArrowArray(Movable):
             " pointers in DeviceBuffer without an AsyncRT handle"
         )
 
+    @staticmethod
+    fn from_array(array: Array) raises -> UnsafePointer[CArrowArray, MutAnyOrigin]:
+        """Build a heap-allocated CArrowArray from a Mojo Array for export to Python.
+
+        The returned pointer must be passed to pa.Array._import_from_c.  Arrow
+        will zero the release field (via ArrowArrayMove) and store its own copy.
+        After _import_from_c returns the caller should call `.free()` on the
+        returned pointer to release the empty struct shell.
+
+        Buffer data stays alive through the ArcPointer ref-counts held by the
+        heap-allocated Array copy (stored in private_data).  The release callback
+        (_release_exported_array) frees everything once Python GC's the array.
+        """
+        var dtype = array.dtype
+        var n_buffers: Int64
+        var n_children: Int64 = 0
+
+        if dtype.is_bool() or dtype.is_primitive():
+            n_buffers = 2
+        elif dtype.is_string() or dtype == binary:
+            n_buffers = 3
+        elif dtype.is_list():
+            n_buffers = 2
+            n_children = 1
+        elif dtype.is_fixed_size_list():
+            n_buffers = 1
+            n_children = 1
+        elif dtype.is_struct():
+            n_buffers = 1
+            n_children = Int64(len(dtype.fields))
+        else:
+            raise Error("CArrowArray.from_array: unsupported dtype: {}".format(dtype))
+
+        # Heap-allocate Array copy to keep ArcPointer ref-counts alive.
+        var arr_heap = alloc[Array](1)
+        arr_heap.init_pointee_copy(array)
+
+        # Heap-allocate the buffers pointer array.
+        var buffers = alloc[UnsafePointer[NoneType, MutAnyOrigin]](Int(n_buffers))
+
+        # Buffer[0] = validity bitmap (null pointer means all-valid).
+        if arr_heap[].bitmap:
+            buffers[0] = UnsafePointer[NoneType, MutAnyOrigin](
+                unsafe_from_address=Int(
+                    arr_heap[].bitmap.value()._buffer.unsafe_ptr()
+                )
+            )
+        else:
+            buffers[0] = UnsafePointer[NoneType, MutAnyOrigin]()
+
+        if dtype.is_bool() or dtype.is_primitive():
+            buffers[1] = UnsafePointer[NoneType, MutAnyOrigin](
+                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
+            )
+        elif dtype.is_string() or dtype == binary:
+            buffers[1] = UnsafePointer[NoneType, MutAnyOrigin](
+                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
+            )
+            buffers[2] = UnsafePointer[NoneType, MutAnyOrigin](
+                unsafe_from_address=Int(arr_heap[].buffers[1].unsafe_ptr())
+            )
+        elif dtype.is_list():
+            buffers[1] = UnsafePointer[NoneType, MutAnyOrigin](
+                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
+            )
+
+        # Recursively build children.
+        var children_ptr = UnsafePointer[
+            UnsafePointer[CArrowArray, MutAnyOrigin], MutAnyOrigin
+        ]()
+        if n_children > 0:
+            children_ptr = alloc[UnsafePointer[CArrowArray, MutAnyOrigin]](
+                Int(n_children)
+            )
+            for i in range(Int(n_children)):
+                children_ptr[i] = CArrowArray.from_array(arr_heap[].children[i])
+
+        var c_array = alloc[CArrowArray](1)
+        c_array.init_pointee_move(
+            CArrowArray(
+                length=Int64(arr_heap[].length),
+                null_count=Int64(arr_heap[].nulls),
+                offset=Int64(arr_heap[].offset),
+                n_buffers=n_buffers,
+                n_children=n_children,
+                buffers=buffers,
+                children=children_ptr,
+                dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](),
+                release=_release_exported_array,
+                private_data=arr_heap.bitcast[NoneType](),
+            )
+        )
+        return c_array
+
     fn to_array(deinit self, dtype: DataType) raises -> Array:
         """Convert to an Array, taking ownership of the C struct.
 
@@ -417,6 +579,43 @@ struct CArrowArray(Movable):
             Allocation.foreign(heap_c.bitcast[UInt8](), _release_c_array)
         )
         return heap_c[]._to_array(dtype, owner)
+
+
+# ---------------------------------------------------------------------------
+# CArrowSchema export helpers
+
+
+struct _SchemaExportData(Movable):
+    """Holds heap-allocated strings for a CArrowSchema export."""
+
+    var fmt: String
+    var name: String
+
+    fn __init__(out self, fmt: String, name: String):
+        self.fmt = fmt
+        self.name = name
+
+
+fn _release_heap_c_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
+    """Release callback for heap-allocated CArrowSchemas.
+
+    Arrow calls this when it is done with an imported schema.  Frees:
+    - The heap-allocated child CArrowSchema structs (shells only; their own
+      release was already called by Arrow's recursive import).
+    - The children pointer array.
+    - The _SchemaExportData holding the format/name strings.
+    Then nulls out the release field per the Arrow spec.
+    """
+    for i in range(Int(ptr[].n_children)):
+        ptr[].children[i].free()
+    if ptr[].n_children > 0:
+        ptr[].children.free()
+    var data = ptr[].private_data.bitcast[_SchemaExportData]()
+    data.destroy_pointee()
+    data.free()
+    # Null out release per Arrow spec.
+    # Offset of release field in CArrowSchema: 7 pointer/int64 fields * 8 = 56.
+    (ptr.bitcast[UInt8]() + 56).bitcast[UInt64]()[0] = 0
 
 
 # ---------------------------------------------------------------------------

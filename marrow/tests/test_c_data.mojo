@@ -125,19 +125,19 @@ def test_list_array_from_pyarrow() raises:
 
 def test_schema_from_dtype() raises:
     var c_schema = CArrowSchema.from_dtype(int32)
-    var dtype = c_schema.to_dtype()
+    var dtype = c_schema[].to_dtype()
     assert_equal(dtype, int32)
 
     var c_schema_str = CArrowSchema.from_dtype(string)
-    var dtype_str = c_schema_str.to_dtype()
+    var dtype_str = c_schema_str[].to_dtype()
     assert_equal(dtype_str, string)
 
     var c_schema_bool = CArrowSchema.from_dtype(bool_)
-    var dtype_bool = c_schema_bool.to_dtype()
+    var dtype_bool = c_schema_bool[].to_dtype()
     assert_equal(dtype_bool, bool_)
 
     var c_schema_float64 = CArrowSchema.from_dtype(float64)
-    var dtype_float64 = c_schema_float64.to_dtype()
+    var dtype_float64 = c_schema_float64[].to_dtype()
     assert_equal(dtype_float64, float64)
 
 

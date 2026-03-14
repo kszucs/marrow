@@ -169,6 +169,26 @@ struct Array(
     fn write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
+    fn copy(self) -> Array:
+        """Returns an O(1) copy of this array (Arc ref-count bumps only)."""
+        return Array(copy=self)
+
+    fn slice(self, offset: Int, length: Int = -1) -> Array:
+        """Returns a zero-copy slice starting at offset with the given length.
+
+        Matches PyArrow's Array.slice(offset, length) API.
+        """
+        var actual_length = length if length >= 0 else self.length - offset
+        return Array(
+            dtype=self.dtype.copy(),
+            length=actual_length,
+            nulls=self.nulls,
+            bitmap=self.bitmap,
+            buffers=self.buffers.copy(),
+            children=self.children.copy(),
+            offset=self.offset + offset,
+        )
+
     fn to_python_object(var self) raises -> PythonObject:
         comptime for T in primitive_dtypes:
             if self.dtype == T:
@@ -900,7 +920,7 @@ struct StructArray(
         return self.children.copy()
 
 
-struct ChunkedArray(Movable, Writable):
+struct ChunkedArray(Copyable, Movable, Writable):
     """An array-like composed from a (possibly empty) collection of pyarrow.Arrays.
 
     [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.ChunkedArray.html#pyarrow-chunkedarray).

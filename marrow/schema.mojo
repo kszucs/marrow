@@ -2,11 +2,11 @@
 
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
-from .dtypes import Field
-from .c_data import CArrowSchema
+from .dtypes import DataType, Field
+from std.python import Python, PythonObject
 
 
-struct Schema(Copyable):
+struct Schema(ImplicitlyCopyable, Sized, Writable):
     var fields: List[Field]
     var metadata: Dict[String, String]
 
@@ -20,20 +20,37 @@ struct Schema(Copyable):
         self.fields = fields^
         self.metadata = metadata^
 
-    @staticmethod
-    fn from_c(c_arrow_schema: CArrowSchema) raises -> Schema:
-        """Initializes a schema from a CArrowSchema."""
-        var fields = List[Field]()
-        for i in range(c_arrow_schema.n_children):
-            var child = c_arrow_schema.children[i]
-            var field = child[].to_field()
-            fields.append(field^)
+    fn __init__(out self, *, copy: Self):
+        self.fields = List[Field](copy=copy.fields)
+        self.metadata = Dict[String, String](copy=copy.metadata)
 
-        return Schema(fields=fields^)
+    @staticmethod
+    fn from_pyarrow(pa_schema: PythonObject) raises -> Schema:
+        """Initializes a schema from a PyArrow schema."""
+        from .c_data import CArrowSchema
+        var c_schema = CArrowSchema.from_pyarrow(pa_schema)
+        return c_schema.to_schema()
+
+    fn to_pyarrow(self) raises -> PythonObject:
+        """Converts this schema to a PyArrow schema via the C Data Interface."""
+        from .c_data import CArrowSchema
+        var pa = Python.import_module("pyarrow")
+        var c_schema = CArrowSchema.from_schema(self.fields)
+        var result = pa.Schema._import_from_c(Int(c_schema))
+        c_schema.free()
+        return result
 
     fn append(mut self, var field: Field):
         """Appends a field to the schema."""
         self.fields.append(field^)
+
+    fn __len__(self) -> Int:
+        """Returns the number of fields in the schema."""
+        return len(self.fields)
+
+    fn num_fields(self) -> Int:
+        """Returns the number of fields in the schema."""
+        return len(self.fields)
 
     fn names(self) -> List[String]:
         """Returns the names of the fields in the schema."""
@@ -56,3 +73,32 @@ struct Schema(Copyable):
             if StringSlice(field.name) == name.value():
                 return field
         raise Error(t"Field with name `{name.value()}` not found.")
+
+    fn get_field_index(self, name: String) -> Int:
+        """Returns the index of the field with the given name, or -1 if not found."""
+        for i in range(len(self.fields)):
+            if self.fields[i].name == name:
+                return i
+        return -1
+
+    fn __eq__(self, other: Schema) -> Bool:
+        """Returns True if the schemas have equal fields (metadata ignored)."""
+        if len(self.fields) != len(other.fields):
+            return False
+        for i in range(len(self.fields)):
+            if self.fields[i] != other.fields[i]:
+                return False
+        return True
+
+    fn __ne__(self, other: Schema) -> Bool:
+        """Returns True if the schemas differ."""
+        return not self.__eq__(other)
+
+    fn write_to[W: Writer](self, mut writer: W):
+        """Writes the schema to a writer."""
+        writer.write("Schema(fields=[")
+        for i in range(len(self.fields)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self.fields[i])
+        writer.write("])")

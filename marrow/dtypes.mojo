@@ -418,12 +418,12 @@ struct DataType(
 
 
 fn list_(var value_type: DataType) -> DataType:
-    return DataType(code=LIST, fields=[Field("value", value_type^)])
+    return DataType(code=LIST, fields=[Field("item", value_type^, True)])
 
 
 fn fixed_size_list_(var value_type: DataType, size: Int) -> DataType:
     var dt = DataType(
-        code=FIXED_SIZE_LIST, fields=[Field("value", value_type^)]
+        code=FIXED_SIZE_LIST, fields=[Field("item", value_type^, True)]
     )
     dt.size = size
     return dt^
