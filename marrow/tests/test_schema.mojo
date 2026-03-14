@@ -169,6 +169,7 @@ def test_schema_to_pyarrow() raises:
 def test_schema_to_pyarrow_nested() raises:
     """Test Schema.to_pyarrow with nested types."""
     from marrow.dtypes import list_, struct_
+
     var pa = Python.import_module("pyarrow")
     var schema = Schema(
         fields=[
@@ -179,7 +180,18 @@ def test_schema_to_pyarrow_nested() raises:
     var pa_schema = schema.to_pyarrow()
     assert_equal(Int(py=pa_schema.__len__()), 2)
     assert_equal(String(pa_schema.field(0).type), "list<item: int32>")
-    assert_true(Bool(pa_schema.field(1).type.__eq__(pa.struct(Python.list(pa.field("a", pa.int32(), False), pa.field("b", pa.float64(), False))))))
+    assert_true(
+        Bool(
+            pa_schema.field(1).type.__eq__(
+                pa.struct(
+                    Python.list(
+                        pa.field("a", pa.int32(), False),
+                        pa.field("b", pa.float64(), False),
+                    )
+                )
+            )
+        )
+    )
 
 
 def main() raises:

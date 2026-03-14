@@ -145,9 +145,7 @@ struct Table(Copyable, Writable):
         return self.schema.names()
 
     @staticmethod
-    fn from_batches(
-        schema: Schema, batches: List[RecordBatch]
-    ) -> Table:
+    fn from_batches(schema: Schema, batches: List[RecordBatch]) -> Table:
         """Builds a Table from a list of RecordBatches sharing the same schema.
 
         Each column in the resulting Table is a ChunkedArray whose chunks are

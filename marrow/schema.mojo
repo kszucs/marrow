@@ -29,6 +29,7 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
         """Initializes a schema from a PyArrow schema."""
         from .c_data import CArrowSchema
         from std.memory import alloc
+
         var ptr = alloc[CArrowSchema](1)
         pa_schema._export_to_c(Int(ptr))
         var c_schema = ptr.take_pointee()
@@ -38,6 +39,7 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
     fn to_pyarrow(self) raises -> PythonObject:
         """Converts this schema to a PyArrow schema via the C Data Interface."""
         from .c_data import CArrowSchema
+
         var pa = Python.import_module("pyarrow")
         var c_schema = CArrowSchema.from_schema(self.fields)
         var result = pa.Schema._import_from_c(Int(c_schema))
@@ -79,7 +81,8 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
         raise Error(t"Field with name `{name.value()}` not found.")
 
     fn get_field_index(self, name: String) -> Int:
-        """Returns the index of the field with the given name, or -1 if not found."""
+        """Returns the index of the field with the given name, or -1 if not found.
+        """
         for i in range(len(self.fields)):
             if self.fields[i].name == name:
                 return i

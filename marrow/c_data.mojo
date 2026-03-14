@@ -20,6 +20,37 @@ from .schema import Schema
 comptime ARROW_FLAG_NULLABLE = 2
 
 
+struct _SchemaExportData(Movable):
+    """Holds heap-allocated strings for a CArrowSchema export."""
+
+    var fmt: String
+    var name: String
+
+    fn __init__(out self, fmt: String, name: String):
+        self.fmt = fmt
+        self.name = name
+
+
+fn _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
+    """Release callback for heap-allocated CArrowSchemas exported to Arrow.
+
+    Arrow calls this when it is done with an imported schema.  Frees:
+    - The heap-allocated child CArrowSchema structs (shells only; their own
+      release was already called by Arrow's recursive import).
+    - The children pointer array.
+    - The _SchemaExportData holding the format/name strings.
+    Then nulls out the release field per the Arrow spec.
+    """
+    for i in range(Int(ptr[].n_children)):
+        ptr[].children[i].free()
+    if ptr[].n_children > 0:
+        ptr[].children.free()
+    var data = ptr[].private_data.bitcast[_SchemaExportData]()
+    data.destroy_pointee()
+    data.free()
+    UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
+
+
 @fieldwise_init
 struct CArrowSchema(Copyable):
     var format: UnsafePointer[c_char, MutAnyOrigin]
@@ -39,12 +70,14 @@ struct CArrowSchema(Copyable):
         self.release(UnsafePointer(to=self))
 
     @staticmethod
-    fn from_dtype(dtype: DataType) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+    fn from_dtype(
+        dtype: DataType,
+    ) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
         """Build a heap-allocated CArrowSchema for a DataType.
 
         Format strings are stored in a heap-allocated _SchemaExportData
         (via private_data) so they outlive the struct. The release callback
-        _release_heap_c_schema frees everything.
+        _release_exported_schema frees everything.
         """
         var fmt: String
         var n_children: Int64 = 0
@@ -101,7 +134,9 @@ struct CArrowSchema(Copyable):
             for i in range(Int(n_children)):
                 children[i] = CArrowSchema.from_field(dtype.fields[i])
         else:
-            raise Error("CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype))
+            raise Error(
+                "CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype)
+            )
 
         var data = alloc[_SchemaExportData](1)
         data.init_pointee_move(_SchemaExportData(fmt=fmt, name=""))
@@ -119,33 +154,43 @@ struct CArrowSchema(Copyable):
                 n_children=n_children,
                 children=children,
                 dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
-                release=_release_heap_c_schema,
+                release=_release_exported_schema,
                 private_data=data.bitcast[NoneType](),
             )
         )
         return c_schema
 
     @staticmethod
-    fn from_field(field: Field) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+    fn from_field(
+        field: Field,
+    ) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
         """Build a heap-allocated CArrowSchema for a Field."""
         var c_schema = CArrowSchema.from_dtype(field.dtype)
         var data = c_schema[].private_data.bitcast[_SchemaExportData]()
         data[].name = field.name
         c_schema[].name = UnsafePointer[c_char, MutAnyOrigin](
-            unsafe_from_address=Int(data[].name.as_c_string_slice().unsafe_ptr())
+            unsafe_from_address=Int(
+                data[].name.as_c_string_slice().unsafe_ptr()
+            )
         )
-        c_schema[].flags = Int64(ARROW_FLAG_NULLABLE) if field.nullable else Int64(0)
+        c_schema[].flags = Int64(
+            ARROW_FLAG_NULLABLE
+        ) if field.nullable else Int64(0)
         return c_schema
 
     @staticmethod
-    fn from_schema(fields: List[Field]) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
+    fn from_schema(
+        fields: List[Field],
+    ) raises -> UnsafePointer[CArrowSchema, MutAnyOrigin]:
         """Build a heap-allocated CArrowSchema for a top-level struct schema."""
         var n_fields = len(fields)
         var children = UnsafePointer[
             UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
         ]()
         if n_fields > 0:
-            children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](n_fields)
+            children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
+                n_fields
+            )
             for i in range(n_fields):
                 children[i] = CArrowSchema.from_field(fields[i])
 
@@ -165,7 +210,7 @@ struct CArrowSchema(Copyable):
                 n_children=Int64(n_fields),
                 children=children,
                 dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
-                release=_release_heap_c_schema,
+                release=_release_exported_schema,
                 private_data=data.bitcast[NoneType](),
             )
         )
@@ -233,8 +278,7 @@ struct CArrowSchema(Copyable):
         return Schema(fields=fields^)
 
 
-
-fn _release_c_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
+fn _release_imported_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     """Release callback for CArrowArray imported via the C Data Interface.
 
     Called when the last Buffer (or Bitmap) that references the imported array
@@ -244,7 +288,6 @@ fn _release_c_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     var c_ptr = ptr.bitcast[CArrowArray]()
     c_ptr[].release(c_ptr)
     c_ptr.free()
-
 
 
 fn _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
@@ -265,8 +308,7 @@ fn _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
     var arr_ptr = ptr[].private_data.bitcast[Array]()
     arr_ptr.destroy_pointee()
     arr_ptr.free()
-    # Null out release per Arrow spec (offset 64 in CArrowArray)
-    (ptr.bitcast[UInt8]() + 64).bitcast[UInt64]()[0] = 0
+    UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
 
 @fieldwise_init
@@ -450,7 +492,9 @@ struct CArrowArray(Movable):
         )
 
     @staticmethod
-    fn from_array(array: Array) raises -> UnsafePointer[CArrowArray, MutAnyOrigin]:
+    fn from_array(
+        array: Array,
+    ) raises -> UnsafePointer[CArrowArray, MutAnyOrigin]:
         """Build a heap-allocated CArrowArray from a Mojo Array for export to Python.
 
         The returned pointer must be passed to pa.Array._import_from_c.  Arrow
@@ -480,14 +524,18 @@ struct CArrowArray(Movable):
             n_buffers = 1
             n_children = Int64(len(dtype.fields))
         else:
-            raise Error("CArrowArray.from_array: unsupported dtype: {}".format(dtype))
+            raise Error(
+                "CArrowArray.from_array: unsupported dtype: {}".format(dtype)
+            )
 
         # Heap-allocate Array copy to keep ArcPointer ref-counts alive.
         var arr_heap = alloc[Array](1)
         arr_heap.init_pointee_copy(array)
 
         # Heap-allocate the buffers pointer array.
-        var buffers = alloc[UnsafePointer[NoneType, MutAnyOrigin]](Int(n_buffers))
+        var buffers = alloc[UnsafePointer[NoneType, MutAnyOrigin]](
+            Int(n_buffers)
+        )
 
         # Buffer[0] = validity bitmap (null pointer means all-valid).
         if arr_heap[].bitmap:
@@ -554,46 +602,9 @@ struct CArrowArray(Movable):
         var heap_c = alloc[CArrowArray](1)
         heap_c.init_pointee_move(self^)
         var owner = ArcPointer(
-            Allocation.foreign(heap_c.bitcast[UInt8](), _release_c_array)
+            Allocation.foreign(heap_c.bitcast[UInt8](), _release_imported_array)
         )
         return heap_c[]._to_array(dtype, owner)
-
-
-# ---------------------------------------------------------------------------
-# CArrowSchema export helpers
-
-
-struct _SchemaExportData(Movable):
-    """Holds heap-allocated strings for a CArrowSchema export."""
-
-    var fmt: String
-    var name: String
-
-    fn __init__(out self, fmt: String, name: String):
-        self.fmt = fmt
-        self.name = name
-
-
-fn _release_heap_c_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
-    """Release callback for heap-allocated CArrowSchemas.
-
-    Arrow calls this when it is done with an imported schema.  Frees:
-    - The heap-allocated child CArrowSchema structs (shells only; their own
-      release was already called by Arrow's recursive import).
-    - The children pointer array.
-    - The _SchemaExportData holding the format/name strings.
-    Then nulls out the release field per the Arrow spec.
-    """
-    for i in range(Int(ptr[].n_children)):
-        ptr[].children[i].free()
-    if ptr[].n_children > 0:
-        ptr[].children.free()
-    var data = ptr[].private_data.bitcast[_SchemaExportData]()
-    data.destroy_pointee()
-    data.free()
-    # Null out release per Arrow spec.
-    # Offset of release field in CArrowSchema: 7 pointer/int64 fields * 8 = 56.
-    (ptr.bitcast[UInt8]() + 56).bitcast[UInt64]()[0] = 0
 
 
 # ---------------------------------------------------------------------------

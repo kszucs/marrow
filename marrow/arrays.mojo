@@ -139,6 +139,7 @@ struct Array(
         """Import an Array from a PyArrow array via the C Data Interface."""
         from .c_data import CArrowArray, CArrowSchema
         from std.memory import alloc
+
         var array_ptr = alloc[CArrowArray](1)
         var schema_ptr = alloc[CArrowSchema](1)
         pyobj._export_to_c(Int(array_ptr), Int(schema_ptr))
@@ -153,6 +154,7 @@ struct Array(
         """Export this Array to a PyArrow array via the C Data Interface."""
         from .c_data import CArrowArray, CArrowSchema
         from std.python import Python
+
         var pa = Python.import_module("pyarrow")
         var c_schema = CArrowSchema.from_dtype(self.dtype)
         var c_array = CArrowArray.from_array(self)

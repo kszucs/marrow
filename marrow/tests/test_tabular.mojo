@@ -10,9 +10,7 @@ from marrow.builders import PrimitiveBuilder
 
 def test_record_batch_construction() raises:
     """Test basic RecordBatch construction and property accessors."""
-    var schema = Schema(
-        fields=[Field("x", int32), Field("y", float64)]
-    )
+    var schema = Schema(fields=[Field("x", int32), Field("y", float64)])
     var col_x: Array = array[int32]([1, 2, 3])
     var by = PrimitiveBuilder[float64](3)
     by.append(1.0)
@@ -145,9 +143,7 @@ def test_table_from_batches() raises:
 
 def test_table_column_access() raises:
     """Test Table column access by index and name."""
-    var schema = Schema(
-        fields=[Field("a", int32), Field("b", float64)]
-    )
+    var schema = Schema(fields=[Field("a", int32), Field("b", float64)])
     var bf = PrimitiveBuilder[float64](2)
     bf.append(3.0)
     bf.append(4.0)
