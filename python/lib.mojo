@@ -6,6 +6,7 @@ from std.python.bindings import PythonModuleBuilder
 from dtypes import add_to_module as add_dtypes
 from arrays import add_to_module as add_arrays
 from compute import add_to_module as add_compute
+from schema import add_to_module as add_schema
 
 
 @export
@@ -15,6 +16,7 @@ fn PyInit_marrow() -> PythonObject:
         add_dtypes(m)
         add_arrays(m)
         add_compute(m)
+        add_schema(m)
         return m.finalize()
     except e:
         abort(String("error creating Python Mojo module:", e))

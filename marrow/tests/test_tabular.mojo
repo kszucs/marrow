@@ -11,31 +11,18 @@ from marrow.c_data import CArrowArray, CArrowSchema
 
 fn batch_from_arrow(pa_batch: PythonObject) raises -> RecordBatch:
     """Import a RecordBatch from any Arrow-compatible Python object."""
-    var py = Python()
-    ref cpy = py.cpython()
     var capsule_tuple = pa_batch.__arrow_c_array__()
-    var schema_raw = cpy.PyCapsule_GetPointer(
-        capsule_tuple[0]._obj_ptr, "arrow_schema"
-    )
-    var array_raw = cpy.PyCapsule_GetPointer(
-        capsule_tuple[1]._obj_ptr, "arrow_array"
-    )
-    var c_schema_src = schema_raw.bitcast[CArrowSchema]()
-    var c_array_src = array_raw.bitcast[CArrowArray]()
-    var c_schema = c_schema_src[]
-    var c_array = c_array_src[]
-    UnsafePointer(to=c_schema_src[].release).bitcast[UInt64]()[0] = 0
-    UnsafePointer(to=c_array_src[].release).bitcast[UInt64]()[0] = 0
+    var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
+    var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
     var schema = c_schema.to_schema()
     var n_cols = Int(c_array.n_children)
     var columns = List[Array]()
     for i in range(n_cols):
-        var child_c_schema = c_schema.children[i][]
-        var child_c_array = c_array.children[i][]
+        var child_schema = c_schema.children[i][].copy()
+        var child_array = c_array.children[i][].copy()
         UnsafePointer(to=c_schema.children[i][].release).bitcast[UInt64]()[0] = 0
         UnsafePointer(to=c_array.children[i][].release).bitcast[UInt64]()[0] = 0
-        var dtype = child_c_schema.to_dtype()
-        columns.append(child_c_array^.to_array(dtype))
+        columns.append(child_array^.to_array(child_schema.to_dtype()))
     return RecordBatch(schema=schema, columns=columns^)
 
 
@@ -45,12 +32,10 @@ fn batch_to_arrow(batch: RecordBatch) raises -> PythonObject:
     var arrays = Python.list()
     var names = Python.list()
     for i in range(batch.num_columns()):
-        var col = batch.column(i)
-        var c_schema = CArrowSchema.from_dtype(col.dtype)
-        var c_array = CArrowArray.from_array(col)
-        arrays.append(pa.Array._import_from_c(
-            Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
-        ))
+        var col = batch.column(i).copy()
+        var schema_cap = CArrowSchema.from_dtype(col.dtype).to_pycapsule()
+        var array_cap = CArrowArray.from_array(col).to_pycapsule()
+        arrays.append(pa.Array._import_from_c(array_cap, schema_cap))
         names.append(String(batch.schema.fields[i].name))
     return pa.RecordBatch.from_arrays(arrays, names=names)
 

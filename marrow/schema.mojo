@@ -2,10 +2,12 @@
 
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
+from std.python import PythonObject
+from std.python.conversions import ConvertibleToPython
 from .dtypes import DataType, Field
 
 
-struct Schema(ImplicitlyCopyable, Sized, Writable):
+struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
     var fields: List[Field]
     var metadata: Dict[String, String]
 
@@ -65,6 +67,9 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
                 return i
         return -1
 
+    fn __ne__(self, other: Schema) -> Bool:
+        return not self.__eq__(other)
+
     fn __eq__(self, other: Schema) -> Bool:
         """Returns True if the schemas have equal fields (metadata ignored)."""
         if len(self.fields) != len(other.fields):
@@ -74,9 +79,8 @@ struct Schema(ImplicitlyCopyable, Sized, Writable):
                 return False
         return True
 
-    fn __ne__(self, other: Schema) -> Bool:
-        """Returns True if the schemas differ."""
-        return not self.__eq__(other)
+    fn to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
 
     fn write_to[W: Writer](self, mut writer: W):
         """Writes the schema to a writer."""

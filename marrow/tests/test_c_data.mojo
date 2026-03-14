@@ -9,26 +9,13 @@ from marrow.dtypes import *
 
 fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
     """Import a CArrowArray from any Arrow-compatible Python object via PyCapsule."""
-    var py = Python()
-    ref cpy = py.cpython()
     var capsule_tuple = pyobj.__arrow_c_array__()
-    var raw = cpy.PyCapsule_GetPointer(capsule_tuple[1]._obj_ptr, "arrow_array")
-    var src = raw.bitcast[CArrowArray]()
-    var copy = src[]
-    UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
-    return copy
+    return CArrowArray.from_pycapsule(capsule_tuple[1])
 
 
 fn c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
     """Import a CArrowSchema from any Arrow-compatible Python object via PyCapsule."""
-    var py = Python()
-    ref cpy = py.cpython()
-    var schema_capsule = pyobj.__arrow_c_schema__()
-    var raw = cpy.PyCapsule_GetPointer(schema_capsule._obj_ptr, "arrow_schema")
-    var src = raw.bitcast[CArrowSchema]()
-    var copy = src[]
-    UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
-    return copy
+    return CArrowSchema.from_pycapsule(pyobj.__arrow_c_schema__())
 
 
 def test_schema_from_pyarrow() raises:
@@ -572,11 +559,9 @@ def test_export_primitive_array_roundtrip() raises:
     var arr: Array = b.finish_typed()
 
     # Export via C Data Interface, re-import into PyArrow, then back into Mojo.
-    var c_schema = CArrowSchema.from_dtype(arr.dtype)
-    var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(
-        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
-    )
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule()
+    var pyarr = pa.Array._import_from_c(array_cap, schema_cap)
     var reimported = c_array_from_pyobj(pyarr)^.to_array(int32)
     var result = reimported^.as_int32()
 
@@ -595,11 +580,9 @@ def test_export_string_array_roundtrip() raises:
     b.append("mojo")
     var arr: Array = b.finish_typed()
 
-    var c_schema = CArrowSchema.from_dtype(arr.dtype)
-    var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(
-        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
-    )
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule()
+    var pyarr = pa.Array._import_from_c(array_cap, schema_cap)
     var reimported = c_array_from_pyobj(pyarr)^.to_array(string)
     var result = reimported^.as_string()
 
@@ -619,11 +602,9 @@ def test_export_array_with_nulls_roundtrip() raises:
     b.append_null()
     var arr: Array = b.finish_typed()
 
-    var c_schema = CArrowSchema.from_dtype(arr.dtype)
-    var c_array = CArrowArray.from_array(arr)
-    var pyarr = pa.Array._import_from_c(
-        Int(UnsafePointer(to=c_array)), Int(UnsafePointer(to=c_schema))
-    )
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule()
+    var array_cap = CArrowArray.from_array(arr).to_pycapsule()
+    var pyarr = pa.Array._import_from_c(array_cap, schema_cap)
     var reimported = c_array_from_pyobj(pyarr)^.to_array(int64)
     var result = reimported^.as_int64()
 

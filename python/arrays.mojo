@@ -801,91 +801,91 @@ fn _bool_arrow_c_array(ptr: UnsafePointer[BoolArray, MutAnyOrigin]) raises -> Py
     return array_to_capsule_tuple(ptr[])
 
 fn _bool_arrow_c_schema(ptr: UnsafePointer[BoolArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _int8_arrow_c_array(ptr: UnsafePointer[Int8Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _int8_arrow_c_schema(ptr: UnsafePointer[Int8Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _int16_arrow_c_array(ptr: UnsafePointer[Int16Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _int16_arrow_c_schema(ptr: UnsafePointer[Int16Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _int32_arrow_c_array(ptr: UnsafePointer[Int32Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _int32_arrow_c_schema(ptr: UnsafePointer[Int32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _int64_arrow_c_array(ptr: UnsafePointer[Int64Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _int64_arrow_c_schema(ptr: UnsafePointer[Int64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _uint8_arrow_c_array(ptr: UnsafePointer[UInt8Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _uint8_arrow_c_schema(ptr: UnsafePointer[UInt8Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _uint16_arrow_c_array(ptr: UnsafePointer[UInt16Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _uint16_arrow_c_schema(ptr: UnsafePointer[UInt16Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _uint32_arrow_c_array(ptr: UnsafePointer[UInt32Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _uint32_arrow_c_schema(ptr: UnsafePointer[UInt32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _uint64_arrow_c_array(ptr: UnsafePointer[UInt64Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _uint64_arrow_c_schema(ptr: UnsafePointer[UInt64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _float32_arrow_c_array(ptr: UnsafePointer[Float32Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _float32_arrow_c_schema(ptr: UnsafePointer[Float32Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _float64_arrow_c_array(ptr: UnsafePointer[Float64Array, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _float64_arrow_c_schema(ptr: UnsafePointer[Float64Array, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _str_arrow_c_array(ptr: UnsafePointer[StringArray, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _str_arrow_c_schema(ptr: UnsafePointer[StringArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _list_arrow_c_array(ptr: UnsafePointer[ListArray, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _list_arrow_c_schema(ptr: UnsafePointer[ListArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _fsl_arrow_c_array(ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _fsl_arrow_c_schema(ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 fn _struct_arrow_c_array(ptr: UnsafePointer[StructArray, MutAnyOrigin]) raises -> PythonObject:
     return array_to_capsule_tuple(ptr[])
 
 fn _struct_arrow_c_schema(ptr: UnsafePointer[StructArray, MutAnyOrigin]) raises -> PythonObject:
-    return schema_to_capsule(ptr[].dtype)
+    return schema_to_capsule(ptr[].type())
 
 
 # ---------------------------------------------------------------------------

@@ -20,15 +20,21 @@ from .schema import Schema
 comptime ARROW_FLAG_NULLABLE = 2
 
 
-struct _SchemaExportData(Movable):
-    """Holds heap-allocated strings for a CArrowSchema export."""
+fn _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
+    """Copy a Mojo String into a heap-allocated null-terminated C string.
 
-    var fmt: String
-    var name: String
+    The caller owns the returned buffer and must free it when done.
 
-    fn __init__(out self, fmt: String, name: String):
-        self.fmt = fmt
-        self.name = name
+    Note: copies len(s) bytes then writes an explicit null terminator.
+    String.unsafe_ptr() is not guaranteed to be null-terminated (SSO inline
+    storage leaves bytes past len(s) uninitialized).
+    TODO: replace with unsafe_cstr_ptr() once available in this Mojo build.
+    """
+    var n = len(s)
+    var buf = alloc[c_char](n + 1)
+    memcpy(dest=buf.bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
+    buf.bitcast[UInt8]()[n] = 0
+    return UnsafePointer[c_char, MutAnyOrigin](unsafe_from_address=Int(buf))
 
 
 fn _release_schema_capsule(capsule: PyObjectPtr):
@@ -39,6 +45,8 @@ fn _release_schema_capsule(capsule: PyObjectPtr):
     If its release callback is still set (i.e. not yet consumed by an
     Arrow importer), we call it to free the format/name strings and children,
     then free the struct shell itself.
+    If the release callback has been zeroed (capsule consumed via pycapsule
+    import), we just free the shell.
     """
     try:
         var py = Python()
@@ -63,16 +71,17 @@ fn _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
     - The heap-allocated child CArrowSchema struct shells (their own release
       callbacks were already invoked by Arrow's recursive import).
     - The children pointer array.
-    - The heap-allocated _SchemaExportData holding the format/name strings.
+    - The heap-allocated format and name C strings.
     Nulls the release field per the Arrow spec so double-free is detectable.
     """
     for i in range(Int(ptr[].n_children)):
         ptr[].children[i].free()
     if ptr[].n_children > 0:
         ptr[].children.free()
-    var data = ptr[].private_data.bitcast[_SchemaExportData]()
-    data.destroy_pointee()
-    data.free()
+    if ptr[].format:
+        ptr[].format.free()
+    if ptr[].name:
+        ptr[].name.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
 
@@ -82,28 +91,21 @@ struct CArrowSchema(Copyable, Movable):
 
     Ownership model
     ---------------
-    A CArrowSchema value owns its heap resources (children, private_data)
-    through the `release` callback.  When the struct is no longer needed,
-    `release` must be called exactly once — `__del__` handles this
+    A CArrowSchema value owns its heap resources (format/name C strings,
+    children) through the `release` callback.  When the struct is no longer
+    needed, `release` must be called exactly once — `__del__` handles this
     automatically, but only if `release` is still non-null.
 
-    Arrow importers (e.g. PyArrow's `_import_from_c`) take ownership by
-    copying the struct fields then zeroing the source's release field (per the
-    Arrow C Data Interface spec).  After a transfer the zeroed source is safe
-    to drop.  `__del__` guards against this by checking for a null release.
+    Arrow importers take ownership by copying the struct fields then zeroing
+    the source's release field (per the Arrow C Data Interface spec).  After a
+    transfer the zeroed source is safe to drop.  `__del__` guards against this
+    by checking for a null release.
 
-    Lifecycle for Python export (the common path):
+    Lifecycle for Python export:
         1. `from_dtype` / `from_field` / `from_schema` builds the struct value.
         2. `to_pycapsule` moves it onto the heap and wraps it in a PyCapsule.
         3. `_release_schema_capsule` (PyCapsule destructor) calls `release` and
            frees the struct shell when Python GC collects the capsule.
-
-    Lifecycle for direct Arrow export (e.g. tests, pa._import_from_c):
-        1. Build the struct value.
-        2. Pass `UnsafePointer(to=c_schema)` to the Arrow importer.
-        3. The importer copies the struct and zeroes the local release field.
-        4. When the local value goes out of scope `__del__` is a no-op (release
-           is null).  The importer later calls `_release_exported_schema`.
     """
 
     var format: UnsafePointer[c_char, MutAnyOrigin]
@@ -130,18 +132,15 @@ struct CArrowSchema(Copyable, Movable):
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
 
-        The format string and field name are stored in a heap-allocated
-        _SchemaExportData (referenced via private_data) so they remain valid
-        for the lifetime of the struct regardless of where it lives.
-        Child schemas are also heap-allocated so the children pointer array
-        survives moves and copies of the parent.
+        The format string is heap-allocated as a raw C string owned by the
+        `format` pointer; `_release_exported_schema` frees it.  Child schemas
+        are also heap-allocated so the children pointer array survives moves.
 
         The returned value owns all resources; `__del__` calls
         `_release_exported_schema` when it goes out of scope, unless ownership
-        has been transferred to an Arrow importer or `to_pycapsule`.
+        has been transferred via `to_pycapsule`.
 
-        Call `.to_pycapsule()` to wrap the result in a Python capsule, or pass
-        `UnsafePointer(to=c_schema)` directly to an Arrow importer.
+        Call `.to_pycapsule()` to wrap the result in a Python capsule.
         """
         var fmt: String
         var n_children: Int64 = 0
@@ -213,16 +212,8 @@ struct CArrowSchema(Copyable, Movable):
                 "CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype)
             )
 
-        # Heap-allocate the export data so format/name strings outlive moves.
-        var data = alloc[_SchemaExportData](1)
-        data.init_pointee_move(_SchemaExportData(fmt=fmt, name=""))
         return CArrowSchema(
-            # Point directly into the heap-allocated string data.
-            format=UnsafePointer[c_char, MutAnyOrigin](
-                unsafe_from_address=Int(
-                    data[].fmt.as_c_string_slice().unsafe_ptr()
-                )
-            ),
+            format=_alloc_c_string(fmt),
             name=UnsafePointer[c_char, MutAnyOrigin](),
             metadata=UnsafePointer[c_char, MutAnyOrigin](),
             flags=0,
@@ -230,8 +221,7 @@ struct CArrowSchema(Copyable, Movable):
             children=children,
             dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
             release=_release_exported_schema,
-            # private_data keeps the _SchemaExportData alive; freed by release.
-            private_data=data.bitcast[NoneType](),
+            private_data=OpaquePointer[MutAnyOrigin](),
         )
 
     @staticmethod
@@ -240,24 +230,15 @@ struct CArrowSchema(Copyable, Movable):
     ) raises -> CArrowSchema:
         """Build a CArrowSchema for a Field.
 
-        Delegates to `from_dtype` and then patches in the field name and
-        nullability flag.  The name string is stored inside the same
-        heap-allocated _SchemaExportData as the format string, so a single
-        `_release_exported_schema` call cleans everything up.
+        Delegates to `from_dtype` and then sets the field name (heap-allocated
+        as a raw C string) and nullability flag.
         """
         var c_schema = CArrowSchema.from_dtype(field.dtype)
-        # Reach into private_data to store the name alongside the format string.
-        var data = c_schema.private_data.bitcast[_SchemaExportData]()
-        data[].name = field.name
-        c_schema.name = UnsafePointer[c_char, MutAnyOrigin](
-            unsafe_from_address=Int(
-                data[].name.as_c_string_slice().unsafe_ptr()
-            )
-        )
+        c_schema.name = _alloc_c_string(field.name)
         c_schema.flags = Int64(
             ARROW_FLAG_NULLABLE
         ) if field.nullable else Int64(0)
-        return c_schema^  # transfer ownership; no __del__ on the local copy
+        return c_schema^
 
     @staticmethod
     fn from_schema(
@@ -283,14 +264,8 @@ struct CArrowSchema(Copyable, Movable):
                 child_ptr.init_pointee_move(child^)
                 children[i] = child_ptr
 
-        var data = alloc[_SchemaExportData](1)
-        data.init_pointee_move(_SchemaExportData(fmt="+s", name=""))
         return CArrowSchema(
-            format=UnsafePointer[c_char, MutAnyOrigin](
-                unsafe_from_address=Int(
-                    data[].fmt.as_c_string_slice().unsafe_ptr()
-                )
-            ),
+            format=_alloc_c_string("+s"),
             name=UnsafePointer[c_char, MutAnyOrigin](),
             metadata=UnsafePointer[c_char, MutAnyOrigin](),
             flags=0,
@@ -298,8 +273,27 @@ struct CArrowSchema(Copyable, Movable):
             children=children,
             dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
             release=_release_exported_schema,
-            private_data=data.bitcast[NoneType](),
+            private_data=OpaquePointer[MutAnyOrigin](),
         )
+
+    @staticmethod
+    fn from_pycapsule(capsule: PythonObject) raises -> CArrowSchema:
+        """Take ownership of a CArrowSchema from an "arrow_schema" PyCapsule.
+
+        Copies the struct out of the capsule's raw memory and zeroes the
+        source's release field so the capsule destructor does not double-free.
+        The returned value owns all resources and will call
+        `_release_exported_schema` (or the original producer's callback) when
+        it goes out of scope.
+        """
+        var py = Python()
+        ref cpy = py.cpython()
+        var src = cpy.PyCapsule_GetPointer(
+            capsule._obj_ptr, "arrow_schema"
+        ).bitcast[CArrowSchema]()
+        var schema = src[].copy()
+        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        return schema^
 
     fn to_pycapsule(deinit self) raises -> PythonObject:
         """Wrap this schema in a Python "arrow_schema" capsule.
@@ -361,7 +355,7 @@ struct CArrowSchema(Copyable, Movable):
             var field = self.children[0][].to_field()
             return list_(field.dtype.copy())
         elif fmt.startswith("+w:"):
-            var size = Int(fmt[3:])
+            var size = Int(String(fmt).removeprefix("+w:"))
             var field = self.children[0][].to_field()
             return fixed_size_list_(field.dtype.copy(), size)
         elif fmt == "+s":
@@ -446,7 +440,7 @@ fn _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
 
 
 @fieldwise_init
-struct CArrowArray(Movable):
+struct CArrowArray(Copyable, Movable):
     """Arrow C Data Interface array struct (ArrowArray).
 
     Ownership model
@@ -753,6 +747,21 @@ struct CArrowArray(Movable):
             # private_data keeps arr_heap alive; freed by _release_exported_array.
             private_data=arr_heap.bitcast[NoneType](),
         )
+
+    @staticmethod
+    fn from_pycapsule(capsule: PythonObject) raises -> CArrowArray:
+        """Take ownership of a CArrowArray from an "arrow_array" PyCapsule.
+
+        Mirrors `CArrowSchema.from_pycapsule`.
+        """
+        var py = Python()
+        ref cpy = py.cpython()
+        var src = cpy.PyCapsule_GetPointer(
+            capsule._obj_ptr, "arrow_array"
+        ).bitcast[CArrowArray]()
+        var array = src[].copy()
+        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        return array^
 
     fn to_pycapsule(deinit self) raises -> PythonObject:
         """Wrap this array in a Python "arrow_array" capsule.

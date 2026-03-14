@@ -87,6 +87,12 @@ fn field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     return f.to_python_object()
 
 
+fn list_(value_type: PythonObject) raises -> PythonObject:
+    """Create a list DataType from a value type."""
+    var d = value_type.downcast_value_ptr[dt.DataType]()[]
+    return dt.list_(d^).to_python_object()
+
+
 fn struct_(fields_obj: PythonObject) raises -> PythonObject:
     """Create a struct DataType from a list of Fields."""
     var fields = List[dt.Field]()
@@ -122,4 +128,5 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[string]("string", docstring="Create a string DataType.")
     mb.def_function[binary]("binary", docstring="Create a binary DataType.")
     mb.def_function[field]("field", docstring="Create an Arrow field.")
+    mb.def_function[list_]("list_", docstring="Create a list DataType.")
     mb.def_function[struct_]("struct", docstring="Create a struct DataType.")

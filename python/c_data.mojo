@@ -10,7 +10,6 @@ References:
 """
 from std.python import Python, PythonObject
 from std.python._cpython import CPython
-from std.memory import alloc
 from marrow.c_data import (
     CArrowArray,
     CArrowSchema,
@@ -49,11 +48,7 @@ fn schema_to_capsule(dtype: DataType) raises -> PythonObject:
 
 
 # ---------------------------------------------------------------------------
-# Import: Python capsules → Mojo Array   (ArrowArrayMove semantics)
-#
-# After calling PyCapsule_GetPointer, we copy the structs then zero the
-# release fields on the source.  When Python GC collects the capsule its
-# destructor sees release == NULL and skips the double-free.
+# Import: Python capsules → Mojo Array
 # ---------------------------------------------------------------------------
 
 
@@ -63,22 +58,8 @@ fn array_from_capsule_tuple(capsule_tuple: PythonObject) raises -> Array:
     The capsule_tuple argument must stay alive for the duration of this call
     so that the capsule Python objects are not collected mid-call.
     """
-    var py = Python()
-    ref cpy = py.cpython()
-    var schema_raw = cpy.PyCapsule_GetPointer(
-        capsule_tuple[0]._obj_ptr, "arrow_schema"
-    )
-    var array_raw = cpy.PyCapsule_GetPointer(
-        capsule_tuple[1]._obj_ptr, "arrow_array"
-    )
-    var c_schema_src = schema_raw.bitcast[CArrowSchema]()
-    var c_array_src = array_raw.bitcast[CArrowArray]()
-    # Copy the structs (ArrowArrayMove semantics).
-    var c_schema = c_schema_src[]
-    var c_array = c_array_src[]
-    # Zero release on sources to signal ownership transfer.
-    UnsafePointer(to=c_schema_src[].release).bitcast[UInt64]()[0] = 0
-    UnsafePointer(to=c_array_src[].release).bitcast[UInt64]()[0] = 0
+    var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
+    var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
     return c_array^.to_array(c_schema.to_dtype())
 
 
