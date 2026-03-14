@@ -187,17 +187,15 @@ var filtered = filter_[int64](x, array[bool_]([True, False, True, False]))
 ### Zero-copy PyArrow interop (C Data Interface)
 
 ```mojo
-from python import Python
+from std.python import Python
 from marrow.c_data import CArrowArray, CArrowSchema
 
 var pa = Python.import_module("pyarrow")
 var pyarr = pa.array([1, 2, 3, 4, 5], mask=[False, False, False, False, True])
 
-var c_array = CArrowArray.from_pyarrow(pyarr)
-var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
-
-var dtype = c_schema.to_dtype()     # int64
-var data = c_array.to_array(dtype)
+var capsules = pyarr.__arrow_c_array__()
+var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()  # int64
+var data = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
 var typed = data.as_int64()
 
 print(typed.is_valid(0))   # True

@@ -17,7 +17,6 @@ from marrow.dtypes import float16, float32, float64, binary, string, list_
 from marrow.dtypes import Field
 
 
-
 def test_schema_primitive_fields() raises:
     """Test the schema with primitive fields."""
 
@@ -85,7 +84,9 @@ def test_from_c_schema() raises -> None:
         )
     )
 
-    var schema = CArrowSchema.from_pycapsule(pa_schema.__arrow_c_schema__()).to_schema()
+    var schema = CArrowSchema.from_pycapsule(
+        pa_schema.__arrow_c_schema__()
+    ).to_schema()
 
     assert_equal(len(schema.fields), 2)
 
@@ -144,13 +145,14 @@ def test_schema_from_pyarrow() raises:
     var pa_schema = pa.schema(
         Python.list(pa.field("x", pa.int32()), pa.field("y", pa.float64()))
     )
-    var schema = CArrowSchema.from_pycapsule(pa_schema.__arrow_c_schema__()).to_schema()
+    var schema = CArrowSchema.from_pycapsule(
+        pa_schema.__arrow_c_schema__()
+    ).to_schema()
     assert_equal(len(schema), 2)
     assert_equal(schema.field(index=0).name, "x")
     assert_equal(schema.field(index=0).dtype, int32)
     assert_equal(schema.field(index=1).name, "y")
     assert_equal(schema.field(index=1).dtype, float64)
-
 
 
 def main() raises:

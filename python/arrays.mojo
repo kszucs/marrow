@@ -807,7 +807,7 @@ fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
-# TODO: maybe instroduce an Array trait and rename Array struct to AnyArray
+# TODO: maybe introduce an Array trait and rename Array struct to AnyArray
 fn _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
     return arr
 

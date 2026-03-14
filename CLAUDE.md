@@ -87,7 +87,9 @@ Usage: `var arr: Array = my_primitive_array` and `var prim: PrimitiveArray[int64
 
 **C Data Interface** (`marrow/c_data.mojo`):
 - `CArrowSchema` and `CArrowArray` for zero-copy data exchange
-- Primary use case: interop with PyArrow via `from_pyarrow()` and `to_pyarrow()`
+- Import: `CArrowSchema.from_pycapsule()` + `.to_dtype()`, `CArrowArray.from_pycapsule()` + `.to_array(dtype)`
+- Export: `CArrowSchema.from_dtype(dtype).to_pycapsule()`, `CArrowArray.from_array(arr).to_pycapsule()`
+- Python arrays expose `__arrow_c_array__()` and `__arrow_c_schema__()` protocol methods for zero-copy exchange with PyArrow
 
 **Tabular** (`marrow/tabular.mojo`):
 - `RecordBatch` - schema + column arrays
@@ -115,7 +117,6 @@ marrow/
 ├── schema.mojo           # Schema with Fields and metadata
 ├── tabular.mojo          # RecordBatch
 ├── visitor.mojo          # DataTypeVisitor, ArrayVisitor traits
-├── pretty.mojo           # Visitor-based pretty printing
 └── tests/                # Core module tests
 python/                   # The Python module top level
 ```
@@ -134,11 +135,16 @@ var s = StringArray()
 s.unsafe_append("hello")
 s.unsafe_append("world")
 
-# From PyArrow (zero-copy)
-var c_array = CArrowArray.from_pyarrow(pyarrow_array)
-var c_schema = CArrowSchema.from_pyarrow(pyarrow_array.type)
-var dtype = c_schema.to_dtype()
-var data = c_array.to_array(dtype)
+# From PyArrow (via Arrow C Data Interface)
+from marrow.c_data import CArrowArray, CArrowSchema
+var capsules = pyarrow_array.__arrow_c_array__()
+var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()
+var data = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
+
+# To PyArrow (via Arrow C Data Interface)
+var schema_cap = CArrowSchema.from_dtype(data.dtype).to_pycapsule()
+var array_cap = CArrowArray.from_array(data).to_pycapsule()
+var pyarr = pa.Array._import_from_c(array_cap, schema_cap)
 ```
 
 ### Null Handling

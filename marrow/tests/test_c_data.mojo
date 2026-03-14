@@ -8,13 +8,15 @@ from marrow.dtypes import *
 
 
 fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
-    """Import a CArrowArray from any Arrow-compatible Python object via PyCapsule."""
+    """Import a CArrowArray from any Arrow-compatible Python object via PyCapsule.
+    """
     var capsule_tuple = pyobj.__arrow_c_array__()
     return CArrowArray.from_pycapsule(capsule_tuple[1])
 
 
 fn c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
-    """Import a CArrowSchema from any Arrow-compatible Python object via PyCapsule."""
+    """Import a CArrowSchema from any Arrow-compatible Python object via PyCapsule.
+    """
     return CArrowSchema.from_pycapsule(pyobj.__arrow_c_schema__())
 
 
@@ -551,8 +553,20 @@ def test_fixed_size_list_with_nulls() raises:
 def test_schema_from_dtype_all_types() raises:
     """All supported dtypes survive a from_dtype → to_dtype roundtrip."""
     var types = [
-        int8, uint8, int16, uint16, int32, uint32, int64, uint64,
-        float16, float32, float64, bool_, binary, string,
+        int8,
+        uint8,
+        int16,
+        uint16,
+        int32,
+        uint32,
+        int64,
+        uint64,
+        float16,
+        float32,
+        float64,
+        bool_,
+        binary,
+        string,
     ]
     for i in range(len(types)):
         var dt = types[i]

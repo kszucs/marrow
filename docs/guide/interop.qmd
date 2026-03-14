@@ -55,57 +55,50 @@ Reproduce with:
 pixi run bench_python
 ```
 
-## Zero-copy C Data Interface (Mojo)
+## Zero-copy C Data Interface
 
-At the Mojo level, Marrow and PyArrow can exchange data with **zero copies** via the Arrow C Data Interface. The array buffers stay in place; only metadata pointers are transferred.
+Marrow arrays implement the Arrow C Data Interface protocol (`__arrow_c_array__` / `__arrow_c_schema__`), so they exchange data with PyArrow with **zero copies** at both the Python and Mojo level.
+
+### Python level
+
+```{python}
+# PyArrow → Marrow (via __arrow_c_array__ protocol)
+pa_arr = pa.array([1, 2, 3, None, 5])
+ma_arr = ma.array(pa_arr)
+print(ma_arr)
+```
+
+```{python}
+# Marrow → PyArrow (via __arrow_c_array__ protocol)
+ma_arr = ma.array([1, 2, 3, None, 5])
+pa_arr = pa.array(ma_arr)
+print(pa_arr)
+```
+
+### Mojo level
+
+At the Mojo level the underlying `CArrowSchema` and `CArrowArray` structs are directly accessible for low-level interop.
 
 ```mojo
-from python import Python
+from std.python import Python
 from marrow.c_data import CArrowArray, CArrowSchema
 
 var pa = Python.import_module("pyarrow")
-
-# Create a PyArrow array
 var pyarr = pa.array([1, 2, 3, 4, 5], mask=[False, False, False, False, True])
 
-# Export from PyArrow into C Data Interface structs (zero-copy)
-var c_array  = CArrowArray.from_pyarrow(pyarr)
-var c_schema = CArrowSchema.from_pyarrow(pyarr.type)
-
-# Convert schema to Marrow DataType
-var dtype = c_schema.to_dtype()    # int64
-
-# Wrap the array data (still zero-copy — shares PyArrow's buffers)
-var data   = c_array.to_array(dtype)
-var typed  = data.as_int64()
+# Import from PyArrow via the Arrow C Data Interface capsule protocol
+var capsules = pyarr.__arrow_c_array__()
+var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()  # int64
+var data  = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
+var typed = data.as_int64()
 
 print(typed.is_valid(0))    # True
 print(typed.is_valid(4))    # False — null
 print(typed.unsafe_get(0))  # 1
 print(typed.unsafe_get(3))  # 4
+
+# Export from Mojo back to PyArrow
+var schema_cap = CArrowSchema.from_dtype(data.dtype).to_pycapsule()
+var array_cap  = CArrowArray.from_array(data).to_pycapsule()
+var pa_result  = pa.Array._import_from_c(array_cap, schema_cap)
 ```
-
-::: {.callout-note}
-**Direction**: Consuming PyArrow data in Mojo works fully. Exporting Marrow arrays back to PyArrow via the C Data Interface is not yet implemented — release callbacks (required by the Arrow spec) can't be registered from Mojo yet.
-:::
-
-## Current limitations
-
-Direct Python-level conversion between Marrow and PyArrow arrays is not yet supported. Marrow arrays are opaque Mojo objects from Python's perspective — PyArrow can't iterate over them directly:
-
-```{python}
-#| error: true
-ma_arr = ma.array([1, 2, 3])
-pa.array(ma_arr)   # TypeError: not iterable
-```
-
-For now, if you need to pass data from Marrow to PyArrow, reconstruct via Python first:
-
-```{python}
-# Workaround: round-trip through Python repr
-# (only practical for small arrays)
-ma_arr = ma.array([1, 2, 3, None, 5])
-print(ma_arr)  # inspect the values, then recreate in PyArrow if needed
-```
-
-Native Python-level Arrow C Data Interface support is planned for a future release.

@@ -949,7 +949,8 @@ struct ArrowArrayStream(Copyable):
 fn arrow_array_stream_from_python(
     pyobj: PythonObject, cpython: CPython
 ) raises -> ArrowArrayStream:
-    """Create an ArrowArrayStream from a Python object supporting __arrow_c_stream__."""
+    """Create an ArrowArrayStream from a Python object supporting __arrow_c_stream__.
+    """
     var stream = pyobj.__arrow_c_stream__()
     var ptr = cpython.PyCapsule_GetPointer(
         stream.steal_data(), "arrow_array_stream"
