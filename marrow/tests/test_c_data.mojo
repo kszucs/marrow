@@ -2,6 +2,9 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
+from marrow.arrays import Array, BoolArray, PrimitiveArray, StringArray
+from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
+from marrow.dtypes import *
 
 
 fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
@@ -332,6 +335,406 @@ def test_numeric_dtypes() raises:
         var c_schema = c_schema_from_pyobj(py_type)
         var dtype = c_schema.to_dtype()
         assert_equal(dtype, expected_mojo_type)
+
+
+def test_bool_array_from_pyarrow() raises:
+    """Boolean arrays are bit-packed; both the values and validity bitmaps."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(
+        Python.list(True, False, True, False),
+        mask=Python.list(False, False, False, True),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    var dtype = c_schema.to_dtype()
+    assert_equal(dtype, bool_)
+    assert_equal(c_array.length, 4)
+    assert_equal(c_array.null_count, 1)
+    assert_equal(c_array.n_buffers, 2)
+    assert_equal(c_array.n_children, 0)
+
+    var data = c_array^.to_array(dtype)
+    var arr = data^.as_bool()
+
+    assert_true(arr.is_valid(0))
+    assert_true(arr.is_valid(1))
+    assert_true(arr.is_valid(2))
+    assert_false(arr.is_valid(3))
+
+    assert_true(arr.unsafe_get(0))
+    assert_false(arr.unsafe_get(1))
+    assert_true(arr.unsafe_get(2))
+
+
+def test_primitive_array_no_nulls() raises:
+    """Array with no nulls: buffers[0] (validity bitmap) pointer is null."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(Python.list(10, 20, 30))
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    var dtype = c_schema.to_dtype()
+    assert_equal(c_array.null_count, 0)
+
+    var data = c_array^.to_array(dtype)
+    var arr = data^.as_int64()
+
+    assert_equal(arr.nulls, 0)  # no null bitmap → all valid
+    assert_true(arr.is_valid(0))
+    assert_true(arr.is_valid(1))
+    assert_true(arr.is_valid(2))
+    assert_equal(arr.unsafe_get(0), 10)
+    assert_equal(arr.unsafe_get(1), 20)
+    assert_equal(arr.unsafe_get(2), 30)
+
+
+def test_primitive_array_with_offset() raises:
+    """Sliced primitive array: offset field is non-zero."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(Python.list(10, 20, 30, 40)).slice(1)
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    assert_equal(c_array.offset, 1)
+    assert_equal(c_array.length, 3)
+
+    var dtype = c_schema.to_dtype()
+    var data = c_array^.to_array(dtype)
+    var arr = data^.as_int64()
+
+    assert_equal(arr.length, 3)
+    assert_equal(arr.offset, 1)
+    # Values at logical positions 0..2 correspond to physical positions 1..3
+    assert_equal(arr.unsafe_get(0), 20)
+    assert_equal(arr.unsafe_get(1), 30)
+    assert_equal(arr.unsafe_get(2), 40)
+
+
+def test_string_array_with_offset() raises:
+    """Sliced string array: offset is propagated into StringArray."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(Python.list("foo", "bar", "baz")).slice(1)
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    assert_equal(c_array.offset, 1)
+    assert_equal(c_array.length, 2)
+
+    var dtype = c_schema.to_dtype()
+    var data = c_array^.to_array(dtype)
+    var arr = data^.as_string()
+
+    assert_equal(arr.length, 2)
+    assert_equal(arr.offset, 1)
+    assert_equal(String(arr.unsafe_get(0)), "bar")
+    assert_equal(String(arr.unsafe_get(1)), "baz")
+
+
+def test_empty_array_from_pyarrow() raises:
+    """Empty array (length=0): buffers may be null without error."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(Python.list(), type=pa.int32())
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    assert_equal(c_array.length, 0)
+    assert_equal(c_array.null_count, 0)
+
+    var dtype = c_schema.to_dtype()
+    assert_equal(dtype, int32)
+
+    var data = c_array^.to_array(dtype)
+    assert_equal(data.length, 0)
+
+
+def test_binary_dtype_array_from_pyarrow() raises:
+    """Binary (bytes) array uses the same 3-buffer layout as strings."""
+    var pa = Python.import_module("pyarrow")
+
+    var pydata = Python.evaluate("[b'hello', b'world', b'']")
+    var pyarr = pa.array(
+        pydata,
+        type=pa.binary(),
+        mask=Python.list(False, False, True),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    var dtype = c_schema.to_dtype()
+    assert_equal(dtype, binary)
+    assert_equal(c_array.length, 3)
+    assert_equal(c_array.null_count, 1)
+    assert_equal(c_array.n_buffers, 3)
+    assert_equal(c_array.n_children, 0)
+
+    var data = c_array^.to_array(dtype)
+    assert_equal(data.length, 3)
+    assert_true(data.is_valid(0))
+    assert_true(data.is_valid(1))
+    assert_false(data.is_valid(2))
+
+
+def test_struct_array_values_from_pyarrow() raises:
+    """Struct array: verify child column values are accessible."""
+    var pa = Python.import_module("pyarrow")
+
+    var col_x = pa.array(Python.list(1, 2, 3), type=pa.int32())
+    var col_y = pa.array(Python.list("a", "b", "c"))
+    var pyarr = pa.StructArray.from_arrays(
+        Python.list(col_x, col_y),
+        names=Python.list("x", "y"),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    var dtype = c_schema.to_dtype()
+    assert_true(dtype.is_struct())
+    assert_equal(c_array.length, 3)
+    assert_equal(c_array.null_count, 0)
+    assert_equal(c_array.n_buffers, 1)
+    assert_equal(c_array.n_children, 2)
+
+    var data = c_array^.to_array(dtype)
+    assert_equal(data.length, 3)
+    assert_equal(len(data.children), 2)
+
+    var xs = data.children[0].copy().as_int32()
+    assert_equal(xs.unsafe_get(0), 1)
+    assert_equal(xs.unsafe_get(1), 2)
+    assert_equal(xs.unsafe_get(2), 3)
+
+    var ys = data.children[1].copy().as_string()
+    assert_equal(String(ys.unsafe_get(0)), "a")
+    assert_equal(String(ys.unsafe_get(1)), "b")
+    assert_equal(String(ys.unsafe_get(2)), "c")
+
+
+def test_fixed_size_list_with_nulls() raises:
+    """FixedSizeList array with a null row: bitmap must reflect validity."""
+    var pa = Python.import_module("pyarrow")
+
+    var flat = pa.array(Python.list(1, 2, 3, 0, 0, 0), type=pa.int32())
+    var pyarr = pa.FixedSizeListArray.from_arrays(
+        flat,
+        3,
+        mask=pa.array(Python.list(False, True)),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+
+    var dtype = c_schema.to_dtype()
+    assert_true(dtype.is_fixed_size_list())
+    assert_equal(c_array.length, 2)
+    assert_equal(c_array.null_count, 1)
+    assert_equal(c_array.n_buffers, 1)
+    assert_equal(c_array.n_children, 1)
+
+    var data = c_array^.to_array(dtype)
+    var fsl = data^.as_fixed_size_list()
+
+    assert_true(fsl.is_valid(0))
+    assert_false(fsl.is_valid(1))
+
+    var first = fsl.unsafe_get(0).as_int32()
+    assert_equal(first.unsafe_get(0), 1)
+    assert_equal(first.unsafe_get(1), 2)
+    assert_equal(first.unsafe_get(2), 3)
+
+
+def test_export_primitive_array_roundtrip() raises:
+    """PrimitiveArray built in Mojo round-trips through PyArrow and back."""
+    var b = PrimitiveBuilder[int32](3)
+    b.append(7)
+    b.append(42)
+    b.append(-1)
+    var arr: Array = b.finish_typed()
+
+    # Export to PyArrow, re-import via C Data Interface, check Mojo values.
+    var pyarr = arr.to_pyarrow()
+    var reimported = Array.from_pyarrow(pyarr)
+    var result = reimported^.as_int32()
+
+    assert_equal(result.length, 3)
+    assert_equal(result.unsafe_get(0), 7)
+    assert_equal(result.unsafe_get(1), 42)
+    assert_equal(result.unsafe_get(2), -1)
+
+
+def test_export_string_array_roundtrip() raises:
+    """StringArray built in Mojo round-trips through PyArrow and back."""
+    var b = StringBuilder(3)
+    b.append("hello")
+    b.append("world")
+    b.append("mojo")
+    var arr: Array = b.finish_typed()
+
+    var pyarr = arr.to_pyarrow()
+    var reimported = Array.from_pyarrow(pyarr)
+    var result = reimported^.as_string()
+
+    assert_equal(result.length, 3)
+    assert_equal(String(result.unsafe_get(0)), "hello")
+    assert_equal(String(result.unsafe_get(1)), "world")
+    assert_equal(String(result.unsafe_get(2)), "mojo")
+
+
+def test_export_array_with_nulls_roundtrip() raises:
+    """Null bitmap survives Mojo → PyArrow → Mojo roundtrip."""
+    var b = PrimitiveBuilder[int64](4)
+    b.append(1)
+    b.append_null()
+    b.append(3)
+    b.append_null()
+    var arr: Array = b.finish_typed()
+
+    var pyarr = arr.to_pyarrow()
+    var reimported = Array.from_pyarrow(pyarr)
+    var result = reimported^.as_int64()
+
+    assert_equal(result.length, 4)
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_true(result.is_valid(2))
+    assert_false(result.is_valid(3))
+    assert_equal(result.unsafe_get(0), 1)
+    assert_equal(result.unsafe_get(2), 3)
+
+
+def test_schema_from_dtype_all_types() raises:
+    """All supported dtypes survive a from_dtype → to_dtype roundtrip."""
+    var types = [
+        int8, uint8, int16, uint16, int32, uint32, int64, uint64,
+        float16, float32, float64, bool_, binary, string,
+    ]
+    for i in range(len(types)):
+        var dt = types[i]
+        var c_schema = CArrowSchema.from_dtype(dt)
+        var roundtripped = c_schema[].to_dtype()
+        assert_equal(roundtripped, dt)
+
+    # Nested types
+    var list_dt = list_(int64)
+    var c_list = CArrowSchema.from_dtype(list_dt)
+    var rt_list = c_list[].to_dtype()
+    assert_true(rt_list.is_list())
+    assert_equal(rt_list.fields[0].dtype, int64)
+
+    var fsl_dt = fixed_size_list_(float32, 4)
+    var c_fsl = CArrowSchema.from_dtype(fsl_dt)
+    var rt_fsl = c_fsl[].to_dtype()
+    assert_true(rt_fsl.is_fixed_size_list())
+    assert_equal(rt_fsl.size, 4)
+    assert_equal(rt_fsl.fields[0].dtype, float32)
+
+    var struct_fields = List[Field]()
+    struct_fields.append(Field("a", int32, True))
+    var struct_dt = struct_(struct_fields)
+    var c_struct = CArrowSchema.from_dtype(struct_dt)
+    var rt_struct = c_struct[].to_dtype()
+    assert_true(rt_struct.is_struct())
+    assert_equal(len(rt_struct.fields), 1)
+    assert_equal(rt_struct.fields[0].name, "a")
+    assert_equal(rt_struct.fields[0].dtype, int32)
+
+
+def test_schema_field_nullable_flags() raises:
+    """ARROW_FLAG_NULLABLE is set iff field.nullable == True."""
+    var c_nullable = CArrowSchema.from_field(Field("x", int32, True))
+    var f_nullable = c_nullable[].to_field()
+    assert_true(f_nullable.nullable)
+
+    var c_required = CArrowSchema.from_field(Field("y", int64, False))
+    var f_required = c_required[].to_field()
+    assert_false(f_required.nullable)
+
+
+def test_all_numeric_array_imports() raises:
+    """Each numeric type can be imported and values accessed via as_*()."""
+    var pa = Python.import_module("pyarrow")
+
+    # int8
+    var arr_i8 = c_array_from_pyobj(
+        pa.array(Python.list(1, 2, 3), type=pa.int8())
+    )
+    var data_i8 = arr_i8^.to_array(int8)
+    assert_equal(data_i8^.as_int8().unsafe_get(0), 1)
+
+    # uint8
+    var arr_u8 = c_array_from_pyobj(
+        pa.array(Python.list(10, 20, 30), type=pa.uint8())
+    )
+    var data_u8 = arr_u8^.to_array(uint8)
+    assert_equal(data_u8^.as_uint8().unsafe_get(1), 20)
+
+    # int16
+    var arr_i16 = c_array_from_pyobj(
+        pa.array(Python.list(100, 200), type=pa.int16())
+    )
+    var data_i16 = arr_i16^.to_array(int16)
+    assert_equal(data_i16^.as_int16().unsafe_get(0), 100)
+
+    # uint16
+    var arr_u16 = c_array_from_pyobj(
+        pa.array(Python.list(300, 400), type=pa.uint16())
+    )
+    var data_u16 = arr_u16^.to_array(uint16)
+    assert_equal(data_u16^.as_uint16().unsafe_get(1), 400)
+
+    # int32
+    var arr_i32 = c_array_from_pyobj(
+        pa.array(Python.list(-1, 0, 1), type=pa.int32())
+    )
+    var data_i32 = arr_i32^.to_array(int32)
+    assert_equal(data_i32^.as_int32().unsafe_get(0), -1)
+
+    # uint32
+    var arr_u32 = c_array_from_pyobj(
+        pa.array(Python.list(0, 4294967295), type=pa.uint32())
+    )
+    var data_u32 = arr_u32^.to_array(uint32)
+    assert_equal(data_u32^.as_uint32().unsafe_get(1), 4294967295)
+
+    # int64 (already covered by test_primitive_array_from_pyarrow, include for completeness)
+    var arr_i64 = c_array_from_pyobj(
+        pa.array(Python.list(9999999999), type=pa.int64())
+    )
+    var data_i64 = arr_i64^.to_array(int64)
+    assert_equal(data_i64^.as_int64().unsafe_get(0), 9999999999)
+
+    # uint64
+    var arr_u64 = c_array_from_pyobj(
+        pa.array(Python.list(0, 1), type=pa.uint64())
+    )
+    var data_u64 = arr_u64^.to_array(uint64)
+    assert_equal(data_u64^.as_uint64().unsafe_get(0), 0)
+
+    # float32
+    var arr_f32 = c_array_from_pyobj(
+        pa.array(Python.list(1.5, 2.5), type=pa.float32())
+    )
+    var data_f32 = arr_f32^.to_array(float32)
+    assert_equal(data_f32^.as_float32().unsafe_get(0), 1.5)
+
+    # float64
+    var arr_f64 = c_array_from_pyobj(
+        pa.array(Python.list(3.14, 2.71), type=pa.float64())
+    )
+    var data_f64 = arr_f64^.to_array(float64)
+    assert_equal(data_f64^.as_float64().unsafe_get(1), 2.71)
 
 
 # def test_schema_to_pyarrow():

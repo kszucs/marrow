@@ -410,14 +410,14 @@ struct CArrowArray(Movable):
                 values_field.dtype, owner
             )
             children.append(values_array^)
-        elif dtype.is_string():
+        elif dtype.is_string() or dtype == binary:
             if self.n_buffers != 3:
                 raise Error(
-                    t"string array must have 3 buffers, got {self.n_buffers}"
+                    t"string/binary array must have 3 buffers, got {self.n_buffers}"
                 )
             if self.n_children != 0:
                 raise Error(
-                    t"string array must have 0 children, got {self.n_children}"
+                    t"string/binary array must have 0 children, got {self.n_children}"
                 )
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
