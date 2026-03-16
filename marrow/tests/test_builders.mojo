@@ -275,7 +275,7 @@ def test_string_builder_capacity_growth() raises:
 
 
 def test_string_builder_append_string_slice() raises:
-    """append(StringSlice) stores the string correctly."""
+    """Append(StringSlice) stores the string correctly."""
     var b = StringBuilder(2)
     var s1 = StringSlice("hello")
     var s2 = StringSlice("world")
@@ -288,7 +288,7 @@ def test_string_builder_append_string_slice() raises:
 
 
 def test_string_builder_unsafe_append_string_slice() raises:
-    """unsafe_append(StringSlice) stores the string correctly when capacity is pre-reserved.
+    """Unsafe_append(StringSlice) stores the string correctly when capacity is pre-reserved.
     """
     var b = StringBuilder(2, bytes_capacity=10)
     var s1 = StringSlice("hi")
