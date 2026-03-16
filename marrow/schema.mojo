@@ -39,10 +39,7 @@ struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
 
     fn names(self) -> List[String]:
         """Returns the names of the fields in the schema."""
-        var res = List[String](capacity=len(self.fields))
-        for field in self.fields:
-            res.append(field.name)
-        return res^
+        return [field.name for field in self.fields]
 
     fn field(self, *, index: Int) raises -> ref[self.fields] Field:
         """Returns the field at the given index."""
@@ -53,7 +50,7 @@ struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
         for field in self.fields:
             if field.name == name:
                 return field
-        raise Error(t"Field with name `{name.value()}` not found.")
+        raise Error(t"Field with name `{name}` not found.")
 
     fn get_field_index(self, name: String) -> Int:
         """Returns the index of the field with the given name, or -1 if not found.
