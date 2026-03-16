@@ -15,9 +15,8 @@ Available reductions and their SIMD horizontal method:
 
 import std.math as math
 
-from marrow.arrays import PrimitiveArray, Array
-
-from marrow.dtypes import (
+from ..arrays import PrimitiveArray, Array
+from ..dtypes import (
     DataType,
     numeric_dtypes,
     bool_ as bool_dt,

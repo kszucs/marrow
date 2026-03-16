@@ -93,6 +93,14 @@ fn _record_batch_column(
         return ptr[].columns[idx].copy().to_python_object()
 
 
+fn _record_batch_equals(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
+) raises -> PythonObject:
+    """Return True if the two RecordBatches have equal schema and columns."""
+    var other_rb = other.downcast_value_ptr[RecordBatch]()[].copy()
+    return PythonObject(ptr[] == other_rb)
+
+
 fn _record_batch_slice(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     offset: PythonObject,
@@ -325,8 +333,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_column_names]("column_names")
         .def_method[_record_batch_column]("column")
         .def_method[_record_batch_slice]("slice")
-        .def_method[pymethod[RecordBatch.equals]()]("equals")
-        .def_method[pymethod[RecordBatch.__eq__]()]("__eq__")
+        .def_method[_record_batch_equals]("equals")
+        .def_method[_record_batch_equals]("__eq__")
         .def_method[_record_batch_select]("select")
         .def_method[_record_batch_rename_columns]("rename_columns")
         .def_method[_record_batch_add_column]("add_column")

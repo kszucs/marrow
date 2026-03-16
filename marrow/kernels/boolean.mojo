@@ -1,8 +1,8 @@
 """Boolean and bitwise kernels."""
 
-from marrow.arrays import PrimitiveArray
-from marrow.bitmap import Bitmap
-from marrow.dtypes import bool_ as bool_dt
+from ..arrays import PrimitiveArray
+from ..bitmap import Bitmap
+from ..dtypes import bool_ as bool_dt
 
 
 fn count_true(array: PrimitiveArray[bool_dt]) raises -> Int:

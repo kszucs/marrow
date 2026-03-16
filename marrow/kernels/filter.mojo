@@ -49,11 +49,10 @@ import std.math as math
 from std.bit import count_trailing_zeros
 from std.memory import memcpy
 
-from marrow.arrays import PrimitiveArray, StringArray, Array
-from marrow.buffers import Buffer, BufferBuilder
-from marrow.bitmap import Bitmap, BitmapBuilder
-from marrow.dtypes import DataType, bool_, uint32, string, numeric_dtypes
-
+from ..arrays import PrimitiveArray, StringArray, Array
+from ..buffers import Buffer, BufferBuilder
+from ..bitmap import Bitmap, BitmapBuilder
+from ..dtypes import DataType, bool_, uint32, string, numeric_dtypes
 from .boolean import count_true
 from .aggregate import sum_
 

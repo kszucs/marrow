@@ -292,5 +292,29 @@ def test_bitmap_builder_resize_reallocates_when_larger() raises:
     assert_true(bm._builder.ptr != ptr_before)
 
 
+def test_buffer_eq_equal() raises:
+    var b1 = BufferBuilder.alloc(10)
+    var b2 = BufferBuilder.alloc(10)
+    b1.unsafe_set(0, 42)
+    b1.unsafe_set(1, 99)
+    b2.unsafe_set(0, 42)
+    b2.unsafe_set(1, 99)
+    assert_true(b1.finish() == b2.finish())
+
+
+def test_buffer_eq_unequal() raises:
+    var b1 = BufferBuilder.alloc(10)
+    var b2 = BufferBuilder.alloc(10)
+    b1.unsafe_set(0, 42)
+    b2.unsafe_set(0, 43)
+    assert_false(b1.finish() == b2.finish())
+
+
+def test_buffer_eq_different_size() raises:
+    var b1 = BufferBuilder.alloc[DType.int32](10)  # 64 bytes
+    var b2 = BufferBuilder.alloc[DType.int32](20)  # 128 bytes
+    assert_false(b1.finish() == b2.finish())
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

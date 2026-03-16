@@ -495,7 +495,7 @@ struct BufferBuilder(Movable):
 
 
 # TODO: add assertions to ensure alignment and padding invariants hold
-struct Buffer(ImplicitlyCopyable, Movable, Writable):
+struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
     """Immutable contiguous memory region.
 
     CPU accessibility is encoded in `ptr`: a non-null ptr means the buffer is
@@ -617,6 +617,27 @@ struct Buffer(ImplicitlyCopyable, Movable, Writable):
     fn is_host(self) -> Bool:
         """Return True if the buffer is pinned host memory (HOST kind)."""
         return self._owner[]._host.__bool__()
+
+    fn __eq__(self, other: Buffer) -> Bool:
+        """Return True if both buffers have identical CPU-accessible contents.
+
+        Compares full backing bytes using SIMD 64-byte blocks.
+        Returns False if either buffer is device-resident (no CPU access).
+        """
+        if not self.is_cpu() or not other.is_cpu():
+            return False
+        if self.size != other.size:
+            return False
+        comptime width = simd_byte_width()
+        comptime unroll = 64 // width
+        var pa = self.ptr
+        var pb = other.ptr
+        for i in range(0, self.size, 64):
+            comptime for j in range(unroll):
+                comptime k = j * width
+                if (pa + i + k).load[width=width]() != (pb + i + k).load[width=width]():
+                    return False
+        return True
 
     fn device_type(self) raises -> Int32:
         """Return the Arrow C Device Data Interface DeviceType value.

@@ -107,5 +107,44 @@ def test_table_column_access() raises:
     assert_equal(table.column("b").length, 2)
 
 
+def test_record_batch_eq() raises:
+    """Two RecordBatches with the same schema and column values are equal."""
+    var schema = Schema(fields=[Field("x", int32), Field("y", int32)])
+    var a = RecordBatch(
+        schema,
+        [Array(array[int32]([1, 2, 3])), Array(array[int32]([4, 5, 6]))],
+    )
+    var b = RecordBatch(
+        schema,
+        [Array(array[int32]([1, 2, 3])), Array(array[int32]([4, 5, 6]))],
+    )
+    assert_true(a == b)
+
+
+def test_record_batch_eq_unequal() raises:
+    """RecordBatches with different column values are not equal."""
+    var schema = Schema(fields=[Field("x", int32)])
+    var a = RecordBatch(schema, [Array(array[int32]([1, 2, 3]))])
+    var b = RecordBatch(schema, [Array(array[int32]([1, 2, 99]))])
+    assert_true(not (a == b))
+
+
+def test_record_batch_eq_sliced() raises:
+    """Regression: sliced RecordBatches (non-zero column offset) compare correctly.
+
+    The old _arrays_equal implementation compared raw buffer bytes without
+    respecting array offsets, so logically-equal slices of different buffers
+    could compare unequal.
+    """
+    var schema = Schema(fields=[Field("x", int32)])
+    # Build two independent arrays with the same values.
+    var full_a = array[int32]([10, 20, 30, 40, 50])
+    var full_b = array[int32]([10, 20, 30, 40, 50])
+    # Slice both at the same range: [20, 30, 40]
+    var batch_a = RecordBatch(schema, [Array(full_a.slice(1, 3))])
+    var batch_b = RecordBatch(schema, [Array(full_b.slice(1, 3))])
+    assert_true(batch_a == batch_b)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

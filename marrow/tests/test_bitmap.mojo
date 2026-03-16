@@ -945,5 +945,42 @@ def test_and_not_length_mismatch_raises() raises:
         pass
 
 
+def test_bitmap_eq_equal_aligned() raises:
+    var a = _make(8, [0, 3, 7])
+    var b = _make(8, [0, 3, 7])
+    assert_true(a == b)
+
+
+def test_bitmap_eq_unequal() raises:
+    var a = _make(8, [0, 3, 7])
+    var b = _make(8, [0, 3, 6])
+    assert_false(a == b)
+
+
+def test_bitmap_eq_different_length() raises:
+    var a = _make(8, [0, 3])
+    var b = _make(9, [0, 3])
+    assert_false(a == b)
+
+
+def test_bitmap_eq_equal_offset() raises:
+    # Two bitmaps with different non-zero offsets but the same logical bit pattern.
+    # Build a 10-bit bitmap, then slice both starting at bit 2.
+    var base_a = _make(10, [2, 5, 9])
+    var base_b = _make(10, [2, 5, 9])
+    var slice_a = base_a.slice(2, 8)   # logical bits [0..8) → original [2..10)
+    var slice_b = base_b.slice(2, 8)
+    assert_true(slice_a == slice_b)
+
+
+def test_bitmap_eq_offset_mismatch() raises:
+    # Slices that expose different bits are not equal.
+    var base_a = _make(10, [2, 5, 9])
+    var base_b = _make(10, [3, 5, 9])
+    var slice_a = base_a.slice(2, 8)
+    var slice_b = base_b.slice(2, 8)
+    assert_false(slice_a == slice_b)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

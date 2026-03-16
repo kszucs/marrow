@@ -33,7 +33,7 @@ from .buffers import Buffer, BufferBuilder
 # ---------------------------------------------------------------------------
 
 
-struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
+struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
     """Immutable bit-packed validity bitmap.
 
     Wraps a `Buffer` with a `_offset` (bit offset) and `_length` (bit count).
@@ -173,6 +173,22 @@ struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
     fn slice(self, offset: Int, length: Int) -> Bitmap:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return Bitmap(self._buffer, self.bit_offset() + offset, length)
+
+    fn __eq__(self, other: Bitmap) -> Bool:
+        """Return True if both bitmaps have identical logical bit patterns.
+
+        Uses XOR + count_set_bits to correctly handle arbitrary bit offsets
+        on either side. Returns False if either bitmap's buffer is device-resident.
+        """
+        if self._length != other._length:
+            return False
+        if not self._buffer.is_cpu() or not other._buffer.is_cpu():
+            return False
+        try:
+            var xor_result = self ^ other
+            return xor_result.count_set_bits() == 0
+        except:
+            return False
 
     # --- Bulk SIMD operations ---
     #

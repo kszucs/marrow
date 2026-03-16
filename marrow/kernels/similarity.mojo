@@ -6,10 +6,10 @@ from std.sys.info import simd_byte_width
 from std.gpu import global_idx
 from std.gpu.host import DeviceBuffer, DeviceContext
 
-from marrow.arrays import PrimitiveArray, FixedSizeListArray
-from marrow.buffers import Buffer
-from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import DataType
+from ..arrays import PrimitiveArray, FixedSizeListArray
+from ..buffers import Buffer
+from ..builders import PrimitiveBuilder
+from ..dtypes import DataType
 
 
 # ---------------------------------------------------------------------------

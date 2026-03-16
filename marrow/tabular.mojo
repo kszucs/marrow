@@ -14,51 +14,9 @@ from .schema import Schema
 from .dtypes import struct_, Field
 
 
-fn _arrays_equal(a: Array, b: Array) -> Bool:
-    """Compare two Arrays for value equality (buffers and children)."""
-    if a.dtype != b.dtype:
-        return False
-    if a.length != b.length:
-        return False
-    if a.nulls != b.nulls:
-        return False
-    # Compare bitmaps.
-    if a.bitmap.__bool__() != b.bitmap.__bool__():
-        return False
-    if a.bitmap:
-        var ba = a.bitmap.value()._buffer
-        var bb = b.bitmap.value()._buffer
-        if ba.size != bb.size:
-            return False
-        var pa = ba.unsafe_ptr()
-        var pb = bb.unsafe_ptr()
-        for j in range(ba.size):
-            if pa[j] != pb[j]:
-                return False
-    # Compare data buffers.
-    if len(a.buffers) != len(b.buffers):
-        return False
-    for i in range(len(a.buffers)):
-        var ba = a.buffers[i]
-        var bb = b.buffers[i]
-        if ba.size != bb.size:
-            return False
-        var pa = ba.unsafe_ptr()
-        var pb = bb.unsafe_ptr()
-        for j in range(ba.size):
-            if pa[j] != pb[j]:
-                return False
-    # Compare children recursively.
-    if len(a.children) != len(b.children):
-        return False
-    for i in range(len(a.children)):
-        if not _arrays_equal(a.children[i], b.children[i]):
-            return False
-    return True
-
 
 struct RecordBatch(
-    ConvertibleFromPython, ConvertibleToPython, Copyable, Writable
+    ConvertibleFromPython, ConvertibleToPython, Copyable, Equatable, Writable
 ):
     """A schema together with a list of equal-length column arrays.
 
@@ -118,20 +76,16 @@ struct RecordBatch(
         """Returns the Field at the given index (delegates to schema)."""
         return self.schema.field(index=i)
 
-    fn equals(self, other: RecordBatch) -> Bool:
-        """Returns True if the two RecordBatches have equal schema and columns.
-        """
+    fn __eq__(self, other: RecordBatch) -> Bool:
+        """Returns True if the two RecordBatches have equal schema and columns."""
         if self.schema != other.schema:
             return False
         if len(self.columns) != len(other.columns):
             return False
         for i in range(len(self.columns)):
-            if not _arrays_equal(self.columns[i], other.columns[i]):
+            if self.columns[i] != other.columns[i]:
                 return False
         return True
-
-    fn __eq__(self, other: RecordBatch) -> Bool:
-        return self.equals(other)
 
     fn slice(self, offset: Int, length: Int) -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""

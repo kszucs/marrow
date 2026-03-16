@@ -1323,5 +1323,318 @@ def test_struct_array_flatten() raises:
     assert_equal(flat[1].length, 2)
 
 
+# ---------------------------------------------------------------------------
+# Equality tests
+# ---------------------------------------------------------------------------
+
+
+def test_primitive_array_eq() raises:
+    # Fast path: no nulls, offset=0 — uses Buffer.__eq__
+    var a = array[int32]([1, 2, 3])
+    var b = array[int32]([1, 2, 3])
+    assert_true(a == b)
+
+
+def test_primitive_array_eq_unequal() raises:
+    var a = array[int32]([1, 2, 3])
+    var b = array[int32]([1, 2, 4])
+    assert_false(a == b)
+
+
+def test_primitive_array_eq_length_mismatch() raises:
+    var a = array[int32]([1, 2, 3])
+    var b = array[int32]([1, 2])
+    assert_false(a == b)
+
+
+def test_primitive_array_eq_sliced() raises:
+    # Regression test: sliced arrays with non-zero offset must compare correctly.
+    # Old _arrays_equal bug: compared raw buffer bytes ignoring offset.
+    var a = array[int32]([10, 20, 30, 40, 50])
+    var b = array[int32]([10, 20, 30, 40, 50])
+    var sa = a.slice(1, 3)  # [20, 30, 40], offset=1
+    var sb = b.slice(1, 3)  # [20, 30, 40], offset=1
+    assert_true(sa == sb)
+
+
+def test_primitive_array_eq_sliced_unequal() raises:
+    var a = array[int32]([10, 20, 30, 40, 50])
+    var b = array[int32]([10, 20, 99, 40, 50])
+    var sa = a.slice(1, 3)  # [20, 30, 40]
+    var sb = b.slice(1, 3)  # [20, 99, 40]
+    assert_false(sa == sb)
+
+
+def test_primitive_array_eq_nulls_equal() raises:
+    var a = array[int32]([1, None, 3])
+    var b = array[int32]([1, None, 3])
+    assert_true(a == b)
+
+
+def test_primitive_array_eq_nulls_mismatch_count() raises:
+    var a = array[int32]([1, None, 3])
+    var b = array[int32]([1, 2, 3])
+    assert_false(a == b)
+
+
+def test_primitive_array_eq_nulls_mismatch_pattern() raises:
+    # Same null count but different null positions
+    var a = array[int32]([None, 2, 3])
+    var b = array[int32]([1, None, 3])
+    assert_false(a == b)
+
+
+def test_bool_array_eq() raises:
+    var a = array([True, False, True])
+    var b = array([True, False, True])
+    assert_true(a == b)
+    var c = array([True, True, True])
+    assert_false(a == c)
+
+
+def test_string_array_eq() raises:
+    var sa = StringBuilder()
+    sa.append("hello")
+    sa.append("world")
+    var sb = StringBuilder()
+    sb.append("hello")
+    sb.append("world")
+    assert_true(sa.finish_typed() == sb.finish_typed())
+
+
+def test_string_array_eq_unequal() raises:
+    var sa = StringBuilder()
+    sa.append("hello")
+    sa.append("world")
+    var sb = StringBuilder()
+    sb.append("hello")
+    sb.append("mars")
+    assert_false(sa.finish_typed() == sb.finish_typed())
+
+
+def test_string_array_eq_sliced() raises:
+    # Sliced string arrays with matching logical values are equal.
+    var sa = StringBuilder()
+    sa.append("a")
+    sa.append("b")
+    sa.append("c")
+    sa.append("d")
+    var sb = StringBuilder()
+    sb.append("a")
+    sb.append("b")
+    sb.append("c")
+    sb.append("d")
+    var a = sa.finish_typed()
+    var b = sb.finish_typed()
+    assert_true(a.slice(1, 2) == b.slice(1, 2))
+
+
+def test_string_array_eq_nulls() raises:
+    var sa = StringBuilder(3)
+    sa.append("x")
+    sa.append_null()
+    sa.append("z")
+    var sb = StringBuilder(3)
+    sb.append("x")
+    sb.append_null()
+    sb.append("z")
+    assert_true(sa.finish_typed() == sb.finish_typed())
+
+
+def test_list_array_eq() raises:
+    var ints_a = PrimitiveBuilder[int64]()
+    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    var child_a = list_a.values().as_primitive[int64]()
+    child_a[].append(1)
+    child_a[].append(2)
+    list_a.append_valid()
+    child_a[].append(3)
+    list_a.append_valid()
+    var a = list_a.finish_typed()
+
+    var ints_b = PrimitiveBuilder[int64]()
+    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var child_b = list_b.values().as_primitive[int64]()
+    child_b[].append(1)
+    child_b[].append(2)
+    list_b.append_valid()
+    child_b[].append(3)
+    list_b.append_valid()
+    var b = list_b.finish_typed()
+
+    assert_true(a == b)
+
+
+def test_list_array_eq_unequal() raises:
+    var ints_a = PrimitiveBuilder[int64]()
+    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    var child_a = list_a.values().as_primitive[int64]()
+    child_a[].append(1)
+    child_a[].append(2)
+    list_a.append_valid()
+    var a = list_a.finish_typed()
+
+    var ints_b = PrimitiveBuilder[int64]()
+    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var child_b = list_b.values().as_primitive[int64]()
+    child_b[].append(1)
+    child_b[].append(99)
+    list_b.append_valid()
+    var b = list_b.finish_typed()
+
+    assert_false(a == b)
+
+
+def test_list_array_eq_nulls() raises:
+    var ints_a = PrimitiveBuilder[int64]()
+    ints_a.append(1)
+    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    list_a.append_valid()
+    list_a.append_null()
+    var a = list_a.finish_typed()
+
+    var ints_b = PrimitiveBuilder[int64]()
+    ints_b.append(1)
+    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    list_b.append_valid()
+    list_b.append_null()
+    var b = list_b.finish_typed()
+
+    assert_true(a == b)
+
+
+def test_fixed_size_list_array_eq() raises:
+    var a_b = PrimitiveBuilder[int32](4)
+    a_b.append(1)
+    a_b.append(2)
+    a_b.append(3)
+    a_b.append(4)
+    var builder_a = FixedSizeListBuilder(AnyBuilder(a_b^), list_size=2)
+    builder_a.append_valid()
+    builder_a.append_valid()
+
+    var b_b = PrimitiveBuilder[int32](4)
+    b_b.append(1)
+    b_b.append(2)
+    b_b.append(3)
+    b_b.append(4)
+    var builder_b = FixedSizeListBuilder(AnyBuilder(b_b^), list_size=2)
+    builder_b.append_valid()
+    builder_b.append_valid()
+
+    assert_true(builder_a.finish_typed() == builder_b.finish_typed())
+
+
+def test_fixed_size_list_array_eq_unequal() raises:
+    var a_b = PrimitiveBuilder[int32](4)
+    a_b.append(1)
+    a_b.append(2)
+    a_b.append(3)
+    a_b.append(4)
+    var builder_a = FixedSizeListBuilder(AnyBuilder(a_b^), list_size=2)
+    builder_a.append_valid()
+    builder_a.append_valid()
+
+    var b_b = PrimitiveBuilder[int32](4)
+    b_b.append(1)
+    b_b.append(2)
+    b_b.append(3)
+    b_b.append(99)
+    var builder_b = FixedSizeListBuilder(AnyBuilder(b_b^), list_size=2)
+    builder_b.append_valid()
+    builder_b.append_valid()
+
+    assert_false(builder_a.finish_typed() == builder_b.finish_typed())
+
+
+def test_struct_array_eq() raises:
+    var a_b = PrimitiveBuilder[int32](2)
+    a_b.append(1)
+    a_b.append(2)
+    var fields_a = List[Field]()
+    fields_a.append(Field("x", int32))
+    var children_a = List[AnyBuilder]()
+    children_a.append(AnyBuilder(a_b^))
+    var sa = StructBuilder(fields_a^, children_a^, capacity=2)
+    sa.append_valid()
+    sa.append_valid()
+
+    var b_b = PrimitiveBuilder[int32](2)
+    b_b.append(1)
+    b_b.append(2)
+    var fields_b = List[Field]()
+    fields_b.append(Field("x", int32))
+    var children_b = List[AnyBuilder]()
+    children_b.append(AnyBuilder(b_b^))
+    var sb = StructBuilder(fields_b^, children_b^, capacity=2)
+    sb.append_valid()
+    sb.append_valid()
+
+    assert_true(sa.finish_typed() == sb.finish_typed())
+
+
+def test_struct_array_eq_unequal() raises:
+    var a_b = PrimitiveBuilder[int32](2)
+    a_b.append(1)
+    a_b.append(2)
+    var fields_a = List[Field]()
+    fields_a.append(Field("x", int32))
+    var children_a = List[AnyBuilder]()
+    children_a.append(AnyBuilder(a_b^))
+    var sa = StructBuilder(fields_a^, children_a^, capacity=2)
+    sa.append_valid()
+    sa.append_valid()
+
+    var b_b = PrimitiveBuilder[int32](2)
+    b_b.append(1)
+    b_b.append(99)
+    var fields_b = List[Field]()
+    fields_b.append(Field("x", int32))
+    var children_b = List[AnyBuilder]()
+    children_b.append(AnyBuilder(b_b^))
+    var sb = StructBuilder(fields_b^, children_b^, capacity=2)
+    sb.append_valid()
+    sb.append_valid()
+
+    assert_false(sa.finish_typed() == sb.finish_typed())
+
+
+def test_struct_array_eq_dtype_mismatch() raises:
+    var a_b = PrimitiveBuilder[int32](1)
+    a_b.append(1)
+    var fields_a = List[Field]()
+    fields_a.append(Field("x", int32))
+    var children_a = List[AnyBuilder]()
+    children_a.append(AnyBuilder(a_b^))
+    var sa = StructBuilder(fields_a^, children_a^, capacity=1)
+    sa.append_valid()
+
+    var b_b = PrimitiveBuilder[int32](1)
+    b_b.append(1)
+    var fields_b = List[Field]()
+    fields_b.append(Field("y", int32))  # different field name
+    var children_b = List[AnyBuilder]()
+    children_b.append(AnyBuilder(b_b^))
+    var sb = StructBuilder(fields_b^, children_b^, capacity=1)
+    sb.append_valid()
+
+    assert_false(sa.finish_typed() == sb.finish_typed())
+
+
+def test_array_eq_dtype_mismatch() raises:
+    # Type-erased Array: int32 vs int64 → False
+    var a: Array = array[int32]([1, 2, 3])
+    var b: Array = array[int64]([1, 2, 3])
+    assert_false(a == b)
+
+
+def test_array_eq_via_dispatch() raises:
+    # Equal arrays accessed as type-erased Array verify dispatch works.
+    var a: Array = array[int32]([10, 20, 30])
+    var b: Array = array[int32]([10, 20, 30])
+    assert_true(a == b)
+    assert_true(a == b)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

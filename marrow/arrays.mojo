@@ -27,7 +27,7 @@ from .dtypes import *
 
 @fieldwise_init
 struct Array(
-    ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable
+    ConvertibleFromPython, ConvertibleToPython, Copyable, Equatable, Movable, Writable
 ):
     """Array is the lower level abstraction directly usable by the library consumer.
 
@@ -173,6 +173,31 @@ struct Array(
         """Returns an O(1) copy of this array (Arc ref-count bumps only)."""
         return Array(copy=self)
 
+    fn __eq__(self, other: Array) -> Bool:
+        """Return True if both arrays have the same dtype, length, and values.
+
+        Dispatches to the typed array's __eq__ for correctness with offsets and nulls.
+        """
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        try:
+            comptime for T in primitive_dtypes:
+                if self.dtype == T:
+                    return self.as_primitive[T]() == other.as_primitive[T]()
+            if self.dtype.is_string():
+                return self.as_string() == other.as_string()
+            if self.dtype.is_list():
+                return self.as_list() == other.as_list()
+            if self.dtype.is_fixed_size_list():
+                return self.as_fixed_size_list() == other.as_fixed_size_list()
+            if self.dtype.is_struct():
+                return self.as_struct() == other.as_struct()
+        except:
+            return False
+        return False
+
     fn slice(self, offset: Int, length: Int = -1) -> Array:
         """Returns a zero-copy slice starting at offset with the given length.
 
@@ -258,6 +283,7 @@ struct PrimitiveArray[T: DataType](
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Equatable,
     Movable,
     Sized,
     Writable,
@@ -409,6 +435,32 @@ struct PrimitiveArray[T: DataType](
     fn to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
+    fn __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same length, null pattern, and values.
+
+        Fast path (no nulls, offset=0 on both): full buffer SIMD comparison.
+        Slow path (nulls or non-zero offset): element-by-element at valid positions.
+        """
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if self.bitmap.value() != other.bitmap.value():
+                return False
+        # Fast path: no nulls, no offset — full buffer SIMD comparison.
+        if self.nulls == 0 and self.offset == 0 and other.offset == 0:
+            return self.buffer == other.buffer
+        # Slow path: nulls or offset — compare only valid elements.
+        for i in range(self.length):
+            if self.is_valid(i):
+                if self.unsafe_get(i) != other.unsafe_get(i):
+                    return False
+        return True
+
+
 
 comptime BoolArray = PrimitiveArray[bool_]
 comptime Int8Array = PrimitiveArray[int8]
@@ -428,6 +480,7 @@ struct StringArray(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Equatable,
     Movable,
     Sized,
     Writable,
@@ -541,6 +594,24 @@ struct StringArray(
     fn to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
+    fn __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same length, null pattern, and string values."""
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if self.bitmap.value() != other.bitmap.value():
+                return False
+        for i in range(self.length):
+            if self.is_valid(i):
+                if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
+                    return False
+        return True
+
+
     fn __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
@@ -550,6 +621,7 @@ struct ListArray(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Equatable,
     Movable,
     Sized,
     Writable,
@@ -672,12 +744,33 @@ struct ListArray(
             buffer=buf.finish(),
         )
 
+    fn __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same dtype, null pattern, and list values."""
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if self.bitmap.value() != other.bitmap.value():
+                return False
+        for i in range(self.length):
+            if self.is_valid(i):
+                if self.unsafe_get(i) != other.unsafe_get(i):
+                    return False
+        return True
+
+
 
 @fieldwise_init
 struct FixedSizeListArray(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Equatable,
     Movable,
     Sized,
     Writable,
@@ -815,12 +908,33 @@ struct FixedSizeListArray(
             values=new_child^,
         )
 
+    fn __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same dtype, null pattern, and element values."""
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if self.bitmap.value() != other.bitmap.value():
+                return False
+        for i in range(self.length):
+            if self.is_valid(i):
+                if self.unsafe_get(i) != other.unsafe_get(i):
+                    return False
+        return True
+
+
 
 @fieldwise_init
 struct StructArray(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    Equatable,
     Movable,
     Sized,
     Writable,
@@ -918,6 +1032,27 @@ struct StructArray(
         Matches PyArrow's StructArray.flatten() API.
         """
         return self.children.copy()
+
+    fn __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same dtype, null pattern, and field values."""
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if self.bitmap.value() != other.bitmap.value():
+                return False
+        if len(self.children) != len(other.children):
+            return False
+        for i in range(len(self.children)):
+            if self.children[i] != other.children[i]:
+                return False
+        return True
+
 
 
 struct ChunkedArray(Copyable, Movable, Writable):
