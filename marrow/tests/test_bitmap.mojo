@@ -968,7 +968,7 @@ def test_bitmap_eq_equal_offset() raises:
     # Build a 10-bit bitmap, then slice both starting at bit 2.
     var base_a = _make(10, [2, 5, 9])
     var base_b = _make(10, [2, 5, 9])
-    var slice_a = base_a.slice(2, 8)   # logical bits [0..8) → original [2..10)
+    var slice_a = base_a.slice(2, 8)  # logical bits [0..8) → original [2..10)
     var slice_b = base_b.slice(2, 8)
     assert_true(slice_a == slice_b)
 

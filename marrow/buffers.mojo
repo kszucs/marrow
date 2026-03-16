@@ -635,7 +635,9 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         for i in range(0, self.size, 64):
             comptime for j in range(unroll):
                 comptime k = j * width
-                if (pa + i + k).load[width=width]() != (pb + i + k).load[width=width]():
+                if (pa + i + k).load[width=width]() != (pb + i + k).load[
+                    width=width
+                ]():
                     return False
         return True
 

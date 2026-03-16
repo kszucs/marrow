@@ -14,7 +14,7 @@ from marrow.schema import Schema
 from marrow.arrays import Array
 from marrow.dtypes import Field, struct_
 from marrow.c_data import CArrowSchema, CArrowArray
-from arrays import pymethod
+from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +66,6 @@ fn _record_batch_shape(
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
-fn _record_batch_column_names(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
-) raises -> PythonObject:
-    """Return the column names as a Python list of strings."""
-    var builtins = Python.import_module("builtins")
-    var result = builtins.list()
-    for name in ptr[].column_names():
-        result.append(name.to_python_object())
-    return result
-
 
 fn _record_batch_column(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], key: PythonObject
@@ -93,14 +83,6 @@ fn _record_batch_column(
         return ptr[].columns[idx].copy().to_python_object()
 
 
-fn _record_batch_equals(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
-) raises -> PythonObject:
-    """Return True if the two RecordBatches have equal schema and columns."""
-    var other_rb = other.downcast_value_ptr[RecordBatch]()[].copy()
-    return PythonObject(ptr[] == other_rb)
-
-
 fn _record_batch_slice(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     offset: PythonObject,
@@ -108,6 +90,15 @@ fn _record_batch_slice(
 ) raises -> PythonObject:
     """Return a zero-copy slice from offset with given length."""
     return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
+
+
+fn _record_batch_equals(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
+) raises -> PythonObject:
+    """Return True if the two RecordBatches have equal schema and columns."""
+    var other_rb = other.downcast_value_ptr[RecordBatch]()[].copy()
+    return PythonObject(ptr[] == other_rb)
+
 
 
 fn _record_batch_select(
@@ -127,15 +118,6 @@ fn _record_batch_select(
             names.append(String(py=columns[i]))
         return ptr[].select(names).to_python_object()
 
-
-fn _record_batch_rename_columns(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], names_obj: PythonObject
-) raises -> PythonObject:
-    """Return a new RecordBatch with columns renamed."""
-    var names = List[String]()
-    for i in range(Int(names_obj.__len__())):
-        names.append(String(py=names_obj[i]))
-    return ptr[].rename_columns(names).to_python_object()
 
 
 fn _record_batch_add_column(
@@ -330,13 +312,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_shape]("shape")
         .def_method[pymethod[RecordBatch.num_rows]()]("num_rows")
         .def_method[pymethod[RecordBatch.num_columns]()]("num_columns")
-        .def_method[_record_batch_column_names]("column_names")
+        .def_method[pymethod[RecordBatch.column_names]()]("column_names")
         .def_method[_record_batch_column]("column")
         .def_method[_record_batch_slice]("slice")
         .def_method[_record_batch_equals]("equals")
         .def_method[_record_batch_equals]("__eq__")
         .def_method[_record_batch_select]("select")
-        .def_method[_record_batch_rename_columns]("rename_columns")
+        .def_method[pymethod[RecordBatch.rename_columns]()]("rename_columns")
         .def_method[_record_batch_add_column]("add_column")
         .def_method[_record_batch_append_column]("append_column")
         .def_method[pymethod[RecordBatch.remove_column]()]("remove_column")

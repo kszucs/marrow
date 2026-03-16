@@ -6,45 +6,17 @@ back to typed arrays and call the appropriate kernel.
 
 from std.python import PythonObject, Python
 from std.python.bindings import PythonModuleBuilder
-from std.python import PythonObject, ConvertibleToPython, ConvertibleFromPython
 from marrow.arrays import Array
 from marrow.kernels.aggregate import  sum_, product, min_, max_, any_, all_
 from marrow.kernels.arithmetic import add, sub, mul, div
 from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls
+from helpers import pyfunction
 
 # TODO: use explicit Array types in the helper functions below
 # otherwise for filter_ at least mojo is unable to resolve the
 # right overload
 fn filter_(array: Array, selection: Array) raises -> Array:
     return _filter_overloaded(array, selection)
-
-
-fn pyfunction[
-    A0: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    func: fn (A0) raises -> R,
-]() -> fn (PythonObject) raises -> PythonObject:
-    """Wrap a one-arg method returning ConvertibleToPython."""
-
-    fn wrapper(arg0: PythonObject) raises -> PythonObject:
-        return func(A0(py=arg0)).to_python_object()
-
-    return wrapper
-
-fn pyfunction[
-    A0: ConvertibleFromPython,
-    A1: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    func: fn (A0, A1) raises -> R,
-]() -> fn (PythonObject, PythonObject) raises -> PythonObject:
-    """Wrap a two-arg method returning ConvertibleToPython."""
-
-    fn wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
-        return func(A0(py=arg0), A1(py=arg1)).to_python_object()
-
-    return wrapper
 
 
 

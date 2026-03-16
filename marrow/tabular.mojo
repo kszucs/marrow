@@ -14,7 +14,6 @@ from .schema import Schema
 from .dtypes import struct_, Field
 
 
-
 struct RecordBatch(
     ConvertibleFromPython, ConvertibleToPython, Copyable, Equatable, Writable
 ):
@@ -77,7 +76,8 @@ struct RecordBatch(
         return self.schema.field(index=i)
 
     fn __eq__(self, other: RecordBatch) -> Bool:
-        """Returns True if the two RecordBatches have equal schema and columns."""
+        """Returns True if the two RecordBatches have equal schema and columns.
+        """
         if self.schema != other.schema:
             return False
         if len(self.columns) != len(other.columns):

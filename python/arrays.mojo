@@ -44,64 +44,7 @@ from marrow.builders import (
 )
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
-
-
-# ---------------------------------------------------------------------------
-# pymethod helpers — reduce boilerplate for Python bindings
-# ---------------------------------------------------------------------------
-
-
-fn pymethod[
-    T: AnyType,
-    R: ConvertibleToPython,
-    //,
-    method: fn(T) raises -> R,
-]() -> fn(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
-    """Wrap a zero-arg method returning ConvertibleToPython."""
-
-    fn wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
-        return method(ptr[]).to_python_object()
-
-    return wrapper
-
-
-fn pymethod[
-    T: AnyType,
-    A0: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    method: fn(T, A0) raises -> R,
-]() -> fn(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
-    """Wrap a single-arg method returning ConvertibleToPython."""
-
-    fn wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
-    ) raises -> PythonObject:
-        return method(ptr[], A0(py=arg)).to_python_object()
-
-    return wrapper
-
-
-fn pymethod[
-    T: AnyType,
-    A0: ConvertibleFromPython,
-    A1: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    method: fn(T, A0, A1) raises -> R,
-]() -> fn(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
-) raises -> PythonObject:
-    """Wrap a two-arg method returning ConvertibleToPython."""
-
-    fn wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
-        arg0: PythonObject,
-        arg1: PythonObject,
-    ) raises -> PythonObject:
-        return method(ptr[], A0(py=arg0), A1(py=arg1)).to_python_object()
-
-    return wrapper
+from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------

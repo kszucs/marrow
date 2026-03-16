@@ -27,7 +27,12 @@ from .dtypes import *
 
 @fieldwise_init
 struct Array(
-    ConvertibleFromPython, ConvertibleToPython, Copyable, Equatable, Movable, Writable
+    ConvertibleFromPython,
+    ConvertibleToPython,
+    Copyable,
+    Equatable,
+    Movable,
+    Writable,
 ):
     """Array is the lower level abstraction directly usable by the library consumer.
 
@@ -461,7 +466,6 @@ struct PrimitiveArray[T: DataType](
         return True
 
 
-
 comptime BoolArray = PrimitiveArray[bool_]
 comptime Int8Array = PrimitiveArray[int8]
 comptime Int16Array = PrimitiveArray[int16]
@@ -595,7 +599,8 @@ struct StringArray(
         return PythonObject(alloc=self^)
 
     fn __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same length, null pattern, and string values."""
+        """Return True if both arrays have the same length, null pattern, and string values.
+        """
         if self.length != other.length:
             return False
         if self.nulls != other.nulls:
@@ -610,7 +615,6 @@ struct StringArray(
                 if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
                     return False
         return True
-
 
     fn __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -745,7 +749,8 @@ struct ListArray(
         )
 
     fn __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same dtype, null pattern, and list values."""
+        """Return True if both arrays have the same dtype, null pattern, and list values.
+        """
         if self.dtype != other.dtype:
             return False
         if self.length != other.length:
@@ -762,7 +767,6 @@ struct ListArray(
                 if self.unsafe_get(i) != other.unsafe_get(i):
                     return False
         return True
-
 
 
 @fieldwise_init
@@ -909,7 +913,8 @@ struct FixedSizeListArray(
         )
 
     fn __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same dtype, null pattern, and element values."""
+        """Return True if both arrays have the same dtype, null pattern, and element values.
+        """
         if self.dtype != other.dtype:
             return False
         if self.length != other.length:
@@ -926,7 +931,6 @@ struct FixedSizeListArray(
                 if self.unsafe_get(i) != other.unsafe_get(i):
                     return False
         return True
-
 
 
 @fieldwise_init
@@ -1034,7 +1038,8 @@ struct StructArray(
         return self.children.copy()
 
     fn __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same dtype, null pattern, and field values."""
+        """Return True if both arrays have the same dtype, null pattern, and field values.
+        """
         if self.dtype != other.dtype:
             return False
         if self.length != other.length:
@@ -1052,7 +1057,6 @@ struct StructArray(
             if self.children[i] != other.children[i]:
                 return False
         return True
-
 
 
 struct ChunkedArray(Copyable, Movable, Writable):
