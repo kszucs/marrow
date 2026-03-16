@@ -10,7 +10,6 @@ References:
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .arrays import Array, ChunkedArray, StructArray
-from .buffers import Buffer
 from .schema import Schema
 from .dtypes import struct_, Field
 
@@ -58,7 +57,9 @@ fn _arrays_equal(a: Array, b: Array) -> Bool:
     return True
 
 
-struct RecordBatch(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
+struct RecordBatch(
+    ConvertibleFromPython, ConvertibleToPython, Copyable, Writable
+):
     """A schema together with a list of equal-length column arrays.
 
     Equivalent to PyArrow's `RecordBatch`.
@@ -118,7 +119,8 @@ struct RecordBatch(ConvertibleFromPython, ConvertibleToPython, Copyable, Writabl
         return self.schema.field(index=i)
 
     fn equals(self, other: RecordBatch) -> Bool:
-        """Returns True if the two RecordBatches have equal schema and columns."""
+        """Returns True if the two RecordBatches have equal schema and columns.
+        """
         if self.schema != other.schema:
             return False
         if len(self.columns) != len(other.columns):
@@ -143,7 +145,8 @@ struct RecordBatch(ConvertibleFromPython, ConvertibleToPython, Copyable, Writabl
         return self.slice(offset, self.num_rows() - offset)
 
     fn select(self, indices: List[Int]) -> RecordBatch:
-        """Returns a new RecordBatch with only the columns at the given indices."""
+        """Returns a new RecordBatch with only the columns at the given indices.
+        """
         var new_cols = List[Array]()
         var new_fields = List[Field]()
         for i in indices:
@@ -174,7 +177,9 @@ struct RecordBatch(ConvertibleFromPython, ConvertibleToPython, Copyable, Writabl
         var new_fields = List[Field]()
         for i in range(len(names)):
             var f = self.schema.fields[i]
-            new_fields.append(Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable))
+            new_fields.append(
+                Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
+            )
         var cols = List[Array]()
         for col in self.columns:
             cols.append(col.copy())
@@ -222,21 +227,18 @@ struct RecordBatch(ConvertibleFromPython, ConvertibleToPython, Copyable, Writabl
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
     fn to_struct_array(self) -> StructArray:
-        """Converts this RecordBatch to a StructArray (columns become fields)."""
-        var dtype = struct_(self.schema.fields)
+        """Converts this RecordBatch to a StructArray (columns become fields).
+        """
         var cols = List[Array]()
         for col in self.columns:
             cols.append(col.copy())
-        var arr = Array(
-            dtype=dtype,
+        return StructArray(
+            dtype=struct_(self.schema.fields),
             length=self.num_rows(),
             nulls=0,
             bitmap=None,
-            buffers=List[Buffer](),
             children=cols^,
-            offset=0,
         )
-        return StructArray(arr)
 
     fn __str__(self) -> String:
         return String.write(self)

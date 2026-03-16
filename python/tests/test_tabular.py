@@ -13,11 +13,13 @@ import marrow as ma
 
 def make_batch():
     """Return a simple 3-column, 3-row RecordBatch."""
-    return ma.record_batch({
-        "x": ma.array([1, 2, 3], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    return ma.record_batch(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
 
 
 # ── Construction ─────────────────────────────────────────────────────────────
@@ -39,9 +41,7 @@ def test_record_batch_from_list_with_names():
 
 
 def test_record_batch_from_pyarrow():
-    pa_batch = pa.record_batch(
-        {"x": [1, 2, 3], "y": ["a", "b", "c"]}
-    )
+    pa_batch = pa.record_batch({"x": [1, 2, 3], "y": ["a", "b", "c"]})
     batch = ma.record_batch(pa_batch)
     assert type(batch).__name__ == "RecordBatch"
     assert batch.num_rows() == 3
@@ -128,31 +128,37 @@ def test_slice():
 
 def test_equals_same():
     batch = make_batch()
-    batch2 = ma.record_batch({
-        "x": ma.array([1, 2, 3], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    batch2 = ma.record_batch(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
     assert batch.equals(batch2)
 
 
 def test_equals_different():
     batch = make_batch()
-    other = ma.record_batch({
-        "x": ma.array([9, 9, 9], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    other = ma.record_batch(
+        {
+            "x": ma.array([9, 9, 9], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
     assert not batch.equals(other)
 
 
 def test_eq_operator():
     batch = make_batch()
-    batch2 = ma.record_batch({
-        "x": ma.array([1, 2, 3], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    batch2 = ma.record_batch(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
     assert batch.__eq__(batch2)
 
 
@@ -234,20 +240,24 @@ def test_set_column():
 
 
 def test_to_pydict():
-    batch = ma.record_batch({
-        "a": ma.array([1, 2], type=ma.int32()),
-        "b": ma.array(["x", "y"]),
-    })
+    batch = ma.record_batch(
+        {
+            "a": ma.array([1, 2], type=ma.int32()),
+            "b": ma.array(["x", "y"]),
+        }
+    )
     d = batch.to_pydict()
     assert list(d["a"]) == [1, 2]
     assert list(d["b"]) == ["x", "y"]
 
 
 def test_to_pylist():
-    batch = ma.record_batch({
-        "a": ma.array([1, 2], type=ma.int32()),
-        "b": ma.array(["x", "y"]),
-    })
+    batch = ma.record_batch(
+        {
+            "a": ma.array([1, 2], type=ma.int32()),
+            "b": ma.array(["x", "y"]),
+        }
+    )
     rows = batch.to_pylist()
     assert len(rows) == 2
     assert rows[0]["a"] == 1
@@ -282,10 +292,12 @@ def test_arrow_c_schema_roundtrip():
 
 
 def test_pyarrow_roundtrip_with_nulls():
-    batch = ma.record_batch({
-        "a": ma.array([1, None, 3], type=ma.int32()),
-        "b": ma.array(["x", None, "z"]),
-    })
+    batch = ma.record_batch(
+        {
+            "a": ma.array([1, None, 3], type=ma.int32()),
+            "b": ma.array(["x", None, "z"]),
+        }
+    )
     pa_batch = pa.record_batch(batch)
     assert pa_batch.column("a").to_pylist() == [1, None, 3]
     assert pa_batch.column("b").to_pylist() == ["x", None, "z"]
