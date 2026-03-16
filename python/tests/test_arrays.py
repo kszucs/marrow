@@ -4,6 +4,7 @@ Ported from PyArrow's test_convert_builtin.py, excluding pandas/numpy,
 Decimal, Date/Time/Timestamp, Dictionary, and Map cases.
 """
 
+import pyarrow as pa
 import pytest
 import marrow as ma
 
@@ -451,8 +452,6 @@ def test_array_list_scalar_raises():
 
 
 def test_pyarrow_roundtrip_int32():
-    import pyarrow as pa
-
     arr = ma.array([7, 42, -1], type=ma.int32())
     pyarr = pa.array(arr)
     assert pyarr.type == pa.int32()
@@ -467,8 +466,6 @@ def test_pyarrow_roundtrip_int32():
 
 
 def test_pyarrow_roundtrip_string():
-    import pyarrow as pa
-
     arr = ma.array(["hello", "world", "mojo"])
     pyarr = pa.array(arr)
     assert pyarr.type == pa.string()
@@ -483,8 +480,6 @@ def test_pyarrow_roundtrip_string():
 
 
 def test_pyarrow_roundtrip_with_nulls():
-    import pyarrow as pa
-
     arr = ma.array([1, None, 3, None], type=ma.int64())
     pyarr = pa.array(arr)
     assert pyarr.type == pa.int64()
