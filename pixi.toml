@@ -21,6 +21,7 @@ bench = { cmd = "pytest --benchmark -v", depends-on = ["build_python"] }
 fmt_mojo = { cmd = "mojo format marrow" }
 fmt_python = { cmd = "ruff format python" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
+fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 docs = { cmd = "quarto render docs/", depends-on = [
   "build_python",

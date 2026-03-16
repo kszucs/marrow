@@ -521,11 +521,11 @@ struct CArrowArray(Copyable, Movable):
         if dtype.is_bool():
             if self.n_buffers != 2:
                 raise Error(
-                    t"bool array must have 2 buffers, got {self.n_buffers}"
+                    "bool array must have 2 buffers, got ", self.n_buffers
                 )
             if self.n_children != 0:
                 raise Error(
-                    t"bool array must have 0 children, got {self.n_children}"
+                    "bool array must have 0 children, got ", self.n_children
                 )
             var values = Buffer.from_foreign(
                 self.buffers[1],
@@ -536,12 +536,11 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_primitive():
             if self.n_buffers != 2:
                 raise Error(
-                    t"numeric array must have 2 buffers, got {self.n_buffers}"
+                    "numeric array must have 2 buffers, got ", self.n_buffers
                 )
             if self.n_children != 0:
                 raise Error(
-                    "numeric array must have 0 children, got",
-                    t" {self.n_children}.",
+                    "numeric array must have 0 children, got ", self.n_children
                 )
             var values = Buffer.from_foreign(
                 self.buffers[1], Int(length) * dtype.byte_width(), owner
@@ -550,11 +549,11 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_list():
             if self.n_buffers != 2:
                 raise Error(
-                    t"list array must have 2 buffers, got {self.n_buffers}"
+                    "list array must have 2 buffers, got ", self.n_buffers
                 )
             if self.n_children != 1:
                 raise Error(
-                    t"list array must have 1 child, got {self.n_children}"
+                    "list array must have 1 child, got ", self.n_children
                 )
             # list has only an offsets buffer; child data lives in self.children
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -569,11 +568,13 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_string() or dtype == binary:
             if self.n_buffers != 3:
                 raise Error(
-                    t"string/binary array must have 3 buffers, got {self.n_buffers}"
+                    "string/binary array must have 3 buffers, got ",
+                    self.n_buffers,
                 )
             if self.n_children != 0:
                 raise Error(
-                    t"string/binary array must have 0 children, got {self.n_children}"
+                    "string/binary array must have 0 children, got ",
+                    self.n_children,
                 )
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
@@ -584,13 +585,13 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_fixed_size_list():
             if self.n_buffers != 1:
                 raise Error(
-                    "fixed_size_list array must have 1 buffer, got",
-                    t" {self.n_buffers}",
+                    "fixed_size_list array must have 1 buffer, got ",
+                    self.n_buffers,
                 )
             if self.n_children != 1:
                 raise Error(
-                    "fixed_size_list array must have 1 child, got",
-                    t" {self.n_children}",
+                    "fixed_size_list array must have 1 child, got ",
+                    self.n_children,
                 )
             var values_field = dtype.fields[0].copy()
             var values_array = self.children[0][]._to_array(
@@ -600,12 +601,14 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_struct():
             if self.n_buffers != 1:
                 raise Error(
-                    t"struct array must have 1 buffer, got {self.n_buffers}"
+                    "struct array must have 1 buffer, got ", self.n_buffers
                 )
             if self.n_children != Int64(len(dtype.fields)):
                 raise Error(
-                    t"struct array must have {len(dtype.fields)} children, got"
-                    t" {self.n_children}"
+                    "struct array must have ",
+                    len(dtype.fields),
+                    " children, got ",
+                    self.n_children,
                 )
             for i in range(self.n_children):
                 var child_field = dtype.fields[i].copy()
