@@ -21,7 +21,7 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
     - name: checks
-      run: pixi run fmt
+      run: pixi run fmt_check
     - name: tests
       run: |
         pixi run test --no-gpu
