@@ -13,7 +13,7 @@ import std.math as math
 from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, Array
-from ..dtypes import DataType
+from ..dtypes import DataType, numeric_dtypes
 from . import (
     binary_simd,
     binary_not_null,
@@ -105,7 +105,7 @@ fn add[
             )
         else:
             raise Error("add: no GPU accelerator available on this system")
-    return binary_simd[T, func=_add[T.native, _], name="add"](left, right)
+    return binary_simd[T, T, func=_add[T.native, _], name="add"](left, right)
 
 
 fn add(left: Array, right: Array) raises -> Array:
@@ -143,7 +143,7 @@ fn sub[
             )
         else:
             raise Error("sub: no GPU accelerator available on this system")
-    return binary_simd[T, func=_sub[T.native, _], name="sub"](left, right)
+    return binary_simd[T, T, func=_sub[T.native, _], name="sub"](left, right)
 
 
 fn sub(left: Array, right: Array) raises -> Array:
@@ -181,7 +181,7 @@ fn mul[
             )
         else:
             raise Error("mul: no GPU accelerator available on this system")
-    return binary_simd[T, func=_mul[T.native, _], name="mul"](left, right)
+    return binary_simd[T, T, func=_mul[T.native, _], name="mul"](left, right)
 
 
 fn mul(left: Array, right: Array) raises -> Array:
@@ -335,7 +335,7 @@ fn min_[
             )
         else:
             raise Error("min_: no GPU accelerator available on this system")
-    return binary_simd[T, func=_min[T.native, _], name="min_"](left, right)
+    return binary_simd[T, T, func=_min[T.native, _], name="min_"](left, right)
 
 
 fn min_(left: Array, right: Array) raises -> Array:
@@ -373,7 +373,7 @@ fn max_[
             )
         else:
             raise Error("max_: no GPU accelerator available on this system")
-    return binary_simd[T, func=_max[T.native, _], name="max_"](left, right)
+    return binary_simd[T, T, func=_max[T.native, _], name="max_"](left, right)
 
 
 fn max_(left: Array, right: Array) raises -> Array:
@@ -399,6 +399,14 @@ fn neg[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     return unary_simd[T, func=_neg[T.native, _]](array)
 
 
+fn neg(array: Array) raises -> Array:
+    """Runtime-typed neg."""
+    comptime for dtype in numeric_dtypes:
+        if array.dtype == dtype:
+            return Array(neg[dtype](PrimitiveArray[dtype](data=array)))
+    raise Error(t"neg: unsupported dtype {array.dtype}")
+
+
 # ---------------------------------------------------------------------------
 # abs_
 # ---------------------------------------------------------------------------
@@ -415,3 +423,11 @@ fn abs_[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
         Null if the input is null at that position.
     """
     return unary_simd[T, func=_abs[T.native, _]](array)
+
+
+fn abs_(array: Array) raises -> Array:
+    """Runtime-typed abs_."""
+    comptime for dtype in numeric_dtypes:
+        if array.dtype == dtype:
+            return Array(abs_[dtype](PrimitiveArray[dtype](data=array)))
+    raise Error(t"abs_: unsupported dtype {array.dtype}")

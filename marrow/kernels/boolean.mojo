@@ -1,8 +1,9 @@
 """Boolean and bitwise kernels."""
 
-from ..arrays import PrimitiveArray
-from ..bitmap import Bitmap
-from ..dtypes import bool_ as bool_dt
+from ..arrays import PrimitiveArray, Array
+from ..bitmap import Bitmap, BitmapBuilder
+from ..builders import PrimitiveBuilder
+from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 
 
 fn count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
@@ -20,3 +21,124 @@ fn count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
         var combined = data_bm & array.bitmap.value()
         return combined.count_set_bits()
     return data_bm.count_set_bits()
+
+
+fn and_(
+    lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
+) raises -> PrimitiveArray[bool_dt]:
+    """Bitwise AND of two bit-packed bool arrays."""
+    var length = len(lhs)
+    if len(rhs) != length:
+        raise Error("and_: input arrays must have equal length")
+    var lhs_bm = Bitmap(lhs.buffer, lhs.offset, length)
+    var rhs_bm = Bitmap(rhs.buffer, rhs.offset, length)
+    var result_bm = lhs_bm & rhs_bm
+    return PrimitiveArray[bool_dt](
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=result_bm._buffer,
+    )
+
+
+fn or_(
+    lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
+) raises -> PrimitiveArray[bool_dt]:
+    """Bitwise OR of two bit-packed bool arrays."""
+    var length = len(lhs)
+    if len(rhs) != length:
+        raise Error("or_: input arrays must have equal length")
+    var lhs_bm = Bitmap(lhs.buffer, lhs.offset, length)
+    var rhs_bm = Bitmap(rhs.buffer, rhs.offset, length)
+    var result_bm = lhs_bm | rhs_bm
+    return PrimitiveArray[bool_dt](
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=result_bm._buffer,
+    )
+
+
+fn not_(
+    arr: PrimitiveArray[bool_dt]
+) raises -> PrimitiveArray[bool_dt]:
+    """Bitwise NOT of a bit-packed bool array."""
+    var length = len(arr)
+    var bm = Bitmap(arr.buffer, arr.offset, length)
+    var result_bm = ~bm
+    return PrimitiveArray[bool_dt](
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=result_bm._buffer,
+    )
+
+
+fn is_null[T: DataType](
+    arr: PrimitiveArray[T]
+) -> PrimitiveArray[bool_dt]:
+    """Return a bool array that is True where arr has a null value."""
+    var length = len(arr)
+    var builder = BitmapBuilder.alloc(length)
+    for i in range(length):
+        builder.set_bit(i, not arr.is_valid(i))
+    var bm = builder.finish(length)
+    return PrimitiveArray[bool_dt](
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=bm._buffer,
+    )
+
+
+fn is_null(arr: Array) raises -> Array:
+    """Runtime-typed is_null."""
+    comptime for dtype in numeric_dtypes:
+        if arr.dtype == dtype:
+            return Array(is_null[dtype](PrimitiveArray[dtype](data=arr)))
+    raise Error(t"is_null: unsupported dtype {arr.dtype}")
+
+
+fn select[
+    T: DataType
+](
+    mask: PrimitiveArray[bool_dt],
+    then_: PrimitiveArray[T],
+    else_: PrimitiveArray[T],
+) raises -> PrimitiveArray[T]:
+    """Element-wise select: result[i] = then_[i] if mask[i] else else_[i]."""
+    var length = len(then_)
+    if len(mask) != length or len(else_) != length:
+        raise Error("select: input arrays must have equal length")
+    var builder = PrimitiveBuilder[T](length)
+    var data_bm = Bitmap(mask.buffer, mask.offset, length)
+    for i in range(length):
+        if data_bm.is_valid(i):
+            builder._buffer.unsafe_set[T.native](i, then_.unsafe_get(i))
+        else:
+            builder._buffer.unsafe_set[T.native](i, else_.unsafe_get(i))
+    builder._length = length
+    return builder.finish_typed()
+
+
+fn select(mask: Array, then_: Array, else_: Array) raises -> Array:
+    """Runtime-typed select."""
+    if then_.dtype != else_.dtype:
+        raise Error(
+            t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}"
+        )
+    var bool_mask = PrimitiveArray[bool_dt](data=mask)
+    comptime for dtype in numeric_dtypes:
+        if then_.dtype == dtype:
+            return Array(
+                select[dtype](
+                    bool_mask,
+                    PrimitiveArray[dtype](data=then_),
+                    PrimitiveArray[dtype](data=else_),
+                )
+            )
+    raise Error(t"select: unsupported dtype {then_.dtype}")

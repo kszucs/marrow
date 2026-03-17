@@ -52,7 +52,7 @@ from marrow.arrays import PrimitiveArray, Array
 from marrow.buffers import Buffer, BufferBuilder
 from marrow.bitmap import Bitmap, BitmapBuilder
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import DataType, numeric_dtypes
+from marrow.dtypes import DataType, bool_ as bool_dt, numeric_dtypes
 
 
 # ---------------------------------------------------------------------------
@@ -238,25 +238,32 @@ fn binary_not_null[
 
 fn binary_simd[
     T: DataType,
-    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[T.native, W],
+    OutT: DataType,
+    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[OutT.native, W],
     name: StringLiteral = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-) raises -> PrimitiveArray[
-    T
-]:
-    """SIMD-vectorized binary kernel.
+) raises -> PrimitiveArray[OutT]:
+    """SIMD-vectorized binary kernel with independent input and output types.
 
-    Computes the output validity bitmap upfront via `bitmap_and`, then applies
-    func element-wise using full SIMD vectors followed by a scalar tail.
+    Computes the output validity bitmap upfront via ``bitmap_and``, then applies
+    ``func`` element-wise using full SIMD vectors followed by a scalar tail.
     Null slots in the output have undefined data values but are correctly
     marked invalid by the precomputed bitmap.
 
+    When ``OutT`` is ``bool_`` the output is bit-packed via ``BitmapBuilder``;
+    otherwise a regular ``BufferBuilder`` is used.  Both paths share the same
+    SIMD load loop — the ``comptime if`` eliminates the dead branch at compile
+    time.
+
     Parameters:
-        T: Element DataType (same for both inputs and output).
-        func: The element-wise binary function parameterized by SIMD width W.
-              Must accept and return SIMD[T.native, W] for any W >= 1.
+        T: Input DataType.
+        OutT: Output DataType.  Pass ``T`` for same-type arithmetic; pass
+              ``bool_`` for comparison kernels.
+        func: Binary function parameterized by SIMD width W.  Because
+              ``Scalar[T] == SIMD[T, 1]``, the same function covers both the
+              SIMD main loop and the scalar tail.
         name: Operation name used in length-mismatch error messages.
 
     Args:
@@ -264,7 +271,7 @@ fn binary_simd[
         right: The right input array.
 
     Returns:
-        A new PrimitiveArray with func applied element-wise using SIMD.
+        A new ``PrimitiveArray[OutT]`` with ``func`` applied element-wise.
     """
     if len(left) != len(right):
         raise Error(
@@ -274,40 +281,69 @@ fn binary_simd[
 
     var length = len(left)
     comptime native = T.native
+    comptime out_native = OutT.native
     comptime width = simd_byte_width() // size_of[native]()
 
     var bm = bitmap_and(left.bitmap, right.bitmap)
-    var buf = BufferBuilder.alloc[native](length)
     ref lb = left.buffer
     ref rb = right.buffer
 
-    var i = 0
-    while i + width <= length:
-        buf.simd_store[native, width](
-            i,
-            func[width](
+    comptime if out_native == DType.bool:
+        var data_bm = BitmapBuilder.alloc(length)
+        var i = 0
+        while i + width <= length:
+            var result = func[width](
                 lb.simd_load[native, width](left.offset + i),
                 rb.simd_load[native, width](right.offset + i),
-            ),
-        )
-        i += width
-    while i < length:
-        buf.unsafe_set[native](
-            i,
-            func[1](
+            )
+            for j in range(width):
+                data_bm.set_bit(i + j, result[j].__bool__())
+            i += width
+        while i < length:
+            var result = func[1](
                 lb.unsafe_get[native](left.offset + i),
                 rb.unsafe_get[native](right.offset + i),
-            ),
+            )
+            data_bm.set_bit(i, result[0].__bool__())
+            i += 1
+        var nulls = 0
+        if bm:
+            nulls = length - bm.value().count_set_bits()
+        return PrimitiveArray[OutT](
+            length=length,
+            nulls=nulls,
+            offset=0,
+            bitmap=bm,
+            buffer=data_bm.finish(length)._buffer,
         )
-        i += 1
-
-    return PrimitiveArray[T](
-        length=length,
-        nulls=length - bm.value().count_set_bits() if bm else 0,
-        offset=0,
-        bitmap=bm,
-        buffer=buf.finish(),
-    )
+    else:
+        var buf = BufferBuilder.alloc[out_native](length)
+        var i = 0
+        while i + width <= length:
+            buf.simd_store[out_native, width](
+                i,
+                func[width](
+                    lb.simd_load[native, width](left.offset + i),
+                    rb.simd_load[native, width](right.offset + i),
+                ),
+            )
+            i += width
+        while i < length:
+            buf.unsafe_set[out_native](
+                i,
+                func[1](
+                    lb.unsafe_get[native](left.offset + i),
+                    rb.unsafe_get[native](right.offset + i),
+                ),
+            )
+            i += 1
+        return PrimitiveArray[OutT](
+            length=length,
+            nulls=length - bm.value().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=buf.finish(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +610,44 @@ fn binary_array_dispatch[
                     PrimitiveArray[dtype](data=left),
                     PrimitiveArray[dtype](data=right),
                     ctx,
+                )
+            )
+    raise Error(t"{name}: unsupported dtype {left.dtype}")
+
+
+fn binary_array_dispatch[
+    name: StringLiteral,
+    OutT: DataType,
+    func: fn[T: DataType](
+        PrimitiveArray[T], PrimitiveArray[T]
+    ) raises -> PrimitiveArray[OutT],
+](
+    left: Array,
+    right: Array,
+) raises -> Array:
+    """Runtime-typed binary dispatch with a fixed output type (e.g. comparisons).
+
+    Parameters:
+        name: Operation name used in error messages.
+        OutT: Output DataType (e.g. ``bool_`` for comparisons).
+        func: The typed binary kernel to dispatch to.
+
+    Args:
+        left: Left operand (runtime-typed Array).
+        right: Right operand (runtime-typed Array).
+
+    Returns:
+        A new Array wrapping ``PrimitiveArray[OutT]`` with the result.
+    """
+    if left.dtype != right.dtype:
+        raise Error(t"{name}: dtype mismatch: {left.dtype} vs {right.dtype}")
+
+    comptime for dtype in numeric_dtypes:
+        if left.dtype == dtype:
+            return Array(
+                func[dtype](
+                    PrimitiveArray[dtype](data=left),
+                    PrimitiveArray[dtype](data=right),
                 )
             )
     raise Error(t"{name}: unsupported dtype {left.dtype}")
