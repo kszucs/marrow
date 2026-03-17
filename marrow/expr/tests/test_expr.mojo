@@ -3,13 +3,13 @@ from std.testing import assert_equal, TestSuite
 from marrow.arrays import array, PrimitiveArray, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, abs_, neg
-from marrow.kernels.expr import (
+from marrow.expr import (
     Expr,
     DISPATCH_AUTO,
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
-from marrow.kernels.executor import PipelineExecutor
+from marrow.expr.executor import PipelineExecutor
 
 
 fn _make(a: PrimitiveArray[int64]) -> List[Array]:
@@ -42,7 +42,7 @@ fn _exec_pred(
 
 
 # ---------------------------------------------------------------------------
-# Arithmetic — original tests (verify each op matches the corresponding kernel)
+# Arithmetic
 # ---------------------------------------------------------------------------
 
 
@@ -310,7 +310,7 @@ def test_is_null() raises:
 
 
 # ---------------------------------------------------------------------------
-# DispatchHint
+# Dispatch hint
 # ---------------------------------------------------------------------------
 
 
@@ -361,6 +361,47 @@ def test_write_to_if_else() raises:
         String(expr),
         "if_else(less(input(0), input(1)), input(0), input(1))",
     )
+
+
+# ---------------------------------------------------------------------------
+# Kind / downcast
+# ---------------------------------------------------------------------------
+
+
+def test_kind_column() raises:
+    """Column node reports LOAD kind."""
+    from marrow.expr import LOAD
+    var expr = Expr.input(0)
+    assert_equal(expr.kind(), LOAD)
+    assert_equal(expr.as_column()[].index, 0)
+
+
+def test_kind_literal() raises:
+    """Literal node reports LITERAL kind."""
+    from marrow.expr import LITERAL
+    var expr = Expr.literal[int64](42)
+    assert_equal(expr.kind(), LITERAL)
+
+
+def test_kind_binary() raises:
+    """Binary node reports its op as kind."""
+    from marrow.expr import ADD
+    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    assert_equal(expr.kind(), ADD)
+    assert_equal(expr.as_binary()[].op, ADD)
+
+
+def test_inputs_binary() raises:
+    """Binary.inputs() returns two children."""
+    var expr = Expr.sub(Expr.input(0), Expr.input(1))
+    var children = expr.inputs()
+    assert_equal(len(children), 2)
+
+
+def test_inputs_leaf() raises:
+    """Column.inputs() returns empty list."""
+    var expr = Expr.input(0)
+    assert_equal(len(expr.inputs()), 0)
 
 
 def main() raises:

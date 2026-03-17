@@ -47,7 +47,7 @@ from marrow.kernels.compare import (
     greater_equal,
 )
 from marrow.kernels.concat import concat
-from marrow.kernels.expr import (
+from marrow.expr import (
     Expr,
     LOAD, ADD, SUB, MUL, DIV, NEG, ABS, LITERAL,
     EQ, NE, LT, LE, GT, GE, AND, OR, NOT, IS_NULL, IF_ELSE,
@@ -168,95 +168,81 @@ struct PipelineExecutor(Copyable, Movable):
 
 fn _eval(expr: Expr, inputs: List[Array]) raises -> Array:
     """Walk the expression tree using type-erased kernel APIs."""
-    if expr.kind == LOAD:
-        return inputs[expr.input_idx].copy()
-    if expr.kind == LITERAL:
+    var k = expr.kind()
+    if k == LOAD:
+        return inputs[expr.as_column()[].index].copy()
+    if k == LITERAL:
         return _broadcast_literal(
-            inputs[0].dtype, inputs[0].length, expr.literal_value
+            inputs[0].dtype, inputs[0].length, expr.as_literal()[].value
         )
-    if expr.kind == ADD:
-        return add(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == SUB:
-        return sub(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == MUL:
-        return mul(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == DIV:
-        return div(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == NEG:
-        return neg(_eval(expr.children[0], inputs))
-    if expr.kind == ABS:
-        return abs_(_eval(expr.children[0], inputs))
-    if expr.kind == EQ:
-        return equal(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == NE:
-        return not_equal(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == LT:
-        return less(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == LE:
-        return less_equal(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == GT:
-        return greater(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == GE:
-        return greater_equal(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-        )
-    if expr.kind == AND:
+    if k == ADD:
+        var bin = expr.as_binary()
+        return add(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == SUB:
+        var bin = expr.as_binary()
+        return sub(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == MUL:
+        var bin = expr.as_binary()
+        return mul(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == DIV:
+        var bin = expr.as_binary()
+        return div(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == NEG:
+        return neg(_eval(expr.as_unary()[].child, inputs))
+    if k == ABS:
+        return abs_(_eval(expr.as_unary()[].child, inputs))
+    if k == EQ:
+        var bin = expr.as_binary()
+        return equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == NE:
+        var bin = expr.as_binary()
+        return not_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == LT:
+        var bin = expr.as_binary()
+        return less(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == LE:
+        var bin = expr.as_binary()
+        return less_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == GT:
+        var bin = expr.as_binary()
+        return greater(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == GE:
+        var bin = expr.as_binary()
+        return greater_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
+    if k == AND:
+        var bin = expr.as_binary()
         return Array(
             and_(
-                PrimitiveArray[bool_dt](data=_eval(expr.children[0], inputs)),
-                PrimitiveArray[bool_dt](data=_eval(expr.children[1], inputs)),
+                PrimitiveArray[bool_dt](data=_eval(bin[].left, inputs)),
+                PrimitiveArray[bool_dt](data=_eval(bin[].right, inputs)),
             )
         )
-    if expr.kind == OR:
+    if k == OR:
+        var bin = expr.as_binary()
         return Array(
             or_(
-                PrimitiveArray[bool_dt](data=_eval(expr.children[0], inputs)),
-                PrimitiveArray[bool_dt](data=_eval(expr.children[1], inputs)),
+                PrimitiveArray[bool_dt](data=_eval(bin[].left, inputs)),
+                PrimitiveArray[bool_dt](data=_eval(bin[].right, inputs)),
             )
         )
-    if expr.kind == NOT:
+    if k == NOT:
         return Array(
             not_(
-                PrimitiveArray[bool_dt](data=_eval(expr.children[0], inputs))
+                PrimitiveArray[bool_dt](
+                    data=_eval(expr.as_unary()[].child, inputs)
+                )
             )
         )
-    if expr.kind == IS_NULL:
-        return is_null(_eval(expr.children[0], inputs))
-    if expr.kind == IF_ELSE:
+    if k == IS_NULL:
+        return is_null(_eval(expr.as_is_null()[].child, inputs))
+    if k == IF_ELSE:
+        var ie = expr.as_if_else()
         return select(
-            _eval(expr.children[0], inputs),
-            _eval(expr.children[1], inputs),
-            _eval(expr.children[2], inputs),
+            _eval(ie[].cond, inputs),
+            _eval(ie[].then_, inputs),
+            _eval(ie[].else_, inputs),
         )
-    raise Error(t"_eval: unknown Expr kind {expr.kind}")
+    raise Error(t"_eval: unknown Expr kind {k}")
 
 
 # ---------------------------------------------------------------------------

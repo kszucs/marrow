@@ -4,9 +4,9 @@ from std.testing import assert_equal, TestSuite
 
 from marrow.arrays import array, PrimitiveArray, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
-from marrow.kernels.expr import Expr, DISPATCH_CPU
+from marrow.expr import Expr, DISPATCH_CPU
 from marrow.builders import PrimitiveBuilder
-from marrow.kernels.executor import ExecutionContext, PipelineExecutor
+from marrow.expr.executor import ExecutionContext, PipelineExecutor
 
 
 fn _make(a: PrimitiveArray[int64]) -> List[Array]:
