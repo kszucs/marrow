@@ -185,6 +185,18 @@ struct Field(
         return PythonObject(alloc=self^)
 
 
+fn field(name: String, var dtype: DataType, nullable: Bool = True) -> Field:
+    """Construct a Field from a name and data type.
+
+    Equivalent to PyArrow's `pa.field()`.
+
+    Example:
+        field("x", int32)
+        field("y", float64, nullable=False)
+    """
+    return Field(name, dtype^, nullable)
+
+
 struct DataType(
     ConvertibleFromPython,
     ConvertibleToPython,

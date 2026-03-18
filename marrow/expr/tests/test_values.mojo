@@ -1,10 +1,9 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
 from marrow.arrays import array, PrimitiveArray, Array
-from marrow.dtypes import Field, int64, float64, bool_ as bool_dt
+from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
+from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     AnyValue,
     Column,
@@ -17,26 +16,6 @@ from marrow.expr import (
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
-
-
-fn _batch(a: PrimitiveArray[int64]) raises -> RecordBatch:
-    var schema = Schema()
-    schema.append(Field("c0", int64))
-    var cols = List[Array]()
-    cols.append(Array(a))
-    return RecordBatch(schema=schema, columns=cols^)
-
-
-fn _batch(
-    a: PrimitiveArray[int64], b: PrimitiveArray[int64]
-) raises -> RecordBatch:
-    var schema = Schema()
-    schema.append(Field("c0", int64))
-    schema.append(Field("c1", int64))
-    var cols = List[Array]()
-    cols.append(Array(a))
-    cols.append(Array(b))
-    return RecordBatch(schema=schema, columns=cols^)
 
 
 fn _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
@@ -61,46 +40,32 @@ def test_add_expr() raises:
     """Operator + matches kernels.add."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([10, 20, 30, 40, 50])
-
-    var expr = col(0) + col(1)
-    var result = _exec(expr, _batch(a, b))
-    var expected = add[int64](a, b)
-
-    assert_true(result == expected)
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec(col(0) + col(1), batch)
+    assert_true(result == add[int64](a, b))
 
 
 def test_sub_expr() raises:
     """Operator - matches kernels.sub."""
     var a = array[int64]([10, 20, 30, 40, 50])
     var b = array[int64]([1, 2, 3, 4, 5])
-
-    var expr = col(0) - col(1)
-    var result = _exec(expr, _batch(a, b))
-    var expected = sub[int64](a, b)
-
-    assert_true(result == expected)
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec(col(0) - col(1), batch)
+    assert_true(result == sub[int64](a, b))
 
 
 def test_neg_expr() raises:
     """Operator -x matches kernels.neg."""
     var a = array[int64]([1, -2, 3, -4, 5])
-
-    var expr = -col(0)
-    var result = _exec(expr, _batch(a))
-    var expected = k_neg[int64](a)
-
-    assert_true(result == expected)
+    var result = _exec(-col(0), record_batch([a], names=["c0"]))
+    assert_true(result == k_neg[int64](a))
 
 
 def test_abs_expr() raises:
     """Method .abs() matches kernels.abs_."""
     var a = array[int64]([-1, -2, 3, -4, 5])
-
-    var expr = col(0).abs()
-    var result = _exec(expr, _batch(a))
-    var expected = k_abs[int64](a)
-
-    assert_true(result == expected)
+    var result = _exec(col(0).abs(), record_batch([a], names=["c0"]))
+    assert_true(result == k_abs[int64](a))
 
 
 # ---------------------------------------------------------------------------
@@ -112,22 +77,17 @@ def test_abs_of_sub() raises:
     """Expression abs(a - b) matches abs_(sub(a, b))."""
     var a = array[int64]([1, 5, 3, 10, 2])
     var b = array[int64]([5, 1, 3, 2, 10])
-
-    var expr = (col(0) - col(1)).abs()
-    var result = _exec(expr, _batch(a, b))
-    var expected = k_abs[int64](sub[int64](a, b))
-
-    assert_true(result == expected)
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec((col(0) - col(1)).abs(), batch)
+    assert_true(result == k_abs[int64](sub[int64](a, b)))
 
 
 def test_diff_of_squares() raises:
     """Expression (a + b) * (a - b) matches manual computation."""
     var a = array[int64]([3, 5, 7, 9, 11])
     var b = array[int64]([1, 2, 3, 4, 5])
-
-    var expr = (col(0) + col(1)) * (col(0) - col(1))
-    var result = _exec(expr, _batch(a, b))
-
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec((col(0) + col(1)) * (col(0) - col(1)), batch)
     assert_true(result == array[int64]([8, 21, 40, 65, 96]))
 
 
@@ -140,9 +100,7 @@ def test_single_element() raises:
     """Expression works with a single-element array."""
     var a = array[int64]([42])
     var b = array[int64]([8])
-
-    var expr = col(0) + col(1)
-    var result = _exec(expr, _batch(a, b))
+    var result = _exec(col(0) + col(1), record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 50)
 
 
@@ -150,12 +108,9 @@ def test_non_aligned_length() raises:
     """Expression works with non-SIMD-aligned lengths."""
     var a = array[int64]([1, 2, 3, 4, 5, 6, 7])
     var b = array[int64]([10, 20, 30, 40, 50, 60, 70])
-
-    var expr = col(0) + col(1)
-    var result = _exec(expr, _batch(a, b))
-    var expected = add[int64](a, b)
-
-    assert_true(result == expected)
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec(col(0) + col(1), batch)
+    assert_true(result == add[int64](a, b))
 
 
 def test_write_to() raises:
@@ -172,18 +127,14 @@ def test_write_to() raises:
 def test_literal_int64() raises:
     """``lit()`` fills the array with the constant value."""
     var a = array[int64]([1, 2, 3, 4, 5])
-
-    var expr = lit[int64](10)
-    var result = _exec(expr, _batch(a))
-
+    var result = _exec(lit[int64](10), record_batch([a], names=["c0"]))
     assert_true(result == array[int64]([10, 10, 10, 10, 10]))
 
 
 def test_add_literal() raises:
     """Adds a + literal(7) == [8, 9, 10, 11, 12]."""
     var a = array[int64]([1, 2, 3, 4, 5])
-    var expr = col(0) + lit[int64](7)
-    var result = _exec(expr, _batch(a))
+    var result = _exec(col(0) + lit[int64](7), record_batch([a], names=["c0"]))
     assert_true(result == array[int64]([8, 9, 10, 11, 12]))
 
 
@@ -196,10 +147,7 @@ def test_equal_pred() raises:
     """EQ returns True where a == b."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([1, 0, 3, 0, 5])
-
-    var expr = col(0) == col(1)
-    var result = _exec_pred(expr, _batch(a, b))
-
+    var result = _exec_pred(col(0) == col(1), record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 1)
@@ -211,10 +159,7 @@ def test_less_pred() raises:
     """LT returns True where a < b."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([5, 1, 3, 20])
-
-    var expr = col(0) < col(1)
-    var result = _exec_pred(expr, _batch(a, b))
-
+    var result = _exec_pred(col(0) < col(1), record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 0)
@@ -225,10 +170,7 @@ def test_greater_equal_pred() raises:
     """GE returns True where a >= b."""
     var a = array[int64]([5, 1, 3, 20])
     var b = array[int64]([1, 5, 3, 10])
-
-    var expr = col(0) >= col(1)
-    var result = _exec_pred(expr, _batch(a, b))
-
+    var result = _exec_pred(col(0) >= col(1), record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 1)
@@ -244,12 +186,8 @@ def test_and_pred() raises:
     """AND: True only where both sides are True."""
     var a = array[int64]([1, 2, 3, 4])
     var b = array[int64]([2, 2, 2, 2])
-
-    var less_expr = col(0) < col(1)
-    var ne_expr = col(0) != lit[int64](3)
-    var expr = less_expr & ne_expr
-    var result = _exec_pred(expr, _batch(a, b))
-
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec_pred((col(0) < col(1)) & (col(0) != lit[int64](3)), batch)
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 0)
@@ -260,10 +198,7 @@ def test_not_pred() raises:
     """NOT inverts a boolean expression."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([3, 3, 3, 3, 3])
-
-    var expr = ~(col(0) == col(1))
-    var result = _exec_pred(expr, _batch(a, b))
-
+    var result = _exec_pred(~(col(0) == col(1)), record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 1)
     assert_equal(result[1], 1)
     assert_equal(result[2], 0)
@@ -280,11 +215,8 @@ def test_if_else() raises:
     """``if_else`` selects from two arrays based on a bool condition."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([9, 2, 3, 1])
-
-    var cond = col(0) > col(1)
-    var expr = if_else(cond, col(0), col(1))
-    var result = _exec(expr, _batch(a, b))
-
+    var batch = record_batch([a, b], names=["c0", "c1"])
+    var result = _exec(if_else(col(0) > col(1), col(0), col(1)), batch)
     assert_equal(result[0], 9)
     assert_equal(result[1], 5)
     assert_equal(result[2], 3)
@@ -299,9 +231,7 @@ def test_if_else() raises:
 def test_is_null() raises:
     """``is_null()`` is True for null elements, False for valid ones."""
     var a = array[int64]([1, 2, 3])
-    var expr = col(0).is_null()
-    var result = _exec_pred(expr, _batch(a))
-
+    var result = _exec_pred(col(0).is_null(), record_batch([a], names=["c0"]))
     assert_true(result == array([False, False, False]))
 
 
@@ -323,7 +253,7 @@ def test_dispatch_hint_cpu() raises:
 
     var a = array[int64]([1, 2, 3])
     var b = array[int64]([10, 20, 30])
-    var result = _exec(expr, _batch(a, b))
+    var result = _exec(expr, record_batch([a, b], names=["c0", "c1"]))
     assert_equal(result[0], 11)
     assert_equal(result[1], 22)
     assert_equal(result[2], 33)

@@ -107,3 +107,15 @@ struct Schema(
                 writer.write(", ")
             writer.write(self.fields[i])
         writer.write("])")
+
+
+# TODO: add an overload with support for schema({"field1": int32, "field2": int16}) syntax
+fn schema(var fields: List[Field]) -> Schema:
+    """Construct a Schema from a list of fields.
+
+    Equivalent to PyArrow's `pa.schema()`.
+
+    Example:
+        schema([field("x", int32), field("y", float64)])
+    """
+    return Schema(fields=fields^)
