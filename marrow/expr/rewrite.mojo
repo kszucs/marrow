@@ -13,7 +13,7 @@ Example
 -------
     # Fold x + 0 → x
     struct FoldAddZero(Rewrite):
-        fn name(self) -> StringLiteral:
+        fn name(self) -> String:
             return "fold_add_zero"
 
         fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
@@ -52,7 +52,7 @@ trait Rewrite(ImplicitlyDestructible, Movable):
     does not match; return a new ``AnyValue`` when it fires.
     """
 
-    fn name(self) -> StringLiteral:
+    fn name(self) -> String:
         """Short name for diagnostics and tracing."""
         ...
 
@@ -74,14 +74,14 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
     """Type-erased rewrite rule container."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_name: fn(ArcPointer[NoneType]) -> StringLiteral
+    var _virt_name: fn(ArcPointer[NoneType]) -> String
     var _virt_apply: fn(ArcPointer[NoneType], AnyValue) -> Optional[AnyValue]
     var _virt_drop: fn(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_name[T: Rewrite](ptr: ArcPointer[NoneType]) -> StringLiteral:
+    fn _tramp_name[T: Rewrite](ptr: ArcPointer[NoneType]) -> String:
         return rebind[ArcPointer[T]](ptr)[].name()
 
     @staticmethod
@@ -113,7 +113,7 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
 
     # --- public API ---
 
-    fn name(self) -> StringLiteral:
+    fn name(self) -> String:
         return self._virt_name(self._data)
 
     fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
