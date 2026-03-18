@@ -100,7 +100,9 @@ def test_single_element() raises:
     """Expression works with a single-element array."""
     var a = array[int64]([42])
     var b = array[int64]([8])
-    var result = _exec(col(0) + col(1), record_batch([a, b], names=["c0", "c1"]))
+    var result = _exec(
+        col(0) + col(1), record_batch([a, b], names=["c0", "c1"])
+    )
     assert_equal(result[0], 50)
 
 
@@ -147,7 +149,9 @@ def test_equal_pred() raises:
     """EQ returns True where a == b."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([1, 0, 3, 0, 5])
-    var result = _exec_pred(col(0) == col(1), record_batch([a, b], names=["c0", "c1"]))
+    var result = _exec_pred(
+        col(0) == col(1), record_batch([a, b], names=["c0", "c1"])
+    )
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 1)
@@ -159,7 +163,9 @@ def test_less_pred() raises:
     """LT returns True where a < b."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([5, 1, 3, 20])
-    var result = _exec_pred(col(0) < col(1), record_batch([a, b], names=["c0", "c1"]))
+    var result = _exec_pred(
+        col(0) < col(1), record_batch([a, b], names=["c0", "c1"])
+    )
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 0)
@@ -170,7 +176,9 @@ def test_greater_equal_pred() raises:
     """GE returns True where a >= b."""
     var a = array[int64]([5, 1, 3, 20])
     var b = array[int64]([1, 5, 3, 10])
-    var result = _exec_pred(col(0) >= col(1), record_batch([a, b], names=["c0", "c1"]))
+    var result = _exec_pred(
+        col(0) >= col(1), record_batch([a, b], names=["c0", "c1"])
+    )
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 1)
@@ -187,7 +195,9 @@ def test_and_pred() raises:
     var a = array[int64]([1, 2, 3, 4])
     var b = array[int64]([2, 2, 2, 2])
     var batch = record_batch([a, b], names=["c0", "c1"])
-    var result = _exec_pred((col(0) < col(1)) & (col(0) != lit[int64](3)), batch)
+    var result = _exec_pred(
+        (col(0) < col(1)) & (col(0) != lit[int64](3)), batch
+    )
     assert_equal(result[0], 1)
     assert_equal(result[1], 0)
     assert_equal(result[2], 0)
@@ -198,7 +208,9 @@ def test_not_pred() raises:
     """NOT inverts a boolean expression."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([3, 3, 3, 3, 3])
-    var result = _exec_pred(~(col(0) == col(1)), record_batch([a, b], names=["c0", "c1"]))
+    var result = _exec_pred(
+        ~(col(0) == col(1)), record_batch([a, b], names=["c0", "c1"])
+    )
     assert_equal(result[0], 1)
     assert_equal(result[1], 1)
     assert_equal(result[2], 0)

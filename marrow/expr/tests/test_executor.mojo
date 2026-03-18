@@ -37,7 +37,9 @@ def test_large_add() raises:
     var a = arange[int64](0, n)
     var b = arange[int64](0, n)
     var batch = record_batch([a, b], names=["c0", "c1"])
-    var result = Planner().build(col(0) + col(1)).eval(batch).as_primitive[int64]()
+    var result = (
+        Planner().build(col(0) + col(1)).eval(batch).as_primitive[int64]()
+    )
     for i in range(n):
         assert_equal(result[i], Scalar[int64.native](i * 2))
 
@@ -48,7 +50,9 @@ def test_large_mul() raises:
     var a = arange[int64](1, n + 1)
     var b = arange[int64](0, n)
     var batch = record_batch([a, b], names=["c0", "c1"])
-    var result = Planner().build(col(0) * col(1)).eval(batch).as_primitive[int64]()
+    var result = (
+        Planner().build(col(0) * col(1)).eval(batch).as_primitive[int64]()
+    )
     for i in range(n):
         assert_equal(result[i], Scalar[int64.native]((i + 1) * i))
 
@@ -57,7 +61,12 @@ def test_chunk_boundary_values() raises:
     """Values at boundaries are correct."""
     var a = arange[int64](0, 128)
     var batch = record_batch([a], names=["c0"])
-    var result = Planner().build(col(0) + lit[int64](1)).eval(batch).as_primitive[int64]()
+    var result = (
+        Planner()
+        .build(col(0) + lit[int64](1))
+        .eval(batch)
+        .as_primitive[int64]()
+    )
     for i in range(128):
         assert_equal(result[i], Scalar[int64.native](i + 1))
 
@@ -86,7 +95,9 @@ def test_predicate() raises:
     var a = arange[int64](0, n)
     var b = arange[int64](0, n)
     var batch = record_batch([a, b], names=["c0", "c1"])
-    var result = Planner().build(col(0) < col(1)).eval(batch).as_primitive[bool_dt]()
+    var result = (
+        Planner().build(col(0) < col(1)).eval(batch).as_primitive[bool_dt]()
+    )
     # a == b everywhere, so all False
     for i in range(n):
         assert_equal(result[i], 0)
@@ -98,9 +109,12 @@ def test_chained_expression() raises:
     var b = arange[int64](1, 257)
     var batch = record_batch([a, b], names=["c0", "c1"])
     # (a + b) * (a - b)
-    var result = Planner().build(
-        (col(0) + col(1)) * (col(0) - col(1))
-    ).eval(batch).as_primitive[int64]()
+    var result = (
+        Planner()
+        .build((col(0) + col(1)) * (col(0) - col(1)))
+        .eval(batch)
+        .as_primitive[int64]()
+    )
     for i in range(256):
         var expected = (i + (i + 1)) * (i - (i + 1))
         assert_equal(result[i], Scalar[int64.native](expected))
@@ -111,9 +125,11 @@ def test_dispatch_cpu_hint() raises:
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([5, 4, 3, 2, 1])
     var batch = record_batch([a, b], names=["c0", "c1"])
-    var result = Planner().build(
-        (col(0) + col(1)).with_dispatch(DISPATCH_CPU)
-    ).eval(batch)
+    var result = (
+        Planner()
+        .build((col(0) + col(1)).with_dispatch(DISPATCH_CPU))
+        .eval(batch)
+    )
     assert_true(result == Array(array[int64]([6, 6, 6, 6, 6])))
 
 
@@ -126,7 +142,9 @@ def test_in_memory_table_identity() raises:
     """Executing without any operations returns the original batch."""
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
-    var result = execute(in_memory_table(record_batch([x, y], names=["x", "y"])))
+    var result = execute(
+        in_memory_table(record_batch([x, y], names=["x", "y"]))
+    )
     assert_equal(result.num_rows(), 5)
     assert_equal(result.num_columns(), 2)
 
@@ -140,7 +158,9 @@ def test_select_single_column() raises:
     """Selecting a single column returns a 1-column batch."""
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
-    var result = execute(in_memory_table(record_batch([x, y], names=["x", "y"])).select("x"))
+    var result = execute(
+        in_memory_table(record_batch([x, y], names=["x", "y"])).select("x")
+    )
     assert_equal(result.num_columns(), 1)
     assert_equal(result.num_rows(), 5)
     assert_equal(result.schema.fields[0].name, "x")
@@ -153,7 +173,9 @@ def test_select_multiple_columns() raises:
     """Selecting multiple columns preserves order."""
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
-    var result = execute(in_memory_table(record_batch([x, y], names=["x", "y"])).select("y", "x"))
+    var result = execute(
+        in_memory_table(record_batch([x, y], names=["x", "y"])).select("y", "x")
+    )
     assert_equal(result.num_columns(), 2)
     assert_equal(result.schema.fields[0].name, "y")
     assert_equal(result.schema.fields[1].name, "x")
@@ -167,7 +189,9 @@ def test_select_preserves_values() raises:
     """All values are preserved through select."""
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
-    var result = execute(in_memory_table(record_batch([x, y], names=["x", "y"])).select("x"))
+    var result = execute(
+        in_memory_table(record_batch([x, y], names=["x", "y"])).select("x")
+    )
     var col_x = result.columns[0].as_primitive[int64]()
     for i in range(5):
         assert_equal(col_x[i], Scalar[int64.native](i + 1))
@@ -183,8 +207,9 @@ def test_filter_greater_than() raises:
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
     var result = execute(
-        in_memory_table(record_batch([x, y], names=["x", "y"]))
-        .filter(col("x") > lit[int64](3))
+        in_memory_table(record_batch([x, y], names=["x", "y"])).filter(
+            col("x") > lit[int64](3)
+        )
     )
     assert_equal(result.num_rows(), 2)
     var col_x = result.columns[0].as_primitive[int64]()
@@ -197,8 +222,9 @@ def test_filter_equality() raises:
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
     var result = execute(
-        in_memory_table(record_batch([x, y], names=["x", "y"]))
-        .filter(col("x") == lit[int64](3))
+        in_memory_table(record_batch([x, y], names=["x", "y"])).filter(
+            col("x") == lit[int64](3)
+        )
     )
     assert_equal(result.num_rows(), 1)
     var col_x = result.columns[0].as_primitive[int64]()
@@ -212,8 +238,9 @@ def test_filter_no_match() raises:
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
     var result = execute(
-        in_memory_table(record_batch([x, y], names=["x", "y"]))
-        .filter(col("x") > lit[int64](100))
+        in_memory_table(record_batch([x, y], names=["x", "y"])).filter(
+            col("x") > lit[int64](100)
+        )
     )
     assert_equal(result.num_rows(), 0)
 
@@ -263,12 +290,15 @@ def test_filter_then_select() raises:
 
 
 def test_streaming_morsel_boundaries() raises:
-    """Small morsel_size produces multiple batches that together contain all rows."""
+    """Small morsel_size produces multiple batches that together contain all rows.
+    """
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
-    var proc = Planner(ctx).build(in_memory_table(record_batch([x, y], names=["x", "y"])))
+    var proc = Planner(ctx).build(
+        in_memory_table(record_batch([x, y], names=["x", "y"]))
+    )
     var batches = proc.to_batches()
     # 5 rows, morsel_size=2 → 3 batches (2+2+1)
     assert_equal(len(batches), 3)
@@ -281,7 +311,9 @@ def test_streaming_read_all_matches_execute() raises:
     """``read_all()`` produces the same result as execute()."""
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
-    var rel = in_memory_table(record_batch([x, y], names=["x", "y"])).filter(col("x") > lit[int64](2))
+    var rel = in_memory_table(record_batch([x, y], names=["x", "y"])).filter(
+        col("x") > lit[int64](2)
+    )
     var result_exec = execute(rel)
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
@@ -298,8 +330,9 @@ def test_streaming_filter_skips_empty() raises:
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
-        in_memory_table(record_batch([x, y], names=["x", "y"]))
-        .filter(col("x") > lit[int64](4))
+        in_memory_table(record_batch([x, y], names=["x", "y"])).filter(
+            col("x") > lit[int64](4)
+        )
     )
     var batches = proc.to_batches()
     assert_equal(len(batches), 1)

@@ -19,21 +19,23 @@ from marrow.dtypes import Field, field
 
 def test_schema_primitive_fields() raises:
     """Test the schema with primitive fields."""
-    var s = schema([
-        field("field1", int8),
-        field("field2", int16),
-        field("field3", int32),
-        field("field4", int64),
-        field("field5", uint8),
-        field("field6", uint16),
-        field("field7", uint32),
-        field("field8", uint64),
-        field("field9", float16),
-        field("field10", float32),
-        field("field11", float64),
-        field("field12", binary),
-        field("field13", string),
-    ])
+    var s = schema(
+        [
+            field("field1", int8),
+            field("field2", int16),
+            field("field3", int32),
+            field("field4", int64),
+            field("field5", uint8),
+            field("field6", uint16),
+            field("field7", uint32),
+            field("field8", uint64),
+            field("field9", float16),
+            field("field10", float32),
+            field("field11", float64),
+            field("field12", binary),
+            field("field13", string),
+        ]
+    )
 
     assert_equal(len(s.fields), 13)
     for i in range(13):
@@ -171,7 +173,9 @@ def test_schema_fn_multiple_fields() raises:
 
 def test_schema_fn_equals_struct_init() raises:
     """schema([...]) produces the same result as Schema(fields=[...])."""
-    var s1 = schema([field("x", int32, nullable=False), field("y", float64, nullable=False)])
+    var s1 = schema(
+        [field("x", int32, nullable=False), field("y", float64, nullable=False)]
+    )
     var s2 = Schema(fields=[Field("x", int32), Field("y", float64)])
     assert_true(s1 == s2)
 
