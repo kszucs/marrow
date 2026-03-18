@@ -120,6 +120,7 @@ fn select[
     builder._length = length
     return builder.finish_typed()
 
+
 # TODO: use SIMD select instead of naive element-wise loop when possible
 fn select(mask: Array, then_: Array, else_: Array) raises -> Array:
     """Runtime-typed select."""

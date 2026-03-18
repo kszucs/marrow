@@ -504,7 +504,8 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
         return self._virt_pull(self._data)
 
     fn read_all(mut self) raises -> RecordBatch:
-        """Consume all remaining batches and concatenate into a single RecordBatch."""
+        """Consume all remaining batches and concatenate into a single RecordBatch.
+        """
         var batches = self.to_batches()
         if len(batches) == 0:
             return RecordBatch(schema=self.schema(), columns=List[Array]())
@@ -648,9 +649,7 @@ struct ProjectProcessor(RelationProcessor):
         var result_cols = List[Array]()
         for ref v in self.values:
             result_cols.append(v.eval(inputs))
-        return RecordBatch(
-            schema=self.schema_.copy(), columns=result_cols^
-        )
+        return RecordBatch(schema=self.schema_.copy(), columns=result_cols^)
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +757,9 @@ fn execute(
     var batch = RecordBatch(schema=schema, columns=cols^)
 
     # Build a ScanProcessor and evaluate the expression on each morsel.
-    var scan: AnyRelationProcessor = ScanProcessor(batch=batch, morsel_size=morsel_size)
+    var scan: AnyRelationProcessor = ScanProcessor(
+        batch=batch, morsel_size=morsel_size
+    )
     var evaluator = build(expr)
     var results = List[Array]()
     while True:
