@@ -267,7 +267,9 @@ def test_select_then_filter() raises:
 def test_filter_then_select() raises:
     """Filter followed by select works correctly."""
     var rel = (
-        in_memory_table(_named_batch()).filter(col("x") > lit[int64](3)).select("y")
+        in_memory_table(_named_batch())
+        .filter(col("x") > lit[int64](3))
+        .select("y")
     )
     var result = execute(rel)
     assert_equal(result.num_rows(), 2)
@@ -284,7 +286,8 @@ def test_filter_then_select() raises:
 
 
 def test_streaming_morsel_boundaries() raises:
-    """Small morsel_size produces multiple batches that together contain all rows."""
+    """Small morsel_size produces multiple batches that together contain all rows.
+    """
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(in_memory_table(_named_batch()))
@@ -326,7 +329,9 @@ def test_streaming_chained_filter_project() raises:
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var rel = (
-        in_memory_table(_named_batch()).filter(col("x") > lit[int64](2)).select("y")
+        in_memory_table(_named_batch())
+        .filter(col("x") > lit[int64](2))
+        .select("y")
     )
     var proc = Planner(ctx).build(rel)
     var result = proc.read_all()

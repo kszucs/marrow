@@ -657,7 +657,8 @@ struct Planner:
             raise Error("Planner.build: unknown expression kind ", k)
 
     fn build(self, expr: AnyRelation) raises -> AnyRelationProcessor:
-        """Build a relation processor pipeline from a relational expression tree."""
+        """Build a relation processor pipeline from a relational expression tree.
+        """
         var k = expr.kind()
         if k == IN_MEMORY_TABLE_NODE:
             var arc = expr.downcast[InMemoryTable]()
@@ -685,7 +686,9 @@ struct Planner:
                 schema_=arc[].schema(),
             )
         if k == SCAN_NODE:
-            raise Error("Planner.build: Scan requires external data source binding")
+            raise Error(
+                "Planner.build: Scan requires external data source binding"
+            )
         raise Error("Planner.build: unknown relation kind ", k)
 
 
@@ -710,8 +713,6 @@ fn execute(
     return proc.read_all()
 
 
-
-
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
@@ -728,5 +729,3 @@ fn _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
             builder._length = length
             return Array(builder.finish_typed())
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype}")
-
-

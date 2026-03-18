@@ -47,7 +47,8 @@ fn _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
 fn _exec_pred(
     expr: AnyValue, batch: RecordBatch
 ) raises -> PrimitiveArray[bool_dt]:
-    """Helper: build a value processor and evaluate predicate against the batch."""
+    """Helper: build a value processor and evaluate predicate against the batch.
+    """
     return Planner().build(expr).eval(batch).as_primitive[bool_dt]()
 
 
