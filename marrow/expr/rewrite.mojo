@@ -4,7 +4,7 @@
 ``AnyRewrite`` — the type-erased, ArcPointer-backed rule container.
 ``Rewriter``   — drives bottom-up fixed-point iteration over a list of rules.
 
-Rules are **non-destructive**: ``apply`` returns a new ``Expr`` or ``None``
+Rules are **non-destructive**: ``apply`` returns a new ``AnyValue`` or ``None``
 (no match).  This is a hard requirement for e-graph / equality-saturation
 compatibility — the same rule list can be handed to a future ``EGraph``
 runner without modification.
@@ -16,14 +16,14 @@ Example
         fn name(self) -> StringLiteral:
             return "fold_add_zero"
 
-        fn apply(self, expr: Expr) -> Optional[Expr]:
+        fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
             if expr.kind() != ADD:
                 return None
-            var bin = expr.as_binary()[]
+            var bin = expr.downcast[Binary]()[]
             if bin.right.kind() != LITERAL:
                 return None
-            if bin.right.as_literal()[].value == 0.0:
-                return bin.left
+            # Literal.value is a length-1 Array; inspect element 0
+            # to check whether it is zero.
             return None
 
     var rewriter = Rewriter(List[AnyRewrite](FoldAddZero()))
@@ -31,18 +31,12 @@ Example
 """
 
 from std.memory import ArcPointer
-from marrow.expr.expr import (
-    Expr,
-    Binary,
-    Unary,
-    IsNull,
-    IfElse,
-    Cast,
+from marrow.expr.values import (
+    AnyValue,
+    rebuild,
     LOAD,
     LITERAL,
-    IS_NULL,
-    IF_ELSE,
-    CAST,
+    ADD,
 )
 
 
@@ -55,14 +49,14 @@ trait Rewrite(ImplicitlyDestructible, Movable):
     """A single, non-destructive expression rewrite rule.
 
     ``apply`` must NOT mutate its argument.  Return ``None`` when the rule
-    does not match; return a new ``Expr`` when it fires.
+    does not match; return a new ``AnyValue`` when it fires.
     """
 
     fn name(self) -> StringLiteral:
         """Short name for diagnostics and tracing."""
         ...
 
-    fn apply(self, expr: Expr) -> Optional[Expr]:
+    fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
         """Try to rewrite ``expr``.
 
         Returns:
@@ -81,7 +75,7 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
 
     var _data: ArcPointer[NoneType]
     var _virt_name: fn(ArcPointer[NoneType]) -> StringLiteral
-    var _virt_apply: fn(ArcPointer[NoneType], Expr) -> Optional[Expr]
+    var _virt_apply: fn(ArcPointer[NoneType], AnyValue) -> Optional[AnyValue]
     var _virt_drop: fn(var ArcPointer[NoneType])
 
     # --- trampolines ---
@@ -93,7 +87,7 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
     @staticmethod
     fn _tramp_apply[
         T: Rewrite
-    ](ptr: ArcPointer[NoneType], expr: Expr) -> Optional[Expr]:
+    ](ptr: ArcPointer[NoneType], expr: AnyValue) -> Optional[AnyValue]:
         return rebind[ArcPointer[T]](ptr)[].apply(expr)
 
     @staticmethod
@@ -122,7 +116,7 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
     fn name(self) -> StringLiteral:
         return self._virt_name(self._data)
 
-    fn apply(self, expr: Expr) -> Optional[Expr]:
+    fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
         return self._virt_apply(self._data, expr)
 
     fn __del__(deinit self):
@@ -150,7 +144,7 @@ struct Rewriter:
     fn __init__(out self, var rules: List[AnyRewrite]):
         self.rules = rules^
 
-    fn rewrite(self, expr: Expr) raises -> Expr:
+    fn rewrite(self, expr: AnyValue) raises -> AnyValue:
         """Rewrite ``expr`` bottom-up to a fixed point."""
         # Rewrite children first (bottom-up)
         var children = expr.inputs()
@@ -164,7 +158,7 @@ struct Rewriter:
         # Rebuild the node with rewritten children if any changed
         var current = expr
         if children_changed:
-            current = _rebuild(expr, children)
+            current = rebuild(expr, children)
 
         # Apply rules to this node until fixed point
         var changed = True
@@ -179,25 +173,3 @@ struct Rewriter:
         return current
 
 
-fn _rebuild(expr: Expr, children: List[Expr]) -> Expr:
-    """Reconstruct a node with replaced children.
-
-    Leaves (Column, Literal) are returned unchanged.
-    """
-    var k = expr.kind()
-    if k == LOAD or k == LITERAL:
-        return expr
-    if k >= 2 and k <= 13:  # Binary ops (ADD..OR)
-        var bin = expr.as_binary()[]
-        return Binary(op=bin.op, left=children[0], right=children[1])
-    if k >= 14 and k <= 16:  # Unary ops (NEG, ABS, NOT)
-        var un = expr.as_unary()[]
-        return Unary(op=un.op, child=children[0])
-    if k == IS_NULL:
-        return IsNull(child=children[0])
-    if k == IF_ELSE:
-        return IfElse(cond=children[0], then_=children[1], else_=children[2])
-    if k == CAST:
-        var cast = expr.as_cast()[]
-        return Cast(child=children[0], to=cast.to)
-    return expr  # unknown: pass through

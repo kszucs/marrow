@@ -2,9 +2,13 @@ from std.testing import assert_equal, TestSuite
 
 from marrow.arrays import array, PrimitiveArray, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
-from marrow.kernels.arithmetic import add, sub, abs_, neg
+from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
 from marrow.expr import (
-    Expr,
+    AnyValue,
+    Column, Binary,
+    col,
+    lit,
+    if_else,
     DISPATCH_AUTO,
     DISPATCH_CPU,
     DISPATCH_GPU,
@@ -27,13 +31,13 @@ fn _make(
     return inputs^
 
 
-fn _exec(expr: Expr, inputs: List[Array]) raises -> PrimitiveArray[int64]:
+fn _exec(expr: AnyValue, inputs: List[Array]) raises -> PrimitiveArray[int64]:
     """Helper: execute and convert result to typed array."""
     return PrimitiveArray[int64](data=PipelineExecutor().execute(expr, inputs))
 
 
 fn _exec_pred(
-    expr: Expr, inputs: List[Array]
+    expr: AnyValue, inputs: List[Array]
 ) raises -> PrimitiveArray[bool_dt]:
     """Helper: execute predicate and convert result to typed bool array."""
     return PrimitiveArray[bool_dt](
@@ -47,11 +51,11 @@ fn _exec_pred(
 
 
 def test_add_expr() raises:
-    """Expr.add matches kernels.add."""
+    """Operator + matches kernels.add."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([10, 20, 30, 40, 50])
 
-    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    var expr = col(0) + col(1)
     var result = _exec(expr, _make(a, b))
     var expected = add[int64](a, b)
 
@@ -60,11 +64,11 @@ def test_add_expr() raises:
 
 
 def test_sub_expr() raises:
-    """Expr.sub matches kernels.sub."""
+    """Operator - matches kernels.sub."""
     var a = array[int64]([10, 20, 30, 40, 50])
     var b = array[int64]([1, 2, 3, 4, 5])
 
-    var expr = Expr.sub(Expr.input(0), Expr.input(1))
+    var expr = col(0) - col(1)
     var result = _exec(expr, _make(a, b))
     var expected = sub[int64](a, b)
 
@@ -73,24 +77,24 @@ def test_sub_expr() raises:
 
 
 def test_neg_expr() raises:
-    """Expr.neg matches kernels.neg."""
+    """Operator -x matches kernels.neg."""
     var a = array[int64]([1, -2, 3, -4, 5])
 
-    var expr = Expr.neg(Expr.input(0))
+    var expr = -col(0)
     var result = _exec(expr, _make(a))
-    var expected = neg[int64](a)
+    var expected = k_neg[int64](a)
 
     for i in range(len(result)):
         assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
 
 
 def test_abs_expr() raises:
-    """Expr.abs_ matches kernels.abs_."""
+    """Method .abs() matches kernels.abs_."""
     var a = array[int64]([-1, -2, 3, -4, 5])
 
-    var expr = Expr.abs_(Expr.input(0))
+    var expr = col(0).abs()
     var result = _exec(expr, _make(a))
-    var expected = abs_[int64](a)
+    var expected = k_abs[int64](a)
 
     for i in range(len(result)):
         assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
@@ -102,27 +106,24 @@ def test_abs_expr() raises:
 
 
 def test_abs_of_sub() raises:
-    """Expr abs(a - b) matches abs_(sub(a, b))."""
+    """Expression abs(a - b) matches abs_(sub(a, b))."""
     var a = array[int64]([1, 5, 3, 10, 2])
     var b = array[int64]([5, 1, 3, 2, 10])
 
-    var expr = Expr.abs_(Expr.sub(Expr.input(0), Expr.input(1)))
+    var expr = (col(0) - col(1)).abs()
     var result = _exec(expr, _make(a, b))
-    var expected = abs_[int64](sub[int64](a, b))
+    var expected = k_abs[int64](sub[int64](a, b))
 
     for i in range(len(result)):
         assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
 
 
 def test_diff_of_squares() raises:
-    """Expr (a + b) * (a - b) matches manual computation."""
+    """Expression (a + b) * (a - b) matches manual computation."""
     var a = array[int64]([3, 5, 7, 9, 11])
     var b = array[int64]([1, 2, 3, 4, 5])
 
-    var expr = Expr.mul(
-        Expr.add(Expr.input(0), Expr.input(1)),
-        Expr.sub(Expr.input(0), Expr.input(1)),
-    )
+    var expr = (col(0) + col(1)) * (col(0) - col(1))
     var result = _exec(expr, _make(a, b))
 
     for i in range(len(result)):
@@ -141,7 +142,7 @@ def test_single_element() raises:
     var a = array[int64]([42])
     var b = array[int64]([8])
 
-    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    var expr = col(0) + col(1)
     var result = _exec(expr, _make(a, b))
     assert_equal(result.unsafe_get(0), 50)
 
@@ -151,7 +152,7 @@ def test_non_aligned_length() raises:
     var a = array[int64]([1, 2, 3, 4, 5, 6, 7])
     var b = array[int64]([10, 20, 30, 40, 50, 60, 70])
 
-    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    var expr = col(0) + col(1)
     var result = _exec(expr, _make(a, b))
     var expected = add[int64](a, b)
 
@@ -160,8 +161,8 @@ def test_non_aligned_length() raises:
 
 
 def test_write_to() raises:
-    """Expr.write_to produces readable expression strings."""
-    var expr = Expr.abs_(Expr.sub(Expr.input(0), Expr.input(1)))
+    """AnyValue.write_to produces readable expression strings."""
+    var expr = (col(0) - col(1)).abs()
     assert_equal(String(expr), "abs(sub(input(0), input(1)))")
 
 
@@ -171,10 +172,10 @@ def test_write_to() raises:
 
 
 def test_literal_int64() raises:
-    """Expr.literal fills the array with the constant value."""
+    """lit() fills the array with the constant value."""
     var a = array[int64]([1, 2, 3, 4, 5])
 
-    var expr = Expr.literal[int64](10)
+    var expr = lit[int64](10)
     var result = _exec(expr, _make(a))
 
     for i in range(len(result)):
@@ -182,9 +183,9 @@ def test_literal_int64() raises:
 
 
 def test_add_literal() raises:
-    """a + literal(7) == [8, 9, 10, 11, 12]."""
+    """Adds a + literal(7) == [8, 9, 10, 11, 12]."""
     var a = array[int64]([1, 2, 3, 4, 5])
-    var expr = Expr.add(Expr.input(0), Expr.literal[int64](7))
+    var expr = col(0) + lit[int64](7)
     var result = _exec(expr, _make(a))
     for i in range(len(result)):
         assert_equal(result.unsafe_get(i), a.unsafe_get(i) + 7)
@@ -200,7 +201,7 @@ def test_equal_pred() raises:
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([1, 0, 3, 0, 5])
 
-    var expr = Expr.equal(Expr.input(0), Expr.input(1))
+    var expr = col(0) == col(1)
     var result = _exec_pred(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 1)
@@ -215,7 +216,7 @@ def test_less_pred() raises:
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([5, 1, 3, 20])
 
-    var expr = Expr.less(Expr.input(0), Expr.input(1))
+    var expr = col(0) < col(1)
     var result = _exec_pred(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 1)
@@ -229,7 +230,7 @@ def test_greater_equal_pred() raises:
     var a = array[int64]([5, 1, 3, 20])
     var b = array[int64]([1, 5, 3, 10])
 
-    var expr = Expr.greater_equal(Expr.input(0), Expr.input(1))
+    var expr = col(0) >= col(1)
     var result = _exec_pred(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 1)
@@ -248,9 +249,9 @@ def test_and_pred() raises:
     var a = array[int64]([1, 2, 3, 4])
     var b = array[int64]([2, 2, 2, 2])
 
-    var less_expr = Expr.less(Expr.input(0), Expr.input(1))
-    var ne_expr = Expr.not_equal(Expr.input(0), Expr.literal[int64](3))
-    var expr = Expr.and_(less_expr, ne_expr)
+    var less_expr = col(0) < col(1)
+    var ne_expr = col(0) != lit[int64](3)
+    var expr = less_expr & ne_expr
     var result = _exec_pred(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 1)
@@ -264,7 +265,7 @@ def test_not_pred() raises:
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([3, 3, 3, 3, 3])
 
-    var expr = Expr.not_(Expr.equal(Expr.input(0), Expr.input(1)))
+    var expr = ~(col(0) == col(1))
     var result = _exec_pred(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 1)
@@ -280,12 +281,12 @@ def test_not_pred() raises:
 
 
 def test_if_else() raises:
-    """IF_ELSE selects from two arrays based on a bool condition."""
+    """if_else selects from two arrays based on a bool condition."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([9, 2, 3, 1])
 
-    var cond = Expr.greater(Expr.input(0), Expr.input(1))
-    var expr = Expr.if_else(cond, Expr.input(0), Expr.input(1))
+    var cond = col(0) > col(1)
+    var expr = if_else(cond, col(0), col(1))
     var result = _exec(expr, _make(a, b))
 
     assert_equal(result.unsafe_get(0), 9)
@@ -300,9 +301,9 @@ def test_if_else() raises:
 
 
 def test_is_null() raises:
-    """IS_NULL is True for null elements, False for valid ones."""
+    """is_null() is True for null elements, False for valid ones."""
     var a = array[int64]([1, 2, 3])
-    var expr = Expr.is_null(Expr.input(0))
+    var expr = col(0).is_null()
     var result = _exec_pred(expr, _make(a))
 
     for i in range(3):
@@ -316,15 +317,13 @@ def test_is_null() raises:
 
 def test_dispatch_hint_default() raises:
     """Default dispatch is DISPATCH_AUTO."""
-    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    var expr = col(0) + col(1)
     assert_equal(expr.dispatch, DISPATCH_AUTO)
 
 
 def test_dispatch_hint_cpu() raises:
     """with_dispatch(DISPATCH_CPU) returns a copy with CPU hint."""
-    var expr = Expr.add(Expr.input(0), Expr.input(1)).with_dispatch(
-        DISPATCH_CPU
-    )
+    var expr = (col(0) + col(1)).with_dispatch(DISPATCH_CPU)
     assert_equal(expr.dispatch, DISPATCH_CPU)
 
     var a = array[int64]([1, 2, 3])
@@ -341,22 +340,18 @@ def test_dispatch_hint_cpu() raises:
 
 
 def test_write_to_literal() raises:
-    assert_equal(String(Expr.literal[int64](5)), "literal(5.0)")
+    assert_equal(String(lit[int64](5)), "literal(...)")
 
 
 def test_write_to_equal() raises:
     assert_equal(
-        String(Expr.equal(Expr.input(0), Expr.input(1))),
+        String(col(0) == col(1)),
         "equal(input(0), input(1))",
     )
 
 
 def test_write_to_if_else() raises:
-    var expr = Expr.if_else(
-        Expr.less(Expr.input(0), Expr.input(1)),
-        Expr.input(0),
-        Expr.input(1),
-    )
+    var expr = if_else(col(0) < col(1), col(0), col(1))
     assert_equal(
         String(expr),
         "if_else(less(input(0), input(1)), input(0), input(1))",
@@ -371,36 +366,36 @@ def test_write_to_if_else() raises:
 def test_kind_column() raises:
     """Column node reports LOAD kind."""
     from marrow.expr import LOAD
-    var expr = Expr.input(0)
+    var expr = col(0)
     assert_equal(expr.kind(), LOAD)
-    assert_equal(expr.as_column()[].index, 0)
+    assert_equal(expr.downcast[Column]()[].index, 0)
 
 
 def test_kind_literal() raises:
     """Literal node reports LITERAL kind."""
     from marrow.expr import LITERAL
-    var expr = Expr.literal[int64](42)
+    var expr = lit[int64](42)
     assert_equal(expr.kind(), LITERAL)
 
 
 def test_kind_binary() raises:
     """Binary node reports its op as kind."""
     from marrow.expr import ADD
-    var expr = Expr.add(Expr.input(0), Expr.input(1))
+    var expr = col(0) + col(1)
     assert_equal(expr.kind(), ADD)
-    assert_equal(expr.as_binary()[].op, ADD)
+    assert_equal(expr.downcast[Binary]()[].op, ADD)
 
 
 def test_inputs_binary() raises:
     """Binary.inputs() returns two children."""
-    var expr = Expr.sub(Expr.input(0), Expr.input(1))
+    var expr = col(0) - col(1)
     var children = expr.inputs()
     assert_equal(len(children), 2)
 
 
 def test_inputs_leaf() raises:
     """Column.inputs() returns empty list."""
-    var expr = Expr.input(0)
+    var expr = col(0)
     assert_equal(len(expr.inputs()), 0)
 
 

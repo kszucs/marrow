@@ -2,25 +2,25 @@
 
 Scalar expressions
 ------------------
-``Expr``     — type-erased scalar expression node (ArcPointer-backed)
-``Value``    — trait every scalar expression node must implement
+``AnyValue``    — type-erased scalar expression node (ArcPointer-backed)
+``Value``       — trait every scalar expression node must implement
 
 Concrete scalar nodes: ``Column``, ``Literal``, ``Binary``, ``Unary``,
 ``IsNull``, ``IfElse``, ``Cast``
 
-Node-kind / op constants: ``LOAD``, ``LITERAL``, ``ADD``, ``SUB``,
-``MUL``, ``DIV``, ``EQ``, ``NE``, ``LT``, ``LE``, ``GT``, ``GE``,
-``AND``, ``OR``, ``NEG``, ``ABS``, ``NOT``, ``IS_NULL``, ``IF_ELSE``,
-``CAST``
-
-Dispatch hints: ``DISPATCH_AUTO``, ``DISPATCH_CPU``, ``DISPATCH_GPU``
+Factory functions: ``col()``, ``lit()``, ``if_else()``
+Utilities: ``rebuild()``, ``resolve_columns()``
+Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
+``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
 
 Relational plans
 ----------------
 ``AnyRelation`` — type-erased relational plan node
 ``Relation``    — trait every relational plan node must implement
 
-Concrete plan nodes: ``Scan``, ``Filter``, ``Project``
+Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``
+Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
+Factory: ``in_memory_table()``
 
 Rewriting
 ---------
@@ -29,11 +29,11 @@ Rewriting
 ``Rewriter``   — bottom-up fixed-point rewrite driver
 """
 
-from marrow.expr.expr import (
-    # Trait
+from marrow.expr.values import (
+    # Traits
     Value,
     # Type-erased container
-    Expr,
+    AnyValue,
     # Concrete nodes
     Column,
     Literal,
@@ -42,6 +42,13 @@ from marrow.expr.expr import (
     IsNull,
     IfElse,
     Cast,
+    # Free-standing factory functions
+    col,
+    lit,
+    if_else,
+    # Utilities
+    rebuild,
+    resolve_columns,
     # Leaf-node kinds
     LOAD,
     LITERAL,
@@ -71,12 +78,19 @@ from marrow.expr.expr import (
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
-from marrow.expr.plan import (
+from marrow.expr.relations import (
     Relation,
     AnyRelation,
     Scan,
     Filter,
     Project,
+    InMemoryTable,
+    in_memory_table,
+    # Plan node kind constants
+    SCAN_NODE,
+    FILTER_NODE,
+    PROJECT_NODE,
+    IN_MEMORY_TABLE_NODE,
 )
 from marrow.expr.rewrite import (
     Rewrite,
@@ -86,4 +100,7 @@ from marrow.expr.rewrite import (
 from marrow.expr.executor import (
     ExecutionContext,
     PipelineExecutor,
+    ValuesExecutor,
+    RelationsExecutor,
+    execute,
 )

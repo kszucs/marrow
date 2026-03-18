@@ -1,43 +1,33 @@
 """Scalar expression nodes for the marrow expression system.
 
-``Value``  — the trait every scalar expression node must implement.
-``Expr``   — the type-erased, ArcPointer-backed container (analogous to
-             ``AnyBuilder``).  Copies are O(1) ref-count bumps; the
-             expression DAG is fully shareable.
-
+``Value``       — the trait every scalar expression node must implement.
+``AnyValue``    — the type-erased, ArcPointer-backed container.
 Concrete node types
 -------------------
 ``Column``  — input column reference (LOAD)
-``Literal`` — scalar constant broadcast to array length (LITERAL)
+``Literal`` — scalar constant stored as a length-1 Array (LITERAL)
 ``Binary``  — binary arithmetic / comparison / boolean (ADD … OR)
 ``Unary``   — unary arithmetic / boolean (NEG, ABS, NOT)
 ``IsNull``  — null check (IS_NULL)
 ``IfElse``  — conditional select (IF_ELSE)
 ``Cast``    — explicit type cast (CAST)
 
-Node-kind / op constants
-------------------------
-BinaryOp : ADD SUB MUL DIV EQ NE LT LE GT GE AND OR
-UnaryOp  : NEG ABS NOT
-Other    : LOAD LITERAL IS_NULL IF_ELSE CAST
+Factory functions
+-----------------
+``col(index)``  / ``col(name)`` — column reference
+``lit[T](value)``               — typed scalar literal
+``if_else(cond, then_, else_)`` — conditional
 
-Dispatch hints
---------------
-DISPATCH_AUTO — executor decides
-DISPATCH_CPU  — always CPU SIMD path
-DISPATCH_GPU  — always GPU; raises if no accelerator
-
-E-graph compatibility
----------------------
-Nodes are immutable after construction and are designed to support hash
-consing (structural hash / equality) as a prerequisite for equality
-saturation.  A future ``ExprContext`` intern table and ``EGraph`` runner
-can be added without changing node representations or ``Rewrite``
-rule definitions.
+Operator overloads on ``AnyValue``: ``+``, ``-``, ``*``, ``/``, ``>``,
+``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
+unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
 """
 
 from std.memory import ArcPointer
+from marrow.arrays import Array, PrimitiveArray
+from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import DataType
+from marrow.schema import Schema
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +99,7 @@ trait Value(ImplicitlyDestructible, Movable):
         """Return the output data type, or None if not yet inferred."""
         ...
 
-    fn inputs(self) -> List[Expr]:
+    fn inputs(self) -> List[AnyValue]:
         """Return child expressions (empty for leaf nodes)."""
         ...
 
@@ -119,23 +109,23 @@ trait Value(ImplicitlyDestructible, Movable):
 
 
 # ---------------------------------------------------------------------------
-# Expr — type-erased, ArcPointer-backed expression container
+# AnyValue — type-erased, ArcPointer-backed expression container
 # ---------------------------------------------------------------------------
 
 
-struct Expr(ImplicitlyCopyable, Movable, Writable):
+struct AnyValue(ImplicitlyCopyable, Movable, Writable):
     """Type-erased scalar expression node.
 
     Wraps any ``Value``-conforming type on the heap behind an
     ``ArcPointer`` so copies are O(1) ref-count bumps.  Composite nodes
-    (``Binary``, ``IfElse``) hold ``Expr`` children — the entire DAG is
+    (``Binary``, ``IfElse``) hold ``AnyValue`` children — the entire DAG is
     shared by reference.
     """
 
     var _data: ArcPointer[NoneType]
     var _virt_kind: fn(ArcPointer[NoneType]) -> UInt8
     var _virt_dtype: fn(ArcPointer[NoneType]) -> Optional[DataType]
-    var _virt_inputs: fn(ArcPointer[NoneType]) -> List[Expr]
+    var _virt_inputs: fn(ArcPointer[NoneType]) -> List[AnyValue]
     var _virt_write_to_string: fn(ArcPointer[NoneType]) -> String
     var _virt_drop: fn(var ArcPointer[NoneType])
     var dispatch: UInt8
@@ -154,7 +144,7 @@ struct Expr(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod
-    fn _tramp_inputs[T: Value](ptr: ArcPointer[NoneType]) -> List[Expr]:
+    fn _tramp_inputs[T: Value](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
         return rebind[ArcPointer[T]](ptr)[].inputs()
 
     @staticmethod
@@ -198,13 +188,13 @@ struct Expr(ImplicitlyCopyable, Movable, Writable):
     fn dtype(self) -> Optional[DataType]:
         return self._virt_dtype(self._data)
 
-    fn inputs(self) -> List[Expr]:
+    fn inputs(self) -> List[AnyValue]:
         return self._virt_inputs(self._data)
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
 
-    fn with_dispatch(self, hint: UInt8) -> Expr:
+    fn with_dispatch(self, hint: UInt8) -> AnyValue:
         """Return a copy of this expression with the given dispatch hint."""
         var copy = self
         copy.dispatch = hint
@@ -215,138 +205,62 @@ struct Expr(ImplicitlyCopyable, Movable, Writable):
     fn downcast[T: Value](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
 
-    @always_inline
-    fn as_column(self) -> ArcPointer[Column]:
-        return self.downcast[Column]()
+    # --- operator overloads (ibis-style) ---
 
-    @always_inline
-    fn as_literal(self) -> ArcPointer[Literal]:
-        return self.downcast[Literal]()
+    fn __add__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=ADD, left=self, right=other)
 
-    @always_inline
-    fn as_binary(self) -> ArcPointer[Binary]:
-        return self.downcast[Binary]()
+    fn __sub__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=SUB, left=self, right=other)
 
-    @always_inline
-    fn as_unary(self) -> ArcPointer[Unary]:
-        return self.downcast[Unary]()
+    fn __mul__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=MUL, left=self, right=other)
 
-    @always_inline
-    fn as_is_null(self) -> ArcPointer[IsNull]:
-        return self.downcast[IsNull]()
+    fn __truediv__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=DIV, left=self, right=other)
 
-    @always_inline
-    fn as_if_else(self) -> ArcPointer[IfElse]:
-        return self.downcast[IfElse]()
+    fn __gt__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=GT, left=self, right=other)
 
-    @always_inline
-    fn as_cast(self) -> ArcPointer[Cast]:
-        return self.downcast[Cast]()
+    fn __lt__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=LT, left=self, right=other)
 
-    # --- static factory methods (preserve existing call sites) ---
+    fn __ge__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=GE, left=self, right=other)
 
-    @staticmethod
-    fn input(idx: Int) -> Expr:
-        """Reference to the ``idx``-th input array."""
-        return Column(index=idx, name=String(), dtype_=None)
+    fn __le__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=LE, left=self, right=other)
 
-    @staticmethod
-    fn literal[T: DataType](value: Scalar[T.native]) -> Expr:
-        """A scalar constant broadcast to the length of the first input."""
-        return Literal(value=Float64(value), dtype_=T)
+    fn __eq__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=EQ, left=self, right=other)
 
-    @staticmethod
-    fn _binary(op: UInt8, var left: Expr, var right: Expr) -> Expr:
-        return Binary(op=op, left=left^, right=right^)
+    fn __ne__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=NE, left=self, right=other)
 
-    @staticmethod
-    fn add(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise addition."""
-        return Expr._binary(ADD, left^, right^)
+    fn __neg__(self) -> AnyValue:
+        return Unary(op=NEG, child=self)
 
-    @staticmethod
-    fn sub(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise subtraction."""
-        return Expr._binary(SUB, left^, right^)
+    fn __invert__(self) -> AnyValue:
+        """Logical NOT."""
+        return Unary(op=NOT, child=self)
 
-    @staticmethod
-    fn mul(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise multiplication."""
-        return Expr._binary(MUL, left^, right^)
+    fn __and__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=AND, left=self, right=other)
 
-    @staticmethod
-    fn div(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise division."""
-        return Expr._binary(DIV, left^, right^)
+    fn __or__(self, other: AnyValue) -> AnyValue:
+        return Binary(op=OR, left=self, right=other)
 
-    @staticmethod
-    fn equal(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise equality (→ bool array)."""
-        return Expr._binary(EQ, left^, right^)
+    fn is_null(self) -> AnyValue:
+        """True where this expression produces a null value."""
+        return IsNull(child=self)
 
-    @staticmethod
-    fn not_equal(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise inequality (→ bool array)."""
-        return Expr._binary(NE, left^, right^)
-
-    @staticmethod
-    fn less(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise less-than (→ bool array)."""
-        return Expr._binary(LT, left^, right^)
-
-    @staticmethod
-    fn less_equal(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise less-or-equal (→ bool array)."""
-        return Expr._binary(LE, left^, right^)
-
-    @staticmethod
-    fn greater(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise greater-than (→ bool array)."""
-        return Expr._binary(GT, left^, right^)
-
-    @staticmethod
-    fn greater_equal(var left: Expr, var right: Expr) -> Expr:
-        """Element-wise greater-or-equal (→ bool array)."""
-        return Expr._binary(GE, left^, right^)
-
-    @staticmethod
-    fn and_(var left: Expr, var right: Expr) -> Expr:
-        """Logical AND of two boolean expressions."""
-        return Expr._binary(AND, left^, right^)
-
-    @staticmethod
-    fn or_(var left: Expr, var right: Expr) -> Expr:
-        """Logical OR of two boolean expressions."""
-        return Expr._binary(OR, left^, right^)
-
-    @staticmethod
-    fn _unary(op: UInt8, var child: Expr) -> Expr:
-        return Unary(op=op, child=child^)
-
-    @staticmethod
-    fn neg(var child: Expr) -> Expr:
-        """Element-wise negation."""
-        return Expr._unary(NEG, child^)
-
-    @staticmethod
-    fn abs_(var child: Expr) -> Expr:
+    fn abs(self) -> AnyValue:
         """Element-wise absolute value."""
-        return Expr._unary(ABS, child^)
+        return Unary(op=ABS, child=self)
 
-    @staticmethod
-    fn not_(var child: Expr) -> Expr:
-        """Logical NOT of a boolean expression."""
-        return Expr._unary(NOT, child^)
-
-    @staticmethod
-    fn is_null(var child: Expr) -> Expr:
-        """True where the child expression produces a null value."""
-        return IsNull(child=child^)
-
-    @staticmethod
-    fn if_else(var cond: Expr, var then_: Expr, var else_: Expr) -> Expr:
-        """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i]."""
-        return IfElse(cond=cond^, then_=then_^, else_=else_^)
+    fn cast(self, to: DataType) -> AnyValue:
+        """Explicit type cast."""
+        return Cast(child=self, to=to)
 
     fn __del__(deinit self):
         self._virt_drop(self._data^)
@@ -382,34 +296,36 @@ struct Column(Value):
     fn dtype(self) -> Optional[DataType]:
         return self.dtype_
 
-    fn inputs(self) -> List[Expr]:
-        return List[Expr]()
+    fn inputs(self) -> List[AnyValue]:
+        return List[AnyValue]()
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(t"input({self.index})")
 
 
 struct Literal(Value):
-    """Scalar constant broadcast to the length of the first input (LITERAL node)."""
+    """Scalar constant broadcast to the length of the first input (LITERAL node).
 
-    var value: Float64
-    var dtype_: DataType
+    Stores the scalar as a length-1 Array, supporting any dtype (numeric,
+    string, bool).  Similar to arrow-rs ``Scalar<T>``.
+    """
 
-    fn __init__(out self, *, value: Float64, dtype_: DataType):
-        self.value = value
-        self.dtype_ = dtype_
+    var value: Array
+
+    fn __init__(out self, *, var value: Array):
+        self.value = value^
 
     fn kind(self) -> UInt8:
         return LITERAL
 
     fn dtype(self) -> Optional[DataType]:
-        return self.dtype_
+        return self.value.dtype
 
-    fn inputs(self) -> List[Expr]:
-        return List[Expr]()
+    fn inputs(self) -> List[AnyValue]:
+        return List[AnyValue]()
 
     fn write_to[W: Writer](self, mut writer: W):
-        writer.write(t"literal({self.value})")
+        writer.write(t"literal(...)")
 
 
 struct Binary(Value):
@@ -424,10 +340,10 @@ struct Binary(Value):
     """
 
     var op: UInt8
-    var left: Expr
-    var right: Expr
+    var left: AnyValue
+    var right: AnyValue
 
-    fn __init__(out self, *, op: UInt8, var left: Expr, var right: Expr):
+    fn __init__(out self, *, op: UInt8, var left: AnyValue, var right: AnyValue):
         self.op = op
         self.left = left^
         self.right = right^
@@ -438,11 +354,8 @@ struct Binary(Value):
     fn dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=2)
-        result.append(self.left)
-        result.append(self.right)
-        return result^
+    fn inputs(self) -> List[AnyValue]:
+        return [self.left, self.right]
 
     fn write_to[W: Writer](self, mut writer: W):
         if self.op == ADD:
@@ -487,9 +400,9 @@ struct Unary(Value):
     """
 
     var op: UInt8
-    var child: Expr
+    var child: AnyValue
 
-    fn __init__(out self, *, op: UInt8, var child: Expr):
+    fn __init__(out self, *, op: UInt8, var child: AnyValue):
         self.op = op
         self.child = child^
 
@@ -499,10 +412,8 @@ struct Unary(Value):
     fn dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=1)
-        result.append(self.child)
-        return result^
+    fn inputs(self) -> List[AnyValue]:
+        return [self.child]
 
     fn write_to[W: Writer](self, mut writer: W):
         if self.op == NEG:
@@ -520,9 +431,9 @@ struct Unary(Value):
 struct IsNull(Value):
     """Null check — produces a bool array: True where child is null."""
 
-    var child: Expr
+    var child: AnyValue
 
-    fn __init__(out self, *, var child: Expr):
+    fn __init__(out self, *, var child: AnyValue):
         self.child = child^
 
     fn kind(self) -> UInt8:
@@ -531,10 +442,8 @@ struct IsNull(Value):
     fn dtype(self) -> Optional[DataType]:
         return None  # bool_ after type inference
 
-    fn inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=1)
-        result.append(self.child)
-        return result^
+    fn inputs(self) -> List[AnyValue]:
+        return [self.child]
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(t"is_null(")
@@ -545,11 +454,11 @@ struct IsNull(Value):
 struct IfElse(Value):
     """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i]."""
 
-    var cond: Expr
-    var then_: Expr
-    var else_: Expr
+    var cond: AnyValue
+    var then_: AnyValue
+    var else_: AnyValue
 
-    fn __init__(out self, *, var cond: Expr, var then_: Expr, var else_: Expr):
+    fn __init__(out self, *, var cond: AnyValue, var then_: AnyValue, var else_: AnyValue):
         self.cond = cond^
         self.then_ = then_^
         self.else_ = else_^
@@ -560,12 +469,8 @@ struct IfElse(Value):
     fn dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=3)
-        result.append(self.cond)
-        result.append(self.then_)
-        result.append(self.else_)
-        return result^
+    fn inputs(self) -> List[AnyValue]:
+        return [self.cond, self.then_, self.else_]
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(t"if_else(")
@@ -580,10 +485,10 @@ struct IfElse(Value):
 struct Cast(Value):
     """Explicit type cast."""
 
-    var child: Expr
+    var child: AnyValue
     var to: DataType
 
-    fn __init__(out self, *, var child: Expr, to: DataType):
+    fn __init__(out self, *, var child: AnyValue, to: DataType):
         self.child = child^
         self.to = to
 
@@ -593,12 +498,107 @@ struct Cast(Value):
     fn dtype(self) -> Optional[DataType]:
         return self.to
 
-    fn inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=1)
-        result.append(self.child)
-        return result^
+    fn inputs(self) -> List[AnyValue]:
+        return [self.child]
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(t"cast(")
         self.child.write_to(writer)
         writer.write(t", {self.to})")
+
+
+
+# ---------------------------------------------------------------------------
+# Literal helpers
+# ---------------------------------------------------------------------------
+
+
+fn _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
+    """Create a Literal expression from a typed scalar value."""
+    var builder = PrimitiveBuilder[T](1)
+    builder.unsafe_append(value)
+    return Literal(value=Array(builder.finish_typed()))
+
+
+# ---------------------------------------------------------------------------
+# Free-standing factory functions
+# ---------------------------------------------------------------------------
+
+
+fn col(index: Int) -> AnyValue:
+    """Reference to the ``index``-th input column."""
+    return Column(index=index, name=String(), dtype_=None)
+
+
+fn col(var name: String) -> AnyValue:
+    """Reference to a named column (resolved against the schema at execution)."""
+    return Column(index=-1, name=name^, dtype_=None)
+
+
+fn lit[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
+    """A scalar constant broadcast to the length of the first input."""
+    return _make_literal[T](value)
+
+
+fn if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
+    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i]."""
+    return IfElse(cond=cond, then_=then_, else_=else_)
+
+
+# ---------------------------------------------------------------------------
+# Expression tree utilities
+# ---------------------------------------------------------------------------
+
+
+fn rebuild(expr: AnyValue, children: List[AnyValue]) -> AnyValue:
+    """Reconstruct an expression node with replaced children.
+
+    Leaves (Column, Literal) are returned unchanged.
+    """
+    var k = expr.kind()
+    if k == LOAD or k == LITERAL:
+        return expr
+    if k >= ADD and k <= OR:  # Binary ops
+        var bin = expr.downcast[Binary]()
+        return Binary(op=bin[].op, left=children[0], right=children[1])
+    if k >= NEG and k <= NOT:  # Unary ops
+        var un = expr.downcast[Unary]()
+        return Unary(op=un[].op, child=children[0])
+    if k == IS_NULL:
+        return IsNull(child=children[0])
+    if k == IF_ELSE:
+        return IfElse(cond=children[0], then_=children[1], else_=children[2])
+    if k == CAST:
+        var c = expr.downcast[Cast]()
+        return Cast(child=children[0], to=c[].to)
+    return expr  # unknown: pass through
+
+
+fn resolve_columns(expr: AnyValue, schema: Schema) raises -> AnyValue:
+    """Resolve name-based Column references (index == -1) to positional
+    indices using the schema.
+
+    Walks the expression tree bottom-up, replacing ``col("name")`` with
+    ``col(index)`` where ``index`` is the field position in ``schema``.
+    """
+    var k = expr.kind()
+    if k == LOAD:
+        var c = expr.downcast[Column]()
+        if c[].index == -1:
+            var idx = schema.get_field_index(c[].name)
+            if idx == -1:
+                raise Error(
+                    "resolve_columns: column '" + c[].name
+                    + "' not found in schema"
+                )
+            return col(idx)
+        return expr
+
+    if k == LITERAL:
+        return expr
+
+    # Recursively resolve children and rebuild
+    var children = expr.inputs()
+    for i in range(len(children)):
+        children[i] = resolve_columns(children[i], schema)
+    return rebuild(expr, children)

@@ -47,12 +47,21 @@ from marrow.kernels.compare import (
     greater_equal,
 )
 from marrow.kernels.concat import concat
-from marrow.expr import (
-    Expr,
+from marrow.schema import Schema
+from marrow.tabular import RecordBatch
+from marrow.kernels.filter import filter_
+from marrow.expr.values import (
+    AnyValue,
+    Column, Literal, Binary, Unary, IsNull, IfElse, Cast,
     LOAD, ADD, SUB, MUL, DIV, NEG, ABS, LITERAL,
-    EQ, NE, LT, LE, GT, GE, AND, OR, NOT, IS_NULL, IF_ELSE,
+    EQ, NE, LT, LE, GT, GE, AND, OR, NOT, IS_NULL, IF_ELSE, CAST,
     DISPATCH_CPU,
     DISPATCH_GPU,
+)
+from marrow.expr.relations import (
+    AnyRelation,
+    Scan, Filter as PlanFilter, Project, InMemoryTable,
+    SCAN_NODE, FILTER_NODE, PROJECT_NODE, IN_MEMORY_TABLE_NODE,
 )
 
 
@@ -113,9 +122,13 @@ struct PipelineExecutor(Copyable, Movable):
     fn __init__(out self, var ctx: ExecutionContext = ExecutionContext()):
         self.ctx = ctx^
 
+    fn execute(self, plan: AnyRelation) raises -> RecordBatch:
+        """Execute a relational plan tree, returning a RecordBatch."""
+        return RelationsExecutor().execute(plan)
+
     fn execute(
         self,
-        expr: Expr,
+        expr: AnyValue,
         inputs: List[Array],
     ) raises -> Array:
         """Evaluate an expression tree over the given input arrays.
@@ -125,7 +138,7 @@ struct PipelineExecutor(Copyable, Movable):
 
         Args:
             expr: The expression tree to evaluate.
-            inputs: Input arrays referenced by ``Expr.input(idx)`` nodes.
+            inputs: Input arrays referenced by ``col(idx)`` nodes.
 
         Returns:
             A new ``Array`` with the expression result.
@@ -144,7 +157,9 @@ struct PipelineExecutor(Copyable, Movable):
         var num_workers = min(effective_workers, n_morsels)
 
         if num_workers <= 1 or n_morsels == 1:
-            return _eval(expr, inputs)
+            var input_copy = _copy_inputs(inputs)
+            var evaluator = ValuesExecutor(input_copy^)
+            return evaluator.execute(expr)
 
         var results = List[Array](capacity=n_morsels)
         for _ in range(n_morsels):
@@ -155,94 +170,197 @@ struct PipelineExecutor(Copyable, Movable):
             var start = i * morsel_size
             var end = min(start + morsel_size, length)
             var chunk_inputs = _slice_inputs(inputs, start, end)
-            results[i] = _eval(expr, chunk_inputs)
+            var evaluator = ValuesExecutor(chunk_inputs^)
+            results[i] = evaluator.execute(expr)
 
         sync_parallelize[process_morsel](n_morsels)
         return concat(results)
 
 
+fn execute(
+    expr: AnyValue,
+    inputs: List[Array],
+    morsel_size: Int = 65_536,
+    num_cpu_workers: Int = 0,
+) raises -> Array:
+    """Convenience wrapper around ``PipelineExecutor`` for expression evaluation.
+
+    Args:
+        expr: The expression tree to evaluate.
+        inputs: Input arrays referenced by ``col(idx)`` nodes.
+        morsel_size: Number of elements per parallel work chunk.
+        num_cpu_workers: Number of CPU threads (0 = ``parallelism_level()``).
+
+    Returns:
+        A new ``Array`` with the expression result.
+    """
+    var ctx = ExecutionContext()
+    ctx.morsel_size = morsel_size
+    ctx.num_cpu_workers = num_cpu_workers
+    return PipelineExecutor(ctx).execute(expr, inputs)
+
+
 # ---------------------------------------------------------------------------
-# Expression tree interpreter (type-erased)
+# Expression tree executor (overloaded eval per node type)
 # ---------------------------------------------------------------------------
 
 
-fn _eval(expr: Expr, inputs: List[Array]) raises -> Array:
-    """Walk the expression tree using type-erased kernel APIs."""
-    var k = expr.kind()
-    if k == LOAD:
-        return inputs[expr.as_column()[].index].copy()
-    if k == LITERAL:
-        return _broadcast_literal(
-            inputs[0].dtype, inputs[0].length, expr.as_literal()[].value
-        )
-    if k == ADD:
-        var bin = expr.as_binary()
-        return add(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == SUB:
-        var bin = expr.as_binary()
-        return sub(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == MUL:
-        var bin = expr.as_binary()
-        return mul(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == DIV:
-        var bin = expr.as_binary()
-        return div(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == NEG:
-        return neg(_eval(expr.as_unary()[].child, inputs))
-    if k == ABS:
-        return abs_(_eval(expr.as_unary()[].child, inputs))
-    if k == EQ:
-        var bin = expr.as_binary()
-        return equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == NE:
-        var bin = expr.as_binary()
-        return not_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == LT:
-        var bin = expr.as_binary()
-        return less(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == LE:
-        var bin = expr.as_binary()
-        return less_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == GT:
-        var bin = expr.as_binary()
-        return greater(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == GE:
-        var bin = expr.as_binary()
-        return greater_equal(_eval(bin[].left, inputs), _eval(bin[].right, inputs))
-    if k == AND:
-        var bin = expr.as_binary()
-        return Array(
-            and_(
-                PrimitiveArray[bool_dt](data=_eval(bin[].left, inputs)),
-                PrimitiveArray[bool_dt](data=_eval(bin[].right, inputs)),
-            )
-        )
-    if k == OR:
-        var bin = expr.as_binary()
-        return Array(
-            or_(
-                PrimitiveArray[bool_dt](data=_eval(bin[].left, inputs)),
-                PrimitiveArray[bool_dt](data=_eval(bin[].right, inputs)),
-            )
-        )
-    if k == NOT:
-        return Array(
-            not_(
-                PrimitiveArray[bool_dt](
-                    data=_eval(expr.as_unary()[].child, inputs)
+struct ValuesExecutor:
+    """Evaluates an expression tree against a list of input arrays.
+
+    Dispatches to overloaded ``execute`` methods per concrete node type,
+    mirroring the RelationsExecutor pattern for relation nodes.
+    """
+
+    var inputs: List[Array]
+
+    fn __init__(out self, var inputs: List[Array]):
+        self.inputs = inputs^
+
+    fn execute(mut self, expr: AnyValue) raises -> Array:
+        """Dispatch to the typed overload matching the runtime kind."""
+        var k = expr.kind()
+        if k == LOAD:
+            return self.execute(expr.downcast[Column]()[])
+        elif k == LITERAL:
+            return self.execute(expr.downcast[Literal]()[])
+        elif k >= ADD and k <= OR:
+            return self.execute(expr.downcast[Binary]()[])
+        elif k >= NEG and k <= NOT:
+            return self.execute(expr.downcast[Unary]()[])
+        elif k == IS_NULL:
+            return self.execute(expr.downcast[IsNull]()[])
+        elif k == IF_ELSE:
+            return self.execute(expr.downcast[IfElse]()[])
+        elif k == CAST:
+            return self.execute(expr.downcast[Cast]()[])
+        else:
+            raise Error("ValuesExecutor: unknown kind ", k)
+
+    fn execute(mut self, col: Column) raises -> Array:
+        return self.inputs[col.index].copy()
+
+    fn execute(mut self, lit: Literal) raises -> Array:
+        return _broadcast_literal(self.inputs[0].length, lit.value)
+
+    fn execute(mut self, bin: Binary) raises -> Array:
+        var left = self.execute(bin.left)
+        var right = self.execute(bin.right)
+        if bin.op == ADD:
+            return add(left, right)
+        elif bin.op == SUB:
+            return sub(left, right)
+        elif bin.op == MUL:
+            return mul(left, right)
+        elif bin.op == DIV:
+            return div(left, right)
+        elif bin.op == EQ:
+            return equal(left, right)
+        elif bin.op == NE:
+            return not_equal(left, right)
+        elif bin.op == LT:
+            return less(left, right)
+        elif bin.op == LE:
+            return less_equal(left, right)
+        elif bin.op == GT:
+            return greater(left, right)
+        elif bin.op == GE:
+            return greater_equal(left, right)
+        elif bin.op == AND:
+            return Array(
+                and_(
+                    PrimitiveArray[bool_dt](data=left),
+                    PrimitiveArray[bool_dt](data=right),
                 )
             )
+        elif bin.op == OR:
+            return Array(
+                or_(
+                    PrimitiveArray[bool_dt](data=left),
+                    PrimitiveArray[bool_dt](data=right),
+                )
+            )
+        else:
+            raise Error("ValuesExecutor: unknown binary op ", bin.op)
+
+    fn execute(mut self, un: Unary) raises -> Array:
+        var child = self.execute(un.child)
+        if un.op == NEG:
+            return neg(child)
+        elif un.op == ABS:
+            return abs_(child)
+        elif un.op == NOT:
+            return Array(not_(PrimitiveArray[bool_dt](data=child)))
+        else:
+            raise Error("ValuesExecutor: unknown unary op ", un.op)
+
+    fn execute(mut self, node: IsNull) raises -> Array:
+        return is_null(self.execute(node.child))
+
+    fn execute(mut self, node: IfElse) raises -> Array:
+        var cond = self.execute(node.cond)
+        var then_ = self.execute(node.then_)
+        var else_ = self.execute(node.else_)
+        return select(cond, then_, else_)
+
+    fn execute(mut self, node: Cast) raises -> Array:
+        raise Error("ValuesExecutor: cast not implemented")
+
+
+# ---------------------------------------------------------------------------
+# Relational plan executor (overloaded execute per node type)
+# ---------------------------------------------------------------------------
+
+
+struct RelationsExecutor:
+    """Executes a relational plan tree, returning a RecordBatch.
+
+    Dispatches to overloaded ``execute`` methods based on ``plan.kind()``,
+    mirroring the ValuesExecutor pattern for expression nodes.
+    """
+
+    fn __init__(out self):
+        pass
+
+    fn execute(self, plan: AnyRelation) raises -> RecordBatch:
+        var k = plan.kind()
+        if k == IN_MEMORY_TABLE_NODE:
+            return self.execute(plan.downcast[InMemoryTable]()[])
+        if k == SCAN_NODE:
+            return self.execute(plan.downcast[Scan]()[])
+        if k == FILTER_NODE:
+            return self.execute(plan.downcast[PlanFilter]()[])
+        if k == PROJECT_NODE:
+            return self.execute(plan.downcast[Project]()[])
+        raise Error("RelationsExecutor: unknown relation kind ", k)
+
+    fn execute(self, node: InMemoryTable) raises -> RecordBatch:
+        return RecordBatch(copy=node.batch)
+
+    fn execute(self, node: Scan) raises -> RecordBatch:
+        raise Error("RelationsExecutor: Scan requires external data source binding")
+
+    fn execute(self, node: PlanFilter) raises -> RecordBatch:
+        var child_batch = self.execute(node.input)
+        var input_arrays = _batch_to_inputs(child_batch)
+        var evaluator = ValuesExecutor(input_arrays^)
+        var mask = evaluator.execute(node.predicate)
+        var result_cols = List[Array]()
+        for i in range(child_batch.num_columns()):
+            result_cols.append(filter_(child_batch.columns[i].copy(), mask.copy()))
+        return RecordBatch(
+            schema=Schema(copy=child_batch.schema), columns=result_cols^
         )
-    if k == IS_NULL:
-        return is_null(_eval(expr.as_is_null()[].child, inputs))
-    if k == IF_ELSE:
-        var ie = expr.as_if_else()
-        return select(
-            _eval(ie[].cond, inputs),
-            _eval(ie[].then_, inputs),
-            _eval(ie[].else_, inputs),
-        )
-    raise Error(t"_eval: unknown Expr kind {k}")
+
+    fn execute(self, node: Project) raises -> RecordBatch:
+        var child_batch = self.execute(node.input)
+        var result_cols = List[Array]()
+        for ref e in node.exprs_:
+            var input_arrays = _batch_to_inputs(child_batch)
+            var evaluator = ValuesExecutor(input_arrays^)
+            var result = evaluator.execute(e)
+            result_cols.append(result.copy())
+        return RecordBatch(schema=node.schema(), columns=result_cols^)
 
 
 # ---------------------------------------------------------------------------
@@ -250,19 +368,25 @@ fn _eval(expr: Expr, inputs: List[Array]) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn _broadcast_literal(
-    dtype: DataType, length: Int, value: Float64
-) raises -> Array:
-    """Create an array filled with a scalar literal, matching the given dtype."""
+fn _copy_inputs(inputs: List[Array]) -> List[Array]:
+    """Copy a list of arrays (O(1) per array via ref-counting)."""
+    var result = List[Array](capacity=len(inputs))
+    for ref inp in inputs:
+        result.append(inp.copy())
+    return result^
+
+
+fn _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
+    """Broadcast a length-1 scalar array to the given length."""
     comptime for dt in numeric_dtypes:
-        if dtype == dt:
-            var scalar = Scalar[dt.native](value)
+        if scalar_array.dtype == dt:
+            var val = PrimitiveArray[dt](data=scalar_array).unsafe_get(0)
             var builder = PrimitiveBuilder[dt](length)
             for i in range(length):
-                builder._buffer.unsafe_set[dt.native](i, scalar)
+                builder._buffer.unsafe_set[dt.native](i, val)
             builder._length = length
             return Array(builder.finish_typed())
-    raise Error(t"_broadcast_literal: unsupported dtype {dtype}")
+    raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype}")
 
 
 fn _empty_like(arr: Array) raises -> Array:
@@ -284,3 +408,11 @@ fn _slice_inputs(
     for ref inp in inputs:
         slices.append(inp.slice(start, end - start))
     return slices^
+
+
+fn _batch_to_inputs(batch: RecordBatch) -> List[Array]:
+    """Convert a RecordBatch's columns to a List[Array] for the evaluator."""
+    var inputs = List[Array](capacity=batch.num_columns())
+    for i in range(batch.num_columns()):
+        inputs.append(batch.columns[i].copy())
+    return inputs^
