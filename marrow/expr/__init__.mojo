@@ -108,13 +108,12 @@ from marrow.expr.executor import (
     UnaryProcessor,
     IsNullProcessor,
     IfElseProcessor,
-    build,
     # Relation processors
     RelationProcessor,
     AnyRelationProcessor,
     ScanProcessor,
     FilterProcessor,
     ProjectProcessor,
-    plan,
+    Planner,
     execute,
 )
