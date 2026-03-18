@@ -9,12 +9,14 @@ Concrete plan nodes
 ``Filter``         — applies a boolean predicate to its input.
 ``Project``        — evaluates a list of expressions to produce output columns.
 ``InMemoryTable``  — leaf node backed by a RecordBatch.
+``ParquetScan``    — leaf node that reads from a Parquet file.
 
 Plan-building API
 -----------------
 ``AnyRelation.select(*names)``  — project columns by name.
 ``AnyRelation.filter(pred)``    — filter rows by predicate.
 ``in_memory_table(batch)``      — create an in-memory relation.
+``parquet_scan(path)``          — create a Parquet file scan.
 
 Example
 -------
@@ -37,6 +39,7 @@ comptime SCAN_NODE: UInt8 = 0
 comptime FILTER_NODE: UInt8 = 1
 comptime PROJECT_NODE: UInt8 = 2
 comptime IN_MEMORY_TABLE_NODE: UInt8 = 3
+comptime PARQUET_SCAN_NODE: UInt8 = 4
 
 
 # ---------------------------------------------------------------------------
@@ -369,3 +372,48 @@ struct InMemoryTable(Relation):
 fn in_memory_table(batch: RecordBatch) -> AnyRelation:
     """Create a relation backed by an in-memory RecordBatch."""
     return InMemoryTable(batch=batch)
+
+
+struct ParquetScan(Relation):
+    """Parquet file scan — leaf node that reads from a Parquet file.
+
+    ``path``    — filesystem path to the Parquet file.
+    ``schema_`` — output schema inferred from the Parquet footer metadata.
+    """
+
+    var path: String
+    var schema_: Schema
+
+    fn __init__(out self, *, var path: String, var schema_: Schema):
+        self.path = path^
+        self.schema_ = schema_^
+
+    fn kind(self) -> UInt8:
+        return PARQUET_SCAN_NODE
+
+    fn schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    fn inputs(self) -> List[AnyRelation]:
+        return List[AnyRelation]()
+
+    fn exprs(self) -> List[AnyValue]:
+        return List[AnyValue]()
+
+    fn write_to[W: Writer](self, mut writer: W):
+        writer.write(t"ParquetScan({self.path})")
+
+
+fn parquet_scan(path: String) raises -> AnyRelation:
+    """Create a relation that reads from a Parquet file.
+
+    Reads the schema from the Parquet footer metadata (no data I/O).
+    """
+    from std.python import Python
+    from marrow.c_data import CArrowSchema
+
+    var pq = Python.import_module("pyarrow.parquet")
+    var pa_schema = pq.read_schema(path)
+    var capsule = pa_schema.__arrow_c_schema__()
+    var schema_ = CArrowSchema.from_pycapsule(capsule).to_schema()
+    return ParquetScan(path=path, schema_=schema_^)

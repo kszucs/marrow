@@ -18,9 +18,10 @@ Relational plans
 ``AnyRelation`` — type-erased relational plan node
 ``Relation``    — trait every relational plan node must implement
 
-Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``
+Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
+``ParquetScan``
 Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
-Factory: ``in_memory_table()``
+Factory: ``in_memory_table()``, ``parquet_scan()``
 
 Rewriting
 ---------
@@ -85,12 +86,15 @@ from marrow.expr.relations import (
     Filter,
     Project,
     InMemoryTable,
+    ParquetScan,
     in_memory_table,
+    parquet_scan,
     # Plan node kind constants
     SCAN_NODE,
     FILTER_NODE,
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
+    PARQUET_SCAN_NODE,
 )
 from marrow.expr.rewrite import (
     Rewrite,
@@ -112,6 +116,7 @@ from marrow.expr.executor import (
     RelationProcessor,
     AnyRelationProcessor,
     ScanProcessor,
+    ParquetScanProcessor,
     FilterProcessor,
     ProjectProcessor,
     Planner,

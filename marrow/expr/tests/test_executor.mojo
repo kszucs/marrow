@@ -1,6 +1,8 @@
 """Tests for expression execution and streaming query execution."""
 
 from std.testing import assert_equal, assert_true, TestSuite
+from std.python import Python
+from std.os import remove
 
 from marrow.arrays import array, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
@@ -10,6 +12,7 @@ from marrow.expr import (
     col,
     lit,
     in_memory_table,
+    parquet_scan,
     execute,
     DISPATCH_CPU,
 )
@@ -360,6 +363,77 @@ def test_streaming_chained_filter_project() raises:
     assert_equal(col_y[0], 30)
     assert_equal(col_y[1], 40)
     assert_equal(col_y[2], 50)
+
+
+# ---------------------------------------------------------------------------
+# ParquetScan execution
+# ---------------------------------------------------------------------------
+
+
+fn _write_test_parquet(path: String) raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = pa.table(
+        Python.dict(
+            id=pa.array(Python.list(1, 2, 3, 4, 5), type=pa.int64()),
+            val=pa.array(
+                Python.list(1.0, 2.0, 3.0, 4.0, 5.0), type=pa.float64()
+            ),
+        )
+    )
+    pq.write_table(t, path)
+
+
+def test_parquet_scan_execute() raises:
+    """Full scan reads all rows and columns from a Parquet file."""
+    var path = "/tmp/marrow_test_parquet_scan.parquet"
+    _write_test_parquet(path)
+    var result = execute(parquet_scan(path))
+    assert_equal(result.num_rows(), 5)
+    assert_equal(result.num_columns(), 2)
+    var ids = result.columns[0].as_int64()
+    assert_equal(ids[0], 1)
+    assert_equal(ids[4], 5)
+    remove(path)
+
+
+def test_parquet_scan_filter() raises:
+    """Filter over a ParquetScan keeps only matching rows."""
+    var path = "/tmp/marrow_test_parquet_scan_filter.parquet"
+    _write_test_parquet(path)
+    var result = execute(parquet_scan(path).filter(col("id") > lit[int64](3)))
+    assert_equal(result.num_rows(), 2)
+    var ids = result.columns[0].as_int64()
+    assert_equal(ids[0], 4)
+    assert_equal(ids[1], 5)
+    remove(path)
+
+
+def test_parquet_scan_select() raises:
+    """Select over a ParquetScan projects to a single column."""
+    var path = "/tmp/marrow_test_parquet_scan_select.parquet"
+    _write_test_parquet(path)
+    var result = execute(parquet_scan(path).select("id"))
+    assert_equal(result.num_rows(), 5)
+    assert_equal(result.num_columns(), 1)
+    assert_equal(result.schema.fields[0].name, "id")
+    remove(path)
+
+
+def test_parquet_scan_filter_select() raises:
+    """Chained filter + select over a ParquetScan."""
+    var path = "/tmp/marrow_test_parquet_scan_filter_select.parquet"
+    _write_test_parquet(path)
+    var result = execute(
+        parquet_scan(path).filter(col("id") > lit[int64](3)).select("id")
+    )
+    assert_equal(result.num_rows(), 2)
+    assert_equal(result.num_columns(), 1)
+    assert_equal(result.schema.fields[0].name, "id")
+    var ids = result.columns[0].as_int64()
+    assert_equal(ids[0], 4)
+    assert_equal(ids[1], 5)
+    remove(path)
 
 
 def main() raises:

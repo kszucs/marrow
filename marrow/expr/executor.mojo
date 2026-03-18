@@ -81,11 +81,14 @@ from marrow.expr.relations import (
     Filter as PlanFilter,
     Project,
     InMemoryTable,
+    ParquetScan,
     SCAN_NODE,
     FILTER_NODE,
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
+    PARQUET_SCAN_NODE,
 )
+from marrow.parquet import read_table
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +529,58 @@ struct ScanProcessor(RelationProcessor):
 
 
 # ---------------------------------------------------------------------------
+# ParquetScanProcessor — reads a Parquet file and yields morsel-sized slices
+# ---------------------------------------------------------------------------
+
+
+struct ParquetScanProcessor(RelationProcessor):
+    """Reads a Parquet file at construction time and yields morsel-sized slices.
+
+    Uses ``marrow.parquet.read_table`` (backed by PyArrow) for I/O, then
+    streams the result the same way as ``ScanProcessor``.
+    """
+
+    var batch: RecordBatch
+    var offset: Int
+    var morsel_size: Int
+
+    # TODO: make the reading lazy as well instead of materializing the whole table upfront
+    # TODO: add support for projection pushdown to avoid reading unnecessary columns
+    fn __init__(out self, path: String, morsel_size: Int) raises:
+        var table = read_table(path)
+        var batches = table.to_batches()
+        if len(batches) == 0:
+            self.batch = RecordBatch(schema=table.schema, columns=List[Array]())
+        elif len(batches) == 1:
+            self.batch = RecordBatch(copy=batches[0])
+        else:
+            var schema = batches[0].schema
+            var num_cols = batches[0].num_columns()
+            var result_cols = List[Array](capacity=num_cols)
+            for c in range(num_cols):
+                var col_arrays = List[Array](capacity=len(batches))
+                for b in range(len(batches)):
+                    col_arrays.append(batches[b].columns[c].copy())
+                result_cols.append(concat(col_arrays))
+            self.batch = RecordBatch(
+                schema=Schema(copy=schema), columns=result_cols^
+            )
+        self.offset = 0
+        self.morsel_size = morsel_size
+
+    fn schema(self) -> Schema:
+        return Schema(copy=self.batch.schema)
+
+    fn pull(mut self) raises -> RecordBatch:
+        if self.offset >= self.batch.num_rows():
+            raise Exhausted()
+        var length = min(self.morsel_size, self.batch.num_rows() - self.offset)
+        var result = self.batch.slice(self.offset, length)
+        self.offset += length
+        return result^
+
+
+# ---------------------------------------------------------------------------
 # FilterProcessor — pulls from child, applies boolean predicate
 # ---------------------------------------------------------------------------
 
@@ -684,6 +739,11 @@ struct Planner:
                 child=child^,
                 values=values^,
                 schema_=arc[].schema(),
+            )
+        if k == PARQUET_SCAN_NODE:
+            var arc = expr.downcast[ParquetScan]()
+            return ParquetScanProcessor(
+                path=arc[].path, morsel_size=self.ctx.morsel_size
             )
         if k == SCAN_NODE:
             raise Error(
