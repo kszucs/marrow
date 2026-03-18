@@ -52,9 +52,9 @@ def test_select_single_column() raises:
     assert_equal(result.num_columns(), 1)
     assert_equal(result.num_rows(), 5)
     assert_equal(result.schema.fields[0].name, "x")
-    var x = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(x.unsafe_get(0), 1)
-    assert_equal(x.unsafe_get(4), 5)
+    var x = result.columns[0].as_primitive[int64]()
+    assert_equal(x[0], 1)
+    assert_equal(x[4], 5)
 
 
 def test_select_multiple_columns() raises:
@@ -64,19 +64,19 @@ def test_select_multiple_columns() raises:
     assert_equal(result.num_columns(), 2)
     assert_equal(result.schema.fields[0].name, "y")
     assert_equal(result.schema.fields[1].name, "x")
-    var y = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(y.unsafe_get(0), 10)
-    var x = PrimitiveArray[int64](data=result.columns[1].copy())
-    assert_equal(x.unsafe_get(0), 1)
+    var y = result.columns[0].as_primitive[int64]()
+    assert_equal(y[0], 10)
+    var x = result.columns[1].as_primitive[int64]()
+    assert_equal(x[0], 1)
 
 
 def test_select_preserves_values() raises:
     """All values are preserved through select."""
     var rel = in_memory_table(_batch()).select("x")
     var result = execute(rel)
-    var x = PrimitiveArray[int64](data=result.columns[0].copy())
+    var x = result.columns[0].as_primitive[int64]()
     for i in range(5):
-        assert_equal(x.unsafe_get(i), Scalar[int64.native](i + 1))
+        assert_equal(x[i], Scalar[int64.native](i + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +89,9 @@ def test_filter_greater_than() raises:
     var rel = in_memory_table(_batch()).filter(col("x") > lit[int64](3))
     var result = execute(rel)
     assert_equal(result.num_rows(), 2)
-    var x = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(x.unsafe_get(0), 4)
-    assert_equal(x.unsafe_get(1), 5)
+    var x = result.columns[0].as_primitive[int64]()
+    assert_equal(x[0], 4)
+    assert_equal(x[1], 5)
 
 
 def test_filter_equality() raises:
@@ -99,10 +99,10 @@ def test_filter_equality() raises:
     var rel = in_memory_table(_batch()).filter(col("x") == lit[int64](3))
     var result = execute(rel)
     assert_equal(result.num_rows(), 1)
-    var x = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(x.unsafe_get(0), 3)
-    var y = PrimitiveArray[int64](data=result.columns[1].copy())
-    assert_equal(y.unsafe_get(0), 30)
+    var x = result.columns[0].as_primitive[int64]()
+    assert_equal(x[0], 3)
+    var y = result.columns[1].as_primitive[int64]()
+    assert_equal(y[0], 30)
 
 
 def test_filter_no_match() raises:
@@ -127,10 +127,10 @@ def test_select_then_filter() raises:
     var result = execute(rel)
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 2)
-    var x = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(x.unsafe_get(0), 3)
-    assert_equal(x.unsafe_get(1), 4)
-    assert_equal(x.unsafe_get(2), 5)
+    var x = result.columns[0].as_primitive[int64]()
+    assert_equal(x[0], 3)
+    assert_equal(x[1], 4)
+    assert_equal(x[2], 5)
 
 
 def test_filter_then_select() raises:
@@ -142,9 +142,9 @@ def test_filter_then_select() raises:
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
-    var y = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(y.unsafe_get(0), 40)
-    assert_equal(y.unsafe_get(1), 50)
+    var y = result.columns[0].as_primitive[int64]()
+    assert_equal(y[0], 40)
+    assert_equal(y[1], 50)
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +191,8 @@ def test_streaming_filter_skips_empty() raises:
     # Only the last morsel has a matching row
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 1)
-    var x = PrimitiveArray[int64](data=batches[0].columns[0].copy())
-    assert_equal(x.unsafe_get(0), 5)
+    var x = batches[0].columns[0].as_primitive[int64]()
+    assert_equal(x[0], 5)
 
 
 def test_streaming_chained_filter_project() raises:
@@ -207,10 +207,10 @@ def test_streaming_chained_filter_project() raises:
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
-    var y = PrimitiveArray[int64](data=result.columns[0].copy())
-    assert_equal(y.unsafe_get(0), 30)
-    assert_equal(y.unsafe_get(1), 40)
-    assert_equal(y.unsafe_get(2), 50)
+    var y = result.columns[0].as_primitive[int64]()
+    assert_equal(y[0], 30)
+    assert_equal(y[1], 40)
+    assert_equal(y[2], 50)
 
 
 def main() raises:

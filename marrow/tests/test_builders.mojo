@@ -48,8 +48,8 @@ def test_bool_builder_append_null() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_true(frozen.is_valid(2))
-    assert_true(frozen.unsafe_get(0))
-    assert_false(frozen.unsafe_get(2))
+    assert_true(frozen[0])
+    assert_false(frozen[2])
 
 
 def test_bool_builder_null_count() raises:
@@ -84,7 +84,7 @@ def test_bool_builder_all_false() raises:
     assert_equal(frozen.null_count(), 0)
     for i in range(3):
         assert_true(frozen.is_valid(i))
-        assert_false(frozen.unsafe_get(i))
+        assert_false(frozen[i])
 
 
 def test_bool_builder_as_any_builder() raises:
@@ -105,8 +105,8 @@ def test_primitive_builder_int16() raises:
     b.append(32767)
     b.append(-32768)
     var frozen = b.finish_typed()
-    assert_equal(frozen.unsafe_get(0), 32767)
-    assert_equal(frozen.unsafe_get(1), -32768)
+    assert_equal(frozen[0], 32767)
+    assert_equal(frozen[1], -32768)
 
 
 def test_primitive_builder_uint32() raises:
@@ -114,8 +114,8 @@ def test_primitive_builder_uint32() raises:
     b.append(0)
     b.append(42)
     var frozen = b.finish_typed()
-    assert_equal(frozen.unsafe_get(0), 0)
-    assert_equal(frozen.unsafe_get(1), 42)
+    assert_equal(frozen[0], 0)
+    assert_equal(frozen[1], 42)
 
 
 def test_primitive_builder_float32() raises:
@@ -155,9 +155,9 @@ def test_primitive_builder_capacity_doubling() raises:
     b.append(9)
     assert_equal(len(b), 10)
     var frozen = b.finish_typed()
-    assert_equal(frozen.unsafe_get(0), 0)
-    assert_equal(frozen.unsafe_get(4), 4)
-    assert_equal(frozen.unsafe_get(9), 9)
+    assert_equal(frozen[0], 0)
+    assert_equal(frozen[4], 4)
+    assert_equal(frozen[9], 9)
 
 
 def test_primitive_builder_as_any_builder() raises:
@@ -207,8 +207,8 @@ def test_string_builder_append_null() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_true(frozen.is_valid(2))
-    assert_equal(frozen.unsafe_get(0), "hello")
-    assert_equal(frozen.unsafe_get(2), "world")
+    assert_equal(frozen[0], "hello")
+    assert_equal(frozen[2], "world")
 
 
 def test_string_builder_null_count() raises:
@@ -232,9 +232,9 @@ def test_string_builder_empty_string() raises:
     b.append("")
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    assert_equal(frozen.unsafe_get(0), "")
-    assert_equal(frozen.unsafe_get(1), "x")
-    assert_equal(frozen.unsafe_get(2), "")
+    assert_equal(frozen[0], "")
+    assert_equal(frozen[1], "x")
+    assert_equal(frozen[2], "")
 
 
 def test_string_builder_offsets_correct() raises:
@@ -246,9 +246,9 @@ def test_string_builder_offsets_correct() raises:
     b.append("f")  # bytes [5..6)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 4)
-    assert_equal(frozen.unsafe_get(0), "ab")
-    assert_equal(frozen.unsafe_get(1), "cde")
-    assert_equal(frozen.unsafe_get(3), "f")
+    assert_equal(frozen[0], "ab")
+    assert_equal(frozen[1], "cde")
+    assert_equal(frozen[3], "f")
 
 
 def test_string_builder_all_nulls() raises:
@@ -269,9 +269,9 @@ def test_string_builder_capacity_growth() raises:
     b.append("third")
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    assert_equal(frozen.unsafe_get(0), "first")
-    assert_equal(frozen.unsafe_get(1), "second")
-    assert_equal(frozen.unsafe_get(2), "third")
+    assert_equal(frozen[0], "first")
+    assert_equal(frozen[1], "second")
+    assert_equal(frozen[2], "third")
 
 
 def test_string_builder_append_string_slice() raises:
@@ -283,8 +283,8 @@ def test_string_builder_append_string_slice() raises:
     b.append(s2)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(frozen.unsafe_get(0), "hello")
-    assert_equal(frozen.unsafe_get(1), "world")
+    assert_equal(frozen[0], "hello")
+    assert_equal(frozen[1], "world")
 
 
 def test_string_builder_unsafe_append_string_slice() raises:
@@ -297,8 +297,8 @@ def test_string_builder_unsafe_append_string_slice() raises:
     b.unsafe_append(s2)
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(frozen.unsafe_get(0), "hi")
-    assert_equal(frozen.unsafe_get(1), "bye")
+    assert_equal(frozen[0], "hi")
+    assert_equal(frozen[1], "bye")
 
 
 def test_string_builder_as_any_builder() raises:
@@ -358,7 +358,7 @@ def test_list_builder_empty_list() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     assert_true(frozen.is_valid(0))
-    var inner = PrimitiveArray[int64](frozen.unsafe_get(0))
+    var inner = frozen[0].as_primitive[int64]()
     assert_equal(inner.length, 0)
 
 
@@ -390,10 +390,10 @@ def test_list_builder_multiple_nulls_offsets() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_false(frozen.is_valid(2))
-    var first = PrimitiveArray[int32](frozen.unsafe_get(0))
+    var first = frozen[0].as_primitive[int32]()
     assert_equal(first.length, 2)
-    assert_equal(first.unsafe_get(0), 1)
-    assert_equal(first.unsafe_get(1), 2)
+    assert_equal(first[0], 1)
+    assert_equal(first[1], 2)
 
 
 def test_list_builder_string_child() raises:
@@ -404,9 +404,9 @@ def test_list_builder_string_child() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
-    var inner = StringArray(frozen.unsafe_get(0))
-    assert_equal(inner.unsafe_get(0), "hello")
-    assert_equal(inner.unsafe_get(1), "world")
+    var inner = StringArray(frozen[0])
+    assert_equal(inner[0], "hello")
+    assert_equal(inner[1], "world")
 
 
 # ---------------------------------------------------------------------------
@@ -434,9 +434,9 @@ def test_fixed_size_list_builder_float32() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    var first = frozen.unsafe_get(0).as_float32()
+    var first = frozen[0].as_float32()
     assert_equal(first.length, 2)
-    var second = frozen.unsafe_get(1).as_float32()
+    var second = frozen[1].as_float32()
     assert_equal(second.length, 2)
 
 
@@ -486,11 +486,11 @@ def test_fixed_size_list_builder_size1() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    var first = frozen.unsafe_get(0).as_int32()
+    var first = frozen[0].as_int32()
     assert_equal(first.length, 1)
-    assert_equal(first.unsafe_get(0), 7)
-    var third = frozen.unsafe_get(2).as_int32()
-    assert_equal(third.unsafe_get(0), 9)
+    assert_equal(first[0], 7)
+    var third = frozen[2].as_int32()
+    assert_equal(third[0], 9)
 
 
 # ---------------------------------------------------------------------------
@@ -563,9 +563,9 @@ def test_struct_builder_field_values_accessible() raises:
     var frozen = sb.finish_typed()
 
     ref field_data = frozen.unsafe_get("x")
-    var x_arr = PrimitiveArray[int32](field_data.copy())
-    assert_equal(x_arr.unsafe_get(0), 42)
-    assert_equal(x_arr.unsafe_get(1), 99)
+    var x_arr = field_data.as_primitive[int32]()
+    assert_equal(x_arr[0], 42)
+    assert_equal(x_arr[1], 99)
 
 
 def test_struct_builder_multi_type_fields() raises:
@@ -666,9 +666,9 @@ def test_factory_array_bool_with_nulls() raises:
     assert_true(a.is_valid(2))
     assert_false(a.is_valid(3))
     assert_true(a.is_valid(4))
-    assert_true(a.unsafe_get(0))
-    assert_false(a.unsafe_get(2))
-    assert_true(a.unsafe_get(4))
+    assert_true(a[0])
+    assert_false(a[2])
+    assert_true(a[4])
 
 
 def test_factory_array_bool_all_nulls() raises:
@@ -681,9 +681,9 @@ def test_factory_array_int_with_nulls() raises:
     var a = array[int32]([1, None, 3, None, 5])
     assert_equal(len(a), 5)
     assert_equal(a.null_count(), 2)
-    assert_equal(a.unsafe_get(0), 1)
-    assert_equal(a.unsafe_get(2), 3)
-    assert_equal(a.unsafe_get(4), 5)
+    assert_equal(a[0], 1)
+    assert_equal(a[2], 3)
+    assert_equal(a[4], 5)
     assert_true(a.is_valid(0))
     assert_false(a.is_valid(1))
     assert_false(a.is_valid(3))
@@ -693,9 +693,9 @@ def test_factory_array_int_all_valid() raises:
     var a = array[int64]([10, 20, 30])
     assert_equal(len(a), 3)
     assert_equal(a.null_count(), 0)
-    assert_equal(a.unsafe_get(0), 10)
-    assert_equal(a.unsafe_get(1), 20)
-    assert_equal(a.unsafe_get(2), 30)
+    assert_equal(a[0], 10)
+    assert_equal(a[1], 20)
+    assert_equal(a[2], 30)
 
 
 def test_factory_nulls_all_invalid() raises:
@@ -723,21 +723,21 @@ def test_factory_arange_validity() raises:
     assert_equal(a.null_count(), 0)
     for i in range(5):
         assert_true(a.is_valid(i))
-    assert_equal(a.unsafe_get(0), 0)
-    assert_equal(a.unsafe_get(4), 4)
+    assert_equal(a[0], 0)
+    assert_equal(a[4], 4)
 
 
 def test_factory_arange_non_zero_start() raises:
     var a = arange[int64](10, 15)
     assert_equal(len(a), 5)
-    assert_equal(a.unsafe_get(0), 10)
-    assert_equal(a.unsafe_get(4), 14)
+    assert_equal(a[0], 10)
+    assert_equal(a[4], 14)
 
 
 def test_factory_arange_single() raises:
     var a = arange[int32](7, 8)
     assert_equal(len(a), 1)
-    assert_equal(a.unsafe_get(0), 7)
+    assert_equal(a[0], 7)
 
 
 def test_factory_arange_empty() raises:
@@ -818,8 +818,8 @@ def test_any_builder_finish_dispatch_primitive() raises:
     var builder: AnyBuilder = b^
     var arr = builder.finish()
     assert_equal(arr.length, 2)
-    assert_equal(arr.as_int32().unsafe_get(0), 42)
-    assert_equal(arr.as_int32().unsafe_get(1), 99)
+    assert_equal(arr.as_int32()[0], 42)
+    assert_equal(arr.as_int32()[1], 99)
     # data buffer is shrunk: 2 int32s = 8 bytes → 64 bytes
     assert_equal(arr.buffers[0].size, 64)
 

@@ -1,4 +1,4 @@
-from std.testing import assert_equal, TestSuite
+from std.testing import assert_equal, assert_true, TestSuite
 
 from marrow.arrays import array, PrimitiveArray, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
@@ -32,14 +32,14 @@ fn _make(a: PrimitiveArray[int64], b: PrimitiveArray[int64]) -> List[Array]:
 
 fn _exec(expr: AnyValue, inputs: List[Array]) raises -> PrimitiveArray[int64]:
     """Helper: execute and convert result to typed array."""
-    return PrimitiveArray[int64](data=execute(expr, inputs))
+    return execute(expr, inputs).as_primitive[int64]()
 
 
 fn _exec_pred(
     expr: AnyValue, inputs: List[Array]
 ) raises -> PrimitiveArray[bool_dt]:
     """Helper: execute predicate and convert result to typed bool array."""
-    return PrimitiveArray[bool_dt](data=execute(expr, inputs))
+    return execute(expr, inputs).as_primitive[bool_dt]()
 
 
 # ---------------------------------------------------------------------------
@@ -56,8 +56,7 @@ def test_add_expr() raises:
     var result = _exec(expr, _make(a, b))
     var expected = add[int64](a, b)
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 def test_sub_expr() raises:
@@ -69,8 +68,7 @@ def test_sub_expr() raises:
     var result = _exec(expr, _make(a, b))
     var expected = sub[int64](a, b)
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 def test_neg_expr() raises:
@@ -81,8 +79,7 @@ def test_neg_expr() raises:
     var result = _exec(expr, _make(a))
     var expected = k_neg[int64](a)
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 def test_abs_expr() raises:
@@ -93,8 +90,7 @@ def test_abs_expr() raises:
     var result = _exec(expr, _make(a))
     var expected = k_abs[int64](a)
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +107,7 @@ def test_abs_of_sub() raises:
     var result = _exec(expr, _make(a, b))
     var expected = k_abs[int64](sub[int64](a, b))
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 def test_diff_of_squares() raises:
@@ -123,10 +118,7 @@ def test_diff_of_squares() raises:
     var expr = (col(0) + col(1)) * (col(0) - col(1))
     var result = _exec(expr, _make(a, b))
 
-    for i in range(len(result)):
-        var ai = a.unsafe_get(i)
-        var bi = b.unsafe_get(i)
-        assert_equal(result.unsafe_get(i), ai * ai - bi * bi)
+    assert_true(result == array[int64]([8, 21, 40, 65, 96]))
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +133,7 @@ def test_single_element() raises:
 
     var expr = col(0) + col(1)
     var result = _exec(expr, _make(a, b))
-    assert_equal(result.unsafe_get(0), 50)
+    assert_equal(result[0], 50)
 
 
 def test_non_aligned_length() raises:
@@ -153,8 +145,7 @@ def test_non_aligned_length() raises:
     var result = _exec(expr, _make(a, b))
     var expected = add[int64](a, b)
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), expected.unsafe_get(i))
+    assert_true(result == expected)
 
 
 def test_write_to() raises:
@@ -175,8 +166,7 @@ def test_literal_int64() raises:
     var expr = lit[int64](10)
     var result = _exec(expr, _make(a))
 
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), 10)
+    assert_true(result == array[int64]([10, 10, 10, 10, 10]))
 
 
 def test_add_literal() raises:
@@ -184,8 +174,7 @@ def test_add_literal() raises:
     var a = array[int64]([1, 2, 3, 4, 5])
     var expr = col(0) + lit[int64](7)
     var result = _exec(expr, _make(a))
-    for i in range(len(result)):
-        assert_equal(result.unsafe_get(i), a.unsafe_get(i) + 7)
+    assert_true(result == array[int64]([8, 9, 10, 11, 12]))
 
 
 # ---------------------------------------------------------------------------
@@ -201,11 +190,11 @@ def test_equal_pred() raises:
     var expr = col(0) == col(1)
     var result = _exec_pred(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 1)
-    assert_equal(result.unsafe_get(1), 0)
-    assert_equal(result.unsafe_get(2), 1)
-    assert_equal(result.unsafe_get(3), 0)
-    assert_equal(result.unsafe_get(4), 1)
+    assert_equal(result[0], 1)
+    assert_equal(result[1], 0)
+    assert_equal(result[2], 1)
+    assert_equal(result[3], 0)
+    assert_equal(result[4], 1)
 
 
 def test_less_pred() raises:
@@ -216,10 +205,10 @@ def test_less_pred() raises:
     var expr = col(0) < col(1)
     var result = _exec_pred(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 1)
-    assert_equal(result.unsafe_get(1), 0)
-    assert_equal(result.unsafe_get(2), 0)
-    assert_equal(result.unsafe_get(3), 1)
+    assert_equal(result[0], 1)
+    assert_equal(result[1], 0)
+    assert_equal(result[2], 0)
+    assert_equal(result[3], 1)
 
 
 def test_greater_equal_pred() raises:
@@ -230,10 +219,10 @@ def test_greater_equal_pred() raises:
     var expr = col(0) >= col(1)
     var result = _exec_pred(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 1)
-    assert_equal(result.unsafe_get(1), 0)
-    assert_equal(result.unsafe_get(2), 1)
-    assert_equal(result.unsafe_get(3), 1)
+    assert_equal(result[0], 1)
+    assert_equal(result[1], 0)
+    assert_equal(result[2], 1)
+    assert_equal(result[3], 1)
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +240,10 @@ def test_and_pred() raises:
     var expr = less_expr & ne_expr
     var result = _exec_pred(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 1)
-    assert_equal(result.unsafe_get(1), 0)
-    assert_equal(result.unsafe_get(2), 0)
-    assert_equal(result.unsafe_get(3), 0)
+    assert_equal(result[0], 1)
+    assert_equal(result[1], 0)
+    assert_equal(result[2], 0)
+    assert_equal(result[3], 0)
 
 
 def test_not_pred() raises:
@@ -265,11 +254,11 @@ def test_not_pred() raises:
     var expr = ~(col(0) == col(1))
     var result = _exec_pred(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 1)
-    assert_equal(result.unsafe_get(1), 1)
-    assert_equal(result.unsafe_get(2), 0)
-    assert_equal(result.unsafe_get(3), 1)
-    assert_equal(result.unsafe_get(4), 1)
+    assert_equal(result[0], 1)
+    assert_equal(result[1], 1)
+    assert_equal(result[2], 0)
+    assert_equal(result[3], 1)
+    assert_equal(result[4], 1)
 
 
 # ---------------------------------------------------------------------------
@@ -286,10 +275,10 @@ def test_if_else() raises:
     var expr = if_else(cond, col(0), col(1))
     var result = _exec(expr, _make(a, b))
 
-    assert_equal(result.unsafe_get(0), 9)
-    assert_equal(result.unsafe_get(1), 5)
-    assert_equal(result.unsafe_get(2), 3)
-    assert_equal(result.unsafe_get(3), 10)
+    assert_equal(result[0], 9)
+    assert_equal(result[1], 5)
+    assert_equal(result[2], 3)
+    assert_equal(result[3], 10)
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +292,7 @@ def test_is_null() raises:
     var expr = col(0).is_null()
     var result = _exec_pred(expr, _make(a))
 
-    for i in range(3):
-        assert_equal(result.unsafe_get(i), 0)
+    assert_true(result == array([False, False, False]))
 
 
 # ---------------------------------------------------------------------------
@@ -326,9 +314,9 @@ def test_dispatch_hint_cpu() raises:
     var a = array[int64]([1, 2, 3])
     var b = array[int64]([10, 20, 30])
     var result = _exec(expr, _make(a, b))
-    assert_equal(result.unsafe_get(0), 11)
-    assert_equal(result.unsafe_get(1), 22)
-    assert_equal(result.unsafe_get(2), 33)
+    assert_equal(result[0], 11)
+    assert_equal(result[1], 22)
+    assert_equal(result[2], 33)
 
 
 # ---------------------------------------------------------------------------

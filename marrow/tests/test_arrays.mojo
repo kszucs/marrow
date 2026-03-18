@@ -207,14 +207,14 @@ def test_array_empty() raises:
 def test_array_from_ints() raises:
     var g = array[int8]([1, 2])
     assert_equal(len(g), 2)
-    assert_equal(g.unsafe_get(0), 1)
-    assert_equal(g.unsafe_get(1), 2)
+    assert_equal(g[0], 1)
+    assert_equal(g[1], 2)
 
     var b = array([True, False, True])
     assert_equal(len(b), 3)
-    assert_true(b.unsafe_get(0))
-    assert_false(b.unsafe_get(1))
-    assert_true(b.unsafe_get(2))
+    assert_true(b[0])
+    assert_false(b[1])
+    assert_true(b[2])
 
 
 def test_array_with_nulls() raises:
@@ -224,8 +224,8 @@ def test_array_with_nulls() raises:
     assert_true(a.is_valid(0))
     assert_false(a.is_valid(1))
     assert_true(a.is_valid(2))
-    assert_equal(a.unsafe_get(0), 1)
-    assert_equal(a.unsafe_get(2), 3)
+    assert_equal(a[0], 1)
+    assert_equal(a[2], 3)
 
     var b = array([True, None, False])
     assert_equal(b.length, 3)
@@ -237,15 +237,15 @@ def test_array_with_nulls() raises:
 def test_arange() raises:
     var a = arange[int32](1, 5)
     assert_equal(len(a), 4)
-    assert_equal(a.unsafe_get(0), 1)
-    assert_equal(a.unsafe_get(1), 2)
-    assert_equal(a.unsafe_get(2), 3)
-    assert_equal(a.unsafe_get(3), 4)
+    assert_equal(a[0], 1)
+    assert_equal(a[1], 2)
+    assert_equal(a[2], 3)
+    assert_equal(a[3], 4)
 
     var b = arange[uint8](0, 3)
     assert_equal(len(b), 3)
-    assert_equal(b.unsafe_get(0), 0)
-    assert_equal(b.unsafe_get(2), 2)
+    assert_equal(b[0], 0)
+    assert_equal(b[2], 2)
 
 
 def test_arange_empty() raises:
@@ -256,7 +256,7 @@ def test_arange_empty() raises:
 def test_arange_single() raises:
     var a = arange[int64](7, 8)
     assert_equal(len(a), 1)
-    assert_equal(a.unsafe_get(0), 7)
+    assert_equal(a[0], 7)
 
 
 def test_arange_validity() raises:
@@ -268,15 +268,15 @@ def test_arange_validity() raises:
 def test_arange_int8() raises:
     var a = arange[int8](10, 15)
     assert_equal(len(a), 5)
-    assert_equal(a.unsafe_get(0), 10)
-    assert_equal(a.unsafe_get(4), 14)
+    assert_equal(a[0], 10)
+    assert_equal(a[4], 14)
 
 
 def test_arange_uint64() raises:
     var a = arange[uint64](100, 103)
     assert_equal(len(a), 3)
-    assert_equal(a.unsafe_get(0), 100)
-    assert_equal(a.unsafe_get(2), 102)
+    assert_equal(a[0], 100)
+    assert_equal(a[2], 102)
 
 
 # TODO: move this to compute kernels
@@ -314,17 +314,17 @@ def test_primitive_array_with_offset() raises:
 
     # Default offset should be 0
     assert_equal(arr.offset, 0)
-    assert_equal(arr.unsafe_get(0), 100)
-    assert_equal(arr.unsafe_get(1), 200)
+    assert_equal(arr[0], 100)
+    assert_equal(arr[1], 200)
 
     # Create a zero-copy slice, should point to the same buffers.
     var sliced = arr.slice(2)
     assert_equal(sliced.offset, 2)
 
     # Test that offset affects get operations
-    assert_equal(sliced.unsafe_get(0), 300)  # Should get arr[2]
-    assert_equal(sliced.unsafe_get(1), 400)  # Should get arr[3]
-    assert_equal(sliced.unsafe_get(2), 500)  # Should get arr[4]
+    assert_equal(sliced[0], 300)  # Should get arr[2]
+    assert_equal(sliced[1], 400)  # Should get arr[3]
+    assert_equal(sliced[2], 500)  # Should get arr[4]
 
 
 def test_primitive_array_nulls_with_offset() raises:
@@ -353,8 +353,8 @@ def test_string_builder() raises:
     assert_equal(a._capacity, 2)
 
     var frozen = a.finish_typed()
-    assert_equal(frozen.unsafe_get(0), "hello")
-    assert_equal(frozen.unsafe_get(1), "world")
+    assert_equal(frozen[0], "hello")
+    assert_equal(frozen[1], "world")
 
 
 def test_list_bool_array() raises:
@@ -368,11 +368,11 @@ def test_list_bool_array() raises:
     assert_equal(len(lists), 1)
 
     # TODO: fix listarray.unsafe_get
-    var first_value = lists.unsafe_get(0)
+    var first_value = lists[0]
     var bool_array = first_value.as_bool()
-    assert_true(bool_array.unsafe_get(0))
-    assert_false(bool_array.unsafe_get(1))
-    assert_true(bool_array.unsafe_get(2))
+    assert_true(bool_array[0])
+    assert_false(bool_array[1])
+    assert_true(bool_array[2])
 
 
 def test_list_str() raises:
@@ -384,9 +384,9 @@ def test_list_str() raises:
     var lists = list_b.finish_typed()
     assert_equal(len(lists), 1)
 
-    var first_value = StringArray(lists.unsafe_get(0))
-    assert_equal(first_value.unsafe_get(0), "hello")
-    assert_equal(first_value.unsafe_get(1), "world")
+    var first_value = StringArray(lists[0])
+    assert_equal(first_value[0], "hello")
+    assert_equal(first_value[1], "world")
 
 
 def test_list_of_list() raises:
@@ -421,15 +421,15 @@ def test_list_of_list() raises:
     top_b.append_valid()
     list2 = top_b.finish_typed()
 
-    top = ListArray(list2.unsafe_get(0))
-    middle_0 = top.unsafe_get(0)
-    bottom = PrimitiveArray[int64](middle_0^)
-    assert_equal(bottom.unsafe_get(1), 2)
-    assert_equal(bottom.unsafe_get(0), 1)
-    middle_1 = top.unsafe_get(1)
-    bottom = PrimitiveArray[int64](middle_1^)
-    assert_equal(bottom.unsafe_get(0), 3)
-    assert_equal(bottom.unsafe_get(1), 4)
+    top = ListArray(list2[0])
+    middle_0 = top[0]
+    bottom = middle_0.as_primitive[int64]()
+    assert_equal(bottom[1], 2)
+    assert_equal(bottom[0], 1)
+    middle_1 = top[1]
+    bottom = middle_1.as_primitive[int64]()
+    assert_equal(bottom[0], 3)
+    assert_equal(bottom[1], 4)
 
 
 def test_fixed_size_list_int_array() raises:
@@ -451,17 +451,17 @@ def test_fixed_size_list_int_array() raises:
     assert_equal(fsl.dtype.size, 3)
 
     # First list: [1, 2, 3]
-    var first = fsl.unsafe_get(0).as_int64()
+    var first = fsl[0].as_int64()
     assert_equal(len(first), 3)
-    assert_equal(first.unsafe_get(0), 1)
-    assert_equal(first.unsafe_get(1), 2)
-    assert_equal(first.unsafe_get(2), 3)
+    assert_equal(first[0], 1)
+    assert_equal(first[1], 2)
+    assert_equal(first[2], 3)
 
     # Second list: [4, 5, 6]
-    var second = fsl.unsafe_get(1).as_int64()
-    assert_equal(second.unsafe_get(0), 4)
-    assert_equal(second.unsafe_get(1), 5)
-    assert_equal(second.unsafe_get(2), 6)
+    var second = fsl[1].as_int64()
+    assert_equal(second[0], 4)
+    assert_equal(second[1], 5)
+    assert_equal(second[2], 6)
 
 
 def test_fixed_size_list_roundtrip() raises:
@@ -480,9 +480,9 @@ def test_fixed_size_list_roundtrip() raises:
     assert_equal(fsl.dtype.size, 2)
     assert_equal(len(fsl), 2)
 
-    var first = fsl.unsafe_get(0).as_int32()
-    assert_equal(first.unsafe_get(0), 10)
-    assert_equal(first.unsafe_get(1), 20)
+    var first = fsl[0].as_int32()
+    assert_equal(first[0], 10)
+    assert_equal(first[1], 20)
 
 
 def test_fixed_size_list_with_nulls() raises:
@@ -508,14 +508,14 @@ def test_fixed_size_list_with_nulls() raises:
     assert_false(fsl.is_valid(2))
 
     # unsafe_get on valid entries returns correct values even when array has nulls
-    var first = fsl.unsafe_get(0).as_int64()
-    assert_equal(first.unsafe_get(0), 1)
-    assert_equal(first.unsafe_get(1), 2)
-    assert_equal(first.unsafe_get(2), 3)
-    var second = fsl.unsafe_get(1).as_int64()
-    assert_equal(second.unsafe_get(0), 4)
-    assert_equal(second.unsafe_get(1), 5)
-    assert_equal(second.unsafe_get(2), 6)
+    var first = fsl[0].as_int64()
+    assert_equal(first[0], 1)
+    assert_equal(first[1], 2)
+    assert_equal(first[2], 3)
+    var second = fsl[1].as_int64()
+    assert_equal(second[0], 4)
+    assert_equal(second[1], 5)
+    assert_equal(second[2], 6)
 
 
 def test_fixed_size_list_unsafe_get_dtype() raises:
@@ -530,12 +530,12 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
     builder.append_valid()
     var fsl = builder.finish_typed()
 
-    var slice0 = fsl.unsafe_get(0)
+    var slice0 = fsl[0]
     assert_equal(slice0.dtype, int32)
     assert_equal(slice0.length, 2)
     assert_equal(slice0.offset, 0)
 
-    var slice1 = fsl.unsafe_get(1)
+    var slice1 = fsl[1]
     assert_equal(slice1.dtype, int32)
     assert_equal(slice1.length, 2)
     assert_equal(slice1.offset, 2)
@@ -597,13 +597,13 @@ def test_struct_array_unsafe_get() raises:
     sb.append_valid()
     var struct_array = sb.finish_typed()
     ref int_data_a = struct_array.unsafe_get("int_data_a")
-    var int_a = PrimitiveArray[int32](int_data_a.copy())
-    assert_equal(int_a.unsafe_get(0), 1)
-    assert_equal(int_a.unsafe_get(4), 5)
+    var int_a = int_data_a.as_primitive[int32]()
+    assert_equal(int_a[0], 1)
+    assert_equal(int_a[4], 5)
     ref int_data_b = struct_array.unsafe_get("int_data_b")
-    var int_b = PrimitiveArray[int32](int_data_b.copy())
-    assert_equal(int_b.unsafe_get(0), 10)
-    assert_equal(int_b.unsafe_get(2), 30)
+    var int_b = int_data_b.as_primitive[int32]()
+    assert_equal(int_b[0], 10)
+    assert_equal(int_b[2], 30)
 
 
 def test_chunked_array() raises:
@@ -615,8 +615,8 @@ def test_chunked_array() raises:
     assert_equal(chunked_array.chunk(0).length, 1)
     var second_chunk = chunked_array.chunk(1).copy().as_uint8()
     assert_equal(second_chunk.length, 2)
-    assert_equal(second_chunk.unsafe_get(0), 0)
-    assert_equal(second_chunk.unsafe_get(1), 1)
+    assert_equal(second_chunk[0], 0)
+    assert_equal(second_chunk[1], 1)
 
 
 def test_combine_chunked_array() raises:
@@ -625,7 +625,7 @@ def test_combine_chunked_array() raises:
     var chunked_array = ChunkedArray(uint8, arrays^)
     assert_equal(chunked_array.length, 3)
     assert_equal(len(chunked_array.chunks), 2)
-    assert_equal(chunked_array.chunk(1).copy().as_uint8().unsafe_get(1), 1)
+    assert_equal(chunked_array.chunk(1).copy().as_uint8()[1], 1)
 
     var combined_array = chunked_array^.combine_chunks()
     assert_equal(combined_array.length, 3)
@@ -642,8 +642,8 @@ def test_primitive_finish_shrinks() raises:
     a.append(99)
     var frozen = a.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(frozen.unsafe_get(0), 42)
-    assert_equal(frozen.unsafe_get(1), 99)
+    assert_equal(frozen[0], 42)
+    assert_equal(frozen[1], 99)
 
     var values_buffer = frozen.buffer
     # 2 int64 values = 16 bytes, but buffer padded to 64 bytes for alignment
@@ -658,8 +658,8 @@ def test_primitive_finish_via_append() raises:
     a.append(3)
     var frozen = a.finish_typed()
     assert_equal(frozen.length, 3)
-    assert_equal(frozen.unsafe_get(0), 1)
-    assert_equal(frozen.unsafe_get(2), 3)
+    assert_equal(frozen[0], 1)
+    assert_equal(frozen[2], 3)
 
 
 def test_primitive_finish_preserves_nulls() raises:
@@ -682,8 +682,8 @@ def test_primitive_finish_converts_to_array() raises:
     a.append(8)
     var frozen = a.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(frozen.unsafe_get(0), 7)
-    assert_equal(frozen.unsafe_get(1), 8)
+    assert_equal(frozen[0], 7)
+    assert_equal(frozen[1], 8)
 
 
 def test_getitem_bounds_check() raises:
@@ -721,8 +721,8 @@ def test_string_finish_zero_copy() raises:
     s.append("world")
     var frozen = s.finish_typed()
     assert_equal(frozen.length, 2)
-    assert_equal(frozen.unsafe_get(0), "hello")
-    assert_equal(frozen.unsafe_get(1), "world")
+    assert_equal(frozen[0], "hello")
+    assert_equal(frozen[1], "world")
 
 
 def test_string_finish_shrinks() raises:
@@ -731,7 +731,7 @@ def test_string_finish_shrinks() raises:
     s.append("hi")
     var frozen = s.finish_typed()
     assert_equal(frozen.length, 1)
-    assert_equal(frozen.unsafe_get(0), "hi")
+    assert_equal(frozen[0], "hi")
 
 
 def test_string_getitem_bounds_check() raises:

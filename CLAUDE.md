@@ -193,6 +193,14 @@ Before adding a new feature, kernel, or test suite, inspect the reference implem
 
 This applies especially to: new kernels, array type behaviour, validity/null handling, offset semantics, and test coverage.
 
+### Testing Guidelines
+
+When writing or modifying tests:
+
+- **Prefer `arr[i]` over `arr.unsafe_get(i)`** for indexed element access. Use `unsafe_get` only when the explicit point of the test is to exercise the unsafe API.
+- **Prefer `x.as_primitive[T]()`** over `PrimitiveArray[T](data=x)` for obtaining a typed view of a type-erased `Array`.
+- **Prefer `assert_true(arr1 == arr2)`** over element-by-element loops when asserting that two typed arrays have equal contents. `PrimitiveArray[T].__eq__` returns `Bool` (structural equality), so a single `assert_true(result == expected)` replaces the whole loop.
+
 ### Kernel Implementation Pattern
 
 Kernels in `marrow/kernels/` are implemented as typed overloads first, with a type-erased `Array` overload as a thin dispatch layer:

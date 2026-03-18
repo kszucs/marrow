@@ -25,11 +25,11 @@ def test_equal_true_and_false() raises:
     var b = array[int64]([1, 0, 3, 0, 5])
     var result = equal[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 1)  # 1 == 1
-    assert_equal(result.unsafe_get(1), 0)  # 2 != 0
-    assert_equal(result.unsafe_get(2), 1)  # 3 == 3
-    assert_equal(result.unsafe_get(3), 0)  # 4 != 0
-    assert_equal(result.unsafe_get(4), 1)  # 5 == 5
+    assert_equal(result[0], 1)  # 1 == 1
+    assert_equal(result[1], 0)  # 2 != 0
+    assert_equal(result[2], 1)  # 3 == 3
+    assert_equal(result[3], 0)  # 4 != 0
+    assert_equal(result[4], 1)  # 5 == 5
 
 
 def test_not_equal() raises:
@@ -38,9 +38,9 @@ def test_not_equal() raises:
     var b = array[int64]([1, 9, 3])
     var result = not_equal[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 0)  # 1 == 1
-    assert_equal(result.unsafe_get(1), 1)  # 2 != 9
-    assert_equal(result.unsafe_get(2), 0)  # 3 == 3
+    assert_equal(result[0], 0)  # 1 == 1
+    assert_equal(result[1], 1)  # 2 != 9
+    assert_equal(result[2], 0)  # 3 == 3
 
 
 def test_less() raises:
@@ -49,10 +49,10 @@ def test_less() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 1)  # 1 < 5
-    assert_equal(result.unsafe_get(1), 0)  # 5 > 1
-    assert_equal(result.unsafe_get(2), 0)  # 3 == 3, not strictly less
-    assert_equal(result.unsafe_get(3), 1)  # 10 < 20
+    assert_equal(result[0], 1)  # 1 < 5
+    assert_equal(result[1], 0)  # 5 > 1
+    assert_equal(result[2], 0)  # 3 == 3, not strictly less
+    assert_equal(result[3], 1)  # 10 < 20
 
 
 def test_less_equal() raises:
@@ -61,10 +61,10 @@ def test_less_equal() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less_equal[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 1)  # 1 <= 5
-    assert_equal(result.unsafe_get(1), 0)  # 5 > 1
-    assert_equal(result.unsafe_get(2), 1)  # 3 <= 3
-    assert_equal(result.unsafe_get(3), 1)  # 10 <= 20
+    assert_equal(result[0], 1)  # 1 <= 5
+    assert_equal(result[1], 0)  # 5 > 1
+    assert_equal(result[2], 1)  # 3 <= 3
+    assert_equal(result[3], 1)  # 10 <= 20
 
 
 def test_greater() raises:
@@ -73,10 +73,10 @@ def test_greater() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 1)  # 5 > 1
-    assert_equal(result.unsafe_get(1), 0)  # 1 < 5
-    assert_equal(result.unsafe_get(2), 0)  # 3 == 3
-    assert_equal(result.unsafe_get(3), 1)  # 20 > 10
+    assert_equal(result[0], 1)  # 5 > 1
+    assert_equal(result[1], 0)  # 1 < 5
+    assert_equal(result[2], 0)  # 3 == 3
+    assert_equal(result[3], 1)  # 20 > 10
 
 
 def test_greater_equal() raises:
@@ -85,10 +85,10 @@ def test_greater_equal() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater_equal[int64](a, b)
 
-    assert_equal(result.unsafe_get(0), 1)  # 5 >= 1
-    assert_equal(result.unsafe_get(1), 0)  # 1 < 5
-    assert_equal(result.unsafe_get(2), 1)  # 3 >= 3
-    assert_equal(result.unsafe_get(3), 1)  # 20 >= 10
+    assert_equal(result[0], 1)  # 5 >= 1
+    assert_equal(result[1], 0)  # 1 < 5
+    assert_equal(result[2], 1)  # 3 >= 3
+    assert_equal(result[3], 1)  # 20 >= 10
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +110,9 @@ def test_less_float64() raises:
     var b = bb.finish_typed()
     var result = less[float64](a, b)
 
-    assert_equal(result.unsafe_get(0), 0)  # 1.0 == 1.0
-    assert_equal(result.unsafe_get(1), 0)  # 2.5 > 2.0
-    assert_equal(result.unsafe_get(2), 1)  # 3.0 < 5.0
+    assert_equal(result[0], 0)  # 1.0 == 1.0
+    assert_equal(result[1], 0)  # 2.5 > 2.0
+    assert_equal(result[2], 1)  # 3.0 < 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -142,10 +142,10 @@ def test_single_element() raises:
     var a = array[int64]([7])
     var b = array[int64]([7])
     var eq = equal[int64](a, b)
-    assert_equal(eq.unsafe_get(0), 1)
+    assert_equal(eq[0], 1)
 
     var lt = less[int64](a, b)
-    assert_equal(lt.unsafe_get(0), 0)
+    assert_equal(lt[0], 0)
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +161,8 @@ def test_non_aligned_length() raises:
     var result = less[int64](a, b)
 
     for i in range(n):
-        var expected = Int(a.unsafe_get(i) < b.unsafe_get(i))
-        assert_equal(Int(result.unsafe_get(i)), expected)
+        var expected = Int(a[i] < b[i])
+        assert_equal(Int(result[i]), expected)
 
 
 # ---------------------------------------------------------------------------
