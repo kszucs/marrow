@@ -1,6 +1,6 @@
-"""Tests for RecordBatch Python bindings.
+"""Tests for RecordBatch and Table Python bindings.
 
-Mirrors PyArrow's RecordBatch test patterns where applicable.
+Mirrors PyArrow's test patterns where applicable.
 """
 
 import pyarrow as pa
@@ -302,3 +302,192 @@ def test_pyarrow_roundtrip_with_nulls():
     pa_batch = pa.record_batch(batch)
     assert pa_batch.column("a").to_pylist() == [1, None, 3]
     assert pa_batch.column("b").to_pylist() == ["x", None, "z"]
+
+
+# ===========================================================================
+# Table tests
+# ===========================================================================
+
+
+def make_table():
+    """Return a simple 3-column, 3-row Table."""
+    return ma.table(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
+
+
+# ── Construction ─────────────────────────────────────────────────────────────
+
+
+def test_table_from_dict():
+    t = make_table()
+    assert type(t).__name__ == "Table"
+    assert t.num_rows() == 3
+    assert t.num_columns() == 3
+
+
+def test_table_from_list_with_names():
+    x = ma.array([1, 2], type=ma.int64())
+    y = ma.array(["a", "b"])
+    t = ma.table([x, y], names=["x", "y"])
+    assert t.num_rows() == 2
+    assert t.num_columns() == 2
+
+
+def test_table_from_pyarrow():
+    pa_table = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
+    t = ma.table(pa_table)
+    assert type(t).__name__ == "Table"
+    assert t.num_rows() == 3
+    assert t.num_columns() == 2
+
+
+# ── Properties ───────────────────────────────────────────────────────────────
+
+
+def test_table_shape():
+    assert make_table().shape() == (3, 3)
+
+
+def test_table_column_names():
+    assert list(make_table().column_names()) == ["x", "y", "z"]
+
+
+def test_table_schema():
+    t = make_table()
+    schema = t.schema()
+    assert type(schema).__name__ == "Schema"
+
+
+def test_table_columns():
+    cols = make_table().columns()
+    assert len(cols) == 3
+
+
+def test_table_str():
+    s = str(make_table())
+    assert "Table" in s
+    assert "num_rows=3" in s
+
+
+# ── Column access ────────────────────────────────────────────────────────────
+
+
+def test_table_column_by_index():
+    t = make_table()
+    col = t.column(0)
+    assert type(col).__name__ == "Int32Array"
+    assert len(col) == 3
+
+
+def test_table_column_by_name():
+    t = make_table()
+    col = t.column("y")
+    assert type(col).__name__ == "Float64Array"
+
+
+def test_table_column_by_name_not_found():
+    with pytest.raises(Exception):
+        make_table().column("missing")
+
+
+# ── Equality ─────────────────────────────────────────────────────────────────
+
+
+def test_table_equals():
+    t1 = make_table()
+    t2 = make_table()
+    assert t1.equals(t2)
+    assert t1 == t2
+
+
+def test_table_not_equals():
+    t = make_table()
+    other = ma.table(
+        {
+            "x": ma.array([9, 9, 9], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
+    assert not t.equals(other)
+
+
+# ── to_batches ───────────────────────────────────────────────────────────────
+
+
+def test_table_to_batches():
+    t = make_table()
+    batches = t.to_batches()
+    assert len(batches) >= 1
+    total_rows = sum(b.num_rows() for b in batches)
+    assert total_rows == 3
+
+
+# ── to_pydict / to_pylist ───────────────────────────────────────────────────
+
+
+def test_table_to_pydict():
+    t = ma.table(
+        {
+            "a": ma.array([1, 2], type=ma.int32()),
+            "b": ma.array(["x", "y"]),
+        }
+    )
+    d = t.to_pydict()
+    assert list(d["a"]) == [1, 2]
+    assert list(d["b"]) == ["x", "y"]
+
+
+def test_table_to_pylist():
+    t = ma.table(
+        {
+            "a": ma.array([1, 2], type=ma.int32()),
+            "b": ma.array(["x", "y"]),
+        }
+    )
+    rows = t.to_pylist()
+    assert len(rows) == 2
+    assert rows[0]["a"] == 1
+    assert rows[1]["b"] == "y"
+
+
+# ── Arrow C Stream Interface roundtrip ───────────────────────────────────────
+
+
+def test_table_arrow_c_stream_roundtrip():
+    """Export marrow Table -> import into PyArrow via __arrow_c_stream__."""
+    t = make_table()
+    pa_table = pa.table(t)
+    assert pa_table.num_rows == 3
+    assert pa_table.num_columns == 3
+    assert pa_table.schema.field("x").type == pa.int32()
+    assert pa_table.schema.field("y").type == pa.float64()
+    assert pa_table.schema.field("z").type == pa.string()
+    assert pa_table.column("x").to_pylist() == [1, 2, 3]
+    assert pa_table.column("z").to_pylist() == ["a", "b", "c"]
+
+
+def test_table_arrow_c_stream_import():
+    """Import PyArrow Table -> marrow Table via __arrow_c_stream__."""
+    pa_table = pa.table({"a": [1, 2, 3], "b": ["x", "y", "z"]})
+    t = ma.table(pa_table)
+    assert t.num_rows() == 3
+    assert t.num_columns() == 2
+    assert list(t.column_names()) == ["a", "b"]
+
+
+def test_table_arrow_c_stream_with_nulls():
+    t = ma.table(
+        {
+            "a": ma.array([1, None, 3], type=ma.int32()),
+            "b": ma.array(["x", None, "z"]),
+        }
+    )
+    pa_table = pa.table(t)
+    assert pa_table.column("a").to_pylist() == [1, None, 3]
+    assert pa_table.column("b").to_pylist() == ["x", None, "z"]

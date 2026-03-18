@@ -16,6 +16,7 @@ import std.math as math
 from .dtypes import *
 from .arrays import *
 from .schema import Schema
+from .tabular import RecordBatch, Table
 
 comptime ARROW_FLAG_NULLABLE = 2
 
@@ -563,7 +564,7 @@ struct CArrowArray(Copyable, Movable):
                 values_field.dtype, owner
             )
             children.append(values_array^)
-        elif dtype.is_string() or dtype == binary:
+        elif dtype.is_string() or dtype.is_binary():
             if self.n_buffers != 3:
                 raise Error(
                     "string/binary array must have 3 buffers, got ",
@@ -669,7 +670,7 @@ struct CArrowArray(Copyable, Movable):
 
         if dtype.is_bool() or dtype.is_primitive():
             n_buffers = 2
-        elif dtype.is_string() or dtype == binary:
+        elif dtype.is_string() or dtype.is_binary():
             n_buffers = 3
         elif dtype.is_list():
             n_buffers = 2
@@ -706,7 +707,7 @@ struct CArrowArray(Copyable, Movable):
             buffers[1] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
             )
-        elif dtype.is_string() or dtype == binary:
+        elif dtype.is_string() or dtype.is_binary():
             buffers[1] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
             )
@@ -898,11 +899,106 @@ struct CArrowDeviceArray(Movable):
         )
 
 
-# See: https://arrow.apache.org/docs/format/CStreamInterface.html
+# ---------------------------------------------------------------------------
+# Arrow C Stream Interface
+# https://arrow.apache.org/docs/format/CStreamInterface.html
+# ---------------------------------------------------------------------------
+
+
+struct _StreamPrivateData(Movable):
+    """Internal state for an exported CArrowArrayStream.
+
+    Holds the schema fields and record batches that the stream yields.
+    `index` tracks the current position in `batches`.
+    """
+
+    var fields: List[Field]
+    var batches: List[RecordBatch]
+    var index: Int
+
+    fn __init__(out self, var fields: List[Field], var batches: List[RecordBatch]):
+        self.fields = fields^
+        self.batches = batches^
+        self.index = 0
+
+
+fn _stream_get_schema(
+    stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
+    schema_out: UnsafePointer[CArrowSchema, MutAnyOrigin],
+) -> Int32:
+    """Stream callback: write the schema into `schema_out`."""
+    try:
+        var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
+        schema_out.init_pointee_move(CArrowSchema.from_schema(data[].fields))
+        return 0
+    except:
+        return 1
+
+
+fn _stream_get_next(
+    stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
+    array_out: UnsafePointer[CArrowArray, MutAnyOrigin],
+) -> Int32:
+    """Stream callback: write the next batch into `array_out`, or signal end."""
+    try:
+        var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
+        if data[].index >= len(data[].batches):
+            # Signal end-of-stream: set release to null.
+            UnsafePointer(to=array_out[].release).bitcast[UInt64]()[0] = 0
+            return 0
+        var batch = data[].batches[data[].index].copy()
+        data[].index += 1
+        var struct_arr: Array = batch.to_struct_array()
+        array_out.init_pointee_move(CArrowArray.from_array(struct_arr))
+        return 0
+    except:
+        return 1
+
+
+fn _stream_get_last_error(
+    stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
+) -> UnsafePointer[UInt8, MutAnyOrigin]:
+    """Stream callback: return null (no detailed error tracking)."""
+    return UnsafePointer[UInt8, MutAnyOrigin]()
+
+
+fn _stream_release(
+    stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
+) -> None:
+    """Stream callback: free private data and null the release field."""
+    var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
+    data.destroy_pointee()
+    data.free()
+    UnsafePointer(to=stream_ptr[].release).bitcast[UInt64]()[0] = 0
+
+
+fn _release_stream_capsule(capsule: PyObjectPtr):
+    """PyCapsule destructor for "arrow_array_stream" capsules."""
+    try:
+        var py = Python()
+        ref cpy = py.cpython()
+        var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_array_stream")
+        if ptr:
+            var c_stream = ptr.bitcast[CArrowArrayStream]()
+            if UnsafePointer(to=c_stream[].release).bitcast[UInt64]()[0] != 0:
+                c_stream[].release(c_stream)
+            c_stream.free()
+    except:
+        pass
 
 
 @fieldwise_init
 struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
+    """Arrow C Stream Interface struct (ArrowArrayStream).
+
+    Provides a streaming interface to exchange sequences of record batches.
+    Each stream has a fixed schema and yields batches via get_next() until
+    end-of-stream (signalled by a null release field on the output array).
+
+    Import:  `from_pycapsule()` → `to_record_batches()`
+    Export:  `from_batches()` → `to_pycapsule()`
+    """
+
     var get_schema: fn(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowSchema, MutAnyOrigin],
@@ -917,43 +1013,95 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     var release: fn(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
+    @staticmethod
+    fn from_batches(
+        var fields: List[Field], var batches: List[RecordBatch]
+    ) -> CArrowArrayStream:
+        """Build a CArrowArrayStream that yields the given batches.
 
-@fieldwise_init
-struct ArrowArrayStream(Copyable):
-    """Provide an fiendly interface to the C Arrow Array Stream."""
+        The stream takes ownership of the batches; callers should not
+        mutate them after this call.
+        """
+        var data = alloc[_StreamPrivateData](1)
+        data.init_pointee_move(_StreamPrivateData(fields^, batches^))
+        return CArrowArrayStream(
+            get_schema=_stream_get_schema,
+            get_next=_stream_get_next,
+            get_last_error=_stream_get_last_error,
+            release=_stream_release,
+            private_data=data.bitcast[NoneType](),
+        )
 
-    var handle: UnsafePointer[CArrowArrayStream, MutAnyOrigin]
+    @staticmethod
+    fn from_pycapsule(capsule: PythonObject) raises -> CArrowArrayStream:
+        """Take ownership of a CArrowArrayStream from an
+        "arrow_array_stream" PyCapsule.
+        """
+        var py = Python()
+        ref cpy = py.cpython()
+        var src = cpy.PyCapsule_GetPointer(
+            capsule._obj_ptr, "arrow_array_stream"
+        ).bitcast[CArrowArrayStream]()
+        var stream = src[].copy()
+        UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
+        return stream
 
-    fn c_schema(self) raises -> CArrowSchema:
-        """Return the C variant of the Arrow Schema."""
-        var schema = alloc[CArrowSchema](1)
-        var err = self.handle[].get_schema(self.handle, schema)
+    fn to_pycapsule(self) raises -> PythonObject:
+        """Wrap this stream in a Python "arrow_array_stream" PyCapsule."""
+        var py = Python()
+        ref cpy = py.cpython()
+        var ptr = alloc[CArrowArrayStream](1)
+        ptr.init_pointee_copy(self)
+        return PythonObject(
+            from_owned=cpy.PyCapsule_New(
+                ptr.bitcast[NoneType](),
+                "arrow_array_stream",
+                _release_stream_capsule,
+            )
+        )
+
+    fn to_table(self) raises -> Table:
+        """Consume the stream and build a Table.
+
+        Calls get_schema once, then iterates get_next until end-of-stream.
+        """
+        var heap = alloc[CArrowArrayStream](1)
+        heap.init_pointee_copy(self)
+
+        # Get schema.
+        var c_schema = alloc[CArrowSchema](1)
+        var err = heap[].get_schema(heap, c_schema)
         if err != 0:
-            raise Error("Failed to get schema ", err)
-        if not schema:
-            raise Error("The schema pointer is null")
-        return schema.take_pointee()
+            heap[].release(heap)
+            heap.free()
+            raise Error("CArrowArrayStream: get_schema failed with code ", err)
+        var schema = c_schema.take_pointee().to_schema()
 
-    fn c_next(self) raises -> CArrowArray:
-        """Return the next buffer in the streeam."""
-        var arrow_array = alloc[CArrowArray](1)
-        var err = self.handle[].get_next(self.handle, arrow_array)
-        if err != 0:
-            raise Error("Failed to get next arrow array ", err)
-        if not arrow_array:
-            raise Error("The arrow array pointer is null")
-        return arrow_array.take_pointee()
+        # Iterate batches.
+        var batches = List[RecordBatch]()
+        while True:
+            var c_array = alloc[CArrowArray](1)
+            err = heap[].get_next(heap, c_array)
+            if err != 0:
+                heap[].release(heap)
+                heap.free()
+                raise Error(
+                    "CArrowArrayStream: get_next failed with code ", err
+                )
+            # End-of-stream: release field is null.
+            if UnsafePointer(to=c_array[].release).bitcast[UInt64]()[0] == 0:
+                c_array.free()
+                break
+            var struct_dtype = struct_(schema.fields)
+            var arr = c_array.take_pointee().to_array(struct_dtype)
+            var columns = List[Array]()
+            for child in arr.children:
+                columns.append(child.copy())
+            batches.append(
+                RecordBatch(schema=schema, columns=columns^)
+            )
 
-
-fn arrow_array_stream_from_python(
-    pyobj: PythonObject, cpython: CPython
-) raises -> ArrowArrayStream:
-    """Create an ArrowArrayStream from a Python object supporting __arrow_c_stream__.
-    """
-    var stream = pyobj.__arrow_c_stream__()
-    var ptr = cpython.PyCapsule_GetPointer(
-        stream.steal_data(), "arrow_array_stream"
-    )
-    if not ptr:
-        raise Error("Failed to get the arrow array stream pointer")
-    return ArrowArrayStream(ptr.bitcast[CArrowArrayStream]())
+        # Release the stream.
+        heap[].release(heap)
+        heap.free()
+        return Table.from_batches(schema, batches^)

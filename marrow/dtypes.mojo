@@ -1,4 +1,4 @@
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 # The following enum codes are copied from the C++ implementation of Arrow
@@ -252,7 +252,20 @@ struct DataType(
         self.size = copy.size
 
     fn __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[DataType]()[]
+        from .c_data import CArrowSchema
+
+        # Try downcasting from a marrow Python object.
+        try:
+            self = py.downcast_value_ptr[DataType]()[]
+            return
+        except:
+            pass
+        # Fall back to the Arrow C Schema Interface for foreign objects.
+        var builtins = Python.import_module("builtins")
+        if not builtins.hasattr(py, "__arrow_c_schema__"):
+            raise Error("cannot convert Python object to DataType")
+        var c_schema = CArrowSchema.from_pycapsule(py.__arrow_c_schema__())
+        self = c_schema.to_dtype()
 
     fn __eq__(self, other: Self) -> Bool:
         if self.code != other.code or self.size != other.size:

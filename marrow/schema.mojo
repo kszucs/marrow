@@ -2,12 +2,14 @@
 
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
-from std.python import PythonObject
-from std.python.conversions import ConvertibleToPython
+from std.python import Python, PythonObject
+from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .dtypes import DataType, Field
 
 
-struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
+struct Schema(
+    ConvertibleFromPython, ConvertibleToPython, ImplicitlyCopyable, Sized, Writable
+):
     var fields: List[Field]
     var metadata: Dict[String, String]
 
@@ -24,6 +26,23 @@ struct Schema(ConvertibleToPython, ImplicitlyCopyable, Sized, Writable):
     fn __init__(out self, *, copy: Self):
         self.fields = List[Field](copy=copy.fields)
         self.metadata = Dict[String, String](copy=copy.metadata)
+
+    fn __init__(out self, *, py: PythonObject) raises:
+        from .c_data import CArrowSchema
+
+        # Try downcasting from a marrow Python object.
+        try:
+            self = py.downcast_value_ptr[Self]()[].copy()
+            return
+        except:
+            pass
+
+        # Fall back to the Arrow C Schema Interface for foreign objects.
+        var builtins = Python.import_module("builtins")
+        if not builtins.hasattr(py, "__arrow_c_schema__"):
+            raise Error("cannot convert Python object to Schema")
+        var c_schema = CArrowSchema.from_pycapsule(py.__arrow_c_schema__())
+        self = c_schema.to_schema()
 
     fn append(mut self, var field: Field):
         """Appends a field to the schema."""

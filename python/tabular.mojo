@@ -1,61 +1,137 @@
-"""Python bindings for RecordBatch.
+"""Python bindings for RecordBatch and Table.
 
-Exposes RecordBatch to Python with an API matching PyArrow's RecordBatch.
+Exposes RecordBatch and Table to Python with APIs matching PyArrow.
 
 References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html
+- https://arrow.apache.org/docs/python/generated/pyarrow.Table.html
 """
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from std.collections import OwnedKwargsDict
-from marrow.tabular import RecordBatch
+from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
-from marrow.arrays import Array
+from marrow.arrays import Array, ChunkedArray
 from marrow.dtypes import Field, struct_
-from marrow.c_data import CArrowSchema, CArrowArray
+from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------
-# Helper: convert a Python array (marrow or any __arrow_c_array__ object)
-# to a Mojo Array via the Arrow C Data Interface.
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-fn _py_array_to_mojo(obj: PythonObject) raises -> Array:
-    """Convert a Python array to a Mojo Array via __arrow_c_array__."""
+fn _import_record_batch(obj: PythonObject) raises -> RecordBatch:
+    """Import a RecordBatch from any object with __arrow_c_record_batch__ or __arrow_c_array__."""
     var builtins = Python.import_module("builtins")
-    if builtins.hasattr(obj, "__arrow_c_array__"):
-        var caps = obj.__arrow_c_array__(Python.none())
-        var c_schema = CArrowSchema.from_pycapsule(caps[0])
-        var c_array = CArrowArray.from_pycapsule(caps[1])
-        return c_array^.to_array(c_schema.to_dtype())
-    raise Error("Expected an array supporting __arrow_c_array__")
+    var caps: PythonObject
+    if builtins.hasattr(obj, "__arrow_c_record_batch__"):
+        caps = obj.__arrow_c_record_batch__()
+    elif builtins.hasattr(obj, "__arrow_c_array__"):
+        caps = obj.__arrow_c_array__(Python.none())
+    else:
+        raise Error("Expected __arrow_c_record_batch__ or __arrow_c_array__")
+    var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
+    var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(struct_(schema.fields))
+    var columns = List[Array]()
+    for child in struct_arr.children:
+        columns.append(child.copy())
+    return RecordBatch(schema=schema, columns=columns^)
+
+
+fn _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
+    """Convert schema + columns to a Python dict mapping names to value lists."""
+    var builtins = Python.import_module("builtins")
+    var result = builtins.dict()
+    for i in range(len(columns)):
+        var col_obj = columns[i].copy().to_python_object()
+        var col_len = Int(col_obj.__len__())
+        var values = builtins.list()
+        for j in range(col_len):
+            values.append(col_obj[j])
+        result[schema.fields[i].name.to_python_object()] = values
+    return result
+
+
+fn _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
+    """Convert schema + columns to a Python list of row dicts."""
+    var builtins = Python.import_module("builtins")
+    var n_rows = columns[0].length if len(columns) > 0 else 0
+    var n_cols = len(columns)
+    var col_objs = List[PythonObject]()
+    var col_names = schema.names()
+    for i in range(n_cols):
+        col_objs.append(columns[i].copy().to_python_object())
+    var result = builtins.list()
+    for j in range(n_rows):
+        var row = builtins.dict()
+        for i in range(n_cols):
+            row[col_names[i].to_python_object()] = col_objs[i][j]
+        result.append(row)
+    return result
+
+
+fn _export_c_array(schema: Schema, columns: List[Array]) raises -> PythonObject:
+    """Export schema + columns as Arrow C Data Interface capsule pair."""
+    var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
+    var cols = List[Array]()
+    for col in columns:
+        cols.append(col.copy())
+    var struct_arr: Array = RecordBatch(
+        schema=schema, columns=cols^
+    ).to_struct_array()
+    var array_cap = CArrowArray.from_array(struct_arr).to_pycapsule()
+    return Python.tuple(schema_cap, array_cap)
+
+
+fn _build_from_dict(data: PythonObject) raises -> RecordBatch:
+    """Build a RecordBatch from a Python dict of {name: array}."""
+    var fields = List[Field]()
+    var columns = List[Array]()
+    for key in data:
+        var name = String(py=key)
+        var arr = Array(py=data[key])
+        fields.append(Field(name=name, dtype=arr.dtype.copy()))
+        columns.append(arr^)
+    return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
+
+
+fn _build_from_arrays(
+    data: PythonObject, names_obj: PythonObject
+) raises -> RecordBatch:
+    """Build a RecordBatch from a list of arrays + names."""
+    var fields = List[Field]()
+    var columns = List[Array]()
+    var i = 0
+    for arr_obj in data:
+        var arr = Array(py=arr_obj)
+        var name = String(py=names_obj[i])
+        fields.append(Field(name=name, dtype=arr.dtype.copy()))
+        columns.append(arr^)
+        i += 1
+    return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
 
 # ---------------------------------------------------------------------------
-# Property / method wrappers that cannot use the generic pymethod helper
-# because they return Python containers or need multi-arg dispatch.
+# RecordBatch: methods that need custom Python ↔ Mojo dispatch
 # ---------------------------------------------------------------------------
 
 
 fn _record_batch_schema(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Return the RecordBatch schema as a Python Schema object."""
-    var schema = ptr[].schema
-    return schema.to_python_object()
+    return ptr[].schema.to_python_object()
 
 
 fn _record_batch_columns(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Return the columns as a Python list of typed array objects."""
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
-    for i in range(ptr[].num_columns()):
+    for i in range(len(ptr[].columns)):
         result.append(ptr[].columns[i].copy().to_python_object())
     return result
 
@@ -63,18 +139,15 @@ fn _record_batch_columns(
 fn _record_batch_shape(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Return (num_rows, num_columns) as a Python tuple."""
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
 fn _record_batch_column(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], key: PythonObject
 ) raises -> PythonObject:
-    """Return a column by integer index or string name."""
     var builtins = Python.import_module("builtins")
     if builtins.isinstance(key, builtins.int):
-        var idx = Int(py=key)
-        return ptr[].columns[idx].copy().to_python_object()
+        return ptr[].columns[Int(py=key)].copy().to_python_object()
     else:
         var name = String(py=key)
         var idx = ptr[].schema.get_field_index(name)
@@ -88,22 +161,18 @@ fn _record_batch_slice(
     offset: PythonObject,
     length: PythonObject,
 ) raises -> PythonObject:
-    """Return a zero-copy slice from offset with given length."""
     return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
 
 
 fn _record_batch_equals(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
 ) raises -> PythonObject:
-    """Return True if the two RecordBatches have equal schema and columns."""
-    var other_rb = other.downcast_value_ptr[RecordBatch]()[].copy()
-    return PythonObject(ptr[] == other_rb)
+    return PythonObject(ptr[] == other.downcast_value_ptr[RecordBatch]()[])
 
 
 fn _record_batch_select(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], columns: PythonObject
 ) raises -> PythonObject:
-    """Return a new RecordBatch with a subset of columns (by index or name)."""
     var n = Int(columns.__len__())
     var builtins = Python.import_module("builtins")
     if n > 0 and builtins.isinstance(columns[0], builtins.int):
@@ -118,183 +187,60 @@ fn _record_batch_select(
         return ptr[].select(names).to_python_object()
 
 
-fn _record_batch_add_column(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
-    i: PythonObject,
-    field: PythonObject,
-    column: PythonObject,
-) raises -> PythonObject:
-    """Return a new RecordBatch with `column` inserted at position `i`."""
-    return (
-        ptr[]
-        .add_column(Int(py=i), Field(py=field), _py_array_to_mojo(column))
-        .to_python_object()
-    )
-
-
-fn _record_batch_append_column(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
-    field: PythonObject,
-    column: PythonObject,
-) raises -> PythonObject:
-    """Return a new RecordBatch with `column` appended at the end."""
-    return (
-        ptr[]
-        .append_column(Field(py=field), _py_array_to_mojo(column))
-        .to_python_object()
-    )
-
-
-fn _record_batch_set_column(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
-    i: PythonObject,
-    field: PythonObject,
-    column: PythonObject,
-) raises -> PythonObject:
-    """Return a new RecordBatch with the column at `i` replaced."""
-    return (
-        ptr[]
-        .set_column(Int(py=i), Field(py=field), _py_array_to_mojo(column))
-        .to_python_object()
-    )
-
-
 fn _record_batch_to_pydict(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Convert to a Python dict mapping column names to lists of values."""
-    var builtins = Python.import_module("builtins")
-    var result = builtins.dict()
-    for i in range(ptr[].num_columns()):
-        var name = ptr[].schema.fields[i].name
-        var col_obj = ptr[].columns[i].copy().to_python_object()
-        var col_len = Int(col_obj.__len__())
-        var values = builtins.list()
-        for j in range(col_len):
-            values.append(col_obj[j])
-        result[name.to_python_object()] = values
-    return result
+    return _to_pydict(ptr[].schema, ptr[].columns)
 
 
 fn _record_batch_to_pylist(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Convert to a Python list of row dicts."""
-    var builtins = Python.import_module("builtins")
-    var n_rows = ptr[].num_rows()
-    var n_cols = ptr[].num_columns()
-    var col_objs = List[PythonObject]()
-    var col_names = ptr[].column_names()
-    for i in range(n_cols):
-        col_objs.append(ptr[].columns[i].copy().to_python_object())
-    var result = builtins.list()
-    for j in range(n_rows):
-        var row = builtins.dict()
-        for i in range(n_cols):
-            row[col_names[i].to_python_object()] = col_objs[i][j]
-        result.append(row)
-    return result
-
-
-fn _record_batch_arrow_c_record_batch(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
-    requested_schema: PythonObject,
-) raises -> PythonObject:
-    """Export as Arrow C Data Interface (schema capsule, array capsule) pair."""
-    var schema_cap = CArrowSchema.from_schema(
-        ptr[].schema.fields
-    ).to_pycapsule()
-    var struct_arr: Array = ptr[].to_struct_array()
-    var array_cap = CArrowArray.from_array(struct_arr).to_pycapsule()
-    return Python.tuple(schema_cap, array_cap)
+    return _to_pylist(ptr[].schema, ptr[].columns)
 
 
 fn _record_batch_arrow_c_array(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     requested_schema: PythonObject,
 ) raises -> PythonObject:
-    """Export as Arrow C Data Interface (schema capsule, array capsule) pair via __arrow_c_array__.
-    """
-    var schema_cap = CArrowSchema.from_schema(
-        ptr[].schema.fields
-    ).to_pycapsule()
-    var struct_arr: Array = ptr[].to_struct_array()
-    var array_cap = CArrowArray.from_array(struct_arr).to_pycapsule()
-    return Python.tuple(schema_cap, array_cap)
+    return _export_c_array(ptr[].schema, ptr[].columns)
 
 
 fn _record_batch_arrow_c_schema(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    """Export the schema as an Arrow C Data Interface capsule."""
     return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
 
 
+def _record_batch_rich_compare(
+    first: RecordBatch, second: PythonObject, op: Int
+) raises -> Bool:
+    if op == RichCompareOps.Py_EQ:
+        return first == second.downcast_value_ptr[RecordBatch]()[]
+    raise NotImplementedError()
+
+
 # ---------------------------------------------------------------------------
-# Constructor: record_batch(data, names=None, schema=None)
+# RecordBatch constructor
 # ---------------------------------------------------------------------------
 
 
 fn record_batch(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
-    """Create a RecordBatch from a dict of arrays, a list of arrays + names,
-    or any object implementing the __arrow_c_record_batch__ protocol."""
+    """Create a RecordBatch from a dict, list+names, or Arrow protocol object."""
     var builtins = Python.import_module("builtins")
 
-    # Protocol: __arrow_c_record_batch__
-    if builtins.hasattr(data, "__arrow_c_record_batch__"):
-        var caps = data.__arrow_c_record_batch__()
-        var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
-        var struct_dtype = struct_(schema.fields)
-        var c_array = CArrowArray.from_pycapsule(caps[1])
-        var struct_arr = c_array^.to_array(struct_dtype)
-        var columns = List[Array]()
-        for child in struct_arr.children:
-            columns.append(child.copy())
-        return RecordBatch(schema=schema, columns=columns^).to_python_object()
+    if builtins.hasattr(data, "__arrow_c_record_batch__") or builtins.hasattr(
+        data, "__arrow_c_array__"
+    ):
+        return _import_record_batch(data).to_python_object()
 
-    # Protocol: __arrow_c_array__ returning a struct (e.g. PyArrow RecordBatch)
-    if builtins.hasattr(data, "__arrow_c_array__"):
-        var caps = data.__arrow_c_array__(Python.none())
-        var c_schema = CArrowSchema.from_pycapsule(caps[0])
-        var schema = c_schema.to_schema()
-        var struct_dtype = struct_(schema.fields)
-        var c_array = CArrowArray.from_pycapsule(caps[1])
-        var struct_arr = c_array^.to_array(struct_dtype)
-        var columns = List[Array]()
-        for child in struct_arr.children:
-            columns.append(child.copy())
-        return RecordBatch(schema=schema, columns=columns^).to_python_object()
-
-    # Dict: {column_name: array, ...}
     if builtins.isinstance(data, builtins.dict):
-        var fields = List[Field]()
-        var columns = List[Array]()
-        for key in data:
-            var name = String(py=key)
-            var arr = _py_array_to_mojo(data[key])
-            fields.append(Field(name=name, dtype=arr.dtype.copy()))
-            columns.append(arr^)
-        return RecordBatch(
-            schema=Schema(fields=fields^), columns=columns^
-        ).to_python_object()
+        return _build_from_dict(data).to_python_object()
 
-    # List/tuple of arrays + names= kwarg
     if opt := kwargs.find("names"):
-        var names_obj = opt.value()
-        var fields = List[Field]()
-        var columns = List[Array]()
-        var i = 0
-        for arr_obj in data:
-            var arr = _py_array_to_mojo(arr_obj)
-            var name = String(py=names_obj[i])
-            fields.append(Field(name=name, dtype=arr.dtype.copy()))
-            columns.append(arr^)
-            i += 1
-        return RecordBatch(
-            schema=Schema(fields=fields^), columns=columns^
-        ).to_python_object()
+        return _build_from_arrays(data, opt.value()).to_python_object()
 
     raise Error(
         "record_batch: expected a dict, or a list of arrays with names= kwarg,"
@@ -302,14 +248,121 @@ fn record_batch(
     )
 
 
-def _record_batch_rich_compare(
-    first: RecordBatch, second: PythonObject, op: Int
+# ---------------------------------------------------------------------------
+# Table: methods that need custom Python ↔ Mojo dispatch
+# ---------------------------------------------------------------------------
+
+
+fn _table_schema(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    return ptr[].schema.to_python_object()
+
+
+fn _table_columns(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    var rb = ptr[].combine_chunks()
+    var builtins = Python.import_module("builtins")
+    var result = builtins.list()
+    for i in range(len(rb.columns)):
+        result.append(rb.columns[i].copy().to_python_object())
+    return result
+
+
+fn _table_shape(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
+
+
+fn _table_column(
+    ptr: UnsafePointer[Table, MutAnyOrigin], key: PythonObject
+) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    var rb = ptr[].combine_chunks()
+    if builtins.isinstance(key, builtins.int):
+        return rb.columns[Int(py=key)].copy().to_python_object()
+    else:
+        var name = String(py=key)
+        var idx = ptr[].schema.get_field_index(name)
+        if idx == -1:
+            raise Error("Column '{}' not found.".format(name))
+        return rb.columns[idx].copy().to_python_object()
+
+
+fn _table_equals(
+    ptr: UnsafePointer[Table, MutAnyOrigin], other: PythonObject
+) raises -> PythonObject:
+    return PythonObject(ptr[] == other.downcast_value_ptr[Table]()[])
+
+
+fn _table_to_pydict(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    var rb = ptr[].combine_chunks()
+    return _to_pydict(rb.schema, rb.columns)
+
+
+fn _table_to_pylist(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    var rb = ptr[].combine_chunks()
+    return _to_pylist(rb.schema, rb.columns)
+
+
+fn _table_arrow_c_stream(
+    ptr: UnsafePointer[Table, MutAnyOrigin],
+    requested_schema: PythonObject,
+) raises -> PythonObject:
+    var batches = ptr[].to_batches()
+    var fields = List(ptr[].schema.fields)
+    return CArrowArrayStream.from_batches(fields^, batches^).to_pycapsule()
+
+
+fn _table_arrow_c_schema(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
+
+
+def _table_rich_compare(
+    first: Table, second: PythonObject, op: Int
 ) raises -> Bool:
-    """Implement rich compare for RecordData."""
-    var second_rb = second.downcast_value_ptr[RecordBatch]()
     if op == RichCompareOps.Py_EQ:
-        return first == second_rb[]
+        return first == second.downcast_value_ptr[Table]()[]
     raise NotImplementedError()
+
+
+# ---------------------------------------------------------------------------
+# Table constructor
+# ---------------------------------------------------------------------------
+
+
+fn table(
+    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+) raises -> PythonObject:
+    """Create a Table from a dict, list+names, or Arrow protocol object."""
+    var builtins = Python.import_module("builtins")
+
+    if builtins.hasattr(data, "__arrow_c_stream__"):
+        var capsule = data.__arrow_c_stream__(Python.none())
+        return CArrowArrayStream.from_pycapsule(capsule).to_table().to_python_object()
+
+    var rb: RecordBatch
+    if builtins.isinstance(data, builtins.dict):
+        rb = _build_from_dict(data)
+    elif opt := kwargs.find("names"):
+        rb = _build_from_arrays(data, opt.value())
+    else:
+        raise Error(
+            "table: expected a dict, or a list of arrays with names= kwarg,"
+            " or an object with __arrow_c_stream__"
+        )
+    var schema = rb.schema
+    var batch_list = List[RecordBatch]()
+    batch_list.append(rb^)
+    return Table.from_batches(schema, batch_list).to_python_object()
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +371,7 @@ def _record_batch_rich_compare(
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
-    """Add RecordBatch type and record_batch constructor to the Python module.
-    """
+    """Add RecordBatch, Table types and constructors to the Python module."""
     ref rb_py = mb.add_type[RecordBatch]("RecordBatch")
     _ = (
         rb_py.def_method[_record_batch_schema]("schema")
@@ -334,18 +386,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_equals]("__eq__")
         .def_method[_record_batch_select]("select")
         .def_method[pymethod[RecordBatch.rename_columns]()]("rename_columns")
-        .def_method[_record_batch_add_column]("add_column")
-        .def_method[_record_batch_append_column]("append_column")
+        .def_method[pymethod[RecordBatch.add_column]()]("add_column")
+        .def_method[pymethod[RecordBatch.append_column]()]("append_column")
         .def_method[pymethod[RecordBatch.remove_column]()]("remove_column")
-        .def_method[_record_batch_set_column]("set_column")
+        .def_method[pymethod[RecordBatch.set_column]()]("set_column")
         .def_method[pymethod[RecordBatch.__str__]()]("__str__")
         .def_method[pymethod[RecordBatch.__str__]()]("__repr__")
         .def_method[_record_batch_to_pydict]("to_pydict")
         .def_method[_record_batch_to_pylist]("to_pylist")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_array__")
-        .def_method[_record_batch_arrow_c_record_batch](
-            "__arrow_c_record_batch__"
-        )
+        .def_method[_record_batch_arrow_c_array]("__arrow_c_record_batch__")
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
     )
     var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
@@ -356,5 +406,36 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         docstring=(
             "Create a RecordBatch from a dict of arrays, a list of arrays with"
             " names=, or any object implementing __arrow_c_record_batch__."
+        ),
+    )
+
+    # Table
+    ref t_py = mb.add_type[Table]("Table")
+    _ = (
+        t_py.def_method[_table_schema]("schema")
+        .def_method[_table_columns]("columns")
+        .def_method[_table_shape]("shape")
+        .def_method[pymethod[Table.num_rows]()]("num_rows")
+        .def_method[pymethod[Table.num_columns]()]("num_columns")
+        .def_method[pymethod[Table.column_names]()]("column_names")
+        .def_method[_table_column]("column")
+        .def_method[pymethod[Table.to_batches]()]("to_batches")
+        .def_method[_table_equals]("equals")
+        .def_method[_table_equals]("__eq__")
+        .def_method[pymethod[Table.__str__]()]("__str__")
+        .def_method[pymethod[Table.__str__]()]("__repr__")
+        .def_method[_table_to_pydict]("to_pydict")
+        .def_method[_table_to_pylist]("to_pylist")
+        .def_method[_table_arrow_c_stream]("__arrow_c_stream__")
+        .def_method[_table_arrow_c_schema]("__arrow_c_schema__")
+    )
+    var t_tp = TypeProtocolBuilder[Table](t_py)
+    _ = t_tp.def_richcompare[_table_rich_compare]()
+
+    mb.def_function[table](
+        "table",
+        docstring=(
+            "Create a Table from a dict of arrays, a list of arrays with"
+            " names=, or any object implementing __arrow_c_stream__."
         ),
     )

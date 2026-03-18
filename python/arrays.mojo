@@ -787,13 +787,15 @@ fn infer_type(obj: PythonObject) raises -> PythonObject:
 fn array(
     obj: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
-    var builtins = Python.import_module("builtins")
-    if builtins.hasattr(obj, "__arrow_c_array__"):
-        var capsule_tuple = obj.__arrow_c_array__()
-        var c_schema = CArrowSchema.from_pycapsule(capsule_tuple[0])
-        var c_array = CArrowArray.from_pycapsule(capsule_tuple[1])
-        return c_array^.to_array(c_schema.to_dtype()).to_python_object()
+    # Try converting directly (handles marrow arrays and __arrow_c_array__).
+    # Skip when type= is given since the user wants explicit type control.
+    if not kwargs.find("type"):
+        try:
+            return Array(py=obj).to_python_object()
+        except:
+            pass
 
+    # Fall back to building from a Python sequence.
     var dtype: dt.DataType
     var has_nulls = True
     if opt := kwargs.find("type"):

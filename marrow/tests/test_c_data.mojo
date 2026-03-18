@@ -2,6 +2,7 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
+from marrow.tabular import Table
 from marrow.arrays import Array, BoolArray, PrimitiveArray, StringArray
 from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from marrow.dtypes import *
@@ -181,44 +182,40 @@ def test_schema_to_field() raises:
 
 def test_arrow_array_stream() raises:
     var pa = Python.import_module("pyarrow")
-    var python = Python()
-    ref cpython = python.cpython()
 
     var data = Python.dict(
         col1=Python.list(1.0, 2.0, 3.0, 4.0, 5.0),
         col2=Python.list("a", "b", "c", "d", "e"),
     )
+    var python = Python()
     var pyschema = pa.schema(
         python.list(
             pa.field("col1", pa.int64()),
             pa.field("col2", pa.string()),
         )
     )
-    var table = pa.table(data, schema=pyschema)
+    var py_table = pa.table(data, schema=pyschema)
 
-    var array_stream = arrow_array_stream_from_python(table, cpython)
+    var capsule = py_table.__arrow_c_stream__(Python.none())
+    var stream = CArrowArrayStream.from_pycapsule(capsule)
+    var table = stream.to_table()
 
-    var c_schema = array_stream.c_schema()
-    var schema = c_schema.to_dtype()
-    assert_equal(len(schema.fields), 2)
-    assert_equal(schema.fields[0].name, "col1")
-    assert_equal(schema.fields[0].dtype, int64)
-    assert_equal(schema.fields[1].name, "col2")
-    assert_equal(schema.fields[1].dtype, string)
+    assert_equal(table.num_columns(), 2)
+    assert_equal(table.num_rows(), 5)
+    assert_equal(table.schema.fields[0].name, "col1")
+    assert_equal(table.schema.fields[0].dtype, int64)
+    assert_equal(table.schema.fields[1].name, "col2")
+    assert_equal(table.schema.fields[1].dtype, string)
 
-    var c_array = array_stream.c_next()
-    assert_equal(c_array.length, 5)
-    assert_equal(c_array.null_count, 0)
+    var batches = table.to_batches()
+    assert_true(len(batches) >= 1)
 
-    var array_data = c_array^.to_array(schema)
-    assert_equal(array_data.length, 5)
-    assert_equal(len(array_data.children), 2)
-
-    var col1_array = array_data.children[0].copy().as_int64()
+    var batch = batches[0].copy()
+    var col1_array = batch.columns[0].copy().as_int64()
     assert_equal(col1_array[0], 1)
     assert_equal(col1_array[4], 5)
 
-    var col2_array = array_data.children[1].copy().as_string()
+    var col2_array = batch.columns[1].copy().as_string()
     assert_equal(col2_array[0], "a")
     assert_equal(col2_array[4], "e")
 

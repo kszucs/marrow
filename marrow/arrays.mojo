@@ -18,7 +18,7 @@ convert to/from `Array` via implicit constructors and `as_*()` accessors.
 from std.memory import memcpy
 from std.sys import size_of
 from std.gpu.host import DeviceContext
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .buffers import Buffer, BufferBuilder
 from .bitmap import Bitmap, BitmapBuilder
@@ -121,24 +121,48 @@ struct Array(
         self.offset = take.offset
 
     fn __init__(out self, *, py: PythonObject) raises:
-        var dt = DataType(py=py.type())
-        comptime for T in primitive_dtypes:
-            if dt == T:
-                self = Array(py.downcast_value_ptr[PrimitiveArray[T]]()[])
-                return
-        if dt.is_string():
+        from .c_data import CArrowSchema, CArrowArray
+
+        # Try downcasting from a marrow Python object.
+        # downcast_value_ptr safely checks Py_TYPE and raises on mismatch.
+        try:
+            comptime for T in primitive_dtypes:
+                try:
+                    self = Array(py.downcast_value_ptr[PrimitiveArray[T]]()[])
+                    return
+                except:
+                    pass
             self = Array(py.downcast_value_ptr[StringArray]()[])
-        elif dt.is_list():
+            return
+        except:
+            pass
+        try:
             self = Array(py.downcast_value_ptr[ListArray]()[])
-        elif dt.is_fixed_size_list():
+            return
+        except:
+            pass
+        try:
             self = Array(py.downcast_value_ptr[FixedSizeListArray]()[])
-        elif dt.is_struct():
+            return
+        except:
+            pass
+        try:
             self = Array(py.downcast_value_ptr[StructArray]()[])
-        else:
+            return
+        except:
+            pass
+
+        # Fall back to the Arrow C Data Interface for foreign objects.
+        var builtins = Python.import_module("builtins")
+        if not builtins.hasattr(py, "__arrow_c_array__"):
             raise Error(
                 "cannot convert Python object of type",
                 t" '{py.__class__.__name__}' to Array",
             )
+        var caps = py.__arrow_c_array__(Python.none())
+        var c_schema = CArrowSchema.from_pycapsule(caps[0])
+        var c_array = CArrowArray.from_pycapsule(caps[1])
+        self = c_array^.to_array(c_schema.to_dtype())
 
     fn is_valid(self, index: Int) -> Bool:
         if not self.bitmap:

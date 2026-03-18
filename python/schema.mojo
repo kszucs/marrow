@@ -12,12 +12,13 @@ fn _schema_arrow_c_schema(
 
 
 fn schema(fields_or_schema: PythonObject) raises -> PythonObject:
-    """Create a Schema from a list of Fields or any object implementing __arrow_c_schema__."""
-    var builtins = Python.import_module("builtins")
-    if builtins.hasattr(fields_or_schema, "__arrow_c_schema__"):
-        return CArrowSchema.from_pycapsule(
-            fields_or_schema.__arrow_c_schema__()
-        ).to_schema().to_python_object()
+    """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object."""
+    # Try converting directly (handles marrow Schema and __arrow_c_schema__).
+    try:
+        return Schema(py=fields_or_schema).to_python_object()
+    except:
+        pass
+    # Fall back to treating as a list of marrow Field objects.
     var fields = List[Field]()
     for f in fields_or_schema:
         fields.append(f.downcast_value_ptr[Field]()[])

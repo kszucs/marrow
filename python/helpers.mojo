@@ -68,6 +68,30 @@ fn pymethod[
 
 fn pymethod[
     T: AnyType,
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    A2: ConvertibleFromPython,
+    R: ConvertibleToPython,
+    //,
+    method: fn(T, A0, A1, A2) raises -> R,
+]() -> fn(
+    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject, PythonObject
+) raises -> PythonObject:
+    """Wrap a three-arg method returning ConvertibleToPython."""
+
+    fn wrapper(
+        ptr: UnsafePointer[T, MutAnyOrigin],
+        arg0: PythonObject,
+        arg1: PythonObject,
+        arg2: PythonObject,
+    ) raises -> PythonObject:
+        return method(ptr[], A0(py=arg0), A1(py=arg1), A2(py=arg2)).to_python_object()
+
+    return wrapper
+
+
+fn pymethod[
+    T: AnyType,
     E: ConvertibleToPython & Copyable,
     //,
     method: fn(T) raises -> List[E],

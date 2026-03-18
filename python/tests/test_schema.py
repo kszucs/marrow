@@ -49,3 +49,25 @@ def test_schema_from_pyarrow():
     pa_schema = pa.schema([pa.field("x", pa.int32()), pa.field("y", pa.float64())])
     schema = ma.schema(pa_schema)
     assert pa.schema(schema).equals(pa_schema)
+
+
+def test_schema_from_marrow_schema():
+    """Passing a marrow Schema to ma.schema() should return an equal copy."""
+    original = ma.schema(
+        [ma.field("a", ma.int64()), ma.field("b", ma.string())]
+    )
+    copy = ma.schema(original)
+    pa_original = pa.schema(original)
+    pa_copy = pa.schema(copy)
+    assert pa_original.equals(pa_copy)
+
+
+def test_schema_from_fields():
+    """Creating a schema from a list of fields."""
+    schema = ma.schema(
+        [ma.field("x", ma.int32()), ma.field("y", ma.float64())]
+    )
+    pa_schema = pa.schema(schema)
+    assert len(pa_schema) == 2
+    assert pa_schema.field("x").type == pa.int32()
+    assert pa_schema.field("y").type == pa.float64()

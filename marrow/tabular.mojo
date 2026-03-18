@@ -210,7 +210,7 @@ struct RecordBatch(
         self.write_to(writer)
 
 
-struct Table(Copyable, Writable):
+struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
     """A schema together with a list of equal-length ChunkedArrays.
 
     Equivalent to PyArrow's `Table`.  Unlike RecordBatch, each column may
@@ -223,6 +223,27 @@ struct Table(Copyable, Writable):
     fn __init__(out self, schema: Schema, var columns: List[ChunkedArray]):
         self.schema = schema
         self.columns = columns^
+
+    fn __init__(out self, *, copy: Self):
+        self.schema = Schema(copy=copy.schema)
+        var cols = List[ChunkedArray]()
+        for col in copy.columns:
+            cols.append(ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks)))
+        self.columns = cols^
+
+    fn __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[Self]()[].copy()
+
+    fn copy(self) -> Table:
+        """Returns a copy of this Table (O(1) Arc ref-count bumps)."""
+        return Table(copy=self)
+
+    fn to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
+
+    fn get_schema(self) -> Schema:
+        """Returns the schema."""
+        return self.schema
 
     fn num_rows(self) -> Int:
         """Returns the number of rows (length of the first column, or 0)."""
@@ -244,6 +265,14 @@ struct Table(Copyable, Writable):
         if idx == -1:
             raise Error("Column '{}' not found.".format(name))
         return self.columns[idx]
+
+    fn combine_chunks(self) raises -> RecordBatch:
+        """Combine all chunks in each column into a single RecordBatch."""
+        var cols = List[Array]()
+        for col in self.columns:
+            var ca = ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+            cols.append(ca^.combine_chunks())
+        return RecordBatch(schema=self.schema, columns=cols^)
 
     fn column_names(self) -> List[String]:
         """Returns the names of all columns (delegates to schema)."""
@@ -270,6 +299,68 @@ struct Table(Copyable, Writable):
             )
         return Table(schema=schema, columns=columns^)
 
+    fn to_batches(self) raises -> List[RecordBatch]:
+        """Convert this Table to a list of RecordBatches.
+
+        Returns one RecordBatch per chunk. If columns have different chunk
+        counts the result aligns on the first column's chunk boundaries
+        (single-batch fallback when chunk counts differ).
+        """
+        if len(self.columns) == 0:
+            return List[RecordBatch]()
+
+        # Check if all columns have the same number of chunks.
+        var n_chunks = len(self.columns[0].chunks)
+        var aligned = True
+        for col in self.columns:
+            if len(col.chunks) != n_chunks:
+                aligned = False
+                break
+
+        if aligned and n_chunks > 0:
+            var batches = List[RecordBatch]()
+            for chunk_idx in range(n_chunks):
+                var cols = List[Array]()
+                for col in self.columns:
+                    cols.append(col.chunks[chunk_idx].copy())
+                batches.append(RecordBatch(schema=self.schema, columns=cols^))
+            return batches^
+
+        # Fallback: combine chunks into a single batch.
+        from .kernels.concat import concat
+
+        var cols = List[Array]()
+        for col in self.columns:
+            if len(col.chunks) == 1:
+                cols.append(col.chunks[0].copy())
+            else:
+                var ca = ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+                cols.append(ca^.combine_chunks())
+        var batches = List[RecordBatch]()
+        batches.append(RecordBatch(schema=self.schema, columns=cols^))
+        return batches^
+
+    fn field(self, i: Int) raises -> Field:
+        """Returns the Field at the given index (delegates to schema)."""
+        return self.schema.field(index=i)
+
+    fn __eq__(self, other: Table) -> Bool:
+        """Returns True if the two Tables have equal schema and columns."""
+        if self.schema != other.schema:
+            return False
+        if len(self.columns) != len(other.columns):
+            return False
+        for i in range(len(self.columns)):
+            if len(self.columns[i].chunks) != len(other.columns[i].chunks):
+                return False
+            for j in range(len(self.columns[i].chunks)):
+                if self.columns[i].chunks[j] != other.columns[i].chunks[j]:
+                    return False
+        return True
+
+    fn __str__(self) -> String:
+        return String.write(self)
+
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Table(num_rows=",
@@ -280,3 +371,6 @@ struct Table(Copyable, Writable):
             self.schema,
             ")",
         )
+
+    fn write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
