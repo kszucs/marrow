@@ -183,6 +183,7 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - Prefer explicit `if/else` over early-return `if + return` guard clauses. Keep the control flow flat and readable with `if/else` branches.
 - Prefer PyArrow's API naming everywhere — both in the Mojo core types and in the Python bindings. When in doubt, match PyArrow's method names and signatures.
 - Use **conventional commits** for all commit messages (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`, etc.), with an optional scope in parentheses (e.g. `feat(kernels): add concat`).
+- Add an entry to **`CHANGELOG.md`** for every meaningful change (new feature, behaviour change, notable fix). Group under `### Features`, `### Refactors`, `### Tests`, or `### Fixes` inside the `## [Unreleased]` section. Trivial changes (formatting, typos, test-only fixes) do not need an entry.
 
 ### Prior Art — Consult C++ and Rust Implementations First
 
