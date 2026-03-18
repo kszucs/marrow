@@ -235,6 +235,29 @@ struct RecordBatch(
         self.write_to(writer)
 
 
+fn record_batch(
+    var columns: List[Array], *, names: List[String]
+) raises -> RecordBatch:
+    """Construct a RecordBatch from a list of arrays and column names.
+
+    Infers the schema from the column dtypes and the provided names.
+    Raises if len(columns) != len(names).
+    """
+    if len(columns) != len(names):
+        raise Error(
+            "record_batch: len(columns) ("
+            + String(len(columns))
+            + ") != len(names) ("
+            + String(len(names))
+            + ")"
+        )
+    var fields = List[Field]()
+    for i in range(len(columns)):
+        fields.append(Field(names[i], columns[i].dtype))
+    var schema = Schema(fields=fields^)
+    return RecordBatch(schema=schema, columns=columns^)
+
+
 struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
     """A schema together with a list of equal-length ChunkedArrays.
 
