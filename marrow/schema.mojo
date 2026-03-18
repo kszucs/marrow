@@ -2,7 +2,7 @@
 
 [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema)
 """
-from std.python import Python, PythonObject
+from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .dtypes import DataType, Field
 
@@ -38,11 +38,12 @@ struct Schema(
             pass
 
         # Fall back to the Arrow C Schema Interface for foreign objects.
-        var builtins = Python.import_module("builtins")
-        if not builtins.hasattr(py, "__arrow_c_schema__"):
+        var capsule: PythonObject
+        try:
+            capsule = py.__arrow_c_schema__()
+        except:
             raise Error("cannot convert Python object to Schema")
-        var c_schema = CArrowSchema.from_pycapsule(py.__arrow_c_schema__())
-        self = c_schema.to_schema()
+        self = CArrowSchema.from_pycapsule(capsule).to_schema()
 
     fn append(mut self, var field: Field):
         """Appends a field to the schema."""

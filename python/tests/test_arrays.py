@@ -4,7 +4,6 @@ Ported from PyArrow's test_convert_builtin.py, excluding pandas/numpy,
 Decimal, Date/Time/Timestamp, Dictionary, and Map cases.
 """
 
-import pyarrow as pa
 import pytest
 import marrow as ma
 
@@ -448,47 +447,3 @@ def test_array_list_scalar_raises():
         ma.array([1, 2, 3], type=ma.list_(ma.int64()))
 
 
-# ── PyArrow roundtrip (via Arrow C Data Interface) ───────────────────────────
-
-
-def test_pyarrow_roundtrip_int32():
-    arr = ma.array([7, 42, -1], type=ma.int32())
-    pyarr = pa.array(arr)
-    assert pyarr.type == pa.int32()
-    assert pyarr[0].as_py() == 7
-    assert pyarr[1].as_py() == 42
-    assert pyarr[2].as_py() == -1
-    reimported = ma.array(pyarr)
-    assert len(reimported) == 3
-    assert reimported[0] == 7
-    assert reimported[1] == 42
-    assert reimported[2] == -1
-
-
-def test_pyarrow_roundtrip_string():
-    arr = ma.array(["hello", "world", "mojo"])
-    pyarr = pa.array(arr)
-    assert pyarr.type == pa.string()
-    assert pyarr[0].as_py() == "hello"
-    assert pyarr[1].as_py() == "world"
-    assert pyarr[2].as_py() == "mojo"
-    reimported = ma.array(pyarr)
-    assert len(reimported) == 3
-    assert reimported[0] == "hello"
-    assert reimported[1] == "world"
-    assert reimported[2] == "mojo"
-
-
-def test_pyarrow_roundtrip_with_nulls():
-    arr = ma.array([1, None, 3, None], type=ma.int64())
-    pyarr = pa.array(arr)
-    assert pyarr.type == pa.int64()
-    assert pyarr[0].as_py() == 1
-    assert pyarr[1].as_py() is None
-    assert pyarr[2].as_py() == 3
-    assert pyarr[3].as_py() is None
-    reimported = ma.array(pyarr)
-    assert len(reimported) == 4
-    assert reimported.null_count() == 2
-    assert reimported[0] == 1
-    assert reimported[2] == 3

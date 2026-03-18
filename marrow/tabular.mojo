@@ -7,7 +7,7 @@ References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html
 - https://arrow.apache.org/docs/python/generated/pyarrow.Table.html
 """
-from std.python import PythonObject
+from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .arrays import Array, ChunkedArray, StructArray
 from .schema import Schema
@@ -37,7 +37,32 @@ struct RecordBatch(
         self.columns = cols^
 
     fn __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
+        from .c_data import CArrowSchema, CArrowArray
+
+        # Try downcasting from a marrow Python object.
+        try:
+            self = py.downcast_value_ptr[Self]()[].copy()
+            return
+        except:
+            pass
+        # Fall back to Arrow C Data Interface for foreign objects.
+        # Try __arrow_c_record_batch__ first, then __arrow_c_array__.
+        var caps: PythonObject
+        try:
+            caps = py.__arrow_c_record_batch__()
+        except:
+            try:
+                caps = py.__arrow_c_array__(Python.none())
+            except:
+                raise Error("cannot convert Python object to RecordBatch")
+        var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
+        var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
+            struct_(schema.fields)
+        )
+        var columns = List[Array]()
+        for child in struct_arr.children:
+            columns.append(child.copy())
+        self = RecordBatch(schema=schema, columns=columns^)
 
     fn copy(self) -> RecordBatch:
         """Returns a copy of this RecordBatch (O(1) Arc ref-count bumps)."""
@@ -232,7 +257,21 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         self.columns = cols^
 
     fn __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
+        from .c_data import CArrowArrayStream
+
+        # Try downcasting from a marrow Python object.
+        try:
+            self = py.downcast_value_ptr[Self]()[].copy()
+            return
+        except:
+            pass
+        # Fall back to Arrow C Stream Interface for foreign objects.
+        var capsule: PythonObject
+        try:
+            capsule = py.__arrow_c_stream__(Python.none())
+        except:
+            raise Error("cannot convert Python object to Table")
+        self = CArrowArrayStream.from_pycapsule(capsule).to_table()
 
     fn copy(self) -> Table:
         """Returns a copy of this Table (O(1) Arc ref-count bumps)."""

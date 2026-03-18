@@ -125,6 +125,8 @@ struct Array(
 
         # Try downcasting from a marrow Python object.
         # downcast_value_ptr safely checks Py_TYPE and raises on mismatch.
+        # TODO: would be nice to have a cleaner approach to downcast
+        # multiple possible types without so many nested try/catch blocks.
         try:
             comptime for T in primitive_dtypes:
                 try:
@@ -153,13 +155,14 @@ struct Array(
             pass
 
         # Fall back to the Arrow C Data Interface for foreign objects.
-        var builtins = Python.import_module("builtins")
-        if not builtins.hasattr(py, "__arrow_c_array__"):
+        var caps: PythonObject
+        try:
+            caps = py.__arrow_c_array__(Python.none())
+        except:
             raise Error(
                 "cannot convert Python object of type",
                 t" '{py.__class__.__name__}' to Array",
             )
-        var caps = py.__arrow_c_array__(Python.none())
         var c_schema = CArrowSchema.from_pycapsule(caps[0])
         var c_array = CArrowArray.from_pycapsule(caps[1])
         self = c_array^.to_array(c_schema.to_dtype())

@@ -14,7 +14,7 @@ from std.collections import OwnedKwargsDict
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
 from marrow.arrays import Array, ChunkedArray
-from marrow.dtypes import Field, struct_
+from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from helpers import pymethod
 
@@ -22,24 +22,6 @@ from helpers import pymethod
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-fn _import_record_batch(obj: PythonObject) raises -> RecordBatch:
-    """Import a RecordBatch from any object with __arrow_c_record_batch__ or __arrow_c_array__."""
-    var builtins = Python.import_module("builtins")
-    var caps: PythonObject
-    if builtins.hasattr(obj, "__arrow_c_record_batch__"):
-        caps = obj.__arrow_c_record_batch__()
-    elif builtins.hasattr(obj, "__arrow_c_array__"):
-        caps = obj.__arrow_c_array__(Python.none())
-    else:
-        raise Error("Expected __arrow_c_record_batch__ or __arrow_c_array__")
-    var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
-    var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(struct_(schema.fields))
-    var columns = List[Array]()
-    for child in struct_arr.children:
-        columns.append(child.copy())
-    return RecordBatch(schema=schema, columns=columns^)
 
 
 fn _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
@@ -229,13 +211,13 @@ fn record_batch(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
     """Create a RecordBatch from a dict, list+names, or Arrow protocol object."""
+    # Try converting directly (handles marrow objects and Arrow protocol).
+    try:
+        return RecordBatch(py=data).to_python_object()
+    except:
+        pass
+
     var builtins = Python.import_module("builtins")
-
-    if builtins.hasattr(data, "__arrow_c_record_batch__") or builtins.hasattr(
-        data, "__arrow_c_array__"
-    ):
-        return _import_record_batch(data).to_python_object()
-
     if builtins.isinstance(data, builtins.dict):
         return _build_from_dict(data).to_python_object()
 
@@ -281,6 +263,7 @@ fn _table_column(
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var rb = ptr[].combine_chunks()
+    # TODO: use try/catch python().int()
     if builtins.isinstance(key, builtins.int):
         return rb.columns[Int(py=key)].copy().to_python_object()
     else:
@@ -343,13 +326,14 @@ fn table(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
     """Create a Table from a dict, list+names, or Arrow protocol object."""
-    var builtins = Python.import_module("builtins")
-
-    if builtins.hasattr(data, "__arrow_c_stream__"):
-        var capsule = data.__arrow_c_stream__(Python.none())
-        return CArrowArrayStream.from_pycapsule(capsule).to_table().to_python_object()
+    # Try converting directly (handles marrow objects and Arrow protocol).
+    try:
+        return Table(py=data).to_python_object()
+    except:
+        pass
 
     var rb: RecordBatch
+    var builtins = Python.import_module("builtins")
     if builtins.isinstance(data, builtins.dict):
         rb = _build_from_dict(data)
     elif opt := kwargs.find("names"):

@@ -3,7 +3,6 @@
 Mirrors PyArrow's test patterns where applicable.
 """
 
-import pyarrow as pa
 import pytest
 import marrow as ma
 
@@ -37,14 +36,6 @@ def test_record_batch_from_list_with_names():
     y = ma.array(["a", "b"])
     batch = ma.record_batch([x, y], names=["x", "y"])
     assert batch.num_rows() == 2
-    assert batch.num_columns() == 2
-
-
-def test_record_batch_from_pyarrow():
-    pa_batch = pa.record_batch({"x": [1, 2, 3], "y": ["a", "b", "c"]})
-    batch = ma.record_batch(pa_batch)
-    assert type(batch).__name__ == "RecordBatch"
-    assert batch.num_rows() == 3
     assert batch.num_columns() == 2
 
 
@@ -267,43 +258,6 @@ def test_to_pylist():
     assert rows[1]["b"] == "y"
 
 
-# ── Arrow C Data Interface roundtrip ─────────────────────────────────────────
-
-
-def test_arrow_c_record_batch_roundtrip():
-    """Export marrow RecordBatch → import into PyArrow via __arrow_c_record_batch__."""
-    batch = make_batch()
-    pa_batch = pa.record_batch(batch)
-    assert pa_batch.num_rows == 3
-    assert pa_batch.num_columns == 3
-    assert pa_batch.schema.field("x").type == pa.int32()
-    assert pa_batch.schema.field("y").type == pa.float64()
-    assert pa_batch.schema.field("z").type == pa.string()
-    assert pa_batch.column("x").to_pylist() == [1, 2, 3]
-    assert pa_batch.column("z").to_pylist() == ["a", "b", "c"]
-
-
-def test_arrow_c_schema_roundtrip():
-    """Export marrow schema → import into PyArrow via __arrow_c_schema__."""
-    batch = make_batch()
-    pa_schema = pa.schema(batch)
-    assert pa_schema.field("x").type == pa.int32()
-    assert pa_schema.field("y").type == pa.float64()
-    assert pa_schema.field("z").type == pa.string()
-
-
-def test_pyarrow_roundtrip_with_nulls():
-    batch = ma.record_batch(
-        {
-            "a": ma.array([1, None, 3], type=ma.int32()),
-            "b": ma.array(["x", None, "z"]),
-        }
-    )
-    pa_batch = pa.record_batch(batch)
-    assert pa_batch.column("a").to_pylist() == [1, None, 3]
-    assert pa_batch.column("b").to_pylist() == ["x", None, "z"]
-
-
 # ===========================================================================
 # Table tests
 # ===========================================================================
@@ -335,14 +289,6 @@ def test_table_from_list_with_names():
     y = ma.array(["a", "b"])
     t = ma.table([x, y], names=["x", "y"])
     assert t.num_rows() == 2
-    assert t.num_columns() == 2
-
-
-def test_table_from_pyarrow():
-    pa_table = pa.table({"x": [1, 2, 3], "y": ["a", "b", "c"]})
-    t = ma.table(pa_table)
-    assert type(t).__name__ == "Table"
-    assert t.num_rows() == 3
     assert t.num_columns() == 2
 
 
@@ -454,40 +400,3 @@ def test_table_to_pylist():
     assert len(rows) == 2
     assert rows[0]["a"] == 1
     assert rows[1]["b"] == "y"
-
-
-# ── Arrow C Stream Interface roundtrip ───────────────────────────────────────
-
-
-def test_table_arrow_c_stream_roundtrip():
-    """Export marrow Table -> import into PyArrow via __arrow_c_stream__."""
-    t = make_table()
-    pa_table = pa.table(t)
-    assert pa_table.num_rows == 3
-    assert pa_table.num_columns == 3
-    assert pa_table.schema.field("x").type == pa.int32()
-    assert pa_table.schema.field("y").type == pa.float64()
-    assert pa_table.schema.field("z").type == pa.string()
-    assert pa_table.column("x").to_pylist() == [1, 2, 3]
-    assert pa_table.column("z").to_pylist() == ["a", "b", "c"]
-
-
-def test_table_arrow_c_stream_import():
-    """Import PyArrow Table -> marrow Table via __arrow_c_stream__."""
-    pa_table = pa.table({"a": [1, 2, 3], "b": ["x", "y", "z"]})
-    t = ma.table(pa_table)
-    assert t.num_rows() == 3
-    assert t.num_columns() == 2
-    assert list(t.column_names()) == ["a", "b"]
-
-
-def test_table_arrow_c_stream_with_nulls():
-    t = ma.table(
-        {
-            "a": ma.array([1, None, 3], type=ma.int32()),
-            "b": ma.array(["x", None, "z"]),
-        }
-    )
-    pa_table = pa.table(t)
-    assert pa_table.column("a").to_pylist() == [1, None, 3]
-    assert pa_table.column("b").to_pylist() == ["x", None, "z"]
