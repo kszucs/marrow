@@ -239,12 +239,16 @@ fn binary_not_null[
 fn binary_simd[
     T: DataType,
     OutT: DataType,
-    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[OutT.native, W],
+    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+        OutT.native, W
+    ],
     name: StringLiteral = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-) raises -> PrimitiveArray[OutT]:
+) raises -> PrimitiveArray[
+    OutT
+]:
     """SIMD-vectorized binary kernel with independent input and output types.
 
     Computes the output validity bitmap upfront via ``bitmap_and``, then applies
@@ -621,10 +625,7 @@ fn binary_array_dispatch[
     func: fn[T: DataType](
         PrimitiveArray[T], PrimitiveArray[T]
     ) raises -> PrimitiveArray[OutT],
-](
-    left: Array,
-    right: Array,
-) raises -> Array:
+](left: Array, right: Array,) raises -> Array:
     """Runtime-typed binary dispatch with a fixed output type (e.g. comparisons).
 
     Parameters:

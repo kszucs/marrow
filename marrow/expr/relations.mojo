@@ -19,7 +19,7 @@ Plan-building API
 Example
 -------
     var plan = in_memory_table(batch).filter(col("x") > lit[int64](0)).select("x")
-    var result = PipelineExecutor().execute(plan)
+    var result = execute(plan)
 """
 
 from std.memory import ArcPointer
@@ -109,9 +109,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].exprs()
 
     @staticmethod
-    fn _tramp_write_to_string[
-        T: Relation
-    ](ptr: ArcPointer[NoneType]) -> String:
+    fn _tramp_write_to_string[T: Relation](ptr: ArcPointer[NoneType]) -> String:
         var s = String()
         rebind[ArcPointer[T]](ptr)[].write_to(s)
         return s^
@@ -134,8 +132,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __copyinit__(out self, read copy: Self):
-        self._data = copy._data.copy()
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
         self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
         self._virt_inputs = copy._virt_inputs
@@ -200,7 +198,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     fn downcast[T: Relation](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
-
 
     fn __del__(deinit self):
         self._virt_drop(self._data^)
@@ -359,7 +356,8 @@ struct InMemoryTable(Relation):
 
     fn write_to[W: Writer](self, mut writer: W):
         writer.write(
-            t"InMemoryTable(num_rows={self.batch.num_rows()}, schema={self.batch.schema})"
+            t"InMemoryTable(num_rows={self.batch.num_rows()},"
+            t" schema={self.batch.schema})"
         )
 
 

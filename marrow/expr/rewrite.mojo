@@ -105,8 +105,8 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
         self._virt_apply = Self._tramp_apply[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __copyinit__(out self, read copy: Self):
-        self._data = copy._data.copy()
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
         self._virt_name = copy._virt_name
         self._virt_apply = copy._virt_apply
         self._virt_drop = copy._virt_drop
@@ -171,5 +171,3 @@ struct Rewriter:
                     changed = True
                     break  # restart rule sweep after any match
         return current
-
-

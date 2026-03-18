@@ -381,5 +381,95 @@ def test_drop_nulls_values_correct() raises:
     assert_equal(result.unsafe_get(4), 9)
 
 
+# ---------------------------------------------------------------------------
+# filter — sliced (offset) arrays
+# ---------------------------------------------------------------------------
+
+
+def test_filter_sliced_array() raises:
+    """Filter a sliced int32 array with alternating selection."""
+    var a = array[int32]([10, 20, 30, 40, 50])
+    var sliced = a.slice(1, 3)  # [20, 30, 40] with offset=1
+    assert_equal(sliced.offset, 1)
+    var result = filter_(sliced, array([True, False, True]))
+    assert_equal(len(result), 2)
+    assert_equal(result.unsafe_get(0), 20)
+    assert_equal(result.unsafe_get(1), 40)
+
+
+def test_filter_sliced_keep_all() raises:
+    """All-selected path with offset array."""
+    var a = array[int32]([1, 2, 3, 4, 5])
+    var sliced = a.slice(2, 3)  # [3, 4, 5] with offset=2
+    var result = filter_(sliced, array([True, True, True]))
+    assert_equal(len(result), 3)
+    assert_equal(result.unsafe_get(0), 3)
+    assert_equal(result.unsafe_get(1), 4)
+    assert_equal(result.unsafe_get(2), 5)
+
+
+def test_filter_sliced_with_nulls() raises:
+    """Sliced array with nulls preserves validity."""
+    var b = PrimitiveBuilder[int32](6)
+    b.append(1)
+    b.append_null()
+    b.append(3)
+    b.append_null()
+    b.append(5)
+    b.append(6)
+    var a = b.finish_typed()
+    var sliced = a.slice(1, 4)  # [null, 3, null, 5] with offset=1
+    var result = filter_(sliced, array([True, True, True, False]))
+    assert_equal(len(result), 3)
+    assert_equal(result.nulls, 2)
+    assert_false(result.is_valid(0))
+    assert_true(result.is_valid(1))
+    assert_equal(result.unsafe_get(1), 3)
+    assert_false(result.is_valid(2))
+
+
+def test_filter_sliced_bool() raises:
+    """Filter a sliced bool array."""
+    var a = array([True, False, True, True, False])
+    var sliced = a.slice(1, 3)  # [False, True, True] with offset=1
+    var result = filter_(sliced, array([True, False, True]))
+    assert_equal(len(result), 2)
+    assert_equal(Bool(result.unsafe_get(0)), False)
+    assert_equal(Bool(result.unsafe_get(1)), True)
+
+
+def test_filter_sliced_strings() raises:
+    """Filter a sliced StringArray."""
+    var s = StringBuilder()
+    s.append("aa")
+    s.append("bb")
+    s.append("cc")
+    s.append("dd")
+    s.append("ee")
+    var a = s.finish_typed()
+    var sliced = a.slice(1, 3)  # ["bb", "cc", "dd"] with offset=1
+    var result = filter_(sliced, array([True, False, True]))
+    assert_equal(len(result), 2)
+    assert_equal(result.unsafe_get(0), "bb")
+    assert_equal(result.unsafe_get(1), "dd")
+
+
+def test_drop_nulls_sliced() raises:
+    """drop_nulls on a sliced array with nulls."""
+    var b = PrimitiveBuilder[int32](6)
+    b.append(10)
+    b.append_null()
+    b.append(30)
+    b.append_null()
+    b.append(50)
+    b.append(60)
+    var a = b.finish_typed()
+    var sliced = a.slice(1, 4)  # [null, 30, null, 50] with offset=1
+    var result = drop_nulls(sliced)
+    assert_equal(len(result), 2)
+    assert_equal(result.unsafe_get(0), 30)
+    assert_equal(result.unsafe_get(1), 50)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

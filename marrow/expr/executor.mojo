@@ -1,41 +1,35 @@
-"""Morsel-driven parallel expression executor.
+"""Processor-based streaming query executor.
 
 Execution model
 ---------------
-The executor splits input arrays into equal-sized **morsels** and distributes
-them across CPU worker threads using ``sync_parallelize`` from
-``std.algorithm``.  Worker threads that finish early are assigned additional
-morsels by the stdlib's coalescing logic — this provides natural load
-balancing similar to DuckDB/Umbra morsel-driven scheduling, without an
-explicit work-stealing scheduler.
+Each logical plan node maps to a physical **processor** that implements a
+pull-based iterator.  There are two processor hierarchies mirroring the two
+expression hierarchies:
 
-CPU path (default)::
+**Relation processors** (yield ``RecordBatch`` via ``__next__()``):
+    ``ScanProcessor``, ``FilterProcessor``, ``ProjectProcessor``
 
-    Input arrays [length N]
-        │
-        ├── morsel 0 [0, M)      → thread 0 → result[0]
-        ├── morsel 1 [M, 2M)     → thread 1 → result[1]
-        ├── morsel 2 [2M, 3M)    → thread 0 → result[2]   ← stolen!
-        └── morsel 3 [3M, N)     → thread 1 → result[3]
-                                              │
-                                         concat(results)
-                                              │
-                                           Array
+**Value processors** (evaluate ``Array`` via ``eval(inputs)``):
+    *Leaf* — ``ColumnProcessor``, ``LiteralProcessor`` (hold data)
+    *Operations* — ``BinaryProcessor``, ``UnaryProcessor``,
+    ``IsNullProcessor``, ``IfElseProcessor`` (compose nested value processors)
 
-NOTE: Exceptions raised inside ``sync_parallelize`` tasks are caught
-internally and cause ``abort()`` rather than propagating to the caller.  This
-is a known stdlib limitation.  Use the sequential fast path (set
-``morsel_size`` larger than your array length) when error propagation matters.
+``plan(expr)`` walks the expression tree bottom-up and builds both hierarchies.
+Consuming the top-level relation processor pulls morsel-sized
+``RecordBatch`` values through the pipeline.
+
+Convenience wrappers ``execute(plan)`` and ``execute(expr, inputs)`` materialise
+the full result as a ``RecordBatch`` or ``Array`` respectively.
 """
 
-import std.math as math
-from std.algorithm import sync_parallelize
-from std.runtime.asyncrt import parallelism_level
+from std.iter import Iterator, Iterable
+from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
+import std.math as math
 
 from marrow.arrays import PrimitiveArray, Array
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import DataType, numeric_dtypes, bool_ as bool_dt
+from marrow.dtypes import DataType, Field, numeric_dtypes, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, mul, div, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -52,16 +46,46 @@ from marrow.tabular import RecordBatch
 from marrow.kernels.filter import filter_
 from marrow.expr.values import (
     AnyValue,
-    Column, Literal, Binary, Unary, IsNull, IfElse, Cast,
-    LOAD, ADD, SUB, MUL, DIV, NEG, ABS, LITERAL,
-    EQ, NE, LT, LE, GT, GE, AND, OR, NOT, IS_NULL, IF_ELSE, CAST,
+    Column,
+    Literal,
+    Binary,
+    Unary,
+    IsNull,
+    IfElse,
+    Cast,
+    LOAD,
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    NEG,
+    ABS,
+    LITERAL,
+    EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+    AND,
+    OR,
+    NOT,
+    IS_NULL,
+    IF_ELSE,
+    CAST,
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
 from marrow.expr.relations import (
     AnyRelation,
-    Scan, Filter as PlanFilter, Project, InMemoryTable,
-    SCAN_NODE, FILTER_NODE, PROJECT_NODE, IN_MEMORY_TABLE_NODE,
+    Scan,
+    Filter as PlanFilter,
+    Project,
+    InMemoryTable,
+    SCAN_NODE,
+    FILTER_NODE,
+    PROJECT_NODE,
+    IN_MEMORY_TABLE_NODE,
 )
 
 
@@ -71,7 +95,7 @@ from marrow.expr.relations import (
 
 
 struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
-    """Runtime dispatch configuration for the ``PipelineExecutor``."""
+    """Runtime configuration for query execution."""
 
     var device_ctx: Optional[DeviceContext]
     """GPU device context.  None = CPU-only execution."""
@@ -80,7 +104,7 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
     """Number of CPU worker threads.  0 = ``parallelism_level()`` at execute time."""
 
     var morsel_size: Int
-    """Number of elements per CPU work chunk.  Default 65 536."""
+    """Number of rows per batch yielded by ``ScanProcessor``.  Default 65 536."""
 
     var gpu_threshold: Int
     """Minimum array length to auto-dispatch to GPU when ``DISPATCH_AUTO``."""
@@ -105,76 +129,594 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
         self.gpu_threshold = gpu_threshold
 
 
+# ===================================================================
+# Value processor hierarchy — evaluate scalar expressions
+# ===================================================================
+
+
 # ---------------------------------------------------------------------------
-# PipelineExecutor
+# ValueProcessor trait
 # ---------------------------------------------------------------------------
 
 
-struct PipelineExecutor(Copyable, Movable):
-    """Morsel-driven parallel executor with CPU / GPU dispatch.
+trait ValueProcessor(ImplicitlyDestructible, Movable):
+    """Evaluates a scalar expression against a list of input arrays.
 
-    All public methods accept and return type-erased ``Array`` values.
-    Runtime dtype dispatch to typed kernels happens internally.
+    Leaf processors (``ColumnProcessor``, ``LiteralProcessor``) hold data.
+    Operation processors (``BinaryProcessor``, ``UnaryProcessor``, etc.)
+    compose nested ``AnyValueProcessor`` children.
     """
 
-    var ctx: ExecutionContext
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        """Evaluate the expression against the given input arrays."""
+        ...
 
-    fn __init__(out self, var ctx: ExecutionContext = ExecutionContext()):
-        self.ctx = ctx^
 
-    fn execute(self, plan: AnyRelation) raises -> RecordBatch:
-        """Execute a relational plan tree, returning a RecordBatch."""
-        return RelationsExecutor().execute(plan)
+# ---------------------------------------------------------------------------
+# AnyValueProcessor — type-erased value processor
+# ---------------------------------------------------------------------------
 
-    fn execute(
-        self,
-        expr: AnyValue,
-        inputs: List[Array],
-    ) raises -> Array:
-        """Evaluate an expression tree over the given input arrays.
 
-        Handles both arithmetic (ADD, SUB, …) and predicate (EQ, LT, …)
-        nodes.  Returns a type-erased ``Array``.
+struct AnyValueProcessor(ImplicitlyCopyable, Movable):
+    """Type-erased value processor.
 
-        Args:
-            expr: The expression tree to evaluate.
-            inputs: Input arrays referenced by ``col(idx)`` nodes.
+    Wraps any ``ValueProcessor``-conforming type on the heap behind an
+    ``ArcPointer`` so the value processor tree can be composed at runtime.
+    Copies are O(1) ref-count bumps.
+    """
 
-        Returns:
-            A new ``Array`` with the expression result.
+    var _data: ArcPointer[NoneType]
+    var _virt_eval: fn(ArcPointer[NoneType], List[Array]) raises -> Array
+    var _virt_drop: fn(var ArcPointer[NoneType])
+
+    # --- trampolines ---
+
+    @staticmethod
+    fn _tramp_eval[
+        T: ValueProcessor
+    ](ptr: ArcPointer[NoneType], inputs: List[Array]) raises -> Array:
+        return rebind[ArcPointer[T]](ptr)[].eval(inputs)
+
+    @staticmethod
+    fn _tramp_drop[T: ValueProcessor](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[T]](ptr^)
+        _ = typed^
+
+    # --- construction ---
+
+    @implicit
+    fn __init__[T: ValueProcessor](out self, var value: T):
+        var ptr = ArcPointer(value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_eval = Self._tramp_eval[T]
+        self._virt_drop = Self._tramp_drop[T]
+
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
+        self._virt_eval = copy._virt_eval
+        self._virt_drop = copy._virt_drop
+
+    # --- public API ---
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        """Evaluate the expression against the given input arrays."""
+        return self._virt_eval(self._data, inputs)
+
+    fn __del__(deinit self):
+        self._virt_drop(self._data^)
+
+
+# ---------------------------------------------------------------------------
+# Leaf value processors — hold data
+# ---------------------------------------------------------------------------
+
+
+struct ColumnProcessor(ValueProcessor):
+    """Returns the input array at the given column index."""
+
+    var index: Int
+
+    fn __init__(out self, index: Int):
+        self.index = index
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        return inputs[self.index].copy()
+
+
+struct LiteralProcessor(ValueProcessor):
+    """Broadcasts a scalar value to match the input length."""
+
+    var value: Array
+
+    fn __init__(out self, value: Array):
+        self.value = value.copy()
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        return _broadcast_literal(inputs[0].length, self.value)
+
+
+# ---------------------------------------------------------------------------
+# Operation value processors — compose nested value processors
+# ---------------------------------------------------------------------------
+
+
+struct BinaryProcessor(ValueProcessor):
+    """Evaluates two children and applies a binary kernel."""
+
+    var left: AnyValueProcessor
+    var right: AnyValueProcessor
+    var op: UInt8
+
+    fn __init__(
+        out self,
+        var left: AnyValueProcessor,
+        var right: AnyValueProcessor,
+        op: UInt8,
+    ):
+        self.left = left^
+        self.right = right^
+        self.op = op
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        var l = self.left.eval(inputs)
+        var r = self.right.eval(inputs)
+        if self.op == ADD:
+            return add(l, r)
+        elif self.op == SUB:
+            return sub(l, r)
+        elif self.op == MUL:
+            return mul(l, r)
+        elif self.op == DIV:
+            return div(l, r)
+        elif self.op == EQ:
+            return equal(l, r)
+        elif self.op == NE:
+            return not_equal(l, r)
+        elif self.op == LT:
+            return less(l, r)
+        elif self.op == LE:
+            return less_equal(l, r)
+        elif self.op == GT:
+            return greater(l, r)
+        elif self.op == GE:
+            return greater_equal(l, r)
+        elif self.op == AND:
+            return Array(
+                and_(
+                    PrimitiveArray[bool_dt](data=l),
+                    PrimitiveArray[bool_dt](data=r),
+                )
+            )
+        elif self.op == OR:
+            return Array(
+                or_(
+                    PrimitiveArray[bool_dt](data=l),
+                    PrimitiveArray[bool_dt](data=r),
+                )
+            )
+        else:
+            raise Error("BinaryProcessor: unknown op ", self.op)
+
+
+struct UnaryProcessor(ValueProcessor):
+    """Evaluates one child and applies a unary kernel."""
+
+    var child: AnyValueProcessor
+    var op: UInt8
+
+    fn __init__(out self, var child: AnyValueProcessor, op: UInt8):
+        self.child = child^
+        self.op = op
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        var c = self.child.eval(inputs)
+        if self.op == NEG:
+            return neg(c)
+        elif self.op == ABS:
+            return abs_(c)
+        elif self.op == NOT:
+            return Array(not_(PrimitiveArray[bool_dt](data=c)))
+        else:
+            raise Error("UnaryProcessor: unknown op ", self.op)
+
+
+struct IsNullProcessor(ValueProcessor):
+    """Evaluates one child and returns a boolean null-check array."""
+
+    var child: AnyValueProcessor
+
+    fn __init__(out self, var child: AnyValueProcessor):
+        self.child = child^
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        return is_null(self.child.eval(inputs))
+
+
+struct IfElseProcessor(ValueProcessor):
+    """Evaluates condition, then, and else branches and selects."""
+
+    var cond: AnyValueProcessor
+    var then_: AnyValueProcessor
+    var else_: AnyValueProcessor
+
+    fn __init__(
+        out self,
+        var cond: AnyValueProcessor,
+        var then_: AnyValueProcessor,
+        var else_: AnyValueProcessor,
+    ):
+        self.cond = cond^
+        self.then_ = then_^
+        self.else_ = else_^
+
+    fn eval(self, inputs: List[Array]) raises -> Array:
+        var c = self.cond.eval(inputs)
+        var t = self.then_.eval(inputs)
+        var e = self.else_.eval(inputs)
+        return select(c, t, e)
+
+
+# ---------------------------------------------------------------------------
+# build() — construct value processor tree from expression tree
+# ---------------------------------------------------------------------------
+
+
+fn build(expr: AnyValue) raises -> AnyValueProcessor:
+    """Build a value processor tree from a scalar expression tree.
+
+    Recursively walks the ``AnyValue`` tree and creates the corresponding
+    ``AnyValueProcessor`` hierarchy.  Runtime dispatch on ``kind()`` happens
+    only here — subsequent ``eval()`` calls go through the pre-built tree.
+    """
+    var k = expr.kind()
+    if k == LOAD:
+        var arc = expr.downcast[Column]()
+        return ColumnProcessor(arc[].index)
+    elif k == LITERAL:
+        var arc = expr.downcast[Literal]()
+        return LiteralProcessor(arc[].value)
+    elif k >= ADD and k <= OR:
+        var arc = expr.downcast[Binary]()
+        var left = build(arc[].left)
+        var right = build(arc[].right)
+        return BinaryProcessor(left^, right^, arc[].op)
+    elif k >= NEG and k <= NOT:
+        var arc = expr.downcast[Unary]()
+        var child = build(arc[].child)
+        return UnaryProcessor(child^, arc[].op)
+    elif k == IS_NULL:
+        var arc = expr.downcast[IsNull]()
+        var child = build(arc[].child)
+        return IsNullProcessor(child^)
+    elif k == IF_ELSE:
+        var arc = expr.downcast[IfElse]()
+        var c = build(arc[].cond)
+        var t = build(arc[].then_)
+        var e = build(arc[].else_)
+        return IfElseProcessor(c^, t^, e^)
+    elif k == CAST:
+        raise Error("build: cast not implemented")
+    else:
+        raise Error("build: unknown expression kind ", k)
+
+
+# ===================================================================
+# Relation processor hierarchy — stream RecordBatch values
+# ===================================================================
+
+
+# ---------------------------------------------------------------------------
+# RelationProcessor trait
+# ---------------------------------------------------------------------------
+
+
+trait RelationProcessor(Iterator, ImplicitlyDestructible, Movable):
+    """Pull-based relation processor.
+
+    Concrete processors implement ``__next__()`` to yield morsel-sized
+    ``RecordBatch`` values, raising ``StopIteration`` when exhausted.
+    """
+
+    comptime Element = RecordBatch
+
+    fn schema(self) -> Schema:
+        """Return the output schema of this processor."""
+        ...
+
+    def __next__(mut self) raises StopIteration -> RecordBatch:
+        """Return the next batch, or raise ``StopIteration`` when exhausted."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# AnyRelationProcessor — type-erased relation processor
+# ---------------------------------------------------------------------------
+
+
+struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
+    """Type-erased relation processor.
+
+    Wraps any ``Processor``-conforming type on the heap behind an
+    ``ArcPointer`` so the processor hierarchy can be composed at runtime.
+    """
+
+    comptime Element = RecordBatch
+    comptime IteratorType[
+        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
+    ]: Iterator = Self
+
+    var _data: ArcPointer[NoneType]
+    var _virt_next: fn(ArcPointer[NoneType]) raises -> RecordBatch
+    var _virt_schema: fn(ArcPointer[NoneType]) -> Schema
+    var _virt_drop: fn(var ArcPointer[NoneType])
+
+    # --- trampolines ---
+
+    @staticmethod
+    fn _tramp_next[
+        T: RelationProcessor
+    ](ptr: ArcPointer[NoneType]) raises -> RecordBatch:
+        return rebind[ArcPointer[T]](ptr)[].__next__()
+
+    @staticmethod
+    fn _tramp_schema[T: RelationProcessor](ptr: ArcPointer[NoneType]) -> Schema:
+        return rebind[ArcPointer[T]](ptr)[].schema()
+
+    @staticmethod
+    fn _tramp_drop[T: RelationProcessor](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[T]](ptr^)
+        _ = typed^
+
+    # --- copy ---
+
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
+        self._virt_next = copy._virt_next
+        self._virt_schema = copy._virt_schema
+        self._virt_drop = copy._virt_drop
+
+    # --- construction ---
+
+    @implicit
+    fn __init__[T: RelationProcessor](out self, var value: T):
+        var ptr = ArcPointer(value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_next = Self._tramp_next[T]
+        self._virt_schema = Self._tramp_schema[T]
+        self._virt_drop = Self._tramp_drop[T]
+
+    # --- public API ---
+
+    fn schema(self) -> Schema:
+        """Return the output schema of this processor."""
+        return self._virt_schema(self._data)
+
+    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
+        """Return an iterator over batches (returns a copy sharing the same processor state)."""
+        return self.copy()
+
+    def __next__(mut self) raises StopIteration -> RecordBatch:
+        """Return the next batch, or raise ``StopIteration`` when exhausted."""
+        return self._virt_next(self._data)
+
+    fn read_all(mut self) raises -> RecordBatch:
+        """Consume all remaining batches and concatenate into a single RecordBatch.
         """
-        if len(inputs) == 0:
-            raise Error("PipelineExecutor.execute: inputs must be non-empty")
-        var length = inputs[0].length
+        var batches = self.to_batches()
+        if len(batches) == 0:
+            return RecordBatch(schema=self.schema(), columns=List[Array]())
+        if len(batches) == 1:
+            return RecordBatch(copy=batches[0])
+        # Concat each column across batches.
+        var schema = batches[0].schema
+        var num_cols = batches[0].num_columns()
+        var result_cols = List[Array](capacity=num_cols)
+        for c in range(num_cols):
+            var col_arrays = List[Array](capacity=len(batches))
+            for b in range(len(batches)):
+                col_arrays.append(batches[b].columns[c].copy())
+            result_cols.append(concat(col_arrays))
+        return RecordBatch(schema=Schema(copy=schema), columns=result_cols^)
 
-        var morsel_size = self.ctx.morsel_size
-        var n_morsels = math.ceildiv(length, morsel_size)
-        var effective_workers = (
-            parallelism_level()
-            if self.ctx.num_cpu_workers == 0
-            else self.ctx.num_cpu_workers
+    fn to_batches(mut self) raises -> List[RecordBatch]:
+        """Consume all remaining batches into a list."""
+        var result = List[RecordBatch]()
+        for batch in self:
+            result.append(batch)
+        return result^
+
+    fn __del__(deinit self):
+        self._virt_drop(self._data^)
+
+
+# ---------------------------------------------------------------------------
+# ScanProcessor — yields morsel-sized slices of an in-memory RecordBatch
+# ---------------------------------------------------------------------------
+
+
+struct ScanProcessor(RelationProcessor):
+    """Yields morsel-sized slices of an in-memory ``RecordBatch``.
+
+    Each ``__next__()`` call returns a morsel-sized batch with offset-0 arrays,
+    advancing the internal offset.
+    """
+
+    var batch: RecordBatch
+    var offset: Int
+    var morsel_size: Int
+
+    fn __init__(out self, batch: RecordBatch, morsel_size: Int):
+        self.batch = RecordBatch(copy=batch)
+        self.offset = 0
+        self.morsel_size = morsel_size
+
+    fn schema(self) -> Schema:
+        return Schema(copy=self.batch.schema)
+
+    def __next__(mut self) raises StopIteration -> RecordBatch:
+        if self.offset >= self.batch.num_rows():
+            raise StopIteration()
+        var length = min(self.morsel_size, self.batch.num_rows() - self.offset)
+        var result = self.batch.slice(self.offset, length)
+        self.offset += length
+        return result^
+
+
+# ---------------------------------------------------------------------------
+# FilterProcessor — pulls from child, applies boolean predicate
+# ---------------------------------------------------------------------------
+
+
+struct FilterProcessor(RelationProcessor):
+    """Pulls batches from a child processor, evaluates a boolean predicate,
+    and yields only the rows where the predicate is true.
+
+    Batches where all rows are filtered out are silently skipped.
+    """
+
+    var child: AnyRelationProcessor
+    var predicate: AnyValueProcessor
+    var schema_: Schema
+
+    fn __init__(
+        out self,
+        var child: AnyRelationProcessor,
+        var predicate: AnyValueProcessor,
+        schema_: Schema,
+    ):
+        self.child = child^
+        self.predicate = predicate^
+        self.schema_ = schema_
+
+    fn schema(self) -> Schema:
+        return self.schema_.copy()
+
+    def __next__(mut self) raises StopIteration -> RecordBatch:
+        # Skips batches that filter to 0 rows. Terminates when the child
+        # raises StopIteration (propagates out of the loop).
+        while True:
+            var batch = self.child.__next__()
+            var inputs = _batch_to_inputs(batch)
+            var mask = self.predicate.eval(inputs)
+            var result_cols = List[Array]()
+            for i in range(batch.num_columns()):
+                result_cols.append(
+                    filter_(batch.columns[i].copy(), mask.copy())
+                )
+            var result = RecordBatch(
+                schema=self.schema_.copy(), columns=result_cols^
+            )
+            if result.num_rows() > 0:
+                return result^
+
+
+# ---------------------------------------------------------------------------
+# ProjectProcessor — pulls from child, evaluates projection expressions
+# ---------------------------------------------------------------------------
+
+
+struct ProjectProcessor(RelationProcessor):
+    """Pulls batches from a child processor and evaluates a list of
+    value processors to produce new output columns.
+    """
+
+    var child: AnyRelationProcessor
+    var values: List[AnyValueProcessor]
+    var schema_: Schema
+
+    fn __init__(
+        out self,
+        var child: AnyRelationProcessor,
+        var values: List[AnyValueProcessor],
+        schema_: Schema,
+    ):
+        self.child = child^
+        self.values = values^
+        self.schema_ = schema_
+
+    fn schema(self) -> Schema:
+        return self.schema_.copy()
+
+    def __next__(mut self) raises StopIteration -> RecordBatch:
+        var batch = self.child.__next__()  # raises StopIteration when exhausted
+        var inputs = _batch_to_inputs(batch)
+        var result_cols = List[Array]()
+        for ref v in self.values:
+            result_cols.append(v.eval(inputs))
+        return RecordBatch(
+            schema=self.schema_.copy(), columns=result_cols^
         )
-        var num_workers = min(effective_workers, n_morsels)
 
-        if num_workers <= 1 or n_morsels == 1:
-            var input_copy = _copy_inputs(inputs)
-            var evaluator = ValuesExecutor(input_copy^)
-            return evaluator.execute(expr)
 
-        var results = List[Array](capacity=n_morsels)
-        for _ in range(n_morsels):
-            results.append(_empty_like(inputs[0]))
+# ---------------------------------------------------------------------------
+# plan() — build processor hierarchy from a logical plan
+# ---------------------------------------------------------------------------
 
-        @parameter
-        fn process_morsel(i: Int) raises:
-            var start = i * morsel_size
-            var end = min(start + morsel_size, length)
-            var chunk_inputs = _slice_inputs(inputs, start, end)
-            var evaluator = ValuesExecutor(chunk_inputs^)
-            results[i] = evaluator.execute(expr)
 
-        sync_parallelize[process_morsel](n_morsels)
-        return concat(results)
+fn plan(
+    expr: AnyRelation, ctx: ExecutionContext = ExecutionContext()
+) raises -> AnyRelationProcessor:
+    """Build a processor pipeline from a relational expression tree.
+
+    Walks the expression tree bottom-up, creating the corresponding relation
+    and value processors.  The returned ``AnyRelationProcessor`` can be
+    iterated to pull morsel-sized ``RecordBatch`` values through the pipeline.
+
+    Args:
+        expr: The logical relational expression tree.
+        ctx: Execution context (morsel size, device, etc.).
+
+    Returns:
+        A type-erased relation processor for streaming execution.
+    """
+    var k = expr.kind()
+    if k == IN_MEMORY_TABLE_NODE:
+        var arc = expr.downcast[InMemoryTable]()
+        return ScanProcessor(batch=arc[].batch, morsel_size=ctx.morsel_size)
+    if k == FILTER_NODE:
+        var arc = expr.downcast[PlanFilter]()
+        var child = plan(arc[].input, ctx)
+        var predicate = build(arc[].predicate)
+        return FilterProcessor(
+            child=child^,
+            predicate=predicate^,
+            schema_=arc[].input.schema(),
+        )
+    if k == PROJECT_NODE:
+        var arc = expr.downcast[Project]()
+        var child = plan(arc[].input, ctx)
+        var values = List[AnyValueProcessor]()
+        for ref e in arc[].exprs_:
+            values.append(build(e))
+        return ProjectProcessor(
+            child=child^,
+            values=values^,
+            schema_=arc[].schema(),
+        )
+    if k == SCAN_NODE:
+        raise Error("plan: Scan requires external data source binding")
+    raise Error("plan: unknown relation kind ", k)
+
+
+# ---------------------------------------------------------------------------
+# Convenience execute() functions
+# ---------------------------------------------------------------------------
+
+
+fn execute(
+    expr: AnyRelation, ctx: ExecutionContext = ExecutionContext()
+) raises -> RecordBatch:
+    """Execute a relational expression tree, materialising the full result.
+
+    Args:
+        expr: The logical relational expression tree.
+        ctx: Execution context (morsel size, device, etc.).
+
+    Returns:
+        A single ``RecordBatch`` containing all result rows.
+    """
+    var proc = plan(expr, ctx)
+    return proc.read_all()
 
 
 fn execute(
@@ -183,197 +725,51 @@ fn execute(
     morsel_size: Int = 65_536,
     num_cpu_workers: Int = 0,
 ) raises -> Array:
-    """Convenience wrapper around ``PipelineExecutor`` for expression evaluation.
+    """Evaluate an expression tree over the given input arrays.
+
+    Splits the input arrays into morsel-sized batches via ``ScanProcessor``,
+    evaluates the expression on each batch, and concatenates the results.
 
     Args:
         expr: The expression tree to evaluate.
         inputs: Input arrays referenced by ``col(idx)`` nodes.
-        morsel_size: Number of elements per parallel work chunk.
-        num_cpu_workers: Number of CPU threads (0 = ``parallelism_level()``).
+        morsel_size: Number of rows per morsel.
+        num_cpu_workers: Reserved for future parallel execution.
 
     Returns:
         A new ``Array`` with the expression result.
     """
-    var ctx = ExecutionContext()
-    ctx.morsel_size = morsel_size
-    ctx.num_cpu_workers = num_cpu_workers
-    return PipelineExecutor(ctx).execute(expr, inputs)
+    if len(inputs) == 0:
+        raise Error("execute: inputs must be non-empty")
 
+    # Build a RecordBatch from the input arrays.
+    var fields = List[Field]()
+    for i in range(len(inputs)):
+        fields.append(Field(String("c") + String(i), inputs[i].dtype))
+    var schema = Schema(fields=fields^)
+    var cols = List[Array](capacity=len(inputs))
+    for ref inp in inputs:
+        cols.append(inp.copy())
+    var batch = RecordBatch(schema=schema, columns=cols^)
 
-# ---------------------------------------------------------------------------
-# Expression tree executor (overloaded eval per node type)
-# ---------------------------------------------------------------------------
+    # Build a ScanProcessor and evaluate the expression on each morsel.
+    var scan: AnyRelationProcessor = ScanProcessor(batch=batch, morsel_size=morsel_size)
+    var evaluator = build(expr)
+    var results = List[Array]()
+    for morsel in scan:
+        var morsel_inputs = _batch_to_inputs(morsel)
+        results.append(evaluator.eval(morsel_inputs))
 
-
-struct ValuesExecutor:
-    """Evaluates an expression tree against a list of input arrays.
-
-    Dispatches to overloaded ``execute`` methods per concrete node type,
-    mirroring the RelationsExecutor pattern for relation nodes.
-    """
-
-    var inputs: List[Array]
-
-    fn __init__(out self, var inputs: List[Array]):
-        self.inputs = inputs^
-
-    fn execute(mut self, expr: AnyValue) raises -> Array:
-        """Dispatch to the typed overload matching the runtime kind."""
-        var k = expr.kind()
-        if k == LOAD:
-            return self.execute(expr.downcast[Column]()[])
-        elif k == LITERAL:
-            return self.execute(expr.downcast[Literal]()[])
-        elif k >= ADD and k <= OR:
-            return self.execute(expr.downcast[Binary]()[])
-        elif k >= NEG and k <= NOT:
-            return self.execute(expr.downcast[Unary]()[])
-        elif k == IS_NULL:
-            return self.execute(expr.downcast[IsNull]()[])
-        elif k == IF_ELSE:
-            return self.execute(expr.downcast[IfElse]()[])
-        elif k == CAST:
-            return self.execute(expr.downcast[Cast]()[])
-        else:
-            raise Error("ValuesExecutor: unknown kind ", k)
-
-    fn execute(mut self, col: Column) raises -> Array:
-        return self.inputs[col.index].copy()
-
-    fn execute(mut self, lit: Literal) raises -> Array:
-        return _broadcast_literal(self.inputs[0].length, lit.value)
-
-    fn execute(mut self, bin: Binary) raises -> Array:
-        var left = self.execute(bin.left)
-        var right = self.execute(bin.right)
-        if bin.op == ADD:
-            return add(left, right)
-        elif bin.op == SUB:
-            return sub(left, right)
-        elif bin.op == MUL:
-            return mul(left, right)
-        elif bin.op == DIV:
-            return div(left, right)
-        elif bin.op == EQ:
-            return equal(left, right)
-        elif bin.op == NE:
-            return not_equal(left, right)
-        elif bin.op == LT:
-            return less(left, right)
-        elif bin.op == LE:
-            return less_equal(left, right)
-        elif bin.op == GT:
-            return greater(left, right)
-        elif bin.op == GE:
-            return greater_equal(left, right)
-        elif bin.op == AND:
-            return Array(
-                and_(
-                    PrimitiveArray[bool_dt](data=left),
-                    PrimitiveArray[bool_dt](data=right),
-                )
-            )
-        elif bin.op == OR:
-            return Array(
-                or_(
-                    PrimitiveArray[bool_dt](data=left),
-                    PrimitiveArray[bool_dt](data=right),
-                )
-            )
-        else:
-            raise Error("ValuesExecutor: unknown binary op ", bin.op)
-
-    fn execute(mut self, un: Unary) raises -> Array:
-        var child = self.execute(un.child)
-        if un.op == NEG:
-            return neg(child)
-        elif un.op == ABS:
-            return abs_(child)
-        elif un.op == NOT:
-            return Array(not_(PrimitiveArray[bool_dt](data=child)))
-        else:
-            raise Error("ValuesExecutor: unknown unary op ", un.op)
-
-    fn execute(mut self, node: IsNull) raises -> Array:
-        return is_null(self.execute(node.child))
-
-    fn execute(mut self, node: IfElse) raises -> Array:
-        var cond = self.execute(node.cond)
-        var then_ = self.execute(node.then_)
-        var else_ = self.execute(node.else_)
-        return select(cond, then_, else_)
-
-    fn execute(mut self, node: Cast) raises -> Array:
-        raise Error("ValuesExecutor: cast not implemented")
-
-
-# ---------------------------------------------------------------------------
-# Relational plan executor (overloaded execute per node type)
-# ---------------------------------------------------------------------------
-
-
-struct RelationsExecutor:
-    """Executes a relational plan tree, returning a RecordBatch.
-
-    Dispatches to overloaded ``execute`` methods based on ``plan.kind()``,
-    mirroring the ValuesExecutor pattern for expression nodes.
-    """
-
-    fn __init__(out self):
-        pass
-
-    fn execute(self, plan: AnyRelation) raises -> RecordBatch:
-        var k = plan.kind()
-        if k == IN_MEMORY_TABLE_NODE:
-            return self.execute(plan.downcast[InMemoryTable]()[])
-        if k == SCAN_NODE:
-            return self.execute(plan.downcast[Scan]()[])
-        if k == FILTER_NODE:
-            return self.execute(plan.downcast[PlanFilter]()[])
-        if k == PROJECT_NODE:
-            return self.execute(plan.downcast[Project]()[])
-        raise Error("RelationsExecutor: unknown relation kind ", k)
-
-    fn execute(self, node: InMemoryTable) raises -> RecordBatch:
-        return RecordBatch(copy=node.batch)
-
-    fn execute(self, node: Scan) raises -> RecordBatch:
-        raise Error("RelationsExecutor: Scan requires external data source binding")
-
-    fn execute(self, node: PlanFilter) raises -> RecordBatch:
-        var child_batch = self.execute(node.input)
-        var input_arrays = _batch_to_inputs(child_batch)
-        var evaluator = ValuesExecutor(input_arrays^)
-        var mask = evaluator.execute(node.predicate)
-        var result_cols = List[Array]()
-        for i in range(child_batch.num_columns()):
-            result_cols.append(filter_(child_batch.columns[i].copy(), mask.copy()))
-        return RecordBatch(
-            schema=Schema(copy=child_batch.schema), columns=result_cols^
-        )
-
-    fn execute(self, node: Project) raises -> RecordBatch:
-        var child_batch = self.execute(node.input)
-        var result_cols = List[Array]()
-        for ref e in node.exprs_:
-            var input_arrays = _batch_to_inputs(child_batch)
-            var evaluator = ValuesExecutor(input_arrays^)
-            var result = evaluator.execute(e)
-            result_cols.append(result.copy())
-        return RecordBatch(schema=node.schema(), columns=result_cols^)
+    if len(results) == 0:
+        raise Error("execute: no results produced")
+    if len(results) == 1:
+        return results[0].copy()
+    return concat(results)
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
-
-fn _copy_inputs(inputs: List[Array]) -> List[Array]:
-    """Copy a list of arrays (O(1) per array via ref-counting)."""
-    var result = List[Array](capacity=len(inputs))
-    for ref inp in inputs:
-        result.append(inp.copy())
-    return result^
 
 
 fn _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
@@ -389,29 +785,8 @@ fn _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype}")
 
 
-fn _empty_like(arr: Array) raises -> Array:
-    """Create a zero-length array with the same dtype."""
-    comptime for dt in numeric_dtypes:
-        if arr.dtype == dt:
-            var b = PrimitiveBuilder[dt](0)
-            return Array(b.finish_typed())
-    raise Error(t"_empty_like: unsupported dtype {arr.dtype}")
-
-
-fn _slice_inputs(
-    inputs: List[Array],
-    start: Int,
-    end: Int,
-) raises -> List[Array]:
-    """Return zero-copy slices of each input array for [start, end)."""
-    var slices = List[Array](capacity=len(inputs))
-    for ref inp in inputs:
-        slices.append(inp.slice(start, end - start))
-    return slices^
-
-
 fn _batch_to_inputs(batch: RecordBatch) -> List[Array]:
-    """Convert a RecordBatch's columns to a List[Array] for the evaluator."""
+    """Convert a RecordBatch's columns to a List[Array]."""
     var inputs = List[Array](capacity=batch.num_columns())
     for i in range(batch.num_columns()):
         inputs.append(batch.columns[i].copy())

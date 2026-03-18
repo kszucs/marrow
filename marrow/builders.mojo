@@ -154,8 +154,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._virt_reset = Self._tramp_reset[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __copyinit__(out self, read copy: Self):
-        self._data = copy._data.copy()
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
         self._virt_length = copy._virt_length
         self._virt_null_count = copy._virt_null_count
         self._virt_dtype = copy._virt_dtype

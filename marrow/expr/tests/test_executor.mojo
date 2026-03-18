@@ -1,4 +1,4 @@
-"""Tests for PipelineExecutor: correctness, parallel paths, edge cases."""
+"""Tests for expression execution: correctness, morsel boundaries, edge cases."""
 
 from std.testing import assert_equal, TestSuite
 
@@ -6,7 +6,7 @@ from marrow.arrays import array, PrimitiveArray, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.expr import AnyValue, col, lit, DISPATCH_CPU, execute
 from marrow.builders import arange
-from marrow.expr.executor import ExecutionContext, PipelineExecutor
+from marrow.expr.executor import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,9 @@ def test_parallel_matches_sequential_add() raises:
     var expr = col(0) + col(1)
 
     var sequential = execute(expr, [Array(a), Array(b)])
-    var parallel = execute(expr, [Array(a), Array(b)], morsel_size=64, num_cpu_workers=4)
+    var parallel = execute(
+        expr, [Array(a), Array(b)], morsel_size=64, num_cpu_workers=4
+    )
 
     assert_equal(parallel == sequential, True)
 
@@ -51,7 +53,9 @@ def test_parallel_matches_sequential_mul() raises:
     var expr = col(0) * col(1)
 
     var sequential = execute(expr, [Array(a), Array(b)])
-    var parallel = execute(expr, [Array(a), Array(b)], morsel_size=50, num_cpu_workers=2)
+    var parallel = execute(
+        expr, [Array(a), Array(b)], morsel_size=50, num_cpu_workers=2
+    )
 
     assert_equal(parallel == sequential, True)
 
@@ -62,7 +66,8 @@ def test_parallel_matches_sequential_mul() raises:
 
 
 def test_chunk_boundary_values() raises:
-    """Values at chunk boundaries (first/last element of each morsel) are correct."""
+    """Values at chunk boundaries (first/last element of each morsel) are correct.
+    """
     var a = arange[int64](0, 128)
     var expr = col(0) + lit[int64](1)
 
@@ -114,7 +119,9 @@ def test_execute_pred_parallel() raises:
     var expr = col(0) < col(1)
 
     var sequential = execute(expr, [Array(a), Array(b)])
-    var parallel = execute(expr, [Array(a), Array(b)], morsel_size=40, num_cpu_workers=3)
+    var parallel = execute(
+        expr, [Array(a), Array(b)], morsel_size=40, num_cpu_workers=3
+    )
 
     assert_equal(parallel == sequential, True)
 
@@ -132,7 +139,9 @@ def test_parallel_chained_expression() raises:
     # (a + b) * (a - b)
     var expr = (col(0) + col(1)) * (col(0) - col(1))
     var sequential = execute(expr, [Array(a), Array(b)])
-    var parallel = execute(expr, [Array(a), Array(b)], morsel_size=64, num_cpu_workers=2)
+    var parallel = execute(
+        expr, [Array(a), Array(b)], morsel_size=64, num_cpu_workers=2
+    )
 
     assert_equal(parallel == sequential, True)
 
@@ -147,7 +156,9 @@ def test_dispatch_cpu_hint() raises:
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([5, 4, 3, 2, 1])
 
-    var result = execute((col(0) + col(1)).with_dispatch(DISPATCH_CPU), [Array(a), Array(b)])
+    var result = execute(
+        (col(0) + col(1)).with_dispatch(DISPATCH_CPU), [Array(a), Array(b)]
+    )
     assert_equal(result == Array(array[int64]([6, 6, 6, 6, 6])), True)
 
 

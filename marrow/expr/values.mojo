@@ -35,7 +35,7 @@ from marrow.schema import Schema
 # ---------------------------------------------------------------------------
 
 # Leaf nodes
-comptime LOAD:    UInt8 = 0
+comptime LOAD: UInt8 = 0
 comptime LITERAL: UInt8 = 1
 
 # BinaryOp values — also used as kind() for Binary nodes
@@ -43,14 +43,14 @@ comptime ADD: UInt8 = 2
 comptime SUB: UInt8 = 3
 comptime MUL: UInt8 = 4
 comptime DIV: UInt8 = 5
-comptime EQ:  UInt8 = 6
-comptime NE:  UInt8 = 7
-comptime LT:  UInt8 = 8
-comptime LE:  UInt8 = 9
-comptime GT:  UInt8 = 10
-comptime GE:  UInt8 = 11
+comptime EQ: UInt8 = 6
+comptime NE: UInt8 = 7
+comptime LT: UInt8 = 8
+comptime LE: UInt8 = 9
+comptime GT: UInt8 = 10
+comptime GE: UInt8 = 11
 comptime AND: UInt8 = 12
-comptime OR:  UInt8 = 13
+comptime OR: UInt8 = 13
 
 # UnaryOp values — also used as kind() for Unary nodes
 comptime NEG: UInt8 = 14
@@ -60,7 +60,7 @@ comptime NOT: UInt8 = 16
 # Other nodes
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
-comptime CAST:    UInt8 = 19
+comptime CAST: UInt8 = 19
 
 
 # ---------------------------------------------------------------------------
@@ -138,9 +138,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
-    fn _tramp_dtype[
-        T: Value
-    ](ptr: ArcPointer[NoneType]) -> Optional[DataType]:
+    fn _tramp_dtype[T: Value](ptr: ArcPointer[NoneType]) -> Optional[DataType]:
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod
@@ -171,8 +169,8 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
         self._virt_drop = Self._tramp_drop[T]
         self.dispatch = DISPATCH_AUTO
 
-    fn __copyinit__(out self, read copy: Self):
-        self._data = copy._data.copy()
+    fn __init__(out self, *, copy: Self):
+        self._data = copy._data
         self._virt_kind = copy._virt_kind
         self._virt_dtype = copy._virt_dtype
         self._virt_inputs = copy._virt_inputs
@@ -343,7 +341,9 @@ struct Binary(Value):
     var left: AnyValue
     var right: AnyValue
 
-    fn __init__(out self, *, op: UInt8, var left: AnyValue, var right: AnyValue):
+    fn __init__(
+        out self, *, op: UInt8, var left: AnyValue, var right: AnyValue
+    ):
         self.op = op
         self.left = left^
         self.right = right^
@@ -452,13 +452,20 @@ struct IsNull(Value):
 
 
 struct IfElse(Value):
-    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i]."""
+    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i].
+    """
 
     var cond: AnyValue
     var then_: AnyValue
     var else_: AnyValue
 
-    fn __init__(out self, *, var cond: AnyValue, var then_: AnyValue, var else_: AnyValue):
+    fn __init__(
+        out self,
+        *,
+        var cond: AnyValue,
+        var then_: AnyValue,
+        var else_: AnyValue,
+    ):
         self.cond = cond^
         self.then_ = then_^
         self.else_ = else_^
@@ -507,7 +514,6 @@ struct Cast(Value):
         writer.write(t", {self.to})")
 
 
-
 # ---------------------------------------------------------------------------
 # Literal helpers
 # ---------------------------------------------------------------------------
@@ -531,7 +537,8 @@ fn col(index: Int) -> AnyValue:
 
 
 fn col(var name: String) -> AnyValue:
-    """Reference to a named column (resolved against the schema at execution)."""
+    """Reference to a named column (resolved against the schema at execution).
+    """
     return Column(index=-1, name=name^, dtype_=None)
 
 
@@ -541,7 +548,8 @@ fn lit[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
 
 
 fn if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
-    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i]."""
+    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i].
+    """
     return IfElse(cond=cond, then_=then_, else_=else_)
 
 
@@ -588,7 +596,8 @@ fn resolve_columns(expr: AnyValue, schema: Schema) raises -> AnyValue:
             var idx = schema.get_field_index(c[].name)
             if idx == -1:
                 raise Error(
-                    "resolve_columns: column '" + c[].name
+                    "resolve_columns: column '"
+                    + c[].name
                     + "' not found in schema"
                 )
             return col(idx)

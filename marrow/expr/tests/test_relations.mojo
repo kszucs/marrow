@@ -5,10 +5,24 @@ from marrow.dtypes import Field, int64, float64
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.expr import (
-    AnyValue, col, lit, ADD, LT, in_memory_table,
-    SCAN_NODE, FILTER_NODE, PROJECT_NODE, IN_MEMORY_TABLE_NODE,
+    AnyValue,
+    col,
+    lit,
+    ADD,
+    LT,
+    in_memory_table,
+    SCAN_NODE,
+    FILTER_NODE,
+    PROJECT_NODE,
+    IN_MEMORY_TABLE_NODE,
 )
-from marrow.expr.relations import AnyRelation, Scan, Filter, Project, InMemoryTable
+from marrow.expr.relations import (
+    AnyRelation,
+    Scan,
+    Filter,
+    Project,
+    InMemoryTable,
+)
 from marrow.expr.values import Column
 
 

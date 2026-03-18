@@ -5,7 +5,8 @@ from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
 from marrow.expr import (
     AnyValue,
-    Column, Binary,
+    Column,
+    Binary,
     col,
     lit,
     if_else,
@@ -13,7 +14,7 @@ from marrow.expr import (
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
-from marrow.expr.executor import PipelineExecutor
+from marrow.expr.executor import execute
 
 
 fn _make(a: PrimitiveArray[int64]) -> List[Array]:
@@ -22,9 +23,7 @@ fn _make(a: PrimitiveArray[int64]) -> List[Array]:
     return inputs^
 
 
-fn _make(
-    a: PrimitiveArray[int64], b: PrimitiveArray[int64]
-) -> List[Array]:
+fn _make(a: PrimitiveArray[int64], b: PrimitiveArray[int64]) -> List[Array]:
     var inputs = List[Array]()
     inputs.append(Array(a))
     inputs.append(Array(b))
@@ -33,16 +32,14 @@ fn _make(
 
 fn _exec(expr: AnyValue, inputs: List[Array]) raises -> PrimitiveArray[int64]:
     """Helper: execute and convert result to typed array."""
-    return PrimitiveArray[int64](data=PipelineExecutor().execute(expr, inputs))
+    return PrimitiveArray[int64](data=execute(expr, inputs))
 
 
 fn _exec_pred(
     expr: AnyValue, inputs: List[Array]
 ) raises -> PrimitiveArray[bool_dt]:
     """Helper: execute predicate and convert result to typed bool array."""
-    return PrimitiveArray[bool_dt](
-        data=PipelineExecutor().execute(expr, inputs)
-    )
+    return PrimitiveArray[bool_dt](data=execute(expr, inputs))
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +363,7 @@ def test_write_to_if_else() raises:
 def test_kind_column() raises:
     """Column node reports LOAD kind."""
     from marrow.expr import LOAD
+
     var expr = col(0)
     assert_equal(expr.kind(), LOAD)
     assert_equal(expr.downcast[Column]()[].index, 0)
@@ -374,6 +372,7 @@ def test_kind_column() raises:
 def test_kind_literal() raises:
     """Literal node reports LITERAL kind."""
     from marrow.expr import LITERAL
+
     var expr = lit[int64](42)
     assert_equal(expr.kind(), LITERAL)
 
@@ -381,6 +380,7 @@ def test_kind_literal() raises:
 def test_kind_binary() raises:
     """Binary node reports its op as kind."""
     from marrow.expr import ADD
+
     var expr = col(0) + col(1)
     assert_equal(expr.kind(), ADD)
     assert_equal(expr.downcast[Binary]()[].op, ADD)

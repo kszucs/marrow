@@ -32,39 +32,39 @@ from . import binary_simd, binary_array_dispatch
 # ---------------------------------------------------------------------------
 
 
-fn _eq[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _eq[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.eq(b))
 
 
-fn _ne[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _ne[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.ne(b))
 
 
-fn _lt[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _lt[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.lt(b))
 
 
-fn _le[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _le[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.le(b))
 
 
-fn _gt[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _gt[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.gt(b))
 
 
-fn _ge[T: DType, W: Int](
-    a: SIMD[T, W], b: SIMD[T, W]
-) -> SIMD[bool_dt.native, W]:
+fn _ge[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
     return rebind[SIMD[bool_dt.native, W]](a.ge(b))
 
 
@@ -75,54 +75,54 @@ fn _ge[T: DType, W: Int](
 
 fn equal[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise equality: result[i] = left[i] == right[i]."""
     return binary_simd[T, bool_dt, _eq[T.native, _], "equal"](left, right)
 
 
 fn not_equal[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
     return binary_simd[T, bool_dt, _ne[T.native, _], "not_equal"](left, right)
 
 
 fn less[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
     return binary_simd[T, bool_dt, _lt[T.native, _], "less"](left, right)
 
 
 fn less_equal[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
     return binary_simd[T, bool_dt, _le[T.native, _], "less_equal"](left, right)
 
 
 fn greater[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
     return binary_simd[T, bool_dt, _gt[T.native, _], "greater"](left, right)
 
 
 fn greater_equal[
     T: DataType
-](
-    left: PrimitiveArray[T], right: PrimitiveArray[T]
-) raises -> PrimitiveArray[bool_dt]:
+](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
+    bool_dt
+]:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
     return binary_simd[T, bool_dt, _ge[T.native, _], "greater_equal"](
         left, right
@@ -141,7 +141,9 @@ fn equal(left: Array, right: Array) raises -> Array:
 
 fn not_equal(left: Array, right: Array) raises -> Array:
     """Runtime-typed not_equal."""
-    return binary_array_dispatch["not_equal", bool_dt, not_equal[_]](left, right)
+    return binary_array_dispatch["not_equal", bool_dt, not_equal[_]](
+        left, right
+    )
 
 
 fn less(left: Array, right: Array) raises -> Array:
@@ -151,7 +153,9 @@ fn less(left: Array, right: Array) raises -> Array:
 
 fn less_equal(left: Array, right: Array) raises -> Array:
     """Runtime-typed less_equal."""
-    return binary_array_dispatch["less_equal", bool_dt, less_equal[_]](left, right)
+    return binary_array_dispatch["less_equal", bool_dt, less_equal[_]](
+        left, right
+    )
 
 
 fn greater(left: Array, right: Array) raises -> Array:

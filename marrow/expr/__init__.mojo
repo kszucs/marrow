@@ -99,8 +99,22 @@ from marrow.expr.rewrite import (
 )
 from marrow.expr.executor import (
     ExecutionContext,
-    PipelineExecutor,
-    ValuesExecutor,
-    RelationsExecutor,
+    # Value processors
+    ValueProcessor,
+    AnyValueProcessor,
+    ColumnProcessor,
+    LiteralProcessor,
+    BinaryProcessor,
+    UnaryProcessor,
+    IsNullProcessor,
+    IfElseProcessor,
+    build,
+    # Relation processors
+    RelationProcessor,
+    AnyRelationProcessor,
+    ScanProcessor,
+    FilterProcessor,
+    ProjectProcessor,
+    plan,
     execute,
 )

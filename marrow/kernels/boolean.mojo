@@ -61,9 +61,7 @@ fn or_(
     )
 
 
-fn not_(
-    arr: PrimitiveArray[bool_dt]
-) raises -> PrimitiveArray[bool_dt]:
+fn not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
     """Bitwise NOT of a bit-packed bool array."""
     var length = len(arr)
     var bm = Bitmap(arr.buffer, arr.offset, length)
@@ -77,9 +75,7 @@ fn not_(
     )
 
 
-fn is_null[T: DataType](
-    arr: PrimitiveArray[T]
-) -> PrimitiveArray[bool_dt]:
+fn is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = BitmapBuilder.alloc(length)
@@ -124,13 +120,11 @@ fn select[
     builder._length = length
     return builder.finish_typed()
 
-
+# TODO: use SIMD select instead of naive element-wise loop when possible
 fn select(mask: Array, then_: Array, else_: Array) raises -> Array:
     """Runtime-typed select."""
     if then_.dtype != else_.dtype:
-        raise Error(
-            t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}"
-        )
+        raise Error(t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}")
     var bool_mask = PrimitiveArray[bool_dt](data=mask)
     comptime for dtype in numeric_dtypes:
         if then_.dtype == dtype:
