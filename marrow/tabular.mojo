@@ -253,7 +253,9 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         self.schema = Schema(copy=copy.schema)
         var cols = List[ChunkedArray]()
         for col in copy.columns:
-            cols.append(ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks)))
+            cols.append(
+                ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+            )
         self.columns = cols^
 
     fn __init__(out self, *, py: PythonObject) raises:
@@ -309,7 +311,9 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         """Combine all chunks in each column into a single RecordBatch."""
         var cols = List[Array]()
         for col in self.columns:
-            var ca = ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+            var ca = ChunkedArray(
+                dtype=col.dtype.copy(), chunks=List(col.chunks)
+            )
             cols.append(ca^.combine_chunks())
         return RecordBatch(schema=self.schema, columns=cols^)
 
@@ -373,7 +377,9 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             if len(col.chunks) == 1:
                 cols.append(col.chunks[0].copy())
             else:
-                var ca = ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+                var ca = ChunkedArray(
+                    dtype=col.dtype.copy(), chunks=List(col.chunks)
+                )
                 cols.append(ca^.combine_chunks())
         var batches = List[RecordBatch]()
         batches.append(RecordBatch(schema=self.schema, columns=cols^))

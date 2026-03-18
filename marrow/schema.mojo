@@ -8,7 +8,11 @@ from .dtypes import DataType, Field
 
 
 struct Schema(
-    ConvertibleFromPython, ConvertibleToPython, ImplicitlyCopyable, Sized, Writable
+    ConvertibleFromPython,
+    ConvertibleToPython,
+    ImplicitlyCopyable,
+    Sized,
+    Writable,
 ):
     var fields: List[Field]
     var metadata: Dict[String, String]

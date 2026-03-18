@@ -44,13 +44,20 @@ def test_datatype_from_pyarrow():
 
 def test_datatype_nested_roundtrip():
     """Nested types (list, struct) roundtrip through PyArrow."""
-    pa_schema = pa.schema([
-        pa.field("lst", pa.list_(pa.int32())),
-        pa.field("st", pa.struct([
-            pa.field("a", pa.int64()),
-            pa.field("b", pa.float64()),
-        ])),
-    ])
+    pa_schema = pa.schema(
+        [
+            pa.field("lst", pa.list_(pa.int32())),
+            pa.field(
+                "st",
+                pa.struct(
+                    [
+                        pa.field("a", pa.int64()),
+                        pa.field("b", pa.float64()),
+                    ]
+                ),
+            ),
+        ]
+    )
     ma_schema = ma.schema(pa_schema)
     roundtripped = pa.schema(ma_schema)
     assert roundtripped.field("lst").type == pa.list_(pa.int32())
@@ -63,11 +70,13 @@ def test_datatype_nested_roundtrip():
 
 
 def test_schema_to_pyarrow():
-    schema = ma.schema([
-        ma.field("x", ma.int32()),
-        ma.field("y", ma.float64()),
-        ma.field("s", ma.string()),
-    ])
+    schema = ma.schema(
+        [
+            ma.field("x", ma.int32()),
+            ma.field("y", ma.float64()),
+            ma.field("s", ma.string()),
+        ]
+    )
     pa_schema = pa.schema(schema)
     assert len(pa_schema) == 3
     assert pa_schema.field("x").type == pa.int32()
@@ -76,23 +85,29 @@ def test_schema_to_pyarrow():
 
 
 def test_schema_to_pyarrow_nested():
-    schema = ma.schema([
-        ma.field("lst", ma.list_(ma.int32())),
-        ma.field(
-            "st",
-            ma.struct([
-                ma.field("a", ma.int32()),
-                ma.field("b", ma.float64()),
-            ]),
-        ),
-    ])
+    schema = ma.schema(
+        [
+            ma.field("lst", ma.list_(ma.int32())),
+            ma.field(
+                "st",
+                ma.struct(
+                    [
+                        ma.field("a", ma.int32()),
+                        ma.field("b", ma.float64()),
+                    ]
+                ),
+            ),
+        ]
+    )
     pa_schema = pa.schema(schema)
     assert len(pa_schema) == 2
     assert str(pa_schema.field("lst").type) == "list<item: int32>"
-    assert pa_schema.field("st").type == pa.struct([
-        pa.field("a", pa.int32(), nullable=False),
-        pa.field("b", pa.float64(), nullable=False),
-    ])
+    assert pa_schema.field("st").type == pa.struct(
+        [
+            pa.field("a", pa.int32(), nullable=False),
+            pa.field("b", pa.float64(), nullable=False),
+        ]
+    )
 
 
 def test_schema_from_pyarrow():
@@ -103,10 +118,12 @@ def test_schema_from_pyarrow():
 
 def test_schema_from_marrow_schema():
     """Passing a marrow Schema to ma.schema() should return an equal copy."""
-    original = ma.schema([
-        ma.field("a", ma.int64()),
-        ma.field("b", ma.string()),
-    ])
+    original = ma.schema(
+        [
+            ma.field("a", ma.int64()),
+            ma.field("b", ma.string()),
+        ]
+    )
     copy = ma.schema(original)
     assert pa.schema(original).equals(pa.schema(copy))
 
@@ -219,11 +236,13 @@ def test_array_from_pyarrow_struct():
 def test_record_batch_from_pyarrow():
     pa_rb = pa.record_batch(
         {"x": [1, 2, 3], "y": [4.0, 5.0, 6.0], "z": ["a", "b", "c"]},
-        schema=pa.schema([
-            pa.field("x", pa.int64()),
-            pa.field("y", pa.float64()),
-            pa.field("z", pa.string()),
-        ]),
+        schema=pa.schema(
+            [
+                pa.field("x", pa.int64()),
+                pa.field("y", pa.float64()),
+                pa.field("z", pa.string()),
+            ]
+        ),
     )
     ma_rb = ma.record_batch(pa_rb)
     assert ma_rb.num_rows() == 3
@@ -253,10 +272,12 @@ def test_record_batch_roundtrip():
 
 
 def test_record_batch_roundtrip_with_nulls():
-    batch = ma.record_batch({
-        "a": ma.array([1, None, 3], type=ma.int32()),
-        "b": ma.array(["x", None, "z"]),
-    })
+    batch = ma.record_batch(
+        {
+            "a": ma.array([1, None, 3], type=ma.int32()),
+            "b": ma.array(["x", None, "z"]),
+        }
+    )
     pa_batch = pa.record_batch(batch)
     assert pa_batch.column("a").to_pylist() == [1, None, 3]
     assert pa_batch.column("b").to_pylist() == ["x", None, "z"]
@@ -275,11 +296,13 @@ def test_record_batch_with_list_column():
 
 
 def test_record_batch_arrow_c_schema():
-    batch = ma.record_batch({
-        "x": ma.array([1, 2, 3], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    batch = ma.record_batch(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
     pa_schema = pa.schema(batch)
     assert pa_schema.field("x").type == pa.int32()
     assert pa_schema.field("y").type == pa.float64()
@@ -294,10 +317,12 @@ def test_record_batch_arrow_c_schema():
 def test_table_from_pyarrow():
     pa_table = pa.table(
         {"x": [1, 2, 3], "y": ["a", "b", "c"]},
-        schema=pa.schema([
-            pa.field("x", pa.int64()),
-            pa.field("y", pa.string()),
-        ]),
+        schema=pa.schema(
+            [
+                pa.field("x", pa.int64()),
+                pa.field("y", pa.string()),
+            ]
+        ),
     )
     ma_table = ma.table(pa_table)
     assert ma_table.num_rows() == 3
@@ -306,11 +331,13 @@ def test_table_from_pyarrow():
 
 
 def test_table_to_pyarrow():
-    ma_table = ma.table({
-        "x": ma.array([1, 2, 3], type=ma.int32()),
-        "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
-        "z": ma.array(["a", "b", "c"]),
-    })
+    ma_table = ma.table(
+        {
+            "x": ma.array([1, 2, 3], type=ma.int32()),
+            "y": ma.array([4.0, 5.0, 6.0], type=ma.float64()),
+            "z": ma.array(["a", "b", "c"]),
+        }
+    )
     pa_table = pa.table(ma_table)
     assert pa_table.num_rows == 3
     assert pa_table.num_columns == 3
@@ -331,10 +358,12 @@ def test_table_roundtrip():
 
 
 def test_table_roundtrip_with_nulls():
-    t = ma.table({
-        "a": ma.array([1, None, 3], type=ma.int32()),
-        "b": ma.array(["x", None, "z"]),
-    })
+    t = ma.table(
+        {
+            "a": ma.array([1, None, 3], type=ma.int32()),
+            "b": ma.array(["x", None, "z"]),
+        }
+    )
     pa_table = pa.table(t)
     assert pa_table.column("a").to_pylist() == [1, None, 3]
     assert pa_table.column("b").to_pylist() == ["x", None, "z"]
@@ -343,15 +372,19 @@ def test_table_roundtrip_with_nulls():
 
 
 def test_table_with_struct_column():
-    pa_table = pa.table({
-        "s": pa.array(
-            [{"a": 1, "b": 2.0}, {"a": 3, "b": 4.0}],
-            type=pa.struct([
-                pa.field("a", pa.int64()),
-                pa.field("b", pa.float64()),
-            ]),
-        ),
-    })
+    pa_table = pa.table(
+        {
+            "s": pa.array(
+                [{"a": 1, "b": 2.0}, {"a": 3, "b": 4.0}],
+                type=pa.struct(
+                    [
+                        pa.field("a", pa.int64()),
+                        pa.field("b", pa.float64()),
+                    ]
+                ),
+            ),
+        }
+    )
     ma_table = ma.table(pa_table)
     assert ma_table.num_rows() == 2
     pa_table2 = pa.table(ma_table)

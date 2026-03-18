@@ -445,5 +445,3 @@ def test_array_list_scalar_raises():
     # Scalar where a list element is expected should raise
     with pytest.raises(Exception):
         ma.array([1, 2, 3], type=ma.list_(ma.int64()))
-
-

@@ -916,7 +916,9 @@ struct _StreamPrivateData(Movable):
     var batches: List[RecordBatch]
     var index: Int
 
-    fn __init__(out self, var fields: List[Field], var batches: List[RecordBatch]):
+    fn __init__(
+        out self, var fields: List[Field], var batches: List[RecordBatch]
+    ):
         self.fields = fields^
         self.batches = batches^
         self.index = 0
@@ -1097,9 +1099,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             var columns = List[Array]()
             for child in arr.children:
                 columns.append(child.copy())
-            batches.append(
-                RecordBatch(schema=schema, columns=columns^)
-            )
+            batches.append(RecordBatch(schema=schema, columns=columns^))
 
         # Release the stream.
         heap[].release(heap)

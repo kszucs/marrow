@@ -29,12 +29,12 @@ fn read_table(source: String) raises -> Table:
     return stream.to_table()
 
 
-fn write_table(table: Table, where: String) raises:
+fn write_table(table: Table, path: String) raises -> None:
     """Write a marrow Table to a Parquet file.
 
     Args:
         table: A marrow Table.
-        where: Path to the output Parquet file.
+        path: Path to the output Parquet file.
     """
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
@@ -56,4 +56,4 @@ fn write_table(table: Table, where: String) raises:
     var reader = pa.RecordBatchReader.from_stream(holder)
     var pa_table = reader.read_all()
 
-    pq.write_table(pa_table, where)
+    pq.write_table(pa_table, path)
