@@ -17,6 +17,8 @@ website:
             href: guide/arrays.qmd
           - text: "Compute"
             href: guide/compute.qmd
+          - text: "Expressions"
+            href: guide/expressions.qmd
           - text: "Type System"
             href: guide/types.qmd
           - text: "PyArrow Interop"

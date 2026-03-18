@@ -25,7 +25,8 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `FixedSizeListArray` — fixed-size nested arrays (embedding vectors, coordinates)
 - `StructArray` — named-field structs
 - `ChunkedArray` — array split across multiple chunks
-- `RecordBatch` — schema + column arrays
+- `RecordBatch` — schema + column arrays, with slice, select, rename, add/remove/set column operations
+- `Table` — schema + chunked columns; `from_batches()`, `to_batches()`, `combine_chunks()`
 
 **Builders** — incrementally build immutable arrays
 - `PrimitiveBuilder[T]`, `StringBuilder`, `ListBuilder`, `FixedSizeListBuilder`, `StructBuilder`
@@ -33,9 +34,20 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 
 **Compute kernels** (SIMD-vectorized, null-aware)
 - Arithmetic: `add`, `sub`, `mul`, `div`, `neg`, `abs_`, `min_`, `max_`
+- Comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` → `BoolArray`
 - Aggregates: `sum_`, `product`, `min_`, `max_`, `any_`, `all_` (null-skipping)
 - Selection: `filter_`, `drop_nulls`
+- Strings: `string_lengths`
 - Similarity: `cosine_similarity` (batch N-vectors vs 1 query, CPU SIMD + GPU)
+
+**Expression execution** (`marrow/expr`)
+- Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …)
+- Relational plan nodes: `InMemoryTable`, `Filter`, `Project`, `ParquetScan` with `.filter()` and `.select()` chaining
+- Pull-based streaming executor: `Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results
+
+**Parquet I/O** (`marrow/parquet`)
+- `read_table(path)` — read a Parquet file into a marrow `Table`
+- `write_table(table, path)` — write a marrow `Table` to Parquet
 
 **Python bindings** — `import marrow as ma`
 - `array(values, type=None)` — create any array type from Python lists with type inference
@@ -175,6 +187,7 @@ print(strs)   # StringArray([hello, NULL, world])
 from marrow.kernels.arithmetic import add, sub, mul, div
 from marrow.kernels.aggregate import sum_, min_, max_, any_, all_
 from marrow.kernels.filter import filter_, drop_nulls
+from marrow.kernels.compare import equal, less, greater_equal
 
 var x = array[int64]([1, 2, 3, 4])
 var y = array[int64]([10, 20, 30, 40])
@@ -182,6 +195,38 @@ var y = array[int64]([10, 20, 30, 40])
 var z = add(x, y)               # Int64Array([11, 22, 33, 44])
 var total = sum_[int64](x)      # 10
 var filtered = filter_[int64](x, array[bool_]([True, False, True, False]))
+
+var a = array[int64]([1, 2, 3, 4])
+var b = array[int64]([1, 3, 2, 4])
+var eq = equal(a, b)            # BoolArray([true, false, false, true])
+var lt = less(a, b)             # BoolArray([false, true, false, false])
+```
+
+### Expression execution
+
+```mojo
+from marrow.expr import col, lit, in_memory_table, execute, ExecutionContext
+from marrow.tabular import record_batch
+
+var batch = record_batch(
+    [array[int64]([25, 35, 45]), array[String](["Alice", "Bob", "Carol"])],
+    names=["age", "name"],
+)
+var plan = in_memory_table(batch)
+    .filter(col("age") > lit(30))
+    .select(col("name"), col("age"))
+
+var ctx = ExecutionContext()
+var results = execute(plan, ctx)   # List[RecordBatch]
+```
+
+### Parquet I/O
+
+```mojo
+from marrow.parquet import read_table, write_table
+
+var tbl = read_table("data.parquet")
+write_table(tbl, "output.parquet")
 ```
 
 ### Zero-copy PyArrow interop (C Data Interface)
@@ -267,7 +312,9 @@ var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
 
 3. **Type coverage**: Only boolean, numeric, string, list, fixed-size list, and struct types are implemented. Date/time, dictionary, union, decimal, and binary types are not yet supported.
 
-4. **GPU null handling**: Binary arithmetic kernels on the GPU do not propagate null bitmaps (GPU `bitmap_and` is not yet implemented). Null-aware GPU arithmetic is CPU-only for now.
+4. **Parquet I/O**: Parquet support currently bridges through PyArrow. Native Mojo Parquet reading is planned for a future release.
+
+5. **GPU null handling**: Binary arithmetic kernels on the GPU do not propagate null bitmaps (GPU `bitmap_and` is not yet implemented). Null-aware GPU arithmetic is CPU-only for now.
 
 ## Development
 
