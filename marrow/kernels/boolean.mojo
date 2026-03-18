@@ -6,7 +6,7 @@ from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 
 
-fn count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
+def count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
     """Count True values in a bit-packed boolean array.
 
     Args:
@@ -23,7 +23,7 @@ fn count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
     return data_bm.count_set_bits()
 
 
-fn and_(
+def and_(
     lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
 ) raises -> PrimitiveArray[bool_dt]:
     """Bitwise AND of two bit-packed bool arrays."""
@@ -42,7 +42,7 @@ fn and_(
     )
 
 
-fn or_(
+def or_(
     lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
 ) raises -> PrimitiveArray[bool_dt]:
     """Bitwise OR of two bit-packed bool arrays."""
@@ -61,7 +61,7 @@ fn or_(
     )
 
 
-fn not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
+def not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
     """Bitwise NOT of a bit-packed bool array."""
     var length = len(arr)
     var bm = Bitmap(arr.buffer, arr.offset, length)
@@ -75,7 +75,7 @@ fn not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
     )
 
 
-fn is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
+def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = BitmapBuilder.alloc(length)
@@ -91,7 +91,7 @@ fn is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     )
 
 
-fn is_null(arr: Array) raises -> Array:
+def is_null(arr: Array) raises -> Array:
     """Runtime-typed is_null."""
     comptime for dtype in numeric_dtypes:
         if arr.dtype == dtype:
@@ -99,7 +99,7 @@ fn is_null(arr: Array) raises -> Array:
     raise Error(t"is_null: unsupported dtype {arr.dtype}")
 
 
-fn select[
+def select[
     T: DataType
 ](
     mask: PrimitiveArray[bool_dt],
@@ -122,7 +122,7 @@ fn select[
 
 
 # TODO: use SIMD select instead of naive element-wise loop when possible
-fn select(mask: Array, then_: Array, else_: Array) raises -> Array:
+def select(mask: Array, then_: Array, else_: Array) raises -> Array:
     """Runtime-typed select."""
     if then_.dtype != else_.dtype:
         raise Error(t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}")

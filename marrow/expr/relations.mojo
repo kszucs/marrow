@@ -50,23 +50,23 @@ comptime PARQUET_SCAN_NODE: UInt8 = 4
 trait Relation(ImplicitlyDestructible, Movable):
     """Interface for immutable relational plan nodes."""
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         """Return the node-kind constant."""
         ...
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         """Return the output schema produced by this plan node."""
         ...
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         """Return child plan nodes (empty for leaf nodes such as Scan)."""
         ...
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         """Return scalar expressions attached to this node."""
         ...
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Format this node for display."""
         ...
 
@@ -84,48 +84,50 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: fn(ArcPointer[NoneType]) -> UInt8
-    var _virt_schema: fn(ArcPointer[NoneType]) -> Schema
-    var _virt_inputs: fn(ArcPointer[NoneType]) -> List[AnyRelation]
-    var _virt_exprs: fn(ArcPointer[NoneType]) -> List[AnyValue]
-    var _virt_write_to_string: fn(ArcPointer[NoneType]) -> String
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_kind: def(ArcPointer[NoneType]) -> UInt8
+    var _virt_schema: def(ArcPointer[NoneType]) -> Schema
+    var _virt_inputs: def(ArcPointer[NoneType]) -> List[AnyRelation]
+    var _virt_exprs: def(ArcPointer[NoneType]) -> List[AnyValue]
+    var _virt_write_to_string: def(ArcPointer[NoneType]) -> String
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
+    def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
         return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
-    fn _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
+    def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
         return rebind[ArcPointer[T]](ptr)[].schema()
 
     @staticmethod
-    fn _tramp_inputs[
+    def _tramp_inputs[
         T: Relation
     ](ptr: ArcPointer[NoneType]) -> List[AnyRelation]:
         return rebind[ArcPointer[T]](ptr)[].inputs()
 
     @staticmethod
-    fn _tramp_exprs[T: Relation](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
+    def _tramp_exprs[T: Relation](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
         return rebind[ArcPointer[T]](ptr)[].exprs()
 
     @staticmethod
-    fn _tramp_write_to_string[T: Relation](ptr: ArcPointer[NoneType]) -> String:
+    def _tramp_write_to_string[
+        T: Relation
+    ](ptr: ArcPointer[NoneType]) -> String:
         var s = String()
         rebind[ArcPointer[T]](ptr)[].write_to(s)
         return s^
 
     @staticmethod
-    fn _tramp_drop[T: Relation](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: Relation](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     # --- construction ---
 
     @implicit
-    fn __init__[T: Relation](out self, var value: T):
+    def __init__[T: Relation](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_kind = Self._tramp_kind[T]
@@ -135,7 +137,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._data = copy._data
         self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
@@ -146,24 +148,24 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     # --- public API ---
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return self._virt_kind(self._data)
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return self._virt_schema(self._data)
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         return self._virt_inputs(self._data)
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         return self._virt_exprs(self._data)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
 
     # --- plan-building API ---
 
-    fn select(self, *names: String) raises -> AnyRelation:
+    def select(self, *names: String) raises -> AnyRelation:
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
@@ -186,7 +188,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         )
         return AnyRelation(proj^)
 
-    fn filter(self, predicate: AnyValue) raises -> AnyRelation:
+    def filter(self, predicate: AnyValue) raises -> AnyRelation:
         """Filter rows by a boolean predicate, returning a new plan node.
 
         Column references using ``col("name")`` are resolved to positional
@@ -199,10 +201,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     # --- downcast ---
 
-    fn downcast[T: Relation](self) -> ArcPointer[T]:
+    def downcast[T: Relation](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -221,23 +223,23 @@ struct Scan(Relation):
     var name: String
     var schema_: Schema
 
-    fn __init__(out self, *, var name: String, var schema_: Schema):
+    def __init__(out self, *, var name: String, var schema_: Schema):
         self.name = name^
         self.schema_ = schema_^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return SCAN_NODE
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.schema_)
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         return List[AnyValue]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Scan({self.name})")
 
 
@@ -253,27 +255,27 @@ struct Filter(Relation):
     var input: AnyRelation
     var predicate: AnyValue
 
-    fn __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
+    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
         self.input = input^
         self.predicate = predicate^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return FILTER_NODE
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return self.input.schema()
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         var result = List[AnyRelation](capacity=1)
         result.append(self.input)
         return result^
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         var result = List[AnyValue](capacity=1)
         result.append(self.predicate)
         return result^
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Filter(predicate=")
         self.predicate.write_to(writer)
         writer.write(t")")
@@ -293,7 +295,7 @@ struct Project(Relation):
     var exprs_: List[AnyValue]
     var schema_: Schema
 
-    fn __init__(
+    def __init__(
         out self,
         *,
         var input: AnyRelation,
@@ -306,24 +308,24 @@ struct Project(Relation):
         self.exprs_ = exprs_^
         self.schema_ = schema_^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return PROJECT_NODE
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.schema_)
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         var result = List[AnyRelation](capacity=1)
         result.append(self.input)
         return result^
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         var result = List[AnyValue](capacity=len(self.exprs_))
         for ref e in self.exprs_:
             result.append(e)
         return result^
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Project([")
         for i in range(len(self.names)):
             if i > 0:
@@ -342,22 +344,22 @@ struct InMemoryTable(Relation):
 
     var batch: RecordBatch
 
-    fn __init__(out self, *, batch: RecordBatch):
+    def __init__(out self, *, batch: RecordBatch):
         self.batch = RecordBatch(copy=batch)
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return IN_MEMORY_TABLE_NODE
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         return List[AnyValue]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             t"InMemoryTable(num_rows={self.batch.num_rows()},"
             t" schema={self.batch.schema})"
@@ -369,7 +371,7 @@ struct InMemoryTable(Relation):
 # ---------------------------------------------------------------------------
 
 
-fn in_memory_table(batch: RecordBatch) -> AnyRelation:
+def in_memory_table(batch: RecordBatch) -> AnyRelation:
     """Create a relation backed by an in-memory RecordBatch."""
     return InMemoryTable(batch=batch)
 
@@ -384,27 +386,27 @@ struct ParquetScan(Relation):
     var path: String
     var schema_: Schema
 
-    fn __init__(out self, *, var path: String, var schema_: Schema):
+    def __init__(out self, *, var path: String, var schema_: Schema):
         self.path = path^
         self.schema_ = schema_^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return PARQUET_SCAN_NODE
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.schema_)
 
-    fn inputs(self) -> List[AnyRelation]:
+    def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    fn exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[AnyValue]:
         return List[AnyValue]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"ParquetScan({self.path})")
 
 
-fn parquet_scan(path: String) raises -> AnyRelation:
+def parquet_scan(path: String) raises -> AnyRelation:
     """Create a relation that reads from a Parquet file.
 
     Reads the schema from the Parquet footer metadata (no data I/O).

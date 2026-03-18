@@ -18,12 +18,12 @@ from marrow.expr import (
 )
 
 
-fn _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
+def _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
     """Helper: build a value processor and evaluate against the batch."""
     return Planner().build(expr).eval(batch).as_primitive[int64]()
 
 
-fn _exec_pred(
+def _exec_pred(
     expr: AnyValue, batch: RecordBatch
 ) raises -> PrimitiveArray[bool_dt]:
     """Helper: build a value processor and evaluate predicate against the batch.

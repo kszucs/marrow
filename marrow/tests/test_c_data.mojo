@@ -8,14 +8,14 @@ from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from marrow.dtypes import *
 
 
-fn c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
+def c_array_from_pyobj(pyobj: PythonObject) raises -> CArrowArray:
     """Import a CArrowArray from any Arrow-compatible Python object via PyCapsule.
     """
     var capsule_tuple = pyobj.__arrow_c_array__()
     return CArrowArray.from_pycapsule(capsule_tuple[1])
 
 
-fn c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
+def c_schema_from_pyobj(pyobj: PythonObject) raises -> CArrowSchema:
     """Import a CArrowSchema from any Arrow-compatible Python object via PyCapsule.
     """
     return CArrowSchema.from_pycapsule(pyobj.__arrow_c_schema__())

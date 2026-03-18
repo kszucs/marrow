@@ -370,7 +370,7 @@ def test_streaming_chained_filter_project() raises:
 # ---------------------------------------------------------------------------
 
 
-fn _write_test_parquet(path: String) raises:
+def _write_test_parquet(path: String) raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var t = pa.table(

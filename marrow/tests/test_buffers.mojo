@@ -210,7 +210,7 @@ def test_buffer_foreign_kind() raises:
         UnsafePointer[Int, MutAnyOrigin]
     ](UnsafePointer(to=n_released))
 
-    fn count_and_free(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
+    def count_and_free(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
         var counter = ptr.bitcast[UnsafePointer[Int, MutAnyOrigin]]()[0]
         counter[0] += 1
         ptr.free()

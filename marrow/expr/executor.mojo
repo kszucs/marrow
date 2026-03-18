@@ -99,7 +99,7 @@ from marrow.parquet import read_table
 struct Exhausted(TrivialRegisterPassable, Writable):
     """Raised by ``pull()`` when a processor has no more batches to yield."""
 
-    fn __init__(out self):
+    def __init__(out self):
         pass
 
     def write_to(self, mut writer: Some[Writer]):
@@ -126,14 +126,14 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
     var gpu_threshold: Int
     """Minimum array length to auto-dispatch to GPU when ``DISPATCH_AUTO``."""
 
-    fn __init__(out self):
+    def __init__(out self):
         """Default: CPU-only, parallelism_level() workers, morsel 65 536."""
         self.device_ctx = None
         self.num_cpu_workers = 0
         self.morsel_size = 65_536
         self.gpu_threshold = 1_000_000
 
-    fn __init__(out self, ctx: DeviceContext, gpu_threshold: Int = 1_000_000):
+    def __init__(out self, ctx: DeviceContext, gpu_threshold: Int = 1_000_000):
         """GPU-enabled context.
 
         Args:
@@ -164,7 +164,7 @@ trait ValueProcessor(ImplicitlyDestructible, Movable):
     compose nested ``AnyValueProcessor`` children.
     """
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         """Evaluate the expression against the given batch."""
         ...
 
@@ -183,43 +183,43 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_eval: fn(ArcPointer[NoneType], RecordBatch) raises -> Array
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) raises -> Array
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_eval[
+    def _tramp_eval[
         T: ValueProcessor
     ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Array:
         return rebind[ArcPointer[T]](ptr)[].eval(batch)
 
     @staticmethod
-    fn _tramp_drop[T: ValueProcessor](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: ValueProcessor](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     # --- construction ---
 
     @implicit
-    fn __init__[T: ValueProcessor](out self, var value: T):
+    def __init__[T: ValueProcessor](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_eval = Self._tramp_eval[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._data = copy._data
         self._virt_eval = copy._virt_eval
         self._virt_drop = copy._virt_drop
 
     # --- public API ---
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         """Evaluate the expression against the given batch."""
         return self._virt_eval(self._data, batch)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -233,10 +233,10 @@ struct ColumnProcessor(ValueProcessor):
 
     var index: Int
 
-    fn __init__(out self, index: Int):
+    def __init__(out self, index: Int):
         self.index = index
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         return batch.columns[self.index].copy()
 
 
@@ -245,10 +245,10 @@ struct LiteralProcessor(ValueProcessor):
 
     var value: Array
 
-    fn __init__(out self, value: Array):
+    def __init__(out self, value: Array):
         self.value = value.copy()
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         return _broadcast_literal(batch.num_rows(), self.value)
 
 
@@ -264,7 +264,7 @@ struct BinaryProcessor(ValueProcessor):
     var right: AnyValueProcessor
     var op: UInt8
 
-    fn __init__(
+    def __init__(
         out self,
         var left: AnyValueProcessor,
         var right: AnyValueProcessor,
@@ -274,7 +274,7 @@ struct BinaryProcessor(ValueProcessor):
         self.right = right^
         self.op = op
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         var l = self.left.eval(batch)
         var r = self.right.eval(batch)
         if self.op == ADD:
@@ -321,11 +321,11 @@ struct UnaryProcessor(ValueProcessor):
     var child: AnyValueProcessor
     var op: UInt8
 
-    fn __init__(out self, var child: AnyValueProcessor, op: UInt8):
+    def __init__(out self, var child: AnyValueProcessor, op: UInt8):
         self.child = child^
         self.op = op
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         var c = self.child.eval(batch)
         if self.op == NEG:
             return neg(c)
@@ -342,10 +342,10 @@ struct IsNullProcessor(ValueProcessor):
 
     var child: AnyValueProcessor
 
-    fn __init__(out self, var child: AnyValueProcessor):
+    def __init__(out self, var child: AnyValueProcessor):
         self.child = child^
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         return is_null(self.child.eval(batch))
 
 
@@ -356,7 +356,7 @@ struct IfElseProcessor(ValueProcessor):
     var then_: AnyValueProcessor
     var else_: AnyValueProcessor
 
-    fn __init__(
+    def __init__(
         out self,
         var cond: AnyValueProcessor,
         var then_: AnyValueProcessor,
@@ -366,7 +366,7 @@ struct IfElseProcessor(ValueProcessor):
         self.then_ = then_^
         self.else_ = else_^
 
-    fn eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> Array:
         var c = self.cond.eval(batch)
         var t = self.then_.eval(batch)
         var e = self.else_.eval(batch)
@@ -390,11 +390,11 @@ trait RelationProcessor(ImplicitlyDestructible, Movable):
     ``RecordBatch`` values, raising ``Exhausted`` when done.
     """
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         """Return the output schema of this processor."""
         ...
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         """Return the next batch, or raise ``Exhausted`` when done."""
         ...
 
@@ -413,30 +413,32 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_pull: fn(ArcPointer[NoneType]) raises -> RecordBatch
-    var _virt_schema: fn(ArcPointer[NoneType]) -> Schema
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_pull: def(ArcPointer[NoneType]) raises -> RecordBatch
+    var _virt_schema: def(ArcPointer[NoneType]) -> Schema
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_pull[
+    def _tramp_pull[
         T: RelationProcessor
     ](ptr: ArcPointer[NoneType]) raises -> RecordBatch:
         return rebind[ArcPointer[T]](ptr)[].pull()
 
     @staticmethod
-    fn _tramp_schema[T: RelationProcessor](ptr: ArcPointer[NoneType]) -> Schema:
+    def _tramp_schema[
+        T: RelationProcessor
+    ](ptr: ArcPointer[NoneType]) -> Schema:
         return rebind[ArcPointer[T]](ptr)[].schema()
 
     @staticmethod
-    fn _tramp_drop[T: RelationProcessor](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: RelationProcessor](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     # --- copy ---
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._data = copy._data
         self._virt_pull = copy._virt_pull
         self._virt_schema = copy._virt_schema
@@ -445,7 +447,7 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
     # --- construction ---
 
     @implicit
-    fn __init__[T: RelationProcessor](out self, var value: T):
+    def __init__[T: RelationProcessor](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_pull = Self._tramp_pull[T]
@@ -454,15 +456,15 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
 
     # --- public API ---
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         """Return the output schema of this processor."""
         return self._virt_schema(self._data)
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         """Return the next batch, or raise ``Exhausted`` when done."""
         return self._virt_pull(self._data)
 
-    fn read_all(mut self) raises -> RecordBatch:
+    def read_all(mut self) raises -> RecordBatch:
         """Consume all remaining batches and concatenate into a single RecordBatch.
         """
         var batches = self.to_batches()
@@ -481,7 +483,7 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
             result_cols.append(concat(col_arrays))
         return RecordBatch(schema=Schema(copy=schema), columns=result_cols^)
 
-    fn to_batches(mut self) raises -> List[RecordBatch]:
+    def to_batches(mut self) raises -> List[RecordBatch]:
         """Consume all remaining batches into a list."""
         var result = List[RecordBatch]()
         while True:
@@ -491,7 +493,7 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
                 break
         return result^
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -511,15 +513,15 @@ struct ScanProcessor(RelationProcessor):
     var offset: Int
     var morsel_size: Int
 
-    fn __init__(out self, batch: RecordBatch, morsel_size: Int):
+    def __init__(out self, batch: RecordBatch, morsel_size: Int):
         self.batch = RecordBatch(copy=batch)
         self.offset = 0
         self.morsel_size = morsel_size
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         if self.offset >= self.batch.num_rows():
             raise Exhausted()
         var length = min(self.morsel_size, self.batch.num_rows() - self.offset)
@@ -546,7 +548,7 @@ struct ParquetScanProcessor(RelationProcessor):
 
     # TODO: make the reading lazy as well instead of materializing the whole table upfront
     # TODO: add support for projection pushdown to avoid reading unnecessary columns
-    fn __init__(out self, path: String, morsel_size: Int) raises:
+    def __init__(out self, path: String, morsel_size: Int) raises:
         var table = read_table(path)
         var batches = table.to_batches()
         if len(batches) == 0:
@@ -568,10 +570,10 @@ struct ParquetScanProcessor(RelationProcessor):
         self.offset = 0
         self.morsel_size = morsel_size
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         if self.offset >= self.batch.num_rows():
             raise Exhausted()
         var length = min(self.morsel_size, self.batch.num_rows() - self.offset)
@@ -596,7 +598,7 @@ struct FilterProcessor(RelationProcessor):
     var predicate: AnyValueProcessor
     var schema_: Schema
 
-    fn __init__(
+    def __init__(
         out self,
         var child: AnyRelationProcessor,
         var predicate: AnyValueProcessor,
@@ -606,10 +608,10 @@ struct FilterProcessor(RelationProcessor):
         self.predicate = predicate^
         self.schema_ = schema_
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return self.schema_.copy()
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         # Skips batches that filter to 0 rows. Exhausted propagates from child.
         while True:
             var batch = self.child.pull()
@@ -640,7 +642,7 @@ struct ProjectProcessor(RelationProcessor):
     var values: List[AnyValueProcessor]
     var schema_: Schema
 
-    fn __init__(
+    def __init__(
         out self,
         var child: AnyRelationProcessor,
         var values: List[AnyValueProcessor],
@@ -650,10 +652,10 @@ struct ProjectProcessor(RelationProcessor):
         self.values = values^
         self.schema_ = schema_
 
-    fn schema(self) -> Schema:
+    def schema(self) -> Schema:
         return self.schema_.copy()
 
-    fn pull(mut self) raises -> RecordBatch:
+    def pull(mut self) raises -> RecordBatch:
         var batch = self.child.pull()  # raises Exhausted when done
         var result_cols = List[Array]()
         for ref v in self.values:
@@ -675,10 +677,10 @@ struct Planner:
 
     var ctx: ExecutionContext
 
-    fn __init__(out self, ctx: ExecutionContext = ExecutionContext()):
+    def __init__(out self, ctx: ExecutionContext = ExecutionContext()):
         self.ctx = ctx
 
-    fn build(self, expr: AnyValue) raises -> AnyValueProcessor:
+    def build(self, expr: AnyValue) raises -> AnyValueProcessor:
         """Build a value processor tree from a scalar expression tree."""
         var k = expr.kind()
         if k == LOAD:
@@ -711,7 +713,7 @@ struct Planner:
         else:
             raise Error("Planner.build: unknown expression kind ", k)
 
-    fn build(self, expr: AnyRelation) raises -> AnyRelationProcessor:
+    def build(self, expr: AnyRelation) raises -> AnyRelationProcessor:
         """Build a relation processor pipeline from a relational expression tree.
         """
         var k = expr.kind()
@@ -757,7 +759,7 @@ struct Planner:
 # ---------------------------------------------------------------------------
 
 
-fn execute(
+def execute(
     expr: AnyRelation, ctx: ExecutionContext = ExecutionContext()
 ) raises -> RecordBatch:
     """Execute a relational expression tree, materialising the full result.
@@ -778,7 +780,7 @@ fn execute(
 # ---------------------------------------------------------------------------
 
 
-fn _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
+def _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
     """Broadcast a length-1 scalar array to the given length."""
     comptime for dt in numeric_dtypes:
         if scalar_array.dtype == dt:

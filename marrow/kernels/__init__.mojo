@@ -60,7 +60,7 @@ from marrow.dtypes import DataType, bool_ as bool_dt, numeric_dtypes
 # ---------------------------------------------------------------------------
 
 
-fn bitmap_and(
+def bitmap_and(
     a: Optional[Bitmap], b: Optional[Bitmap]
 ) raises -> Optional[Bitmap]:
     """Compute the output validity bitmap as the bitwise AND of two input bitmaps.
@@ -89,10 +89,10 @@ fn bitmap_and(
 # ---------------------------------------------------------------------------
 
 
-fn unary[
+def unary[
     InT: DataType,
     OutT: DataType,
-    func: fn(Scalar[InT.native]) -> Scalar[OutT.native],
+    func: def(Scalar[InT.native]) -> Scalar[OutT.native],
 ](array: PrimitiveArray[InT]) raises -> PrimitiveArray[OutT]:
     """Apply a scalar function element-wise to produce a new array.
 
@@ -118,9 +118,9 @@ fn unary[
     return result.finish_typed()
 
 
-fn unary_simd[
+def unary_simd[
     T: DataType,
-    func: fn[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
+    func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
 ](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     """SIMD-vectorized unary kernel.
 
@@ -176,9 +176,11 @@ fn unary_simd[
 # ---------------------------------------------------------------------------
 
 
-fn binary_not_null[
+def binary_not_null[
     T: DataType,
-    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[T.native, W],
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+        T.native, W
+    ],
     name: StringLiteral = "",
 ](
     left: PrimitiveArray[T],
@@ -236,10 +238,10 @@ fn binary_not_null[
     )
 
 
-fn binary_simd[
+def binary_simd[
     T: DataType,
     OutT: DataType,
-    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         OutT.native, W
     ],
     name: StringLiteral = "",
@@ -355,10 +357,10 @@ fn binary_simd[
 # ---------------------------------------------------------------------------
 
 
-fn reduce[
+def reduce[
     T: DataType,
     AccT: DataType,
-    func: fn(Scalar[AccT.native], Scalar[T.native]) -> Scalar[AccT.native],
+    func: def(Scalar[AccT.native], Scalar[T.native]) -> Scalar[AccT.native],
 ](array: PrimitiveArray[T], initial: Scalar[AccT.native]) -> Scalar[
     AccT.native
 ]:
@@ -388,7 +390,7 @@ fn reduce[
 # ---------------------------------------------------------------------------
 
 
-fn _bitmap_mask[
+def _bitmap_mask[
     dtype: DType, W: Int
 ](bp: UnsafePointer[UInt8, _], abs_pos: Int) -> SIMD[DType.bool, W]:
     """Expand W consecutive bitmap bits starting at abs_pos into a SIMD bool vector.
@@ -414,12 +416,12 @@ fn _bitmap_mask[
     ]()
 
 
-fn reduce_simd[
+def reduce_simd[
     T: DataType,
-    combine: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+    combine: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         T.native, W
     ],
-    horizontal: fn[W: Int](SIMD[T.native, W]) -> Scalar[T.native],
+    horizontal: def[W: Int](SIMD[T.native, W]) -> Scalar[T.native],
 ](array: PrimitiveArray[T], initial: Scalar[T.native]) -> Scalar[T.native]:
     """SIMD-vectorized reduction: accumulates over valid (non-null) elements.
 
@@ -490,9 +492,9 @@ fn reduce_simd[
 # ---------------------------------------------------------------------------
 
 
-fn binary_gpu_kernel[
+def binary_gpu_kernel[
     dtype: DType,
-    func: fn[W: Int](SIMD[dtype, W], SIMD[dtype, W]) -> SIMD[dtype, W],
+    func: def[W: Int](SIMD[dtype, W], SIMD[dtype, W]) -> SIMD[dtype, W],
 ](
     lhs: UnsafePointer[Scalar[dtype], MutAnyOrigin],
     rhs: UnsafePointer[Scalar[dtype], MutAnyOrigin],
@@ -506,9 +508,11 @@ fn binary_gpu_kernel[
         result[tid] = func[1](lhs[tid], rhs[tid])
 
 
-fn binary_gpu[
+def binary_gpu[
     T: DataType,
-    func: fn[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[T.native, W],
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+        T.native, W
+    ],
     name: StringLiteral = "",
 ](
     left: PrimitiveArray[T],
@@ -580,9 +584,9 @@ fn binary_gpu[
 # ---------------------------------------------------------------------------
 
 
-fn binary_array_dispatch[
+def binary_array_dispatch[
     name: StringLiteral,
-    func: fn[T: DataType](
+    func: def[T: DataType](
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> PrimitiveArray[T],
 ](
@@ -619,10 +623,10 @@ fn binary_array_dispatch[
     raise Error(t"{name}: unsupported dtype {left.dtype}")
 
 
-fn binary_array_dispatch[
+def binary_array_dispatch[
     name: StringLiteral,
     OutT: DataType,
-    func: fn[T: DataType](
+    func: def[T: DataType](
         PrimitiveArray[T], PrimitiveArray[T]
     ) raises -> PrimitiveArray[OutT],
 ](left: Array, right: Array,) raises -> Array:

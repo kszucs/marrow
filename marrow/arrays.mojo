@@ -53,7 +53,7 @@ struct Array(
     var offset: Int
 
     @implicit
-    fn __init__[T: DataType](out self, array: PrimitiveArray[T]):
+    def __init__[T: DataType](out self, array: PrimitiveArray[T]):
         self.dtype = T
         self.length = array.length
         self.nulls = array.nulls
@@ -63,7 +63,7 @@ struct Array(
         self.children = []
 
     @implicit
-    fn __init__(out self, array: StringArray):
+    def __init__(out self, array: StringArray):
         self.dtype = string
         self.length = array.length
         self.nulls = array.nulls
@@ -73,7 +73,7 @@ struct Array(
         self.children = []
 
     @implicit
-    fn __init__(out self, array: ListArray):
+    def __init__(out self, array: ListArray):
         self.dtype = array.dtype
         self.length = array.length
         self.nulls = array.nulls
@@ -83,7 +83,7 @@ struct Array(
         self.children = [array.values.copy()]
 
     @implicit
-    fn __init__(out self, array: FixedSizeListArray):
+    def __init__(out self, array: FixedSizeListArray):
         self.dtype = array.dtype
         self.length = array.length
         self.nulls = array.nulls
@@ -93,7 +93,7 @@ struct Array(
         self.children = [array.values.copy()]
 
     @implicit
-    fn __init__(out self, array: StructArray):
+    def __init__(out self, array: StructArray):
         self.dtype = array.dtype
         self.length = array.length
         self.nulls = array.nulls
@@ -102,7 +102,7 @@ struct Array(
         self.buffers = []
         self.children = array.children.copy()
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.dtype = copy.dtype
         self.length = copy.length
         self.nulls = copy.nulls
@@ -111,7 +111,7 @@ struct Array(
         self.children = copy.children.copy()
         self.offset = copy.offset
 
-    fn __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit take: Self):
         self.dtype = take.dtype^
         self.length = take.length
         self.nulls = take.nulls
@@ -120,7 +120,7 @@ struct Array(
         self.children = take.children^
         self.offset = take.offset
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
 
         # Try downcasting from a marrow Python object.
@@ -167,12 +167,12 @@ struct Array(
         var c_array = CArrowArray.from_pycapsule(caps[1])
         self = c_array^.to_array(c_schema.to_dtype())
 
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         try:
             comptime for T in primitive_dtypes:
                 if self.dtype == T:
@@ -199,14 +199,14 @@ struct Array(
             writer.write(self.length)
             writer.write(")")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn copy(self) -> Array:
+    def copy(self) -> Array:
         """Returns an O(1) copy of this array (Arc ref-count bumps only)."""
         return Array(copy=self)
 
-    fn __eq__(self, other: Array) -> Bool:
+    def __eq__(self, other: Array) -> Bool:
         """Return True if both arrays have the same dtype, length, and values.
 
         Dispatches to the typed array's __eq__ for correctness with offsets and nulls.
@@ -231,7 +231,7 @@ struct Array(
             return False
         return False
 
-    fn slice(self, offset: Int, length: Int = -1) -> Array:
+    def slice(self, offset: Int, length: Int = -1) -> Array:
         """Returns a zero-copy slice starting at offset with the given length.
 
         Matches PyArrow's Array.slice(offset, length) API.
@@ -247,7 +247,7 @@ struct Array(
             offset=self.offset + offset,
         )
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         comptime for T in primitive_dtypes:
             if self.dtype == T:
                 return self.as_primitive[T]().to_python_object()
@@ -262,52 +262,52 @@ struct Array(
         else:
             raise Error("unsupported type: ", self.dtype)
 
-    fn as_primitive[T: DataType](self) raises -> PrimitiveArray[T]:
+    def as_primitive[T: DataType](self) raises -> PrimitiveArray[T]:
         return PrimitiveArray[T](self)
 
-    fn as_bool(self) raises -> BoolArray:
+    def as_bool(self) raises -> BoolArray:
         return self.as_primitive[bool_]()
 
-    fn as_int8(self) raises -> PrimitiveArray[int8]:
+    def as_int8(self) raises -> PrimitiveArray[int8]:
         return PrimitiveArray[int8](self)
 
-    fn as_int16(self) raises -> PrimitiveArray[int16]:
+    def as_int16(self) raises -> PrimitiveArray[int16]:
         return PrimitiveArray[int16](self)
 
-    fn as_int32(self) raises -> PrimitiveArray[int32]:
+    def as_int32(self) raises -> PrimitiveArray[int32]:
         return PrimitiveArray[int32](self)
 
-    fn as_int64(self) raises -> PrimitiveArray[int64]:
+    def as_int64(self) raises -> PrimitiveArray[int64]:
         return PrimitiveArray[int64](self)
 
-    fn as_uint8(self) raises -> PrimitiveArray[uint8]:
+    def as_uint8(self) raises -> PrimitiveArray[uint8]:
         return PrimitiveArray[uint8](self)
 
-    fn as_uint16(self) raises -> PrimitiveArray[uint16]:
+    def as_uint16(self) raises -> PrimitiveArray[uint16]:
         return PrimitiveArray[uint16](self)
 
-    fn as_uint32(self) raises -> PrimitiveArray[uint32]:
+    def as_uint32(self) raises -> PrimitiveArray[uint32]:
         return PrimitiveArray[uint32](self)
 
-    fn as_uint64(self) raises -> PrimitiveArray[uint64]:
+    def as_uint64(self) raises -> PrimitiveArray[uint64]:
         return PrimitiveArray[uint64](self)
 
-    fn as_float32(self) raises -> PrimitiveArray[float32]:
+    def as_float32(self) raises -> PrimitiveArray[float32]:
         return PrimitiveArray[float32](self)
 
-    fn as_float64(self) raises -> PrimitiveArray[float64]:
+    def as_float64(self) raises -> PrimitiveArray[float64]:
         return PrimitiveArray[float64](self)
 
-    fn as_string(self) raises -> StringArray:
+    def as_string(self) raises -> StringArray:
         return StringArray(self)
 
-    fn as_list(self) raises -> ListArray:
+    def as_list(self) raises -> ListArray:
         return ListArray(self)
 
-    fn as_fixed_size_list(self) raises -> FixedSizeListArray:
+    def as_fixed_size_list(self) raises -> FixedSizeListArray:
         return FixedSizeListArray(self)
 
-    fn as_struct(self) raises -> StructArray:
+    def as_struct(self) raises -> StructArray:
         return StructArray(self)
 
 
@@ -333,7 +333,7 @@ struct PrimitiveArray[T: DataType](
     var bitmap: Optional[Bitmap]
     var buffer: Buffer
 
-    fn __init__(out self, ref data: Array, offset: Int = 0) raises:
+    def __init__(out self, ref data: Array, offset: Int = 0) raises:
         if data.dtype != Self.T:
             # TODO: mojo hangs if we pass data.dtype directly despite that it properly satisfies Writable
             raise Error(
@@ -348,10 +348,10 @@ struct PrimitiveArray[T: DataType](
         self.bitmap = data.bitmap
         self.buffer = data.buffers[0]
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
-    fn __init__(
+    def __init__(
         out self, var *values: Self.scalar, __list_literal__: ()
     ) raises:
         """Constructs a primitive array from a list literal [v1, v2, ...].
@@ -366,16 +366,16 @@ struct PrimitiveArray[T: DataType](
         self = b.finish_typed()
 
     @always_inline
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self.length
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn type(self) -> DataType:
+    def type(self) -> DataType:
         return Self.T
 
-    fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
 
         Matches PyArrow's Array.slice(offset, length) API.
@@ -389,7 +389,7 @@ struct PrimitiveArray[T: DataType](
             buffer=self.buffer,
         )
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("PrimitiveArray[")
         writer.write(Self.T)
         writer.write("]([")
@@ -405,28 +405,28 @@ struct PrimitiveArray[T: DataType](
                 writer.write("NULL")
         writer.write("])")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
     @always_inline
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
     @always_inline
-    fn unsafe_get(self, index: Int) -> Self.scalar:
+    def unsafe_get(self, index: Int) -> Self.scalar:
         return self.buffer.unsafe_get[Self.T.native](index + self.offset)
 
-    fn __getitem__(self, index: Int) raises -> Self.scalar:
+    def __getitem__(self, index: Int) raises -> Self.scalar:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
-    fn null_count(self) -> Int:
+    def null_count(self) -> Int:
         return self.nulls
 
-    fn true_count(self) raises -> Int:
+    def true_count(self) raises -> Int:
         """Count True values. Only valid for BoolArray (PrimitiveArray[bool_]).
         """
         comptime assert (
@@ -437,7 +437,7 @@ struct PrimitiveArray[T: DataType](
             return (data_bm & self.bitmap.value()).count_set_bits()
         return data_bm.count_set_bits()
 
-    fn false_count(self) raises -> Int:
+    def false_count(self) raises -> Int:
         """Count False values. Only valid for BoolArray (PrimitiveArray[bool_]).
         """
         comptime assert (
@@ -445,7 +445,7 @@ struct PrimitiveArray[T: DataType](
         ), "false_count is only valid for BoolArray"
         return self.length - self.nulls - self.true_count()
 
-    fn to_device(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
+    def to_device(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
         """Upload array data to the GPU."""
         var bm: Optional[Bitmap] = None
         if self.bitmap:
@@ -462,7 +462,7 @@ struct PrimitiveArray[T: DataType](
             buffer=self.buffer.to_device(ctx),
         )
 
-    fn to_cpu(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
+    def to_cpu(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
         """Download array data from the GPU to owned CPU heap buffers."""
         var bm: Optional[Bitmap] = None
         if self.bitmap:
@@ -479,10 +479,10 @@ struct PrimitiveArray[T: DataType](
             buffer=self.buffer.to_cpu(ctx),
         )
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values.
 
         Fast path (no nulls, offset=0 on both): full buffer SIMD comparison.
@@ -540,7 +540,7 @@ struct StringArray(
     var offsets: Buffer
     var values: Buffer
 
-    fn __init__(out self, ref data: Array) raises:
+    def __init__(out self, ref data: Array) raises:
         """Construct a StringArray from a generic Array.
 
         Raises:
@@ -558,7 +558,7 @@ struct StringArray(
         self.offsets = data.buffers[0]
         self.values = data.buffers[1]
 
-    fn __init__(out self, var *values: String, __list_literal__: ()) raises:
+    def __init__(out self, var *values: String, __list_literal__: ()) raises:
         """Constructs a string array from a list literal ["a", "b", ...].
 
         Args:
@@ -570,20 +570,20 @@ struct StringArray(
             b.append(value)
         self = b.finish_typed()
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         """Return the number of elements in the array."""
         return self.length
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn null_count(self) -> Int:
+    def null_count(self) -> Int:
         return self.nulls
 
-    fn type(self) -> DataType:
+    def type(self) -> DataType:
         return string
 
-    fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
 
         Matches PyArrow's Array.slice(offset, length) API.
@@ -598,7 +598,7 @@ struct StringArray(
             values=self.values,
         )
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("StringArray([")
         for i in range(self.length):
             if i > 0:
@@ -612,16 +612,16 @@ struct StringArray(
                 writer.write("NULL")
         writer.write("])")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         """Return True if the element at the given index is not null."""
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    fn unsafe_get[
+    def unsafe_get[
         self_origin: Origin[mut=False], //
     ](ref[self_origin] self, index: UInt) -> StringSlice[self_origin]:
         """Return a StringSlice for the element at the given index without bounds checking.
@@ -637,7 +637,7 @@ struct StringArray(
         )
         return StringSlice[self_origin](ptr=ptr, length=length)
 
-    fn __getitem__[
+    def __getitem__[
         self_origin: Origin[mut=False], //
     ](ref[self_origin] self, index: Int) raises -> StringSlice[self_origin]:
         """Return a StringSlice for the element at the given index.
@@ -649,10 +649,10 @@ struct StringArray(
             raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(UInt(index))
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and string values.
         """
         if self.length != other.length:
@@ -670,7 +670,7 @@ struct StringArray(
                     return False
         return True
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
 
@@ -695,7 +695,7 @@ struct ListArray(
     var offsets: Buffer
     var values: Array
 
-    fn __init__(out self, ref data: Array) raises:
+    def __init__(out self, ref data: Array) raises:
         if not data.dtype.is_list():
             raise Error(t"Unexpected dtype '{data.dtype}' instead of 'list'.")
         elif len(data.buffers) != 1:
@@ -711,25 +711,25 @@ struct ListArray(
         self.offsets = data.buffers[0]
         self.values = data.children[0].copy()
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self.length
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn null_count(self) -> Int:
+    def null_count(self) -> Int:
         return self.nulls
 
-    fn type(self) -> DataType:
+    def type(self) -> DataType:
         return self.dtype
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("ListArray([")
         for i in range(self.length):
             if i > 0:
@@ -743,15 +743,15 @@ struct ListArray(
                 writer.write("NULL")
         writer.write("])")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    fn unsafe_get(self, index: Int) -> Array:
+    def unsafe_get(self, index: Int) -> Array:
         """Return a view of the child array for the list at the given index."""
         var start = Int(
             self.offsets.unsafe_get[DType.int32](self.offset + index)
@@ -765,12 +765,12 @@ struct ListArray(
         result.nulls = 0
         return result^
 
-    fn __getitem__(self, index: Int) raises -> Array:
+    def __getitem__(self, index: Int) raises -> Array:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
-    fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
@@ -783,11 +783,11 @@ struct ListArray(
             values=Array(copy=self.values),
         )
 
-    fn flatten(self) -> Array:
+    def flatten(self) -> Array:
         """Unnest this ListArray, returning the flat child values."""
         return Array(copy=self.values)
 
-    fn value_lengths(self) -> PrimitiveArray[int32]:
+    def value_lengths(self) -> PrimitiveArray[int32]:
         """Return an array of list lengths for each element."""
         var buf = BufferBuilder.alloc[DType.int32](self.length)
         for i in range(self.length):
@@ -802,7 +802,7 @@ struct ListArray(
             buffer=buf.finish(),
         )
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same dtype, null pattern, and list values.
         """
         if self.dtype != other.dtype:
@@ -843,7 +843,7 @@ struct FixedSizeListArray(
     var bitmap: Optional[Bitmap]
     var values: Array
 
-    fn __init__(out self, ref data: Array) raises:
+    def __init__(out self, ref data: Array) raises:
         if not data.dtype.is_fixed_size_list():
             raise Error(
                 t"Unexpected dtype '{data.dtype}' instead of 'fixed_size_list'."
@@ -860,25 +860,25 @@ struct FixedSizeListArray(
         self.bitmap = data.bitmap
         self.values = data.children[0].copy()
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self.length
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn null_count(self) -> Int:
+    def null_count(self) -> Int:
         return self.nulls
 
-    fn type(self) -> DataType:
+    def type(self) -> DataType:
         return self.dtype
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("FixedSizeListArray([")
         for i in range(self.length):
             if i > 0:
@@ -892,15 +892,15 @@ struct FixedSizeListArray(
                 writer.write("NULL")
         writer.write("])")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    fn unsafe_get(self, index: Int, out array_data: Array):
+    def unsafe_get(self, index: Int, out array_data: Array):
         var list_size = self.dtype.size
         var start = (self.offset + index) * list_size
         return Array(
@@ -914,12 +914,12 @@ struct FixedSizeListArray(
             offset=start,
         )
 
-    fn __getitem__(self, index: Int) raises -> Array:
+    def __getitem__(self, index: Int) raises -> Array:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         return self.unsafe_get(index)
 
-    fn slice(self, offset: Int = 0, length: Int = -1) -> Self:
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
@@ -931,11 +931,11 @@ struct FixedSizeListArray(
             values=Array(copy=self.values),
         )
 
-    fn flatten(self) -> Array:
+    def flatten(self) -> Array:
         """Unnest this FixedSizeListArray, returning the flat child values."""
         return Array(copy=self.values)
 
-    fn to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
+    def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
         var new_buffers = List[Buffer](capacity=len(self.values.buffers))
         for i in range(len(self.values.buffers)):
@@ -966,7 +966,7 @@ struct FixedSizeListArray(
             values=new_child^,
         )
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same dtype, null pattern, and element values.
         """
         if self.dtype != other.dtype:
@@ -1006,32 +1006,32 @@ struct StructArray(
     var bitmap: Optional[Bitmap]
     var children: List[Array]
 
-    fn __init__(out self, ref data: Array):
+    def __init__(out self, ref data: Array):
         self.dtype = data.dtype
         self.length = data.length
         self.nulls = data.nulls
         self.bitmap = data.bitmap
         self.children = data.children.copy()
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self.length
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn null_count(self) -> Int:
+    def null_count(self) -> Int:
         return self.nulls
 
-    fn type(self) -> DataType:
+    def type(self) -> DataType:
         return self.dtype
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("StructArray({")
         if len(self.children) > 0:
             for i in range(len(self.dtype.fields)):
@@ -1044,28 +1044,28 @@ struct StructArray(
                 self.children[i].write_to(writer)
         writer.write("})")
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
         return self.bitmap.value().is_valid(index)
 
-    fn _index_for_field_name(self, name: StringSlice) raises -> Int:
+    def _index_for_field_name(self, name: StringSlice) raises -> Int:
         for idx, ref field in enumerate(self.dtype.fields):
             if field.name == name:
                 return idx
 
         raise Error(t"Field {name} does not exist in this StructArray.")
 
-    fn unsafe_get(
+    def unsafe_get(
         self, name: StringSlice
     ) raises -> ref[self.children[0]] Array:
         """Access the field with the given name in the struct."""
         return self.children[self._index_for_field_name(name)]
 
-    fn field(self, index: Int) raises -> Array:
+    def field(self, index: Int) raises -> Array:
         """Access a child array by field index.
 
         Matches PyArrow's StructArray.field(index) API.
@@ -1077,21 +1077,21 @@ struct StructArray(
             )
         return self.children[index].copy()
 
-    fn field(self, name: StringSlice) raises -> Array:
+    def field(self, name: StringSlice) raises -> Array:
         """Access a child array by field name.
 
         Matches PyArrow's StructArray.field(name) API.
         """
         return self.children[self._index_for_field_name(name)].copy()
 
-    fn flatten(self) -> List[Array]:
+    def flatten(self) -> List[Array]:
         """Return one Array per field.
 
         Matches PyArrow's StructArray.flatten() API.
         """
         return self.children.copy()
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same dtype, null pattern, and field values.
         """
         if self.dtype != other.dtype:
@@ -1123,20 +1123,20 @@ struct ChunkedArray(Copyable, Movable, Writable):
     var length: Int
     var chunks: List[Array]
 
-    fn _compute_length(mut self) -> None:
+    def _compute_length(mut self) -> None:
         """Update the length of the array from the length of its chunks."""
         var total_length = 0
         for chunk in self.chunks:
             total_length += chunk.length
         self.length = total_length
 
-    fn __init__(out self, var dtype: DataType, var chunks: List[Array]):
+    def __init__(out self, var dtype: DataType, var chunks: List[Array]):
         self.dtype = dtype^
         self.chunks = chunks^
         self.length = 0
         self._compute_length()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write("ChunkedArray([")
         for i in range(len(self.chunks)):
             if i > 0:
@@ -1144,7 +1144,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             self.chunks[i].write_to(writer)
         writer.write("])")
 
-    fn chunk(self, index: Int) -> ref[self.chunks] Array:
+    def chunk(self, index: Int) -> ref[self.chunks] Array:
         """Returns the chunk at the given index.
 
         Args:
@@ -1155,7 +1155,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
         """
         return self.chunks[index]
 
-    fn combine_chunks(var self) raises -> Array:
+    def combine_chunks(var self) raises -> Array:
         """Combines all chunks into a single array."""
         from .kernels.concat import concat
 

@@ -60,7 +60,7 @@ from .string import string_lengths
 # ---------------------------------------------------------------------------
 
 
-fn filter_[
+def filter_[
     T: DataType
 ](
     array: PrimitiveArray[T], selection: PrimitiveArray[bool_]
@@ -211,7 +211,7 @@ fn filter_[
 # ---------------------------------------------------------------------------
 
 
-fn filter_(
+def filter_(
     array: StringArray, selection: PrimitiveArray[bool_]
 ) raises -> StringArray:
     """Filter a StringArray, keeping only elements where selection is True.
@@ -342,7 +342,7 @@ fn filter_(
 # ---------------------------------------------------------------------------
 
 
-fn filter_(array: Array, selection: Array) raises -> Array:
+def filter_(array: Array, selection: Array) raises -> Array:
     """Runtime-typed filter: dispatches to the correct typed overload.
 
     Args:
@@ -372,7 +372,7 @@ fn filter_(array: Array, selection: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn drop_nulls[
+def drop_nulls[
     T: DataType
 ](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Create a new array containing only the valid (non-null) elements.
@@ -408,7 +408,7 @@ fn drop_nulls[
     return filter_[T](array, selection)
 
 
-fn drop_nulls(array: Array) raises -> Array:
+def drop_nulls(array: Array) raises -> Array:
     """Runtime-typed drop_nulls: dispatches to the correct typed version.
 
     Args:

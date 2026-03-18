@@ -17,7 +17,7 @@ struct Schema(
     var fields: List[Field]
     var metadata: Dict[String, String]
 
-    fn __init__(
+    def __init__(
         out self,
         *,
         var fields: List[Field] = [],
@@ -27,11 +27,11 @@ struct Schema(
         self.fields = fields^
         self.metadata = metadata^
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.fields = List[Field](copy=copy.fields)
         self.metadata = Dict[String, String](copy=copy.metadata)
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
 
         # Try downcasting from a marrow Python object.
@@ -49,34 +49,34 @@ struct Schema(
             raise Error("cannot convert Python object to Schema")
         self = CArrowSchema.from_pycapsule(capsule).to_schema()
 
-    fn append(mut self, var field: Field):
+    def append(mut self, var field: Field):
         """Appends a field to the schema."""
         self.fields.append(field^)
 
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         """Returns the number of fields in the schema."""
         return len(self.fields)
 
-    fn num_fields(self) -> Int:
+    def num_fields(self) -> Int:
         """Returns the number of fields in the schema."""
         return len(self.fields)
 
-    fn names(self) -> List[String]:
+    def names(self) -> List[String]:
         """Returns the names of the fields in the schema."""
         return [field.name for field in self.fields]
 
-    fn field(self, *, index: Int) raises -> ref[self.fields] Field:
+    def field(self, *, index: Int) raises -> ref[self.fields] Field:
         """Returns the field at the given index."""
         return self.fields[index]
 
-    fn field(self, *, name: StringSlice) raises -> ref[self.fields] Field:
+    def field(self, *, name: StringSlice) raises -> ref[self.fields] Field:
         """Returns the field with the given name."""
         for field in self.fields:
             if field.name == name:
                 return field
         raise Error(t"Field with name `{name}` not found.")
 
-    fn get_field_index(self, name: String) -> Int:
+    def get_field_index(self, name: String) -> Int:
         """Returns the index of the field with the given name, or -1 if not found.
         """
         for i in range(len(self.fields)):
@@ -84,10 +84,10 @@ struct Schema(
                 return i
         return -1
 
-    fn __ne__(self, other: Schema) -> Bool:
+    def __ne__(self, other: Schema) -> Bool:
         return not self.__eq__(other)
 
-    fn __eq__(self, other: Schema) -> Bool:
+    def __eq__(self, other: Schema) -> Bool:
         """Returns True if the schemas have equal fields (metadata ignored)."""
         if len(self.fields) != len(other.fields):
             return False
@@ -96,10 +96,10 @@ struct Schema(
                 return False
         return True
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Writes the schema to a writer."""
         writer.write("Schema(fields=[")
         for i in range(len(self.fields)):
@@ -110,7 +110,7 @@ struct Schema(
 
 
 # TODO: add an overload with support for schema({"field1": int32, "field2": int16}) syntax
-fn schema(var fields: List[Field]) -> Schema:
+def schema(var fields: List[Field]) -> Schema:
     """Construct a Schema from a list of fields.
 
     Equivalent to PyArrow's `pa.schema()`.

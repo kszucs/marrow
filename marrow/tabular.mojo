@@ -25,18 +25,18 @@ struct RecordBatch(
     var schema: Schema
     var columns: List[Array]
 
-    fn __init__(out self, schema: Schema, var columns: List[Array]):
+    def __init__(out self, schema: Schema, var columns: List[Array]):
         self.schema = schema
         self.columns = columns^
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.schema = Schema(copy=copy.schema)
         var cols = List[Array]()
         for col in copy.columns:
             cols.append(col.copy())
         self.columns = cols^
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
 
         # Try downcasting from a marrow Python object.
@@ -64,43 +64,43 @@ struct RecordBatch(
             columns.append(child.copy())
         self = RecordBatch(schema=schema, columns=columns^)
 
-    fn copy(self) -> RecordBatch:
+    def copy(self) -> RecordBatch:
         """Returns a copy of this RecordBatch (O(1) Arc ref-count bumps)."""
         return RecordBatch(copy=self)
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn num_rows(self) -> Int:
+    def num_rows(self) -> Int:
         """Returns the number of rows (length of the first column, or 0)."""
         if len(self.columns) == 0:
             return 0
         return self.columns[0].length
 
-    fn num_columns(self) -> Int:
+    def num_columns(self) -> Int:
         """Returns the number of columns."""
         return len(self.columns)
 
-    fn column(self, index: Int) -> ref[self.columns] Array:
+    def column(self, index: Int) -> ref[self.columns] Array:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    fn column(self, name: String) raises -> ref[self.columns] Array:
+    def column(self, name: String) raises -> ref[self.columns] Array:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
             raise Error("Column '{}' not found.".format(name))
         return self.columns[idx]
 
-    fn column_names(self) -> List[String]:
+    def column_names(self) -> List[String]:
         """Returns the names of all columns (delegates to schema)."""
         return self.schema.names()
 
-    fn field(self, i: Int) raises -> Field:
+    def field(self, i: Int) raises -> Field:
         """Returns the Field at the given index (delegates to schema)."""
         return self.schema.field(index=i)
 
-    fn __eq__(self, other: RecordBatch) -> Bool:
+    def __eq__(self, other: RecordBatch) -> Bool:
         """Returns True if the two RecordBatches have equal schema and columns.
         """
         if self.schema != other.schema:
@@ -112,18 +112,18 @@ struct RecordBatch(
                 return False
         return True
 
-    fn slice(self, offset: Int, length: Int) -> RecordBatch:
+    def slice(self, offset: Int, length: Int) -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""
         var sliced = List[Array]()
         for col in self.columns:
             sliced.append(col.slice(offset, length))
         return RecordBatch(schema=self.schema, columns=sliced^)
 
-    fn slice(self, offset: Int) -> RecordBatch:
+    def slice(self, offset: Int) -> RecordBatch:
         """Returns a zero-copy slice from offset to the end."""
         return self.slice(offset, self.num_rows() - offset)
 
-    fn select(self, indices: List[Int]) -> RecordBatch:
+    def select(self, indices: List[Int]) -> RecordBatch:
         """Returns a new RecordBatch with only the columns at the given indices.
         """
         var new_cols = List[Array]()
@@ -133,7 +133,7 @@ struct RecordBatch(
             new_fields.append(self.schema.fields[i])
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    fn select(self, names: List[String]) raises -> RecordBatch:
+    def select(self, names: List[String]) raises -> RecordBatch:
         """Returns a new RecordBatch with only the named columns."""
         var new_cols = List[Array]()
         var new_fields = List[Field]()
@@ -145,7 +145,7 @@ struct RecordBatch(
             new_fields.append(self.schema.fields[idx])
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    fn rename_columns(self, names: List[String]) raises -> RecordBatch:
+    def rename_columns(self, names: List[String]) raises -> RecordBatch:
         """Returns a new RecordBatch with columns renamed to `names`."""
         if len(names) != len(self.columns):
             raise Error(
@@ -164,7 +164,7 @@ struct RecordBatch(
             cols.append(col.copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=cols^)
 
-    fn add_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
+    def add_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
         """Returns a new RecordBatch with `column` inserted at position `i`."""
         var new_fields = List[Field]()
         var new_cols = List[Array]()
@@ -178,11 +178,11 @@ struct RecordBatch(
             new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    fn append_column(self, field: Field, column: Array) -> RecordBatch:
+    def append_column(self, field: Field, column: Array) -> RecordBatch:
         """Returns a new RecordBatch with `column` appended at the end."""
         return self.add_column(len(self.columns), field, column)
 
-    fn remove_column(self, i: Int) -> RecordBatch:
+    def remove_column(self, i: Int) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` removed."""
         var new_fields = List[Field]()
         var new_cols = List[Array]()
@@ -192,7 +192,7 @@ struct RecordBatch(
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    fn set_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
+    def set_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` replaced."""
         var new_fields = List[Field]()
         var new_cols = List[Array]()
@@ -205,7 +205,7 @@ struct RecordBatch(
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    fn to_struct_array(self) -> StructArray:
+    def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).
         """
         var cols = List[Array]()
@@ -219,10 +219,10 @@ struct RecordBatch(
             children=cols^,
         )
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "RecordBatch(num_rows=",
             self.num_rows(),
@@ -231,11 +231,11 @@ struct RecordBatch(
             ")",
         )
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
 
-fn record_batch(
+def record_batch(
     var columns: List[Array], *, names: List[String]
 ) raises -> RecordBatch:
     """Construct a RecordBatch from a list of arrays and column names.
@@ -268,11 +268,11 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
     var schema: Schema
     var columns: List[ChunkedArray]
 
-    fn __init__(out self, schema: Schema, var columns: List[ChunkedArray]):
+    def __init__(out self, schema: Schema, var columns: List[ChunkedArray]):
         self.schema = schema
         self.columns = columns^
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.schema = Schema(copy=copy.schema)
         var cols = List[ChunkedArray]()
         for col in copy.columns:
@@ -281,7 +281,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             )
         self.columns = cols^
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowArrayStream
 
         # Try downcasting from a marrow Python object.
@@ -298,39 +298,39 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             raise Error("cannot convert Python object to Table")
         self = CArrowArrayStream.from_pycapsule(capsule).to_table()
 
-    fn copy(self) -> Table:
+    def copy(self) -> Table:
         """Returns a copy of this Table (O(1) Arc ref-count bumps)."""
         return Table(copy=self)
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn get_schema(self) -> Schema:
+    def get_schema(self) -> Schema:
         """Returns the schema."""
         return self.schema
 
-    fn num_rows(self) -> Int:
+    def num_rows(self) -> Int:
         """Returns the number of rows (length of the first column, or 0)."""
         if len(self.columns) == 0:
             return 0
         return self.columns[0].length
 
-    fn num_columns(self) -> Int:
+    def num_columns(self) -> Int:
         """Returns the number of columns."""
         return len(self.columns)
 
-    fn column(self, index: Int) -> ref[self.columns] ChunkedArray:
+    def column(self, index: Int) -> ref[self.columns] ChunkedArray:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    fn column(self, name: String) raises -> ref[self.columns] ChunkedArray:
+    def column(self, name: String) raises -> ref[self.columns] ChunkedArray:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
             raise Error("Column '{}' not found.".format(name))
         return self.columns[idx]
 
-    fn combine_chunks(self) raises -> RecordBatch:
+    def combine_chunks(self) raises -> RecordBatch:
         """Combine all chunks in each column into a single RecordBatch."""
         var cols = List[Array]()
         for col in self.columns:
@@ -340,12 +340,12 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             cols.append(ca^.combine_chunks())
         return RecordBatch(schema=self.schema, columns=cols^)
 
-    fn column_names(self) -> List[String]:
+    def column_names(self) -> List[String]:
         """Returns the names of all columns (delegates to schema)."""
         return self.schema.names()
 
     @staticmethod
-    fn from_batches(schema: Schema, batches: List[RecordBatch]) -> Table:
+    def from_batches(schema: Schema, batches: List[RecordBatch]) -> Table:
         """Builds a Table from a list of RecordBatches sharing the same schema.
 
         Each column in the resulting Table is a ChunkedArray whose chunks are
@@ -365,7 +365,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             )
         return Table(schema=schema, columns=columns^)
 
-    fn to_batches(self) raises -> List[RecordBatch]:
+    def to_batches(self) raises -> List[RecordBatch]:
         """Convert this Table to a list of RecordBatches.
 
         Returns one RecordBatch per chunk. If columns have different chunk
@@ -408,11 +408,11 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         batches.append(RecordBatch(schema=self.schema, columns=cols^))
         return batches^
 
-    fn field(self, i: Int) raises -> Field:
+    def field(self, i: Int) raises -> Field:
         """Returns the Field at the given index (delegates to schema)."""
         return self.schema.field(index=i)
 
-    fn __eq__(self, other: Table) -> Bool:
+    def __eq__(self, other: Table) -> Bool:
         """Returns True if the two Tables have equal schema and columns."""
         if self.schema != other.schema:
             return False
@@ -426,10 +426,10 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                     return False
         return True
 
-    fn __str__(self) -> String:
+    def __str__(self) -> String:
         return String.write(self)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Table(num_rows=",
             self.num_rows(),
@@ -440,5 +440,5 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
             ")",
         )
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

@@ -13,30 +13,30 @@ from std.python import PythonObject, Python, ConvertibleToPython, ConvertibleFro
 # ---------------------------------------------------------------------------
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     R: ConvertibleToPython,
     //,
-    method: fn(T) raises -> R,
-]() -> fn(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    method: def(T) raises -> R,
+]() -> def(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
     """Wrap a zero-arg method returning ConvertibleToPython."""
 
-    fn wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
         return method(ptr[]).to_python_object()
 
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    method: fn(T, A0) raises -> R,
-]() -> fn(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
+    method: def(T, A0) raises -> R,
+]() -> def(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
     """Wrap a single-arg method returning ConvertibleToPython."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
     ) raises -> PythonObject:
         return method(ptr[], A0(py=arg)).to_python_object()
@@ -44,19 +44,19 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    method: fn(T, A0, A1) raises -> R,
-]() -> fn(
+    method: def(T, A0, A1) raises -> R,
+]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
 ) raises -> PythonObject:
     """Wrap a two-arg method returning ConvertibleToPython."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
         arg0: PythonObject,
         arg1: PythonObject,
@@ -66,20 +66,20 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    method: fn(T, A0, A1, A2) raises -> R,
-]() -> fn(
+    method: def(T, A0, A1, A2) raises -> R,
+]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject, PythonObject
 ) raises -> PythonObject:
     """Wrap a three-arg method returning ConvertibleToPython."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
         arg0: PythonObject,
         arg1: PythonObject,
@@ -90,15 +90,15 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     E: ConvertibleToPython & Copyable,
     //,
-    method: fn(T) raises -> List[E],
-]() -> fn(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    method: def(T) raises -> List[E],
+]() -> def(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
     """Wrap a zero-arg method returning List[ConvertibleToPython] as a Python list."""
 
-    fn wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
         var builtins = Python.import_module("builtins")
         var py_list = builtins.list()
         for item in method(ptr[]):
@@ -108,16 +108,16 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
-    method: fn(T, A0) raises -> List[E],
-]() -> fn(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
+    method: def(T, A0) raises -> List[E],
+]() -> def(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
     """Wrap a single-arg method returning List[ConvertibleToPython] as a Python list."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
     ) raises -> PythonObject:
         var builtins = Python.import_module("builtins")
@@ -129,19 +129,19 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
-    method: fn(T, A0, A1) raises -> List[E],
-]() -> fn(
+    method: def(T, A0, A1) raises -> List[E],
+]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
 ) raises -> PythonObject:
     """Wrap a two-arg method returning List[ConvertibleToPython] as a Python list."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
         arg0: PythonObject,
         arg1: PythonObject,
@@ -155,16 +155,16 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    method: fn(T, List[E]) raises -> R,
-]() -> fn(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
+    method: def(T, List[E]) raises -> R,
+]() -> def(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
     """Wrap a single-arg method taking List[ConvertibleFromPython] returning ConvertibleToPython."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
     ) raises -> PythonObject:
         var n = Int(arg.__len__())
@@ -176,19 +176,19 @@ fn pymethod[
     return wrapper
 
 
-fn pymethod[
+def pymethod[
     T: AnyType,
     A0: ConvertibleFromPython,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    method: fn(T, A0, List[E]) raises -> R,
-]() -> fn(
+    method: def(T, A0, List[E]) raises -> R,
+]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
 ) raises -> PythonObject:
     """Wrap a two-arg method where the second arg is List[ConvertibleFromPython]."""
 
-    fn wrapper(
+    def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
         arg0: PythonObject,
         arg1: PythonObject,
@@ -207,30 +207,30 @@ fn pymethod[
 # ---------------------------------------------------------------------------
 
 
-fn pyfunction[
+def pyfunction[
     A0: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    func: fn(A0) raises -> R,
-]() -> fn(PythonObject) raises -> PythonObject:
+    func: def(A0) raises -> R,
+]() -> def(PythonObject) raises -> PythonObject:
     """Wrap a one-arg function returning ConvertibleToPython."""
 
-    fn wrapper(arg0: PythonObject) raises -> PythonObject:
+    def wrapper(arg0: PythonObject) raises -> PythonObject:
         return func(A0(py=arg0)).to_python_object()
 
     return wrapper
 
 
-fn pyfunction[
+def pyfunction[
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
-    func: fn(A0, A1) raises -> R,
-]() -> fn(PythonObject, PythonObject) raises -> PythonObject:
+    func: def(A0, A1) raises -> R,
+]() -> def(PythonObject, PythonObject) raises -> PythonObject:
     """Wrap a two-arg function returning ConvertibleToPython."""
 
-    fn wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
+    def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
         return func(A0(py=arg0), A1(py=arg1)).to_python_object()
 
     return wrapper

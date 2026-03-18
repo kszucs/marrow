@@ -15,7 +15,7 @@ from helpers import pyfunction
 # TODO: use explicit Array types in the helper functions below
 # otherwise for filter_ at least mojo is unable to resolve the
 # right overload
-fn filter_(array: Array, selection: Array) raises -> Array:
+def filter_(array: Array, selection: Array) raises -> Array:
     return _filter_overloaded(array, selection)
 
 

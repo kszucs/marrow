@@ -44,22 +44,22 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
     var _offset: Int
     var _length: Int
 
-    fn __init__(out self, buffer: Buffer, offset: Int, length: Int):
+    def __init__(out self, buffer: Buffer, offset: Int, length: Int):
         self._buffer = buffer
         self._offset = offset
         self._length = length
 
     @always_inline
-    fn __len__(self) -> Int:
+    def __len__(self) -> Int:
         return self._length
 
     @always_inline
-    fn bit_offset(self) -> Int:
+    def bit_offset(self) -> Int:
         """Return the bit offset into the backing buffer."""
         return self._offset
 
     @always_inline
-    fn _aligned_byte_range(
+    def _aligned_byte_range(
         self,
     ) -> Tuple[UnsafePointer[UInt8, ImmutExternalOrigin], Int, Int, Int]:
         """Return 64-byte-aligned pointer and byte range with boundary bits.
@@ -90,7 +90,7 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         )
 
     @always_inline
-    fn is_valid(self, index: Int) -> Bool:
+    def is_valid(self, index: Int) -> Bool:
         """Return True if bit at (_offset + index) is set (value is valid)."""
         var bit_index = self.bit_offset() + index
         return Bool(
@@ -98,11 +98,11 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         )
 
     @always_inline
-    fn is_null(self, index: Int) -> Bool:
+    def is_null(self, index: Int) -> Bool:
         """Return True if bit at (_offset + index) is unset (value is null)."""
         return not self.is_valid(index)
 
-    fn count_set_bits(self) -> Int:
+    def count_set_bits(self) -> Int:
         """Count set bits in [_offset, _offset + _length) using SIMD popcount.
 
         Tier 1: 512-byte blocks with 2 interleaved uint8 accumulators.
@@ -170,11 +170,11 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
 
         return count
 
-    fn slice(self, offset: Int, length: Int) -> Bitmap:
+    def slice(self, offset: Int, length: Int) -> Bitmap:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return Bitmap(self._buffer, self.bit_offset() + offset, length)
 
-    fn __eq__(self, other: Bitmap) -> Bool:
+    def __eq__(self, other: Bitmap) -> Bool:
         """Return True if both bitmaps have identical logical bit patterns.
 
         Uses XOR + count_set_bits to correctly handle arbitrary bit offsets
@@ -198,19 +198,19 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
     # with no overshoot.  Bits outside [_offset, _offset+_length) in results
     # are arbitrary; all operations that consume bitmaps respect _offset and _length.
 
-    fn __and__(self, other: Bitmap) raises -> Bitmap:
+    def __and__(self, other: Bitmap) raises -> Bitmap:
         """Return the bitwise AND of self and other."""
         return self._binop[_and](other)
 
-    fn __or__(self, other: Bitmap) raises -> Bitmap:
+    def __or__(self, other: Bitmap) raises -> Bitmap:
         """Return the bitwise OR of self and other."""
         return self._binop[_or](other)
 
-    fn __xor__(self, other: Bitmap) raises -> Bitmap:
+    def __xor__(self, other: Bitmap) raises -> Bitmap:
         """Return the bitwise XOR of self and other."""
         return self._binop[_xor](other)
 
-    fn __invert__(self) -> Bitmap:
+    def __invert__(self) -> Bitmap:
         """Return the bitwise NOT of this bitmap."""
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
@@ -227,7 +227,7 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
 
         return Bitmap(builder.finish(), lead_bits, self._length)
 
-    fn and_not(self, other: Bitmap) raises -> Bitmap:
+    def and_not(self, other: Bitmap) raises -> Bitmap:
         """Return self & ~other  (A AND NOT B).
 
         Useful for null propagation: combine validity where *both* must be valid,
@@ -236,8 +236,8 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         return self._binop[_and_not](other)
 
     @always_inline
-    fn _binop[
-        op: fn[W: Int](SIMD[DType.uint8, W], SIMD[DType.uint8, W]) -> SIMD[
+    def _binop[
+        op: def[W: Int](SIMD[DType.uint8, W], SIMD[DType.uint8, W]) -> SIMD[
             DType.uint8, W
         ]
     ](self, other: Bitmap) raises -> Bitmap:
@@ -289,38 +289,38 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
 
         return Bitmap(builder.finish(), lead_bits_a, self._length)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Bitmap(offset=", self.bit_offset(), ", length=", self._length, ")"
         )
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
 
 @always_inline
-fn _and[
+def _and[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a & b
 
 
 @always_inline
-fn _or[
+def _or[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a | b
 
 
 @always_inline
-fn _xor[
+def _xor[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a ^ b
 
 
 @always_inline
-fn _and_not[
+def _and_not[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a & ~b
@@ -346,27 +346,27 @@ struct BitmapBuilder(Movable):
 
     var _builder: BufferBuilder
 
-    fn __init__(out self, var builder: BufferBuilder):
+    def __init__(out self, var builder: BufferBuilder):
         self._builder = builder^
 
     @staticmethod
-    fn alloc(length: Int) -> BitmapBuilder:
+    def alloc(length: Int) -> BitmapBuilder:
         """Allocate a zero-filled builder for `length` bits."""
         return BitmapBuilder(BufferBuilder.alloc[DType.bool](length))
 
     @always_inline
-    fn unsafe_ptr(self) -> UnsafePointer[UInt8, MutExternalOrigin]:
+    def unsafe_ptr(self) -> UnsafePointer[UInt8, MutExternalOrigin]:
         """Return the raw mutable byte pointer (for low-level bit operations).
         """
         return self._builder.ptr
 
     # TODO: add safe apis
     @always_inline
-    fn set_bit(mut self, index: Int, value: Bool):
+    def set_bit(mut self, index: Int, value: Bool):
         """Set or clear the bit at `index`."""
         self._builder.unsafe_set[DType.bool](index, value)
 
-    fn set_range(mut self, start: Int, length: Int, value: Bool):
+    def set_range(mut self, start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`.
 
         Handles byte-aligned bulk fills via `memset` for the middle bytes,
@@ -415,7 +415,7 @@ struct BitmapBuilder(Movable):
         if end_byte > start_byte:
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
-    fn extend(mut self, src: Bitmap, dst_start: Int, length: Int):
+    def extend(mut self, src: Bitmap, dst_start: Int, length: Int):
         """Copy `length` bits from `src` (from its `_offset`) into self at `dst_start`.
 
         Replaces the `bitmap_extend` free function.
@@ -431,11 +431,11 @@ struct BitmapBuilder(Movable):
             else:
                 ptr[byte_idx] = ptr[byte_idx] & ~bit_mask
 
-    fn resize(mut self, capacity: Int) raises:
+    def resize(mut self, capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits."""
         self._builder.resize[DType.bool](capacity)
 
-    fn finish(mut self, length: Int) -> Bitmap:
+    def finish(mut self, length: Int) -> Bitmap:
         """Freeze the builder into an immutable `Bitmap` of `length` bits.
 
         The builder is reset to empty and can be reused after this call.

@@ -91,19 +91,19 @@ trait Value(ImplicitlyDestructible, Movable):
     hash consing and equality saturation in a future ``EGraph``.
     """
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         """Return the node-kind constant (LOAD, ADD, NEG, …)."""
         ...
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         """Return the output data type, or None if not yet inferred."""
         ...
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         """Return child expressions (empty for leaf nodes)."""
         ...
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Format this node for display (children formatted recursively)."""
         ...
 
@@ -123,43 +123,43 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: fn(ArcPointer[NoneType]) -> UInt8
-    var _virt_dtype: fn(ArcPointer[NoneType]) -> Optional[DataType]
-    var _virt_inputs: fn(ArcPointer[NoneType]) -> List[AnyValue]
-    var _virt_write_to_string: fn(ArcPointer[NoneType]) -> String
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_kind: def(ArcPointer[NoneType]) -> UInt8
+    var _virt_dtype: def(ArcPointer[NoneType]) -> Optional[DataType]
+    var _virt_inputs: def(ArcPointer[NoneType]) -> List[AnyValue]
+    var _virt_write_to_string: def(ArcPointer[NoneType]) -> String
+    var _virt_drop: def(var ArcPointer[NoneType])
     var dispatch: UInt8
     """Dispatch hint for the executor (DISPATCH_AUTO / CPU / GPU)."""
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_kind[T: Value](ptr: ArcPointer[NoneType]) -> UInt8:
+    def _tramp_kind[T: Value](ptr: ArcPointer[NoneType]) -> UInt8:
         return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
-    fn _tramp_dtype[T: Value](ptr: ArcPointer[NoneType]) -> Optional[DataType]:
+    def _tramp_dtype[T: Value](ptr: ArcPointer[NoneType]) -> Optional[DataType]:
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod
-    fn _tramp_inputs[T: Value](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
+    def _tramp_inputs[T: Value](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
         return rebind[ArcPointer[T]](ptr)[].inputs()
 
     @staticmethod
-    fn _tramp_write_to_string[T: Value](ptr: ArcPointer[NoneType]) -> String:
+    def _tramp_write_to_string[T: Value](ptr: ArcPointer[NoneType]) -> String:
         var s = String()
         rebind[ArcPointer[T]](ptr)[].write_to(s)
         return s^
 
     @staticmethod
-    fn _tramp_drop[T: Value](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: Value](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     # --- construction ---
 
     @implicit
-    fn __init__[T: Value](out self, var value: T):
+    def __init__[T: Value](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_kind = Self._tramp_kind[T]
@@ -169,7 +169,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
         self._virt_drop = Self._tramp_drop[T]
         self.dispatch = DISPATCH_AUTO
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._data = copy._data
         self._virt_kind = copy._virt_kind
         self._virt_dtype = copy._virt_dtype
@@ -180,19 +180,19 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
 
     # --- public API ---
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return self._virt_kind(self._data)
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return self._virt_dtype(self._data)
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return self._virt_inputs(self._data)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
 
-    fn with_dispatch(self, hint: UInt8) -> AnyValue:
+    def with_dispatch(self, hint: UInt8) -> AnyValue:
         """Return a copy of this expression with the given dispatch hint."""
         var copy = self
         copy.dispatch = hint
@@ -200,67 +200,67 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
 
     # --- downcast helpers ---
 
-    fn downcast[T: Value](self) -> ArcPointer[T]:
+    def downcast[T: Value](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
 
     # --- operator overloads (ibis-style) ---
 
-    fn __add__(self, other: AnyValue) -> AnyValue:
+    def __add__(self, other: AnyValue) -> AnyValue:
         return Binary(op=ADD, left=self, right=other)
 
-    fn __sub__(self, other: AnyValue) -> AnyValue:
+    def __sub__(self, other: AnyValue) -> AnyValue:
         return Binary(op=SUB, left=self, right=other)
 
-    fn __mul__(self, other: AnyValue) -> AnyValue:
+    def __mul__(self, other: AnyValue) -> AnyValue:
         return Binary(op=MUL, left=self, right=other)
 
-    fn __truediv__(self, other: AnyValue) -> AnyValue:
+    def __truediv__(self, other: AnyValue) -> AnyValue:
         return Binary(op=DIV, left=self, right=other)
 
-    fn __gt__(self, other: AnyValue) -> AnyValue:
+    def __gt__(self, other: AnyValue) -> AnyValue:
         return Binary(op=GT, left=self, right=other)
 
-    fn __lt__(self, other: AnyValue) -> AnyValue:
+    def __lt__(self, other: AnyValue) -> AnyValue:
         return Binary(op=LT, left=self, right=other)
 
-    fn __ge__(self, other: AnyValue) -> AnyValue:
+    def __ge__(self, other: AnyValue) -> AnyValue:
         return Binary(op=GE, left=self, right=other)
 
-    fn __le__(self, other: AnyValue) -> AnyValue:
+    def __le__(self, other: AnyValue) -> AnyValue:
         return Binary(op=LE, left=self, right=other)
 
-    fn __eq__(self, other: AnyValue) -> AnyValue:
+    def __eq__(self, other: AnyValue) -> AnyValue:
         return Binary(op=EQ, left=self, right=other)
 
-    fn __ne__(self, other: AnyValue) -> AnyValue:
+    def __ne__(self, other: AnyValue) -> AnyValue:
         return Binary(op=NE, left=self, right=other)
 
-    fn __neg__(self) -> AnyValue:
+    def __neg__(self) -> AnyValue:
         return Unary(op=NEG, child=self)
 
-    fn __invert__(self) -> AnyValue:
+    def __invert__(self) -> AnyValue:
         """Logical NOT."""
         return Unary(op=NOT, child=self)
 
-    fn __and__(self, other: AnyValue) -> AnyValue:
+    def __and__(self, other: AnyValue) -> AnyValue:
         return Binary(op=AND, left=self, right=other)
 
-    fn __or__(self, other: AnyValue) -> AnyValue:
+    def __or__(self, other: AnyValue) -> AnyValue:
         return Binary(op=OR, left=self, right=other)
 
-    fn is_null(self) -> AnyValue:
+    def is_null(self) -> AnyValue:
         """True where this expression produces a null value."""
         return IsNull(child=self)
 
-    fn abs(self) -> AnyValue:
+    def abs(self) -> AnyValue:
         """Element-wise absolute value."""
         return Unary(op=ABS, child=self)
 
-    fn cast(self, to: DataType) -> AnyValue:
+    def cast(self, to: DataType) -> AnyValue:
         """Explicit type cast."""
         return Cast(child=self, to=to)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -281,23 +281,23 @@ struct Column(Value):
     var name: String
     var dtype_: Optional[DataType]
 
-    fn __init__(
+    def __init__(
         out self, *, index: Int, var name: String, dtype_: Optional[DataType]
     ):
         self.index = index
         self.name = name^
         self.dtype_ = dtype_
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return LOAD
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return self.dtype_
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return List[AnyValue]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"input({self.index})")
 
 
@@ -310,19 +310,19 @@ struct Literal(Value):
 
     var value: Array
 
-    fn __init__(out self, *, var value: Array):
+    def __init__(out self, *, var value: Array):
         self.value = value^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return LITERAL
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return self.value.dtype
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return List[AnyValue]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"literal(...)")
 
 
@@ -341,23 +341,23 @@ struct Binary(Value):
     var left: AnyValue
     var right: AnyValue
 
-    fn __init__(
+    def __init__(
         out self, *, op: UInt8, var left: AnyValue, var right: AnyValue
     ):
         self.op = op
         self.left = left^
         self.right = right^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return self.op
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return [self.left, self.right]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self.op == ADD:
             writer.write(t"add(")
         elif self.op == SUB:
@@ -402,20 +402,20 @@ struct Unary(Value):
     var op: UInt8
     var child: AnyValue
 
-    fn __init__(out self, *, op: UInt8, var child: AnyValue):
+    def __init__(out self, *, op: UInt8, var child: AnyValue):
         self.op = op
         self.child = child^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return self.op
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return [self.child]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self.op == NEG:
             writer.write(t"neg(")
         elif self.op == ABS:
@@ -433,19 +433,19 @@ struct IsNull(Value):
 
     var child: AnyValue
 
-    fn __init__(out self, *, var child: AnyValue):
+    def __init__(out self, *, var child: AnyValue):
         self.child = child^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return IS_NULL
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return None  # bool_ after type inference
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return [self.child]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"is_null(")
         self.child.write_to(writer)
         writer.write(t")")
@@ -459,7 +459,7 @@ struct IfElse(Value):
     var then_: AnyValue
     var else_: AnyValue
 
-    fn __init__(
+    def __init__(
         out self,
         *,
         var cond: AnyValue,
@@ -470,16 +470,16 @@ struct IfElse(Value):
         self.then_ = then_^
         self.else_ = else_^
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return IF_ELSE
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return None  # filled in by type inference
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return [self.cond, self.then_, self.else_]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"if_else(")
         self.cond.write_to(writer)
         writer.write(t", ")
@@ -495,20 +495,20 @@ struct Cast(Value):
     var child: AnyValue
     var to: DataType
 
-    fn __init__(out self, *, var child: AnyValue, to: DataType):
+    def __init__(out self, *, var child: AnyValue, to: DataType):
         self.child = child^
         self.to = to
 
-    fn kind(self) -> UInt8:
+    def kind(self) -> UInt8:
         return CAST
 
-    fn dtype(self) -> Optional[DataType]:
+    def dtype(self) -> Optional[DataType]:
         return self.to
 
-    fn inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[AnyValue]:
         return [self.child]
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(t"cast(")
         self.child.write_to(writer)
         writer.write(t", {self.to})")
@@ -519,7 +519,7 @@ struct Cast(Value):
 # ---------------------------------------------------------------------------
 
 
-fn _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
+def _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
     """Create a Literal expression from a typed scalar value."""
     var builder = PrimitiveBuilder[T](1)
     builder.unsafe_append(value)
@@ -531,23 +531,23 @@ fn _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
 # ---------------------------------------------------------------------------
 
 
-fn col(index: Int) -> AnyValue:
+def col(index: Int) -> AnyValue:
     """Reference to the ``index``-th input column."""
     return Column(index=index, name=String(), dtype_=None)
 
 
-fn col(var name: String) -> AnyValue:
+def col(var name: String) -> AnyValue:
     """Reference to a named column (resolved against the schema at execution).
     """
     return Column(index=-1, name=name^, dtype_=None)
 
 
-fn lit[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
+def lit[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
     """A scalar constant broadcast to the length of the first input."""
     return _make_literal[T](value)
 
 
-fn if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
+def if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
     """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i].
     """
     return IfElse(cond=cond, then_=then_, else_=else_)
@@ -558,7 +558,7 @@ fn if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
 # ---------------------------------------------------------------------------
 
 
-fn rebuild(expr: AnyValue, children: List[AnyValue]) -> AnyValue:
+def rebuild(expr: AnyValue, children: List[AnyValue]) -> AnyValue:
     """Reconstruct an expression node with replaced children.
 
     Leaves (Column, Literal) are returned unchanged.
@@ -582,7 +582,7 @@ fn rebuild(expr: AnyValue, children: List[AnyValue]) -> AnyValue:
     return expr  # unknown: pass through
 
 
-fn resolve_columns(expr: AnyValue, schema: Schema) raises -> AnyValue:
+def resolve_columns(expr: AnyValue, schema: Schema) raises -> AnyValue:
     """Resolve name-based Column references (index == -1) to positional
     indices using the schema.
 

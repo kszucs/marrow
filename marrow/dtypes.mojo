@@ -156,36 +156,36 @@ struct Field(
     var dtype: DataType
     var nullable: Bool
 
-    fn __init__(
+    def __init__(
         out self, name: String, var dtype: DataType, nullable: Bool = False
     ):
         self.name = name
         self.dtype = dtype^
         self.nullable = nullable
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Field]()[]
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         return (
             self.name == other.name
             and self.dtype == other.dtype
             and self.nullable == other.nullable
         )
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         writer.write(self.name, ": ", self.dtype)
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         writer.write(
             "Field(name=", self.name, ", nullable=", self.nullable, ")"
         )
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
 
-fn field(name: String, var dtype: DataType, nullable: Bool = True) -> Field:
+def field(name: String, var dtype: DataType, nullable: Bool = True) -> Field:
     """Construct a Field from a name and data type.
 
     Equivalent to PyArrow's `pa.field()`.
@@ -210,13 +210,13 @@ struct DataType(
     var fields: List[Field]
     var size: Int
 
-    fn __init__(out self, *, code: UInt8):
+    def __init__(out self, *, code: UInt8):
         self.code = code
         self.native = DType.invalid
         self.fields = []
         self.size = 0
 
-    fn __init__(out self, native: DType):
+    def __init__(out self, native: DType):
         if native == DType.bool:
             self.code = BOOL
         elif native == DType.int8:
@@ -245,25 +245,25 @@ struct DataType(
         self.fields = []
         self.size = 0
 
-    fn __init__(out self, *, code: UInt8, native: DType):
+    def __init__(out self, *, code: UInt8, native: DType):
         self.code = code
         self.native = native
         self.fields = []
         self.size = 0
 
-    fn __init__(out self, *, code: UInt8, fields: List[Field]):
+    def __init__(out self, *, code: UInt8, fields: List[Field]):
         self.code = code
         self.native = DType.invalid
         self.fields = fields.copy()
         self.size = 0
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.code = copy.code
         self.native = copy.native
         self.fields = copy.fields.copy()
         self.size = copy.size
 
-    fn __init__(out self, *, py: PythonObject) raises:
+    def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
 
         # Try downcasting from a marrow Python object.
@@ -280,21 +280,21 @@ struct DataType(
             raise Error("cannot convert Python object to DataType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
-    fn __eq__(self, other: Self) -> Bool:
+    def __eq__(self, other: Self) -> Bool:
         if self.code != other.code or self.size != other.size:
             return False
         return self.fields == other.fields
 
-    fn __is__(self, other: DataType) -> Bool:
+    def __is__(self, other: DataType) -> Bool:
         return self == other
 
-    fn to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    fn write_repr_to[W: Writer](self, mut writer: W):
+    def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         if self.code == NA:
             writer.write("null")
         elif self.code == BOOL:
@@ -343,7 +343,7 @@ struct DataType(
         else:
             writer.write("unknown ", self.code)
 
-    fn bit_width(self) -> UInt8:
+    def bit_width(self) -> UInt8:
         if self.code == BOOL:
             return 1
         elif self.code == INT8:
@@ -369,19 +369,19 @@ struct DataType(
         else:
             return 0
 
-    fn byte_width(self) -> Int:
+    def byte_width(self) -> Int:
         return Int(self.bit_width()) // 8
 
     @always_inline
-    fn is_bool(self) -> Bool:
+    def is_bool(self) -> Bool:
         return self.code == BOOL
 
     @always_inline
-    fn is_fixed_size(self) -> Bool:
+    def is_fixed_size(self) -> Bool:
         return self.bit_width() > 0
 
     @always_inline
-    fn is_integer(self) -> Bool:
+    def is_integer(self) -> Bool:
         return self.code in [
             INT8,
             INT16,
@@ -394,11 +394,11 @@ struct DataType(
         ]
 
     @always_inline
-    fn is_signed_integer(self) -> Bool:
+    def is_signed_integer(self) -> Bool:
         return self.code in [INT8, INT16, INT32, INT64]
 
     @always_inline
-    fn is_unsigned_integer(self) -> Bool:
+    def is_unsigned_integer(self) -> Bool:
         return self.code in [
             UINT8,
             UINT16,
@@ -407,47 +407,47 @@ struct DataType(
         ]
 
     @always_inline
-    fn is_floating_point(self) -> Bool:
+    def is_floating_point(self) -> Bool:
         return self.code in [FLOAT32, FLOAT64]
 
     @always_inline
-    fn is_numeric(self) -> Bool:
+    def is_numeric(self) -> Bool:
         return self.is_integer() or self.is_floating_point()
 
     @always_inline
-    fn is_primitive(self) -> Bool:
+    def is_primitive(self) -> Bool:
         return self.is_numeric() or self.is_bool()
 
     @always_inline
-    fn is_string(self) -> Bool:
+    def is_string(self) -> Bool:
         return self.code == STRING
 
     @always_inline
-    fn is_list(self) -> Bool:
+    def is_list(self) -> Bool:
         return self.code == LIST
 
     @always_inline
-    fn is_fixed_size_list(self) -> Bool:
+    def is_fixed_size_list(self) -> Bool:
         return self.code == FIXED_SIZE_LIST
 
     @always_inline
-    fn is_null(self) -> Bool:
+    def is_null(self) -> Bool:
         return self.code == NA
 
     @always_inline
-    fn is_binary(self) -> Bool:
+    def is_binary(self) -> Bool:
         return self.code == BINARY
 
     @always_inline
-    fn is_struct(self) -> Bool:
+    def is_struct(self) -> Bool:
         return self.code == STRUCT
 
 
-fn list_(var value_type: DataType) -> DataType:
+def list_(var value_type: DataType) -> DataType:
     return DataType(code=LIST, fields=[Field("item", value_type^, True)])
 
 
-fn fixed_size_list_(var value_type: DataType, size: Int) -> DataType:
+def fixed_size_list_(var value_type: DataType, size: Int) -> DataType:
     var dt = DataType(
         code=FIXED_SIZE_LIST, fields=[Field("item", value_type^, True)]
     )
@@ -455,11 +455,11 @@ fn fixed_size_list_(var value_type: DataType, size: Int) -> DataType:
     return dt^
 
 
-fn struct_(fields: List[Field]) -> DataType:
+def struct_(fields: List[Field]) -> DataType:
     return DataType(code=STRUCT, fields=fields)
 
 
-fn struct_(var *fields: Field) -> DataType:
+def struct_(var *fields: Field) -> DataType:
     return DataType(code=STRUCT, fields=List(elements=fields^))
 
 

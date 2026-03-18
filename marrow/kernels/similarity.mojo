@@ -18,7 +18,7 @@ from ..dtypes import DataType
 
 
 # TODO: these kernels should be rewritten to align with the rest of the kernels
-fn _cosine_similarity_no_nulls[
+def _cosine_similarity_no_nulls[
     T: DataType
 ](
     vectors: FixedSizeListArray,
@@ -87,7 +87,7 @@ fn _cosine_similarity_no_nulls[
 # ---------------------------------------------------------------------------
 
 
-fn _cosine_similarity_gpu_kernel[
+def _cosine_similarity_gpu_kernel[
     dtype: DType
 ](
     vectors: UnsafePointer[Scalar[dtype], MutAnyOrigin],
@@ -116,7 +116,7 @@ fn _cosine_similarity_gpu_kernel[
             result[tid] = Scalar[dtype](0)
 
 
-fn _cosine_similarity_gpu[
+def _cosine_similarity_gpu[
     T: DataType
 ](
     vectors: FixedSizeListArray,
@@ -171,7 +171,7 @@ fn _cosine_similarity_gpu[
 # ---------------------------------------------------------------------------
 
 
-fn cosine_similarity[
+def cosine_similarity[
     T: DataType
 ](
     vectors: FixedSizeListArray,

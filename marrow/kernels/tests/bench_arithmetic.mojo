@@ -53,7 +53,7 @@ from marrow.kernels.arithmetic import add
 # ---------------------------------------------------------------------------
 
 
-fn _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
     """Build an array with 10% nulls (every 10th element is null)."""
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
@@ -70,13 +70,13 @@ fn _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
 
 
 @parameter
-fn bench_add[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_add[T: DataType](mut b: Bencher, size: Int) raises:
     var lhs = arange[T](0, size)
     var rhs = arange[T](0, size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var result = add[T](lhs, rhs)
         keep(result.unsafe_get(0))
 
@@ -84,14 +84,14 @@ fn bench_add[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_add_nulls[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_add_nulls[T: DataType](mut b: Bencher, size: Int) raises:
     """Add() with 10% nulls in both inputs."""
     var lhs = _make_array_with_nulls[T](size)
     var rhs = _make_array_with_nulls[T](size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var result = add[T](lhs, rhs)
         keep(result.unsafe_get(1))
 
@@ -104,7 +104,7 @@ fn bench_add_nulls[T: DataType](mut b: Bencher, size: Int) raises:
 # ---------------------------------------------------------------------------
 
 
-fn _bench_gpu_add[
+def _bench_gpu_add[
     T: DataType
 ](size: Int, iters: Int, ctx: DeviceContext,) raises -> Float64:
     """Returns mean microseconds per kernel dispatch with pre-loaded data."""

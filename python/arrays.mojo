@@ -68,7 +68,7 @@ struct PyHelpers(Copyable, Movable):
     var _tuple_type: PyTypeObjectPtr
     var _dict_type: PyTypeObjectPtr
 
-    fn __init__(out self):
+    def __init__(out self):
         self.py = Python()
         ref cpy = self.py.cpython()
         self.none_ptr = cpy.Py_None()
@@ -78,49 +78,49 @@ struct PyHelpers(Copyable, Movable):
         self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
         self._dict_type = cpy.PyDict_Type()
 
-    fn __init__(out self, var other: Self):
+    def __init__(out self, var other: Self):
         # Python is not Movable/Copyable; re-create it. Cached pointers are process-wide constants.
         self = PyHelpers()
 
-    fn __init__(out self, ref other: Self):
+    def __init__(out self, ref other: Self):
         self = PyHelpers()
 
     @always_inline
-    fn cpy(mut self) -> ref[ImmutAnyOrigin] CPython:
+    def cpy(mut self) -> ref[ImmutAnyOrigin] CPython:
         return self.py.cpython()
 
     @always_inline
-    fn is_none(self, ptr: PyObjectPtr) -> Bool:
+    def is_none(self, ptr: PyObjectPtr) -> Bool:
         return ptr == self.none_ptr
 
     @always_inline
-    fn is_unicode(mut self, ptr: PyObjectPtr) -> Bool:
+    def is_unicode(mut self, ptr: PyObjectPtr) -> Bool:
         return self.cpy().PyObject_TypeCheck(ptr, self._unicode_type) != 0
 
     @always_inline
-    fn is_bytes(mut self, ptr: PyObjectPtr) -> Bool:
+    def is_bytes(mut self, ptr: PyObjectPtr) -> Bool:
         return self.cpy().PyObject_TypeCheck(ptr, self._bytes_type) != 0
 
     @always_inline
-    fn is_list(mut self, ptr: PyObjectPtr) -> Bool:
+    def is_list(mut self, ptr: PyObjectPtr) -> Bool:
         return self.cpy().PyObject_TypeCheck(ptr, self._list_type) != 0
 
     @always_inline
-    fn is_tuple(mut self, ptr: PyObjectPtr) -> Bool:
+    def is_tuple(mut self, ptr: PyObjectPtr) -> Bool:
         return self.cpy().PyObject_TypeCheck(ptr, self._tuple_type) != 0
 
     @always_inline
-    fn is_dict(mut self, ptr: PyObjectPtr) -> Bool:
+    def is_dict(mut self, ptr: PyObjectPtr) -> Bool:
         return self.cpy().PyObject_TypeCheck(ptr, self._dict_type) != 0
 
     @always_inline
-    fn raise_on_error(mut self) raises:
+    def raise_on_error(mut self) raises:
         """Raise the current Python exception if one is set."""
         if self.cpy().PyErr_Occurred():
             raise self.cpy().unsafe_get_error()
 
     @always_inline
-    fn to_scalar[
+    def to_scalar[
         dtype: DType
     ](mut self, ptr: PyObjectPtr) raises -> Scalar[dtype]:
         """Convert a Python int, float, or bool object to Scalar[dtype]; raises on type error or overflow.
@@ -150,7 +150,7 @@ struct PyHelpers(Copyable, Movable):
             return converted
 
     @always_inline
-    fn to_string_slice(
+    def to_string_slice(
         mut self, ptr: PyObjectPtr
     ) raises -> StringSlice[ImmutAnyOrigin]:
         """Decode a Python str to a UTF-8 StringSlice; raises on TypeError or encoding error.
@@ -160,12 +160,12 @@ struct PyHelpers(Copyable, Movable):
         return s
 
     @always_inline
-    fn length(mut self, ptr: PyObjectPtr) -> Int:
+    def length(mut self, ptr: PyObjectPtr) -> Int:
         """Return the length of a Python sequence or mapping."""
         return Int(self.cpy().PyObject_Length(ptr))
 
     @always_inline
-    fn dict_getitem(
+    def dict_getitem(
         mut self, dict_ptr: PyObjectPtr, key: PyObjectPtr
     ) raises -> PyObjectPtr:
         """Look up key in a Python dict; returns none_ptr if missing, raises on error.
@@ -177,13 +177,13 @@ struct PyHelpers(Copyable, Movable):
         return val
 
     @always_inline
-    fn list_getitem(mut self, list_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
+    def list_getitem(mut self, list_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
         """Borrowed reference to list[i]; no bounds checking (mirrors PyList_GetItem).
         """
         return self.cpy().PyList_GetItem(list_ptr, i)
 
     @always_inline
-    fn tuple_getitem(mut self, tuple_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
+    def tuple_getitem(mut self, tuple_ptr: PyObjectPtr, i: Int) -> PyObjectPtr:
         """Borrowed reference to tuple[i]; no bounds checking (mirrors PyTuple_GetItem).
         """
         return self.cpy().PyTuple_GetItem(tuple_ptr, i)
@@ -194,21 +194,21 @@ struct PyHelpers(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-fn _str_getitem(
+def _str_getitem(
     ptr: UnsafePointer[StringArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
     return PythonObject(String(ptr[].__getitem__(index)))
 
 
-fn _list_getitem(
+def _list_getitem(
     ptr: UnsafePointer[ListArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
     return ptr[].__getitem__(index).to_python_object()
 
 
-fn _fsl_getitem(
+def _fsl_getitem(
     ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
@@ -244,7 +244,7 @@ struct PyInferrer(Copyable, Movable):
 
     var py: PyHelpers
 
-    fn __init__(out self) raises:
+    def __init__(out self) raises:
         self.none_count = 0
         self.bool_count = 0
         self.int_count = 0
@@ -258,7 +258,7 @@ struct PyInferrer(Copyable, Movable):
         self._field_children = []
         self.py = PyHelpers()
 
-    fn visit(mut self, ptr: PyObjectPtr) raises -> Bool:
+    def visit(mut self, ptr: PyObjectPtr) raises -> Bool:
         """Count one element's Python type, following PyArrow's Visit() order.
 
         Returns False when the type is fully determined (no further widening possible),
@@ -301,7 +301,7 @@ struct PyInferrer(Copyable, Movable):
                 PythonObject(from_borrowed=ptr).__class__.__name__,
             )
 
-    fn _visit_list(mut self, ptr: PyObjectPtr) raises:
+    def _visit_list(mut self, ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitSequence: recurse into list children."""
         if len(self._list_child) == 0:
             self._list_child.append(PyInferrer())
@@ -310,7 +310,7 @@ struct PyInferrer(Copyable, Movable):
             if not self._list_child[0].visit(self.py.list_getitem(ptr, i)):
                 break
 
-    fn _visit_tuple(mut self, ptr: PyObjectPtr) raises:
+    def _visit_tuple(mut self, ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitSequence for tuples."""
         if len(self._list_child) == 0:
             self._list_child.append(PyInferrer())
@@ -319,7 +319,7 @@ struct PyInferrer(Copyable, Movable):
             if not self._list_child[0].visit(self.py.tuple_getitem(ptr, i)):
                 break
 
-    fn _visit_dict(mut self, dict_ptr: PyObjectPtr) raises:
+    def _visit_dict(mut self, dict_ptr: PyObjectPtr) raises:
         """Mirrors PyArrow's VisitDict: route each value to its field's child inferrer.
         """
         ref cpy = self.py.cpy()
@@ -344,7 +344,7 @@ struct PyInferrer(Copyable, Movable):
         key_raw.free()
         val_raw.free()
 
-    fn _total_count(self) -> Int:
+    def _total_count(self) -> Int:
         return (
             self.none_count
             + self.bool_count
@@ -356,7 +356,7 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    fn _get_type(self) raises -> dt.DataType:
+    def _get_type(self) raises -> dt.DataType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
                 raise Error("cannot mix bytes and non-bytes values")
@@ -395,7 +395,7 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    fn infer(mut self, obj: PythonObject) raises -> dt.DataType:
+    def infer(mut self, obj: PythonObject) raises -> dt.DataType:
         """Visit elements until type is locked, then scan remaining elements for nulls.
         """
         var list_ptr = obj._obj_ptr
@@ -423,10 +423,10 @@ struct PyInferrer(Copyable, Movable):
 
 
 trait PyConverter(ImplicitlyDestructible, Movable):
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         ...
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         ...
 
 
@@ -436,51 +436,51 @@ trait PyConverter(ImplicitlyDestructible, Movable):
 
 
 struct PyAnyConverter(ImplicitlyCopyable, Movable):
-    """Type-erased converter dispatching through fn-ptr trampolines."""
+    """Type-erased converter dispatching through def-ptr trampolines."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_append: fn(ArcPointer[NoneType], PyObjectPtr) raises
-    var _virt_extend: fn(ArcPointer[NoneType], PyObjectPtr) raises
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_append: def(ArcPointer[NoneType], PyObjectPtr) raises
+    var _virt_extend: def(ArcPointer[NoneType], PyObjectPtr) raises
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     @staticmethod
-    fn _tramp_append[
+    def _tramp_append[
         T: PyConverter
     ](ptr: ArcPointer[NoneType], value: PyObjectPtr) raises:
         rebind[ArcPointer[T]](ptr)[].append(value)
 
     @staticmethod
-    fn _tramp_extend[
+    def _tramp_extend[
         T: PyConverter
     ](ptr: ArcPointer[NoneType], values: PyObjectPtr) raises:
         rebind[ArcPointer[T]](ptr)[].extend(values)
 
     @staticmethod
-    fn _tramp_drop[T: PyConverter](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: PyConverter](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     @implicit
-    fn __init__[T: PyConverter](out self, var value: T):
+    def __init__[T: PyConverter](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_append = Self._tramp_append[T]
         self._virt_extend = Self._tramp_extend[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __copyinit__(out self, read copy: Self):
+    def __copyinit__(out self, read copy: Self):
         self._data = copy._data.copy()
         self._virt_append = copy._virt_append
         self._virt_extend = copy._virt_extend
         self._virt_drop = copy._virt_drop
 
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         self._virt_append(self._data, value)
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         self._virt_extend(self._data, values)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -494,7 +494,7 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    fn __init__(
+    def __init__(
         out self,
         builder: ArcPointer[PrimitiveBuilder[Self.T]],
         has_nulls: Bool = True,
@@ -503,7 +503,7 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
         var n = self.py.length(values)
         b.reserve(n)
@@ -522,7 +522,7 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
                     )
                 )
 
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
         if self.py.is_none(value):
             b.append_null()
@@ -540,7 +540,7 @@ struct PyStringConverter(PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    fn __init__(
+    def __init__(
         out self,
         builder: ArcPointer[StringBuilder],
         has_nulls: Bool = True,
@@ -550,7 +550,7 @@ struct PyStringConverter(PyConverter):
         self.py = PyHelpers()
 
     @always_inline
-    fn _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
+    def _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
         var total = 0
         for i in range(n):
             var item = self.py.list_getitem(values, i)
@@ -558,7 +558,7 @@ struct PyStringConverter(PyConverter):
                 total += len(self.py.to_string_slice(item))
         return total
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
         var n = self.py.length(values)
 
@@ -578,7 +578,7 @@ struct PyStringConverter(PyConverter):
                     self.py.to_string_slice(self.py.list_getitem(values, i))
                 )
 
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         ref b = self._builder[]
         if self.py.is_none(value):
             b.append_null()
@@ -597,7 +597,7 @@ struct PyListConverter(PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    fn __init__(
+    def __init__(
         out self,
         builder: ArcPointer[ListBuilder],
         var child: PyAnyConverter,
@@ -608,7 +608,7 @@ struct PyListConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         ref builder = self._builder[]
         var n = self.py.length(values)
         builder.reserve(n)
@@ -625,7 +625,7 @@ struct PyListConverter(PyConverter):
                 self._child.extend(self.py.list_getitem(values, i))
                 builder.unsafe_append_valid()
 
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         ref builder = self._builder[]
         if self._has_nulls and self.py.is_none(value):
             builder.append_null()
@@ -645,7 +645,7 @@ struct PyStructConverter(PyConverter):
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
-    fn __init__(
+    def __init__(
         out self,
         builder: ArcPointer[StructBuilder],
         var children: List[PyAnyConverter],
@@ -659,7 +659,7 @@ struct PyStructConverter(PyConverter):
         self._field_keys = field_keys^
         self.py = PyHelpers()
 
-    fn extend(mut self, values: PyObjectPtr) raises:
+    def extend(mut self, values: PyObjectPtr) raises:
         var n_fields = len(self._children)
         ref builder = self._builder[]
         var n = self.py.length(values)
@@ -677,7 +677,7 @@ struct PyStructConverter(PyConverter):
                     )
                 builder.unsafe_append_valid()
 
-    fn append(mut self, value: PyObjectPtr) raises:
+    def append(mut self, value: PyObjectPtr) raises:
         ref builder = self._builder[]
         if self.py.is_none(value):
             for i in range(len(self._children)):
@@ -696,7 +696,7 @@ struct PyStructConverter(PyConverter):
 # ---------------------------------------------------------------------------
 
 
-fn make_converter(
+def make_converter(
     dtype: dt.DataType,
     var builder: AnyBuilder,
     has_nulls: Bool = True,
@@ -735,7 +735,7 @@ fn make_converter(
 # ---------------------------------------------------------------------------
 
 
-fn arrow_c_array[T: AnyType, //, to_array_fn: fn(T) -> Array](
+def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> Array](
     ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
     var arr = to_array_fn(ptr[])
@@ -744,30 +744,30 @@ fn arrow_c_array[T: AnyType, //, to_array_fn: fn(T) -> Array](
     return Python.tuple(schema_cap, array_cap)
 
 
-fn arrow_c_schema[T: AnyType, //, type_fn: fn(T) -> dt.DataType](
+def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.DataType](
     ptr: UnsafePointer[T, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
 # TODO: maybe introduce an Array trait and rename Array struct to AnyArray
-fn _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
+def _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
     return arr
 
 
-fn _str_to_array(arr: StringArray) -> Array:
+def _str_to_array(arr: StringArray) -> Array:
     return arr
 
 
-fn _list_to_array(arr: ListArray) -> Array:
+def _list_to_array(arr: ListArray) -> Array:
     return arr
 
 
-fn _fsl_to_array(arr: FixedSizeListArray) -> Array:
+def _fsl_to_array(arr: FixedSizeListArray) -> Array:
     return arr
 
 
-fn _struct_to_array(arr: StructArray) -> Array:
+def _struct_to_array(arr: StructArray) -> Array:
     return arr
 
 
@@ -779,12 +779,12 @@ fn _struct_to_array(arr: StructArray) -> Array:
 
 
 
-fn infer_type(obj: PythonObject) raises -> PythonObject:
+def infer_type(obj: PythonObject) raises -> PythonObject:
     var inferrer = PyInferrer()
     return inferrer.infer(obj).to_python_object()
 
 
-fn array(
+def array(
     obj: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
     # Try converting directly (handles marrow arrays and __arrow_c_array__).

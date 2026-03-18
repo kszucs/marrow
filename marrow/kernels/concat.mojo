@@ -13,7 +13,7 @@ from ..arrays import Array
 from ..builders import make_builder
 
 
-fn concat(arrays: List[Array]) raises -> Array:
+def concat(arrays: List[Array]) raises -> Array:
     """Concatenate a list of arrays into a single array.
 
     All arrays must have the same dtype. Validity bitmaps and buffer contents

@@ -6,7 +6,7 @@ from ..dtypes import uint32
 
 
 # TODO: implement using SIMD
-fn string_lengths(array: StringArray) -> PrimitiveArray[uint32]:
+def string_lengths(array: StringArray) -> PrimitiveArray[uint32]:
     """Compute per-element byte lengths of a StringArray.
 
     Handles arrays with non-zero offsets (sliced arrays).

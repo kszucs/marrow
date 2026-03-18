@@ -24,7 +24,7 @@ from helpers import pymethod
 # ---------------------------------------------------------------------------
 
 
-fn _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
+def _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
     """Convert schema + columns to a Python dict mapping names to value lists."""
     var builtins = Python.import_module("builtins")
     var result = builtins.dict()
@@ -38,7 +38,7 @@ fn _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return result
 
 
-fn _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
+def _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
     """Convert schema + columns to a Python list of row dicts."""
     var builtins = Python.import_module("builtins")
     var n_rows = columns[0].length if len(columns) > 0 else 0
@@ -56,7 +56,7 @@ fn _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return result
 
 
-fn _export_c_array(schema: Schema, columns: List[Array]) raises -> PythonObject:
+def _export_c_array(schema: Schema, columns: List[Array]) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
     var cols = List[Array]()
@@ -69,7 +69,7 @@ fn _export_c_array(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return Python.tuple(schema_cap, array_cap)
 
 
-fn _build_from_dict(data: PythonObject) raises -> RecordBatch:
+def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     """Build a RecordBatch from a Python dict of {name: array}."""
     var fields = List[Field]()
     var columns = List[Array]()
@@ -81,7 +81,7 @@ fn _build_from_dict(data: PythonObject) raises -> RecordBatch:
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
 
-fn _build_from_arrays(
+def _build_from_arrays(
     data: PythonObject, names_obj: PythonObject
 ) raises -> RecordBatch:
     """Build a RecordBatch from a list of arrays + names."""
@@ -102,13 +102,13 @@ fn _build_from_arrays(
 # ---------------------------------------------------------------------------
 
 
-fn _record_batch_schema(
+def _record_batch_schema(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     return ptr[].schema.to_python_object()
 
 
-fn _record_batch_columns(
+def _record_batch_columns(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
@@ -118,13 +118,13 @@ fn _record_batch_columns(
     return result
 
 
-fn _record_batch_shape(
+def _record_batch_shape(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
-fn _record_batch_column(
+def _record_batch_column(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], key: PythonObject
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
@@ -138,7 +138,7 @@ fn _record_batch_column(
         return ptr[].columns[idx].copy().to_python_object()
 
 
-fn _record_batch_slice(
+def _record_batch_slice(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     offset: PythonObject,
     length: PythonObject,
@@ -146,13 +146,13 @@ fn _record_batch_slice(
     return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
 
 
-fn _record_batch_equals(
+def _record_batch_equals(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
 ) raises -> PythonObject:
     return PythonObject(ptr[] == other.downcast_value_ptr[RecordBatch]()[])
 
 
-fn _record_batch_select(
+def _record_batch_select(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin], columns: PythonObject
 ) raises -> PythonObject:
     var n = Int(columns.__len__())
@@ -169,26 +169,26 @@ fn _record_batch_select(
         return ptr[].select(names).to_python_object()
 
 
-fn _record_batch_to_pydict(
+def _record_batch_to_pydict(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     return _to_pydict(ptr[].schema, ptr[].columns)
 
 
-fn _record_batch_to_pylist(
+def _record_batch_to_pylist(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     return _to_pylist(ptr[].schema, ptr[].columns)
 
 
-fn _record_batch_arrow_c_array(
+def _record_batch_arrow_c_array(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     requested_schema: PythonObject,
 ) raises -> PythonObject:
     return _export_c_array(ptr[].schema, ptr[].columns)
 
 
-fn _record_batch_arrow_c_schema(
+def _record_batch_arrow_c_schema(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
@@ -207,7 +207,7 @@ def _record_batch_rich_compare(
 # ---------------------------------------------------------------------------
 
 
-fn record_batch(
+def record_batch(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
     """Create a RecordBatch from a dict, list+names, or Arrow protocol object."""
@@ -235,13 +235,13 @@ fn record_batch(
 # ---------------------------------------------------------------------------
 
 
-fn _table_schema(
+def _table_schema(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     return ptr[].schema.to_python_object()
 
 
-fn _table_columns(
+def _table_columns(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     var rb = ptr[].combine_chunks()
@@ -252,13 +252,13 @@ fn _table_columns(
     return result
 
 
-fn _table_shape(
+def _table_shape(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
-fn _table_column(
+def _table_column(
     ptr: UnsafePointer[Table, MutAnyOrigin], key: PythonObject
 ) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
@@ -274,27 +274,27 @@ fn _table_column(
         return rb.columns[idx].copy().to_python_object()
 
 
-fn _table_equals(
+def _table_equals(
     ptr: UnsafePointer[Table, MutAnyOrigin], other: PythonObject
 ) raises -> PythonObject:
     return PythonObject(ptr[] == other.downcast_value_ptr[Table]()[])
 
 
-fn _table_to_pydict(
+def _table_to_pydict(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     var rb = ptr[].combine_chunks()
     return _to_pydict(rb.schema, rb.columns)
 
 
-fn _table_to_pylist(
+def _table_to_pylist(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     var rb = ptr[].combine_chunks()
     return _to_pylist(rb.schema, rb.columns)
 
 
-fn _table_arrow_c_stream(
+def _table_arrow_c_stream(
     ptr: UnsafePointer[Table, MutAnyOrigin],
     requested_schema: PythonObject,
 ) raises -> PythonObject:
@@ -303,7 +303,7 @@ fn _table_arrow_c_stream(
     return CArrowArrayStream.from_batches(fields^, batches^).to_pycapsule()
 
 
-fn _table_arrow_c_schema(
+def _table_arrow_c_schema(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
@@ -322,7 +322,7 @@ def _table_rich_compare(
 # ---------------------------------------------------------------------------
 
 
-fn table(
+def table(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
     """Create a Table from a dict, list+names, or Arrow protocol object."""

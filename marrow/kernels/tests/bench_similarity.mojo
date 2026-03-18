@@ -14,7 +14,7 @@ from marrow.dtypes import float32
 from marrow.kernels.similarity import cosine_similarity
 
 
-fn _make_vectors(n_vectors: Int, dim: Int) raises -> FixedSizeListArray:
+def _make_vectors(n_vectors: Int, dim: Int) raises -> FixedSizeListArray:
     """Build N random-ish vectors of given dimension."""
     var total = n_vectors * dim
     var b = PrimitiveBuilder[float32](total)
@@ -29,7 +29,7 @@ fn _make_vectors(n_vectors: Int, dim: Int) raises -> FixedSizeListArray:
     return builder.finish_typed()
 
 
-fn _make_query(dim: Int) raises -> PrimitiveArray[float32]:
+def _make_query(dim: Int) raises -> PrimitiveArray[float32]:
     """Build a query vector of given dimension."""
     var b = PrimitiveBuilder[float32](dim)
     for i in range(dim):
@@ -39,7 +39,7 @@ fn _make_query(dim: Int) raises -> PrimitiveArray[float32]:
     return b.finish_typed()
 
 
-fn _bench_cpu(
+def _bench_cpu(
     vectors: FixedSizeListArray,
     query: PrimitiveArray[float32],
     iters: Int,
@@ -57,7 +57,7 @@ fn _bench_cpu(
     return Float64(perf_counter_ns() - start) / Float64(iters) / 1000.0
 
 
-fn _bench_gpu(
+def _bench_gpu(
     vectors: FixedSizeListArray,
     query: PrimitiveArray[float32],
     iters: Int,
@@ -82,7 +82,7 @@ fn _bench_gpu(
     return Float64(perf_counter_ns() - start) / Float64(iters) / 1000.0
 
 
-fn _bench_gpu_preloaded(
+def _bench_gpu_preloaded(
     vectors: FixedSizeListArray,
     query: PrimitiveArray[float32],
     iters: Int,
@@ -107,7 +107,7 @@ fn _bench_gpu_preloaded(
     return Float64(perf_counter_ns() - start) / Float64(iters) / 1000.0
 
 
-fn _print_row(kernel: String, n: Int, dim: Int, us: Float64):
+def _print_row(kernel: String, n: Int, dim: Int, us: Float64):
     var n_str = String(n)
     var dim_str = String(dim)
     # TODO: use format specifiers once supported

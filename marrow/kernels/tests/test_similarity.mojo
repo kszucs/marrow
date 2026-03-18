@@ -19,7 +19,7 @@ def _make_vectors(*values: Float64, dim: Int) raises -> FixedSizeListArray:
     return builder.finish_typed()
 
 
-fn _make_query(*values: Float64) raises -> PrimitiveArray[float32]:
+def _make_query(*values: Float64) raises -> PrimitiveArray[float32]:
     """Helper: build query PrimitiveArray."""
     var b = PrimitiveBuilder[float32](len(values))
     for v in values:
@@ -28,7 +28,7 @@ fn _make_query(*values: Float64) raises -> PrimitiveArray[float32]:
 
 
 # TODO: use abs and place this to a common test utils module
-fn _approx_equal(a: Float64, b: Float64, tol: Float64 = 1e-5) -> Bool:
+def _approx_equal(a: Float64, b: Float64, tol: Float64 = 1e-5) -> Bool:
     var diff = a - b
     if diff < 0:
         diff = -diff

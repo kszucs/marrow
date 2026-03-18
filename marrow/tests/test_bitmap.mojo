@@ -10,7 +10,7 @@ from marrow.bitmap import Bitmap, BitmapBuilder
 # ---------------------------------------------------------------------------
 
 
-fn _make(n_bits: Int, set_bits: List[Int]) -> Bitmap:
+def _make(n_bits: Int, set_bits: List[Int]) -> Bitmap:
     """Build a Bitmap with exactly the specified bits set."""
     var b = BitmapBuilder.alloc(n_bits)
     for i in range(len(set_bits)):
@@ -18,7 +18,7 @@ fn _make(n_bits: Int, set_bits: List[Int]) -> Bitmap:
     return b.finish(n_bits)
 
 
-fn _count_naive(bm: Bitmap) -> Int:
+def _count_naive(bm: Bitmap) -> Int:
     """Reference popcount: walks every bit via is_valid."""
     var n = 0
     for i in range(len(bm)):

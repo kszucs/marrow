@@ -172,7 +172,7 @@ struct Allocation(Movable):
     var ptr: UnsafePointer[UInt8, MutAnyOrigin]
     """Raw CPU pointer.  Non-null for CPU and FOREIGN; null (default) for HOST/DEVICE."""
 
-    var release: Optional[fn(UnsafePointer[UInt8, MutAnyOrigin]) -> None]
+    var release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) -> None]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
     None for HOST and DEVICE (their Optional field destructors handle release)."""
 
@@ -182,10 +182,10 @@ struct Allocation(Movable):
     var _device: Optional[DeviceBuffer[DType.uint8]]
     """GPU device buffer.  Set only for DEVICE kind; None otherwise."""
 
-    fn __init__(
+    def __init__(
         out self,
         ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        release: Optional[fn(UnsafePointer[UInt8, MutAnyOrigin]) -> None],
+        release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) -> None],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
     ):
@@ -195,20 +195,20 @@ struct Allocation(Movable):
         self._device = device
 
     @staticmethod
-    fn cpu(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> Allocation:
+    def cpu(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> Allocation:
         """Create an owned CPU allocation.  `__del__` calls `ptr.free()`."""
         return Allocation(ptr, None, None, None)
 
     @staticmethod
-    fn foreign(
+    def foreign(
         ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        release: fn(UnsafePointer[UInt8, MutAnyOrigin]) -> None,
+        release: def(UnsafePointer[UInt8, MutAnyOrigin]) -> None,
     ) -> Allocation:
         """Create a foreign CPU allocation with a custom release callback."""
         return Allocation(ptr, release, None, None)
 
     @staticmethod
-    fn host(host_buf: HostBuffer[DType.uint8]) -> Allocation:
+    def host(host_buf: HostBuffer[DType.uint8]) -> Allocation:
         """Create a HOST (pinned) allocation.  HostBuffer.__del__ handles release.
         """
         return Allocation(
@@ -216,14 +216,14 @@ struct Allocation(Movable):
         )
 
     @staticmethod
-    fn device(dev_buf: DeviceBuffer[DType.uint8]) -> Allocation:
+    def device(dev_buf: DeviceBuffer[DType.uint8]) -> Allocation:
         """Create a DEVICE (GPU) allocation.  DeviceBuffer.__del__ handles release.
         """
         return Allocation(
             UnsafePointer[UInt8, MutAnyOrigin](), None, None, dev_buf
         )
 
-    fn device_type(self) raises -> Int32:
+    def device_type(self) raises -> Int32:
         """Return the Arrow C Device Data Interface DeviceType value.
 
         Inferred from the GPU runtime context's API name:
@@ -256,7 +256,7 @@ struct Allocation(Movable):
         else:
             return DeviceType.CPU
 
-    fn device_id(self) raises -> Int64:
+    def device_id(self) raises -> Int64:
         """Return the physical device index.  -1 for CPU and FOREIGN allocations.
 
         For HOST allocations reads from `HostBuffer.context().id()`.
@@ -271,7 +271,7 @@ struct Allocation(Movable):
         else:
             return -1
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         if self.release:
             # FOREIGN: invoke the producer's C release callback.
             self.release.value()(self.ptr)
@@ -304,7 +304,7 @@ struct BufferBuilder(Movable):
     var _host: Optional[HostBuffer[DType.uint8]]
     """Set when allocated via `alloc_host`; None for CPU heap allocations."""
 
-    fn __init__(
+    def __init__(
         out self,
         ptr: UnsafePointer[UInt8, MutExternalOrigin],
         size: Int,
@@ -315,7 +315,7 @@ struct BufferBuilder(Movable):
         self._host = host
 
     @staticmethod
-    fn _aligned_size[T: DType](length: Int) -> Int:
+    def _aligned_size[T: DType](length: Int) -> Int:
         """Compute the 64-byte-aligned allocation size for `length` elements of type T.
 
         For DType.bool, `length` is the number of bits.
@@ -326,7 +326,7 @@ struct BufferBuilder(Movable):
             return math.align_up(length * size_of[T](), 64)
 
     @staticmethod
-    fn alloc[
+    def alloc[
         I: Intable, //, T: DType = DType.uint8
     ](length: I) -> BufferBuilder:
         """Allocate a 64-byte-aligned buffer for `length` elements of type T.
@@ -340,7 +340,7 @@ struct BufferBuilder(Movable):
         return BufferBuilder(ptr, byte_size)
 
     @staticmethod
-    fn alloc_uninit(byte_size: Int) -> BufferBuilder:
+    def alloc_uninit(byte_size: Int) -> BufferBuilder:
         """Allocate a 64-byte-aligned buffer without zero-filling.
 
         Use only when the caller guarantees every byte will be written
@@ -351,7 +351,7 @@ struct BufferBuilder(Movable):
         return BufferBuilder(ptr, size)
 
     @staticmethod
-    fn alloc_host[
+    def alloc_host[
         I: Intable, //, T: DType = DType.uint8
     ](ctx: DeviceContext, length: I) raises -> BufferBuilder:
         """Allocate page-locked (pinned) host memory for `length` elements of type T.
@@ -378,7 +378,7 @@ struct BufferBuilder(Movable):
         memset_zero(ptr, byte_size)
         return BufferBuilder(ptr, byte_size, host)
 
-    fn finish(mut self) -> Buffer:
+    def finish(mut self) -> Buffer:
         """Snapshot the mutable builder into an immutable Buffer and reset state.
 
         For CPU builders (`alloc`): returns kind=CPU.
@@ -409,7 +409,7 @@ struct BufferBuilder(Movable):
         new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
         return result
 
-    fn resize[
+    def resize[
         I: Intable, //, T: DType = DType.uint8
     ](mut self, length: I) raises:
         """Resize the buffer to hold `length` elements of type T.
@@ -433,21 +433,21 @@ struct BufferBuilder(Movable):
         swap(self, new)
 
     @always_inline
-    fn length[T: DType = DType.uint8](self) -> Int:
+    def length[T: DType = DType.uint8](self) -> Int:
         comptime if T == DType.bool:
             return self.size * 8
         else:
             return self.size // size_of[T]()
 
     @always_inline
-    fn unsafe_ptr[
+    def unsafe_ptr[
         T: DType = DType.uint8
     ](self) -> UnsafePointer[Scalar[T], MutExternalOrigin]:
         return self.ptr.bitcast[Scalar[T]]()
 
     # TODO: use Indexable for index?
     @always_inline
-    fn unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
+    def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         comptime output = Scalar[T]
         comptime if T == DType.bool:
             var byte = self.ptr[index // 8]
@@ -456,7 +456,7 @@ struct BufferBuilder(Movable):
             return self.ptr.bitcast[output]()[index]
 
     @always_inline
-    fn unsafe_set[
+    def unsafe_set[
         T: DType = DType.uint8
     ](mut self, index: Int, value: Scalar[T]):
         comptime if T == DType.bool:
@@ -471,16 +471,16 @@ struct BufferBuilder(Movable):
             self.ptr.bitcast[output]()[index] = value
 
     @always_inline
-    fn simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
+    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
         """Load W elements of type T at element index `index`."""
         return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
 
     @always_inline
-    fn simd_store[T: DType, W: Int](mut self, index: Int, value: SIMD[T, W]):
+    def simd_store[T: DType, W: Int](mut self, index: Int, value: SIMD[T, W]):
         """Store W elements of type T at element index `index`."""
         (self.ptr.bitcast[Scalar[T]]() + index).store(value)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         if self.ptr and not self._host:
             # CPU heap allocation: free the pointer directly.
             # HOST allocation: the _host HostBuffer field destructor cascades to
@@ -522,7 +522,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
     var _owner: ArcPointer[Allocation]
     """Shared ownership handle."""
 
-    fn __init__(
+    def __init__(
         out self,
         ptr: UnsafePointer[UInt8, ImmutExternalOrigin],
         size: Int,
@@ -532,13 +532,13 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         self.size = size
         self._owner = owner
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self.ptr = copy.ptr
         self.size = copy.size
         self._owner = copy._owner
 
     @staticmethod
-    fn from_foreign[
+    def from_foreign[
         I: Intable, //
     ](
         ptr: OpaquePointer[MutAnyOrigin],
@@ -563,7 +563,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         )
 
     @staticmethod
-    fn from_host(host: HostBuffer[DType.uint8]) -> Buffer:
+    def from_host(host: HostBuffer[DType.uint8]) -> Buffer:
         """Create a HOST (pinned) buffer from a Mojo HostBuffer.
 
         The HostBuffer is moved into an `Allocation` behind `ArcPointer`;
@@ -583,7 +583,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         )
 
     @staticmethod
-    fn from_device(dev: DeviceBuffer[DType.uint8], size: Int) -> Buffer:
+    def from_device(dev: DeviceBuffer[DType.uint8], size: Int) -> Buffer:
         """Create a DEVICE (GPU) buffer from a Mojo DeviceBuffer.
 
         The DeviceBuffer is moved into an `Allocation` behind `ArcPointer`;
@@ -601,7 +601,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         )
 
     @always_inline
-    fn is_cpu(self) -> Bool:
+    def is_cpu(self) -> Bool:
         """Return True if the buffer is CPU-accessible (ptr is non-null).
 
         True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
@@ -609,16 +609,16 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         return self.ptr.__bool__()
 
     @always_inline
-    fn is_device(self) -> Bool:
+    def is_device(self) -> Bool:
         """Return True if the buffer lives on a GPU device (ptr is null)."""
         return not self.ptr.__bool__()
 
     @always_inline
-    fn is_host(self) -> Bool:
+    def is_host(self) -> Bool:
         """Return True if the buffer is pinned host memory (HOST kind)."""
         return self._owner[]._host.__bool__()
 
-    fn __eq__(self, other: Buffer) -> Bool:
+    def __eq__(self, other: Buffer) -> Bool:
         """Return True if both buffers have identical CPU-accessible contents.
 
         Compares full backing bytes using SIMD 64-byte blocks.
@@ -641,14 +641,14 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
                     return False
         return True
 
-    fn device_type(self) raises -> Int32:
+    def device_type(self) raises -> Int32:
         """Return the Arrow C Device Data Interface DeviceType value.
 
         Delegates to `Allocation.device_type()`.
         """
         return self._owner[].device_type()
 
-    fn device_id(self) raises -> Int64:
+    def device_id(self) raises -> Int64:
         """Return the physical device index.  -1 for CPU and FOREIGN buffers.
 
         Delegates to `Allocation.device_id()`, which reads from
@@ -656,7 +656,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         """
         return self._owner[].device_id()
 
-    fn device_buffer(self) -> DeviceBuffer[DType.uint8]:
+    def device_buffer(self) -> DeviceBuffer[DType.uint8]:
         """Return the DeviceBuffer handle.
 
         Precondition: `is_device()` must be True.  The returned DeviceBuffer is
@@ -667,7 +667,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         return self._owner[]._device.value()
 
     # TODO: maybe should check for host buffer to copy that as well over the device
-    fn to_device(self, ctx: DeviceContext) raises -> Buffer:
+    def to_device(self, ctx: DeviceContext) raises -> Buffer:
         """Upload this CPU-accessible buffer to the GPU.
 
         Returns a new DEVICE buffer with the same `device_id` as the context
@@ -685,7 +685,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         ctx.enqueue_copy(dev, self.ptr)
         return Buffer.from_device(dev, self.size)
 
-    fn to_cpu(self, ctx: DeviceContext) raises -> Buffer:
+    def to_cpu(self, ctx: DeviceContext) raises -> Buffer:
         """Download this DEVICE buffer to an owned CPU heap buffer.
 
         HOST (pinned) buffers are already CPU-accessible via `ptr`; this method
@@ -704,14 +704,14 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         return builder.finish()
 
     @always_inline
-    fn length[T: DType = DType.uint8](self) -> Int:
+    def length[T: DType = DType.uint8](self) -> Int:
         comptime if T == DType.bool:
             return self.size * 8
         else:
             return self.size // size_of[T]()
 
     @always_inline
-    fn unsafe_ptr[
+    def unsafe_ptr[
         T: DType = DType.uint8
     ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
         """Return a typed pointer to the element at offset.
@@ -725,7 +725,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         return self.ptr.bitcast[Scalar[T]]() + offset
 
     @always_inline
-    fn unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
+    def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         debug_assert(
             self.is_cpu(),
             "cannot read device buffer, call to_cpu() first",
@@ -738,7 +738,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
             return self.ptr.bitcast[output]()[index]
 
     @always_inline
-    fn simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
+    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
         """Load W elements of type T at element index `index`.
 
         Precondition: `is_cpu()` must be True.
@@ -749,6 +749,6 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         )
         return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
 
-    fn write_to[W: Writer](self, mut writer: W):
+    def write_to[W: Writer](self, mut writer: W):
         """Write the buffer's bytes to a Writer."""
         writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")

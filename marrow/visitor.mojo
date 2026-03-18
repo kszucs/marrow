@@ -14,25 +14,25 @@ trait DataTypeVisitor:
     `visit(DataType)` dispatches to the typed overloads by runtime dtype.
     """
 
-    fn visit[T: DataType](mut self) raises:
+    def visit[T: DataType](mut self) raises:
         pass
 
-    fn visit_string(mut self) raises:
+    def visit_string(mut self) raises:
         pass
 
-    fn visit_binary(mut self) raises:
+    def visit_binary(mut self) raises:
         raise Error("visit_binary: not implemented")
 
-    fn visit_list(mut self, child: DataType) raises:
+    def visit_list(mut self, child: DataType) raises:
         raise Error("visit_list: not implemented")
 
-    fn visit_fixed_size_list(mut self, child: DataType, size: Int) raises:
+    def visit_fixed_size_list(mut self, child: DataType, size: Int) raises:
         raise Error("visit_fixed_size_list: not implemented")
 
-    fn visit_struct(mut self, fields: List[Field]) raises:
+    def visit_struct(mut self, fields: List[Field]) raises:
         raise Error("visit_struct: not implemented")
 
-    fn visit(mut self, dtype: DataType) raises:
+    def visit(mut self, dtype: DataType) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
         comptime for dt in primitive_dtypes:
             if dtype == dt:
@@ -70,26 +70,26 @@ trait ArrayVisitor:
     into nested arrays.
     """
 
-    fn visit[T: DataType](mut self, array: PrimitiveArray[T]) raises:
+    def visit[T: DataType](mut self, array: PrimitiveArray[T]) raises:
         pass
 
-    fn visit(mut self, array: StringArray) raises:
+    def visit(mut self, array: StringArray) raises:
         pass
 
-    fn visit(mut self, array: ListArray) raises:
+    def visit(mut self, array: ListArray) raises:
         pass
 
-    fn visit(mut self, array: FixedSizeListArray) raises:
+    def visit(mut self, array: FixedSizeListArray) raises:
         pass
 
-    fn visit(mut self, array: StructArray) raises:
+    def visit(mut self, array: StructArray) raises:
         pass
 
-    fn visit(mut self, array: ChunkedArray) raises:
+    def visit(mut self, array: ChunkedArray) raises:
         for chunk in array.chunks:
             self.visit(chunk)
 
-    fn visit(mut self, array: Array) raises:
+    def visit(mut self, array: Array) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
 
         comptime for dtype in primitive_dtypes:

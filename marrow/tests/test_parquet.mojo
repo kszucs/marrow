@@ -8,7 +8,7 @@ from marrow.schema import Schema
 from marrow.dtypes import Field, int32, int64, float64, string
 
 
-fn _make_table() raises -> Table:
+def _make_table() raises -> Table:
     """Build a simple 3-column, 3-row Table via PyArrow roundtrip."""
     var pa = Python.import_module("pyarrow")
     var py_table = pa.table(

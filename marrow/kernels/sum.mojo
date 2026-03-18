@@ -1,8 +1,8 @@
 """Aggregate (reduction) kernels.
 
 Each reduction has:
-  - A typed overload: fn[T: DataType](PrimitiveArray[T]) -> Scalar[T.native]
-  - A runtime-typed overload (where applicable): fn(Array) raises -> Scalar[float64]
+  - A typed overload: def[T: DataType](PrimitiveArray[T]) -> Scalar[T.native]
+  - A runtime-typed overload (where applicable): def(Array) raises -> Scalar[float64]
 
 Available reductions and their SIMD horizontal method:
   sum      — reduce_add,  identity = 0
@@ -30,55 +30,55 @@ from . import reduce_simd
 
 
 # sum
-fn _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 
-fn _horizontal_add[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_add[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_add()
 
 
 # product
-fn _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a * b
 
 
-fn _horizontal_mul[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_mul[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_mul()
 
 
 # min_
-fn _vmin[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _vmin[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return math.min(a, b)
 
 
-fn _horizontal_min[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_min[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_min()
 
 
 # max_
-fn _vmax[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _vmax[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return math.max(a, b)
 
 
-fn _horizontal_max[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_max[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_max()
 
 
 # any_ / all_
-fn _or[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _or[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a | b
 
 
-fn _horizontal_or[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_or[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_or()
 
 
-fn _and[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _and[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a & b
 
 
-fn _horizontal_and[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
+def _horizontal_and[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
     return v.reduce_and()
 
 
@@ -87,14 +87,14 @@ fn _horizontal_and[T: DType, W: Int](v: SIMD[T, W]) -> Scalar[T]:
 # ---------------------------------------------------------------------------
 
 
-fn sum[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
+def sum[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
     return reduce_simd[
         T, combine=_add[T.native, _], horizontal=_horizontal_add[T.native, _]
     ](array, Scalar[T.native](0))
 
 
-fn sum(array: Array) raises -> Scalar[DType.float64]:
+def sum(array: Array) raises -> Scalar[DType.float64]:
     """Runtime-typed sum, returns float64."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -109,7 +109,7 @@ fn sum(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-fn product[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
+def product[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
     return reduce_simd[
@@ -117,7 +117,7 @@ fn product[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     ](array, Scalar[T.native](1))
 
 
-fn product(array: Array) raises -> Scalar[DType.float64]:
+def product(array: Array) raises -> Scalar[DType.float64]:
     """Runtime-typed product, returns float64."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -132,7 +132,7 @@ fn product(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-fn min_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
+def min_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     """Minimum of all valid (non-null) elements.
 
     Returns Scalar[T].MAX_FINITE if empty or all null.
@@ -142,7 +142,7 @@ fn min_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     ](array, Scalar[T.native].MAX_FINITE)
 
 
-fn min_(array: Array) raises -> Scalar[DType.float64]:
+def min_(array: Array) raises -> Scalar[DType.float64]:
     """Runtime-typed min, returns float64."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -157,7 +157,7 @@ fn min_(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-fn max_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
+def max_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     """Maximum of all valid (non-null) elements.
 
     Returns Scalar[T].MIN_FINITE if empty or all null.
@@ -167,7 +167,7 @@ fn max_[T: DataType](array: PrimitiveArray[T]) -> Scalar[T.native]:
     ](array, Scalar[T.native].MIN_FINITE)
 
 
-fn max_(array: Array) raises -> Scalar[DType.float64]:
+def max_(array: Array) raises -> Scalar[DType.float64]:
     """Runtime-typed max, returns float64."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -182,7 +182,7 @@ fn max_(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-fn any_(array: PrimitiveArray[bool_dt]) -> Bool:
+def any_(array: PrimitiveArray[bool_dt]) -> Bool:
     """True if any valid element is True. False if empty or all null."""
     return Bool(
         reduce_simd[
@@ -193,7 +193,7 @@ fn any_(array: PrimitiveArray[bool_dt]) -> Bool:
     )
 
 
-fn all_(array: PrimitiveArray[bool_dt]) -> Bool:
+def all_(array: PrimitiveArray[bool_dt]) -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     return Bool(
         reduce_simd[

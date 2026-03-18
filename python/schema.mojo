@@ -5,13 +5,13 @@ from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema
 
 
-fn _schema_arrow_c_schema(
+def _schema_arrow_c_schema(
     ptr: UnsafePointer[Schema, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_schema(ptr[].fields).to_pycapsule()
 
 
-fn schema(fields_or_schema: PythonObject) raises -> PythonObject:
+def schema(fields_or_schema: PythonObject) raises -> PythonObject:
     """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object."""
     # Try converting directly (handles marrow Schema and __arrow_c_schema__).
     try:

@@ -5,95 +5,95 @@ from std.python.bindings import PythonModuleBuilder
 import marrow.dtypes as dt
 
 
-fn null() raises -> PythonObject:
+def null() raises -> PythonObject:
     """Create a null DataType."""
     return dt.null.to_python_object()
 
 
-fn bool_() raises -> PythonObject:
+def bool_() raises -> PythonObject:
     """Create a boolean DataType."""
     return dt.bool_.to_python_object()
 
 
-fn int8() raises -> PythonObject:
+def int8() raises -> PythonObject:
     """Create an int8 DataType."""
     return dt.int8.to_python_object()
 
 
-fn int16() raises -> PythonObject:
+def int16() raises -> PythonObject:
     """Create an int16 DataType."""
     return dt.int16.to_python_object()
 
 
-fn int32() raises -> PythonObject:
+def int32() raises -> PythonObject:
     """Create an int32 DataType."""
     return dt.int32.to_python_object()
 
 
-fn int64() raises -> PythonObject:
+def int64() raises -> PythonObject:
     """Create an int64 DataType."""
     return dt.int64.to_python_object()
 
 
-fn uint8() raises -> PythonObject:
+def uint8() raises -> PythonObject:
     """Create a uint8 DataType."""
     return dt.uint8.to_python_object()
 
 
-fn uint16() raises -> PythonObject:
+def uint16() raises -> PythonObject:
     """Create a uint16 DataType."""
     return dt.uint16.to_python_object()
 
 
-fn uint32() raises -> PythonObject:
+def uint32() raises -> PythonObject:
     """Create a uint32 DataType."""
     return dt.uint32.to_python_object()
 
 
-fn uint64() raises -> PythonObject:
+def uint64() raises -> PythonObject:
     """Create a uint64 DataType."""
     return dt.uint64.to_python_object()
 
 
-fn float16() raises -> PythonObject:
+def float16() raises -> PythonObject:
     """Create a float16 DataType."""
     return dt.float16.to_python_object()
 
 
-fn float32() raises -> PythonObject:
+def float32() raises -> PythonObject:
     """Create a float32 DataType."""
     return dt.float32.to_python_object()
 
 
-fn float64() raises -> PythonObject:
+def float64() raises -> PythonObject:
     """Create a float64 DataType."""
     return dt.float64.to_python_object()
 
 
-fn string() raises -> PythonObject:
+def string() raises -> PythonObject:
     """Create a string DataType."""
     return dt.string.to_python_object()
 
 
-fn binary() raises -> PythonObject:
+def binary() raises -> PythonObject:
     """Create a binary DataType."""
     return dt.binary.to_python_object()
 
 
-fn field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
+def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     """Create a Field with the given name and data type."""
     var d = dtype.downcast_value_ptr[dt.DataType]()[]
     var f = dt.Field(String(py=name), d^)
     return f.to_python_object()
 
 
-fn list_(value_type: PythonObject) raises -> PythonObject:
+def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
     var d = value_type.downcast_value_ptr[dt.DataType]()[]
     return dt.list_(d^).to_python_object()
 
 
-fn struct_(fields_obj: PythonObject) raises -> PythonObject:
+def struct_(fields_obj: PythonObject) raises -> PythonObject:
     """Create a struct DataType from a list of Fields."""
     var fields = List[dt.Field]()
     for f in fields_obj:

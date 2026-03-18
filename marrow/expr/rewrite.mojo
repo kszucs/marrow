@@ -13,10 +13,10 @@ Example
 -------
     # Fold x + 0 → x
     struct FoldAddZero(Rewrite):
-        fn name(self) -> String:
+        def name(self) -> String:
             return "fold_add_zero"
 
-        fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
+        def apply(self, expr: AnyValue) -> Optional[AnyValue]:
             if expr.kind() != ADD:
                 return None
             var bin = expr.downcast[Binary]()[]
@@ -52,11 +52,11 @@ trait Rewrite(ImplicitlyDestructible, Movable):
     does not match; return a new ``AnyValue`` when it fires.
     """
 
-    fn name(self) -> String:
+    def name(self) -> String:
         """Short name for diagnostics and tracing."""
         ...
 
-    fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
+    def apply(self, expr: AnyValue) -> Optional[AnyValue]:
         """Try to rewrite ``expr``.
 
         Returns:
@@ -74,38 +74,38 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
     """Type-erased rewrite rule container."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_name: fn(ArcPointer[NoneType]) -> String
-    var _virt_apply: fn(ArcPointer[NoneType], AnyValue) -> Optional[AnyValue]
-    var _virt_drop: fn(var ArcPointer[NoneType])
+    var _virt_name: def(ArcPointer[NoneType]) -> String
+    var _virt_apply: def(ArcPointer[NoneType], AnyValue) -> Optional[AnyValue]
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_name[T: Rewrite](ptr: ArcPointer[NoneType]) -> String:
+    def _tramp_name[T: Rewrite](ptr: ArcPointer[NoneType]) -> String:
         return rebind[ArcPointer[T]](ptr)[].name()
 
     @staticmethod
-    fn _tramp_apply[
+    def _tramp_apply[
         T: Rewrite
     ](ptr: ArcPointer[NoneType], expr: AnyValue) -> Optional[AnyValue]:
         return rebind[ArcPointer[T]](ptr)[].apply(expr)
 
     @staticmethod
-    fn _tramp_drop[T: Rewrite](var ptr: ArcPointer[NoneType]):
+    def _tramp_drop[T: Rewrite](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
     # --- construction ---
 
     @implicit
-    fn __init__[T: Rewrite](out self, var value: T):
+    def __init__[T: Rewrite](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_name = Self._tramp_name[T]
         self._virt_apply = Self._tramp_apply[T]
         self._virt_drop = Self._tramp_drop[T]
 
-    fn __init__(out self, *, copy: Self):
+    def __init__(out self, *, copy: Self):
         self._data = copy._data
         self._virt_name = copy._virt_name
         self._virt_apply = copy._virt_apply
@@ -113,13 +113,13 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
 
     # --- public API ---
 
-    fn name(self) -> String:
+    def name(self) -> String:
         return self._virt_name(self._data)
 
-    fn apply(self, expr: AnyValue) -> Optional[AnyValue]:
+    def apply(self, expr: AnyValue) -> Optional[AnyValue]:
         return self._virt_apply(self._data, expr)
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         self._virt_drop(self._data^)
 
 
@@ -141,10 +141,10 @@ struct Rewriter:
 
     var rules: List[AnyRewrite]
 
-    fn __init__(out self, var rules: List[AnyRewrite]):
+    def __init__(out self, var rules: List[AnyRewrite]):
         self.rules = rules^
 
-    fn rewrite(self, expr: AnyValue) raises -> AnyValue:
+    def rewrite(self, expr: AnyValue) raises -> AnyValue:
         """Rewrite ``expr`` bottom-up to a fixed point."""
         # Rewrite children first (bottom-up)
         var children = expr.inputs()

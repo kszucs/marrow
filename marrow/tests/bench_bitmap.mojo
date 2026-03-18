@@ -37,7 +37,7 @@ from marrow.bitmap import Bitmap, BitmapBuilder
 # ---------------------------------------------------------------------------
 
 
-fn _make_alternating(size: Int) -> Bitmap:
+def _make_alternating(size: Int) -> Bitmap:
     """Bitmap with alternating 0/1 bits (worst-case for popcount branching)."""
     var b = BitmapBuilder.alloc(size)
     var i = 0
@@ -47,7 +47,7 @@ fn _make_alternating(size: Int) -> Bitmap:
     return b.finish(size)
 
 
-fn _make_half_set(size: Int) -> Bitmap:
+def _make_half_set(size: Int) -> Bitmap:
     """Bitmap with the first half of bits set."""
     var b = BitmapBuilder.alloc(size)
     b.set_range(0, size // 2, True)
@@ -60,12 +60,12 @@ fn _make_half_set(size: Int) -> Bitmap:
 
 
 @parameter
-fn bench_count_set_bits(mut b: Bencher, size: Int) raises:
+def bench_count_set_bits(mut b: Bencher, size: Int) raises:
     var bm = _make_alternating(size)
 
     @always_inline
     @parameter
-    fn call_fn():
+    def call_fn():
         var n = bm.count_set_bits()
         keep(n)
 
@@ -73,13 +73,13 @@ fn bench_count_set_bits(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_count_set_bits_aligned(mut b: Bencher, size: Int) raises:
+def bench_count_set_bits_aligned(mut b: Bencher, size: Int) raises:
     """Count_set_bits with byte_offset=128 (64-byte aligned, lead_bytes=0)."""
     var bm = _make_alternating(size + 2048).slice(128 << 3, size)
 
     @always_inline
     @parameter
-    fn call_fn():
+    def call_fn():
         var n = bm.count_set_bits()
         keep(n)
 
@@ -87,14 +87,14 @@ fn bench_count_set_bits_aligned(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_count_set_bits_unaligned(mut b: Bencher, size: Int) raises:
+def bench_count_set_bits_unaligned(mut b: Bencher, size: Int) raises:
     """Count_set_bits with byte_offset=96 (NOT 64-byte aligned, lead_bytes=32).
     """
     var bm = _make_alternating(size + 2048).slice(96 << 3, size)
 
     @always_inline
     @parameter
-    fn call_fn():
+    def call_fn():
         var n = bm.count_set_bits()
         keep(n)
 
@@ -102,13 +102,13 @@ fn bench_count_set_bits_unaligned(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_and(mut b: Bencher, size: Int) raises:
+def bench_and(mut b: Bencher, size: Int) raises:
     var lhs = _make_half_set(size)
     var rhs = _make_alternating(size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = lhs & rhs
         keep(r._length)
 
@@ -118,13 +118,13 @@ fn bench_and(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_or(mut b: Bencher, size: Int) raises:
+def bench_or(mut b: Bencher, size: Int) raises:
     var lhs = _make_half_set(size)
     var rhs = _make_alternating(size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = lhs | rhs
         keep(r._length)
 
@@ -134,12 +134,12 @@ fn bench_or(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_invert(mut b: Bencher, size: Int) raises:
+def bench_invert(mut b: Bencher, size: Int) raises:
     var bitmap = _make_alternating(size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = ~bitmap
         keep(r._length)
 
@@ -148,12 +148,12 @@ fn bench_invert(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_set_range(mut b: Bencher, size: Int) raises:
+def bench_set_range(mut b: Bencher, size: Int) raises:
     var builder = BitmapBuilder.alloc(size)
 
     @always_inline
     @parameter
-    fn call_fn():
+    def call_fn():
         builder.set_range(0, size, True)
         keep(builder.unsafe_ptr())
 
@@ -176,7 +176,7 @@ fn bench_set_range(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_invert_cache_aligned(mut b: Bencher, size: Int) raises:
+def bench_invert_cache_aligned(mut b: Bencher, size: Int) raises:
     """Invert with a byte_offset that is already 64-byte aligned (lead_bytes=0).
     """
     # 128-byte = 1024-bit offset → byte_offset=128, 128 & 63 == 0, no lead bytes.
@@ -184,7 +184,7 @@ fn bench_invert_cache_aligned(mut b: Bencher, size: Int) raises:
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = ~bitmap
         keep(r._length)
 
@@ -193,14 +193,14 @@ fn bench_invert_cache_aligned(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_invert_cache_unaligned(mut b: Bencher, size: Int) raises:
+def bench_invert_cache_unaligned(mut b: Bencher, size: Int) raises:
     """Invert with a byte_offset that is NOT 64-byte aligned (lead_bytes=32)."""
     # 96-byte = 768-bit offset → byte_offset=96, 96 & 63 == 32, lead_bytes=32.
     var bitmap = _make_alternating(size + 2048).slice(96 << 3, size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = ~bitmap
         keep(r._length)
 
@@ -209,14 +209,14 @@ fn bench_invert_cache_unaligned(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_and_cache_unaligned(mut b: Bencher, size: Int) raises:
+def bench_and_cache_unaligned(mut b: Bencher, size: Int) raises:
     """AND of two bitmaps both at byte_offset=96 (lead_bytes=32, same shift)."""
     var lhs = _make_half_set(size + 2048).slice(96 << 3, size)
     var rhs = _make_alternating(size + 2048).slice(96 << 3, size)
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = lhs & rhs
         keep(r._length)
 
@@ -235,7 +235,7 @@ fn bench_and_cache_unaligned(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_and_same_offset(mut b: Bencher, size: Int) raises:
+def bench_and_same_offset(mut b: Bencher, size: Int) raises:
     """AND of two bitmaps sharing the same non-zero sub-byte offset (pure SIMD, no shift).
     """
     var lhs = _make_half_set(size).slice(3, size - 8)
@@ -243,7 +243,7 @@ fn bench_and_same_offset(mut b: Bencher, size: Int) raises:
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = lhs & rhs
         keep(r._length)
 
@@ -253,7 +253,7 @@ fn bench_and_same_offset(mut b: Bencher, size: Int) raises:
 
 
 @parameter
-fn bench_and_diff_offset(mut b: Bencher, size: Int) raises:
+def bench_and_diff_offset(mut b: Bencher, size: Int) raises:
     """AND of two bitmaps with different sub-byte offsets (one-sided shift-combine).
     """
     var lhs = _make_half_set(size).slice(3, size - 8)
@@ -261,7 +261,7 @@ fn bench_and_diff_offset(mut b: Bencher, size: Int) raises:
 
     @always_inline
     @parameter
-    fn call_fn() raises:
+    def call_fn() raises:
         var r = lhs & rhs
         keep(r._length)
 

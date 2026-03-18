@@ -11,7 +11,7 @@ from tabular import add_to_module as add_tabular
 
 
 @export
-fn PyInit_marrow() -> PythonObject:
+def PyInit_marrow() -> PythonObject:
     try:
         var m = PythonModuleBuilder("marrow")
         add_dtypes(m)

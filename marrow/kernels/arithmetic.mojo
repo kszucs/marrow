@@ -4,7 +4,7 @@ Each public function dispatches based on the optional `ctx` argument:
   - CPU (default): operates on PrimitiveArray[T] using SIMD vectorization.
   - GPU (ctx provided): operates on device-resident PrimitiveArray[T] via a GPU kernel.
 
-The SIMD helper functions (fn[W: Int](SIMD[T, W], ...) -> SIMD[T, W]) are shared
+The SIMD helper functions (def[W: Int](SIMD[T, W], ...) -> SIMD[T, W]) are shared
 between CPU and GPU paths. Since Scalar[T] = SIMD[T, 1], the GPU kernel calls
 each helper with W=1 per thread.
 """
@@ -27,51 +27,51 @@ from . import (
 # SIMD helpers — shared by CPU and GPU paths
 # ---------------------------------------------------------------------------
 
-# Binary: fn[W: Int](SIMD[T, W], SIMD[T, W]) -> SIMD[T, W]
+# Binary: def[W: Int](SIMD[T, W], SIMD[T, W]) -> SIMD[T, W]
 
 
-fn _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 
-fn _sub[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _sub[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a - b
 
 
-fn _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a * b
 
 
-fn _div[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _div[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a / b
 
 
-fn _floordiv[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _floordiv[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a // b
 
 
-fn _mod[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _mod[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a % b
 
 
-fn _min[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _min[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     # TODO(kszucs): consider return (a < b).select(a, b)
     return math.min(a, b)
 
 
-fn _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+def _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     # TODO(kszucs): consider return (a > b).select(a, b)
     return math.max(a, b)
 
 
-# Unary: fn[W: Int](SIMD[T, W]) -> SIMD[T, W]
+# Unary: def[W: Int](SIMD[T, W]) -> SIMD[T, W]
 
 
-fn _neg[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+def _neg[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
     return -a
 
 
-fn _abs[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+def _abs[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
     return abs(a)
 
 
@@ -80,7 +80,7 @@ fn _abs[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
 # ---------------------------------------------------------------------------
 
 
-fn add[
+def add[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -108,7 +108,7 @@ fn add[
     return binary_simd[T, T, func=_add[T.native, _], name="add"](left, right)
 
 
-fn add(left: Array, right: Array) raises -> Array:
+def add(left: Array, right: Array) raises -> Array:
     """Runtime-typed add."""
     return binary_array_dispatch["add", add[_]](left, right)
 
@@ -118,7 +118,7 @@ fn add(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn sub[
+def sub[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -146,7 +146,7 @@ fn sub[
     return binary_simd[T, T, func=_sub[T.native, _], name="sub"](left, right)
 
 
-fn sub(left: Array, right: Array) raises -> Array:
+def sub(left: Array, right: Array) raises -> Array:
     """Runtime-typed sub."""
     return binary_array_dispatch["sub", sub[_]](left, right)
 
@@ -156,7 +156,7 @@ fn sub(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn mul[
+def mul[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -184,7 +184,7 @@ fn mul[
     return binary_simd[T, T, func=_mul[T.native, _], name="mul"](left, right)
 
 
-fn mul(left: Array, right: Array) raises -> Array:
+def mul(left: Array, right: Array) raises -> Array:
     """Runtime-typed mul."""
     return binary_array_dispatch["mul", mul[_]](left, right)
 
@@ -194,7 +194,7 @@ fn mul(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn div[
+def div[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -222,7 +222,7 @@ fn div[
     return binary_not_null[T, func=_div[T.native, _], name="div"](left, right)
 
 
-fn div(left: Array, right: Array) raises -> Array:
+def div(left: Array, right: Array) raises -> Array:
     """Runtime-typed div."""
     return binary_array_dispatch["div", div[_]](left, right)
 
@@ -232,7 +232,7 @@ fn div(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn floordiv[
+def floordiv[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -262,7 +262,7 @@ fn floordiv[
     )
 
 
-fn floordiv(left: Array, right: Array) raises -> Array:
+def floordiv(left: Array, right: Array) raises -> Array:
     """Runtime-typed floordiv."""
     return binary_array_dispatch["floordiv", floordiv[_]](left, right)
 
@@ -272,7 +272,7 @@ fn floordiv(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn mod[
+def mod[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -300,7 +300,7 @@ fn mod[
     return binary_not_null[T, func=_mod[T.native, _], name="mod"](left, right)
 
 
-fn mod(left: Array, right: Array) raises -> Array:
+def mod(left: Array, right: Array) raises -> Array:
     """Runtime-typed mod."""
     return binary_array_dispatch["mod", mod[_]](left, right)
 
@@ -310,7 +310,7 @@ fn mod(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn min_[
+def min_[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -338,7 +338,7 @@ fn min_[
     return binary_simd[T, T, func=_min[T.native, _], name="min_"](left, right)
 
 
-fn min_(left: Array, right: Array) raises -> Array:
+def min_(left: Array, right: Array) raises -> Array:
     """Runtime-typed min_."""
     return binary_array_dispatch["min_", min_[_]](left, right)
 
@@ -348,7 +348,7 @@ fn min_(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn max_[
+def max_[
     T: DataType
 ](
     left: PrimitiveArray[T],
@@ -376,7 +376,7 @@ fn max_[
     return binary_simd[T, T, func=_max[T.native, _], name="max_"](left, right)
 
 
-fn max_(left: Array, right: Array) raises -> Array:
+def max_(left: Array, right: Array) raises -> Array:
     """Runtime-typed max_."""
     return binary_array_dispatch["max_", max_[_]](left, right)
 
@@ -386,7 +386,7 @@ fn max_(left: Array, right: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn neg[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
+def neg[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     """Element-wise negation.
 
     Args:
@@ -399,7 +399,7 @@ fn neg[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     return unary_simd[T, func=_neg[T.native, _]](array)
 
 
-fn neg(array: Array) raises -> Array:
+def neg(array: Array) raises -> Array:
     """Runtime-typed neg."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -412,7 +412,7 @@ fn neg(array: Array) raises -> Array:
 # ---------------------------------------------------------------------------
 
 
-fn abs_[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
+def abs_[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     """Element-wise absolute value.
 
     Args:
@@ -425,7 +425,7 @@ fn abs_[T: DataType](array: PrimitiveArray[T]) -> PrimitiveArray[T]:
     return unary_simd[T, func=_abs[T.native, _]](array)
 
 
-fn abs_(array: Array) raises -> Array:
+def abs_(array: Array) raises -> Array:
     """Runtime-typed abs_."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:

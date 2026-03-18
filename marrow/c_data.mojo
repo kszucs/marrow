@@ -21,7 +21,7 @@ from .tabular import RecordBatch, Table
 comptime ARROW_FLAG_NULLABLE = 2
 
 
-fn _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
+def _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
     """Copy a Mojo String into a heap-allocated null-terminated C string.
 
     The caller owns the returned buffer and must free it when done.
@@ -38,7 +38,7 @@ fn _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
     return UnsafePointer[c_char, MutAnyOrigin](unsafe_from_address=Int(buf))
 
 
-fn _release_schema_capsule(capsule: PyObjectPtr):
+def _release_schema_capsule(capsule: PyObjectPtr):
     """PyCapsule destructor for "arrow_schema" capsules.
 
     Called by Python's GC when a schema capsule is collected.
@@ -64,7 +64,7 @@ fn _release_schema_capsule(capsule: PyObjectPtr):
         pass
 
 
-fn _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
+def _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
     """Arrow release callback for CArrowSchemas exported from Mojo.
 
     Arrow calls this (via the release function pointer) when it is done with
@@ -118,17 +118,17 @@ struct CArrowSchema(Copyable, Movable):
         UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
     ]
     var dictionary: UnsafePointer[CArrowSchema, MutAnyOrigin]
-    var release: fn(UnsafePointer[CArrowSchema, MutAnyOrigin]) -> None
+    var release: def(UnsafePointer[CArrowSchema, MutAnyOrigin]) -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         # Guard: release is zeroed by an Arrow importer after it takes ownership,
         # so we only call it when we still own the resources.
         if UnsafePointer(to=self.release).bitcast[UInt64]()[0] != 0:
             self.release(UnsafePointer(to=self))
 
     @staticmethod
-    fn from_dtype(
+    def from_dtype(
         dtype: DataType,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
@@ -226,7 +226,7 @@ struct CArrowSchema(Copyable, Movable):
         )
 
     @staticmethod
-    fn from_field(
+    def from_field(
         field: Field,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema for a Field.
@@ -242,7 +242,7 @@ struct CArrowSchema(Copyable, Movable):
         return c_schema^
 
     @staticmethod
-    fn from_schema(
+    def from_schema(
         fields: List[Field],
     ) raises -> CArrowSchema:
         """Build a top-level "+s" CArrowSchema representing a record-batch schema.
@@ -278,7 +278,7 @@ struct CArrowSchema(Copyable, Movable):
         )
 
     @staticmethod
-    fn from_pycapsule(capsule: PythonObject) raises -> CArrowSchema:
+    def from_pycapsule(capsule: PythonObject) raises -> CArrowSchema:
         """Take ownership of a CArrowSchema from an "arrow_schema" PyCapsule.
 
         Copies the struct out of the capsule's raw memory and zeroes the
@@ -296,7 +296,7 @@ struct CArrowSchema(Copyable, Movable):
         UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
         return schema^
 
-    fn to_pycapsule(deinit self) raises -> PythonObject:
+    def to_pycapsule(deinit self) raises -> PythonObject:
         """Wrap this schema in a Python "arrow_schema" capsule.
 
         Moves `self` onto the heap so the capsule can hold a stable pointer.
@@ -319,7 +319,7 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
-    fn to_dtype(self) raises -> DataType:
+    def to_dtype(self) raises -> DataType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
@@ -367,13 +367,13 @@ struct CArrowSchema(Copyable, Movable):
         else:
             raise Error("Unknown format: ", fmt)
 
-    fn to_field(self) raises -> Field:
+    def to_field(self) raises -> Field:
         var name = StringSlice(unsafe_from_utf8_ptr=self.name)
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         return Field(String(name), dtype^, nullable != 0)
 
-    fn to_schema(self) raises -> Schema:
+    def to_schema(self) raises -> Schema:
         """Build a Schema from this top-level struct CArrowSchema."""
         var fields = List[Field]()
         for i in range(self.n_children):
@@ -381,7 +381,7 @@ struct CArrowSchema(Copyable, Movable):
         return Schema(fields=fields^)
 
 
-fn _release_array_capsule(capsule: PyObjectPtr):
+def _release_array_capsule(capsule: PyObjectPtr):
     """PyCapsule destructor for "arrow_array" capsules.
 
     Mirrors `_release_schema_capsule`.  The capsule holds a raw pointer to a
@@ -404,7 +404,7 @@ fn _release_array_capsule(capsule: PyObjectPtr):
         pass
 
 
-fn _release_imported_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
+def _release_imported_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     """Release callback for CArrowArray imported via the C Data Interface.
 
     Called when the last Buffer (or Bitmap) that references the imported array
@@ -416,7 +416,7 @@ fn _release_imported_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     c_ptr.free()
 
 
-fn _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
+def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
     """Arrow release callback for CArrowArrays exported from Mojo.
 
     Called (via the release function pointer) when an Arrow consumer is done
@@ -478,15 +478,15 @@ struct CArrowArray(Copyable, Movable):
         UnsafePointer[CArrowArray, MutAnyOrigin], MutAnyOrigin
     ]
     var dictionary: UnsafePointer[CArrowArray, MutAnyOrigin]
-    var release: fn(UnsafePointer[CArrowArray, MutAnyOrigin]) -> None
+    var release: def(UnsafePointer[CArrowArray, MutAnyOrigin]) -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
-    fn __del__(deinit self):
+    def __del__(deinit self):
         # Guard: release is zeroed by an Arrow importer after it takes ownership.
         if UnsafePointer(to=self.release).bitcast[UInt64]()[0] != 0:
             self.release(UnsafePointer(to=self))
 
-    fn _to_array(
+    def _to_array(
         self, dtype: DataType, owner: ArcPointer[Allocation]
     ) raises -> Array:
         """Build an Array from this CArrowArray, all buffers sharing one owner.
@@ -628,7 +628,7 @@ struct CArrowArray(Copyable, Movable):
             offset=Int(self.offset),
         )
 
-    fn _to_device_array(
+    def _to_device_array(
         self,
         dtype: DataType,
         owner: ArcPointer[Allocation],
@@ -650,7 +650,7 @@ struct CArrowArray(Copyable, Movable):
         )
 
     @staticmethod
-    fn from_array(
+    def from_array(
         array: Array,
     ) raises -> CArrowArray:
         """Build a CArrowArray value from a Mojo Array for export.
@@ -749,7 +749,7 @@ struct CArrowArray(Copyable, Movable):
         )
 
     @staticmethod
-    fn from_pycapsule(capsule: PythonObject) raises -> CArrowArray:
+    def from_pycapsule(capsule: PythonObject) raises -> CArrowArray:
         """Take ownership of a CArrowArray from an "arrow_array" PyCapsule.
 
         Mirrors `CArrowSchema.from_pycapsule`.
@@ -763,7 +763,7 @@ struct CArrowArray(Copyable, Movable):
         UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
         return array^
 
-    fn to_pycapsule(deinit self) raises -> PythonObject:
+    def to_pycapsule(deinit self) raises -> PythonObject:
         """Wrap this array in a Python "arrow_array" capsule.
 
         Mirrors `CArrowSchema.to_pycapsule`.  Moves `self` onto the heap so
@@ -786,7 +786,7 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    fn to_array(deinit self, dtype: DataType) raises -> Array:
+    def to_array(deinit self, dtype: DataType) raises -> Array:
         """Convert to an Array, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
@@ -808,7 +808,7 @@ struct CArrowArray(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-fn _release_c_device_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
+def _release_c_device_array(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> None:
     """Release callback for CArrowDeviceArray imported via the C Device Data Interface.
 
     Called when the last Buffer that references the imported array is dropped.
@@ -855,7 +855,7 @@ struct CArrowDeviceArray(Movable):
     var reserved1: Int64
     var reserved2: Int64
 
-    fn to_array(
+    def to_array(
         deinit self, dtype: DataType, ctx: DeviceContext
     ) raises -> Array:
         """Import a device array into marrow, taking ownership of the C struct.
@@ -916,7 +916,7 @@ struct _StreamPrivateData(Movable):
     var batches: List[RecordBatch]
     var index: Int
 
-    fn __init__(
+    def __init__(
         out self, var fields: List[Field], var batches: List[RecordBatch]
     ):
         self.fields = fields^
@@ -924,7 +924,7 @@ struct _StreamPrivateData(Movable):
         self.index = 0
 
 
-fn _stream_get_schema(
+def _stream_get_schema(
     stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
     schema_out: UnsafePointer[CArrowSchema, MutAnyOrigin],
 ) -> Int32:
@@ -937,7 +937,7 @@ fn _stream_get_schema(
         return 1
 
 
-fn _stream_get_next(
+def _stream_get_next(
     stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
     array_out: UnsafePointer[CArrowArray, MutAnyOrigin],
 ) -> Int32:
@@ -957,14 +957,14 @@ fn _stream_get_next(
         return 1
 
 
-fn _stream_get_last_error(
+def _stream_get_last_error(
     stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
 ) -> UnsafePointer[UInt8, MutAnyOrigin]:
     """Stream callback: return null (no detailed error tracking)."""
     return UnsafePointer[UInt8, MutAnyOrigin]()
 
 
-fn _stream_release(
+def _stream_release(
     stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
 ) -> None:
     """Stream callback: free private data and null the release field."""
@@ -974,7 +974,7 @@ fn _stream_release(
     UnsafePointer(to=stream_ptr[].release).bitcast[UInt64]()[0] = 0
 
 
-fn _release_stream_capsule(capsule: PyObjectPtr):
+def _release_stream_capsule(capsule: PyObjectPtr):
     """PyCapsule destructor for "arrow_array_stream" capsules."""
     try:
         var py = Python()
@@ -1001,22 +1001,22 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     Export:  `from_batches()` → `to_pycapsule()`
     """
 
-    var get_schema: fn(
+    var get_schema: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowSchema, MutAnyOrigin],
     ) -> Int32
-    var get_next: fn(
+    var get_next: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowArray, MutAnyOrigin],
     ) -> Int32
-    var get_last_error: fn(
+    var get_last_error: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin]
     ) -> UnsafePointer[UInt8, MutAnyOrigin]
-    var release: fn(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> None
+    var release: def(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
     @staticmethod
-    fn from_batches(
+    def from_batches(
         var fields: List[Field], var batches: List[RecordBatch]
     ) -> CArrowArrayStream:
         """Build a CArrowArrayStream that yields the given batches.
@@ -1035,7 +1035,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         )
 
     @staticmethod
-    fn from_pycapsule(capsule: PythonObject) raises -> CArrowArrayStream:
+    def from_pycapsule(capsule: PythonObject) raises -> CArrowArrayStream:
         """Take ownership of a CArrowArrayStream from an
         "arrow_array_stream" PyCapsule.
         """
@@ -1048,7 +1048,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         UnsafePointer(to=src[].release).bitcast[UInt64]()[0] = 0
         return stream
 
-    fn to_pycapsule(self) raises -> PythonObject:
+    def to_pycapsule(self) raises -> PythonObject:
         """Wrap this stream in a Python "arrow_array_stream" PyCapsule."""
         var py = Python()
         ref cpy = py.cpython()
@@ -1062,7 +1062,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             )
         )
 
-    fn to_table(self) raises -> Table:
+    def to_table(self) raises -> Table:
         """Consume the stream and build a Table.
 
         Calls get_schema once, then iterates get_next until end-of-stream.

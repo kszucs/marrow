@@ -13,7 +13,7 @@ from .tabular import Table
 from .c_data import CArrowArrayStream
 
 
-fn read_table(source: String) raises -> Table:
+def read_table(source: String) raises -> Table:
     """Read a Parquet file into a marrow Table.
 
     Args:
@@ -29,7 +29,7 @@ fn read_table(source: String) raises -> Table:
     return stream.to_table()
 
 
-fn write_table(table: Table, path: String) raises -> None:
+def write_table(table: Table, path: String) raises -> None:
     """Write a marrow Table to a Parquet file.
 
     Args:
