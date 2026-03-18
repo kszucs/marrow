@@ -169,7 +169,7 @@ def test_write_to() raises:
 
 
 def test_literal_int64() raises:
-    """lit() fills the array with the constant value."""
+    """``lit()`` fills the array with the constant value."""
     var a = array[int64]([1, 2, 3, 4, 5])
 
     var expr = lit[int64](10)
@@ -278,7 +278,7 @@ def test_not_pred() raises:
 
 
 def test_if_else() raises:
-    """if_else selects from two arrays based on a bool condition."""
+    """``if_else`` selects from two arrays based on a bool condition."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([9, 2, 3, 1])
 
@@ -298,7 +298,7 @@ def test_if_else() raises:
 
 
 def test_is_null() raises:
-    """is_null() is True for null elements, False for valid ones."""
+    """``is_null()`` is True for null elements, False for valid ones."""
     var a = array[int64]([1, 2, 3])
     var expr = col(0).is_null()
     var result = _exec_pred(expr, _make(a))
@@ -319,7 +319,7 @@ def test_dispatch_hint_default() raises:
 
 
 def test_dispatch_hint_cpu() raises:
-    """with_dispatch(DISPATCH_CPU) returns a copy with CPU hint."""
+    """``with_dispatch(DISPATCH_CPU)`` returns a copy with CPU hint."""
     var expr = (col(0) + col(1)).with_dispatch(DISPATCH_CPU)
     assert_equal(expr.dispatch, DISPATCH_CPU)
 

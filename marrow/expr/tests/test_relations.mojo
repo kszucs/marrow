@@ -273,7 +273,7 @@ def test_scan_filter_schema_passthrough() raises:
 
 
 def test_scan_filter_resolves_column_name() raises:
-    """col('x') inside filter is resolved to a positional col(0)."""
+    """``col('x')`` inside filter is resolved to a positional col(0)."""
     var src = AnyRelation(Scan(name="t", schema_=_schema()))
     var plan = src.filter(col("x") > lit[int64](0))
     var filt = plan.downcast[Filter]()

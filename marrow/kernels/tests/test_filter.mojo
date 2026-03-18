@@ -455,7 +455,7 @@ def test_filter_sliced_strings() raises:
 
 
 def test_drop_nulls_sliced() raises:
-    """drop_nulls on a sliced array with nulls."""
+    """``drop_nulls`` on a sliced array with nulls."""
     var b = PrimitiveBuilder[int32](6)
     b.append(10)
     b.append_null()

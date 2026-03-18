@@ -20,7 +20,7 @@ from marrow.kernels.compare import (
 
 
 def test_equal_true_and_false() raises:
-    """equal: True where values match, False elsewhere."""
+    """Equal: True where values match, False elsewhere."""
     var a = array[int64]([1, 2, 3, 4, 5])
     var b = array[int64]([1, 0, 3, 0, 5])
     var result = equal[int64](a, b)
@@ -33,7 +33,7 @@ def test_equal_true_and_false() raises:
 
 
 def test_not_equal() raises:
-    """not_equal is the inverse of equal."""
+    """``not_equal`` is the inverse of equal."""
     var a = array[int64]([1, 2, 3])
     var b = array[int64]([1, 9, 3])
     var result = not_equal[int64](a, b)
@@ -44,7 +44,7 @@ def test_not_equal() raises:
 
 
 def test_less() raises:
-    """less: True where a < b."""
+    """``less``: True where a < b."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([5, 1, 3, 20])
     var result = less[int64](a, b)
@@ -56,7 +56,7 @@ def test_less() raises:
 
 
 def test_less_equal() raises:
-    """less_equal: True where a <= b."""
+    """``less_equal``: True where a <= b."""
     var a = array[int64]([1, 5, 3, 10])
     var b = array[int64]([5, 1, 3, 20])
     var result = less_equal[int64](a, b)
@@ -68,7 +68,7 @@ def test_less_equal() raises:
 
 
 def test_greater() raises:
-    """greater: True where a > b."""
+    """``greater``: True where a > b."""
     var a = array[int64]([5, 1, 3, 20])
     var b = array[int64]([1, 5, 3, 10])
     var result = greater[int64](a, b)
@@ -80,7 +80,7 @@ def test_greater() raises:
 
 
 def test_greater_equal() raises:
-    """greater_equal: True where a >= b."""
+    """``greater_equal``: True where a >= b."""
     var a = array[int64]([5, 1, 3, 20])
     var b = array[int64]([1, 5, 3, 10])
     var result = greater_equal[int64](a, b)
@@ -97,7 +97,7 @@ def test_greater_equal() raises:
 
 
 def test_less_float64() raises:
-    """less works for float64."""
+    """``less`` works for float64."""
     var ab = PrimitiveBuilder[float64](3)
     ab.unsafe_append(1.0)
     ab.unsafe_append(2.5)
@@ -162,7 +162,7 @@ def test_non_aligned_length() raises:
 
     for i in range(n):
         var expected = Int(a.unsafe_get(i) < b.unsafe_get(i))
-        assert_equal(result.unsafe_get(i), expected)
+        assert_equal(Int(result.unsafe_get(i)), expected)
 
 
 # ---------------------------------------------------------------------------

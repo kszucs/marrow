@@ -3,10 +3,10 @@
 Execution model
 ---------------
 Each logical plan node maps to a physical **processor** that implements a
-pull-based iterator.  There are two processor hierarchies mirroring the two
+pull-based pipeline.  There are two processor hierarchies mirroring the two
 expression hierarchies:
 
-**Relation processors** (yield ``RecordBatch`` via ``__next__()``):
+**Relation processors** (yield ``RecordBatch`` via ``pull()``):
     ``ScanProcessor``, ``FilterProcessor``, ``ProjectProcessor``
 
 **Value processors** (evaluate ``Array`` via ``eval(inputs)``):
@@ -22,7 +22,6 @@ Convenience wrappers ``execute(plan)`` and ``execute(expr, inputs)`` materialise
 the full result as a ``RecordBatch`` or ``Array`` respectively.
 """
 
-from std.iter import Iterator, Iterable
 from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
 import std.math as math
@@ -87,6 +86,21 @@ from marrow.expr.relations import (
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Exhausted — signals that a processor has no more batches
+# ---------------------------------------------------------------------------
+
+
+struct Exhausted(TrivialRegisterPassable, Writable):
+    """Raised by ``pull()`` when a processor has no more batches to yield."""
+
+    fn __init__(out self):
+        pass
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write("Exhausted")
 
 
 # ---------------------------------------------------------------------------
@@ -410,21 +424,19 @@ fn build(expr: AnyValue) raises -> AnyValueProcessor:
 # ---------------------------------------------------------------------------
 
 
-trait RelationProcessor(Iterator, ImplicitlyDestructible, Movable):
+trait RelationProcessor(ImplicitlyDestructible, Movable):
     """Pull-based relation processor.
 
-    Concrete processors implement ``__next__()`` to yield morsel-sized
-    ``RecordBatch`` values, raising ``StopIteration`` when exhausted.
+    Concrete processors implement ``pull()`` to yield morsel-sized
+    ``RecordBatch`` values, raising ``Exhausted`` when done.
     """
-
-    comptime Element = RecordBatch
 
     fn schema(self) -> Schema:
         """Return the output schema of this processor."""
         ...
 
-    def __next__(mut self) raises StopIteration -> RecordBatch:
-        """Return the next batch, or raise ``StopIteration`` when exhausted."""
+    fn pull(mut self) raises -> RecordBatch:
+        """Return the next batch, or raise ``Exhausted`` when done."""
         ...
 
 
@@ -433,30 +445,26 @@ trait RelationProcessor(Iterator, ImplicitlyDestructible, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
+struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
     """Type-erased relation processor.
 
-    Wraps any ``Processor``-conforming type on the heap behind an
+    Wraps any ``RelationProcessor``-conforming type on the heap behind an
     ``ArcPointer`` so the processor hierarchy can be composed at runtime.
+    Copies are O(1) ref-count bumps.
     """
 
-    comptime Element = RecordBatch
-    comptime IteratorType[
-        iterable_mut: Bool, //, iterable_origin: Origin[mut=iterable_mut]
-    ]: Iterator = Self
-
     var _data: ArcPointer[NoneType]
-    var _virt_next: fn(ArcPointer[NoneType]) raises -> RecordBatch
+    var _virt_pull: fn(ArcPointer[NoneType]) raises -> RecordBatch
     var _virt_schema: fn(ArcPointer[NoneType]) -> Schema
     var _virt_drop: fn(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    fn _tramp_next[
+    fn _tramp_pull[
         T: RelationProcessor
     ](ptr: ArcPointer[NoneType]) raises -> RecordBatch:
-        return rebind[ArcPointer[T]](ptr)[].__next__()
+        return rebind[ArcPointer[T]](ptr)[].pull()
 
     @staticmethod
     fn _tramp_schema[T: RelationProcessor](ptr: ArcPointer[NoneType]) -> Schema:
@@ -471,7 +479,7 @@ struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
 
     fn __init__(out self, *, copy: Self):
         self._data = copy._data
-        self._virt_next = copy._virt_next
+        self._virt_pull = copy._virt_pull
         self._virt_schema = copy._virt_schema
         self._virt_drop = copy._virt_drop
 
@@ -481,7 +489,7 @@ struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
     fn __init__[T: RelationProcessor](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_next = Self._tramp_next[T]
+        self._virt_pull = Self._tramp_pull[T]
         self._virt_schema = Self._tramp_schema[T]
         self._virt_drop = Self._tramp_drop[T]
 
@@ -491,17 +499,12 @@ struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
         """Return the output schema of this processor."""
         return self._virt_schema(self._data)
 
-    def __iter__(ref self) -> Self.IteratorType[origin_of(self)]:
-        """Return an iterator over batches (returns a copy sharing the same processor state)."""
-        return self.copy()
-
-    def __next__(mut self) raises StopIteration -> RecordBatch:
-        """Return the next batch, or raise ``StopIteration`` when exhausted."""
-        return self._virt_next(self._data)
+    fn pull(mut self) raises -> RecordBatch:
+        """Return the next batch, or raise ``Exhausted`` when done."""
+        return self._virt_pull(self._data)
 
     fn read_all(mut self) raises -> RecordBatch:
-        """Consume all remaining batches and concatenate into a single RecordBatch.
-        """
+        """Consume all remaining batches and concatenate into a single RecordBatch."""
         var batches = self.to_batches()
         if len(batches) == 0:
             return RecordBatch(schema=self.schema(), columns=List[Array]())
@@ -521,8 +524,11 @@ struct AnyRelationProcessor(Iterator, Iterable, ImplicitlyCopyable, Movable):
     fn to_batches(mut self) raises -> List[RecordBatch]:
         """Consume all remaining batches into a list."""
         var result = List[RecordBatch]()
-        for batch in self:
-            result.append(batch)
+        while True:
+            try:
+                result.append(self.pull())
+            except Exhausted:
+                break
         return result^
 
     fn __del__(deinit self):
@@ -553,9 +559,9 @@ struct ScanProcessor(RelationProcessor):
     fn schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    def __next__(mut self) raises StopIteration -> RecordBatch:
+    fn pull(mut self) raises -> RecordBatch:
         if self.offset >= self.batch.num_rows():
-            raise StopIteration()
+            raise Exhausted()
         var length = min(self.morsel_size, self.batch.num_rows() - self.offset)
         var result = self.batch.slice(self.offset, length)
         self.offset += length
@@ -591,11 +597,10 @@ struct FilterProcessor(RelationProcessor):
     fn schema(self) -> Schema:
         return self.schema_.copy()
 
-    def __next__(mut self) raises StopIteration -> RecordBatch:
-        # Skips batches that filter to 0 rows. Terminates when the child
-        # raises StopIteration (propagates out of the loop).
+    fn pull(mut self) raises -> RecordBatch:
+        # Skips batches that filter to 0 rows. Exhausted propagates from child.
         while True:
-            var batch = self.child.__next__()
+            var batch = self.child.pull()
             var inputs = _batch_to_inputs(batch)
             var mask = self.predicate.eval(inputs)
             var result_cols = List[Array]()
@@ -637,8 +642,8 @@ struct ProjectProcessor(RelationProcessor):
     fn schema(self) -> Schema:
         return self.schema_.copy()
 
-    def __next__(mut self) raises StopIteration -> RecordBatch:
-        var batch = self.child.__next__()  # raises StopIteration when exhausted
+    fn pull(mut self) raises -> RecordBatch:
+        var batch = self.child.pull()  # raises Exhausted when done
         var inputs = _batch_to_inputs(batch)
         var result_cols = List[Array]()
         for ref v in self.values:
@@ -756,9 +761,13 @@ fn execute(
     var scan: AnyRelationProcessor = ScanProcessor(batch=batch, morsel_size=morsel_size)
     var evaluator = build(expr)
     var results = List[Array]()
-    for morsel in scan:
-        var morsel_inputs = _batch_to_inputs(morsel)
-        results.append(evaluator.eval(morsel_inputs))
+    while True:
+        try:
+            var morsel = scan.pull()
+            var morsel_inputs = _batch_to_inputs(morsel)
+            results.append(evaluator.eval(morsel_inputs))
+        except Exhausted:
+            break
 
     if len(results) == 0:
         raise Error("execute: no results produced")

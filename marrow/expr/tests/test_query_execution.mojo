@@ -167,7 +167,7 @@ def test_streaming_morsel_boundaries() raises:
 
 
 def test_streaming_read_all_matches_execute() raises:
-    """read_all() produces the same result as execute()."""
+    """``read_all()`` produces the same result as execute()."""
     var rel = in_memory_table(_batch()).filter(col("x") > lit[int64](2))
     var result_exec = execute(rel)
     var ctx = ExecutionContext()
