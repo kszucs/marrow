@@ -35,13 +35,6 @@ from marrow.kernels.arithmetic import (
     round,
     sin,
     cos,
-    tan,
-    asin,
-    acos,
-    atan,
-    sinh,
-    cosh,
-    tanh,
 )
 
 
@@ -554,7 +547,7 @@ def test_floor_with_nulls() raises:
 
 
 # ---------------------------------------------------------------------------
-# sin / cos / tan
+# sin / cos
 # ---------------------------------------------------------------------------
 
 
@@ -568,59 +561,6 @@ def test_cos_typed() raises:
     var a = array[float64]([0.0])
     var result = cos[float64](a)
     assert_equal(result[0], 1.0)
-
-
-def test_tan_typed() raises:
-    var a = array[float64]([0.0])
-    var result = tan[float64](a)
-    assert_equal(result[0], 0.0)
-
-
-# ---------------------------------------------------------------------------
-# asin / acos / atan
-# ---------------------------------------------------------------------------
-
-
-def test_asin_typed() raises:
-    var a = array[float64]([0.0, 1.0])
-    var result = asin[float64](a)
-    assert_equal(result[0], 0.0)
-    assert_true(result[1] > 1.570 and result[1] < 1.572)  # π/2
-
-
-def test_acos_typed() raises:
-    var a = array[float64]([1.0])
-    var result = acos[float64](a)
-    assert_equal(result[0], 0.0)
-
-
-def test_atan_typed() raises:
-    var a = array[float64]([0.0])
-    var result = atan[float64](a)
-    assert_equal(result[0], 0.0)
-
-
-# ---------------------------------------------------------------------------
-# sinh / cosh / tanh
-# ---------------------------------------------------------------------------
-
-
-def test_sinh_typed() raises:
-    var a = array[float64]([0.0])
-    var result = sinh[float64](a)
-    assert_equal(result[0], 0.0)
-
-
-def test_cosh_typed() raises:
-    var a = array[float64]([0.0])
-    var result = cosh[float64](a)
-    assert_equal(result[0], 1.0)
-
-
-def test_tanh_typed() raises:
-    var a = array[float64]([0.0])
-    var result = tanh[float64](a)
-    assert_equal(result[0], 0.0)
 
 
 # ---------------------------------------------------------------------------

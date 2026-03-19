@@ -414,9 +414,7 @@ struct DataType(
     @always_inline
     def is_floating_point(self) -> Bool:
         return (
-            self.code == FLOAT16
-            or self.code == FLOAT32
-            or self.code == FLOAT64
+            self.code == FLOAT16 or self.code == FLOAT32 or self.code == FLOAT64
         )
 
     @always_inline

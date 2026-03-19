@@ -315,5 +315,46 @@ def test_buffer_eq_different_size() raises:
     assert_false(b1.finish() == b2.finish())
 
 
+def test_aligned_unsafe_ptr_zero_offset() raises:
+    """With offset=0, aligned_unsafe_ptr equals unsafe_ptr."""
+    var bb = BufferBuilder.alloc[DType.int64](16)
+    var buf = bb.finish()
+    var ptr = buf.unsafe_ptr[DType.int64](0)
+    var aligned = buf.aligned_unsafe_ptr[DType.int64](0)
+    assert_true(ptr == aligned)
+
+
+def test_aligned_unsafe_ptr_aligned_offset() raises:
+    """Offset already on a 64-byte boundary stays unchanged."""
+    # 64 bytes / 8 bytes per int64 = 8 elements per 64-byte block
+    var bb = BufferBuilder.alloc[DType.int64](32)
+    var buf = bb.finish()
+    var aligned = buf.aligned_unsafe_ptr[DType.int64](8)
+    var expected = buf.unsafe_ptr[DType.int64](8)
+    assert_true(aligned == expected)
+
+
+def test_aligned_unsafe_ptr_unaligned_offset() raises:
+    """Offset in the middle of a 64-byte block rounds down."""
+    # int64: 8 bytes each, 64/8 = 8 elements per block
+    # offset=5 → byte offset=40, align_down(40,64)=0 → element 0
+    var bb = BufferBuilder.alloc[DType.int64](32)
+    var buf = bb.finish()
+    var aligned = buf.aligned_unsafe_ptr[DType.int64](5)
+    var expected = buf.unsafe_ptr[DType.int64](0)
+    assert_true(aligned == expected)
+
+
+def test_aligned_unsafe_ptr_second_block() raises:
+    """Offset in the second 64-byte block rounds to start of that block."""
+    # int32: 4 bytes each, 64/4 = 16 elements per block
+    # offset=20 → byte offset=80, align_down(80,64)=64 → element 16
+    var bb = BufferBuilder.alloc[DType.int32](64)
+    var buf = bb.finish()
+    var aligned = buf.aligned_unsafe_ptr[DType.int32](20)
+    var expected = buf.unsafe_ptr[DType.int32](16)
+    assert_true(aligned == expected)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

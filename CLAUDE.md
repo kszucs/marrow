@@ -69,6 +69,7 @@ Usage: `var arr: Array = my_primitive_array` and `var prim: PrimitiveArray[int64
 - Immutable, ref-counted via `ArcPointer[Allocation]`
 - Allocation kinds: CPU (owned heap), FOREIGN (external with release callback), HOST (pinned GPU host memory), DEVICE (GPU memory)
 - `BufferBuilder` is the mutable counterpart; `finish()` transfers ownership to immutable `Buffer`
+- All buffers are 64-byte aligned and padded. Use `aligned_unsafe_ptr[T](offset)` / `aligned_device_ptr[T](offset)` when the array offset is non-zero to ensure SIMD loads start at a 64-byte boundary. Use `unsafe_ptr[T](offset)` / `device_ptr[T](offset)` only when exact element positioning is needed.
 
 **Bitmap** (`marrow/bitmap.mojo`):
 - Immutable, bit-packed validity buffer wrapping a `Buffer`

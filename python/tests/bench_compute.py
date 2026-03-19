@@ -296,3 +296,49 @@ def test_marrow_drop_nulls_float64(benchmark, ma_arrays):
 
 def test_pyarrow_drop_nulls_float64(benchmark, pa_arrays):
     benchmark(pc.drop_null, pa_arrays["float64_nulls"])
+
+
+# ── equal ────────────────────────────────────────────────────────────────────
+
+
+def test_marrow_equal_int64(benchmark, ma_arrays):
+    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
+    benchmark(ma.equal, a, b)
+
+
+def test_pyarrow_equal_int64(benchmark, pa_arrays):
+    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
+    benchmark(pc.equal, a, b)
+
+
+def test_marrow_equal_float64(benchmark, ma_arrays):
+    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
+    benchmark(ma.equal, a, b)
+
+
+def test_pyarrow_equal_float64(benchmark, pa_arrays):
+    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
+    benchmark(pc.equal, a, b)
+
+
+# ── less ─────────────────────────────────────────────────────────────────────
+
+
+def test_marrow_less_int64(benchmark, ma_arrays):
+    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
+    benchmark(ma.less, a, b)
+
+
+def test_pyarrow_less_int64(benchmark, pa_arrays):
+    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
+    benchmark(pc.less, a, b)
+
+
+def test_marrow_less_float64(benchmark, ma_arrays):
+    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
+    benchmark(ma.less, a, b)
+
+
+def test_pyarrow_less_float64(benchmark, pa_arrays):
+    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
+    benchmark(pc.less, a, b)

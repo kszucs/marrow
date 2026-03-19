@@ -12,15 +12,21 @@ to device; function parameters do).
 
 import std.math as math
 from std.algorithm.functional import elementwise
-from std.gpu.host import DeviceContext
+from std.gpu.host import DeviceContext, get_gpu_target
 from std.sys import size_of
-from std.sys.info import simd_byte_width
+from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, Array
 from ..buffers import Buffer, BufferBuilder
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
-from . import bitmap_and, binary_array_dispatch, unary_numeric_dispatch, unary_float_dispatch
+from . import (
+    bitmap_and,
+    binary_array_dispatch,
+    binary_float_dispatch,
+    unary_numeric_dispatch,
+    unary_float_dispatch,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +37,6 @@ from . import bitmap_and, binary_array_dispatch, unary_numeric_dispatch, unary_f
 def _elementwise_unary[
     T: DataType,
     func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
-    simd_width: Int,
 ](
     output: UnsafePointer[Scalar[T.native], MutAnyOrigin],
     input: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
@@ -49,9 +54,11 @@ def _elementwise_unary[
         (output + i).store(func[W](input.load[width=W](i)))
 
     if ctx:
-        elementwise[process, simd_width, target="gpu"](length, ctx.value())
+        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
     else:
-        elementwise[process, simd_width, target="cpu", use_blocking_impl=True](
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
 
@@ -61,7 +68,6 @@ def _elementwise_binary[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         T.native, W
     ],
-    simd_width: Int,
 ](
     output: UnsafePointer[Scalar[T.native], MutAnyOrigin],
     lhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
@@ -80,9 +86,11 @@ def _elementwise_binary[
         (output + i).store(func[W](lhs.load[width=W](i), rhs.load[width=W](i)))
 
     if ctx:
-        elementwise[process, simd_width, target="gpu"](length, ctx.value())
+        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
     else:
-        elementwise[process, simd_width, target="cpu", use_blocking_impl=True](
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
 
@@ -101,19 +109,18 @@ def _unary[
 ) raises -> PrimitiveArray[T]:
     """Unary kernel: allocates output, resolves pointers, calls elementwise."""
     comptime native = T.native
-    comptime width = simd_byte_width() // size_of[native]()
     var length = len(array)
 
     var buf: BufferBuilder
     var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
         buf = BufferBuilder.alloc_device[native](ctx.value(), length)
-        in_ptr = array.buffer.device_ptr[native](array.offset)
+        in_ptr = array.buffer.aligned_device_ptr[native](array.offset)
     else:
         buf = BufferBuilder.alloc[native](length)
-        in_ptr = array.buffer.unsafe_ptr[native](array.offset)
+        in_ptr = array.buffer.aligned_unsafe_ptr[native](array.offset)
 
-    _elementwise_unary[T, func, width](
+    _elementwise_unary[T, func](
         buf.ptr.bitcast[Scalar[native]](), in_ptr, length, ctx
     )
 
@@ -146,7 +153,6 @@ def _binary[
         )
 
     comptime native = T.native
-    comptime width = simd_byte_width() // size_of[native]()
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
@@ -157,15 +163,15 @@ def _binary[
     if ctx:
         buf = BufferBuilder.alloc_device[native](ctx.value(), length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
-        lhs_ptr = left.buffer.device_ptr[native](left.offset)
-        rhs_ptr = right.buffer.device_ptr[native](right.offset)
+        lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
+        rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
     else:
         buf = BufferBuilder.alloc[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
-        lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
-        rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
+        lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)
+        rhs_ptr = right.buffer.aligned_unsafe_ptr[native](right.offset)
 
-    _elementwise_binary[T, func, width](out_ptr, lhs_ptr, rhs_ptr, length, ctx)
+    _elementwise_binary[T, func](out_ptr, lhs_ptr, rhs_ptr, length, ctx)
 
     return PrimitiveArray[T](
         length=length,
@@ -220,11 +226,11 @@ def _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
 
 
 def _neg_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
-    return -a
+    return a.__neg__()
 
 
 def _abs_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
-    return abs(a)
+    return a.__abs__()
 
 
 def _sign_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
@@ -234,90 +240,79 @@ def _sign_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
 # Float-only unary
 
 
-def _sqrt_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _sqrt_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.sqrt(a)
 
 
-def _exp_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _exp_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.exp(a)
 
 
-def _exp2_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _exp2_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.exp2(a)
 
 
-def _log_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _log_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.log(a)
 
 
-def _log2_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _log2_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.log2(a)
 
 
-def _log10_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _log10_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.log10(a)
 
 
-def _log1p_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _log1p_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.log1p(a)
 
 
-def _floor_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.floor(a)
+def _floor_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+    return a.__floor__()
 
 
-def _ceil_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.ceil(a)
+def _ceil_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+    return a.__ceil__()
 
 
-def _trunc_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.trunc(a)
+def _trunc_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+    return a.__trunc__()
 
 
-def _round_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.round(a)
+def _round_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+    return a.__round__()
 
 
-def _sin_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _sin_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.sin(a)
 
 
-def _cos_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _cos_fn[
+    T: DType, W: Int
+](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.cos(a)
 
 
-def _tan_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.tan(a)
-
-
-def _asin_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.asin(a)
-
-
-def _acos_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.acos(a)
-
-
-def _atan_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.atan(a)
-
-
-def _sinh_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.sinh(a)
-
-
-def _cosh_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.cosh(a)
-
-
-def _tanh_fn[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
-    return math.tanh(a)
-
-
-# Float-only binary
-
-
-def _pow_fn[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
+def _pow_fn[
+    T: DType, W: Int
+](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W] where T.is_floating_point():
     return math.pow(a, b)
 
 
@@ -421,8 +416,13 @@ def pow_[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-) raises -> PrimitiveArray[T] where T.is_floating_point():
+) raises -> PrimitiveArray[
+    T
+]:
     """Element-wise power: result[i] = left[i] ** right[i]."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "pow_ requires a floating-point type"
     return _binary[T, func=_pow_fn[T.native, _], name="pow_"](left, right)
 
 
@@ -446,104 +446,96 @@ def sign[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _sign_fn[T.native, _]](array)
 
 
-def sqrt[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def sqrt[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise square root."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "sqrt requires a floating-point type"
     return _unary[T, _sqrt_fn[T.native, _]](array)
 
 
-def exp[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def exp[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise natural exponential (e^x)."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "exp requires a floating-point type"
     return _unary[T, _exp_fn[T.native, _]](array)
 
 
-def exp2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def exp2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 exponential (2^x)."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "exp2 requires a floating-point type"
     return _unary[T, _exp2_fn[T.native, _]](array)
 
 
-def log[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def log[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise natural logarithm."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "log requires a floating-point type"
     return _unary[T, _log_fn[T.native, _]](array)
 
 
-def log2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def log2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 logarithm."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "log2 requires a floating-point type"
     return _unary[T, _log2_fn[T.native, _]](array)
 
 
-def log10[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def log10[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-10 logarithm."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "log10 requires a floating-point type"
     return _unary[T, _log10_fn[T.native, _]](array)
 
 
-def log1p[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def log1p[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise log(1 + x)."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "log1p requires a floating-point type"
     return _unary[T, _log1p_fn[T.native, _]](array)
 
 
-def floor[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def floor[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise floor."""
     return _unary[T, _floor_fn[T.native, _]](array)
 
 
-def ceil[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def ceil[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise ceiling."""
     return _unary[T, _ceil_fn[T.native, _]](array)
 
 
-def trunc[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def trunc[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise truncation toward zero."""
     return _unary[T, _trunc_fn[T.native, _]](array)
 
 
-def round[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def round[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise rounding to nearest integer."""
     return _unary[T, _round_fn[T.native, _]](array)
 
 
-def sin[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def sin[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise sine."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "sin requires a floating-point type"
     return _unary[T, _sin_fn[T.native, _]](array)
 
 
-def cos[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
+def cos[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise cosine."""
+    comptime assert (
+        T.native.is_floating_point()
+    ), "cos requires a floating-point type"
     return _unary[T, _cos_fn[T.native, _]](array)
-
-
-def tan[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise tangent."""
-    return _unary[T, _tan_fn[T.native, _]](array)
-
-
-def asin[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise arcsine."""
-    return _unary[T, _asin_fn[T.native, _]](array)
-
-
-def acos[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise arccosine."""
-    return _unary[T, _acos_fn[T.native, _]](array)
-
-
-def atan[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise arctangent."""
-    return _unary[T, _atan_fn[T.native, _]](array)
-
-
-def sinh[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise hyperbolic sine."""
-    return _unary[T, _sinh_fn[T.native, _]](array)
-
-
-def cosh[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise hyperbolic cosine."""
-    return _unary[T, _cosh_fn[T.native, _]](array)
-
-
-def tanh[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T] where T.is_floating_point():
-    """Element-wise hyperbolic tangent."""
-    return _unary[T, _tanh_fn[T.native, _]](array)
 
 
 # ---------------------------------------------------------------------------
@@ -608,7 +600,7 @@ def sign(array: Array) raises -> Array:
 
 def pow_(left: Array, right: Array) raises -> Array:
     """Runtime-typed pow_."""
-    return binary_array_dispatch["pow_", pow_[_]](left, right)
+    return binary_float_dispatch["pow_", pow_[_]](left, right)
 
 
 def sqrt(array: Array) raises -> Array:
@@ -648,22 +640,22 @@ def log1p(array: Array) raises -> Array:
 
 def floor(array: Array) raises -> Array:
     """Runtime-typed floor."""
-    return unary_float_dispatch["floor", floor[_]](array)
+    return unary_numeric_dispatch["floor", floor[_]](array)
 
 
 def ceil(array: Array) raises -> Array:
     """Runtime-typed ceil."""
-    return unary_float_dispatch["ceil", ceil[_]](array)
+    return unary_numeric_dispatch["ceil", ceil[_]](array)
 
 
 def trunc(array: Array) raises -> Array:
     """Runtime-typed trunc."""
-    return unary_float_dispatch["trunc", trunc[_]](array)
+    return unary_numeric_dispatch["trunc", trunc[_]](array)
 
 
 def round(array: Array) raises -> Array:
     """Runtime-typed round."""
-    return unary_float_dispatch["round", round[_]](array)
+    return unary_numeric_dispatch["round", round[_]](array)
 
 
 def sin(array: Array) raises -> Array:
@@ -674,38 +666,3 @@ def sin(array: Array) raises -> Array:
 def cos(array: Array) raises -> Array:
     """Runtime-typed cos."""
     return unary_float_dispatch["cos", cos[_]](array)
-
-
-def tan(array: Array) raises -> Array:
-    """Runtime-typed tan."""
-    return unary_float_dispatch["tan", tan[_]](array)
-
-
-def asin(array: Array) raises -> Array:
-    """Runtime-typed asin."""
-    return unary_float_dispatch["asin", asin[_]](array)
-
-
-def acos(array: Array) raises -> Array:
-    """Runtime-typed acos."""
-    return unary_float_dispatch["acos", acos[_]](array)
-
-
-def atan(array: Array) raises -> Array:
-    """Runtime-typed atan."""
-    return unary_float_dispatch["atan", atan[_]](array)
-
-
-def sinh(array: Array) raises -> Array:
-    """Runtime-typed sinh."""
-    return unary_float_dispatch["sinh", sinh[_]](array)
-
-
-def cosh(array: Array) raises -> Array:
-    """Runtime-typed cosh."""
-    return unary_float_dispatch["cosh", cosh[_]](array)
-
-
-def tanh(array: Array) raises -> Array:
-    """Runtime-typed tanh."""
-    return unary_float_dispatch["tanh", tanh[_]](array)

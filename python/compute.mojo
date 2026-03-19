@@ -9,6 +9,7 @@ from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import Array
 from marrow.kernels.aggregate import sum_, product, min_, max_, any_, all_
 from marrow.kernels.arithmetic import add, sub, mul, div
+from marrow.kernels.compare import equal, not_equal, less, less_equal, greater, greater_equal
 from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls
 from helpers import pyfunction
 
@@ -56,4 +57,22 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[pyfunction[drop_nulls]()](
         "drop_nulls", docstring="drop_nulls(array: Array, /) -> Array\n--\n\nDrop null values from an array."
+    )
+    mb.def_function[pyfunction[equal]()](
+        "equal", docstring="equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise equality, propagating nulls."
+    )
+    mb.def_function[pyfunction[not_equal]()](
+        "not_equal", docstring="not_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise inequality, propagating nulls."
+    )
+    mb.def_function[pyfunction[less]()](
+        "less", docstring="less(left: Array, right: Array, /) -> Array\n--\n\nElement-wise less-than, propagating nulls."
+    )
+    mb.def_function[pyfunction[less_equal]()](
+        "less_equal", docstring="less_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise less-or-equal, propagating nulls."
+    )
+    mb.def_function[pyfunction[greater]()](
+        "greater", docstring="greater(left: Array, right: Array, /) -> Array\n--\n\nElement-wise greater-than, propagating nulls."
+    )
+    mb.def_function[pyfunction[greater_equal]()](
+        "greater_equal", docstring="greater_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise greater-or-equal, propagating nulls."
     )

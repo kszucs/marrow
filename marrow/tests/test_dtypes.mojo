@@ -1,5 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 import marrow.dtypes as dt
+from marrow.dtypes import DataType, Field
 
 
 def test_bool_type() raises:

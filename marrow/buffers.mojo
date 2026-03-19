@@ -553,6 +553,14 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         size: Int,
         owner: ArcPointer[Allocation],
     ):
+        debug_assert(
+            Int(ptr) % 64 == 0 or Int(ptr) == 0,
+            "Buffer pointer must be 64-byte aligned",
+        )
+        debug_assert(
+            size % 64 == 0 or size == 0,
+            "Buffer size must be 64-byte aligned",
+        )
         self.ptr = ptr
         self.size = size
         self._owner = owner
@@ -583,7 +591,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
             rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
                 ptr.bitcast[UInt8]()
             ),
-            math.align_up(Int(size), 64),
+            Int(size),
             owner,
         )
 
@@ -701,6 +709,20 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         """
         return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
 
+    @always_inline
+    def aligned_device_ptr[
+        T: DType
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
+        """Return a typed device pointer aligned down to a 64-byte boundary.
+
+        Useful when `offset` is non-zero: the returned pointer starts at the
+        closest 64-byte-aligned element position ≤ offset.
+
+        Precondition: `is_device()` must be True.
+        """
+        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
+        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + aligned
+
     # TODO: maybe should check for host buffer to copy that as well over the device
     def to_device(self, ctx: DeviceContext) raises -> Buffer:
         """Upload this CPU-accessible buffer to the GPU.
@@ -760,6 +782,24 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         return self.ptr.bitcast[Scalar[T]]() + offset
 
     @always_inline
+    def aligned_unsafe_ptr[
+        T: DType = DType.uint8
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
+        """Return a typed pointer aligned down to a 64-byte boundary.
+
+        Useful when `offset` is non-zero: the returned pointer starts at the
+        closest 64-byte-aligned element position ≤ offset.
+
+        Precondition: `is_cpu()` must be True.
+        """
+        debug_assert(
+            self.is_cpu(),
+            "cannot read device buffer, call to_cpu() first",
+        )
+        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
+        return self.ptr.bitcast[Scalar[T]]() + aligned
+
+    @always_inline
     def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         debug_assert(
             self.is_cpu(),
@@ -771,6 +811,8 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
             return output((byte >> UInt8(index % 8)) & 1)
         else:
             return self.ptr.bitcast[output]()[index]
+
+    # have aligned_down(64) pointer methods
 
     @always_inline
     def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:

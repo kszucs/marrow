@@ -1035,6 +1035,21 @@ def array[T: DataType]() raises -> PrimitiveArray[T]:
 
 def array[T: DataType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
     """Create a primitive array from optional ints (`None` → null)."""
+    # comptime assert T.is_integer(), "array() with int values only supported for integer DataTypes"
+    var b = PrimitiveBuilder[T](len(values))
+    for value in values:
+        if value:
+            b.append(Scalar[T.native](value.value()))
+        else:
+            b.append_null()
+    return b.finish_typed()
+
+
+def array[
+    T: DataType
+](values: List[Optional[Float64]]) raises -> PrimitiveArray[T]:
+    """Create a primitive array from optional ints (`None` → null)."""
+    # comptime assert T.is_integer(), "array() with int values only supported for integer DataTypes"
     var b = PrimitiveBuilder[T](len(values))
     for value in values:
         if value:

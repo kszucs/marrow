@@ -1,7 +1,7 @@
 """Element-wise comparison kernels.
 
 Each kernel compares two ``PrimitiveArray[T]`` values element-wise and returns
-a bit-packed ``PrimitiveArray[bool_]`` following the Arrow boolean layout.
+a ``PrimitiveArray[bool_]`` following the Arrow boolean layout.
 
 Null propagation: if either input has a null at position ``i``, the output is
 null at ``i`` (validity = ``bitmap_and(left.bitmap, right.bitmap)``).  Data
@@ -22,37 +22,91 @@ and a runtime-typed overload ``def(Array, Array)`` that dispatches via
 ``binary_array_dispatch``.
 """
 
-from std.algorithm import vectorize
+from std.algorithm.functional import elementwise
 from std.sys import size_of
-from std.sys.info import simd_byte_width
+from std.sys.info import simd_byte_width, simd_width_of
+from std.utils.index import IndexList
+
+from std.gpu.host import DeviceContext, get_gpu_target
 
 from ..arrays import PrimitiveArray, Array
-from ..bitmap import BitmapBuilder
+from ..buffers import BufferBuilder
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
 
 
 # ---------------------------------------------------------------------------
-# Generic comparison kernel — bool output (bit-packed)
+# Elementwise compare + bit-pack — pointers as params for GPU DevicePassable
+# ---------------------------------------------------------------------------
+
+
+def _elementwise_cmp_pack[
+    T: DataType,
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+        DType.bool, W
+    ],
+](
+    output: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
+    lhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    rhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Compare elements and bit-pack via elementwise.
+
+    Pointers are function parameters (not closure captures) so they transfer
+    correctly to GPU via DevicePassable.
+    Safe to load beyond length: buffers are 64-byte aligned and padded.
+    """
+
+    @parameter
+    @always_inline
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
+        var i = idx[0]
+        # Always compare 8 elements and pack one output byte.  When W >= 8
+        # we produce W // 8 bytes; for the scalar tail (W < 8) we load 8
+        # from the byte-aligned base instead (safe: 64-byte padded buffers,
+        # and 8 × sizeof(T) ≤ 64 for all primitive types).
+        comptime assert 8 * size_of[Scalar[T.native]]() <= 64
+        comptime shifts = SIMD[DType.uint8, 8](0, 1, 2, 3, 4, 5, 6, 7)
+        var base = (i // 8) * 8
+        comptime packs = (W + 7) // 8
+        comptime for k in range(packs):
+            var off = base + k * 8
+            var cmp = func[8](lhs.load[width=8](off), rhs.load[width=8](off))
+            (output + off // 8).store(
+                (cmp.cast[DType.uint8]() << shifts).reduce_or()
+            )
+
+    if ctx:
+        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+# ---------------------------------------------------------------------------
+# Generic comparison kernel — single-pass compare + bit-pack
 # ---------------------------------------------------------------------------
 
 
 def _binary_cmp[
     T: DataType,
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
-        bool_dt.native, W
+        DType.bool, W
     ],
     name: StringLiteral = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-) raises -> PrimitiveArray[
-    bool_dt
-]:
-    """SIMD-vectorized comparison kernel producing bit-packed bool output.
-
-    Computes the output validity bitmap upfront via ``bitmap_and``, then
-    applies ``func`` element-wise, packing results into a ``BitmapBuilder``.
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
+    """Binary comparison kernel — single-pass compare + bit-pack (CPU and GPU).
     """
     if len(left) != len(right):
         raise Error(
@@ -61,36 +115,39 @@ def _binary_cmp[
         )
 
     comptime native = T.native
-    comptime width = simd_byte_width() // size_of[native]()
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
-    ref lb = left.buffer
-    ref rb = right.buffer
-    var l_off = left.offset
-    var r_off = right.offset
-    var data_bm = BitmapBuilder.alloc(length)
 
-    def process[
-        W: Int
-    ](i: Int) unified {mut data_bm, read lb, read rb, read l_off, read r_off}:
-        var result = func[W](
-            lb.simd_load[native, W](l_off + i),
-            rb.simd_load[native, W](r_off + i),
-        )
-        for j in range(W):
-            data_bm.set_bit(i + j, result[j].__bool__())
+    var out_buf: BufferBuilder
+    var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
+    var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
+    if ctx:
+        out_buf = BufferBuilder.alloc_device[DType.bool](ctx.value(), length)
+        lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
+        rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
+    else:
+        out_buf = BufferBuilder.alloc[DType.bool](length)
+        lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)
+        rhs_ptr = right.buffer.aligned_unsafe_ptr[native](right.offset)
 
-    vectorize[width](length, process)
-    var nulls = 0
-    # TODO: bitmap builder could track null count during building to avoid this extra pass
-    if bm:
-        nulls = length - bm.value().count_set_bits()
+    _elementwise_cmp_pack[T, func](
+        out_buf.ptr,
+        lhs_ptr,
+        rhs_ptr,
+        length,
+        ctx,
+    )
+
+    var result_buf = out_buf.finish()
+    if ctx:
+        result_buf = result_buf.to_cpu(ctx.value())
+
     return PrimitiveArray[bool_dt](
         length=length,
-        nulls=nulls,
+        nulls=length - bm.value().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=data_bm.finish(length)._buffer,
+        buffer=result_buf,
     )
 
 
@@ -99,40 +156,28 @@ def _binary_cmp[
 # ---------------------------------------------------------------------------
 
 
-def _eq[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.eq(b))
+def _eq[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.eq(b)
 
 
-def _ne[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.ne(b))
+def _ne[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.ne(b)
 
 
-def _lt[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.lt(b))
+def _lt[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.lt(b)
 
 
-def _le[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.le(b))
+def _le[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.le(b)
 
 
-def _gt[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.gt(b))
+def _gt[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.gt(b)
 
 
-def _ge[
-    T: DType, W: Int
-](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[bool_dt.native, W]:
-    return rebind[SIMD[bool_dt.native, W]](a.ge(b))
+def _ge[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    return a.ge(b)
 
 
 # ---------------------------------------------------------------------------
@@ -142,56 +187,68 @@ def _ge[
 
 def equal[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise equality: result[i] = left[i] == right[i]."""
-    return _binary_cmp[T, _eq[T.native, _], "equal"](left, right)
+    return _binary_cmp[T, _eq[T.native, _], "equal"](left, right, ctx)
 
 
 def not_equal[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
-    return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right)
+    return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right, ctx)
 
 
 def less[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
-    return _binary_cmp[T, _lt[T.native, _], "less"](left, right)
+    return _binary_cmp[T, _lt[T.native, _], "less"](left, right, ctx)
 
 
 def less_equal[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
-    return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right)
+    return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right, ctx)
 
 
 def greater[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
-    return _binary_cmp[T, _gt[T.native, _], "greater"](left, right)
+    return _binary_cmp[T, _gt[T.native, _], "greater"](left, right, ctx)
 
 
 def greater_equal[
     T: DataType
-](left: PrimitiveArray[T], right: PrimitiveArray[T]) raises -> PrimitiveArray[
-    bool_dt
-]:
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[bool_dt]:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
-    return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right)
+    return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
