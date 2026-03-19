@@ -20,10 +20,11 @@ Mutable counterpart.  Wraps `BufferBuilder` for incremental construction.
 Call `finish(length)` to freeze into an immutable `Bitmap`.
 """
 
-from std.sys.info import simd_width_of
+from std.sys.info import simd_byte_width, simd_width_of
 from std.bit import pop_count
 import std.math as math
-from std.memory import bitcast, memset
+from std.math import iota
+from std.memory import bitcast, memcpy, memset
 
 from .buffers import Buffer, BufferBuilder
 
@@ -101,6 +102,120 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
     def is_null(self, index: Int) -> Bool:
         """Return True if bit at (_offset + index) is unset (value is null)."""
         return not self.is_valid(index)
+
+    @always_inline
+    def mask[dtype: DType, W: Int](self, abs_pos: Int) -> SIMD[DType.bool, W]:
+        """Expand W consecutive bitmap bits starting at abs_pos into a SIMD bool vector.
+
+        Each lane j of the result is True iff bit (abs_pos + j) is set in the bitmap.
+        Loads a full UInt32 unconditionally — safe because Arrow buffers are always
+        64-byte padded, so reading 4 bytes at any valid byte offset never faults.
+        """
+        var bp = self._buffer.unsafe_ptr()
+        var byte_idx = abs_pos >> 3
+        var bit_off = abs_pos & 7
+
+        # Single unaligned 4-byte load: branchless, safe due to 64-byte padding.
+        var bits = (bp + byte_idx).bitcast[UInt32]().load[alignment=1]()
+        bits >>= UInt32(bit_off)
+
+        return ((SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1).cast[
+            DType.bool
+        ]()
+
+    def any_set(self) -> Bool:
+        """Return True if any bit in [_offset, _offset + _length) is set.
+
+        Early-exits on the first non-zero SIMD chunk. Boundary bytes are
+        masked to exclude bits outside the logical range. No scalar tail
+        is needed: Arrow buffers are 64-byte padded so SIMD overreads are safe.
+        """
+        if self._length == 0:
+            return False
+
+        comptime width = simd_width_of[DType.uint8]()
+        var ptr = self._buffer.unsafe_ptr()
+        var bit_start = self._offset
+        var bit_end = bit_start + self._length
+        var byte_start = bit_start >> 3
+        var byte_end = (bit_end + 7) >> 3
+        var nbytes = byte_end - byte_start
+
+        # Mask out bits below _offset in the first byte and above
+        # _offset+_length in the last byte so they don't affect the result.
+        var first_mask = UInt8(0xFF) << UInt8(bit_start & 7)
+        var last_mask = UInt8((1 << ((bit_end - 1) & 7) + 1) - 1) if bit_end & 7 != 0 else UInt8(0xFF)
+
+        if nbytes == 1:
+            return (ptr[byte_start] & first_mask & last_mask) != 0
+
+        # Check first and last boundary bytes.
+        if (ptr[byte_start] & first_mask) != 0:
+            return True
+        if (ptr[byte_end - 1] & last_mask) != 0:
+            return True
+
+        # SIMD scan of middle bytes — safe to overread due to 64-byte padding.
+        var i = byte_start + 1
+        var end = byte_end - 1
+        while i + width <= end:
+            if (ptr + i).load[width=width]().reduce_or() != 0:
+                return True
+            i += width
+        # Remaining middle bytes (< width).
+        while i < end:
+            if ptr[i] != 0:
+                return True
+            i += 1
+
+        return False
+
+    def all_set(self) -> Bool:
+        """Return True if all bits in [_offset, _offset + _length) are set.
+
+        Early-exits on the first non-0xFF SIMD chunk. Boundary bytes are
+        masked to exclude bits outside the logical range. No scalar tail
+        is needed: Arrow buffers are 64-byte padded so SIMD overreads are safe.
+        """
+        if self._length == 0:
+            return True
+
+        comptime width = simd_width_of[DType.uint8]()
+        var ptr = self._buffer.unsafe_ptr()
+        var bit_start = self._offset
+        var bit_end = bit_start + self._length
+        var byte_start = bit_start >> 3
+        var byte_end = (bit_end + 7) >> 3
+        var nbytes = byte_end - byte_start
+
+        # Mask: set boundary bits outside the logical range to 1 so they
+        # don't cause a false negative (we're checking all-ones).
+        var first_fill = ~(UInt8(0xFF) << UInt8(bit_start & 7))
+        var last_fill = ~(UInt8((1 << ((bit_end - 1) & 7) + 1) - 1)) if bit_end & 7 != 0 else UInt8(0)
+
+        if nbytes == 1:
+            return ((ptr[byte_start] | first_fill | last_fill) == 0xFF)
+
+        # Check first and last boundary bytes.
+        if (ptr[byte_start] | first_fill) != 0xFF:
+            return False
+        if (ptr[byte_end - 1] | last_fill) != 0xFF:
+            return False
+
+        # SIMD scan of middle bytes — safe to overread due to 64-byte padding.
+        var i = byte_start + 1
+        var end = byte_end - 1
+        while i + width <= end:
+            if (ptr + i).load[width=width]().reduce_and() != 0xFF:
+                return False
+            i += width
+        # Remaining middle bytes (< width).
+        while i < end:
+            if ptr[i] != 0xFF:
+                return False
+            i += 1
+
+        return True
 
     def count_set_bits(self) -> Int:
         """Count set bits in [_offset, _offset + _length) using SIMD popcount.
@@ -415,21 +530,130 @@ struct BitmapBuilder(Movable):
         if end_byte > start_byte:
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
+    def copy_bits(
+        mut self, src_ptr: UnsafePointer[UInt8, _], src_offset: Int, dst_offset: Int, length: Int
+    ):
+        """Bulk-copy `length` bits from `src_ptr` at bit `src_offset` into
+        self at bit `dst_offset`.
+
+        Three code paths ordered by expected frequency:
+        1. Same sub-byte alignment: memcpy for middle bytes, masks at edges.
+        2. Different alignment: shift-and-merge byte-by-byte.
+        3. Short runs (< 16 bits): bit-by-bit fallback to avoid setup overhead.
+        """
+        if length == 0:
+            return
+        var dst = self._builder.ptr
+
+        # Short runs: bit-by-bit is faster than computing byte masks.
+        if length < 16:
+            for i in range(length):
+                var s_byte = (src_offset + i) >> 3
+                var s_bit = (src_offset + i) & 7
+                var val = (src_ptr[s_byte] >> UInt8(s_bit)) & 1
+                var d_byte = (dst_offset + i) >> 3
+                var d_bit = (dst_offset + i) & 7
+                var d_mask = UInt8(1 << d_bit)
+                if val:
+                    dst[d_byte] = dst[d_byte] | d_mask
+                else:
+                    dst[d_byte] = dst[d_byte] & ~d_mask
+            return
+
+        var src_bit = src_offset & 7
+        var dst_bit = dst_offset & 7
+
+        if src_bit == dst_bit:
+            # Same sub-byte alignment: can use memcpy for the bulk.
+            var src_byte = src_offset >> 3
+            var dst_byte = dst_offset >> 3
+            var end_bit = dst_offset + length
+            var end_byte = end_bit >> 3
+            var end_sub = end_bit & 7
+
+            if dst_bit != 0:
+                # Merge leading partial byte.
+                var keep_mask = UInt8((1 << dst_bit) - 1)
+                dst[dst_byte] = (dst[dst_byte] & keep_mask) | (
+                    src_ptr[src_byte] & ~keep_mask
+                )
+                src_byte += 1
+                dst_byte += 1
+
+            # Full middle bytes via memcpy.
+            if end_byte > dst_byte:
+                memcpy(dest=dst + dst_byte, src=src_ptr + src_byte, count=end_byte - dst_byte)
+
+            if end_sub != 0:
+                # Merge trailing partial byte.
+                var trail_byte_src = src_byte + (end_byte - dst_byte)
+                var keep_mask = UInt8(0xFF) << UInt8(end_sub)
+                dst[end_byte] = (dst[end_byte] & keep_mask) | (
+                    src_ptr[trail_byte_src] & ~keep_mask
+                )
+        else:
+            # Different sub-byte alignment: shift-and-merge byte-by-byte.
+            var src_byte = src_offset >> 3
+            var dst_byte_start = dst_offset >> 3
+            var end_bit = dst_offset + length
+            var end_byte = end_bit >> 3
+            var end_sub = end_bit & 7
+            var delta = src_bit - dst_bit
+
+            if dst_bit != 0:
+                # Leading partial byte.
+                var keep_mask = UInt8((1 << dst_bit) - 1)
+                var shifted: UInt8
+                if delta > 0:
+                    shifted = (src_ptr[src_byte] >> UInt8(delta)) | (
+                        src_ptr[src_byte + 1] << UInt8(8 - delta)
+                    )
+                else:
+                    shifted = (src_ptr[src_byte] << UInt8(-delta))
+                    if src_byte > 0:
+                        shifted |= src_ptr[src_byte - 1] >> UInt8(8 + delta)
+                dst[dst_byte_start] = (dst[dst_byte_start] & keep_mask) | (
+                    shifted & ~keep_mask
+                )
+                dst_byte_start += 1
+
+            # Full middle bytes.
+            var src_bit_pos = src_offset + ((dst_byte_start << 3) - dst_offset)
+            for j in range(dst_byte_start, end_byte):
+                var sb = src_bit_pos >> 3
+                var so = src_bit_pos & 7
+                if so == 0:
+                    dst[j] = src_ptr[sb]
+                else:
+                    dst[j] = (src_ptr[sb] >> UInt8(so)) | (
+                        src_ptr[sb + 1] << UInt8(8 - so)
+                    )
+                src_bit_pos += 8
+
+            if end_sub != 0:
+                # Trailing partial byte.
+                var sb = src_bit_pos >> 3
+                var so = src_bit_pos & 7
+                var shifted: UInt8
+                if so == 0:
+                    shifted = src_ptr[sb]
+                else:
+                    shifted = (src_ptr[sb] >> UInt8(so)) | (
+                        src_ptr[sb + 1] << UInt8(8 - so)
+                    )
+                var keep_mask = UInt8(0xFF) << UInt8(end_sub)
+                dst[end_byte] = (dst[end_byte] & keep_mask) | (
+                    shifted & ~keep_mask
+                )
+
     def extend(mut self, src: Bitmap, dst_start: Int, length: Int):
         """Copy `length` bits from `src` (from its `_offset`) into self at `dst_start`.
 
         Replaces the `bitmap_extend` free function.
         """
-        var ptr = self._builder.ptr
-        for i in range(length):
-            var bit = src.is_valid(i)
-            var pos = dst_start + i
-            var byte_idx = pos >> 3
-            var bit_mask = UInt8(1 << (pos & 7))
-            if bit:
-                ptr[byte_idx] = ptr[byte_idx] | bit_mask
-            else:
-                ptr[byte_idx] = ptr[byte_idx] & ~bit_mask
+        self.copy_bits(
+            src._buffer.unsafe_ptr(), src.bit_offset(), dst_start, length
+        )
 
     def resize(mut self, capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits."""

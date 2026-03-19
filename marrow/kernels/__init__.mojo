@@ -22,11 +22,9 @@ Kernel tiers for binary array → array operations
   - `binary_gpu` — GPU kernel launch via DeviceContext; not all kernels need this.
 
 For reductions (array → scalar):
-  - `reduce` — scalar accumulation over valid (non-null) elements only.
-  - `reduce_simd` — SIMD-vectorized reduction using SIMD accumulators and
-    Mojo's horizontal reduction methods (reduce_add, reduce_min, etc.).
-    Null slots are blended with the identity value rather than branched over,
-    keeping the SIMD loop branch-free.
+  - Numeric reductions (sum, product, min, max) use ``std.algorithm``
+    reduction primitives with bitmap-aware ``input_fn`` callbacks.
+  - Boolean reductions (any_, all_) use bitmap AND + popcount.
 
 NOTE: `reduce_gpu` is intentionally absent. Reductions are low arithmetic
 intensity (≤1 FLOP/element for sum), and GPU tree-reduction logic is complex.
@@ -42,7 +40,7 @@ TODO: binary_gpu does not propagate null bitmaps; GPU-side bitmap_and is not
 """
 
 import std.math as math
-from std.math import iota
+from std.algorithm import vectorize
 from std.sys import size_of, has_accelerator
 from std.sys.info import simd_byte_width
 from std.gpu import global_idx
@@ -146,21 +144,17 @@ def unary_simd[
 
     var bm = array.bitmap
     var buf = BufferBuilder.alloc[native](length)
+    var arr_off = array.offset
 
-    var i = 0
-    while i + width <= length:
-        buf.simd_store[native, width](
+    ref arr_buf = array.buffer
+
+    def process[W: Int](i: Int) unified {mut buf, read arr_buf, read arr_off}:
+        buf.simd_store[native, W](
             i,
-            func[width](
-                array.buffer.simd_load[native, width](array.offset + i)
-            ),
+            func[W](arr_buf.simd_load[native, W](arr_off + i)),
         )
-        i += width
-    while i < length:
-        buf.unsafe_set[native](
-            i, func[1](array.buffer.unsafe_get[native](array.offset + i))
-        )
-        i += 1
+
+    vectorize[width, unroll_factor=4](length, process)
 
     return PrimitiveArray[T](
         length=length,
@@ -294,24 +288,23 @@ def binary_simd[
     ref lb = left.buffer
     ref rb = right.buffer
 
+    var l_off = left.offset
+    var r_off = right.offset
+
     comptime if out_native == DType.bool:
         var data_bm = BitmapBuilder.alloc(length)
-        var i = 0
-        while i + width <= length:
-            var result = func[width](
-                lb.simd_load[native, width](left.offset + i),
-                rb.simd_load[native, width](right.offset + i),
+
+        def process_bool[W: Int](i: Int) unified {
+            mut data_bm, read lb, read rb, read l_off, read r_off
+        }:
+            var result = func[W](
+                lb.simd_load[native, W](l_off + i),
+                rb.simd_load[native, W](r_off + i),
             )
-            for j in range(width):
+            for j in range(W):
                 data_bm.set_bit(i + j, result[j].__bool__())
-            i += width
-        while i < length:
-            var result = func[1](
-                lb.unsafe_get[native](left.offset + i),
-                rb.unsafe_get[native](right.offset + i),
-            )
-            data_bm.set_bit(i, result[0].__bool__())
-            i += 1
+
+        vectorize[width](length, process_bool)
         var nulls = 0
         if bm:
             nulls = length - bm.value().count_set_bits()
@@ -324,25 +317,19 @@ def binary_simd[
         )
     else:
         var buf = BufferBuilder.alloc[out_native](length)
-        var i = 0
-        while i + width <= length:
-            buf.simd_store[out_native, width](
+
+        def process[W: Int](i: Int) unified {
+            mut buf, read lb, read rb, read l_off, read r_off
+        }:
+            buf.simd_store[out_native, W](
                 i,
-                func[width](
-                    lb.simd_load[native, width](left.offset + i),
-                    rb.simd_load[native, width](right.offset + i),
+                func[W](
+                    lb.simd_load[native, W](l_off + i),
+                    rb.simd_load[native, W](r_off + i),
                 ),
             )
-            i += width
-        while i < length:
-            buf.unsafe_set[out_native](
-                i,
-                func[1](
-                    lb.unsafe_get[native](left.offset + i),
-                    rb.unsafe_get[native](right.offset + i),
-                ),
-            )
-            i += 1
+
+        vectorize[width, unroll_factor=4](length, process)
         return PrimitiveArray[OutT](
             length=length,
             nulls=length - bm.value().count_set_bits() if bm else 0,
@@ -350,141 +337,6 @@ def binary_simd[
             bitmap=bm,
             buffer=buf.finish(),
         )
-
-
-# ---------------------------------------------------------------------------
-# Reduction arity helper
-# ---------------------------------------------------------------------------
-
-
-def reduce[
-    T: DataType,
-    AccT: DataType,
-    func: def(Scalar[AccT.native], Scalar[T.native]) -> Scalar[AccT.native],
-](array: PrimitiveArray[T], initial: Scalar[AccT.native]) -> Scalar[
-    AccT.native
-]:
-    """Reduce an array to a scalar value, skipping nulls.
-
-    Parameters:
-        T: Input array DataType.
-        AccT: Accumulator DataType (may differ from input for widening).
-        func: The accumulator function (acc, value) -> acc.
-
-    Args:
-        array: The input array.
-        initial: The initial accumulator value (e.g. 0 for sum).
-
-    Returns:
-        The accumulated scalar result.
-    """
-    var acc = initial
-    for i in range(len(array)):
-        if array.is_valid(i):
-            acc = func(acc, array.unsafe_get(i))
-    return acc
-
-
-# ---------------------------------------------------------------------------
-# SIMD reduction arity helpers
-# ---------------------------------------------------------------------------
-
-
-def _bitmap_mask[
-    dtype: DType, W: Int
-](bp: UnsafePointer[UInt8, _], abs_pos: Int) -> SIMD[DType.bool, W]:
-    """Expand W consecutive bitmap bits starting at abs_pos into a SIMD bool vector.
-
-    Each lane j of the result is True iff bit (abs_pos + j) is set in the bitmap.
-    Uses a uint32 window that covers up to 24 bits (3 bytes), sufficient for any
-    combination of W <= 16 and bit_off 0..7.
-    """
-    var byte_idx = abs_pos >> 3
-    var bit_off = abs_pos & 7
-
-    # Build a uint32 window containing all W bits starting at bit abs_pos.
-    # Read the second (and third) byte only when bits spill past the first.
-    var bits = UInt32(bp[byte_idx])
-    if bit_off + W > 8:
-        bits |= UInt32(bp[byte_idx + 1]) << 8
-    if bit_off + W > 16:
-        bits |= UInt32(bp[byte_idx + 2]) << 16
-    bits >>= UInt32(bit_off)
-
-    return ((SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1).cast[
-        DType.bool
-    ]()
-
-
-def reduce_simd[
-    T: DataType,
-    combine: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
-        T.native, W
-    ],
-    horizontal: def[W: Int](SIMD[T.native, W]) -> Scalar[T.native],
-](array: PrimitiveArray[T], initial: Scalar[T.native]) -> Scalar[T.native]:
-    """SIMD-vectorized reduction: accumulates over valid (non-null) elements.
-
-    Two-phase approach:
-      1. Main loop: accumulate W elements at a time via SIMD vectors. Null slots
-         are replaced with `initial` (the identity element) via bitmap blending, so
-         they contribute nothing to the result (e.g., 0 for sum, MAX for min, etc.).
-      2. Horizontal: collapse the SIMD[T, W] accumulator to a scalar via `horizontal`.
-      3. Scalar tail: handles the remaining < W elements with per-element null checks,
-         reusing `combine[1]` since Scalar[T] == SIMD[T, 1].
-
-    For the common case (offset=0, no nulls), the main loop is branchless:
-    - bit_off is always 0, so _bitmap_mask reads exactly 1 or 2 bitmap bytes.
-    - identity_vec blending collapses to a no-op when all lanes are valid.
-
-    Parameters:
-        T: Array DataType (same for input and accumulator).
-        combine: Fn[W](acc, val) -> acc, called with W for the main loop and W=1
-                 for the scalar tail.  Since Scalar[T] == SIMD[T, 1], the same
-                 function works for both.
-        horizontal: Fn[W](SIMD[T, W]) -> Scalar[T], applied once to collapse the
-                    SIMD accumulator at the end of the main loop.  Wrap Mojo's
-                    built-in SIMD methods: v.reduce_add(), v.reduce_min(), etc.
-
-    Args:
-        array: Input array.
-        initial: Initial accumulator value AND identity for null blending.
-                 Use 0 for sum, Scalar[T].MAX for min, Scalar[T].MIN for max.
-
-    Returns:
-        Accumulated scalar result. Returns `initial` if empty or all null.
-    """
-    comptime native = T.native
-    comptime width = simd_byte_width() // size_of[native]()
-    var length = len(array)
-    var has_nulls = array.bitmap.__bool__()
-    var bp = array.bitmap.value()._buffer.unsafe_ptr() if has_nulls else UnsafePointer[
-        UInt8, ImmutExternalOrigin
-    ]()
-
-    var acc = SIMD[native, width](initial)
-    var identity_vec = SIMD[native, width](initial)
-    var i = 0
-
-    while i + width <= length:
-        var vec = array.buffer.simd_load[native, width](array.offset + i)
-        if has_nulls:
-            var mask = _bitmap_mask[native, width](bp, array.offset + i)
-            acc = combine[width](acc, mask.select(vec, identity_vec))
-        else:
-            acc = combine[width](acc, vec)
-        i += width
-
-    var result = horizontal[width](acc)
-
-    while i < length:
-        if array.is_valid(i):
-            result = combine[1](
-                result, array.buffer.unsafe_get[native](array.offset + i)
-            )
-        i += 1
-
-    return result
 
 
 # ---------------------------------------------------------------------------

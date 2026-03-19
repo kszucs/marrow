@@ -113,8 +113,12 @@ def filter_[
                 count=n * elem_size,
             )
         if has_nulls:
-            for i in range(n):
-                bm.set_bit(i, array.is_valid(i))
+            bm.copy_bits(
+                array.bitmap.value()._buffer.unsafe_ptr(),
+                array.offset,
+                0,
+                n,
+            )
         else:
             bm.set_range(0, n, True)
     elif out_len > 0 and selection.offset & 7 == 0:
@@ -162,37 +166,66 @@ def filter_[
                         )
                     # Copy validity for this run.
                     if has_nulls:
-                        for i in range(run_len):
-                            bm.set_bit(
-                                out_idx + i, array.is_valid(run_start + i)
-                            )
+                        bm.copy_bits(
+                            array.bitmap.value()._buffer.unsafe_ptr(),
+                            arr_off + run_start,
+                            out_idx,
+                            run_len,
+                        )
                     else:
                         bm.set_range(out_idx, run_len, True)
                     out_idx += run_len
         else:
             # Selectivity <= 80%: IndexIterator — scatter individual elements.
-            for word_i in range(word_count):
-                var word = word_ptr[word_i]
-                if word == 0:
-                    continue
-                var base = word_i * 64
-                while word != 0:
-                    var bit = Int(count_trailing_zeros(word))
-                    var elem_i = base + bit
-                    if elem_i >= n:
-                        break
-                    buf.unsafe_set[native](out_idx, array.unsafe_get(elem_i))
-                    bm.set_bit(out_idx, array.is_valid(elem_i))
-                    out_idx += 1
-                    word &= word - 1
+            if has_nulls:
+                for word_i in range(word_count):
+                    var word = word_ptr[word_i]
+                    if word == 0:
+                        continue
+                    var base = word_i * 64
+                    while word != 0:
+                        var bit = Int(count_trailing_zeros(word))
+                        var elem_i = base + bit
+                        if elem_i >= n:
+                            break
+                        buf.unsafe_set[native](
+                            out_idx, array.unsafe_get(elem_i)
+                        )
+                        bm.set_bit(out_idx, array.is_valid(elem_i))
+                        out_idx += 1
+                        word &= word - 1
+            else:
+                for word_i in range(word_count):
+                    var word = word_ptr[word_i]
+                    if word == 0:
+                        continue
+                    var base = word_i * 64
+                    while word != 0:
+                        var bit = Int(count_trailing_zeros(word))
+                        var elem_i = base + bit
+                        if elem_i >= n:
+                            break
+                        buf.unsafe_set[native](
+                            out_idx, array.unsafe_get(elem_i)
+                        )
+                        out_idx += 1
+                        word &= word - 1
+                bm.set_range(0, out_len, True)
     elif out_len > 0:
         # Non-byte-aligned selection offset: element-by-element fallback.
         var out_idx = 0
-        for i in range(n):
-            if sel_bm.is_valid(i):
-                buf.unsafe_set[native](out_idx, array.unsafe_get(i))
-                bm.set_bit(out_idx, array.is_valid(i))
-                out_idx += 1
+        if has_nulls:
+            for i in range(n):
+                if sel_bm.is_valid(i):
+                    buf.unsafe_set[native](out_idx, array.unsafe_get(i))
+                    bm.set_bit(out_idx, array.is_valid(i))
+                    out_idx += 1
+        else:
+            for i in range(n):
+                if sel_bm.is_valid(i):
+                    buf.unsafe_set[native](out_idx, array.unsafe_get(i))
+                    out_idx += 1
+            bm.set_range(0, out_len, True)
 
     var bm_bitmap = bm.finish(out_len)
     var ones = bm_bitmap.count_set_bits()
