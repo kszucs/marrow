@@ -303,16 +303,20 @@ struct BufferBuilder(Movable):
     var size: Int
     var _host: Optional[HostBuffer[DType.uint8]]
     """Set when allocated via `alloc_host`; None for CPU heap allocations."""
+    var _device: Optional[DeviceBuffer[DType.uint8]]
+    """Set when allocated via `alloc_device`; None otherwise."""
 
     def __init__(
         out self,
         ptr: UnsafePointer[UInt8, MutExternalOrigin],
         size: Int,
         host: Optional[HostBuffer[DType.uint8]] = None,
+        device: Optional[DeviceBuffer[DType.uint8]] = None,
     ):
         self.ptr = ptr
         self.size = size
         self._host = host
+        self._device = device
 
     @staticmethod
     def _aligned_size[T: DType](length: Int) -> Int:
@@ -378,21 +382,42 @@ struct BufferBuilder(Movable):
         memset_zero(ptr, byte_size)
         return BufferBuilder(ptr, byte_size, host)
 
+    @staticmethod
+    def alloc_device[
+        I: Intable, //, T: DType = DType.uint8
+    ](ctx: DeviceContext, length: I) raises -> BufferBuilder:
+        """Allocate a device (GPU) buffer for `length` elements of type T.
+
+        The returned builder exposes `ptr` as a `MutAnyOrigin` device pointer
+        suitable for GPU kernel writes. Call `finish()` to obtain an immutable
+        device-resident `Buffer`.
+        """
+        var byte_size = Self._aligned_size[T](Int(length))
+        var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
+        var ptr = rebind[UnsafePointer[UInt8, MutExternalOrigin]](
+            dev.unsafe_ptr()
+        )
+        return BufferBuilder(ptr, byte_size, device=dev)
+
     def finish(mut self) -> Buffer:
         """Snapshot the mutable builder into an immutable Buffer and reset state.
 
         For CPU builders (`alloc`): returns kind=CPU.
-        For HOST builders (`alloc_host`): returns kind=HOST; device_type is
-        inferred from the HostBuffer's context API.
+        For HOST builders (`alloc_host`): returns kind=HOST.
+        For DEVICE builders (`alloc_device`): returns kind=DEVICE.
 
-        In both cases a fresh zero-capacity CPU allocation is installed on this
-        builder so it can continue to be used after the call.
+        A fresh zero-capacity CPU allocation is installed on this builder so
+        it can continue to be used after the call.
         """
         var new = Self.alloc(0)
         swap(self, new)
         # After swap: self has the fresh empty allocation; new has the old state.
         # We null new.ptr before returning so new.__del__ skips ptr.free() —
         # the returned Buffer's Allocation owns the memory from this point on.
+        if new._device:
+            var result = Buffer.from_device(new._device.take(), new.size)
+            new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
+            return result
         if new._host:
             var result = Buffer.from_host(new._host.take())
             new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
@@ -665,6 +690,16 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         """
         debug_assert(self.is_device(), "not a device buffer")
         return self._owner[]._device.value()
+
+    @always_inline
+    def device_ptr[
+        T: DType
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
+        """Return a typed device pointer into GPU memory at element offset.
+
+        Precondition: `is_device()` must be True.
+        """
+        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
 
     # TODO: maybe should check for host buffer to copy that as well over the device
     def to_device(self, ctx: DeviceContext) raises -> Buffer:

@@ -69,13 +69,33 @@ def _reduce[
             )
 
         comptime if op == "sum":
-            algo_sum[native, input_fn_nulls, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_sum[
+                native,
+                input_fn_nulls,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "product":
-            algo_product[native, input_fn_nulls, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_product[
+                native,
+                input_fn_nulls,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "min":
-            algo_min[native, input_fn_nulls, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_min[
+                native,
+                input_fn_nulls,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "max":
-            algo_max[native, input_fn_nulls, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_max[
+                native,
+                input_fn_nulls,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
     else:
 
         @always_inline
@@ -86,13 +106,33 @@ def _reduce[
             return array.buffer.simd_load[native, width](arr_off + idx[0])
 
         comptime if op == "sum":
-            algo_sum[native, input_fn, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_sum[
+                native,
+                input_fn,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "product":
-            algo_product[native, input_fn, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_product[
+                native,
+                input_fn,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "min":
-            algo_min[native, input_fn, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_min[
+                native,
+                input_fn,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
         elif op == "max":
-            algo_max[native, input_fn, output_fn, single_thread_blocking_override=True](Index(length), reduce_dim=0)
+            algo_max[
+                native,
+                input_fn,
+                output_fn,
+                single_thread_blocking_override=True,
+            ](Index(length), reduce_dim=0)
 
     return out
 

@@ -46,6 +46,7 @@ All functions support arrays with non-zero offsets (sliced arrays).
 import std.math as math
 from std.bit import count_trailing_zeros
 from std.memory import memcpy
+from std.sys import size_of
 
 from ..arrays import PrimitiveArray, StringArray, Array
 from ..buffers import Buffer, BufferBuilder

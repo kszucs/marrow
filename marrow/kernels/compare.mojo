@@ -22,9 +22,76 @@ and a runtime-typed overload ``def(Array, Array)`` that dispatches via
 ``binary_array_dispatch``.
 """
 
+from std.algorithm import vectorize
+from std.sys import size_of
+from std.sys.info import simd_byte_width
+
 from ..arrays import PrimitiveArray, Array
+from ..bitmap import BitmapBuilder
 from ..dtypes import DataType, bool_ as bool_dt
-from . import binary_simd, binary_array_dispatch
+from . import bitmap_and, binary_array_dispatch
+
+
+# ---------------------------------------------------------------------------
+# Generic comparison kernel — bool output (bit-packed)
+# ---------------------------------------------------------------------------
+
+
+def _binary_cmp[
+    T: DataType,
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+        bool_dt.native, W
+    ],
+    name: StringLiteral = "",
+](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+) raises -> PrimitiveArray[
+    bool_dt
+]:
+    """SIMD-vectorized comparison kernel producing bit-packed bool output.
+
+    Computes the output validity bitmap upfront via ``bitmap_and``, then
+    applies ``func`` element-wise, packing results into a ``BitmapBuilder``.
+    """
+    if len(left) != len(right):
+        raise Error(
+            t"{name} arrays must have the same length, got {len(left)} and"
+            t" {len(right)}"
+        )
+
+    comptime native = T.native
+    comptime width = simd_byte_width() // size_of[native]()
+    var length = len(left)
+    var bm = bitmap_and(left.bitmap, right.bitmap)
+    ref lb = left.buffer
+    ref rb = right.buffer
+    var l_off = left.offset
+    var r_off = right.offset
+    var data_bm = BitmapBuilder.alloc(length)
+
+    def process[
+        W: Int
+    ](i: Int) unified {mut data_bm, read lb, read rb, read l_off, read r_off}:
+        var result = func[W](
+            lb.simd_load[native, W](l_off + i),
+            rb.simd_load[native, W](r_off + i),
+        )
+        for j in range(W):
+            data_bm.set_bit(i + j, result[j].__bool__())
+
+    vectorize[width](length, process)
+    var nulls = 0
+    # TODO: bitmap builder could track null count during building to avoid this extra pass
+    if bm:
+        nulls = length - bm.value().count_set_bits()
+    return PrimitiveArray[bool_dt](
+        length=length,
+        nulls=nulls,
+        offset=0,
+        bitmap=bm,
+        buffer=data_bm.finish(length)._buffer,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +146,7 @@ def equal[
     bool_dt
 ]:
     """Element-wise equality: result[i] = left[i] == right[i]."""
-    return binary_simd[T, bool_dt, _eq[T.native, _], "equal"](left, right)
+    return _binary_cmp[T, _eq[T.native, _], "equal"](left, right)
 
 
 def not_equal[
@@ -88,7 +155,7 @@ def not_equal[
     bool_dt
 ]:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
-    return binary_simd[T, bool_dt, _ne[T.native, _], "not_equal"](left, right)
+    return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right)
 
 
 def less[
@@ -97,7 +164,7 @@ def less[
     bool_dt
 ]:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
-    return binary_simd[T, bool_dt, _lt[T.native, _], "less"](left, right)
+    return _binary_cmp[T, _lt[T.native, _], "less"](left, right)
 
 
 def less_equal[
@@ -106,7 +173,7 @@ def less_equal[
     bool_dt
 ]:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
-    return binary_simd[T, bool_dt, _le[T.native, _], "less_equal"](left, right)
+    return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right)
 
 
 def greater[
@@ -115,7 +182,7 @@ def greater[
     bool_dt
 ]:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
-    return binary_simd[T, bool_dt, _gt[T.native, _], "greater"](left, right)
+    return _binary_cmp[T, _gt[T.native, _], "greater"](left, right)
 
 
 def greater_equal[
@@ -124,9 +191,7 @@ def greater_equal[
     bool_dt
 ]:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
-    return binary_simd[T, bool_dt, _ge[T.native, _], "greater_equal"](
-        left, right
-    )
+    return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right)
 
 
 # ---------------------------------------------------------------------------

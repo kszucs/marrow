@@ -119,9 +119,9 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         var bits = (bp + byte_idx).bitcast[UInt32]().load[alignment=1]()
         bits >>= UInt32(bit_off)
 
-        return ((SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1).cast[
-            DType.bool
-        ]()
+        return (
+            (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
+        ).cast[DType.bool]()
 
     def any_set(self) -> Bool:
         """Return True if any bit in [_offset, _offset + _length) is set.
@@ -144,7 +144,9 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         # Mask out bits below _offset in the first byte and above
         # _offset+_length in the last byte so they don't affect the result.
         var first_mask = UInt8(0xFF) << UInt8(bit_start & 7)
-        var last_mask = UInt8((1 << ((bit_end - 1) & 7) + 1) - 1) if bit_end & 7 != 0 else UInt8(0xFF)
+        var last_mask = UInt8(
+            (1 << ((bit_end - 1) & 7) + 1) - 1
+        ) if bit_end & 7 != 0 else UInt8(0xFF)
 
         if nbytes == 1:
             return (ptr[byte_start] & first_mask & last_mask) != 0
@@ -191,10 +193,12 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         # Mask: set boundary bits outside the logical range to 1 so they
         # don't cause a false negative (we're checking all-ones).
         var first_fill = ~(UInt8(0xFF) << UInt8(bit_start & 7))
-        var last_fill = ~(UInt8((1 << ((bit_end - 1) & 7) + 1) - 1)) if bit_end & 7 != 0 else UInt8(0)
+        var last_fill = ~(
+            UInt8((1 << ((bit_end - 1) & 7) + 1) - 1)
+        ) if bit_end & 7 != 0 else UInt8(0)
 
         if nbytes == 1:
-            return ((ptr[byte_start] | first_fill | last_fill) == 0xFF)
+            return (ptr[byte_start] | first_fill | last_fill) == 0xFF
 
         # Check first and last boundary bytes.
         if (ptr[byte_start] | first_fill) != 0xFF:
@@ -531,7 +535,11 @@ struct BitmapBuilder(Movable):
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
     def copy_bits(
-        mut self, src_ptr: UnsafePointer[UInt8, _], src_offset: Int, dst_offset: Int, length: Int
+        mut self,
+        src_ptr: UnsafePointer[UInt8, _],
+        src_offset: Int,
+        dst_offset: Int,
+        length: Int,
     ):
         """Bulk-copy `length` bits from `src_ptr` at bit `src_offset` into
         self at bit `dst_offset`.
@@ -582,7 +590,11 @@ struct BitmapBuilder(Movable):
 
             # Full middle bytes via memcpy.
             if end_byte > dst_byte:
-                memcpy(dest=dst + dst_byte, src=src_ptr + src_byte, count=end_byte - dst_byte)
+                memcpy(
+                    dest=dst + dst_byte,
+                    src=src_ptr + src_byte,
+                    count=end_byte - dst_byte,
+                )
 
             if end_sub != 0:
                 # Merge trailing partial byte.
@@ -609,7 +621,7 @@ struct BitmapBuilder(Movable):
                         src_ptr[src_byte + 1] << UInt8(8 - delta)
                     )
                 else:
-                    shifted = (src_ptr[src_byte] << UInt8(-delta))
+                    shifted = src_ptr[src_byte] << UInt8(-delta)
                     if src_byte > 0:
                         shifted |= src_ptr[src_byte - 1] >> UInt8(8 + delta)
                 dst[dst_byte_start] = (dst[dst_byte_start] & keep_mask) | (
