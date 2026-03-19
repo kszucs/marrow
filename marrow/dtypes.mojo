@@ -382,33 +382,42 @@ struct DataType(
 
     @always_inline
     def is_integer(self) -> Bool:
-        return self.code in [
-            INT8,
-            INT16,
-            INT32,
-            INT64,
-            UINT8,
-            UINT16,
-            UINT32,
-            UINT64,
-        ]
+        return (
+            self.code == INT8
+            or self.code == INT16
+            or self.code == INT32
+            or self.code == INT64
+            or self.code == UINT8
+            or self.code == UINT16
+            or self.code == UINT32
+            or self.code == UINT64
+        )
 
     @always_inline
     def is_signed_integer(self) -> Bool:
-        return self.code in [INT8, INT16, INT32, INT64]
+        return (
+            self.code == INT8
+            or self.code == INT16
+            or self.code == INT32
+            or self.code == INT64
+        )
 
     @always_inline
     def is_unsigned_integer(self) -> Bool:
-        return self.code in [
-            UINT8,
-            UINT16,
-            UINT32,
-            UINT64,
-        ]
+        return (
+            self.code == UINT8
+            or self.code == UINT16
+            or self.code == UINT32
+            or self.code == UINT64
+        )
 
     @always_inline
     def is_floating_point(self) -> Bool:
-        return self.code in [FLOAT32, FLOAT64]
+        return (
+            self.code == FLOAT16
+            or self.code == FLOAT32
+            or self.code == FLOAT64
+        )
 
     @always_inline
     def is_numeric(self) -> Bool:
@@ -479,17 +488,9 @@ comptime float64 = DataType(code=FLOAT64, native=DType.float64)
 comptime string = DataType(code=STRING)
 comptime binary = DataType(code=BINARY)
 
-comptime numeric_dtypes = [
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-]
+comptime signed_integer_dtypes = [int8, int16, int32, int64]
+comptime unsigned_integer_dtypes = [uint8, uint16, uint32, uint64]
+comptime integer_dtypes = signed_integer_dtypes + unsigned_integer_dtypes
+comptime float_dtypes = [float16, float32, float64]
+comptime numeric_dtypes = integer_dtypes + float_dtypes
 comptime primitive_dtypes = [bool_] + numeric_dtypes

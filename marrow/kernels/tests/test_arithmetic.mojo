@@ -20,6 +20,28 @@ from marrow.kernels.arithmetic import (
     max_,
     neg,
     abs_,
+    sign,
+    pow_,
+    sqrt,
+    exp,
+    exp2,
+    log,
+    log2,
+    log10,
+    log1p,
+    floor,
+    ceil,
+    trunc,
+    round,
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+    sinh,
+    cosh,
+    tanh,
 )
 
 
@@ -351,6 +373,290 @@ def test_abs_large_array() raises:
     assert_equal(result[0], 500)
     assert_equal(result[500], 0)
     assert_equal(result[999], 499)
+
+
+# ---------------------------------------------------------------------------
+# sign
+# ---------------------------------------------------------------------------
+
+
+def test_sign_typed() raises:
+    var a = array[int32]([-3, 0, 5, -1])
+    var result = sign[int32](a)
+    assert_equal(result[0], -1)
+    assert_equal(result[1], 0)
+    assert_equal(result[2], 1)
+    assert_equal(result[3], -1)
+
+
+def test_sign_with_nulls() raises:
+    var a = PrimitiveBuilder[int32](3)
+    a.append(-3)
+    a.append_null()
+    a.append(5)
+    var result = sign[int32](a.finish_typed())
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_true(result.is_valid(2))
+    assert_equal(result[0], -1)
+    assert_equal(result[2], 1)
+
+
+def test_sign_runtime_typed() raises:
+    var a = array[int32]([-3, 0, 5])
+    var result = sign(Array(a))
+    var r = result.as_primitive[int32]()
+    assert_equal(r[0], -1)
+    assert_equal(r[1], 0)
+    assert_equal(r[2], 1)
+
+
+# ---------------------------------------------------------------------------
+# sqrt
+# ---------------------------------------------------------------------------
+
+
+def test_sqrt_typed() raises:
+    var a = array[float32]([4.0, 9.0, 16.0, 25.0])
+    var result = sqrt[float32](a)
+    assert_equal(result[0], 2.0)
+    assert_equal(result[1], 3.0)
+    assert_equal(result[2], 4.0)
+    assert_equal(result[3], 5.0)
+
+
+def test_sqrt_with_nulls() raises:
+    var a = PrimitiveBuilder[float32](3)
+    a.append(4.0)
+    a.append_null()
+    a.append(9.0)
+    var result = sqrt[float32](a.finish_typed())
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_true(result.is_valid(2))
+    assert_equal(result[0], 2.0)
+    assert_equal(result[2], 3.0)
+
+
+def test_sqrt_runtime_typed() raises:
+    var a = array[float64]([1.0, 4.0, 9.0])
+    var result = sqrt(Array(a))
+    var r = result.as_primitive[float64]()
+    assert_equal(r[0], 1.0)
+    assert_equal(r[1], 2.0)
+    assert_equal(r[2], 3.0)
+
+
+# ---------------------------------------------------------------------------
+# exp / exp2
+# ---------------------------------------------------------------------------
+
+
+def test_exp_typed() raises:
+    var a = array[float32]([0.0, 1.0])
+    var result = exp[float32](a)
+    assert_equal(result[0], 1.0)
+    assert_true(result[1] > 2.718 and result[1] < 2.719)
+
+
+def test_exp2_typed() raises:
+    var a = array[float32]([0.0, 1.0, 2.0, 3.0])
+    var result = exp2[float32](a)
+    assert_equal(result[0], 1.0)
+    assert_equal(result[1], 2.0)
+    assert_equal(result[2], 4.0)
+    assert_equal(result[3], 8.0)
+
+
+# ---------------------------------------------------------------------------
+# log / log2 / log10 / log1p
+# ---------------------------------------------------------------------------
+
+
+def test_log_typed() raises:
+    var a = array[float32]([1.0, 2.718282])
+    var result = log[float32](a)
+    assert_equal(result[0], 0.0)
+    assert_true(result[1] > 0.999 and result[1] < 1.001)
+
+
+def test_log2_typed() raises:
+    var a = array[float32]([1.0, 2.0, 4.0, 8.0])
+    var result = log2[float32](a)
+    assert_equal(result[0], 0.0)
+    assert_equal(result[1], 1.0)
+    assert_equal(result[2], 2.0)
+    assert_equal(result[3], 3.0)
+
+
+def test_log10_typed() raises:
+    var a = array[float32]([1.0, 10.0, 100.0])
+    var result = log10[float32](a)
+    assert_equal(result[0], 0.0)
+    assert_equal(result[1], 1.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_log1p_typed() raises:
+    var a = array[float32]([0.0])
+    var result = log1p[float32](a)
+    assert_equal(result[0], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# floor / ceil / trunc / round
+# ---------------------------------------------------------------------------
+
+
+def test_floor_typed() raises:
+    var a = array[float32]([1.7, -1.7, 2.0])
+    var result = floor[float32](a)
+    assert_equal(result[0], 1.0)
+    assert_equal(result[1], -2.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_ceil_typed() raises:
+    var a = array[float32]([1.2, -1.2, 2.0])
+    var result = ceil[float32](a)
+    assert_equal(result[0], 2.0)
+    assert_equal(result[1], -1.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_trunc_typed() raises:
+    var a = array[float32]([1.9, -1.9, 2.0])
+    var result = trunc[float32](a)
+    assert_equal(result[0], 1.0)
+    assert_equal(result[1], -1.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_round_typed() raises:
+    var a = array[float32]([1.4, 1.6, 2.0, -1.6])
+    var result = round[float32](a)
+    assert_equal(result[0], 1.0)
+    assert_equal(result[1], 2.0)
+    assert_equal(result[2], 2.0)
+    assert_equal(result[3], -2.0)
+
+
+def test_floor_with_nulls() raises:
+    var a = PrimitiveBuilder[float32](3)
+    a.append(1.7)
+    a.append_null()
+    a.append(-1.7)
+    var result = floor[float32](a.finish_typed())
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_equal(result[0], 1.0)
+    assert_equal(result[2], -2.0)
+
+
+# ---------------------------------------------------------------------------
+# sin / cos / tan
+# ---------------------------------------------------------------------------
+
+
+def test_sin_typed() raises:
+    var a = array[float64]([0.0])
+    var result = sin[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+def test_cos_typed() raises:
+    var a = array[float64]([0.0])
+    var result = cos[float64](a)
+    assert_equal(result[0], 1.0)
+
+
+def test_tan_typed() raises:
+    var a = array[float64]([0.0])
+    var result = tan[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# asin / acos / atan
+# ---------------------------------------------------------------------------
+
+
+def test_asin_typed() raises:
+    var a = array[float64]([0.0, 1.0])
+    var result = asin[float64](a)
+    assert_equal(result[0], 0.0)
+    assert_true(result[1] > 1.570 and result[1] < 1.572)  # π/2
+
+
+def test_acos_typed() raises:
+    var a = array[float64]([1.0])
+    var result = acos[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+def test_atan_typed() raises:
+    var a = array[float64]([0.0])
+    var result = atan[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# sinh / cosh / tanh
+# ---------------------------------------------------------------------------
+
+
+def test_sinh_typed() raises:
+    var a = array[float64]([0.0])
+    var result = sinh[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+def test_cosh_typed() raises:
+    var a = array[float64]([0.0])
+    var result = cosh[float64](a)
+    assert_equal(result[0], 1.0)
+
+
+def test_tanh_typed() raises:
+    var a = array[float64]([0.0])
+    var result = tanh[float64](a)
+    assert_equal(result[0], 0.0)
+
+
+# ---------------------------------------------------------------------------
+# pow_
+# ---------------------------------------------------------------------------
+
+
+def test_pow_typed() raises:
+    var a = array[float32]([2.0, 3.0, 4.0])
+    var b = array[float32]([3.0, 2.0, 0.5])
+    var result = pow_[float32](a, b)
+    assert_equal(result[0], 8.0)
+    assert_equal(result[1], 9.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_pow_with_nulls() raises:
+    var a = PrimitiveBuilder[float32](3)
+    a.append(2.0)
+    a.append_null()
+    a.append(4.0)
+    var b = array[float32]([3.0, 2.0, 0.5])
+    var result = pow_[float32](a.finish_typed(), b)
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_equal(result[0], 8.0)
+    assert_equal(result[2], 2.0)
+
+
+def test_pow_runtime_typed() raises:
+    var a = array[float64]([2.0, 3.0])
+    var b = array[float64]([3.0, 2.0])
+    var result = pow_(Array(a), Array(b))
+    var r = result.as_primitive[float64]()
+    assert_equal(r[0], 8.0)
+    assert_equal(r[1], 9.0)
 
 
 def main() raises:

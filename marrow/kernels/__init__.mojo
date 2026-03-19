@@ -3,6 +3,8 @@
 Provides:
   - `bitmap_and` — null bitmap propagation (bitwise AND of two validity bitmaps).
   - `binary_array_dispatch` — runtime-typed dispatch over numeric dtypes.
+  - `unary_numeric_dispatch` — runtime-typed unary dispatch over numeric dtypes.
+  - `unary_float_dispatch` — runtime-typed unary dispatch over float dtypes.
 
 Kernel implementations live in their respective modules:
   - `arithmetic.mojo` — binary arithmetic, unary math, GPU dispatch via ``elementwise``
@@ -15,7 +17,7 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray, Array
 from marrow.bitmap import Bitmap
-from marrow.dtypes import DataType, bool_ as bool_dt, numeric_dtypes
+from marrow.dtypes import DataType, bool_ as bool_dt, numeric_dtypes, float_dtypes
 
 
 # ---------------------------------------------------------------------------
@@ -124,3 +126,47 @@ def binary_array_dispatch[
                 )
             )
     raise Error(t"{name}: unsupported dtype {left.dtype}")
+
+
+def unary_numeric_dispatch[
+    name: StringLiteral,
+    func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
+](array: Array) raises -> Array:
+    """Runtime-typed unary dispatch over all numeric dtypes.
+
+    Parameters:
+        name: Operation name used in error messages.
+        func: The typed unary kernel to dispatch to.
+
+    Args:
+        array: Input array (runtime-typed).
+
+    Returns:
+        A new Array with the element-wise result.
+    """
+    comptime for dtype in numeric_dtypes:
+        if array.dtype == dtype:
+            return Array(func[dtype](PrimitiveArray[dtype](data=array)))
+    raise Error(t"{name}: unsupported dtype {array.dtype}")
+
+
+def unary_float_dispatch[
+    name: StringLiteral,
+    func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
+](array: Array) raises -> Array:
+    """Runtime-typed unary dispatch restricted to floating-point dtypes.
+
+    Parameters:
+        name: Operation name used in error messages.
+        func: The typed unary kernel to dispatch to.
+
+    Args:
+        array: Input array (runtime-typed); must be float16, float32, or float64.
+
+    Returns:
+        A new Array with the element-wise result.
+    """
+    comptime for dtype in float_dtypes:
+        if array.dtype == dtype:
+            return Array(func[dtype](PrimitiveArray[dtype](data=array)))
+    raise Error(t"{name}: unsupported dtype {array.dtype}, expected float type")
