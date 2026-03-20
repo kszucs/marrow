@@ -3,48 +3,12 @@
 `filter` selects elements from an array based on a boolean selection array,
 producing a new array containing only the selected elements.
 
-Design
-------
-Selection type is `PrimitiveArray[bool_]` (Arrow bit-packed boolean).  The
-selection bitmap is read through the offset-aware `Bitmap` abstraction.
-
-Primitive filter
-~~~~~~~~~~~~~~~~
-Processes the selection bitmap in 64-bit words (8x fewer outer-loop iterations
-than byte-by-byte).  Strategy is chosen upfront based on selectivity
-(out_len / n), matching Arrow's approach from
-https://dl.acm.org/doi/abs/10.1145/3465998.3466009 :
-
-  selectivity > 80% -> SlicesIterator
-    Finds contiguous runs of 1-bits using trailing_zeros + trailing_ones on
-    each 64-bit word, then bulk-copies each run with `memcpy`.  Avoids
-    per-element scatter overhead for dense filters.
-
-  selectivity <= 80% -> IndexIterator
-    Iterates only the set bits using trailing_zeros + clear-lowest-bit on each
-    64-bit word, then scatters elements one at a time.
-
-  all selected (out_len == n) -> single memcpy of data and validity buffers.
-
-The output validity bitmap is built using `BitmapBuilder` operations
-(`set_bit`, `set_range`) and source validity is read via the offset-aware
-`PrimitiveArray.is_valid()`.
-
-String filter composition
-~~~~~~~~~~~~~~~~~~~~~~~~~
-  1. `string_lengths(array)` -> `PrimitiveArray[uint32]` of per-element byte lengths.
-  2. `filter_[uint32](lengths, selection)` -> selected lengths.
-  3. `sum[uint32](sel_lengths)` -> total output byte size.
-  4. Output validity built directly via `BitmapBuilder`.
-  5. Prefix-sum of sel_lengths -> output offsets buffer.
-  6. Run-merging copy: consecutive selected source ranges are merged into a
-     single `memcpy` for efficiency.
 
 All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 import std.math as math
-from std.bit import count_trailing_zeros
+from std.bit import count_trailing_zeros, pop_count
 from std.memory import memcpy
 from std.sys import size_of
 
@@ -54,6 +18,260 @@ from ..bitmap import Bitmap, BitmapBuilder
 from ..dtypes import DataType, bool_, uint32, string, numeric_dtypes
 from .aggregate import sum_
 from .string import string_lengths
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+
+
+@always_inline
+def _filter_sparse[T: DType](
+    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    out_pos: Int,
+    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    base: Int,
+    sel_word: UInt64,
+):
+    """Sparse filter: CTZ scatter, O(popcount).
+
+    Touches only the set-bit positions via count-trailing-zeros loop.
+    Best when few bits are set (low popcount).
+    """
+    var w = sel_word
+    var out = dst + out_pos
+    var inp = src + base
+    while w != 0:
+        out[0] = inp[Int(count_trailing_zeros(w))]
+        w &= w - 1
+        out = out + 1
+
+
+@always_inline
+def _filter_dense[T: DType](
+    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    out_pos: Int,
+    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    base: Int,
+    sel_word: UInt64,
+):
+    """Dense filter: byte-chunked branchless scatter.
+
+    Processes the 64-bit mask one byte at a time. Precomputes per-byte
+    popcount prefix sums so each of the 8 chunks writes to an independent
+    output region. This breaks the 64-deep serial dependency on the output
+    pointer into 8 independent chains of depth 8 that the OoO engine can
+    overlap (~32 cycles vs ~128 for the naive approach).
+    """
+    var inp = src + base
+    var offset = out_pos
+
+    comptime for i in range(8):
+        var byte = (sel_word >> UInt64(i * 8)) & 0xFF
+        var out = dst + offset
+        var chunk_inp = inp + i * 8
+        var b = byte
+        var k = 0
+        comptime for bit in range(8):
+            out[k] = chunk_inp[bit]
+            k += Int(b & 1)
+            b >>= 1
+        offset += Int(pop_count(byte))
+
+
+#@always_inline
+@no_inline
+def _filter_block[
+    T: DType,
+    SPARSE_THRESHOLD: Int = 24,
+](
+    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    out_pos: Int,
+    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    base: Int,
+    sel_word: UInt64,
+) -> Int:
+    """Filter a 64-element block using density-adaptive dispatch.
+
+    Dispatches to one of two strategies based on the selection word:
+      - Sparse (≤SPARSE_THRESHOLD bits set): CTZ scatter, O(popcount).
+      - Dense (>SPARSE_THRESHOLD bits set): byte-chunked branchless, O(64).
+
+    The caller handles the all-ones and all-zeros fast paths before calling.
+
+    Parameters:
+        T: Element dtype.
+        SPARSE_THRESHOLD: popcount cutoff; at or below → sparse, above → dense.
+
+    Returns:
+        Number of elements written (popcount of sel_word).
+    """
+    var cnt = Int(pop_count(sel_word))
+    if cnt <= SPARSE_THRESHOLD:
+        _filter_sparse[T](dst, out_pos, src, base, sel_word)
+    else:
+        _filter_dense[T](dst, out_pos, src, base, sel_word)
+    return cnt
+
+
+@always_inline
+def _pext(val: UInt64, mask: UInt64) -> UInt64:
+    """Parallel bit extract: keep bits from `val` where `mask` is set, packed
+    to LSB.  Runs in O(popcount(mask)) iterations via CTZ loop.
+    """
+    var result = UInt64(0)
+    var m = mask
+    var k = UInt64(0)
+    while m != 0:
+        var bit_pos = UInt64(count_trailing_zeros(m))
+        result |= ((val >> bit_pos) & 1) << k
+        k += 1
+        m &= m - 1  # clear lowest set bit
+    return result
+
+
+# ---------------------------------------------------------------------------
+# filter — bitmap / values helpers
+# ---------------------------------------------------------------------------
+
+
+def _filter_bits(
+    src: Bitmap,
+    sel: Bitmap, sel_start: Int, sel_end: Int,
+    out_len: Int,
+) -> Tuple[Bitmap, Int]:
+    """Filter a bitmap, keeping bits where selection is set.
+
+    Uses pext + deposit_bits in 64-bit blocks with run-merge for all-ones
+    and all-zeros blocks.  Works for both validity bitmaps and bool data.
+
+    Args:
+        src: Source bitmap to filter.
+        sel: Selection bitmap (True = keep).
+        sel_start: First 64-bit-aligned block with set bits in sel.
+        sel_end: Past-the-end 64-bit-aligned block in sel.
+        out_len: Pre-counted number of set bits in sel.
+
+    Returns:
+        (filtered_bitmap, zero_bit_count) where zero_bit_count is the number
+        of zero bits in the filtered output (null count when filtering
+        validity bitmaps).
+    """
+    comptime ALL_ONES = ~UInt64(0)
+    var builder = BitmapBuilder.alloc(out_len)
+    var bm_pos = 0
+    var zero_count = 0
+    var i = sel_start
+
+    while i + 64 <= sel_end:
+        var sel_word = sel.load_word(i)
+        if sel_word == 0:
+            i += 64
+            while i + 64 <= sel_end and sel.load_word(i) == 0:
+                i += 64
+            continue
+        if sel_word == ALL_ONES:
+            var run_start = i
+            i += 64
+            while i + 64 <= sel_end and sel.load_word(i) == ALL_ONES:
+                i += 64
+            var j = run_start
+            while j < i:
+                var src_word = src.load_word(j)
+                builder.deposit_bits(bm_pos, src_word, 64)
+                zero_count += 64 - Int(pop_count(src_word))
+                bm_pos += 64
+                j += 64
+            continue
+
+        # Mixed block: pext + deposit.
+        var src_word = src.load_word(i)
+        var count = Int(pop_count(sel_word))
+        var compressed = _pext(src_word, sel_word)
+        builder.deposit_bits(bm_pos, compressed, count)
+        zero_count += count - Int(pop_count(compressed))
+        bm_pos += count
+        i += 64
+
+    # Tail: masked pext + deposit.
+    if i < sel_end:
+        var tail = sel_end - i
+        var mask = (UInt64(1) << UInt64(tail)) - 1
+        var sel_word = sel.load_word(i) & mask
+        if sel_word != 0:
+            var src_word = src.load_word(i)
+            var count = Int(pop_count(sel_word))
+            var compressed = _pext(src_word, sel_word)
+            builder.deposit_bits(bm_pos, compressed, count)
+            zero_count += count - Int(pop_count(compressed))
+
+    return builder.finish(out_len), zero_count
+
+
+def _filter_values[T: DType](
+    src_buf: Buffer, src_offset: Int,
+    sel: Bitmap, sel_start: Int, sel_end: Int,
+    out_len: Int,
+) -> Buffer:
+    """Filter fixed-width values, keeping elements where selection is set.
+
+    Uses run-merge for all-ones blocks (memcpy) and density-adaptive
+    block dispatch for mixed blocks.
+
+    Args:
+        src_buf: Source data buffer.
+        src_offset: Element offset into src_buf.
+        sel: Selection bitmap (True = keep).
+        sel_start: First 64-bit-aligned block with set bits in sel.
+        sel_end: Past-the-end 64-bit-aligned block in sel.
+        out_len: Pre-counted number of set bits in sel.
+
+    Returns:
+        A new Buffer containing only the selected elements.
+    """
+    comptime ELEM = size_of[Scalar[T]]()
+    comptime ALL_ONES = ~UInt64(0)
+    var buf = BufferBuilder.alloc_uninit(out_len * ELEM)
+    var src = src_buf.unsafe_ptr[T](src_offset)
+    var dst = buf.unsafe_ptr[T]()
+    var out_pos = 0
+    var i = sel_start
+
+    while i + 64 <= sel_end:
+        var sel_word = sel.load_word(i)
+        if sel_word == 0:
+            i += 64
+            while i + 64 <= sel_end and sel.load_word(i) == 0:
+                i += 64
+            continue
+        if sel_word == ALL_ONES:
+            var run_start = i
+            i += 64
+            while i + 64 <= sel_end and sel.load_word(i) == ALL_ONES:
+                i += 64
+            memcpy(
+                dest=(dst + out_pos).bitcast[UInt8](),
+                src=(src + run_start).bitcast[UInt8](),
+                count=(i - run_start) * ELEM,
+            )
+            out_pos += i - run_start
+            continue
+        out_pos += _filter_block[T](dst, out_pos, src, i, sel_word)
+        i += 64
+
+    # Tail: partial block — force sparse (only reads set-bit positions).
+    if i < sel_end:
+        var tail = sel_end - i
+        var mask = (UInt64(1) << UInt64(tail)) - 1
+        var sel_word = sel.load_word(i) & mask
+        if sel_word != 0:
+            out_pos += _filter_block[T, SPARSE_THRESHOLD=64](
+                dst, out_pos, src, i, sel_word
+            )
+
+    return buf.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -68,176 +286,59 @@ def filter_[
 ) raises -> PrimitiveArray[T]:
     """Filter a primitive array, keeping only elements where selection is True.
 
-    Supports arrays with non-zero offsets (sliced arrays).  When the selection
-    offset is byte-aligned (common case), the optimized word-based iteration
-    is used.  Otherwise falls back to element-by-element using offset-aware
-    accessors.
-
-    Parameters:
-        T: Element DataType.
-
     Args:
-        array: The input array.
-        selection: Bit-packed boolean selection (True = keep).
+        array: The input primitive array.
+        selection: Boolean selection mask (True = keep).
 
     Returns:
         A new PrimitiveArray containing only the selected elements.
     """
-    if len(array) != len(selection):
-        raise Error(
-            t"filter: array length {len(array)} != selection length"
-            t" {len(selection)}"
-        )
     var n = len(array)
+    if n != len(selection):
+        raise Error(
+            t"filter: array length {n} != selection length {len(selection)}"
+        )
+
     var sel_bm = Bitmap(selection.buffer, selection.offset, n)
-    var out_len = sel_bm.count_set_bits()
+    var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
-    comptime native = T.native
-    comptime elem_size = size_of[Scalar[native]]()
-    var buf = BufferBuilder.alloc[native](out_len)
-    var bm = BitmapBuilder.alloc(out_len)
-    var arr_off = array.offset
-    var has_nulls = array.nulls > 0
+    if out_len == 0:
+        var empty_buf = BufferBuilder.alloc[T.native](0)
+        return PrimitiveArray[T](
+            length=0, nulls=0, offset=0, bitmap=None,
+            buffer=empty_buf.finish(),
+        )
 
-    if out_len == n:
-        # All selected: bulk copy of data and validity.
-        comptime if native == DType.bool:
-            for i in range(n):
-                buf.unsafe_set[DType.bool](
-                    i,
-                    rebind[Scalar[DType.bool]](array.unsafe_get(i)),
-                )
-        else:
-            memcpy(
-                dest=buf.ptr,
-                src=array.buffer.unsafe_ptr() + arr_off * elem_size,
-                count=n * elem_size,
-            )
-        if has_nulls:
-            bm.copy_bits(
-                array.bitmap.value()._buffer.unsafe_ptr(),
-                array.offset,
-                0,
-                n,
-            )
-        else:
-            bm.set_range(0, n, True)
-    elif out_len > 0 and selection.offset & 7 == 0:
-        # Byte-aligned selection: optimized word-based iteration.
-        var sel_byte_off = selection.offset >> 3
-        var sel_ptr = selection.buffer.unsafe_ptr() + sel_byte_off
-        var word_ptr = sel_ptr.bitcast[UInt64]()
-        var word_count = math.ceildiv(n, 64)
-        var out_idx = 0
+    # Filter validity bitmap (shared by both paths).
+    var bm: Optional[Bitmap] = None
+    var null_count = 0
+    if array.bitmap:
+        var val_bm = array.bitmap.value().slice(array.offset, n)
+        var filtered_bm, nc = _filter_bits(
+            val_bm, sel_bm, sel_start, sel_end, out_len
+        )
+        bm = filtered_bm
+        null_count = nc
 
-        if out_len * 10 > n * 8:
-            # Selectivity > 80%: SlicesIterator — find contiguous 1-bit runs
-            # and bulk-copy each run.
-            for word_i in range(word_count):
-                var word = word_ptr[word_i]
-                if word == 0:
-                    continue
-                var base = word_i * 64
-                while word != 0:
-                    var start_bit = Int(count_trailing_zeros(word))
-                    word |= (UInt64(1) << UInt64(start_bit)) - 1
-                    var end_bit = Int(count_trailing_zeros(~word))
-                    if end_bit < 64:
-                        word &= ~((UInt64(1) << UInt64(end_bit)) - 1)
-                    else:
-                        word = 0
-                    var run_start = base + start_bit
-                    var run_end = min(base + end_bit, n)
-                    var run_len = run_end - run_start
-                    # Bulk-copy data for this run.
-                    comptime if native == DType.bool:
-                        for i in range(run_len):
-                            buf.unsafe_set[DType.bool](
-                                out_idx + i,
-                                rebind[Scalar[DType.bool]](
-                                    array.unsafe_get(run_start + i)
-                                ),
-                            )
-                    else:
-                        memcpy(
-                            dest=buf.ptr + out_idx * elem_size,
-                            src=array.buffer.unsafe_ptr()
-                            + (arr_off + run_start) * elem_size,
-                            count=run_len * elem_size,
-                        )
-                    # Copy validity for this run.
-                    if has_nulls:
-                        bm.copy_bits(
-                            array.bitmap.value()._buffer.unsafe_ptr(),
-                            arr_off + run_start,
-                            out_idx,
-                            run_len,
-                        )
-                    else:
-                        bm.set_range(out_idx, run_len, True)
-                    out_idx += run_len
-        else:
-            # Selectivity <= 80%: IndexIterator — scatter individual elements.
-            if has_nulls:
-                for word_i in range(word_count):
-                    var word = word_ptr[word_i]
-                    if word == 0:
-                        continue
-                    var base = word_i * 64
-                    while word != 0:
-                        var bit = Int(count_trailing_zeros(word))
-                        var elem_i = base + bit
-                        if elem_i >= n:
-                            break
-                        buf.unsafe_set[native](
-                            out_idx, array.unsafe_get(elem_i)
-                        )
-                        bm.set_bit(out_idx, array.is_valid(elem_i))
-                        out_idx += 1
-                        word &= word - 1
-            else:
-                for word_i in range(word_count):
-                    var word = word_ptr[word_i]
-                    if word == 0:
-                        continue
-                    var base = word_i * 64
-                    while word != 0:
-                        var bit = Int(count_trailing_zeros(word))
-                        var elem_i = base + bit
-                        if elem_i >= n:
-                            break
-                        buf.unsafe_set[native](
-                            out_idx, array.unsafe_get(elem_i)
-                        )
-                        out_idx += 1
-                        word &= word - 1
-                bm.set_range(0, out_len, True)
-    elif out_len > 0:
-        # Non-byte-aligned selection offset: element-by-element fallback.
-        var out_idx = 0
-        if has_nulls:
-            for i in range(n):
-                if sel_bm.is_valid(i):
-                    buf.unsafe_set[native](out_idx, array.unsafe_get(i))
-                    bm.set_bit(out_idx, array.is_valid(i))
-                    out_idx += 1
-        else:
-            for i in range(n):
-                if sel_bm.is_valid(i):
-                    buf.unsafe_set[native](out_idx, array.unsafe_get(i))
-                    out_idx += 1
-            bm.set_range(0, out_len, True)
-
-    var bm_bitmap = bm.finish(out_len)
-    var ones = bm_bitmap.count_set_bits()
-    var null_count = out_len - ones
-    return PrimitiveArray[T](
-        length=out_len,
-        nulls=null_count,
-        offset=0,
-        bitmap=Optional[Bitmap](bm_bitmap) if null_count > 0 else None,
-        buffer=buf.finish(),
-    )
+    # Filter data and return.
+    comptime if T == bool_:
+        var data_bm = Bitmap(array.buffer, array.offset, n)
+        var filtered_data, _ = _filter_bits(
+            data_bm, sel_bm, sel_start, sel_end, out_len
+        )
+        return PrimitiveArray[T](
+            length=out_len, nulls=null_count, offset=0,
+            bitmap=bm, buffer=filtered_data._buffer,
+        )
+    else:
+        var result_buf = _filter_values[T.native](
+            array.buffer, array.offset,
+            sel_bm, sel_start, sel_end, out_len,
+        )
+        return PrimitiveArray[T](
+            length=out_len, nulls=null_count, offset=0,
+            bitmap=bm, buffer=result_buf,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,126 +349,138 @@ def filter_[
 def filter_(
     array: StringArray, selection: PrimitiveArray[bool_]
 ) raises -> StringArray:
-    """Filter a StringArray, keeping only elements where selection is True.
+    """Filter a string array, keeping only elements where selection is True.
 
-    Supports arrays with non-zero offsets (sliced arrays).
-
-    Composes:
-      1. `string_lengths` to get per-element byte counts.
-      2. `filter_[uint32]` to select the relevant lengths.
-      3. `sum[uint32]` to compute the total output byte size.
-      4. Output validity built directly via `BitmapBuilder`.
-      5. Prefix sum of selected lengths to build the output offsets buffer.
-      6. Run-merging `memcpy` to copy selected string data.
+    Uses run merging: consecutive selected elements are copied with a single
+    memcpy call to reduce per-element overhead.  When the source has a
+    validity bitmap, it is filtered in the same pass (no second traversal).
 
     Args:
         array: The input string array.
-        selection: Bit-packed boolean selection (True = keep).
+        selection: Boolean selection mask (True = keep).
 
     Returns:
-        A new StringArray containing only the selected elements.
+        A new StringArray containing only the selected strings.
     """
-    if len(array) != len(selection):
+    var n = len(array)
+    if n != len(selection):
         raise Error(
-            t"filter: array length {len(array)} != selection length"
-            t" {len(selection)}"
+            t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var n = len(array)
     var sel_bm = Bitmap(selection.buffer, selection.offset, n)
-    var arr_off = array.offset
+    var out_len = sel_bm.count_set_bits()
 
-    # Step 1+2: compute and filter per-element lengths
-    var lengths = string_lengths(array)
-    var sel_lengths = filter_[uint32](lengths, selection)
+    if out_len == 0:
+        var empty_offsets = BufferBuilder.alloc[DType.uint32](1)
+        var empty_values = BufferBuilder.alloc[DType.uint8](0)
+        return StringArray(
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            offsets=empty_offsets.finish(),
+            values=empty_values.finish(),
+        )
 
-    # Step 3: total output byte size
-    var total_bytes = Int(sum_[uint32](sel_lengths))
+    var off = array.offset
+    var offsets_ptr = array.offsets.unsafe_ptr[DType.uint32]()
+    var values_ptr = array.values.unsafe_ptr()
 
-    var out_len = len(sel_lengths)
-
-    # Step 4: build output validity directly via BitmapBuilder
-    var out_bm = BitmapBuilder.alloc(out_len)
-    if array.nulls > 0:
-        var out_idx = 0
-        for i in range(n):
-            if sel_bm.is_valid(i):
-                out_bm.set_bit(out_idx, array.is_valid(i))
-                out_idx += 1
-    else:
-        out_bm.set_range(0, out_len, True)
-
-    # Step 5: build output offsets via prefix sum of sel_lengths
-    var offsets_buf = BufferBuilder.alloc[DType.uint32](out_len + 1)
-    offsets_buf.unsafe_set[DType.uint32](0, UInt32(0))
-    var running = UInt32(0)
-    for i in range(out_len):
-        running = running + UInt32(sel_lengths.unsafe_get(i))
-        offsets_buf.unsafe_set[DType.uint32](i + 1, running)
-
-    # Step 6: copy selected string data with run-merging
-    var values_buf = BufferBuilder.alloc[DType.uint8](max(total_bytes, 1))
-    var src_ptr = array.values.unsafe_ptr()
-    var dst_ptr = values_buf.unsafe_ptr()
-
-    var run_src_start = -1
-    var run_src_end = -1
-    var dst_offset = 0
-
+    # Compute total output bytes.
+    var total_bytes = 0
     for i in range(n):
         if sel_bm.is_valid(i):
-            var src_start = Int(
-                array.offsets.unsafe_get[DType.uint32](arr_off + i)
+            total_bytes += Int(offsets_ptr[off + i + 1]) - Int(
+                offsets_ptr[off + i]
             )
-            var src_end = Int(
-                array.offsets.unsafe_get[DType.uint32](arr_off + i + 1)
-            )
-            if run_src_start == -1:
-                run_src_start = src_start
-                run_src_end = src_end
-            elif src_start == run_src_end:
-                run_src_end = src_end
-            else:
-                var run_len = run_src_end - run_src_start
-                memcpy(
-                    dest=dst_ptr + dst_offset,
-                    src=src_ptr + run_src_start,
-                    count=run_len,
-                )
-                dst_offset += run_len
-                run_src_start = src_start
-                run_src_end = src_end
-        else:
-            if run_src_start != -1:
-                var run_len = run_src_end - run_src_start
-                memcpy(
-                    dest=dst_ptr + dst_offset,
-                    src=src_ptr + run_src_start,
-                    count=run_len,
-                )
-                dst_offset += run_len
-                run_src_start = -1
-                run_src_end = -1
 
-    # Flush final run
-    if run_src_start != -1:
-        var run_len = run_src_end - run_src_start
-        memcpy(
-            dest=dst_ptr + dst_offset,
-            src=src_ptr + run_src_start,
-            count=run_len,
-        )
+    # Allocate output buffers.
+    # TODO: use alloc_uninit to spare zeroing the output buffers
+    var out_offsets = BufferBuilder.alloc[DType.uint32](out_len + 1)
+    var out_values = BufferBuilder.alloc[DType.uint8](total_bytes)
+    var out_off_ptr = out_offsets.unsafe_ptr[DType.uint32]()
+    var out_val_ptr = out_values.unsafe_ptr[DType.uint8]()
+    var bm: Optional[Bitmap] = None
+    var null_count = 0
 
-    var validity_bm = out_bm.finish(out_len)
-    var out_valid_count = validity_bm.count_set_bits()
-    var null_count = out_len - out_valid_count
+    if array.bitmap:
+        # --- With bitmap: fused run-merging + bitmap filtering ---
+        var src_bm = array.bitmap.value()
+        var bm_builder = BitmapBuilder.alloc(out_len)
+        var byte_pos = UInt32(0)
+        out_off_ptr[0] = 0
+        var j = 0
+        var i = 0
+
+        while i < n:
+            if not sel_bm.is_valid(i):
+                i += 1
+                continue
+
+            var run_start = i
+            while i < n and sel_bm.is_valid(i):
+                var elem_start = offsets_ptr[off + i]
+                var elem_end = offsets_ptr[off + i + 1]
+                byte_pos += elem_end - elem_start
+                var valid = src_bm.is_valid(off + i)
+                bm_builder.set_bit(j, valid)
+                if not valid:
+                    null_count += 1
+                j += 1
+                out_off_ptr[j] = byte_pos
+                i += 1
+
+            var src_byte_start = Int(offsets_ptr[off + run_start])
+            var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
+            var run_bytes = src_byte_end - src_byte_start
+            if run_bytes > 0:
+                memcpy(
+                    dest=out_val_ptr + Int(byte_pos) - run_bytes,
+                    src=values_ptr + src_byte_start,
+                    count=run_bytes,
+                )
+
+        bm = bm_builder.finish(out_len)
+
+    else:
+        # --- No bitmap: run-merging only ---
+        var byte_pos = UInt32(0)
+        out_off_ptr[0] = 0
+        var j = 0
+        var i = 0
+
+        while i < n:
+            if not sel_bm.is_valid(i):
+                i += 1
+                continue
+
+            var run_start = i
+            while i < n and sel_bm.is_valid(i):
+                var elem_start = offsets_ptr[off + i]
+                var elem_end = offsets_ptr[off + i + 1]
+                byte_pos += elem_end - elem_start
+                j += 1
+                out_off_ptr[j] = byte_pos
+                i += 1
+
+            var src_byte_start = Int(offsets_ptr[off + run_start])
+            var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
+            var run_bytes = src_byte_end - src_byte_start
+            if run_bytes > 0:
+                memcpy(
+                    dest=out_val_ptr + Int(byte_pos) - run_bytes,
+                    src=values_ptr + src_byte_start,
+                    count=run_bytes,
+                )
+
     return StringArray(
         length=out_len,
         nulls=null_count,
         offset=0,
-        bitmap=Optional[Bitmap](validity_bm) if null_count > 0 else None,
-        offsets=offsets_buf.finish(),
-        values=values_buf.finish(),
+        bitmap=bm,
+        offsets=out_offsets.finish(),
+        values=out_values.finish(),
     )
 
 

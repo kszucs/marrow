@@ -329,6 +329,7 @@ struct BufferBuilder(Movable):
         else:
             return math.align_up(length * size_of[T](), 64)
 
+    # TODO: rename to alloc_zeroed
     @staticmethod
     def alloc[
         I: Intable, //, T: DType = DType.uint8

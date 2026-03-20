@@ -166,6 +166,7 @@ def _binary[
         lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
         rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
     else:
+        # TODO: use alloc_uninit to spare the zeroing of the output buffer
         buf = BufferBuilder.alloc[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)

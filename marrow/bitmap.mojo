@@ -221,12 +221,24 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
 
         return True
 
-    def count_set_bits(self) -> Int:
-        """Count set bits in [_offset, _offset + _length) using SIMD popcount.
+    def count_set_bits_with_range(self) -> Tuple[Int, Int, Int]:
+        """Count set bits and return the logical bit range that covers them.
 
-        Tier 1: 512-byte blocks with 2 interleaved uint8 accumulators.
-        Tier 2: 64-byte blocks for the remainder.
-        Lead/trail corrections subtract bits outside the bitmap's logical range.
+        Same SIMD scan as count_set_bits(), but also tracks the first and last
+        512-byte (Tier 1) or 64-byte (Tier 2) block that contains set bits.
+        Callers can use the returned range to bound filter loops, skipping
+        leading and trailing zero blocks without an extra pass.
+
+        Lead/trail bytes are zero per the Arrow buffer spec, so block-level
+        tracking is accurate regardless of the bitmap's bit offset.
+
+        Returns (count, start, end):
+          count: total set bits
+          start: logical bit offset of the first block with set bits, rounded
+                 down to a 64-bit boundary (≥ 0)
+          end:   logical bit offset past the last block with set bits, rounded
+                 up to a 64-bit boundary (≤ _length)
+        If count == 0, returns (0, 0, 0).
         """
         comptime width = simd_width_of[DType.uint8]()
         comptime t1_iters = 512 // width // 2
@@ -234,12 +246,16 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
         comptime t2_iters = 64 // width
 
         if self._length == 0:
-            return 0
+            return (0, 0, 0)
 
         ptr, total_bytes, lead_bits, trail_bits = self._aligned_byte_range()
 
+        # first_byte / last_byte: byte offsets in the aligned buffer of the
+        # first and last (exclusive) block that has a non-zero SIMD popcount.
+        var first_byte = total_bytes  # sentinel: not yet found
+        var last_byte = 0
+
         # Tier 1: 512-byte blocks, 2 interleaved uint8 accumulators.
-        # NEON: 16 iters/acc, max 128/lane ≤ 255 ✓ (cast to uint16 before sum).
         var t1_end = (total_bytes // t1_bytes) * t1_bytes
         var count = 0
         for i in range(0, t1_end, t1_bytes):
@@ -252,19 +268,28 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
                 acc1 += pop_count(
                     (ptr + i + (j * 2 + 1) * width).load[width=width]()
                 )
-            count += Int(
+            var block_count = Int(
                 (
                     acc0.cast[DType.uint16]() + acc1.cast[DType.uint16]()
                 ).reduce_add()
             )
+            if block_count > 0:
+                if first_byte == total_bytes:
+                    first_byte = i
+                last_byte = i + t1_bytes
+            count += block_count
 
         # Tier 2: 64-byte blocks for the remainder.
-        # NEON: 4 iters, max 32/lane ≤ 255 ✓.
         for i in range(t1_end, total_bytes, 64):
             var acc = SIMD[DType.uint8, width](0)
             comptime for j in range(t2_iters):
                 acc += pop_count((ptr + i + j * width).load[width=width]())
-            count += Int(acc.cast[DType.uint16]().reduce_add())
+            var block_count = Int(acc.cast[DType.uint16]().reduce_add())
+            if block_count > 0:
+                if first_byte == total_bytes:
+                    first_byte = i
+                last_byte = i + 64
+            count += block_count
 
         # Subtract bits outside [_offset, _offset + _length).
         if lead_bits:
@@ -287,7 +312,39 @@ struct Bitmap(Equatable, ImplicitlyCopyable, Movable, Sized, Writable):
             for i in range(first_trail, total_bytes):
                 count -= Int(pop_count(ptr[i]))
 
+        if count == 0:
+            return (0, 0, 0)
+
+        # Convert aligned-buffer byte offsets → logical bit positions, then
+        # snap to 64-bit word boundaries (down for start, up for end).
+        var start = max(0, first_byte * 8 - lead_bits)
+        var end = min(self._length, last_byte * 8 - lead_bits)
+        start = (start // 64) * 64
+        end = min(self._length, ((end + 63) // 64) * 64)
+        return (count, start, end)
+
+    def count_set_bits(self) -> Int:
+        """Count set bits in [_offset, _offset + _length)."""
+        count, _, _ = self.count_set_bits_with_range()
         return count
+
+    @always_inline
+    def load_word(self, index: Int) -> UInt64:
+        """Load 64 selection bits starting at logical position `index`.
+
+        Handles the bitmap's bit offset correctly. Safe because Arrow buffers
+        are 64-byte padded, so reading 8 bytes at any valid byte offset never
+        faults.
+        """
+        var abs_pos = self._offset + index
+        var byte_idx = abs_pos >> 3
+        var bit_off = abs_pos & 7
+        var raw = (
+            (self._buffer.unsafe_ptr() + byte_idx)
+            .bitcast[UInt64]()
+            .load[alignment=1]()
+        )
+        return raw >> UInt64(bit_off)
 
     def slice(self, offset: Int, length: Int) -> Bitmap:
         """Return a zero-copy view of `length` bits starting at `offset`."""
@@ -478,6 +535,29 @@ struct BitmapBuilder(Movable):
         """Return the raw mutable byte pointer (for low-level bit operations).
         """
         return self._builder.ptr
+
+    @always_inline
+    def deposit_bits(mut self, bit_offset: Int, bits: UInt64, count: Int):
+        """Deposit `count` LSBs from `bits` into the builder at `bit_offset`.
+
+        The builder must be zero-filled (from `alloc`), as this uses OR to set
+        bits. Handles arbitrary bit alignment — writes up to 9 bytes when the
+        64-bit value straddles a byte boundary.
+        """
+        if count == 0:
+            return
+        var dst = self._builder.ptr
+        var byte_idx = bit_offset >> 3
+        var bit_off = bit_offset & 7
+        var shifted = bits << UInt64(bit_off)
+        # OR the low 8 bytes.
+        var ptr64 = (dst + byte_idx).bitcast[UInt64]()
+        ptr64.store[alignment=1](ptr64.load[alignment=1]() | shifted)
+        # Handle overflow into the 9th byte when shifted bits spill past 64.
+        if bit_off > 0 and bit_off + count > 64:
+            dst[byte_idx + 8] = dst[byte_idx + 8] | UInt8(
+                bits >> UInt64(64 - bit_off)
+            )
 
     # TODO: add safe apis
     @always_inline

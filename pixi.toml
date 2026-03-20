@@ -18,6 +18,7 @@ test = { cmd = "pytest -v", depends-on = ["build_python"] }
 bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
 bench_python = { cmd = "pytest --benchmark --python -v", depends-on = ["build_python"] }
 bench = { cmd = "pytest --benchmark -v", depends-on = ["build_python"] }
+profile = "python scripts/profile.py"
 fmt_mojo = { cmd = "mojo format marrow" }
 fmt_python = { cmd = "ruff format python" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
@@ -59,6 +60,7 @@ pytest-benchmark = ">=5.2.3,<6"
 python = ">=3.14.2,<3.15"
 quarto = ">=1.6,<2"
 ruff = ">=0.14.14,<0.15"
+polars = ">=1.39.2,<2"
 
 [pypi-dependencies]
 pyarrow = ">=23.0.0, <24"
