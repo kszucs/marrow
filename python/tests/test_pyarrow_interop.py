@@ -111,7 +111,8 @@ def test_schema_to_pyarrow_nested():
 
 
 def test_schema_from_pyarrow():
-    pa_schema = pa.schema([pa.field("x", pa.int32()), pa.field("y", pa.float64())])
+    pa_schema = pa.schema(
+        [pa.field("x", pa.int32()), pa.field("y", pa.float64())])
     schema = ma.schema(pa_schema)
     assert pa.schema(schema).equals(pa_schema)
 
@@ -220,7 +221,8 @@ def test_array_from_pyarrow_list():
 def test_array_from_pyarrow_struct():
     pa_arr = pa.array(
         [{"a": 1, "b": 2.0}, {"a": 3, "b": 4.0}],
-        type=pa.struct([pa.field("a", pa.int64()), pa.field("b", pa.float64())]),
+        type=pa.struct([pa.field("a", pa.int64()),
+                       pa.field("b", pa.float64())]),
     )
     ma_arr = ma.array(pa_arr)
     assert len(ma_arr) == 2
@@ -252,7 +254,8 @@ def test_record_batch_from_pyarrow():
 
 def test_record_batch_to_pyarrow():
     ma_rb = ma.record_batch(
-        {"x": ma.array([1, 2, 3], type=ma.int64()), "y": ma.array(["a", "b", "c"])}
+        {"x": ma.array([1, 2, 3], type=ma.int64()),
+         "y": ma.array(["a", "b", "c"])}
     )
     pa_rb = pa.record_batch(ma_rb)
     assert pa_rb.num_rows == 3

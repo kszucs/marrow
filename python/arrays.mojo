@@ -44,7 +44,7 @@ from marrow.builders import (
 )
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
-from helpers import pymethod
+from helpers import pymethod, def_display
 
 
 # ---------------------------------------------------------------------------
@@ -825,8 +825,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = (
         bool_array_py.def_method[pymethod[BoolArray.null_count]()]("null_count")
         .def_method[pymethod[BoolArray.type]()]("type")
-        .def_method[pymethod[BoolArray.__str__]()]("__str__")
-        .def_method[pymethod[BoolArray.__str__]()]("__repr__")
         .def_method[pymethod[BoolArray.is_valid]()]("is_valid")
         .def_method[pymethod[BoolArray.slice]()]("slice")
         .def_method[pymethod[BoolArray.true_count]()]("true_count")
@@ -834,6 +832,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[arrow_c_array[_to_array[dt.bool_]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[BoolArray.type]]("__arrow_c_schema__")
     )
+    _ = def_display[BoolArray](bool_array_py)
     var bool_array_sp = SequenceProtocolBuilder[BoolArray](bool_array_py)
     _ = bool_array_sp.def_len[BoolArray.__len__]().def_getitem[
         BoolArray.__getitem__
@@ -844,13 +843,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = (
         int8_array_py.def_method[pymethod[Int8Array.null_count]()]("null_count")
         .def_method[pymethod[Int8Array.type]()]("type")
-        .def_method[pymethod[Int8Array.__str__]()]("__str__")
-        .def_method[pymethod[Int8Array.__str__]()]("__repr__")
         .def_method[pymethod[Int8Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int8Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.int8]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Int8Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Int8Array](int8_array_py)
     var int8_array_sp = SequenceProtocolBuilder[Int8Array](int8_array_py)
     _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[
         Int8Array.__getitem__
@@ -862,13 +860,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[Int16Array.type]()]("type")
-        .def_method[pymethod[Int16Array.__str__]()]("__str__")
-        .def_method[pymethod[Int16Array.__str__]()]("__repr__")
         .def_method[pymethod[Int16Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int16Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.int16]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Int16Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Int16Array](int16_array_py)
     var int16_array_sp = SequenceProtocolBuilder[Int16Array](int16_array_py)
     _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[
         Int16Array.__getitem__
@@ -880,13 +877,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[Int32Array.type]()]("type")
-        .def_method[pymethod[Int32Array.__str__]()]("__str__")
-        .def_method[pymethod[Int32Array.__str__]()]("__repr__")
         .def_method[pymethod[Int32Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int32Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.int32]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Int32Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Int32Array](int32_array_py)
     var int32_array_sp = SequenceProtocolBuilder[Int32Array](int32_array_py)
     _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[
         Int32Array.__getitem__
@@ -898,13 +894,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[Int64Array.type]()]("type")
-        .def_method[pymethod[Int64Array.__str__]()]("__str__")
-        .def_method[pymethod[Int64Array.__str__]()]("__repr__")
         .def_method[pymethod[Int64Array.is_valid]()]("is_valid")
         .def_method[pymethod[Int64Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.int64]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Int64Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Int64Array](int64_array_py)
     var int64_array_sp = SequenceProtocolBuilder[Int64Array](int64_array_py)
     _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[
         Int64Array.__getitem__
@@ -916,13 +911,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[UInt8Array.type]()]("type")
-        .def_method[pymethod[UInt8Array.__str__]()]("__str__")
-        .def_method[pymethod[UInt8Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt8Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt8Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.uint8]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[UInt8Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[UInt8Array](uint8_array_py)
     var uint8_array_sp = SequenceProtocolBuilder[UInt8Array](uint8_array_py)
     _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[
         UInt8Array.__getitem__
@@ -934,13 +928,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[UInt16Array.type]()]("type")
-        .def_method[pymethod[UInt16Array.__str__]()]("__str__")
-        .def_method[pymethod[UInt16Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt16Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt16Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.uint16]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[UInt16Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[UInt16Array](uint16_array_py)
     var uint16_array_sp = SequenceProtocolBuilder[UInt16Array](uint16_array_py)
     _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[
         UInt16Array.__getitem__
@@ -952,13 +945,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[UInt32Array.type]()]("type")
-        .def_method[pymethod[UInt32Array.__str__]()]("__str__")
-        .def_method[pymethod[UInt32Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt32Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt32Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.uint32]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[UInt32Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[UInt32Array](uint32_array_py)
     var uint32_array_sp = SequenceProtocolBuilder[UInt32Array](uint32_array_py)
     _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[
         UInt32Array.__getitem__
@@ -970,13 +962,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[UInt64Array.type]()]("type")
-        .def_method[pymethod[UInt64Array.__str__]()]("__str__")
-        .def_method[pymethod[UInt64Array.__str__]()]("__repr__")
         .def_method[pymethod[UInt64Array.is_valid]()]("is_valid")
         .def_method[pymethod[UInt64Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.uint64]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[UInt64Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[UInt64Array](uint64_array_py)
     var uint64_array_sp = SequenceProtocolBuilder[UInt64Array](uint64_array_py)
     _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[
         UInt64Array.__getitem__
@@ -988,13 +979,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[Float32Array.type]()]("type")
-        .def_method[pymethod[Float32Array.__str__]()]("__str__")
-        .def_method[pymethod[Float32Array.__str__]()]("__repr__")
         .def_method[pymethod[Float32Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float32Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.float32]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Float32Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Float32Array](float32_array_py)
     var float32_array_sp = SequenceProtocolBuilder[Float32Array](
         float32_array_py
     )
@@ -1008,13 +998,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[Float64Array.type]()]("type")
-        .def_method[pymethod[Float64Array.__str__]()]("__str__")
-        .def_method[pymethod[Float64Array.__str__]()]("__repr__")
         .def_method[pymethod[Float64Array.is_valid]()]("is_valid")
         .def_method[pymethod[Float64Array.slice]()]("slice")
         .def_method[arrow_c_array[_to_array[dt.float64]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[Float64Array.type]]("__arrow_c_schema__")
     )
+    _ = def_display[Float64Array](float64_array_py)
     var float64_array_sp = SequenceProtocolBuilder[Float64Array](
         float64_array_py
     )
@@ -1029,13 +1018,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[StringArray.type]()]("type")
-        .def_method[pymethod[StringArray.__str__]()]("__str__")
-        .def_method[pymethod[StringArray.__str__]()]("__repr__")
         .def_method[pymethod[StringArray.is_valid]()]("is_valid")
         .def_method[pymethod[StringArray.slice]()]("slice")
         .def_method[arrow_c_array[_str_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[StringArray.type]]("__arrow_c_schema__")
     )
+    _ = def_display[StringArray](str_array_py)
     var str_array_sp = SequenceProtocolBuilder[StringArray](str_array_py)
     _ = str_array_sp.def_len[StringArray.__len__]().def_getitem[_str_getitem]()
 
@@ -1044,8 +1032,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = (
         list_array_py.def_method[pymethod[ListArray.null_count]()]("null_count")
         .def_method[pymethod[ListArray.type]()]("type")
-        .def_method[pymethod[ListArray.__str__]()]("__str__")
-        .def_method[pymethod[ListArray.__str__]()]("__repr__")
         .def_method[pymethod[ListArray.is_valid]()]("is_valid")
         .def_method[pymethod[ListArray.slice]()]("slice")
         .def_method[pymethod[ListArray.flatten]()]("flatten")
@@ -1053,6 +1039,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[arrow_c_array[_list_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[ListArray.type]]("__arrow_c_schema__")
     )
+    _ = def_display[ListArray](list_array_py)
     var list_array_sp = SequenceProtocolBuilder[ListArray](list_array_py)
     _ = list_array_sp.def_len[ListArray.__len__]().def_getitem[_list_getitem]()
 
@@ -1063,14 +1050,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[FixedSizeListArray.type]()]("type")
-        .def_method[pymethod[FixedSizeListArray.__str__]()]("__str__")
-        .def_method[pymethod[FixedSizeListArray.__str__]()]("__repr__")
         .def_method[pymethod[FixedSizeListArray.is_valid]()]("is_valid")
         .def_method[pymethod[FixedSizeListArray.slice]()]("slice")
         .def_method[pymethod[FixedSizeListArray.flatten]()]("flatten")
         .def_method[arrow_c_array[_fsl_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[FixedSizeListArray.type]]("__arrow_c_schema__")
     )
+    _ = def_display[FixedSizeListArray](fsl_array_py)
     var fsl_array_sp = SequenceProtocolBuilder[FixedSizeListArray](fsl_array_py)
     _ = fsl_array_sp.def_len[FixedSizeListArray.__len__]().def_getitem[
         _fsl_getitem
@@ -1083,13 +1069,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "null_count"
         )
         .def_method[pymethod[StructArray.type]()]("type")
-        .def_method[pymethod[StructArray.__str__]()]("__str__")
-        .def_method[pymethod[StructArray.__str__]()]("__repr__")
         .def_method[pymethod[StructArray.is_valid]()]("is_valid")
         .def_method[pymethod[StructArray.field]()]("field")
         .def_method[arrow_c_array[_struct_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[StructArray.type]]("__arrow_c_schema__")
     )
+    _ = def_display[StructArray](struct_array_py)
     var struct_array_sp = SequenceProtocolBuilder[StructArray](struct_array_py)
     _ = struct_array_sp.def_len[StructArray.__len__]()
 

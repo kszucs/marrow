@@ -5,8 +5,13 @@ by auto-converting arguments via ConvertibleFromPython and return values via
 ConvertibleToPython.
 """
 
-from std.python import PythonObject, Python, ConvertibleToPython, ConvertibleFromPython
-
+from std.python import (
+    PythonObject,
+    Python,
+    ConvertibleToPython,
+    ConvertibleFromPython,
+)
+from std.python.bindings import PythonTypeBuilder
 
 # ---------------------------------------------------------------------------
 # pymethod — wrap a Mojo instance method as a Python-callable method
@@ -85,7 +90,9 @@ def pymethod[
         arg1: PythonObject,
         arg2: PythonObject,
     ) raises -> PythonObject:
-        return method(ptr[], A0(py=arg0), A1(py=arg1), A2(py=arg2)).to_python_object()
+        return method(
+            ptr[], A0(py=arg0), A1(py=arg1), A2(py=arg2)
+        ).to_python_object()
 
     return wrapper
 
@@ -96,7 +103,8 @@ def pymethod[
     //,
     method: def(T) raises -> List[E],
 ]() -> def(UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
-    """Wrap a zero-arg method returning List[ConvertibleToPython] as a Python list."""
+    """Wrap a zero-arg method returning List[ConvertibleToPython] as a Python list.
+    """
 
     def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
         var builtins = Python.import_module("builtins")
@@ -115,7 +123,8 @@ def pymethod[
     //,
     method: def(T, A0) raises -> List[E],
 ]() -> def(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
-    """Wrap a single-arg method returning List[ConvertibleToPython] as a Python list."""
+    """Wrap a single-arg method returning List[ConvertibleToPython] as a Python list.
+    """
 
     def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
@@ -139,7 +148,8 @@ def pymethod[
 ]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
 ) raises -> PythonObject:
-    """Wrap a two-arg method returning List[ConvertibleToPython] as a Python list."""
+    """Wrap a two-arg method returning List[ConvertibleToPython] as a Python list.
+    """
 
     def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
@@ -162,7 +172,8 @@ def pymethod[
     //,
     method: def(T, List[E]) raises -> R,
 ]() -> def(UnsafePointer[T, MutAnyOrigin], PythonObject) raises -> PythonObject:
-    """Wrap a single-arg method taking List[ConvertibleFromPython] returning ConvertibleToPython."""
+    """Wrap a single-arg method taking List[ConvertibleFromPython] returning ConvertibleToPython.
+    """
 
     def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
@@ -186,7 +197,8 @@ def pymethod[
 ]() -> def(
     UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
 ) raises -> PythonObject:
-    """Wrap a two-arg method where the second arg is List[ConvertibleFromPython]."""
+    """Wrap a two-arg method where the second arg is List[ConvertibleFromPython].
+    """
 
     def wrapper(
         ptr: UnsafePointer[T, MutAnyOrigin],
@@ -234,3 +246,24 @@ def pyfunction[
         return func(A0(py=arg0), A1(py=arg1)).to_python_object()
 
     return wrapper
+
+
+def marrow_module(obj: PythonObject) raises -> PythonObject:
+    """Return the name of the module to implement the __module__ method."""
+    return "marrow".to_python_object()
+
+
+def def_display[
+    T: Writable
+](mut type_builder: PythonTypeBuilder) -> ref[type_builder] PythonTypeBuilder:
+    """Define Python methods that are used to display instances of the type or the type itself.
+    """
+
+    def __str__(t: T) -> String:
+        return String.write(t)
+
+    return (
+        type_builder.def_method[pymethod[__str__]()]("__str__")
+        .def_method[pymethod[__str__]()]("__repr__")
+        .def_method[marrow_module]("__module__")
+    )

@@ -3,6 +3,7 @@ from std.python.bindings import PythonModuleBuilder
 from marrow.schema import Schema
 from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema
+from helpers import marrow_module
 
 
 def _schema_arrow_c_schema(
@@ -29,5 +30,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add Schema type and constructor to the Python module."""
     ref schema_py = mb.add_type[Schema]("Schema")
     _ = schema_py.def_method[_schema_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[marrow_module]("__module__")
 
     mb.def_function[schema]("schema", docstring="Create an Arrow schema from a list of fields or any Arrow-compatible object.")

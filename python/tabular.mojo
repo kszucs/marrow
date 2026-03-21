@@ -16,7 +16,7 @@ from marrow.schema import Schema
 from marrow.arrays import Array, ChunkedArray
 from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
-from helpers import pymethod
+from helpers import pymethod, def_display
 
 
 # ---------------------------------------------------------------------------
@@ -25,7 +25,8 @@ from helpers import pymethod
 
 
 def _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
-    """Convert schema + columns to a Python dict mapping names to value lists."""
+    """Convert schema + columns to a Python dict mapping names to value lists.
+    """
     var builtins = Python.import_module("builtins")
     var result = builtins.dict()
     for i in range(len(columns)):
@@ -56,7 +57,9 @@ def _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return result
 
 
-def _export_c_array(schema: Schema, columns: List[Array]) raises -> PythonObject:
+def _export_c_array(
+    schema: Schema, columns: List[Array]
+) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
     var cols = List[Array]()
@@ -210,7 +213,8 @@ def _record_batch_rich_compare(
 def record_batch(
     data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
-    """Create a RecordBatch from a dict, list+names, or Arrow protocol object."""
+    """Create a RecordBatch from a dict, list+names, or Arrow protocol object.
+    """
     # Try converting directly (handles marrow objects and Arrow protocol).
     try:
         return RecordBatch(py=data).to_python_object()
@@ -374,14 +378,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[RecordBatch.append_column]()]("append_column")
         .def_method[pymethod[RecordBatch.remove_column]()]("remove_column")
         .def_method[pymethod[RecordBatch.set_column]()]("set_column")
-        .def_method[pymethod[RecordBatch.__str__]()]("__str__")
-        .def_method[pymethod[RecordBatch.__str__]()]("__repr__")
         .def_method[_record_batch_to_pydict]("to_pydict")
         .def_method[_record_batch_to_pylist]("to_pylist")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_array__")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_record_batch__")
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
     )
+    _ = def_display[RecordBatch](rb_py)
     var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
     _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
@@ -406,13 +409,12 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[Table.to_batches]()]("to_batches")
         .def_method[_table_equals]("equals")
         .def_method[_table_equals]("__eq__")
-        .def_method[pymethod[Table.__str__]()]("__str__")
-        .def_method[pymethod[Table.__str__]()]("__repr__")
         .def_method[_table_to_pydict]("to_pydict")
         .def_method[_table_to_pylist]("to_pylist")
         .def_method[_table_arrow_c_stream]("__arrow_c_stream__")
         .def_method[_table_arrow_c_schema]("__arrow_c_schema__")
     )
+    _ = def_display[Table](t_py)
     var t_tp = TypeProtocolBuilder[Table](t_py)
     _ = t_tp.def_richcompare[_table_rich_compare]()
 

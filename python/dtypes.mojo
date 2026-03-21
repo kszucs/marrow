@@ -3,6 +3,7 @@
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 import marrow.dtypes as dt
+from helpers import marrow_module
 
 
 def null() raises -> PythonObject:
@@ -104,8 +105,8 @@ def struct_(fields_obj: PythonObject) raises -> PythonObject:
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add DataType related data to the Python API."""
 
-    _ = mb.add_type[dt.Field]("Field")
-    _ = mb.add_type[dt.DataType]("DataType")
+    _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
+    _ = mb.add_type[dt.DataType]("DataType").def_method[marrow_module]("__module__")
 
     mb.def_function[bool_]("bool_", docstring="Create a boolean DataType.")
     mb.def_function[int8]("int8", docstring="Create an int8 DataType.")
