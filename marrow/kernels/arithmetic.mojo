@@ -161,12 +161,15 @@ def _binary[
     var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
+        # FIXME: cannot use aligned pointers since the operands
+        # may end up with different alignments; need to switch to
+        # unaligned loads/stores
         buf = BufferBuilder.alloc_device[native](ctx.value(), length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
         rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
     else:
-        # TODO: use alloc_uninit to spare the zeroing of the output buffer
+        # FIXME: use alloc_uninit to spare the zeroing of the output buffer
         buf = BufferBuilder.alloc[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)

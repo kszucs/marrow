@@ -59,6 +59,7 @@ def _elementwise_cmp_pack[
     Safe to load beyond length: buffers are 64-byte aligned and padded.
     """
 
+    # TODO: use std.memory.unsafe.pack_bits instead of manual packing!
     @parameter
     @always_inline
     def process[

@@ -11,6 +11,8 @@ Kernel implementations live in their respective modules:
   - `compare.mojo` — comparison kernels producing bit-packed bool output
   - `aggregate.mojo` — reductions using ``std.algorithm`` (sum, min, max, etc.)
   - `filter.mojo` — selection/filter kernels
+  - `groupby.mojo` — fused groupby with aggregation (sum, min, max, count, mean)
+  - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, Array
 """
 
 from std.gpu.host import DeviceContext
