@@ -13,7 +13,7 @@ Abstractions:
   - ``HashGrouper``: hash table + two-phase pipeline orchestration.
 """
 
-from ..arrays import PrimitiveArray, StringArray, StructArray, Array
+from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import (
     PrimitiveBuilder,
     AnyBuilder,
@@ -65,7 +65,7 @@ struct AggregateState(Movable):
     def dtype(self) -> DataType:
         return self.builder.dtype()
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.builder.finish()
 
 
@@ -74,7 +74,7 @@ struct AggregateState(Movable):
 # ---------------------------------------------------------------------------
 
 
-def _read_as_float64(col: Array, row: Int) raises -> Float64:
+def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
     comptime for dt in primitive_dtypes:
         if col.dtype == dt:
@@ -97,8 +97,8 @@ struct AggregateFunction(Copyable, Movable):
     """
 
     var name: String
-    var values: AggregateState   # per-group running value (float64)
-    var counts: AggregateState   # per-group valid count (int64)
+    var values: AggregateState  # per-group running value (float64)
+    var counts: AggregateState  # per-group valid count (int64)
 
     def __init__(out self, name: String):
         self.name = name
@@ -125,7 +125,7 @@ struct AggregateFunction(Copyable, Movable):
     def add_batch(
         mut self,
         group_ids: PrimitiveArray[uint32],
-        input_col: Array,
+        input_col: AnyArray,
     ) raises:
         """Scatter-update: single O(N) pass over the batch."""
         var n = len(group_ids)
@@ -147,9 +147,7 @@ struct AggregateFunction(Copyable, Movable):
                 continue
 
             var val = _read_as_float64(input_col, i)
-            var cur = Float64(
-                val_ptr[]._buffer.unsafe_get[float64.native](g)
-            )
+            var cur = Float64(val_ptr[]._buffer.unsafe_get[float64.native](g))
 
             if self.name == "sum" or self.name == "mean":
                 val_ptr[]._buffer.unsafe_set[float64.native](
@@ -172,7 +170,7 @@ struct AggregateFunction(Copyable, Movable):
 
     def finish(
         mut self, col_name: String, num_groups: Int
-    ) raises -> Tuple[Field, Array]:
+    ) raises -> Tuple[Field, AnyArray]:
         """Finalize state into a result (field, column) pair."""
         if self.name == "count":
             return (
@@ -196,7 +194,7 @@ struct AggregateFunction(Copyable, Movable):
                     b.append_null()
             return (
                 Field(col_name, float64),
-                Array(b.finish_typed()),
+                AnyArray(b.finish_typed()),
             )
 
         # sum, min, max — emit value if count > 0, else null.
@@ -211,7 +209,7 @@ struct AggregateFunction(Copyable, Movable):
                 b.append_null()
         return (
             Field(col_name, float64),
-            Array(b.finish_typed()),
+            AnyArray(b.finish_typed()),
         )
 
 
@@ -221,8 +219,10 @@ struct AggregateFunction(Copyable, Movable):
 
 
 def _cols_equal_at(
-    ref keys: List[Array], row: Int,
-    ref stored: List[Array], group_idx: Int,
+    ref keys: List[AnyArray],
+    row: Int,
+    ref stored: List[AnyArray],
+    group_idx: Int,
 ) raises -> Bool:
     """Compare one input row against a stored group row, column by column."""
     for k in range(len(keys)):
@@ -256,7 +256,7 @@ def _cols_equal_at(
     return True
 
 
-def _concat_single(existing: Array, single: Array) raises -> Array:
+def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
     """Append a length-1 array slice to an existing array."""
     var ab = make_builder(existing.dtype, existing.length + 1)
     ab.extend(existing)
@@ -283,7 +283,7 @@ struct HashGrouper(Movable):
     var _mask: Int
 
     # Per-group key storage (column-wise, for collision comparison).
-    var _group_keys: List[Array]
+    var _group_keys: List[AnyArray]
     var _group_hashes: List[UInt64]
     var _next_id: Int
 
@@ -295,7 +295,7 @@ struct HashGrouper(Movable):
         self._mask = 63
         self._table = List[Int32](length=64, fill=Int32(-1))
         self._table_hashes = List[UInt64](length=64, fill=UInt64(0))
-        self._group_keys = List[Array]()
+        self._group_keys = List[AnyArray]()
         self._group_hashes = List[UInt64]()
         self._next_id = 0
         self._functions = List[AggregateFunction]()
@@ -318,7 +318,7 @@ struct HashGrouper(Movable):
             var empty = PrimitiveBuilder[uint32](0)
             return empty.finish_typed()
 
-        var key_cols = List[Array]()
+        var key_cols = List[AnyArray]()
         for k in range(len(keys.children)):
             key_cols.append(keys.children[k].copy())
 
@@ -334,7 +334,7 @@ struct HashGrouper(Movable):
     def consume_values(
         mut self,
         group_ids: PrimitiveArray[uint32],
-        values: List[Array],
+        values: List[AnyArray],
     ) raises:
         """Scatter-update aggregate state using pre-resolved group_ids.
 
@@ -344,9 +344,7 @@ struct HashGrouper(Movable):
         for a in range(len(self._functions)):
             self._functions[a].add_batch(group_ids, values[a])
 
-    def consume(
-        mut self, keys: StructArray, values: List[Array]
-    ) raises:
+    def consume(mut self, keys: StructArray, values: List[AnyArray]) raises:
         """Convenience: consume_keys + consume_values in one call."""
         self.consume_values(self.consume_keys(keys), values)
 
@@ -354,7 +352,7 @@ struct HashGrouper(Movable):
         """Build result RecordBatch from key columns + finalized states."""
         var num_groups = self._next_id
         var result_fields = List[Field]()
-        var result_cols = List[Array]()
+        var result_cols = List[AnyArray]()
 
         # Key columns.
         for k in range(len(key_fields)):
@@ -369,9 +367,9 @@ struct HashGrouper(Movable):
 
         # Aggregate columns.
         for a in range(len(self._functions)):
-            var col_name = String("col") + String(a) + "_" + self._functions[
-                a
-            ].name
+            var col_name = (
+                String("col") + String(a) + "_" + self._functions[a].name
+            )
             var pair = self._functions[a].finish(col_name, num_groups)
             result_fields.append(pair[0])
             result_cols.append(pair[1].copy())
@@ -384,7 +382,7 @@ struct HashGrouper(Movable):
     # --- hash table internals ---
 
     def _probe_or_insert(
-        mut self, ref key_cols: List[Array], row: Int, h: UInt64
+        mut self, ref key_cols: List[AnyArray], row: Int, h: UInt64
     ) raises -> Int:
         """Find existing group or insert new one."""
         var slot = Int(h) & self._mask
@@ -424,12 +422,8 @@ struct HashGrouper(Movable):
         """Double hash table capacity and rehash."""
         self._capacity *= 2
         self._mask = self._capacity - 1
-        self._table = List[Int32](
-            length=self._capacity, fill=Int32(-1)
-        )
-        self._table_hashes = List[UInt64](
-            length=self._capacity, fill=UInt64(0)
-        )
+        self._table = List[Int32](length=self._capacity, fill=Int32(-1))
+        self._table_hashes = List[UInt64](length=self._capacity, fill=UInt64(0))
         for gid in range(self._next_id):
             var h = self._group_hashes[gid]
             var slot = Int(h) & self._mask
@@ -446,7 +440,7 @@ struct HashGrouper(Movable):
 
 def groupby(
     keys: StructArray,
-    values: List[Array],
+    values: List[AnyArray],
     aggregations: List[String],
 ) raises -> RecordBatch:
     """Fused grouped aggregation on a struct array of keys.
@@ -476,12 +470,12 @@ def groupby(
 
 
 def groupby(
-    key: Array,
-    values: List[Array],
+    key: AnyArray,
+    values: List[AnyArray],
     aggregations: List[String],
 ) raises -> RecordBatch:
     """Fused grouped aggregation on a single key column."""
-    var children = List[Array]()
+    var children = List[AnyArray]()
     children.append(key.copy())
     var sa = StructArray(
         dtype=struct_(Field("key", key.dtype.copy())),

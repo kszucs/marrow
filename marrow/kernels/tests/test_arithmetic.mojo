@@ -6,7 +6,7 @@ from std.testing import (
     TestSuite,
 )
 
-from marrow.arrays import array, arange, Array, PrimitiveArray
+from marrow.arrays import array, arange, AnyArray, PrimitiveArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import int32, int64, float32, float64
 from marrow.kernels.arithmetic import (
@@ -79,8 +79,8 @@ def test_add_length_mismatch() raises:
 
 
 def test_add_untyped() raises:
-    var a = Array(array[int64]([1, 2, 3]))
-    var b = Array(array[int64]([4, 5, 6]))
+    var a = AnyArray(array[int64]([1, 2, 3]))
+    var b = AnyArray(array[int64]([4, 5, 6]))
     var result = add(a, b)
     assert_equal(result.length, 3)
     var typed = result.as_primitive[int64]()
@@ -149,8 +149,8 @@ def test_sub_with_nulls() raises:
 
 
 def test_sub_untyped() raises:
-    var a = Array(array[int64]([10, 20, 30]))
-    var b = Array(array[int64]([1, 2, 3]))
+    var a = AnyArray(array[int64]([10, 20, 30]))
+    var b = AnyArray(array[int64]([1, 2, 3]))
     var result = sub(a, b)
     var typed = result.as_primitive[int64]()
     assert_equal(typed[0], 9)
@@ -397,7 +397,7 @@ def test_sign_with_nulls() raises:
 
 def test_sign_runtime_typed() raises:
     var a = array[int32]([-3, 0, 5])
-    var result = sign(Array(a))
+    var result = sign(AnyArray(a))
     var r = result.as_primitive[int32]()
     assert_equal(r[0], -1)
     assert_equal(r[1], 0)
@@ -433,7 +433,7 @@ def test_sqrt_with_nulls() raises:
 
 def test_sqrt_runtime_typed() raises:
     var a = array[float64]([1.0, 4.0, 9.0])
-    var result = sqrt(Array(a))
+    var result = sqrt(AnyArray(a))
     var r = result.as_primitive[float64]()
     assert_equal(r[0], 1.0)
     assert_equal(r[1], 2.0)
@@ -593,7 +593,7 @@ def test_pow_with_nulls() raises:
 def test_pow_runtime_typed() raises:
     var a = array[float64]([2.0, 3.0])
     var b = array[float64]([3.0, 2.0])
-    var result = pow_(Array(a), Array(b))
+    var result = pow_(AnyArray(a), AnyArray(b))
     var r = result.as_primitive[float64]()
     assert_equal(r[0], 8.0)
     assert_equal(r[1], 9.0)

@@ -2,7 +2,7 @@
 
 Each reduction has:
   - A typed overload: ``def[T](PrimitiveArray[T]) -> PrimitiveScalar[T]``
-  - A runtime-typed overload: ``def(Array) -> AnyScalar``
+  - A runtime-typed overload: ``def(AnyArray) -> AnyScalar``
 
 Bitmap-aware loading is fused into the stdlib's `input_fn` callback:
 null elements are replaced with the reduction's identity value so they
@@ -17,7 +17,7 @@ from std.algorithm.reduction import (
 )
 from std.utils.index import Index, IndexList
 
-from ..arrays import PrimitiveArray, Array
+from ..arrays import PrimitiveArray, AnyArray
 from ..bitmap import Bitmap
 from ..dtypes import (
     DataType,
@@ -149,7 +149,7 @@ def sum_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)))
 
 
-def sum_(array: Array) raises -> AnyScalar:
+def sum_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed sum."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -168,7 +168,7 @@ def product[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)))
 
 
-def product(array: Array) raises -> AnyScalar:
+def product(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed product."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -191,7 +191,7 @@ def min_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     )
 
 
-def min_(array: Array) raises -> AnyScalar:
+def min_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed min."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
@@ -214,7 +214,7 @@ def max_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     )
 
 
-def max_(array: Array) raises -> AnyScalar:
+def max_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed max."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:

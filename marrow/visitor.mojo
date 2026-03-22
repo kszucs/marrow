@@ -57,15 +57,15 @@ trait ArrayVisitor:
     """Trait for type-dispatched array operations.
 
     Implement this trait and call `visitor.visit(array)` to receive a
-    concretely-typed array matching the runtime dtype of the Array.
+    concretely-typed array matching the runtime dtype of the AnyArray.
 
     All typed `visit` overloads have default no-op bodies, so implementors
-    only need to override the array kinds they care about. `visit(Array)`
+    only need to override the array kinds they care about. `visit(AnyArray)`
     dispatches to the typed overloads by default. `visit(ChunkedArray)`
     dispatches to each chunk by default.
 
     Typed arrays passed to visitor methods share the underlying buffer memory
-    with the original Array (ArcPointer semantics). Visitor methods are
+    with the original AnyArray (ArcPointer semantics). Visitor methods are
     `raises` to allow implementations that perform I/O or recursive dispatch
     into nested arrays.
     """
@@ -89,7 +89,7 @@ trait ArrayVisitor:
         for chunk in array.chunks:
             self.visit(chunk)
 
-    def visit(mut self, array: Array) raises:
+    def visit(mut self, array: AnyArray) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
 
         comptime for dtype in primitive_dtypes:

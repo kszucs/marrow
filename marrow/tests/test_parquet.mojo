@@ -3,7 +3,7 @@ from std.python import Python
 from std.os import remove
 from marrow.parquet import read_table, write_table
 from marrow.tabular import Table, RecordBatch
-from marrow.arrays import Array, PrimitiveArray, StringArray
+from marrow.arrays import AnyArray, PrimitiveArray, StringArray
 from marrow.schema import Schema
 from marrow.dtypes import Field, int32, int64, float64, string
 

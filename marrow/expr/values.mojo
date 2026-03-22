@@ -5,7 +5,7 @@
 Concrete node types
 -------------------
 ``Column``  — input column reference (LOAD)
-``Literal`` — scalar constant stored as a length-1 Array (LITERAL)
+``Literal`` — scalar constant stored as a length-1 AnyArray (LITERAL)
 ``Binary``  — binary arithmetic / comparison / boolean (ADD … OR)
 ``Unary``   — unary arithmetic / boolean (NEG, ABS, NOT)
 ``IsNull``  — null check (IS_NULL)
@@ -24,7 +24,7 @@ unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
 """
 
 from std.memory import ArcPointer
-from marrow.arrays import Array, PrimitiveArray
+from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import DataType
 from marrow.schema import Schema
@@ -304,13 +304,13 @@ struct Column(Value):
 struct Literal(Value):
     """Scalar constant broadcast to the length of the first input (LITERAL node).
 
-    Stores the scalar as a length-1 Array, supporting any dtype (numeric,
+    Stores the scalar as a length-1 AnyArray, supporting any dtype (numeric,
     string, bool).  Similar to arrow-rs ``Scalar<T>``.
     """
 
-    var value: Array
+    var value: AnyArray
 
-    def __init__(out self, *, var value: Array):
+    def __init__(out self, *, var value: AnyArray):
         self.value = value^
 
     def kind(self) -> UInt8:
@@ -523,7 +523,7 @@ def _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
     """Create a Literal expression from a typed scalar value."""
     var builder = PrimitiveBuilder[T](1)
     builder.unsafe_append(value)
-    return Literal(value=Array(builder.finish_typed()))
+    return Literal(value=AnyArray(builder.finish_typed()))
 
 
 # ---------------------------------------------------------------------------

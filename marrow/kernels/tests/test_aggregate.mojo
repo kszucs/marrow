@@ -1,6 +1,6 @@
 from std.testing import assert_equal, TestSuite
 
-from marrow.arrays import array, Array, PrimitiveArray, nulls
+from marrow.arrays import array, AnyArray, PrimitiveArray, nulls
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import int32, int64
 from marrow.kernels.aggregate import sum_
@@ -35,7 +35,7 @@ def test_sum_empty() raises:
 
 
 def test_sum_untyped() raises:
-    var a = Array(array[int64]([1, 2, 3]))
+    var a = AnyArray(array[int64]([1, 2, 3]))
     var result = sum_(a)
     assert_equal(result.as_primitive[int64]().value(), 6)
 

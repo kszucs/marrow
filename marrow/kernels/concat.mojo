@@ -1,4 +1,4 @@
-"""Array concatenation kernel.
+"""AnyArray concatenation kernel.
 
 Combines a list of type-erased arrays into a single array by concatenating
 their contents. Matches the semantics of PyArrow's `pyarrow.concat_arrays()`
@@ -9,11 +9,11 @@ offset-awareness, bitmap concatenation, and recursive child concatenation
 for all supported array types.
 """
 
-from ..arrays import Array
+from ..arrays import AnyArray
 from ..builders import make_builder
 
 
-def concat(arrays: List[Array]) raises -> Array:
+def concat(arrays: List[AnyArray]) raises -> AnyArray:
     """Concatenate a list of arrays into a single array.
 
     All arrays must have the same dtype. Validity bitmaps and buffer contents

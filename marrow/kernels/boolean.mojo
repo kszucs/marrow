@@ -1,6 +1,6 @@
 """Boolean and bitwise kernels."""
 
-from ..arrays import PrimitiveArray, Array
+from ..arrays import PrimitiveArray, AnyArray
 from ..bitmap import Bitmap, BitmapBuilder
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
@@ -91,11 +91,11 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     )
 
 
-def is_null(arr: Array) raises -> Array:
+def is_null(arr: AnyArray) raises -> AnyArray:
     """Runtime-typed is_null."""
     comptime for dtype in numeric_dtypes:
         if arr.dtype == dtype:
-            return Array(is_null[dtype](PrimitiveArray[dtype](data=arr)))
+            return AnyArray(is_null[dtype](PrimitiveArray[dtype](data=arr)))
     raise Error(t"is_null: unsupported dtype {arr.dtype}")
 
 
@@ -122,14 +122,14 @@ def select[
 
 
 # TODO: use SIMD select instead of naive element-wise loop when possible
-def select(mask: Array, then_: Array, else_: Array) raises -> Array:
+def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
     """Runtime-typed select."""
     if then_.dtype != else_.dtype:
         raise Error(t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}")
     var bool_mask = PrimitiveArray[bool_dt](data=mask)
     comptime for dtype in numeric_dtypes:
         if then_.dtype == dtype:
-            return Array(
+            return AnyArray(
                 select[dtype](
                     bool_mask,
                     PrimitiveArray[dtype](data=then_),

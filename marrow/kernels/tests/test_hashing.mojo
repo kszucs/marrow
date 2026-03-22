@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.arrays import array, Array, PrimitiveArray, StringArray
+from marrow.arrays import array, AnyArray, PrimitiveArray, StringArray
 from marrow.builders import PrimitiveBuilder, StringBuilder
 from marrow.dtypes import int32, int64, uint8, uint64, float64, bool_
 from marrow.arrays import StructArray
@@ -8,15 +8,15 @@ from marrow.dtypes import Field, struct_
 from marrow.kernels.hashing import hash_, NULL_HASH_SENTINEL
 
 
-def _children(ref a: Array, ref b: Array) -> List[Array]:
-    var c = List[Array]()
+def _children(ref a: AnyArray, ref b: AnyArray) -> List[AnyArray]:
+    var c = List[AnyArray]()
     c.append(a.copy())
     c.append(b.copy())
     return c^
 
 
-def _children1(ref a: Array) -> List[Array]:
-    var c = List[Array]()
+def _children1(ref a: AnyArray) -> List[AnyArray]:
+    var c = List[AnyArray]()
     c.append(a.copy())
     return c^
 
@@ -100,7 +100,7 @@ def test_hash__string_nulls() raises:
 
 
 def test_hash__dispatch() raises:
-    var a = Array(array[int32]([1, 2, 1]))
+    var a = AnyArray(array[int32]([1, 2, 1]))
     var h = hash_(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
@@ -110,7 +110,7 @@ def test_hash__dispatch_string() raises:
     var b = StringBuilder(2)
     b.append("x")
     b.append("x")
-    var a = Array(b.finish_typed())
+    var a = AnyArray(b.finish_typed())
 
     var h = hash_(a)
     assert_equal(h[0], h[1])
@@ -123,8 +123,8 @@ def test_hash__dispatch_string() raises:
 
 def test_hash_struct_two_fields() raises:
     """StructArray hashing combines per-field hashes."""
-    var a = Array(array[int32]([1, 1, 2, 2]))
-    var b = Array(array[int32]([10, 20, 10, 20]))
+    var a = AnyArray(array[int32]([1, 1, 2, 2]))
+    var b = AnyArray(array[int32]([10, 20, 10, 20]))
     var sa = StructArray(
         dtype=struct_(Field("a", a.dtype.copy()), Field("b", b.dtype.copy())),
         length=4,
@@ -147,7 +147,7 @@ def test_hash_struct_single_field() raises:
     var a = array[int32]([1, 2, 3])
     var h1 = hash_(a)
 
-    var arr = Array(a)
+    var arr = AnyArray(a)
     var sa = StructArray(
         dtype=struct_(Field("a", arr.dtype.copy())),
         length=3,
@@ -163,8 +163,8 @@ def test_hash_struct_single_field() raises:
 
 def test_hash_dispatch_struct() raises:
     """Type-erased dispatch to struct hash."""
-    var a = Array(array[int32]([1, 2, 1]))
-    var b = Array(array[int32]([3, 3, 3]))
+    var a = AnyArray(array[int32]([1, 2, 1]))
+    var b = AnyArray(array[int32]([3, 3, 3]))
     var sa = StructArray(
         dtype=struct_(Field("a", a.dtype.copy()), Field("b", b.dtype.copy())),
         length=3,
@@ -172,7 +172,7 @@ def test_hash_dispatch_struct() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = hash_(Array(sa))
+    var h = hash_(AnyArray(sa))
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])

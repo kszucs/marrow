@@ -8,7 +8,7 @@ from std.time import perf_counter_ns
 from std.benchmark import keep
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import Array, PrimitiveArray, FixedSizeListArray
+from marrow.arrays import AnyArray, PrimitiveArray, FixedSizeListArray
 from marrow.builders import AnyBuilder, PrimitiveBuilder, FixedSizeListBuilder
 from marrow.dtypes import float32
 from marrow.kernels.similarity import cosine_similarity

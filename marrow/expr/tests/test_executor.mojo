@@ -4,7 +4,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from std.python import Python
 from std.os import remove
 
-from marrow.arrays import array, Array
+from marrow.arrays import array, AnyArray
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.tabular import record_batch
 from marrow.expr import (
@@ -32,7 +32,7 @@ def test_sequential_fallback() raises:
     var b = array[int64]([10, 20, 30, 40, 50])
     var batch = record_batch([a, b], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == Array(array[int64]([11, 22, 33, 44, 55])))
+    assert_true(result == AnyArray(array[int64]([11, 22, 33, 44, 55])))
 
 
 def test_large_add() raises:
@@ -90,7 +90,7 @@ def test_single_element() raises:
     var b = array[int64]([8])
     var batch = record_batch([a, b], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == Array(array[int64]([50])))
+    assert_true(result == AnyArray(array[int64]([50])))
 
 
 def test_predicate() raises:
@@ -134,7 +134,7 @@ def test_dispatch_cpu_hint() raises:
         .build((col(0) + col(1)).with_dispatch(DISPATCH_CPU))
         .eval(batch)
     )
-    assert_true(result == Array(array[int64]([6, 6, 6, 6, 6])))
+    assert_true(result == AnyArray(array[int64]([6, 6, 6, 6, 6])))
 
 
 # ---------------------------------------------------------------------------
@@ -444,9 +444,9 @@ def test_parquet_scan_filter_select() raises:
 
 def test_aggregate_sum() raises:
     """Grouped sum via the expression system."""
-    var cols = List[Array]()
-    cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
-    cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
+    var cols = List[AnyArray]()
+    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1])))
+    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50])))
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -469,9 +469,9 @@ def test_aggregate_sum() raises:
 
 def test_aggregate_count() raises:
     """Grouped count via the expression system."""
-    var cols = List[Array]()
-    cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
-    cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
+    var cols = List[AnyArray]()
+    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1])))
+    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50])))
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -486,9 +486,9 @@ def test_aggregate_count() raises:
 
 def test_aggregate_small_morsel() raises:
     """Aggregate with small morsel size forces multiple pulls."""
-    var cols = List[Array]()
-    cols.append(Array(array[int64]([1, 2, 1, 2, 1, 2])))
-    cols.append(Array(array[int64]([10, 20, 30, 40, 50, 60])))
+    var cols = List[AnyArray]()
+    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1, 2])))
+    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50, 60])))
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -500,7 +500,7 @@ def test_aggregate_small_morsel() raises:
     assert_equal(result.num_rows(), 2)
     var s = result.columns[1].as_float64()
     assert_equal(s[0], 90.0)  # key=1: 10+30+50
-    assert_equal(s[1], 120.0) # key=2: 20+40+60
+    assert_equal(s[1], 120.0)  # key=2: 20+40+60
 
 
 def main() raises:

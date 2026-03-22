@@ -12,7 +12,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.memory import memcpy
 from std.sys import size_of
 
-from ..arrays import PrimitiveArray, StringArray, Array
+from ..arrays import PrimitiveArray, StringArray, AnyArray
 from ..buffers import Buffer, BufferBuilder
 from ..bitmap import Bitmap, BitmapBuilder
 from ..dtypes import DataType, bool_, uint32, string, numeric_dtypes
@@ -25,10 +25,10 @@ from .string import string_lengths
 # ---------------------------------------------------------------------------
 
 
-
-
 @always_inline
-def _filter_sparse[T: DType](
+def _filter_sparse[
+    T: DType
+](
     dst: UnsafePointer[Scalar[T], MutExternalOrigin],
     out_pos: Int,
     src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
@@ -50,7 +50,9 @@ def _filter_sparse[T: DType](
 
 
 @always_inline
-def _filter_dense[T: DType](
+def _filter_dense[
+    T: DType
+](
     dst: UnsafePointer[Scalar[T], MutExternalOrigin],
     out_pos: Int,
     src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
@@ -81,7 +83,7 @@ def _filter_dense[T: DType](
         offset += Int(pop_count(byte))
 
 
-#@always_inline
+# @always_inline
 @no_inline
 def _filter_block[
     T: DType,
@@ -139,7 +141,9 @@ def _pext(val: UInt64, mask: UInt64) -> UInt64:
 
 def _filter_bits(
     src: Bitmap,
-    sel: Bitmap, sel_start: Int, sel_end: Int,
+    sel: Bitmap,
+    sel_start: Int,
+    sel_end: Int,
     out_len: Int,
 ) -> Tuple[Bitmap, Int]:
     """Filter a bitmap, keeping bits where selection is set.
@@ -210,9 +214,14 @@ def _filter_bits(
     return builder.finish(out_len), zero_count
 
 
-def _filter_values[T: DType](
-    src_buf: Buffer, src_offset: Int,
-    sel: Bitmap, sel_start: Int, sel_end: Int,
+def _filter_values[
+    T: DType
+](
+    src_buf: Buffer,
+    src_offset: Int,
+    sel: Bitmap,
+    sel_start: Int,
+    sel_end: Int,
     out_len: Int,
 ) -> Buffer:
     """Filter fixed-width values, keeping elements where selection is set.
@@ -305,7 +314,10 @@ def filter_[
     if out_len == 0:
         var empty_buf = BufferBuilder.alloc[T.native](0)
         return PrimitiveArray[T](
-            length=0, nulls=0, offset=0, bitmap=None,
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
             buffer=empty_buf.finish(),
         )
 
@@ -327,17 +339,27 @@ def filter_[
             data_bm, sel_bm, sel_start, sel_end, out_len
         )
         return PrimitiveArray[T](
-            length=out_len, nulls=null_count, offset=0,
-            bitmap=bm, buffer=filtered_data._buffer,
+            length=out_len,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm,
+            buffer=filtered_data._buffer,
         )
     else:
         var result_buf = _filter_values[T.native](
-            array.buffer, array.offset,
-            sel_bm, sel_start, sel_end, out_len,
+            array.buffer,
+            array.offset,
+            sel_bm,
+            sel_start,
+            sel_end,
+            out_len,
         )
         return PrimitiveArray[T](
-            length=out_len, nulls=null_count, offset=0,
-            bitmap=bm, buffer=result_buf,
+            length=out_len,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm,
+            buffer=result_buf,
         )
 
 
@@ -489,7 +511,7 @@ def filter_(
 # ---------------------------------------------------------------------------
 
 
-def filter_(array: Array, selection: Array) raises -> Array:
+def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     """Runtime-typed filter: dispatches to the correct typed overload.
 
     Args:
@@ -497,19 +519,19 @@ def filter_(array: Array, selection: Array) raises -> Array:
         selection: Bit-packed boolean selection (True = keep).
 
     Returns:
-        A new Array with only the selected elements.
+        A new AnyArray with only the selected elements.
     """
     var mask = selection.as_bool()
 
     if array.dtype == bool_:
-        return Array(filter_[bool_](PrimitiveArray[bool_](data=array), mask))
+        return AnyArray(filter_[bool_](PrimitiveArray[bool_](data=array), mask))
 
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return Array(filter_[dtype](array.as_primitive[dtype](), mask))
+            return AnyArray(filter_[dtype](array.as_primitive[dtype](), mask))
 
     if array.dtype.is_string():
-        return Array(filter_(array.as_string(), mask))
+        return AnyArray(filter_(array.as_string(), mask))
 
     raise Error("filter: unsupported dtype ", array.dtype)
 
@@ -555,20 +577,22 @@ def drop_nulls[
     return filter_[T](array, selection)
 
 
-def drop_nulls(array: Array) raises -> Array:
+def drop_nulls(array: AnyArray) raises -> AnyArray:
     """Runtime-typed drop_nulls: dispatches to the correct typed version.
 
     Args:
         array: The input array (runtime-typed).
 
     Returns:
-        A new Array with null elements removed.
+        A new AnyArray with null elements removed.
     """
     if array.dtype == bool_:
-        return Array(drop_nulls[bool_](PrimitiveArray[bool_](data=array)))
+        return AnyArray(drop_nulls[bool_](PrimitiveArray[bool_](data=array)))
 
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return Array(drop_nulls[dtype](PrimitiveArray[dtype](data=array)))
+            return AnyArray(
+                drop_nulls[dtype](PrimitiveArray[dtype](data=array))
+            )
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype)

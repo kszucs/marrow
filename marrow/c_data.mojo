@@ -424,7 +424,7 @@ def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
     - The heap-allocated child CArrowArray struct shells (their own release
       callbacks were already invoked by Arrow's recursive import).
     - The heap-allocated buffers pointer array.
-    - The heap-allocated Array copy in private_data (drops Arc refs so the
+    - The heap-allocated AnyArray copy in private_data (drops Arc refs so the
       underlying Buffer/Bitmap memory is freed when the last ref goes).
     Nulls the release field per the Arrow spec.
     """
@@ -434,7 +434,7 @@ def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
         ptr[].children.free()
     if ptr[].buffers:
         ptr[].buffers.free()
-    var arr_ptr = ptr[].private_data.bitcast[Array]()
+    var arr_ptr = ptr[].private_data.bitcast[AnyArray]()
     arr_ptr.destroy_pointee()
     arr_ptr.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
@@ -447,7 +447,7 @@ struct CArrowArray(Copyable, Movable):
     Ownership model
     ---------------
     Mirrors CArrowSchema.  A CArrowArray value owns its heap resources
-    (buffers pointer array, child struct shells, private_data Array copy)
+    (buffers pointer array, child struct shells, private_data AnyArray copy)
     through the `release` callback.
 
     Arrow importers take ownership by copying the struct fields then zeroing
@@ -455,7 +455,7 @@ struct CArrowArray(Copyable, Movable):
     `__del__` guards against a null release so dropping a consumed value is safe.
 
     Lifecycle for Python export (the common path):
-        1. `from_array` builds the struct value, heap-allocating an Array copy
+        1. `from_array` builds the struct value, heap-allocating an AnyArray copy
            (private_data) and a buffers pointer array.
         2. `to_pycapsule` moves it onto the heap and wraps it in a PyCapsule.
         3. `_release_array_capsule` calls `_release_exported_array` and frees
@@ -488,8 +488,8 @@ struct CArrowArray(Copyable, Movable):
 
     def _to_array(
         self, dtype: DataType, owner: ArcPointer[Allocation]
-    ) raises -> Array:
-        """Build an Array from this CArrowArray, all buffers sharing one owner.
+    ) raises -> AnyArray:
+        """Build an AnyArray from this CArrowArray, all buffers sharing one owner.
 
         All Buffer views hold a copy of `owner` (an ArcPointer, so
         copying just bumps the ref-count).  The C release callback fires
@@ -515,7 +515,7 @@ struct CArrowArray(Copyable, Movable):
             bitmap = None
 
         var buffers = List[Buffer](capacity=2)  # worst case scenario for string
-        var children = List[Array](capacity=Int(self.n_children))
+        var children = List[AnyArray](capacity=Int(self.n_children))
 
         if dtype.is_bool():
             if self.n_buffers != 2:
@@ -618,7 +618,7 @@ struct CArrowArray(Copyable, Movable):
         else:
             raise Error("unsupported dtype for buffer import: ", dtype)
 
-        return Array(
+        return AnyArray(
             dtype=dtype.copy(),
             length=Int(self.length),
             nulls=Int(self.null_count),
@@ -634,8 +634,8 @@ struct CArrowArray(Copyable, Movable):
         owner: ArcPointer[Allocation],
         device_type: Int32,
         device_id: Int64,
-    ) raises -> Array:
-        """Build an Array from device-resident CArrowArray buffers.
+    ) raises -> AnyArray:
+        """Build an AnyArray from device-resident CArrowArray buffers.
 
         TODO: Zero-copy import of device arrays requires wrapping raw device
         pointers in Mojo's DeviceBuffer.  This is not yet supported because
@@ -651,12 +651,12 @@ struct CArrowArray(Copyable, Movable):
 
     @staticmethod
     def from_array(
-        array: Array,
+        array: AnyArray,
     ) raises -> CArrowArray:
-        """Build a CArrowArray value from a Mojo Array for export.
+        """Build a CArrowArray value from a Mojo AnyArray for export.
 
         Buffer pointers in the returned struct point directly into the Mojo
-        Array's ArcPointer-managed memory.  A heap-allocated copy of `array`
+        AnyArray's ArcPointer-managed memory.  A heap-allocated copy of `array`
         is stored in private_data to keep all ArcPointer ref-counts alive for
         the lifetime of the export; `_release_exported_array` destroys that
         copy (dropping the Arc refs) when the Arrow consumer is done.
@@ -686,8 +686,8 @@ struct CArrowArray(Copyable, Movable):
                 "CArrowArray.from_array: unsupported dtype: {}".format(dtype)
             )
 
-        # Heap-allocate Array copy to keep ArcPointer ref-counts alive.
-        var arr_heap = alloc[Array](1)
+        # Heap-allocate AnyArray copy to keep ArcPointer ref-counts alive.
+        var arr_heap = alloc[AnyArray](1)
         arr_heap.init_pointee_copy(array)
 
         # Heap-allocate the buffers pointer array.
@@ -786,8 +786,8 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    def to_array(deinit self, dtype: DataType) raises -> Array:
-        """Convert to an Array, taking ownership of the C struct.
+    def to_array(deinit self, dtype: DataType) raises -> AnyArray:
+        """Convert to an AnyArray, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
         Allocation.  Every Buffer / Bitmap view shares the same
@@ -857,7 +857,7 @@ struct CArrowDeviceArray(Movable):
 
     def to_array(
         deinit self, dtype: DataType, ctx: DeviceContext
-    ) raises -> Array:
+    ) raises -> AnyArray:
         """Import a device array into marrow, taking ownership of the C struct.
 
         The CArrowDeviceArray is moved onto the heap and wrapped in an
@@ -873,7 +873,7 @@ struct CArrowDeviceArray(Movable):
             ctx:   The DeviceContext associated with the device buffers.
 
         Returns:
-            An `Array` whose buffers reference the device memory directly
+            An `AnyArray` whose buffers reference the device memory directly
             (zero-copy for device types; CPU for ARROW_DEVICE_CPU).
         """
         if self.sync_event:
@@ -950,7 +950,7 @@ def _stream_get_next(
             return 0
         var batch = data[].batches[data[].index].copy()
         data[].index += 1
-        var struct_arr: Array = batch.to_struct_array()
+        var struct_arr: AnyArray = batch.to_struct_array()
         array_out.init_pointee_move(CArrowArray.from_array(struct_arr))
         return 0
     except:
@@ -1096,7 +1096,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
                 break
             var struct_dtype = struct_(schema.fields)
             var arr = c_array.take_pointee().to_array(struct_dtype)
-            var columns = List[Array]()
+            var columns = List[AnyArray]()
             for child in arr.children:
                 columns.append(child.copy())
             batches.append(RecordBatch(schema=schema, columns=columns^))

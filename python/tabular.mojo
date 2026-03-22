@@ -13,7 +13,7 @@ from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from std.collections import OwnedKwargsDict
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
-from marrow.arrays import Array, ChunkedArray
+from marrow.arrays import AnyArray, ChunkedArray
 from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from helpers import pymethod, def_display
@@ -24,9 +24,8 @@ from helpers import pymethod, def_display
 # ---------------------------------------------------------------------------
 
 
-def _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
-    """Convert schema + columns to a Python dict mapping names to value lists.
-    """
+def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
+    """Convert schema + columns to a Python dict mapping names to value lists."""
     var builtins = Python.import_module("builtins")
     var result = builtins.dict()
     for i in range(len(columns)):
@@ -39,7 +38,7 @@ def _to_pydict(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return result
 
 
-def _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
+def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     """Convert schema + columns to a Python list of row dicts."""
     var builtins = Python.import_module("builtins")
     var n_rows = columns[0].length if len(columns) > 0 else 0
@@ -57,15 +56,13 @@ def _to_pylist(schema: Schema, columns: List[Array]) raises -> PythonObject:
     return result
 
 
-def _export_c_array(
-    schema: Schema, columns: List[Array]
-) raises -> PythonObject:
+def _export_c_array(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
-    var cols = List[Array]()
+    var cols = List[AnyArray]()
     for col in columns:
         cols.append(col.copy())
-    var struct_arr: Array = RecordBatch(
+    var struct_arr: AnyArray = RecordBatch(
         schema=schema, columns=cols^
     ).to_struct_array()
     var array_cap = CArrowArray.from_array(struct_arr).to_pycapsule()
@@ -75,10 +72,10 @@ def _export_c_array(
 def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     """Build a RecordBatch from a Python dict of {name: array}."""
     var fields = List[Field]()
-    var columns = List[Array]()
+    var columns = List[AnyArray]()
     for key in data:
         var name = String(py=key)
-        var arr = Array(py=data[key])
+        var arr = AnyArray(py=data[key])
         fields.append(Field(name=name, dtype=arr.dtype.copy()))
         columns.append(arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
@@ -89,10 +86,10 @@ def _build_from_arrays(
 ) raises -> RecordBatch:
     """Build a RecordBatch from a list of arrays + names."""
     var fields = List[Field]()
-    var columns = List[Array]()
+    var columns = List[AnyArray]()
     var i = 0
     for arr_obj in data:
-        var arr = Array(py=arr_obj)
+        var arr = AnyArray(py=arr_obj)
         var name = String(py=names_obj[i])
         fields.append(Field(name=name, dtype=arr.dtype.copy()))
         columns.append(arr^)

@@ -17,7 +17,7 @@ from std.sys import size_of
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
-from ..arrays import PrimitiveArray, Array
+from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer, BufferBuilder
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
 from . import (
@@ -543,130 +543,130 @@ def cos[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
 
 
 # ---------------------------------------------------------------------------
-# Runtime dispatch — Array-typed overloads
+# Runtime dispatch — AnyArray-typed overloads
 # ---------------------------------------------------------------------------
 
 
-def add(left: Array, right: Array) raises -> Array:
+def add(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed add."""
     return binary_array_dispatch["add", add[_]](left, right)
 
 
-def sub(left: Array, right: Array) raises -> Array:
+def sub(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed sub."""
     return binary_array_dispatch["sub", sub[_]](left, right)
 
 
-def mul(left: Array, right: Array) raises -> Array:
+def mul(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed mul."""
     return binary_array_dispatch["mul", mul[_]](left, right)
 
 
-def div(left: Array, right: Array) raises -> Array:
+def div(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed div."""
     return binary_array_dispatch["div", div[_]](left, right)
 
 
-def floordiv(left: Array, right: Array) raises -> Array:
+def floordiv(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed floordiv."""
     return binary_array_dispatch["floordiv", floordiv[_]](left, right)
 
 
-def mod(left: Array, right: Array) raises -> Array:
+def mod(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed mod."""
     return binary_array_dispatch["mod", mod[_]](left, right)
 
 
-def min_(left: Array, right: Array) raises -> Array:
+def min_(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed min_."""
     return binary_array_dispatch["min_", min_[_]](left, right)
 
 
-def max_(left: Array, right: Array) raises -> Array:
+def max_(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed max_."""
     return binary_array_dispatch["max_", max_[_]](left, right)
 
 
-def neg(array: Array) raises -> Array:
+def neg(array: AnyArray) raises -> AnyArray:
     """Runtime-typed neg."""
     return unary_numeric_dispatch["neg", neg[_]](array)
 
 
-def abs_(array: Array) raises -> Array:
+def abs_(array: AnyArray) raises -> AnyArray:
     """Runtime-typed abs_."""
     return unary_numeric_dispatch["abs_", abs_[_]](array)
 
 
-def sign(array: Array) raises -> Array:
+def sign(array: AnyArray) raises -> AnyArray:
     """Runtime-typed sign."""
     return unary_numeric_dispatch["sign", sign[_]](array)
 
 
-def pow_(left: Array, right: Array) raises -> Array:
+def pow_(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed pow_."""
     return binary_float_dispatch["pow_", pow_[_]](left, right)
 
 
-def sqrt(array: Array) raises -> Array:
+def sqrt(array: AnyArray) raises -> AnyArray:
     """Runtime-typed sqrt."""
     return unary_float_dispatch["sqrt", sqrt[_]](array)
 
 
-def exp(array: Array) raises -> Array:
+def exp(array: AnyArray) raises -> AnyArray:
     """Runtime-typed exp."""
     return unary_float_dispatch["exp", exp[_]](array)
 
 
-def exp2(array: Array) raises -> Array:
+def exp2(array: AnyArray) raises -> AnyArray:
     """Runtime-typed exp2."""
     return unary_float_dispatch["exp2", exp2[_]](array)
 
 
-def log(array: Array) raises -> Array:
+def log(array: AnyArray) raises -> AnyArray:
     """Runtime-typed log."""
     return unary_float_dispatch["log", log[_]](array)
 
 
-def log2(array: Array) raises -> Array:
+def log2(array: AnyArray) raises -> AnyArray:
     """Runtime-typed log2."""
     return unary_float_dispatch["log2", log2[_]](array)
 
 
-def log10(array: Array) raises -> Array:
+def log10(array: AnyArray) raises -> AnyArray:
     """Runtime-typed log10."""
     return unary_float_dispatch["log10", log10[_]](array)
 
 
-def log1p(array: Array) raises -> Array:
+def log1p(array: AnyArray) raises -> AnyArray:
     """Runtime-typed log1p."""
     return unary_float_dispatch["log1p", log1p[_]](array)
 
 
-def floor(array: Array) raises -> Array:
+def floor(array: AnyArray) raises -> AnyArray:
     """Runtime-typed floor."""
     return unary_numeric_dispatch["floor", floor[_]](array)
 
 
-def ceil(array: Array) raises -> Array:
+def ceil(array: AnyArray) raises -> AnyArray:
     """Runtime-typed ceil."""
     return unary_numeric_dispatch["ceil", ceil[_]](array)
 
 
-def trunc(array: Array) raises -> Array:
+def trunc(array: AnyArray) raises -> AnyArray:
     """Runtime-typed trunc."""
     return unary_numeric_dispatch["trunc", trunc[_]](array)
 
 
-def round(array: Array) raises -> Array:
+def round(array: AnyArray) raises -> AnyArray:
     """Runtime-typed round."""
     return unary_numeric_dispatch["round", round[_]](array)
 
 
-def sin(array: Array) raises -> Array:
+def sin(array: AnyArray) raises -> AnyArray:
     """Runtime-typed sin."""
     return unary_float_dispatch["sin", sin[_]](array)
 
 
-def cos(array: Array) raises -> Array:
+def cos(array: AnyArray) raises -> AnyArray:
     """Runtime-typed cos."""
     return unary_float_dispatch["cos", cos[_]](array)

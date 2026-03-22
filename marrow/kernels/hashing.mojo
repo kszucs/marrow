@@ -9,14 +9,14 @@ Public API:
     - PrimitiveArray[T]: per-element hash (AHasher)
     - StringArray: per-element hash
     - StructArray: per-column hash with combining (multi-key)
-    - Array: runtime-typed dispatch
+    - AnyArray: runtime-typed dispatch
   - ``hash_identity``: identity hash for small integer types (bool, uint8, int8)
     — returns values cast to uint64, zero hash overhead
 """
 
 from std.hashlib import hash as _hash
 
-from ..arrays import PrimitiveArray, StringArray, StructArray, Array
+from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
     DataType,
@@ -94,7 +94,7 @@ def hash_(keys: StringArray) raises -> PrimitiveArray[uint64]:
 def hash_(keys: StructArray) raises -> PrimitiveArray[uint64]:
     """Hash a struct array by combining per-field hashes column-wise.
 
-    Each field (child array) is hashed independently via ``hash_(Array)``
+    Each field (child array) is hashed independently via ``hash_(AnyArray)``
     and the results are combined element-wise. This is the natural
     representation for multi-key hashing — multiple groupby key columns
     are a struct array.
@@ -124,15 +124,19 @@ def hash_(keys: StructArray) raises -> PrimitiveArray[uint64]:
         var builder = PrimitiveBuilder[uint64](capacity=n)
         for i in range(n):
             builder.append(
-                _h(_combine(UInt64(result.unsafe_get(i)),
-                            UInt64(field_hashes.unsafe_get(i))))
+                _h(
+                    _combine(
+                        UInt64(result.unsafe_get(i)),
+                        UInt64(field_hashes.unsafe_get(i)),
+                    )
+                )
             )
         result = builder.finish_typed()
 
     return result^
 
 
-def hash_(keys: Array) raises -> PrimitiveArray[uint64]:
+def hash_(keys: AnyArray) raises -> PrimitiveArray[uint64]:
     """Runtime-typed hash: dispatches to the correct typed overload.
 
     Supports primitive, string, and struct arrays.
@@ -189,7 +193,7 @@ def hash_identity[
     return builder.finish_typed()
 
 
-def hash_identity(keys: Array) raises -> PrimitiveArray[uint64]:
+def hash_identity(keys: AnyArray) raises -> PrimitiveArray[uint64]:
     """Runtime-typed identity hash dispatch."""
     if keys.dtype == bool_:
         return hash_identity[bool_](PrimitiveArray[bool_](data=keys))

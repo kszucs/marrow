@@ -30,7 +30,7 @@ from .buffers import Buffer, BufferBuilder
 from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import *
 from .arrays import (
-    Array,
+    AnyArray,
     BoolArray,
     PrimitiveArray,
     StringArray,
@@ -61,10 +61,10 @@ trait Builder(ImplicitlyDestructible, Movable):
     def append_null(mut self) raises:
         ...
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         ...
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         ...
 
     def reset(mut self):
@@ -90,8 +90,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     var _virt_dtype: def(ArcPointer[NoneType]) -> DataType
     var _virt_reserve: def(ArcPointer[NoneType], Int) raises
     var _virt_append_null: def(ArcPointer[NoneType]) raises
-    var _virt_extend: def(ArcPointer[NoneType], Array) raises
-    var _virt_finish: def(ArcPointer[NoneType]) raises -> Array
+    var _virt_extend: def(ArcPointer[NoneType], AnyArray) raises
+    var _virt_finish: def(ArcPointer[NoneType]) raises -> AnyArray
     var _virt_reset: def(ArcPointer[NoneType])
     var _virt_drop: def(var ArcPointer[NoneType])
 
@@ -120,13 +120,15 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         rebind[ArcPointer[T]](ptr)[].append_null()
 
     @staticmethod
-    def _tramp_extend[T: Builder](ptr: ArcPointer[NoneType], arr: Array) raises:
+    def _tramp_extend[
+        T: Builder
+    ](ptr: ArcPointer[NoneType], arr: AnyArray) raises:
         rebind[ArcPointer[T]](ptr)[].extend(arr)
 
     @staticmethod
     def _tramp_finish[
         T: Builder
-    ](ptr: ArcPointer[NoneType],) raises -> Array:
+    ](ptr: ArcPointer[NoneType],) raises -> AnyArray:
         return rebind[ArcPointer[T]](ptr)[].finish()
 
     @staticmethod
@@ -181,10 +183,10 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def append_null(mut self) raises:
         self._virt_append_null(self._data)
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self._virt_extend(self._data, arr)
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self._virt_finish(self._data)
 
     def reset(mut self):
@@ -301,7 +303,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             else:
                 self.append_null()
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_primitive[Self.T]())
 
     def extend(mut self, arr: PrimitiveArray[Self.T]) raises:
@@ -366,7 +368,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.finish_typed()
 
     def reset(mut self):
@@ -440,7 +442,7 @@ struct StringBuilder(Builder, Sized):
             else:
                 self.append_null()
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_string())
 
     def extend(mut self, arr: StringArray) raises:
@@ -549,7 +551,7 @@ struct StringBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.finish_typed()
 
     def reset(mut self):
@@ -634,7 +636,7 @@ struct ListBuilder(Builder, Sized):
         )
         self._length += 1
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_list())
 
     def extend(mut self, arr: ListArray) raises:
@@ -667,7 +669,7 @@ struct ListBuilder(Builder, Sized):
             self._length + n,
             UInt32(cur_child_len + child_end - child_start),
         )
-        var child_slice = Array(copy=arr.values)
+        var child_slice = AnyArray(copy=arr.values)
         child_slice.offset = child_start
         child_slice.length = child_end - child_start
         child_slice.nulls = 0
@@ -707,7 +709,7 @@ struct ListBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.finish_typed()
 
     def reset(mut self):
@@ -781,7 +783,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         self._bitmap.set_bit(self._length, True)
         self._length += 1
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_fixed_size_list())
 
     def extend(mut self, arr: FixedSizeListArray) raises:
@@ -802,7 +804,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.size
-        var child_slice = Array(copy=arr.values)
+        var child_slice = AnyArray(copy=arr.values)
         child_slice.offset = arr.offset * list_size
         child_slice.length = n * list_size
         child_slice.nulls = 0
@@ -838,7 +840,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.finish_typed()
 
     def reset(mut self):
@@ -920,7 +922,7 @@ struct StructBuilder(Builder, Sized):
         self._bitmap.set_bit(self._length, True)
         self._length += 1
 
-    def extend(mut self, arr: Array) raises:
+    def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_struct())
 
     def extend(mut self, arr: StructArray) raises:
@@ -937,7 +939,7 @@ struct StructBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         for f in range(len(arr.children)):
-            self._children[f].extend(Array(copy=arr.children[f]))
+            self._children[f].extend(AnyArray(copy=arr.children[f]))
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
@@ -957,11 +959,11 @@ struct StructBuilder(Builder, Sized):
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # recursively finish each field builder into a frozen child array
-        var frozen_children = List[Array](capacity=len(self._children))
+        var frozen_children = List[AnyArray](capacity=len(self._children))
         for ref child in self._children:
             frozen_children.append(child.finish())
         # construct the immutable result array
-        var result = Array(
+        var result = AnyArray(
             dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
@@ -974,7 +976,7 @@ struct StructBuilder(Builder, Sized):
         self.reset()
         return StructArray(data=result^)
 
-    def finish(mut self) raises -> Array:
+    def finish(mut self) raises -> AnyArray:
         return self.finish_typed()
 
     def reset(mut self):

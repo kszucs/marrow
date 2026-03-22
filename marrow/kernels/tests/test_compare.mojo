@@ -1,6 +1,6 @@
 from std.testing import assert_equal, TestSuite
 
-from marrow.arrays import array, PrimitiveArray, Array
+from marrow.arrays import array, PrimitiveArray, AnyArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import int64, float64
 
@@ -179,26 +179,26 @@ def test_output_length() raises:
 
 
 # ---------------------------------------------------------------------------
-# Runtime-typed Array overloads
+# Runtime-typed AnyArray overloads
 # ---------------------------------------------------------------------------
 
 
 def test_equal_array_overload() raises:
-    """Type-erased equal(Array, Array) dispatches correctly."""
-    var a = Array(array[int64]([1, 2, 3]))
-    var b = Array(array[int64]([1, 0, 3]))
+    """Type-erased equal(AnyArray, AnyArray) dispatches correctly."""
+    var a = AnyArray(array[int64]([1, 2, 3]))
+    var b = AnyArray(array[int64]([1, 0, 3]))
     var result = equal(a, b)
     assert_equal(result.length, 3)
 
 
 def test_dtype_mismatch_raises() raises:
     """Type-erased kernels raise on dtype mismatch."""
-    var a = Array(array[int64]([1, 2, 3]))
+    var a = AnyArray(array[int64]([1, 2, 3]))
     var fb = PrimitiveBuilder[float64](3)
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
-    var b = Array(fb.finish_typed())
+    var b = AnyArray(fb.finish_typed())
     var raised = False
     try:
         _ = equal(a, b)

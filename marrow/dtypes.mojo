@@ -99,7 +99,7 @@ comptime DENSE_UNION: UInt8 = 28
 # Dictionary-encoded type, also called "categorical" or "factor"
 # in other programming languages. Holds the dictionary value
 # type but not the dictionary itself, which is part of the
-# Array struct
+# AnyArray struct
 comptime DICTIONARY: UInt8 = 29
 
 # Map, a repeated struct logical type

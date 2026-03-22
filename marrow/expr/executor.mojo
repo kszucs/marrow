@@ -9,7 +9,7 @@ expression hierarchies:
 **Relation processors** (yield ``RecordBatch`` via ``pull()``):
     ``ScanProcessor``, ``FilterProcessor``, ``ProjectProcessor``
 
-**Value processors** (evaluate ``Array`` via ``eval(inputs)``):
+**Value processors** (evaluate ``AnyArray`` via ``eval(inputs)``):
     *Leaf* — ``ColumnProcessor``, ``LiteralProcessor`` (hold data)
     *Operations* — ``BinaryProcessor``, ``UnaryProcessor``,
     ``IsNullProcessor``, ``IfElseProcessor`` (compose nested value processors)
@@ -26,7 +26,7 @@ from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
 import std.math as math
 
-from marrow.arrays import PrimitiveArray, Array
+from marrow.arrays import PrimitiveArray, AnyArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import numeric_dtypes, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, mul, div, neg, abs_
@@ -169,7 +169,7 @@ trait ValueProcessor(ImplicitlyDestructible, Movable):
     compose nested ``AnyValueProcessor`` children.
     """
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate the expression against the given batch."""
         ...
 
@@ -188,7 +188,7 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) raises -> Array
+    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) raises -> AnyArray
     var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
@@ -196,7 +196,7 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
     @staticmethod
     def _tramp_eval[
         T: ValueProcessor
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> Array:
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
         return rebind[ArcPointer[T]](ptr)[].eval(batch)
 
     @staticmethod
@@ -220,7 +220,7 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
 
     # --- public API ---
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate the expression against the given batch."""
         return self._virt_eval(self._data, batch)
 
@@ -241,19 +241,19 @@ struct ColumnProcessor(ValueProcessor):
     def __init__(out self, index: Int):
         self.index = index
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         return batch.columns[self.index].copy()
 
 
 struct LiteralProcessor(ValueProcessor):
     """Broadcasts a scalar value to match the input length."""
 
-    var value: Array
+    var value: AnyArray
 
-    def __init__(out self, value: Array):
+    def __init__(out self, value: AnyArray):
         self.value = value.copy()
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         return _broadcast_literal(batch.num_rows(), self.value)
 
 
@@ -279,7 +279,7 @@ struct BinaryProcessor(ValueProcessor):
         self.right = right^
         self.op = op
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         var l = self.left.eval(batch)
         var r = self.right.eval(batch)
         if self.op == ADD:
@@ -303,14 +303,14 @@ struct BinaryProcessor(ValueProcessor):
         elif self.op == GE:
             return greater_equal(l, r)
         elif self.op == AND:
-            return Array(
+            return AnyArray(
                 and_(
                     PrimitiveArray[bool_dt](data=l),
                     PrimitiveArray[bool_dt](data=r),
                 )
             )
         elif self.op == OR:
-            return Array(
+            return AnyArray(
                 or_(
                     PrimitiveArray[bool_dt](data=l),
                     PrimitiveArray[bool_dt](data=r),
@@ -330,14 +330,14 @@ struct UnaryProcessor(ValueProcessor):
         self.child = child^
         self.op = op
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         var c = self.child.eval(batch)
         if self.op == NEG:
             return neg(c)
         elif self.op == ABS:
             return abs_(c)
         elif self.op == NOT:
-            return Array(not_(PrimitiveArray[bool_dt](data=c)))
+            return AnyArray(not_(PrimitiveArray[bool_dt](data=c)))
         else:
             raise Error("UnaryProcessor: unknown op ", self.op)
 
@@ -350,7 +350,7 @@ struct IsNullProcessor(ValueProcessor):
     def __init__(out self, var child: AnyValueProcessor):
         self.child = child^
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         return is_null(self.child.eval(batch))
 
 
@@ -371,7 +371,7 @@ struct IfElseProcessor(ValueProcessor):
         self.then_ = then_^
         self.else_ = else_^
 
-    def eval(self, batch: RecordBatch) raises -> Array:
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
         var c = self.cond.eval(batch)
         var t = self.then_.eval(batch)
         var e = self.else_.eval(batch)
@@ -474,15 +474,15 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
         """
         var batches = self.to_batches()
         if len(batches) == 0:
-            return RecordBatch(schema=self.schema(), columns=List[Array]())
+            return RecordBatch(schema=self.schema(), columns=List[AnyArray]())
         if len(batches) == 1:
             return RecordBatch(copy=batches[0])
         # Concat each column across batches.
         var schema = batches[0].schema
         var num_cols = batches[0].num_columns()
-        var result_cols = List[Array](capacity=num_cols)
+        var result_cols = List[AnyArray](capacity=num_cols)
         for c in range(num_cols):
-            var col_arrays = List[Array](capacity=len(batches))
+            var col_arrays = List[AnyArray](capacity=len(batches))
             for b in range(len(batches)):
                 col_arrays.append(batches[b].columns[c].copy())
             result_cols.append(concat(col_arrays))
@@ -557,15 +557,17 @@ struct ParquetScanProcessor(RelationProcessor):
         var table = read_table(path)
         var batches = table.to_batches()
         if len(batches) == 0:
-            self.batch = RecordBatch(schema=table.schema, columns=List[Array]())
+            self.batch = RecordBatch(
+                schema=table.schema, columns=List[AnyArray]()
+            )
         elif len(batches) == 1:
             self.batch = RecordBatch(copy=batches[0])
         else:
             var schema = batches[0].schema
             var num_cols = batches[0].num_columns()
-            var result_cols = List[Array](capacity=num_cols)
+            var result_cols = List[AnyArray](capacity=num_cols)
             for c in range(num_cols):
-                var col_arrays = List[Array](capacity=len(batches))
+                var col_arrays = List[AnyArray](capacity=len(batches))
                 for b in range(len(batches)):
                     col_arrays.append(batches[b].columns[c].copy())
                 result_cols.append(concat(col_arrays))
@@ -621,7 +623,7 @@ struct FilterProcessor(RelationProcessor):
         while True:
             var batch = self.child.pull()
             var mask = self.predicate.eval(batch)
-            var result_cols = List[Array]()
+            var result_cols = List[AnyArray]()
             for i in range(batch.num_columns()):
                 result_cols.append(
                     filter_(batch.columns[i].copy(), mask.copy())
@@ -662,7 +664,7 @@ struct ProjectProcessor(RelationProcessor):
 
     def pull(mut self) raises -> RecordBatch:
         var batch = self.child.pull()  # raises Exhausted when done
-        var result_cols = List[Array]()
+        var result_cols = List[AnyArray]()
         for ref v in self.values:
             result_cols.append(v.eval(batch))
         return RecordBatch(schema=self.schema_.copy(), columns=result_cols^)
@@ -676,7 +678,7 @@ struct ProjectProcessor(RelationProcessor):
 def _batch_to_struct(batch: RecordBatch) raises -> StructArray:
     """Convert a RecordBatch to a StructArray (key columns)."""
     var fields = List[Field]()
-    var children = List[Array]()
+    var children = List[AnyArray]()
     for i in range(batch.num_columns()):
         fields.append(batch.schema.fields[i].copy())
         children.append(batch.columns[i].copy())
@@ -737,12 +739,10 @@ struct AggregateProcessor(RelationProcessor):
                     var batch = self.child.pull()
 
                     # Evaluate key expressions → StructArray.
-                    var key_arrays = List[Array]()
+                    var key_arrays = List[AnyArray]()
                     for i in range(len(self.key_exprs)):
-                        key_arrays.append(
-                            self.key_exprs[i].eval(batch).copy()
-                        )
-                    var key_children = List[Array]()
+                        key_arrays.append(self.key_exprs[i].eval(batch).copy())
+                    var key_children = List[AnyArray]()
                     var key_struct_fields = List[Field]()
                     for i in range(len(key_arrays)):
                         key_children.append(key_arrays[i].copy())
@@ -759,7 +759,7 @@ struct AggregateProcessor(RelationProcessor):
                     var gids = self.grouper.consume_keys(key_struct)
 
                     # Evaluate value expressions → scatter-update.
-                    var val_arrays = List[Array]()
+                    var val_arrays = List[AnyArray]()
                     for i in range(len(self.value_exprs)):
                         val_arrays.append(
                             self.value_exprs[i].eval(batch).copy()
@@ -915,7 +915,7 @@ def execute(
 # ---------------------------------------------------------------------------
 
 
-def _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
+def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
     comptime for dt in numeric_dtypes:
         if scalar_array.dtype == dt:
@@ -924,5 +924,5 @@ def _broadcast_literal(length: Int, scalar_array: Array) raises -> Array:
             for i in range(length):
                 builder._buffer.unsafe_set[dt.native](i, val)
             builder._length = length
-            return Array(builder.finish_typed())
+            return AnyArray(builder.finish_typed())
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype}")

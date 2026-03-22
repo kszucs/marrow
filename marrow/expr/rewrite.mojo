@@ -22,7 +22,7 @@ Example
             var bin = expr.downcast[Binary]()[]
             if bin.right.kind() != LITERAL:
                 return None
-            # Literal.value is a length-1 Array; inspect element 0
+            # Literal.value is a length-1 AnyArray; inspect element 0
             # to check whether it is zero.
             return None
 

@@ -1,7 +1,7 @@
 """Tests for batch cosine similarity kernel."""
 
 from std.testing import assert_equal, assert_true, TestSuite
-from marrow.arrays import Array, PrimitiveArray, FixedSizeListArray
+from marrow.arrays import AnyArray, PrimitiveArray, FixedSizeListArray
 from marrow.builders import AnyBuilder, PrimitiveBuilder, FixedSizeListBuilder
 from marrow.dtypes import float32, fixed_size_list_
 from marrow.kernels.similarity import cosine_similarity

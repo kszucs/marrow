@@ -1,8 +1,24 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.arrays import array, Array, PrimitiveArray, StringArray, StructArray
+from marrow.arrays import (
+    array,
+    AnyArray,
+    PrimitiveArray,
+    StringArray,
+    StructArray,
+)
 from marrow.builders import PrimitiveBuilder, StringBuilder
-from marrow.dtypes import int8, int32, int64, uint8, uint32, float64, bool_, Field, struct_
+from marrow.dtypes import (
+    int8,
+    int32,
+    int64,
+    uint8,
+    uint32,
+    float64,
+    bool_,
+    Field,
+    struct_,
+)
 from marrow.kernels.groupby import groupby
 
 
@@ -11,8 +27,8 @@ from marrow.kernels.groupby import groupby
 # ---------------------------------------------------------------------------
 
 
-def _values(ref a: Array) -> List[Array]:
-    var v = List[Array]()
+def _values(ref a: AnyArray) -> List[AnyArray]:
+    var v = List[AnyArray]()
     v.append(a.copy())
     return v^
 
@@ -30,8 +46,8 @@ def _aggs(s: String) -> List[String]:
 
 def test_groupby_sum_basic() raises:
     """Sum aggregation: [1,2,1,3,2] keys, [10,20,30,40,50] values."""
-    var keys = Array(array[int32]([1, 2, 1, 3, 2]))
-    var vals = Array(array[int32]([10, 20, 30, 40, 50]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 3, 2]))
+    var vals = AnyArray(array[int32]([10, 20, 30, 40, 50]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
 
     # 3 groups: key=1 (sum=40), key=2 (sum=70), key=3 (sum=40)
@@ -52,8 +68,8 @@ def test_groupby_sum_basic() raises:
 
 
 def test_groupby_sum_all_same_key() raises:
-    var keys = Array(array[int32]([5, 5, 5]))
-    var vals = Array(array[int32]([1, 2, 3]))
+    var keys = AnyArray(array[int32]([5, 5, 5]))
+    var vals = AnyArray(array[int32]([1, 2, 3]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 1)
     var s = result.columns[1].as_primitive[float64]()
@@ -66,8 +82,8 @@ def test_groupby_sum_all_same_key() raises:
 
 
 def test_groupby_min() raises:
-    var keys = Array(array[int32]([1, 2, 1, 2]))
-    var vals = Array(array[int32]([30, 10, 20, 40]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 2]))
+    var vals = AnyArray(array[int32]([30, 10, 20, 40]))
     var result = groupby(keys, _values(vals), _aggs("min"))
     var m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 20.0)  # min(30, 20)
@@ -75,8 +91,8 @@ def test_groupby_min() raises:
 
 
 def test_groupby_max() raises:
-    var keys = Array(array[int32]([1, 2, 1, 2]))
-    var vals = Array(array[int32]([30, 10, 20, 40]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 2]))
+    var vals = AnyArray(array[int32]([30, 10, 20, 40]))
     var result = groupby(keys, _values(vals), _aggs("max"))
     var m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 30.0)  # max(30, 20)
@@ -89,8 +105,8 @@ def test_groupby_max() raises:
 
 
 def test_groupby_count() raises:
-    var keys = Array(array[int32]([1, 2, 1, 3, 2]))
-    var vals = Array(array[int32]([10, 20, 30, 40, 50]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 3, 2]))
+    var vals = AnyArray(array[int32]([10, 20, 30, 40, 50]))
     var result = groupby(keys, _values(vals), _aggs("count"))
     var c = result.columns[1].as_primitive[int64]()
     assert_equal(c[0], 2)  # key=1: 2 rows
@@ -104,8 +120,8 @@ def test_groupby_count() raises:
 
 
 def test_groupby_mean() raises:
-    var keys = Array(array[int32]([1, 2, 1, 2]))
-    var vals = Array(array[int32]([10, 20, 30, 40]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 2]))
+    var vals = AnyArray(array[int32]([10, 20, 30, 40]))
     var result = groupby(keys, _values(vals), _aggs("mean"))
     var m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 20.0)  # (10+30)/2
@@ -119,8 +135,8 @@ def test_groupby_mean() raises:
 
 def test_groupby_null_keys() raises:
     """Null keys form their own group."""
-    var keys = Array(array[int32]([1, None, 2, None, 1]))
-    var vals = Array(array[int32]([10, 20, 30, 40, 50]))
+    var keys = AnyArray(array[int32]([1, None, 2, None, 1]))
+    var vals = AnyArray(array[int32]([10, 20, 30, 40, 50]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
@@ -132,8 +148,8 @@ def test_groupby_null_keys() raises:
 
 def test_groupby_null_values_skipped() raises:
     """Null values are skipped in aggregation."""
-    var keys = Array(array[int32]([1, 1, 1]))
-    var vals = Array(array[int32]([10, None, 30]))
+    var keys = AnyArray(array[int32]([1, 1, 1]))
+    var vals = AnyArray(array[int32]([10, None, 30]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     var s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 40.0)  # 10 + 30 (null skipped)
@@ -141,8 +157,8 @@ def test_groupby_null_values_skipped() raises:
 
 def test_groupby_count_skips_nulls() raises:
     """Count only counts non-null values."""
-    var keys = Array(array[int32]([1, 1, 1]))
-    var vals = Array(array[int32]([10, None, 30]))
+    var keys = AnyArray(array[int32]([1, 1, 1]))
+    var vals = AnyArray(array[int32]([10, None, 30]))
     var result = groupby(keys, _values(vals), _aggs("count"))
     var c = result.columns[1].as_primitive[int64]()
     assert_equal(c[0], 2)  # 2 non-null values
@@ -159,8 +175,8 @@ def test_groupby_string_key() raises:
     b.append("b")
     b.append("a")
     b.append("b")
-    var keys = Array(b.finish_typed())
-    var vals = Array(array[int32]([10, 20, 30, 40]))
+    var keys = AnyArray(b.finish_typed())
+    var vals = AnyArray(array[int32]([10, 20, 30, 40]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
     var s = result.columns[1].as_primitive[float64]()
@@ -174,9 +190,9 @@ def test_groupby_string_key() raises:
 
 
 def test_groupby_multikey() raises:
-    var a = Array(array[int32]([1, 1, 2, 2]))
-    var b = Array(array[int32]([10, 20, 10, 20]))
-    var children = List[Array]()
+    var a = AnyArray(array[int32]([1, 1, 2, 2]))
+    var b = AnyArray(array[int32]([10, 20, 10, 20]))
+    var children = List[AnyArray]()
     children.append(a.copy())
     children.append(b.copy())
     var keys = StructArray(
@@ -186,7 +202,7 @@ def test_groupby_multikey() raises:
         bitmap=None,
         children=children^,
     )
-    var vals = Array(array[int32]([1, 2, 3, 4]))
+    var vals = AnyArray(array[int32]([1, 2, 3, 4]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 4)  # 4 unique combos
 
@@ -197,8 +213,8 @@ def test_groupby_multikey() raises:
 
 
 def test_groupby_empty() raises:
-    var keys = Array(array[int32]())
-    var vals = Array(array[int32]())
+    var keys = AnyArray(array[int32]())
+    var vals = AnyArray(array[int32]())
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 0)
 
@@ -209,13 +225,13 @@ def test_groupby_empty() raises:
 
 
 def test_groupby_bool_key() raises:
-    var keys = Array(array([True, False, True, False, True]))
-    var vals = Array(array[int32]([1, 2, 3, 4, 5]))
+    var keys = AnyArray(array([True, False, True, False, True]))
+    var vals = AnyArray(array[int32]([1, 2, 3, 4, 5]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
     var s = result.columns[1].as_primitive[float64]()
-    assert_equal(s[0], 9.0)   # True: 1+3+5
-    assert_equal(s[1], 6.0)   # False: 2+4
+    assert_equal(s[0], 9.0)  # True: 1+3+5
+    assert_equal(s[1], 6.0)  # False: 2+4
 
 
 # ---------------------------------------------------------------------------
@@ -224,10 +240,10 @@ def test_groupby_bool_key() raises:
 
 
 def test_groupby_multiple_aggs() raises:
-    var keys = Array(array[int32]([1, 2, 1, 2]))
+    var keys = AnyArray(array[int32]([1, 2, 1, 2]))
 
-    var vals = List[Array]()
-    var v = Array(array[int32]([10, 20, 30, 40]))
+    var vals = List[AnyArray]()
+    var v = AnyArray(array[int32]([10, 20, 30, 40]))
     vals.append(v.copy())
     vals.append(v.copy())
 

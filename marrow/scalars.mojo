@@ -1,11 +1,11 @@
 """Arrow scalar types — single-value containers wrapping length-1 arrays.
 
-Following Arrow Rust's design: a Scalar is an Array where ``length == 1``.
+Following Arrow Rust's design: a Scalar is an AnyArray where ``length == 1``.
 This reuses all existing infrastructure (buffers, bitmaps, dtypes, builders)
 without duplicating it.
 
 Type-erased container:
-  ``AnyScalar`` — wraps any length-1 ``Array``, converts implicitly to/from
+  ``AnyScalar`` — wraps any length-1 ``AnyArray``, converts implicitly to/from
   typed scalars.
 
 Typed scalars:
@@ -23,7 +23,7 @@ from .arrays import (
     StringArray,
     ListArray,
     StructArray,
-    Array,
+    AnyArray,
 )
 from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes
@@ -153,7 +153,7 @@ struct ListScalar(Copyable, Movable, Writable):
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-    def value(self) -> Array:
+    def value(self) -> AnyArray:
         """Get the sub-array for this list element."""
         return self._data.unsafe_get(0)
 
@@ -217,31 +217,31 @@ struct StructScalar(Copyable, Movable, Writable):
 
 
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
-    """A single Arrow value — a length-1 Array.
+    """A single Arrow value — a length-1 AnyArray.
 
     Type-erased container. Converts implicitly to/from typed scalars.
     """
 
-    var _data: Array
+    var _data: AnyArray
 
     @implicit
     def __init__[T: DataType](out self, typed: PrimitiveScalar[T]):
-        self._data = Array(typed._data)
+        self._data = AnyArray(typed._data)
 
     @implicit
     def __init__(out self, typed: StringScalar):
-        self._data = Array(typed._data)
+        self._data = AnyArray(typed._data)
 
     @implicit
     def __init__(out self, typed: ListScalar):
-        self._data = Array(typed._data)
+        self._data = AnyArray(typed._data)
 
     @implicit
     def __init__(out self, typed: StructScalar):
-        self._data = Array(typed._data)
+        self._data = AnyArray(typed._data)
 
-    def __init__(out self, *, data: Array):
-        """Wrap an existing length-1 Array."""
+    def __init__(out self, *, data: AnyArray):
+        """Wrap an existing length-1 AnyArray."""
         self._data = data.copy()
 
     def is_valid(self) -> Bool:
@@ -275,7 +275,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         self.write_to(writer)
 
     def to_python_object(var self) raises -> PythonObject:
-        """Convert to a Python scalar via the underlying Array."""
+        """Convert to a Python scalar via the underlying AnyArray."""
         if self.is_null():
             # TODO: we should have a null scalar to return with
             return PythonObject(None)

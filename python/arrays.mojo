@@ -15,7 +15,7 @@ from std.python._cpython import (
 from std.memory import ArcPointer, alloc
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.arrays import (
-    Array,
+    AnyArray,
     PrimitiveArray,
     BoolArray,
     Int8Array,
@@ -735,7 +735,7 @@ def make_converter(
 # ---------------------------------------------------------------------------
 
 
-def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> Array](
+def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
     var arr = to_array_fn(ptr[])
@@ -750,24 +750,24 @@ def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.DataType](
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
-# TODO: maybe introduce an Array trait and rename Array struct to AnyArray
-def _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> Array:
+# TODO: maybe introduce an AnyArray trait and rename AnyArray struct to AnyArray
+def _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> AnyArray:
     return arr
 
 
-def _str_to_array(arr: StringArray) -> Array:
+def _str_to_array(arr: StringArray) -> AnyArray:
     return arr
 
 
-def _list_to_array(arr: ListArray) -> Array:
+def _list_to_array(arr: ListArray) -> AnyArray:
     return arr
 
 
-def _fsl_to_array(arr: FixedSizeListArray) -> Array:
+def _fsl_to_array(arr: FixedSizeListArray) -> AnyArray:
     return arr
 
 
-def _struct_to_array(arr: StructArray) -> Array:
+def _struct_to_array(arr: StructArray) -> AnyArray:
     return arr
 
 
@@ -791,7 +791,7 @@ def array(
     # Skip when type= is given since the user wants explicit type control.
     if not kwargs.find("type"):
         try:
-            return Array(py=obj).to_python_object()
+            return AnyArray(py=obj).to_python_object()
         except:
             pass
 

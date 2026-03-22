@@ -12,12 +12,12 @@ Kernel implementations live in their respective modules:
   - `aggregate.mojo` — reductions using ``std.algorithm`` (sum, min, max, etc.)
   - `filter.mojo` — selection/filter kernels
   - `groupby.mojo` — fused groupby with aggregation (sum, min, max, count, mean)
-  - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, Array
+  - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, AnyArray
 """
 
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import PrimitiveArray, Array
+from marrow.arrays import PrimitiveArray, AnyArray
 from marrow.bitmap import Bitmap
 from marrow.dtypes import (
     DataType,
@@ -67,10 +67,10 @@ def binary_array_dispatch[
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> PrimitiveArray[T],
 ](
-    left: Array,
-    right: Array,
+    left: AnyArray,
+    right: AnyArray,
     ctx: Optional[DeviceContext] = None,
-) raises -> Array:
+) raises -> AnyArray:
     """Runtime-typed binary dispatch: checks dtype match, loops over numeric types.
 
     Parameters:
@@ -78,19 +78,19 @@ def binary_array_dispatch[
         func: The typed binary kernel to dispatch to.
 
     Args:
-        left: Left operand (runtime-typed Array).
-        right: Right operand (runtime-typed Array).
+        left: Left operand (runtime-typed AnyArray).
+        right: Right operand (runtime-typed AnyArray).
         ctx: GPU device context, forwarded to the typed kernel.
 
     Returns:
-        A new Array with the element-wise result.
+        A new AnyArray with the element-wise result.
     """
     if left.dtype != right.dtype:
         raise Error(t"{name}: dtype mismatch: {left.dtype} vs {right.dtype}")
 
     comptime for dtype in numeric_dtypes:
         if left.dtype == dtype:
-            return Array(
+            return AnyArray(
                 func[dtype](
                     PrimitiveArray[dtype](data=left),
                     PrimitiveArray[dtype](data=right),
@@ -107,10 +107,10 @@ def binary_array_dispatch[
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> PrimitiveArray[OutT],
 ](
-    left: Array,
-    right: Array,
+    left: AnyArray,
+    right: AnyArray,
     ctx: Optional[DeviceContext] = None,
-) raises -> Array:
+) raises -> AnyArray:
     """Runtime-typed binary dispatch with a fixed output type (e.g. comparisons).
 
     Parameters:
@@ -119,19 +119,19 @@ def binary_array_dispatch[
         func: The typed binary kernel to dispatch to.
 
     Args:
-        left: Left operand (runtime-typed Array).
-        right: Right operand (runtime-typed Array).
+        left: Left operand (runtime-typed AnyArray).
+        right: Right operand (runtime-typed AnyArray).
         ctx: GPU device context, forwarded to the typed kernel.
 
     Returns:
-        A new Array wrapping ``PrimitiveArray[OutT]`` with the result.
+        A new AnyArray wrapping ``PrimitiveArray[OutT]`` with the result.
     """
     if left.dtype != right.dtype:
         raise Error(t"{name}: dtype mismatch: {left.dtype} vs {right.dtype}")
 
     comptime for dtype in numeric_dtypes:
         if left.dtype == dtype:
-            return Array(
+            return AnyArray(
                 func[dtype](
                     PrimitiveArray[dtype](data=left),
                     PrimitiveArray[dtype](data=right),
@@ -144,7 +144,7 @@ def binary_array_dispatch[
 def unary_numeric_dispatch[
     name: StringLiteral,
     func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
-](array: Array) raises -> Array:
+](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch over all numeric dtypes.
 
     Parameters:
@@ -155,11 +155,11 @@ def unary_numeric_dispatch[
         array: Input array (runtime-typed).
 
     Returns:
-        A new Array with the element-wise result.
+        A new AnyArray with the element-wise result.
     """
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return Array(func[dtype](PrimitiveArray[dtype](data=array)))
+            return AnyArray(func[dtype](PrimitiveArray[dtype](data=array)))
     raise Error(t"{name}: unsupported dtype {array.dtype}")
 
 
@@ -168,14 +168,14 @@ def binary_float_dispatch[
     func: def[T: DataType](
         PrimitiveArray[T], PrimitiveArray[T]
     ) raises -> PrimitiveArray[T],
-](left: Array, right: Array) raises -> Array:
+](left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed binary dispatch restricted to floating-point dtypes."""
     if left.dtype != right.dtype:
         raise Error(t"{name}: dtype mismatch: {left.dtype} vs {right.dtype}")
 
     comptime for dtype in float_dtypes:
         if left.dtype == dtype:
-            return Array(
+            return AnyArray(
                 func[dtype](
                     PrimitiveArray[dtype](data=left),
                     PrimitiveArray[dtype](data=right),
@@ -187,7 +187,7 @@ def binary_float_dispatch[
 def unary_float_dispatch[
     name: StringLiteral,
     func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
-](array: Array) raises -> Array:
+](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch restricted to floating-point dtypes.
 
     Parameters:
@@ -198,9 +198,9 @@ def unary_float_dispatch[
         array: Input array (runtime-typed); must be float16, float32, or float64.
 
     Returns:
-        A new Array with the element-wise result.
+        A new AnyArray with the element-wise result.
     """
     comptime for dtype in float_dtypes:
         if array.dtype == dtype:
-            return Array(func[dtype](PrimitiveArray[dtype](data=array)))
+            return AnyArray(func[dtype](PrimitiveArray[dtype](data=array)))
     raise Error(t"{name}: unsupported dtype {array.dtype}, expected float type")

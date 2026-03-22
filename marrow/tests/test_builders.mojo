@@ -3,7 +3,7 @@ ListBuilder, FixedSizeListBuilder, StructBuilder) and factory functions."""
 
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from marrow.arrays import (
-    Array,
+    AnyArray,
     BoolArray,
     PrimitiveArray,
     StringArray,
@@ -810,7 +810,7 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
 
 
 def test_any_builder_finish_dispatch_primitive() raises:
-    """AnyBuilder.finish() dispatches to PrimitiveBuilder.finish() and returns Array.
+    """AnyBuilder.finish() dispatches to PrimitiveBuilder.finish() and returns AnyArray.
     """
     var b = PrimitiveBuilder[int32](10)
     b.append(42)
@@ -825,7 +825,7 @@ def test_any_builder_finish_dispatch_primitive() raises:
 
 
 def test_any_builder_finish_dispatch_string() raises:
-    """AnyBuilder.finish() dispatches to StringBuilder.finish() and returns Array.
+    """AnyBuilder.finish() dispatches to StringBuilder.finish() and returns AnyArray.
     """
     var b = StringBuilder(10)
     b.append("foo")
@@ -838,7 +838,7 @@ def test_any_builder_finish_dispatch_string() raises:
 
 
 def test_any_builder_finish_dispatch_list() raises:
-    """AnyBuilder.finish() dispatches to ListBuilder.finish() and returns Array.
+    """AnyBuilder.finish() dispatches to ListBuilder.finish() and returns AnyArray.
     """
     var child = PrimitiveBuilder[int32]()
     child.append(1)

@@ -26,6 +26,7 @@
 
 ### Refactors
 
+- **Array trait + AnyArray rename**: Introduced `Array` trait (`type()`, `null_count()`, `is_valid()`, `as_any()`) implemented by all typed arrays. Renamed the type-erased `Array` struct to `AnyArray`, aligning with the existing `Builder`/`AnyBuilder` and `Value`/`AnyValue` naming convention.
 - Moved the expression system from `marrow/kernels/` into the dedicated `marrow/expr/` module.
 - Renamed `plan.mojo` → `relations.mojo` and `expr.mojo` → `values.mojo` for clarity.
 - Redesigned executor with a pull-based streaming model and strict typed processor hierarchy.

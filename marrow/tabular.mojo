@@ -9,7 +9,7 @@ References:
 """
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .arrays import Array, ChunkedArray, StructArray
+from .arrays import AnyArray, ChunkedArray, StructArray
 from .schema import Schema
 from .dtypes import struct_, Field
 
@@ -23,15 +23,15 @@ struct RecordBatch(
     """
 
     var schema: Schema
-    var columns: List[Array]
+    var columns: List[AnyArray]
 
-    def __init__(out self, schema: Schema, var columns: List[Array]):
+    def __init__(out self, schema: Schema, var columns: List[AnyArray]):
         self.schema = schema
         self.columns = columns^
 
     def __init__(out self, *, copy: Self):
         self.schema = Schema(copy=copy.schema)
-        var cols = List[Array]()
+        var cols = List[AnyArray]()
         for col in copy.columns:
             cols.append(col.copy())
         self.columns = cols^
@@ -59,7 +59,7 @@ struct RecordBatch(
         var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
             struct_(schema.fields)
         )
-        var columns = List[Array]()
+        var columns = List[AnyArray]()
         for child in struct_arr.children:
             columns.append(child.copy())
         self = RecordBatch(schema=schema, columns=columns^)
@@ -81,11 +81,11 @@ struct RecordBatch(
         """Returns the number of columns."""
         return len(self.columns)
 
-    def column(self, index: Int) -> ref[self.columns] Array:
+    def column(self, index: Int) -> ref[self.columns] AnyArray:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    def column(self, name: String) raises -> ref[self.columns] Array:
+    def column(self, name: String) raises -> ref[self.columns] AnyArray:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
@@ -114,7 +114,7 @@ struct RecordBatch(
 
     def slice(self, offset: Int, length: Int) -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""
-        var sliced = List[Array]()
+        var sliced = List[AnyArray]()
         for col in self.columns:
             sliced.append(col.slice(offset, length))
         return RecordBatch(schema=self.schema, columns=sliced^)
@@ -126,7 +126,7 @@ struct RecordBatch(
     def select(self, indices: List[Int]) -> RecordBatch:
         """Returns a new RecordBatch with only the columns at the given indices.
         """
-        var new_cols = List[Array]()
+        var new_cols = List[AnyArray]()
         var new_fields = List[Field]()
         for i in indices:
             new_cols.append(self.columns[i].copy())
@@ -135,7 +135,7 @@ struct RecordBatch(
 
     def select(self, names: List[String]) raises -> RecordBatch:
         """Returns a new RecordBatch with only the named columns."""
-        var new_cols = List[Array]()
+        var new_cols = List[AnyArray]()
         var new_fields = List[Field]()
         for name in names:
             var idx = self.schema.get_field_index(name)
@@ -159,15 +159,15 @@ struct RecordBatch(
             new_fields.append(
                 Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
             )
-        var cols = List[Array]()
+        var cols = List[AnyArray]()
         for col in self.columns:
             cols.append(col.copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=cols^)
 
-    def add_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
+    def add_column(self, i: Int, field: Field, column: AnyArray) -> RecordBatch:
         """Returns a new RecordBatch with `column` inserted at position `i`."""
         var new_fields = List[Field]()
-        var new_cols = List[Array]()
+        var new_cols = List[AnyArray]()
         for j in range(i):
             new_fields.append(self.schema.fields[j])
             new_cols.append(self.columns[j].copy())
@@ -178,24 +178,24 @@ struct RecordBatch(
             new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    def append_column(self, field: Field, column: Array) -> RecordBatch:
+    def append_column(self, field: Field, column: AnyArray) -> RecordBatch:
         """Returns a new RecordBatch with `column` appended at the end."""
         return self.add_column(len(self.columns), field, column)
 
     def remove_column(self, i: Int) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` removed."""
         var new_fields = List[Field]()
-        var new_cols = List[Array]()
+        var new_cols = List[AnyArray]()
         for j in range(len(self.columns)):
             if j != i:
                 new_fields.append(self.schema.fields[j])
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
-    def set_column(self, i: Int, field: Field, column: Array) -> RecordBatch:
+    def set_column(self, i: Int, field: Field, column: AnyArray) -> RecordBatch:
         """Returns a new RecordBatch with the column at index `i` replaced."""
         var new_fields = List[Field]()
-        var new_cols = List[Array]()
+        var new_cols = List[AnyArray]()
         for j in range(len(self.columns)):
             if j == i:
                 new_fields.append(field)
@@ -208,7 +208,7 @@ struct RecordBatch(
     def to_struct_array(self) -> StructArray:
         """Converts this RecordBatch to a StructArray (columns become fields).
         """
-        var cols = List[Array]()
+        var cols = List[AnyArray]()
         for col in self.columns:
             cols.append(col.copy())
         return StructArray(
@@ -236,7 +236,7 @@ struct RecordBatch(
 
 
 def record_batch(
-    var columns: List[Array], *, names: List[String]
+    var columns: List[AnyArray], *, names: List[String]
 ) raises -> RecordBatch:
     """Construct a RecordBatch from a list of arrays and column names.
 
@@ -256,8 +256,6 @@ def record_batch(
         fields.append(Field(names[i], columns[i].dtype))
     var schema = Schema(fields=fields^)
     return RecordBatch(schema=schema, columns=columns^)
-
-
 
 
 struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
@@ -334,7 +332,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
 
     def combine_chunks(self) raises -> RecordBatch:
         """Combine all chunks in each column into a single RecordBatch."""
-        var cols = List[Array]()
+        var cols = List[AnyArray]()
         for col in self.columns:
             var ca = ChunkedArray(
                 dtype=col.dtype.copy(), chunks=List(col.chunks)
@@ -356,7 +354,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         var n_cols = schema.num_fields()
         var columns = List[ChunkedArray]()
         for col_idx in range(n_cols):
-            var chunks = List[Array]()
+            var chunks = List[AnyArray]()
             for batch in batches:
                 chunks.append(batch.columns[col_idx].copy())
             columns.append(
@@ -388,7 +386,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         if aligned and n_chunks > 0:
             var batches = List[RecordBatch]()
             for chunk_idx in range(n_chunks):
-                var cols = List[Array]()
+                var cols = List[AnyArray]()
                 for col in self.columns:
                     cols.append(col.chunks[chunk_idx].copy())
                 batches.append(RecordBatch(schema=self.schema, columns=cols^))
@@ -397,7 +395,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         # Fallback: combine chunks into a single batch.
         from .kernels.concat import concat
 
-        var cols = List[Array]()
+        var cols = List[AnyArray]()
         for col in self.columns:
             if len(col.chunks) == 1:
                 cols.append(col.chunks[0].copy())

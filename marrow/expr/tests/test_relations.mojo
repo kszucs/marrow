@@ -1,6 +1,6 @@
 from std.testing import assert_equal, TestSuite
 
-from marrow.arrays import array, Array
+from marrow.arrays import array, AnyArray
 from marrow.dtypes import field, int64, float64
 from marrow.schema import schema
 from marrow.tabular import record_batch

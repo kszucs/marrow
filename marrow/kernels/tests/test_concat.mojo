@@ -9,7 +9,7 @@ from std.testing import (
 from marrow.arrays import (
     array,
     arange,
-    Array,
+    AnyArray,
     PrimitiveArray,
     BoolArray,
     StringArray,
@@ -36,7 +36,7 @@ from marrow.kernels.concat import concat
 
 
 def test_concat_primitive() raises:
-    var arrs: List[Array] = [array[int32]([1, 2]), array[int32]([3, 4, 5])]
+    var arrs: List[AnyArray] = [array[int32]([1, 2]), array[int32]([3, 4, 5])]
     var result = concat(arrs).as_primitive[int32]()
     assert_equal(result.length, 5)
     assert_equal(result[0], 1)
@@ -47,7 +47,7 @@ def test_concat_primitive() raises:
 
 
 def test_concat_single() raises:
-    var arrs: List[Array] = [array[int32]([10, 20, 30])]
+    var arrs: List[AnyArray] = [array[int32]([10, 20, 30])]
     var result = concat(arrs).as_primitive[int32]()
     assert_equal(result.length, 3)
     assert_equal(result[0], 10)
@@ -55,7 +55,7 @@ def test_concat_single() raises:
 
 
 def test_concat_empty_list_raises() raises:
-    var arrs = List[Array]()
+    var arrs = List[AnyArray]()
     with assert_raises():
         _ = concat(arrs)
 
@@ -68,7 +68,10 @@ def test_concat_with_nulls() raises:
     var b2 = PrimitiveBuilder[int32]()
     b2.append(4)
     b2.append_null()
-    var arrs: List[Array] = [Array(b1.finish_typed()), Array(b2.finish_typed())]
+    var arrs: List[AnyArray] = [
+        AnyArray(b1.finish_typed()),
+        AnyArray(b2.finish_typed()),
+    ]
     var result = concat(arrs).as_primitive[int32]()
     assert_equal(result.length, 5)
     assert_equal(result.null_count(), 2)
@@ -87,7 +90,7 @@ def test_concat_with_offset() raises:
     var a = arange[int32](0, 5)
     var s1 = a.slice(1, 3)  # [1, 2, 3], offset=1
     var s2 = a.slice(4, 1)  # [4], offset=4
-    var arrs: List[Array] = [Array(s1), Array(s2)]
+    var arrs: List[AnyArray] = [AnyArray(s1), AnyArray(s2)]
     var result = concat(arrs).as_primitive[int32]()
     assert_equal(result.length, 4)
     assert_equal(result[0], 1)
@@ -103,7 +106,7 @@ def test_concat_with_offset_and_nulls() raises:
     b.append_null()
     b.append(3)
     var sliced = b.finish_typed().slice(1, 2)  # [null, 3], offset=1
-    var arrs: List[Array] = [Array(sliced), Array(array[int32]([4]))]
+    var arrs: List[AnyArray] = [AnyArray(sliced), AnyArray(array[int32]([4]))]
     var result = concat(arrs).as_primitive[int32]()
     assert_equal(result.length, 3)
     assert_equal(result.null_count(), 1)
@@ -120,9 +123,9 @@ def test_concat_with_offset_and_nulls() raises:
 
 
 def test_concat_bool() raises:
-    var arrs: List[Array] = [
-        Array(array([True, False, True])),
-        Array(array([False, True])),
+    var arrs: List[AnyArray] = [
+        AnyArray(array([True, False, True])),
+        AnyArray(array([False, True])),
     ]
     var result = concat(arrs).as_primitive[bool_]()
     assert_equal(result.length, 5)
@@ -137,7 +140,7 @@ def test_concat_bool_with_offset() raises:
     # [True, False, True, False] slice at offset=1 → [False, True, False]
     var a = array([True, False, True, False])
     var sliced = a.slice(1, 3)
-    var arrs: List[Array] = [Array(sliced), Array(array([True]))]
+    var arrs: List[AnyArray] = [AnyArray(sliced), AnyArray(array([True]))]
     var result = concat(arrs).as_primitive[bool_]()
     assert_equal(result.length, 4)
     assert_false(result[0].__bool__())
@@ -157,9 +160,9 @@ def test_concat_string() raises:
     s1.append("world")
     var s2 = StringBuilder()
     s2.append("foo")
-    var arrs: List[Array] = [
-        Array(s1.finish_typed()),
-        Array(s2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(s1.finish_typed()),
+        AnyArray(s2.finish_typed()),
     ]
     var result = StringArray(data=concat(arrs))
     assert_equal(result.length, 3)
@@ -175,9 +178,9 @@ def test_concat_string_with_nulls() raises:
     s1.append("b")
     var s2 = StringBuilder()
     s2.append("c")
-    var arrs: List[Array] = [
-        Array(s1.finish_typed()),
-        Array(s2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(s1.finish_typed()),
+        AnyArray(s2.finish_typed()),
     ]
     var result = StringArray(data=concat(arrs))
     assert_equal(result.length, 4)
@@ -212,9 +215,9 @@ def test_concat_list() raises:
     c2[].append(5)
     c2[].append(6)
     lb2.append_valid()  # [4, 5, 6]
-    var arrs: List[Array] = [
-        Array(lb1.finish_typed()),
-        Array(lb2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(lb1.finish_typed()),
+        AnyArray(lb2.finish_typed()),
     ]
     var result = ListArray(data=concat(arrs))
     assert_equal(result.length, 3)
@@ -242,9 +245,9 @@ def test_concat_list_with_nulls() raises:
     c2[].append(2)
     c2[].append(3)
     lb2.append_valid()  # [2, 3]
-    var arrs: List[Array] = [
-        Array(lb1.finish_typed()),
-        Array(lb2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(lb1.finish_typed()),
+        AnyArray(lb2.finish_typed()),
     ]
     var result = ListArray(data=concat(arrs))
     assert_equal(result.length, 3)
@@ -279,9 +282,9 @@ def test_concat_fixed_size_list() raises:
     child2.append(6.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
-    var arrs: List[Array] = [
-        Array(fsl1.finish_typed()),
-        Array(fsl2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(fsl1.finish_typed()),
+        AnyArray(fsl2.finish_typed()),
     ]
     var result = FixedSizeListArray(data=concat(arrs))
     assert_equal(result.length, 3)
@@ -314,7 +317,7 @@ def test_concat_fixed_size_list_with_offset() raises:
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
-    var arrs: List[Array] = [Array(sliced), Array(fsl2.finish_typed())]
+    var arrs: List[AnyArray] = [AnyArray(sliced), AnyArray(fsl2.finish_typed())]
     var result = FixedSizeListArray(data=concat(arrs))
     assert_equal(result.length, 3)
     var elem0 = result[0].as_primitive[float32]()
@@ -353,9 +356,9 @@ def test_concat_struct() raises:
     var children2: List[AnyBuilder] = [id2^, score2^]
     var sb2 = StructBuilder(fields^, children2^)
     sb2.append_valid()
-    var arrs: List[Array] = [
-        Array(sb1.finish_typed()),
-        Array(sb2.finish_typed()),
+    var arrs: List[AnyArray] = [
+        AnyArray(sb1.finish_typed()),
+        AnyArray(sb2.finish_typed()),
     ]
     var result = StructArray(data=concat(arrs))
     assert_equal(result.length, 3)
@@ -376,7 +379,7 @@ def test_concat_struct() raises:
 
 
 def test_combine_chunks_delegates() raises:
-    var chunks: List[Array] = [
+    var chunks: List[AnyArray] = [
         array[int32]([10, 20]),
         array[int32]([30]),
         array[int32]([40, 50]),

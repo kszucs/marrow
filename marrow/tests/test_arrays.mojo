@@ -58,7 +58,7 @@ def test_array_data_with_offset() raises:
     bitmap.set_bit(4, True)
 
     # Create ArrayData with offset=2
-    var array_data = Array(
+    var array_data = AnyArray(
         dtype=int8,
         length=3,
         nulls=0,
@@ -82,7 +82,7 @@ def test_array_data_fieldwise_init() raises:
     var buffer = buffer_b.finish()
 
     # Test creating ArrayData with all fields specified including offset
-    var array_data = Array(
+    var array_data = AnyArray(
         dtype=int8,
         length=5,
         nulls=0,
@@ -106,27 +106,27 @@ def test_array_from_string() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
-    var a: Array = s.finish()
+    var a: AnyArray = s.finish()
     assert_equal(a.length, 2)
 
 
 def test_array_from_list() raises:
     var ints_b = PrimitiveBuilder[int64]()
     var l = ListBuilder(AnyBuilder(ints_b^))
-    var a: Array = l.finish()
+    var a: AnyArray = l.finish()
     assert_true(a.dtype.is_list())
 
 
 def test_array_from_struct() raises:
     var fields = [Field("x", int32)]
     var s = StructBuilder(fields^, [], capacity=5)
-    var a: Array = s.finish()
+    var a: AnyArray = s.finish()
     assert_true(a.dtype.is_struct())
 
 
 def test_array_copy() raises:
     var _sb = BufferBuilder.alloc[int8.native](3)
-    var src = Array(
+    var src = AnyArray(
         dtype=int8,
         length=3,
         nulls=0,
@@ -146,7 +146,7 @@ def test_array_copy() raises:
 
 def test_array_move() raises:
     var _ab = BufferBuilder.alloc[int8.native](5)
-    var a = Array(
+    var a = AnyArray(
         dtype=int8,
         length=5,
         nulls=0,
@@ -552,7 +552,7 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
 # #     builder.append_valid()
 # #     builder.append_valid()
 # #     var fsl = builder.finish()
-# #     var s = String(Array(fsl^))
+# #     var s = String(AnyArray(fsl^))
 # #     assert_true("FixedSizeListArray" in s)
 
 
@@ -567,7 +567,7 @@ def test_struct_array() raises:
     assert_equal(len(struct_builder), 0)
     assert_equal(struct_builder._capacity, 10)
 
-    var data: Array = struct_builder.finish()
+    var data: AnyArray = struct_builder.finish()
     assert_equal(data.length, 0)
     assert_true(data.dtype.is_struct())
     assert_equal(len(data.dtype.fields), 3)
@@ -607,7 +607,7 @@ def test_struct_array_unsafe_get() raises:
 
 
 def test_chunked_array() raises:
-    var arrays: List[Array] = [array[uint8]([0]), array[uint8]([0, 1])]
+    var arrays: List[AnyArray] = [array[uint8]([0]), array[uint8]([0, 1])]
 
     var chunked_array = ChunkedArray(int8, arrays^)
     assert_equal(chunked_array.length, 3)
@@ -620,7 +620,7 @@ def test_chunked_array() raises:
 
 
 def test_combine_chunked_array() raises:
-    var arrays: List[Array] = [array[uint8]([0]), array[uint8]([0, 1])]
+    var arrays: List[AnyArray] = [array[uint8]([0]), array[uint8]([0, 1])]
 
     var chunked_array = ChunkedArray(uint8, arrays^)
     assert_equal(chunked_array.length, 3)
@@ -1594,16 +1594,16 @@ def test_struct_array_eq_dtype_mismatch() raises:
 
 
 def test_array_eq_dtype_mismatch() raises:
-    # Type-erased Array: int32 vs int64 → False
-    var a: Array = array[int32]([1, 2, 3])
-    var b: Array = array[int64]([1, 2, 3])
+    # Type-erased AnyArray: int32 vs int64 → False
+    var a: AnyArray = array[int32]([1, 2, 3])
+    var b: AnyArray = array[int64]([1, 2, 3])
     assert_false(a == b)
 
 
 def test_array_eq_via_dispatch() raises:
-    # Equal arrays accessed as type-erased Array verify dispatch works.
-    var a: Array = array[int32]([10, 20, 30])
-    var b: Array = array[int32]([10, 20, 30])
+    # Equal arrays accessed as type-erased AnyArray verify dispatch works.
+    var a: AnyArray = array[int32]([10, 20, 30])
+    var b: AnyArray = array[int32]([10, 20, 30])
     assert_true(a == b)
     assert_true(a == b)
 

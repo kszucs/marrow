@@ -6,7 +6,14 @@ from std.testing import (
     TestSuite,
 )
 
-from marrow.arrays import array, arange, Array, PrimitiveArray, BoolArray, nulls
+from marrow.arrays import (
+    array,
+    arange,
+    AnyArray,
+    PrimitiveArray,
+    BoolArray,
+    nulls,
+)
 from marrow.builders import PrimitiveBuilder, StringBuilder
 from marrow.dtypes import int32, int64, uint8, float32, bool_
 from marrow.kernels.filter import filter_, drop_nulls
@@ -295,18 +302,18 @@ def test_filter_strings_length_mismatch_raises() raises:
 
 
 # ---------------------------------------------------------------------------
-# filter — runtime-typed Array dispatch
+# filter — runtime-typed AnyArray dispatch
 # ---------------------------------------------------------------------------
 
 
 def test_filter_array_dispatch_int32() raises:
-    var a = Array(array[int32]([10, 20, 30]))
+    var a = AnyArray(array[int32]([10, 20, 30]))
     var result = filter_(a, array([False, True, True]))
     assert_equal(result.length, 2)
 
 
 def test_filter_array_dispatch_float32() raises:
-    var a = Array(array[float32]([1, 2, 3]))
+    var a = AnyArray(array[float32]([1, 2, 3]))
     var result = filter_(a, array([True, False, True]))
     assert_equal(result.length, 2)
 
@@ -315,13 +322,13 @@ def test_filter_array_dispatch_string() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
-    var a = Array(s.finish_typed())
+    var a = AnyArray(s.finish_typed())
     var result = filter_(a, array([True, False]))
     assert_equal(result.length, 1)
 
 
 def test_filter_array_dispatch_length_mismatch_raises() raises:
-    var a = Array(array[int32]([1, 2, 3]))
+    var a = AnyArray(array[int32]([1, 2, 3]))
     with assert_raises():
         _ = filter_(a, array([True, False]))
 

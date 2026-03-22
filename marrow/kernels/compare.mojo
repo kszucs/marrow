@@ -18,7 +18,7 @@ Available kernels
 * ``greater_equal``  — left[i] >= right[i]
 
 Each has a typed overload ``def[T: DataType](PrimitiveArray[T], PrimitiveArray[T])``
-and a runtime-typed overload ``def(Array, Array)`` that dispatches via
+and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
 ``binary_array_dispatch``.
 """
 
@@ -29,7 +29,7 @@ from std.utils.index import IndexList
 
 from std.gpu.host import DeviceContext, get_gpu_target
 
-from ..arrays import PrimitiveArray, Array
+from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import BufferBuilder
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
@@ -257,36 +257,36 @@ def greater_equal[
 # ---------------------------------------------------------------------------
 
 
-def equal(left: Array, right: Array) raises -> Array:
+def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed equal."""
     return binary_array_dispatch["equal", bool_dt, equal[_]](left, right)
 
 
-def not_equal(left: Array, right: Array) raises -> Array:
+def not_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed not_equal."""
     return binary_array_dispatch["not_equal", bool_dt, not_equal[_]](
         left, right
     )
 
 
-def less(left: Array, right: Array) raises -> Array:
+def less(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed less."""
     return binary_array_dispatch["less", bool_dt, less[_]](left, right)
 
 
-def less_equal(left: Array, right: Array) raises -> Array:
+def less_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed less_equal."""
     return binary_array_dispatch["less_equal", bool_dt, less_equal[_]](
         left, right
     )
 
 
-def greater(left: Array, right: Array) raises -> Array:
+def greater(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed greater."""
     return binary_array_dispatch["greater", bool_dt, greater[_]](left, right)
 
 
-def greater_equal(left: Array, right: Array) raises -> Array:
+def greater_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed greater_equal."""
     return binary_array_dispatch["greater_equal", bool_dt, greater_equal[_]](
         left, right

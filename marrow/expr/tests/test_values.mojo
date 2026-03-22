@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, TestSuite
 
-from marrow.arrays import array, PrimitiveArray, Array
+from marrow.arrays import array, PrimitiveArray, AnyArray
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
 from marrow.tabular import RecordBatch, record_batch

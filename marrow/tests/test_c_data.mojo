@@ -3,7 +3,7 @@ from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
 from marrow.tabular import Table
-from marrow.arrays import Array, BoolArray, PrimitiveArray, StringArray
+from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from marrow.dtypes import *
 
@@ -362,7 +362,7 @@ def test_bool_array_from_pyarrow() raises:
 
 
 def test_primitive_array_no_nulls() raises:
-    """Array with no nulls: buffers[0] (validity bitmap) pointer is null."""
+    """AnyArray with no nulls: buffers[0] (validity bitmap) pointer is null."""
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(Python.list(10, 20, 30))

@@ -144,7 +144,6 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     return Float64(total) / Float64(iters) / Float64(n_blocks)
 
 
-
 # ---------------------------------------------------------------------------
 # Bitmap.load_word micro-benchmarks
 # ---------------------------------------------------------------------------
@@ -252,4 +251,3 @@ def main() raises:
     comptime for oi in range(7):
         var ns = _bench_load_word(lw_n_words, offsets[oi], lw_iters)
         print(t"  {offsets[oi]}           {ns} ns")
-

@@ -41,21 +41,22 @@ Mojo lacks dynamic dispatch, so the codebase uses **type-erased containers** wit
 
 #### Arrays (`marrow/arrays.mojo`)
 
-- **`Array`** - Type-erased, immutable array container (analogous to `ArrayData` in C++ Arrow). Holds `dtype`, `length`, `nulls`, `bitmap`, `buffers`, `children`, `offset`. Copying is O(1) via `ArcPointer` ref-counting inside `Buffer`/`Bitmap`.
-- **Typed arrays** convert implicitly to/from `Array`:
+- **`Array`** - Trait that all typed arrays implement. Provides the common read-only interface: `type()`, `null_count()`, `is_valid()`, `as_any()`. Also extends `Sized`, `Writable`, `Equatable`, `Copyable`, `Movable`.
+- **`AnyArray`** - Type-erased, immutable array container (analogous to `ArrayData` in C++ Arrow). Holds `dtype`, `length`, `nulls`, `bitmap`, `buffers`, `children`, `offset`. Copying is O(1) via `ArcPointer` ref-counting inside `Buffer`/`Bitmap`.
+- **Typed arrays** implement the `Array` trait and convert implicitly to/from `AnyArray`:
   - `PrimitiveArray[T]` - numeric/boolean types
   - `StringArray` - UTF-8 strings
   - `ListArray` - variable-length nested lists
   - `FixedSizeListArray` - fixed-size nested lists (e.g. embedding vectors)
   - `StructArray` - nested structs
-  - `ChunkedArray` - array split across multiple chunks
+  - `ChunkedArray` - array split across multiple chunks (does NOT implement `Array` trait)
 
-Usage: `var arr: Array = my_primitive_array` and `var prim: PrimitiveArray[int64] = some_array` both work transparently.
+Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[int64] = some_array` both work transparently.
 
 #### Builders (`marrow/builders.mojo`)
 
 - **`BuilderData`** - Internal mutable builder state, always accessed through `ArcPointer[BuilderData]` for shared ownership.
-- **`Builder`** - Type-erased builder wrapping `ArcPointer[BuilderData]`. Can be constructed from a `DataType` at runtime. `finish()` returns `Array`.
+- **`Builder`** - Type-erased builder wrapping `ArcPointer[BuilderData]`. Can be constructed from a `DataType` at runtime. `finish()` returns `AnyArray`.
 - **Typed builders** convert implicitly to `Builder` by cloning the `ArcPointer`, so the original typed builder remains usable after passing to a composite builder:
   - `PrimitiveBuilder[T]` → `PrimitiveArray[T]`
   - `StringBuilder` → `StringArray`
@@ -127,7 +128,7 @@ python/                   # The Python module top level
 ### Type Constraints
 
 Mojo lacks dynamic dispatch, so the codebase uses:
-- Type-erased containers (`Array`, `Builder`) with implicit conversions to/from typed wrappers
+- Type-erased containers (`AnyArray`, `AnyBuilder`) with implicit conversions to/from typed wrappers
 - Compile-time parameterization (`PrimitiveArray[int64]`)
 - Visitor pattern (`ArrayVisitor`, `DataTypeVisitor`) for runtime type dispatch
 - Runtime type checking via `DataType.code` comparison
@@ -201,15 +202,15 @@ This applies especially to: new kernels, array type behaviour, validity/null han
 When writing or modifying tests:
 
 - **Prefer `arr[i]` over `arr.unsafe_get(i)`** for indexed element access. Use `unsafe_get` only when the explicit point of the test is to exercise the unsafe API.
-- **Prefer `x.as_primitive[T]()`** over `PrimitiveArray[T](data=x)` for obtaining a typed view of a type-erased `Array`.
+- **Prefer `x.as_primitive[T]()`** over `PrimitiveArray[T](data=x)` for obtaining a typed view of a type-erased `AnyArray`.
 - **Prefer `assert_true(arr1 == arr2)`** over element-by-element loops when asserting that two typed arrays have equal contents. `PrimitiveArray[T].__eq__` returns `Bool` (structural equality), so a single `assert_true(result == expected)` replaces the whole loop.
 
 ### Kernel Implementation Pattern
 
-Kernels in `marrow/kernels/` are implemented as typed overloads first, with a type-erased `Array` overload as a thin dispatch layer:
+Kernels in `marrow/kernels/` are implemented as typed overloads first, with a type-erased `AnyArray` overload as a thin dispatch layer:
 
 1. **Typed overloads** — one per concrete array type (`PrimitiveArray[T]`, `StringArray`, `ListArray`, etc.). These contain all the actual logic.
-2. **Type-erased overload** — accepts `List[Array]` (or `Array` for unary/binary kernels), converts to the appropriate typed list/value, and delegates to the typed overload. This is the "blanket" implementation that makes kernels usable from runtime-typed code.
+2. **Type-erased overload** — accepts `List[AnyArray]` (or `AnyArray` for unary/binary kernels), converts to the appropriate typed list/value, and delegates to the typed overload. This is the "blanket" implementation that makes kernels usable from runtime-typed code.
 
 See `marrow/kernels/concat.mojo` and `marrow/kernels/filter.mojo` for examples.
 
