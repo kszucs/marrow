@@ -15,6 +15,14 @@ from datafusion import SessionContext, udf
 
 ## Setup
 
+DataFusion is an optional dependency in the `examples` pixi feature. Install it with:
+
+```bash
+pixi run -e examples datafusion_udf
+```
+
+Or add it to an existing environment:
+
 ```python
 import marrow as ma
 import pyarrow as pa

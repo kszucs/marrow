@@ -23,7 +23,6 @@ fmt_python = { cmd = "ruff format python" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
-example_datafusion = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs = { cmd = "quarto render docs/", depends-on = [
   "build_python",
 ], env = { PYTHONPATH = "python" } }
@@ -37,8 +36,17 @@ rattler-build = ">=0.35,<1"
 [feature.package.tasks]
 package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir output -c https://conda.modular.com/max-nightly/ -c conda-forge"
 
+# Examples feature — optional dependencies and tasks for runnable examples.
+# Run with: pixi run -e examples datafusion_udf
+[feature.examples.pypi-dependencies]
+datafusion = ">=44.0.0"
+
+[feature.examples.tasks]
+datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+
 [environments]
 package = { features = ["package"], no-default-feature = true }
+examples = { features = ["examples"] }
 
 [dependencies]
 ipython = ">=9.11.0,<10"
@@ -53,5 +61,4 @@ quarto = ">=1.6,<2"
 ruff = ">=0.14.14,<0.15"
 
 [pypi-dependencies]
-datafusion = ">=44.0.0"
 pyarrow = ">=23.0.0, <24"
