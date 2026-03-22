@@ -192,28 +192,25 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def reset(mut self):
         self._virt_reset(self._data)
 
-    def downcast[T: Builder](self) -> ArcPointer[T]:
-        return rebind[ArcPointer[T]](self._data.copy())
-
     @always_inline
     def as_primitive[T: DataType](self) -> ArcPointer[PrimitiveBuilder[T]]:
-        return self.downcast[PrimitiveBuilder[T]]()
+        return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data.copy())
 
     @always_inline
     def as_string(self) -> ArcPointer[StringBuilder]:
-        return self.downcast[StringBuilder]()
+        return rebind[ArcPointer[StringBuilder]](self._data.copy())
 
     @always_inline
     def as_list(self) -> ArcPointer[ListBuilder]:
-        return self.downcast[ListBuilder]()
+        return rebind[ArcPointer[ListBuilder]](self._data.copy())
 
     @always_inline
     def as_fixed_size_list(self) -> ArcPointer[FixedSizeListBuilder]:
-        return self.downcast[FixedSizeListBuilder]()
+        return rebind[ArcPointer[FixedSizeListBuilder]](self._data.copy())
 
     @always_inline
     def as_struct(self) -> ArcPointer[StructBuilder]:
-        return self.downcast[StructBuilder]()
+        return rebind[ArcPointer[StructBuilder]](self._data.copy())
 
     def child(self, index: Int) -> AnyBuilder:
         """Access child builder by index (for composite types)."""

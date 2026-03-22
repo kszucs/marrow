@@ -376,25 +376,22 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-    def copy(self) -> AnyScalar:
-        return AnyScalar(copy=self)
+# --- typed downcasts ---
 
-    # --- typed downcasts ---
+    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
+        return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[]
 
-    def as_primitive[T: DataType](self) -> PrimitiveScalar[T]:
-        return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[].copy()
+    def as_string(ref self) -> ref[self._data[]] StringScalar:
+        return rebind[ArcPointer[StringScalar]](self._data)[]
 
-    def as_string(self) -> StringScalar:
-        return rebind[ArcPointer[StringScalar]](self._data)[].copy()
+    def as_list(ref self) -> ref[self._data[]] ListScalar:
+        return rebind[ArcPointer[ListScalar]](self._data)[]
 
-    def as_list(self) -> ListScalar:
-        return rebind[ArcPointer[ListScalar]](self._data)[].copy()
+    def as_fixed_size_list(ref self) -> ref[self._data[]] ListScalar:
+        return rebind[ArcPointer[ListScalar]](self._data)[]
 
-    def as_fixed_size_list(self) -> ListScalar:
-        return rebind[ArcPointer[ListScalar]](self._data)[].copy()
-
-    def as_struct(self) -> StructScalar:
-        return rebind[ArcPointer[StructScalar]](self._data)[].copy()
+    def as_struct(ref self) -> ref[self._data[]] StructScalar:
+        return rebind[ArcPointer[StructScalar]](self._data)[]
 
     def write_to[W: Writer](self, mut writer: W):
         if self.is_null():

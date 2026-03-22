@@ -241,8 +241,8 @@ def _cols_equal_at(
                 break
 
         if keys[k].dtype().is_string():
-            var sa = keys[k].as_string()
-            var sb = stored[k].as_string()
+            ref sa = keys[k].as_string()
+            ref sb = stored[k].as_string()
             if String(sa.unsafe_get(UInt(row))) != String(
                 sb.unsafe_get(UInt(group_idx))
             ):

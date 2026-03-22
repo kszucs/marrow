@@ -37,7 +37,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
     elif dtype.is_fixed_size_list():
         return scalar.as_fixed_size_list().value().to_python_object()
     elif dtype.is_struct():
-        var s = scalar.as_struct()
+        ref s = scalar.as_struct()
         var builtins = Python.import_module("builtins")
         var d = builtins.dict()
         for i in range(s.num_fields()):

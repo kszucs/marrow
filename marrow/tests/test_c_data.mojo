@@ -57,7 +57,7 @@ def test_primitive_array_from_pyarrow() raises:
     assert_equal(c_array.n_children, 0)
 
     var data = c_array^.to_array(dtype)
-    var array = data^.as_int64()
+    ref array = data.as_int64()
     assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(5, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), True)
@@ -91,7 +91,7 @@ def test_binary_array_from_pyarrow() raises:
     assert_equal(c_array.n_children, 0)
 
     var data = c_array^.to_array(dtype)
-    var array = data^.as_string()
+    ref array = data.as_string()
 
     assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
@@ -126,7 +126,7 @@ def test_list_array_from_pyarrow() raises:
     assert_equal(c_array.n_children, 1)
 
     var data = c_array^.to_array(dtype)
-    var array = data^.as_list()
+    ref array = data.as_list()
 
     assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
@@ -209,11 +209,11 @@ def test_arrow_array_stream() raises:
     assert_true(len(batches) >= 1)
 
     var batch = batches[0].copy()
-    var col1_array = batch.columns[0].copy().as_int64()
+    ref col1_array = batch.columns[0].as_int64()
     assert_equal(col1_array[0], 1)
     assert_equal(col1_array[4], 5)
 
-    var col2_array = batch.columns[1].copy().as_string()
+    ref col2_array = batch.columns[1].as_string()
     assert_equal(col2_array[0], "a")
     assert_equal(col2_array[4], "e")
 
@@ -285,17 +285,17 @@ def test_fixed_size_list_from_pyarrow() raises:
     assert_equal(c_array.n_children, 1)
 
     var data = c_array^.to_array(dtype)
-    var fsl = data^.as_fixed_size_list()
+    ref fsl = data.as_fixed_size_list()
     assert_equal(len(fsl), 3)
 
     # First list: [1, 2, 3]
-    var first = fsl[0].as_int32()
+    ref first = fsl[0].as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
 
     # Second list: [4, 5, 6]
-    var second = fsl[1].as_int32()
+    ref second = fsl[1].as_int32()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -347,7 +347,7 @@ def test_bool_array_from_pyarrow() raises:
     assert_equal(c_array.n_children, 0)
 
     var data = c_array^.to_array(dtype)
-    var arr = data^.as_bool()
+    ref arr = data.as_bool()
 
     assert_true(arr.is_valid(0))
     assert_true(arr.is_valid(1))
@@ -372,7 +372,7 @@ def test_primitive_array_no_nulls() raises:
     assert_equal(c_array.null_count, 0)
 
     var data = c_array^.to_array(dtype)
-    var arr = data^.as_int64()
+    ref arr = data.as_int64()
 
     assert_equal(arr.nulls, 0)  # no null bitmap → all valid
     assert_true(arr.is_valid(0))
@@ -397,7 +397,7 @@ def test_primitive_array_with_offset() raises:
 
     var dtype = c_schema.to_dtype()
     var data = c_array^.to_array(dtype)
-    var arr = data^.as_int64()
+    ref arr = data.as_int64()
 
     assert_equal(arr.length, 3)
     assert_equal(arr.offset, 1)
@@ -421,7 +421,7 @@ def test_string_array_with_offset() raises:
 
     var dtype = c_schema.to_dtype()
     var data = c_array^.to_array(dtype)
-    var arr = data^.as_string()
+    ref arr = data.as_string()
 
     assert_equal(arr.length, 2)
     assert_equal(arr.offset, 1)
@@ -499,15 +499,15 @@ def test_struct_array_values_from_pyarrow() raises:
 
     var data = c_array^.to_array(dtype)
     assert_equal(data.length(), 3)
-    var data_struct = data.as_struct()
+    ref data_struct = data.as_struct()
     assert_equal(len(data_struct.children), 2)
 
-    var xs = data_struct.children[0].as_int32()
+    ref xs = data_struct.children[0].as_int32()
     assert_equal(xs[0], 1)
     assert_equal(xs[1], 2)
     assert_equal(xs[2], 3)
 
-    var ys = data_struct.children[1].as_string()
+    ref ys = data_struct.children[1].as_string()
     assert_equal(String(ys[0]), "a")
     assert_equal(String(ys[1]), "b")
     assert_equal(String(ys[2]), "c")
@@ -535,12 +535,12 @@ def test_fixed_size_list_with_nulls() raises:
     assert_equal(c_array.n_children, 1)
 
     var data = c_array^.to_array(dtype)
-    var fsl = data^.as_fixed_size_list()
+    ref fsl = data.as_fixed_size_list()
 
     assert_true(fsl.is_valid(0))
     assert_false(fsl.is_valid(1))
 
-    var first = fsl[0].as_int32()
+    ref first = fsl[0].as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)

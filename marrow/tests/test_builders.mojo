@@ -358,7 +358,8 @@ def test_list_builder_empty_list() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     assert_true(frozen.is_valid(0))
-    var inner = frozen[0].value().as_primitive[int64]()
+    var inner_val = frozen[0].value()
+    ref inner = inner_val.as_primitive[int64]()
     assert_equal(inner.length, 0)
 
 
@@ -390,7 +391,8 @@ def test_list_builder_multiple_nulls_offsets() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_false(frozen.is_valid(2))
-    var first = frozen[0].value().as_primitive[int32]()
+    var first_val = frozen[0].value()
+    ref first = first_val.as_primitive[int32]()
     assert_equal(first.length, 2)
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
@@ -405,7 +407,7 @@ def test_list_builder_string_child() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     var inner_val = frozen[0].value()
-    var inner = inner_val.as_string()
+    ref inner = inner_val.as_string()
     assert_equal(inner[0], "hello")
     assert_equal(inner[1], "world")
 
@@ -435,9 +437,9 @@ def test_fixed_size_list_builder_float32() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 2)
-    var first = frozen[0].as_float32()
+    ref first = frozen[0].as_float32()
     assert_equal(first.length, 2)
-    var second = frozen[1].as_float32()
+    ref second = frozen[1].as_float32()
     assert_equal(second.length, 2)
 
 
@@ -487,10 +489,10 @@ def test_fixed_size_list_builder_size1() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 3)
-    var first = frozen[0].as_int32()
+    ref first = frozen[0].as_int32()
     assert_equal(first.length, 1)
     assert_equal(first[0], 7)
-    var third = frozen[2].as_int32()
+    ref third = frozen[2].as_int32()
     assert_equal(third[0], 9)
 
 
@@ -564,7 +566,7 @@ def test_struct_builder_field_values_accessible() raises:
     var frozen = sb.finish_typed()
 
     ref field_data = frozen.unsafe_get("x")
-    var x_arr = field_data.as_primitive[int32]()
+    ref x_arr = field_data.as_primitive[int32]()
     assert_equal(x_arr[0], 42)
     assert_equal(x_arr[1], 99)
 

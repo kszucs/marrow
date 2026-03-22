@@ -55,13 +55,13 @@ def test_groupby_sum_basic() raises:
     assert_equal(result.num_columns(), 2)  # key + sum
 
     # Key column in encounter order.
-    var k = result.columns[0].as_primitive[int32]()
+    ref k = result.columns[0].as_primitive[int32]()
     assert_equal(k[0], 1)
     assert_equal(k[1], 2)
     assert_equal(k[2], 3)
 
     # Sum column (float64).
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 40.0)  # 10 + 30
     assert_equal(s[1], 70.0)  # 20 + 50
     assert_equal(s[2], 40.0)  # 40
@@ -72,7 +72,7 @@ def test_groupby_sum_all_same_key() raises:
     var vals = AnyArray(array[int32]([1, 2, 3]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 1)
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 6.0)
 
 
@@ -85,7 +85,7 @@ def test_groupby_min() raises:
     var keys = AnyArray(array[int32]([1, 2, 1, 2]))
     var vals = AnyArray(array[int32]([30, 10, 20, 40]))
     var result = groupby(keys, _values(vals), _aggs("min"))
-    var m = result.columns[1].as_primitive[float64]()
+    ref m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 20.0)  # min(30, 20)
     assert_equal(m[1], 10.0)  # min(10, 40)
 
@@ -94,7 +94,7 @@ def test_groupby_max() raises:
     var keys = AnyArray(array[int32]([1, 2, 1, 2]))
     var vals = AnyArray(array[int32]([30, 10, 20, 40]))
     var result = groupby(keys, _values(vals), _aggs("max"))
-    var m = result.columns[1].as_primitive[float64]()
+    ref m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 30.0)  # max(30, 20)
     assert_equal(m[1], 40.0)  # max(10, 40)
 
@@ -108,7 +108,7 @@ def test_groupby_count() raises:
     var keys = AnyArray(array[int32]([1, 2, 1, 3, 2]))
     var vals = AnyArray(array[int32]([10, 20, 30, 40, 50]))
     var result = groupby(keys, _values(vals), _aggs("count"))
-    var c = result.columns[1].as_primitive[int64]()
+    ref c = result.columns[1].as_primitive[int64]()
     assert_equal(c[0], 2)  # key=1: 2 rows
     assert_equal(c[1], 2)  # key=2: 2 rows
     assert_equal(c[2], 1)  # key=3: 1 row
@@ -123,7 +123,7 @@ def test_groupby_mean() raises:
     var keys = AnyArray(array[int32]([1, 2, 1, 2]))
     var vals = AnyArray(array[int32]([10, 20, 30, 40]))
     var result = groupby(keys, _values(vals), _aggs("mean"))
-    var m = result.columns[1].as_primitive[float64]()
+    ref m = result.columns[1].as_primitive[float64]()
     assert_equal(m[0], 20.0)  # (10+30)/2
     assert_equal(m[1], 30.0)  # (20+40)/2
 
@@ -140,7 +140,7 @@ def test_groupby_null_keys() raises:
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 60.0)  # key=1: 10+50
     assert_equal(s[1], 60.0)  # key=null: 20+40
     assert_equal(s[2], 30.0)  # key=2: 30
@@ -151,7 +151,7 @@ def test_groupby_null_values_skipped() raises:
     var keys = AnyArray(array[int32]([1, 1, 1]))
     var vals = AnyArray(array[int32]([10, None, 30]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 40.0)  # 10 + 30 (null skipped)
 
 
@@ -160,7 +160,7 @@ def test_groupby_count_skips_nulls() raises:
     var keys = AnyArray(array[int32]([1, 1, 1]))
     var vals = AnyArray(array[int32]([10, None, 30]))
     var result = groupby(keys, _values(vals), _aggs("count"))
-    var c = result.columns[1].as_primitive[int64]()
+    ref c = result.columns[1].as_primitive[int64]()
     assert_equal(c[0], 2)  # 2 non-null values
 
 
@@ -179,7 +179,7 @@ def test_groupby_string_key() raises:
     var vals = AnyArray(array[int32]([10, 20, 30, 40]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 40.0)  # "a": 10+30
     assert_equal(s[1], 60.0)  # "b": 20+40
 
@@ -230,7 +230,7 @@ def test_groupby_bool_key() raises:
     var vals = AnyArray(array[int32]([1, 2, 3, 4, 5]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 9.0)  # True: 1+3+5
     assert_equal(s[1], 6.0)  # False: 2+4
 
@@ -255,11 +255,11 @@ def test_groupby_multiple_aggs() raises:
     var result = groupby(keys, vals, aggs)
     assert_equal(result.num_columns(), 3)  # key + sum + count
 
-    var s = result.columns[1].as_primitive[float64]()
+    ref s = result.columns[1].as_primitive[float64]()
     assert_equal(s[0], 40.0)  # sum for key=1
     assert_equal(s[1], 60.0)  # sum for key=2
 
-    var c = result.columns[2].as_primitive[int64]()
+    ref c = result.columns[2].as_primitive[int64]()
     assert_equal(c[0], 2)  # count for key=1
     assert_equal(c[1], 2)  # count for key=2
 

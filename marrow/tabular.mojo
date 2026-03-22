@@ -64,10 +64,6 @@ struct RecordBatch(
             columns.append(child.copy())
         self = RecordBatch(schema=schema, columns=columns^)
 
-    def copy(self) -> RecordBatch:
-        """Returns a copy of this RecordBatch (O(1) Arc ref-count bumps)."""
-        return RecordBatch(copy=self)
-
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
@@ -298,10 +294,6 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         except:
             raise Error("cannot convert Python object to Table")
         self = CArrowArrayStream.from_pycapsule(capsule).to_table()
-
-    def copy(self) -> Table:
-        """Returns a copy of this Table (O(1) Arc ref-count bumps)."""
-        return Table(copy=self)
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)

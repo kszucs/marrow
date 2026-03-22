@@ -148,7 +148,7 @@ def test_hash_struct_single_field() raises:
     var a = array[int32]([1, 2, 3])
     var h1 = hash_(a)
 
-    var arr = AnyArray(a)
+    var arr = AnyArray(a^)
     var sa = StructArray(
         dtype=struct_(Field("a", arr.dtype().copy())),
         length=3,

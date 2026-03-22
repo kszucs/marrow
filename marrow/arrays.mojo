@@ -53,6 +53,9 @@ trait Array(
     the type-erased handle that wraps any Array-conforming type.
     """
 
+    def __init__(out self, data: ArrayData) raises:
+        ...
+
     def type(self) -> DataType:
         ...
 
@@ -63,9 +66,6 @@ trait Array(
         ...
 
     def as_any(self) -> AnyArray:
-        ...
-
-    def __init__(out self, data: ArrayData) raises:
         ...
 
     def as_data(self) raises -> ArrayData:
@@ -253,66 +253,66 @@ struct AnyArray(
         var dt = self.dtype()
         comptime for T in primitive_dtypes:
             if dt == T:
-                return self.as_primitive[T]().to_python_object()
+                return self.as_primitive[T]().copy().to_python_object()
         if dt.is_string():
-            return self.as_string().to_python_object()
+            return self.as_string().copy().to_python_object()
         elif dt.is_list():
-            return self.as_list().to_python_object()
+            return self.as_list().copy().to_python_object()
         elif dt.is_fixed_size_list():
-            return self.as_fixed_size_list().to_python_object()
+            return self.as_fixed_size_list().copy().to_python_object()
         elif dt.is_struct():
-            return self.as_struct().to_python_object()
+            return self.as_struct().copy().to_python_object()
         raise Error("to_python_object: unsupported dtype")
 
     # --- typed downcasts ---
 
-    def as_primitive[T: DataType](self) -> PrimitiveArray[T]:
-        return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[].copy()
+    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveArray[T]:
+        return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[]
 
-    def as_bool(self) -> BoolArray:
+    def as_bool(ref self) -> ref[self._data[]] BoolArray:
         return self.as_primitive[bool_]()
 
-    def as_int8(self) -> PrimitiveArray[int8]:
+    def as_int8(ref self) -> ref[self._data[]] PrimitiveArray[int8]:
         return self.as_primitive[int8]()
 
-    def as_int16(self) -> PrimitiveArray[int16]:
+    def as_int16(ref self) -> ref[self._data[]] PrimitiveArray[int16]:
         return self.as_primitive[int16]()
 
-    def as_int32(self) -> PrimitiveArray[int32]:
+    def as_int32(ref self) -> ref[self._data[]] PrimitiveArray[int32]:
         return self.as_primitive[int32]()
 
-    def as_int64(self) -> PrimitiveArray[int64]:
+    def as_int64(ref self) -> ref[self._data[]] PrimitiveArray[int64]:
         return self.as_primitive[int64]()
 
-    def as_uint8(self) -> PrimitiveArray[uint8]:
+    def as_uint8(ref self) -> ref[self._data[]] PrimitiveArray[uint8]:
         return self.as_primitive[uint8]()
 
-    def as_uint16(self) -> PrimitiveArray[uint16]:
+    def as_uint16(ref self) -> ref[self._data[]] PrimitiveArray[uint16]:
         return self.as_primitive[uint16]()
 
-    def as_uint32(self) -> PrimitiveArray[uint32]:
+    def as_uint32(ref self) -> ref[self._data[]] PrimitiveArray[uint32]:
         return self.as_primitive[uint32]()
 
-    def as_uint64(self) -> PrimitiveArray[uint64]:
+    def as_uint64(ref self) -> ref[self._data[]] PrimitiveArray[uint64]:
         return self.as_primitive[uint64]()
 
-    def as_float32(self) -> PrimitiveArray[float32]:
+    def as_float32(ref self) -> ref[self._data[]] PrimitiveArray[float32]:
         return self.as_primitive[float32]()
 
-    def as_float64(self) -> PrimitiveArray[float64]:
+    def as_float64(ref self) -> ref[self._data[]] PrimitiveArray[float64]:
         return self.as_primitive[float64]()
 
-    def as_string(self) -> StringArray:
-        return rebind[ArcPointer[StringArray]](self._data)[].copy()
+    def as_string(ref self) -> ref[self._data[]] StringArray:
+        return rebind[ArcPointer[StringArray]](self._data)[]
 
-    def as_list(self) -> ListArray:
-        return rebind[ArcPointer[ListArray]](self._data)[].copy()
+    def as_list(ref self) -> ref[self._data[]] ListArray:
+        return rebind[ArcPointer[ListArray]](self._data)[]
 
-    def as_fixed_size_list(self) -> FixedSizeListArray:
-        return rebind[ArcPointer[FixedSizeListArray]](self._data)[].copy()
+    def as_fixed_size_list(ref self) -> ref[self._data[]] FixedSizeListArray:
+        return rebind[ArcPointer[FixedSizeListArray]](self._data)[]
 
-    def as_struct(self) -> StructArray:
-        return rebind[ArcPointer[StructArray]](self._data)[].copy()
+    def as_struct(ref self) -> ref[self._data[]] StructArray:
+        return rebind[ArcPointer[StructArray]](self._data)[]
 
     # --- generic layout (interop) ---
 
@@ -345,10 +345,6 @@ struct AnyArray(
         raise Error("from_data: unsupported dtype")
 
     # --- common operations ---
-
-    def copy(self) -> AnyArray:
-        """Returns an O(1) copy of this array (Arc ref-count bump only)."""
-        return AnyArray(copy=self)
 
     def as_any(self) -> AnyArray:
         """Returns an O(1) copy of this array as AnyArray."""
@@ -899,12 +895,12 @@ struct ListArray(
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
-            values=self.values,
+            values=self.values.copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this ListArray, returning the flat child values."""
-        return self.values
+        return self.values.copy()
 
     def value_lengths(self) -> PrimitiveArray[int32]:
         """Return an array of list lengths for each element."""
@@ -1049,12 +1045,12 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=self.values,
+            values=self.values.copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
-        return self.values
+        return self.values.copy()
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
@@ -1222,14 +1218,14 @@ struct StructArray(
                 t"field index {index} out of bounds for"
                 t" {len(self.children)} fields"
             )
-        return self.children[index]
+        return self.children[index].copy()
 
     def field(self, name: StringSlice) raises -> AnyArray:
         """Access a child array by field name.
 
         Matches PyArrow's StructArray.field(name) API.
         """
-        return self.children[self._index_for_field_name(name)]
+        return self.children[self._index_for_field_name(name)].copy()
 
     def flatten(self) -> List[AnyArray]:
         """Return one AnyArray per field.

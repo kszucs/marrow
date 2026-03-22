@@ -83,7 +83,7 @@ def test_add_untyped() raises:
     var b = AnyArray(array[int64]([4, 5, 6]))
     var result = add(a, b)
     assert_equal(result.length(), 3)
-    var typed = result.as_primitive[int64]()
+    ref typed = result.as_primitive[int64]()
     assert_equal(typed[0], 5)
     assert_equal(typed[1], 7)
     assert_equal(typed[2], 9)
@@ -152,7 +152,7 @@ def test_sub_untyped() raises:
     var a = AnyArray(array[int64]([10, 20, 30]))
     var b = AnyArray(array[int64]([1, 2, 3]))
     var result = sub(a, b)
-    var typed = result.as_primitive[int64]()
+    ref typed = result.as_primitive[int64]()
     assert_equal(typed[0], 9)
     assert_equal(typed[1], 18)
     assert_equal(typed[2], 27)
@@ -397,8 +397,8 @@ def test_sign_with_nulls() raises:
 
 def test_sign_runtime_typed() raises:
     var a = array[int32]([-3, 0, 5])
-    var result = sign(AnyArray(a))
-    var r = result.as_primitive[int32]()
+    var result = sign(AnyArray(a^))
+    ref r = result.as_primitive[int32]()
     assert_equal(r[0], -1)
     assert_equal(r[1], 0)
     assert_equal(r[2], 1)
@@ -433,8 +433,8 @@ def test_sqrt_with_nulls() raises:
 
 def test_sqrt_runtime_typed() raises:
     var a = array[float64]([1.0, 4.0, 9.0])
-    var result = sqrt(AnyArray(a))
-    var r = result.as_primitive[float64]()
+    var result = sqrt(AnyArray(a^))
+    ref r = result.as_primitive[float64]()
     assert_equal(r[0], 1.0)
     assert_equal(r[1], 2.0)
     assert_equal(r[2], 3.0)
@@ -593,8 +593,8 @@ def test_pow_with_nulls() raises:
 def test_pow_runtime_typed() raises:
     var a = array[float64]([2.0, 3.0])
     var b = array[float64]([3.0, 2.0])
-    var result = pow_(AnyArray(a), AnyArray(b))
-    var r = result.as_primitive[float64]()
+    var result = pow_(AnyArray(a^), AnyArray(b^))
+    ref r = result.as_primitive[float64]()
     assert_equal(r[0], 8.0)
     assert_equal(r[1], 9.0)
 

@@ -366,7 +366,7 @@ def test_list_bool_array() raises:
 
     # TODO: fix listarray.unsafe_get
     var first_value = lists[0].value()
-    var bool_array = first_value.as_bool()
+    ref bool_array = first_value.as_bool()
     assert_true(bool_array[0])
     assert_false(bool_array[1])
     assert_true(bool_array[2])
@@ -382,7 +382,7 @@ def test_list_str() raises:
     assert_equal(len(lists), 1)
 
     var first_val = lists[0].value()
-    var first_value = first_val.as_string()
+    ref first_value = first_val.as_string()
     assert_equal(first_value[0], "hello")
     assert_equal(first_value[1], "world")
 
@@ -420,15 +420,15 @@ def test_list_of_list() raises:
     list2 = top_b.finish_typed()
 
     var top_val = list2[0].value()
-    top = top_val.as_list()
+    ref top = top_val.as_list()
     middle_0 = top[0].value()
-    bottom = middle_0.as_primitive[int64]()
-    assert_equal(bottom[1], 2)
-    assert_equal(bottom[0], 1)
+    ref bottom_0 = middle_0.as_primitive[int64]()
+    assert_equal(bottom_0[1], 2)
+    assert_equal(bottom_0[0], 1)
     middle_1 = top[1].value()
-    bottom = middle_1.as_primitive[int64]()
-    assert_equal(bottom[0], 3)
-    assert_equal(bottom[1], 4)
+    ref bottom_1 = middle_1.as_primitive[int64]()
+    assert_equal(bottom_1[0], 3)
+    assert_equal(bottom_1[1], 4)
 
 
 def test_fixed_size_list_int_array() raises:
@@ -450,14 +450,14 @@ def test_fixed_size_list_int_array() raises:
     assert_equal(fsl.dtype.size, 3)
 
     # First list: [1, 2, 3]
-    var first = fsl[0].as_int64()
+    ref first = fsl[0].as_int64()
     assert_equal(len(first), 3)
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
 
     # Second list: [4, 5, 6]
-    var second = fsl[1].as_int64()
+    ref second = fsl[1].as_int64()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -479,7 +479,7 @@ def test_fixed_size_list_roundtrip() raises:
     assert_equal(fsl.dtype.size, 2)
     assert_equal(len(fsl), 2)
 
-    var first = fsl[0].as_int32()
+    ref first = fsl[0].as_int32()
     assert_equal(first[0], 10)
     assert_equal(first[1], 20)
 
@@ -507,11 +507,11 @@ def test_fixed_size_list_with_nulls() raises:
     assert_false(fsl.is_valid(2))
 
     # unsafe_get on valid entries returns correct values even when array has nulls
-    var first = fsl[0].as_int64()
+    ref first = fsl[0].as_int64()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
-    var second = fsl[1].as_int64()
+    ref second = fsl[1].as_int64()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -596,11 +596,11 @@ def test_struct_array_unsafe_get() raises:
     sb.append_valid()
     var struct_array = sb.finish_typed()
     ref int_data_a = struct_array.unsafe_get("int_data_a")
-    var int_a = int_data_a.as_primitive[int32]()
+    ref int_a = int_data_a.as_primitive[int32]()
     assert_equal(int_a[0], 1)
     assert_equal(int_a[4], 5)
     ref int_data_b = struct_array.unsafe_get("int_data_b")
-    var int_b = int_data_b.as_primitive[int32]()
+    ref int_b = int_data_b.as_primitive[int32]()
     assert_equal(int_b[0], 10)
     assert_equal(int_b[2], 30)
 
@@ -612,7 +612,8 @@ def test_chunked_array() raises:
     assert_equal(chunked_array.length, 3)
 
     assert_equal(chunked_array.chunk(0).length(), 1)
-    var second_chunk = chunked_array.chunk(1).copy().as_uint8()
+    var second_chunk_any = chunked_array.chunk(1).copy()
+    ref second_chunk = second_chunk_any.as_uint8()
     assert_equal(second_chunk.length, 2)
     assert_equal(second_chunk[0], 0)
     assert_equal(second_chunk[1], 1)
@@ -983,11 +984,11 @@ def test_fixed_size_list_getitem() raises:
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish_typed()
-    var first = fsl[0].as_int32()
+    ref first = fsl[0].as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
-    var second = fsl[1].as_int32()
+    ref second = fsl[1].as_int32()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -1027,11 +1028,13 @@ def test_struct_array_field_by_index() raises:
     sb.append_valid()
     var sa = sb.finish_typed()
 
-    var id_arr = sa.field(0).as_int32()
+    var field_0 = sa.field(0)
+    ref id_arr = field_0.as_int32()
     assert_equal(id_arr[0], 1)
     assert_equal(id_arr[1], 2)
 
-    var name_arr = sa.field(1).as_string()
+    var field_1 = sa.field(1)
+    ref name_arr = field_1.as_string()
     assert_equal(name_arr[0], "x")
     assert_equal(name_arr[1], "y")
 
@@ -1047,7 +1050,8 @@ def test_struct_array_field_by_name() raises:
     sb.append_valid()
     var sa = sb.finish_typed()
 
-    var val_arr = sa.field("val").as_int32()
+    var field_val = sa.field("val")
+    ref val_arr = field_val.as_int32()
     assert_equal(val_arr[0], 10)
     assert_equal(val_arr[1], 20)
 
@@ -1186,7 +1190,7 @@ def test_fixed_size_list_slice() raises:
     var fsl = builder.finish_typed()
     var s = fsl.slice(1, 2)
     assert_equal(len(s), 2)
-    var first = s[0].as_int32()
+    ref first = s[0].as_int32()
     assert_equal(first[0], 3)
     assert_equal(first[1], 4)
 

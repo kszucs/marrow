@@ -42,11 +42,13 @@ def test_write_read_roundtrip() raises:
     assert_true(len(batches) >= 1)
     var batch = batches[0].copy()
 
-    var col_x = batch.columns[0].copy().as_int64()
+    var tmp_col_x = batch.columns[0].copy()
+    ref col_x = tmp_col_x.as_int64()
     assert_equal(col_x[0], 1)
     assert_equal(col_x[2], 3)
 
-    var col_z = batch.columns[2].copy().as_string()
+    var tmp_col_z = batch.columns[2].copy()
+    ref col_z = tmp_col_z.as_string()
     assert_equal(String(col_z[0]), "a")
     assert_equal(String(col_z[2]), "c")
 
@@ -78,11 +80,13 @@ def test_read_pyarrow_written() raises:
     var batches = t.to_batches()
     var batch = batches[0].copy()
 
-    var col_a = batch.columns[0].copy().as_int64()
+    var tmp_col_a = batch.columns[0].copy()
+    ref col_a = tmp_col_a.as_int64()
     assert_equal(col_a[0], 10)
     assert_equal(col_a[1], 20)
 
-    var col_b = batch.columns[1].copy().as_string()
+    var tmp_col_b = batch.columns[1].copy()
+    ref col_b = tmp_col_b.as_string()
     assert_equal(String(col_b[0]), "hello")
     assert_equal(String(col_b[1]), "world")
 

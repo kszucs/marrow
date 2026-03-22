@@ -126,7 +126,7 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
     """Runtime-typed select."""
     if then_.dtype() != else_.dtype():
         raise Error(t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}")
-    var bool_mask = mask.as_primitive[bool_dt]()
+    ref bool_mask = mask.as_primitive[bool_dt]()
     comptime for dtype in numeric_dtypes:
         if then_.dtype() == dtype:
             return AnyArray(

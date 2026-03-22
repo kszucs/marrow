@@ -675,6 +675,7 @@ struct ProjectProcessor(RelationProcessor):
 # ---------------------------------------------------------------------------
 
 
+# TODO: have this implemented on RecordBatch.to_struct_array()
 def _batch_to_struct(batch: RecordBatch) raises -> StructArray:
     """Convert a RecordBatch to a StructArray (key columns)."""
     var fields = List[Field]()

@@ -235,14 +235,14 @@ def test_project_kind() raises:
 def test_in_memory_table_kind() raises:
     """InMemoryTable reports IN_MEMORY_TABLE_NODE kind."""
     var a = array[int64]([1, 2, 3])
-    var t = in_memory_table(record_batch([a], names=["a"]))
+    var t = in_memory_table(record_batch([a^], names=["a"]))
     assert_equal(t.kind(), IN_MEMORY_TABLE_NODE)
 
 
 def test_in_memory_table_schema() raises:
     """InMemoryTable schema matches the batch schema."""
     var a = array[int64]([1, 2, 3])
-    var t = in_memory_table(record_batch([a], names=["a"]))
+    var t = in_memory_table(record_batch([a^], names=["a"]))
     var s = t.schema()
     assert_equal(len(s), 1)
     assert_equal(s.fields[0].name, "a")
@@ -251,7 +251,7 @@ def test_in_memory_table_schema() raises:
 def test_in_memory_table_leaf() raises:
     """InMemoryTable is a leaf node with no inputs or expressions."""
     var a = array[int64]([1, 2, 3])
-    var t = in_memory_table(record_batch([a], names=["a"]))
+    var t = in_memory_table(record_batch([a^], names=["a"]))
     assert_equal(len(t.inputs()), 0)
     assert_equal(len(t.exprs()), 0)
 
@@ -259,7 +259,7 @@ def test_in_memory_table_leaf() raises:
 def test_in_memory_table_downcast() raises:
     """InMemoryTable can be downcast to access the batch."""
     var a = array[int64]([1, 2, 3])
-    var t = in_memory_table(record_batch([a], names=["a"]))
+    var t = in_memory_table(record_batch([a^], names=["a"]))
     var imt = t.downcast[InMemoryTable]()
     assert_equal(imt[].batch.num_rows(), 3)
 

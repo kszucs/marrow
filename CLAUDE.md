@@ -187,6 +187,9 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - Prefer PyArrow's API naming everywhere — both in the Mojo core types and in the Python bindings. When in doubt, match PyArrow's method names and signatures.
 - Use **conventional commits** for all commit messages (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`, etc.), with an optional scope in parentheses (e.g. `feat(kernels): add concat`).
 - Add an entry to **`CHANGELOG.md`** for every meaningful change (new feature, behaviour change, notable fix). Group under `### Features`, `### Refactors`, `### Tests`, or `### Fixes` inside the `## [Unreleased]` section. Trivial changes (formatting, typos, test-only fixes) do not need an entry.
+- Avoid `ImplicitlyCopyable` on array and scalar types. Copies should be explicit (`.copy()`) so ownership is always visible at the call site.
+- **`.as_<type>()` returns a reference** (`ref self` + `-> ref[self._data[]] T`) — zero-cost borrow tied to the heap allocation inside the `ArcPointer`, with no ownership transfer. Callers use `ref x = val.as_type()` to borrow or `.copy()` to take ownership explicitly.
+- **`.to_<type>()` transfers ownership** — use this name for methods that convert a value to a new type or allocate a new representation (e.g. `.to_python_object()`, `.to_device()`, `.to_host()`).
 
 ### Prior Art — Consult C++ and Rust Implementations First
 

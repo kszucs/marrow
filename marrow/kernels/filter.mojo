@@ -521,7 +521,7 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     Returns:
         A new AnyArray with only the selected elements.
     """
-    var mask = selection.as_bool()
+    var mask = selection.as_bool().copy()
 
     if array.dtype() == bool_:
         return AnyArray(filter_[bool_](array.as_primitive[bool_](), mask))
