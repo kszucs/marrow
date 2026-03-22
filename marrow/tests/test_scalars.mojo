@@ -35,9 +35,9 @@ def test_primitive_scalar_null() raises:
 
 
 def test_primitive_scalar_from_array() raises:
-    """Construct from a length-1 array slice."""
+    """Construct via array __getitem__."""
     var arr = array[int32]([10, 20, 30])
-    var s = PrimitiveScalar[int32](data=arr.slice(1, 1))
+    var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.value(), 20)
 
@@ -77,18 +77,19 @@ def test_string_scalar_null() raises:
 
 
 def test_string_scalar_from_array() raises:
+    """Construct via array __getitem__."""
     var b = StringBuilder(2)
     b.append("foo")
     b.append("bar")
     var arr = b.finish_typed()
-    var s = StringScalar(data=arr.slice(1, 1))
+    var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.as_string(), "bar")
 
 
 def test_string_scalar_write_to() raises:
     var s = StringScalar("hi")
-    assert_equal(String(s), '"hi"')
+    assert_equal(String(s), "hi")
 
 
 # ---------------------------------------------------------------------------

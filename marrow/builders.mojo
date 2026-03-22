@@ -669,7 +669,7 @@ struct ListBuilder(Builder, Sized):
             self._length + n,
             UInt32(cur_child_len + child_end - child_start),
         )
-        var child_slice = AnyArray(copy=arr.values)
+        var child_slice = arr.values.as_any()
         child_slice.offset = child_start
         child_slice.length = child_end - child_start
         child_slice.nulls = 0
@@ -804,7 +804,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.size
-        var child_slice = AnyArray(copy=arr.values)
+        var child_slice = arr.values.as_any()
         child_slice.offset = arr.offset * list_size
         child_slice.length = n * list_size
         child_slice.nulls = 0
@@ -939,7 +939,7 @@ struct StructBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         for f in range(len(arr.children)):
-            self._children[f].extend(AnyArray(copy=arr.children[f]))
+            self._children[f].extend(arr.children[f].as_any())
         self._length += n
 
     def reserve(mut self, additional: Int) raises:

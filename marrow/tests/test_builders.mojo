@@ -358,7 +358,7 @@ def test_list_builder_empty_list() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     assert_true(frozen.is_valid(0))
-    var inner = frozen[0].as_primitive[int64]()
+    var inner = frozen[0].value().as_primitive[int64]()
     assert_equal(inner.length, 0)
 
 
@@ -390,7 +390,7 @@ def test_list_builder_multiple_nulls_offsets() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_false(frozen.is_valid(2))
-    var first = frozen[0].as_primitive[int32]()
+    var first = frozen[0].value().as_primitive[int32]()
     assert_equal(first.length, 2)
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
@@ -404,7 +404,8 @@ def test_list_builder_string_child() raises:
     b.append_valid()
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
-    var inner = StringArray(frozen[0])
+    var inner_val = frozen[0].value()
+    var inner = StringArray(inner_val)
     assert_equal(inner[0], "hello")
     assert_equal(inner[1], "world")
 

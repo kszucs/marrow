@@ -29,6 +29,7 @@ from .buffers import Buffer, BufferBuilder
 from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
+from .scalars import PrimitiveScalar, StringScalar, ListScalar
 
 
 trait Array(
@@ -188,6 +189,10 @@ struct AnyArray(
 
     def copy(self) -> AnyArray:
         """Returns an O(1) copy of this array (Arc ref-count bumps only)."""
+        return AnyArray(copy=self)
+
+    def as_any(self) -> AnyArray:
+        """Returns an O(1) copy of this array as AnyArray."""
         return AnyArray(copy=self)
 
     def __eq__(self, other: AnyArray) -> Bool:
@@ -398,10 +403,12 @@ struct PrimitiveArray[T: DataType](
     def unsafe_get(self, index: Int) -> Self.scalar:
         return self.buffer.unsafe_get[Self.T.native](index + self.offset)
 
-    def __getitem__(self, index: Int) raises -> Self.scalar:
+    def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
-        return self.unsafe_get(index)
+        if not self.is_valid(index):
+            return PrimitiveScalar[Self.T].null()
+        return PrimitiveScalar[Self.T](self.unsafe_get(index))
 
     def null_count(self) -> Int:
         return self.nulls
@@ -624,17 +631,17 @@ struct StringArray(
         )
         return StringSlice[self_origin](ptr=ptr, length=length)
 
-    def __getitem__[
-        self_origin: Origin[mut=False], //
-    ](ref[self_origin] self, index: Int) raises -> StringSlice[self_origin]:
-        """Return a StringSlice for the element at the given index.
+    def __getitem__(self, index: Int) raises -> StringScalar:
+        """Return a StringScalar for the element at the given index.
 
         Raises:
             If the index is out of bounds.
         """
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
-        return self.unsafe_get(UInt(index))
+        if not self.is_valid(index):
+            return StringScalar.null()
+        return StringScalar(String(self.unsafe_get(UInt(index))))
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -753,16 +760,18 @@ struct ListArray(
         var end = Int(
             self.offsets.unsafe_get[DType.int32](self.offset + index + 1)
         )
-        var result = AnyArray(copy=self.values)
+        var result = self.values.as_any()
         result.offset = start
         result.length = end - start
         result.nulls = 0
         return result^
 
-    def __getitem__(self, index: Int) raises -> AnyArray:
+    def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
-        return self.unsafe_get(index)
+        return ListScalar(
+            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+        )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
@@ -774,12 +783,12 @@ struct ListArray(
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
-            values=AnyArray(copy=self.values),
+            values=self.values.as_any(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this ListArray, returning the flat child values."""
-        return AnyArray(copy=self.values)
+        return self.values.as_any()
 
     def value_lengths(self) -> PrimitiveArray[int32]:
         """Return an array of list lengths for each element."""
@@ -929,12 +938,12 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=AnyArray(copy=self.values),
+            values=self.values.as_any(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
-        return AnyArray(copy=self.values)
+        return self.values.as_any()
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""

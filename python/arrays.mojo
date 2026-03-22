@@ -42,6 +42,8 @@ from marrow.builders import (
     StructBuilder,
     make_builder,
 )
+from marrow.scalars import AnyScalar
+from marrow.dtypes import DataType
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod, def_display
@@ -194,25 +196,45 @@ struct PyHelpers(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
+def _prim_scalar_getitem[T: DataType](
+    ptr: UnsafePointer[PrimitiveArray[T], MutAnyOrigin],
+    index: Int,
+) raises -> PythonObject:
+    """Return a Python Scalar for the element at the given index."""
+    var n = len(ptr[])
+    if index < 0 or index >= n:
+        raise Error(t"index {index} out of bounds for length {n}")
+    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
+
+
 def _str_getitem(
     ptr: UnsafePointer[StringArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
-    return PythonObject(String(ptr[].__getitem__(index)))
+    var n = len(ptr[])
+    if index < 0 or index >= n:
+        raise Error(t"index {index} out of bounds for length {n}")
+    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
 
 
 def _list_getitem(
     ptr: UnsafePointer[ListArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
-    return ptr[].__getitem__(index).to_python_object()
+    var n = len(ptr[])
+    if index < 0 or index >= n:
+        raise Error(t"index {index} out of bounds for length {n}")
+    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
 
 
 def _fsl_getitem(
     ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
-    return ptr[].__getitem__(index).to_python_object()
+    var n = len(ptr[])
+    if index < 0 or index >= n:
+        raise Error(t"index {index} out of bounds for length {n}")
+    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
 
 
 # ---------------------------------------------------------------------------
@@ -835,7 +857,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[BoolArray](bool_array_py)
     var bool_array_sp = SequenceProtocolBuilder[BoolArray](bool_array_py)
     _ = bool_array_sp.def_len[BoolArray.__len__]().def_getitem[
-        BoolArray.__getitem__
+        _prim_scalar_getitem[dt.bool_]
     ]()
 
     # --- Numeric PrimitiveArrays ---
@@ -851,7 +873,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[Int8Array](int8_array_py)
     var int8_array_sp = SequenceProtocolBuilder[Int8Array](int8_array_py)
     _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[
-        Int8Array.__getitem__
+        _prim_scalar_getitem[dt.int8]
     ]()
 
     ref int16_array_py = mb.add_type[Int16Array]("Int16Array")
@@ -868,7 +890,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[Int16Array](int16_array_py)
     var int16_array_sp = SequenceProtocolBuilder[Int16Array](int16_array_py)
     _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[
-        Int16Array.__getitem__
+        _prim_scalar_getitem[dt.int16]
     ]()
 
     ref int32_array_py = mb.add_type[Int32Array]("Int32Array")
@@ -885,7 +907,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[Int32Array](int32_array_py)
     var int32_array_sp = SequenceProtocolBuilder[Int32Array](int32_array_py)
     _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[
-        Int32Array.__getitem__
+        _prim_scalar_getitem[dt.int32]
     ]()
 
     ref int64_array_py = mb.add_type[Int64Array]("Int64Array")
@@ -902,7 +924,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[Int64Array](int64_array_py)
     var int64_array_sp = SequenceProtocolBuilder[Int64Array](int64_array_py)
     _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[
-        Int64Array.__getitem__
+        _prim_scalar_getitem[dt.int64]
     ]()
 
     ref uint8_array_py = mb.add_type[UInt8Array]("UInt8Array")
@@ -919,7 +941,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[UInt8Array](uint8_array_py)
     var uint8_array_sp = SequenceProtocolBuilder[UInt8Array](uint8_array_py)
     _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[
-        UInt8Array.__getitem__
+        _prim_scalar_getitem[dt.uint8]
     ]()
 
     ref uint16_array_py = mb.add_type[UInt16Array]("UInt16Array")
@@ -936,7 +958,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[UInt16Array](uint16_array_py)
     var uint16_array_sp = SequenceProtocolBuilder[UInt16Array](uint16_array_py)
     _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[
-        UInt16Array.__getitem__
+        _prim_scalar_getitem[dt.uint16]
     ]()
 
     ref uint32_array_py = mb.add_type[UInt32Array]("UInt32Array")
@@ -953,7 +975,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[UInt32Array](uint32_array_py)
     var uint32_array_sp = SequenceProtocolBuilder[UInt32Array](uint32_array_py)
     _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[
-        UInt32Array.__getitem__
+        _prim_scalar_getitem[dt.uint32]
     ]()
 
     ref uint64_array_py = mb.add_type[UInt64Array]("UInt64Array")
@@ -970,7 +992,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[UInt64Array](uint64_array_py)
     var uint64_array_sp = SequenceProtocolBuilder[UInt64Array](uint64_array_py)
     _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[
-        UInt64Array.__getitem__
+        _prim_scalar_getitem[dt.uint64]
     ]()
 
     ref float32_array_py = mb.add_type[Float32Array]("Float32Array")
@@ -989,7 +1011,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         float32_array_py
     )
     _ = float32_array_sp.def_len[Float32Array.__len__]().def_getitem[
-        Float32Array.__getitem__
+        _prim_scalar_getitem[dt.float32]
     ]()
 
     ref float64_array_py = mb.add_type[Float64Array]("Float64Array")
@@ -1008,7 +1030,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         float64_array_py
     )
     _ = float64_array_sp.def_len[Float64Array.__len__]().def_getitem[
-        Float64Array.__getitem__
+        _prim_scalar_getitem[dt.float64]
     ]()
 
     # --- StringArray ---

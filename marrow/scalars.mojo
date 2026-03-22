@@ -1,18 +1,20 @@
-"""Arrow scalar types — single-value containers wrapping length-1 arrays.
+"""Arrow scalar types — single-value containers.
 
-Following Arrow Rust's design: a Scalar is an AnyArray where ``length == 1``.
-This reuses all existing infrastructure (buffers, bitmaps, dtypes, builders)
-without duplicating it.
-
-Type-erased container:
-  ``AnyScalar`` — wraps any length-1 ``AnyArray``, converts implicitly to/from
-  typed scalars.
+Following Arrow C++'s design: scalars hold native values directly, not
+length-1 arrays.
 
 Typed scalars:
-  ``PrimitiveScalar[T]`` — wraps ``PrimitiveArray[T]`` (length 1)
-  ``StringScalar``       — wraps ``StringArray`` (length 1)
-  ``ListScalar``         — wraps ``ListArray`` (length 1)
-  ``StructScalar``       — wraps ``StructArray`` (length 1)
+  PrimitiveScalar[T] — holds _Scalar[T.native] (built-in Scalar) + Bool validity
+  StringScalar       — holds String value + Bool validity
+  ListScalar         — holds AnyArray (child values) + Bool validity
+  StructScalar       — holds List[AnyArray] (one per field) + DataType + Bool validity
+
+Type-erased container:
+  AnyScalar          — wraps any typed scalar via @implicit conversion;
+                       backed by a length-1 AnyArray for uniform storage.
+
+Scalar trait:
+  Common interface implemented by all four typed scalars.
 """
 
 from std.python import PythonObject
@@ -26,7 +28,33 @@ from .arrays import (
     AnyArray,
 )
 from .builders import PrimitiveBuilder, StringBuilder
+from .buffers import Buffer, BufferBuilder
+from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes
+
+# Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
+from builtin.simd import Scalar as _Scalar
+
+
+# ---------------------------------------------------------------------------
+# Scalar trait
+# ---------------------------------------------------------------------------
+
+
+trait Scalar(Copyable, Movable, Writable):
+    """Common interface for all typed Arrow scalars."""
+
+    def dtype(self) -> DataType:
+        ...
+
+    def is_valid(self) -> Bool:
+        ...
+
+    def is_null(self) -> Bool:
+        ...
+
+    def as_any(self) -> AnyScalar:
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -34,45 +62,78 @@ from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: DataType](Copyable, Movable, Writable):
-    """A single primitive value, backed by a length-1 PrimitiveArray."""
+struct PrimitiveScalar[T: DataType](Boolable, Copyable, Movable, Writable, Equatable):
+    """A single primitive value: holds a native Mojo scalar + validity flag."""
 
-    var _data: PrimitiveArray[Self.T]
+    var _value: _Scalar[Self.T.native]
+    var _is_valid: Bool
 
-    def __init__(out self, value: Scalar[Self.T.native]) raises:
-        """Create a valid scalar from a Mojo Scalar value."""
-        var b = PrimitiveBuilder[Self.T](1)
-        b.append(value)
-        self._data = b.finish_typed()
+    @implicit
+    def __init__(out self, value: _Scalar[Self.T.native]):
+        self._value = value
+        self._is_valid = True
 
-    def __init__(out self, *, data: PrimitiveArray[Self.T]):
-        """Wrap an existing length-1 array."""
-        self._data = PrimitiveArray[Self.T](copy=data)
+    @implicit
+    def __init__(out self, value: IntLiteral):
+        self._value = _Scalar[Self.T.native](value)
+        self._is_valid = True
+
+    @implicit
+    def __init__(out self, value: FloatLiteral):
+        self._value = _Scalar[Self.T.native](value)
+        self._is_valid = True
+
+    def __init__(out self, *, is_valid: Bool):
+        self._value = 0
+        self._is_valid = is_valid
 
     @staticmethod
-    def null() raises -> Self:
-        """Create a null scalar."""
-        var b = PrimitiveBuilder[Self.T](1)
-        b.append_null()
-        return Self(data=b.finish_typed())
+    def null() -> Self:
+        return Self(is_valid=False)
+
+    def dtype(self) -> DataType:
+        return Self.T
 
     def is_valid(self) -> Bool:
-        return self._data.is_valid(0)
+        return self._is_valid
 
     def is_null(self) -> Bool:
-        return not self.is_valid()
+        return not self._is_valid
 
-    def value(self) -> Scalar[Self.T.native]:
-        """Get the underlying value. Undefined if null."""
-        return self._data.unsafe_get(0)
+    def value(self) -> _Scalar[Self.T.native]:
+        """Get the underlying native value. Undefined if null."""
+        return self._value
 
-    def as_array(self) -> PrimitiveArray[Self.T]:
-        """View as a length-1 PrimitiveArray."""
-        return PrimitiveArray[Self.T](copy=self._data)
+    def as_array(self) raises -> PrimitiveArray[Self.T]:
+        """Build a length-1 PrimitiveArray from this scalar."""
+        var b = PrimitiveBuilder[Self.T](1)
+        if self._is_valid:
+            b.append(self._value)
+        else:
+            b.append_null()
+        return b.finish_typed()
+
+    def as_any(self) -> AnyScalar:
+        return self
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.is_null() and other.is_null():
+            return True
+        if self.is_null() or other.is_null():
+            return False
+        return self._value == other._value
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def __bool__(self) -> Bool:
+        if self._is_valid:
+            return Bool(self._value)
+        return False
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_valid():
-            writer.write(self.value())
+        if self._is_valid:
+            writer.write(self._value)
         else:
             writer.write("null")
 
@@ -85,52 +146,74 @@ struct PrimitiveScalar[T: DataType](Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(Copyable, Movable, Writable):
-    """A single string value, backed by a length-1 StringArray."""
+struct StringScalar(Copyable, Movable, Writable, Equatable):
+    """A single string value: holds a String + validity flag."""
 
-    var _data: StringArray
+    var _value: String
+    var _is_valid: Bool
 
+    @implicit
     def __init__(out self, value: String) raises:
-        """Create a valid scalar from a String."""
-        var b = StringBuilder(1)
-        b.append(value)
-        self._data = b.finish_typed()
+        self._value = value
+        self._is_valid = True
 
-    def __init__(out self, *, data: StringArray):
-        """Wrap an existing length-1 array."""
-        self._data = StringArray(copy=data)
+    def __init__(out self, *, is_valid: Bool) raises:
+        self._value = String()
+        self._is_valid = is_valid
 
     @staticmethod
     def null() raises -> Self:
-        """Create a null scalar."""
-        var b = StringBuilder(1)
-        b.append_null()
-        return Self(data=b.finish_typed())
+        return Self(is_valid=False)
+
+    def dtype(self) -> DataType:
+        from .dtypes import string
+        return string
 
     def is_valid(self) -> Bool:
-        return self._data.is_valid(0)
+        return self._is_valid
 
     def is_null(self) -> Bool:
-        return not self.is_valid()
+        return not self._is_valid
 
     def as_string(self) -> String:
         """Get the value as an owned String."""
-        return String(self._data.unsafe_get(0))
+        return self._value
 
-    def as_array(self) -> StringArray:
-        """View as a length-1 StringArray."""
-        return StringArray(copy=self._data)
+    def as_array(self) raises -> StringArray:
+        """Build a length-1 StringArray from this scalar."""
+        var b = StringBuilder(1)
+        if self._is_valid:
+            b.append(self._value)
+        else:
+            b.append_null()
+        return b.finish_typed()
+
+    def as_any(self) raises -> AnyScalar:
+        return AnyScalar(self)
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.is_null() and other.is_null():
+            return True
+        if self.is_null() or other.is_null():
+            return False
+        return self._value == other._value
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_valid():
-            writer.write('"')
-            writer.write(self.as_string())
-            writer.write('"')
+        if self._is_valid:
+            writer.write(self._value)
         else:
             writer.write("null")
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
+        if self._is_valid:
+            writer.write('"')
+            writer.write(self._value)
+            writer.write('"')
+        else:
+            writer.write("null")
 
 
 # ---------------------------------------------------------------------------
@@ -139,30 +222,35 @@ struct StringScalar(Copyable, Movable, Writable):
 
 
 struct ListScalar(Copyable, Movable, Writable):
-    """A single list value, backed by a length-1 ListArray."""
+    """A single list value: holds an AnyArray of child elements + validity flag."""
 
-    var _data: ListArray
+    var _value: AnyArray
+    var _is_valid: Bool
 
-    def __init__(out self, *, data: ListArray):
-        """Wrap an existing length-1 array."""
-        self._data = ListArray(copy=data)
+    def __init__(out self, *, value: AnyArray, is_valid: Bool):
+        self._value = value.copy()
+        self._is_valid = is_valid
+
+    def dtype(self) raises -> DataType:
+        from .dtypes import list_
+        return list_(self._value.dtype)
 
     def is_valid(self) -> Bool:
-        return self._data.is_valid(0)
+        return self._is_valid
 
     def is_null(self) -> Bool:
-        return not self.is_valid()
+        return not self._is_valid
 
     def value(self) -> AnyArray:
-        """Get the sub-array for this list element."""
-        return self._data.unsafe_get(0)
+        """Get the child elements array."""
+        return self._value.copy()
 
-    def as_array(self) -> ListArray:
-        return ListArray(copy=self._data)
+    def as_any(self) raises -> AnyScalar:
+        return AnyScalar(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_valid():
-            self.value().write_to(writer)
+        if self._is_valid:
+            self._value.write_to(writer)
         else:
             writer.write("null")
 
@@ -176,33 +264,53 @@ struct ListScalar(Copyable, Movable, Writable):
 
 
 struct StructScalar(Copyable, Movable, Writable):
-    """A single struct value, backed by a length-1 StructArray."""
+    """A single struct value: holds one AnyScalar per field + validity flag."""
 
-    var _data: StructArray
+    var _dtype: DataType
+    var _value: List[AnyScalar]
+    var _is_valid: Bool
 
-    def __init__(out self, *, data: StructArray):
-        """Wrap an existing length-1 array."""
-        self._data = StructArray(copy=data)
+    def __init__(
+        out self,
+        *,
+        dtype: DataType,
+        value: List[AnyScalar],
+        is_valid: Bool,
+    ):
+        self._dtype = dtype
+        self._value = value.copy()
+        self._is_valid = is_valid
+
+    @staticmethod
+    def null(dtype: DataType) -> Self:
+        return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
+
+    def dtype(self) -> DataType:
+        return self._dtype
 
     def is_valid(self) -> Bool:
-        return self._data.is_valid(0)
+        return self._is_valid
 
     def is_null(self) -> Bool:
-        return not self.is_valid()
+        return not self._is_valid
 
     def num_fields(self) -> Int:
-        return len(self._data.children)
+        return len(self._value)
 
-    def as_array(self) -> StructArray:
-        return StructArray(copy=self._data)
+    def field(self, index: Int) -> AnyScalar:
+        """Return the i-th field as an AnyScalar."""
+        return self._value[index].copy()
+
+    def as_any(self) raises -> AnyScalar:
+        return AnyScalar(self)
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_valid():
+        if self._is_valid:
             writer.write("{")
-            for i in range(self.num_fields()):
+            for i in range(len(self._value)):
                 if i > 0:
                     writer.write(", ")
-                self._data.children[i].slice(0, 1).write_to(writer)
+                self._value[i].write_to(writer)
             writer.write("}")
         else:
             writer.write("null")
@@ -217,31 +325,79 @@ struct StructScalar(Copyable, Movable, Writable):
 
 
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
-    """A single Arrow value — a length-1 AnyArray.
+    """A single Arrow value backed by a length-1 AnyArray.
 
-    Type-erased container. Converts implicitly to/from typed scalars.
+    Type-erased container. Converts implicitly from typed scalars by building
+    a temporary length-1 array — an O(1) allocation, not O(n).
     """
 
     var _data: AnyArray
 
     @implicit
-    def __init__[T: DataType](out self, typed: PrimitiveScalar[T]):
-        self._data = AnyArray(typed._data)
+    def __init__[T: DataType](out self, typed: PrimitiveScalar[T]) raises:
+        var b = PrimitiveBuilder[T](1)
+        if typed._is_valid:
+            b.append(typed._value)
+        else:
+            b.append_null()
+        self._data = AnyArray(b.finish_typed())
 
     @implicit
-    def __init__(out self, typed: StringScalar):
-        self._data = AnyArray(typed._data)
+    def __init__(out self, typed: StringScalar) raises:
+        var b = StringBuilder(1)
+        if typed._is_valid:
+            b.append(typed._value)
+        else:
+            b.append_null()
+        self._data = AnyArray(b.finish_typed())
 
     @implicit
-    def __init__(out self, typed: ListScalar):
-        self._data = AnyArray(typed._data)
+    def __init__(out self, typed: ListScalar) raises:
+        from .dtypes import list_
+        var child = typed._value.copy()
+        var obb = BufferBuilder.alloc[DType.int32](2)
+        obb.unsafe_set[DType.int32](0, 0)
+        obb.unsafe_set[DType.int32](1, Int32(child.length))
+        var offsets = obb.finish()
+        var bm: Optional[Bitmap] = None
+        var nulls = 0
+        if not typed._is_valid:
+            var bmb = BitmapBuilder.alloc(1)
+            bm = bmb.finish(1)
+            nulls = 1
+        self._data = AnyArray(
+            dtype=list_(child.dtype),
+            length=1,
+            nulls=nulls,
+            bitmap=bm^,
+            buffers=[offsets],
+            children=[child^],
+            offset=0,
+        )
 
     @implicit
-    def __init__(out self, typed: StructScalar):
-        self._data = AnyArray(typed._data)
+    def __init__(out self, typed: StructScalar) raises:
+        var bm: Optional[Bitmap] = None
+        var nulls = 0
+        if not typed._is_valid:
+            var bmb = BitmapBuilder.alloc(1)
+            bm = bmb.finish(1)
+            nulls = 1
+        var children = List[AnyArray]()
+        for i in range(len(typed._value)):
+            children.append(typed._value[i]._data.copy())
+        self._data = AnyArray(
+            dtype=typed._dtype,
+            length=1,
+            nulls=nulls,
+            bitmap=bm^,
+            buffers=[],
+            children=children^,
+            offset=0,
+        )
 
     def __init__(out self, *, data: AnyArray):
-        """Wrap an existing length-1 AnyArray."""
+        """Wrap an existing length-1 AnyArray directly."""
         self._data = data.copy()
 
     def is_valid(self) -> Bool:
@@ -254,29 +410,63 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         return self._data.dtype
 
     def as_primitive[T: DataType](self) raises -> PrimitiveScalar[T]:
-        return PrimitiveScalar[T](data=self._data.as_primitive[T]())
+        var arr = self._data.as_primitive[T]()
+        if not self._data.is_valid(0):
+            return PrimitiveScalar[T].null()
+        return PrimitiveScalar[T](arr.unsafe_get(0))
 
     def as_string(self) raises -> StringScalar:
-        return StringScalar(data=self._data.as_string())
+        var arr = self._data.as_string()
+        if not self._data.is_valid(0):
+            return StringScalar.null()
+        return StringScalar(String(arr.unsafe_get(UInt(0))))
 
     def as_list(self) raises -> ListScalar:
-        return ListScalar(data=self._data.as_list())
+        var arr = self._data.as_list()
+        return ListScalar(
+            value=arr.unsafe_get(0), is_valid=self._data.is_valid(0)
+        )
+
+    def as_fixed_size_list(self) raises -> ListScalar:
+        var arr = self._data.as_fixed_size_list()
+        return ListScalar(
+            value=arr.unsafe_get(0), is_valid=self._data.is_valid(0)
+        )
 
     def as_struct(self) raises -> StructScalar:
-        return StructScalar(data=self._data.as_struct())
+        var arr = self._data.as_struct()
+        if not self._data.is_valid(0):
+            return StructScalar.null(arr.dtype)
+        var fields = List[AnyScalar]()
+        var offset = self._data.offset
+        for i in range(len(arr.children)):
+            fields.append(AnyScalar(data=arr.children[i].slice(offset, 1)))
+        return StructScalar(dtype=arr.dtype, value=fields^, is_valid=True)
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_valid():
-            self._data.slice(0, 1).write_to(writer)
-        else:
+        if self.is_null():
             writer.write("null")
+            return
+        try:
+            var dtype = self.dtype()
+            comptime for T in primitive_dtypes:
+                if dtype == T:
+                    writer.write(self.as_primitive[T]().value())
+                    return
+            if dtype.is_string():
+                writer.write(self.as_string().as_string())
+            elif dtype.is_list():
+                self.as_list().value().write_to(writer)
+            elif dtype.is_fixed_size_list():
+                self.as_fixed_size_list().value().write_to(writer)
+            elif dtype.is_struct():
+                self.as_struct().write_to(writer)
+        except:
+            writer.write("Scalar(?)")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
     def to_python_object(var self) raises -> PythonObject:
-        """Convert to a Python scalar via the underlying AnyArray."""
-        if self.is_null():
-            # TODO: we should have a null scalar to return with
-            return PythonObject(None)
-        return self._data.slice(0, 1).to_python_object()
+        """Convert to a Python Scalar wrapper object."""
+        return PythonObject(alloc=self^)

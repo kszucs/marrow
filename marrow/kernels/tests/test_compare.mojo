@@ -161,8 +161,8 @@ def test_non_aligned_length() raises:
     var result = less[int64](a, b)
 
     for i in range(n):
-        var expected = Int(a[i] < b[i])
-        assert_equal(Int(result[i]), expected)
+        var expected = Int(a[i].value() < b[i].value())
+        assert_equal(Int(result[i].value()), expected)
 
 
 # ---------------------------------------------------------------------------

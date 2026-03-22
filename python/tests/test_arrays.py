@@ -108,8 +108,8 @@ def test_array_bool():
     assert type(arr).__name__ == "BoolArray"
     assert len(arr) == 4
     assert arr.null_count() == 2
-    assert arr[0]
-    assert not arr[2]
+    assert arr[0] == True
+    assert arr[2] == False
 
 
 def test_array_int64():
@@ -257,8 +257,8 @@ def test_index_string():
 
 def test_index_list():
     arr = ma.array([[1, 2], [3, 4, 5]])
-    child0 = arr[0]
-    child1 = arr[1]
+    child0 = arr[0].as_py()
+    child1 = arr[1].as_py()
     assert len(child0) == 2
     assert len(child1) == 3
     assert child0[0] == 1

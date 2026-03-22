@@ -449,7 +449,7 @@ def test_exp_typed() raises:
     var a = array[float32]([0.0, 1.0])
     var result = exp[float32](a)
     assert_equal(result[0], 1.0)
-    assert_true(result[1] > 2.718 and result[1] < 2.719)
+    assert_true(result[1].value() > 2.718 and result[1].value() < 2.719)
 
 
 def test_exp2_typed() raises:
@@ -470,7 +470,7 @@ def test_log_typed() raises:
     var a = array[float32]([1.0, 2.718282])
     var result = log[float32](a)
     assert_equal(result[0], 0.0)
-    assert_true(result[1] > 0.999 and result[1] < 1.001)
+    assert_true(result[1].value() > 0.999 and result[1].value() < 1.001)
 
 
 def test_log2_typed() raises:

@@ -368,7 +368,7 @@ def test_list_bool_array() raises:
     assert_equal(len(lists), 1)
 
     # TODO: fix listarray.unsafe_get
-    var first_value = lists[0]
+    var first_value = lists[0].value()
     var bool_array = first_value.as_bool()
     assert_true(bool_array[0])
     assert_false(bool_array[1])
@@ -384,7 +384,8 @@ def test_list_str() raises:
     var lists = list_b.finish_typed()
     assert_equal(len(lists), 1)
 
-    var first_value = StringArray(lists[0])
+    var first_val = lists[0].value()
+    var first_value = StringArray(first_val)
     assert_equal(first_value[0], "hello")
     assert_equal(first_value[1], "world")
 
@@ -421,12 +422,13 @@ def test_list_of_list() raises:
     top_b.append_valid()
     list2 = top_b.finish_typed()
 
-    top = ListArray(list2[0])
-    middle_0 = top[0]
+    var top_val = list2[0].value()
+    top = ListArray(top_val)
+    middle_0 = top[0].value()
     bottom = middle_0.as_primitive[int64]()
     assert_equal(bottom[1], 2)
     assert_equal(bottom[0], 1)
-    middle_1 = top[1]
+    middle_1 = top[1].value()
     bottom = middle_1.as_primitive[int64]()
     assert_equal(bottom[0], 3)
     assert_equal(bottom[1], 4)
@@ -948,9 +950,9 @@ def test_list_array_getitem() raises:
     child[].append(50)
     list_b.append_valid()  # [30, 40, 50]
     var lists = list_b.finish_typed()
-    var first = lists[0]
+    var first = lists[0].value()
     assert_equal(first.length, 2)
-    var second = lists[1]
+    var second = lists[1].value()
     assert_equal(second.length, 3)
 
 

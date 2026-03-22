@@ -26,6 +26,8 @@
 
 ### Refactors
 
+- **Scalar types hold native values** (`marrow/scalars.mojo`): `PrimitiveScalar[T]` now holds `SIMD[T.native, 1]` + `Bool` validity directly instead of a length-1 `PrimitiveArray`. `StringScalar` holds `String` + `Bool`. `ListScalar` holds `AnyArray` (child elements) + `Bool`. `StructScalar` holds `List[AnyArray]` (one per field) + `DataType` + `Bool`. `AnyScalar` remains a type-erased container backed by a length-1 `AnyArray` for uniform storage. Added a `Scalar` trait mirroring the `Array` trait.
+
 - **Array trait + AnyArray rename**: Introduced `Array` trait (`type()`, `null_count()`, `is_valid()`, `as_any()`) implemented by all typed arrays. Renamed the type-erased `Array` struct to `AnyArray`, aligning with the existing `Builder`/`AnyBuilder` and `Value`/`AnyValue` naming convention.
 - Moved the expression system from `marrow/kernels/` into the dedicated `marrow/expr/` module.
 - Renamed `plan.mojo` → `relations.mojo` and `expr.mojo` → `values.mojo` for clarity.
