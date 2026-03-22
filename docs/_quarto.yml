@@ -23,6 +23,10 @@ website:
             href: guide/types.qmd
           - text: "PyArrow Interop"
             href: guide/interop.qmd
+      - text: "Examples"
+        menu:
+          - text: "DataFusion UDFs"
+            href: examples/datafusion.qmd
     right:
       - icon: github
         href: https://github.com/kszucs/marrow

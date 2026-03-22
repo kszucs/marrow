@@ -23,6 +23,7 @@ fmt_python = { cmd = "ruff format python" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
+example_datafusion = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs = { cmd = "quarto render docs/", depends-on = [
   "build_python",
 ], env = { PYTHONPATH = "python" } }
@@ -52,4 +53,5 @@ quarto = ">=1.6,<2"
 ruff = ">=0.14.14,<0.15"
 
 [pypi-dependencies]
+datafusion = ">=44.0.0"
 pyarrow = ">=23.0.0, <24"
