@@ -19,7 +19,7 @@ def make_session() -> SessionContext:
         return pa.array(ma.add(ma.array(a), ma.array(b)))
 
     ctx.register_udf(
-        udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
+        udf(ma.add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
     )
 
     def mojo_add_gpu(a: pa.Array, b: pa.Array) -> pa.Array:
