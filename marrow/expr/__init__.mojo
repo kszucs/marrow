@@ -87,6 +87,7 @@ from marrow.expr.relations import (
     Project,
     InMemoryTable,
     ParquetScan,
+    Aggregate,
     in_memory_table,
     parquet_scan,
     # Plan node kind constants
@@ -95,6 +96,7 @@ from marrow.expr.relations import (
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
+    AGGREGATE_NODE,
 )
 from marrow.expr.rewrite import (
     Rewrite,
@@ -119,6 +121,7 @@ from marrow.expr.executor import (
     ParquetScanProcessor,
     FilterProcessor,
     ProjectProcessor,
+    AggregateProcessor,
     Planner,
     execute,
 )

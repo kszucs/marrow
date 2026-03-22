@@ -75,6 +75,9 @@ from marrow.expr.values import (
     DISPATCH_CPU,
     DISPATCH_GPU,
 )
+from marrow.arrays import StructArray
+from marrow.dtypes import Field, struct_
+from marrow.kernels.groupby import HashGrouper
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -82,11 +85,13 @@ from marrow.expr.relations import (
     Project,
     InMemoryTable,
     ParquetScan,
+    Aggregate as PlanAggregate,
     SCAN_NODE,
     FILTER_NODE,
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
+    AGGREGATE_NODE,
 )
 from marrow.parquet import read_table
 
@@ -664,6 +669,112 @@ struct ProjectProcessor(RelationProcessor):
 
 
 # ---------------------------------------------------------------------------
+# AggregateProcessor — blocking grouped aggregation
+# ---------------------------------------------------------------------------
+
+
+def _batch_to_struct(batch: RecordBatch) raises -> StructArray:
+    """Convert a RecordBatch to a StructArray (key columns)."""
+    var fields = List[Field]()
+    var children = List[Array]()
+    for i in range(batch.num_columns()):
+        fields.append(batch.schema.fields[i].copy())
+        children.append(batch.columns[i].copy())
+    return StructArray(
+        dtype=struct_(fields),
+        length=batch.num_rows(),
+        nulls=0,
+        bitmap=None,
+        children=children^,
+    )
+
+
+struct AggregateProcessor(RelationProcessor):
+    """Blocking grouped aggregation processor.
+
+    Single child input. Key and value expressions are evaluated per morsel.
+
+    Phase 1: Pull all morsels. For each: evaluate key expressions → build
+             StructArray → ``consume_keys()`` → store group_ids. Evaluate
+             value expressions → ``consume_values()`` with stored group_ids.
+             Values are scatter-updated and discarded — never stored.
+    Phase 2: Emit the aggregated result once via ``finish()``.
+    """
+
+    var child: AnyRelationProcessor
+    var key_exprs: List[AnyValueProcessor]
+    var value_exprs: List[AnyValueProcessor]
+    var grouper: HashGrouper
+    var schema_: Schema
+    var key_fields: List[Field]
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        var child: AnyRelationProcessor,
+        var key_exprs: List[AnyValueProcessor],
+        var value_exprs: List[AnyValueProcessor],
+        var grouper: HashGrouper,
+        schema_: Schema,
+        var key_fields: List[Field],
+    ):
+        self.child = child^
+        self.key_exprs = key_exprs^
+        self.value_exprs = value_exprs^
+        self.grouper = grouper^
+        self.schema_ = schema_
+        self.key_fields = key_fields^
+        self._emitted = False
+
+    def schema(self) -> Schema:
+        return self.schema_.copy()
+
+    def pull(mut self) raises -> RecordBatch:
+        # Phase 1: consume all input morsels.
+        if not self._emitted:
+            while True:
+                try:
+                    var batch = self.child.pull()
+
+                    # Evaluate key expressions → StructArray.
+                    var key_arrays = List[Array]()
+                    for i in range(len(self.key_exprs)):
+                        key_arrays.append(
+                            self.key_exprs[i].eval(batch).copy()
+                        )
+                    var key_children = List[Array]()
+                    var key_struct_fields = List[Field]()
+                    for i in range(len(key_arrays)):
+                        key_children.append(key_arrays[i].copy())
+                        key_struct_fields.append(self.key_fields[i].copy())
+                    var key_struct = StructArray(
+                        dtype=struct_(key_struct_fields),
+                        length=batch.num_rows(),
+                        nulls=0,
+                        bitmap=None,
+                        children=key_children^,
+                    )
+
+                    # Consume keys → get group_ids.
+                    var gids = self.grouper.consume_keys(key_struct)
+
+                    # Evaluate value expressions → scatter-update.
+                    var val_arrays = List[Array]()
+                    for i in range(len(self.value_exprs)):
+                        val_arrays.append(
+                            self.value_exprs[i].eval(batch).copy()
+                        )
+                    self.grouper.consume_values(gids, val_arrays)
+                except Exhausted:
+                    break
+
+            self._emitted = True
+            return self.grouper.finish(self.key_fields)
+
+        raise Exhausted()
+
+
+# ---------------------------------------------------------------------------
 # Planner — builds processor hierarchies from expression trees
 # ---------------------------------------------------------------------------
 
@@ -746,6 +857,30 @@ struct Planner:
             var arc = expr.downcast[ParquetScan]()
             return ParquetScanProcessor(
                 path=arc[].path, morsel_size=self.ctx.morsel_size
+            )
+        if k == AGGREGATE_NODE:
+            var arc = expr.downcast[PlanAggregate]()
+            var child = self.build(arc[].input)
+
+            # Build key and value expression processors.
+            var key_exprs = List[AnyValueProcessor]()
+            for ref e in arc[].keys:
+                key_exprs.append(self.build(e))
+            var value_exprs = List[AnyValueProcessor]()
+            for ref e in arc[].agg_exprs:
+                value_exprs.append(self.build(e))
+
+            var key_fields = List[Field]()
+            for i in range(len(arc[].keys)):
+                key_fields.append(arc[].schema().fields[i].copy())
+
+            return AggregateProcessor(
+                child=child^,
+                key_exprs=key_exprs^,
+                value_exprs=value_exprs^,
+                grouper=HashGrouper(arc[].agg_funcs),
+                schema_=arc[].schema(),
+                key_fields=key_fields^,
             )
         if k == SCAN_NODE:
             raise Error(

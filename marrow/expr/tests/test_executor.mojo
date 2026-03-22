@@ -8,6 +8,7 @@ from marrow.arrays import array, Array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.tabular import record_batch
 from marrow.expr import (
+    AnyValue,
     Planner,
     col,
     lit,
@@ -434,6 +435,94 @@ def test_parquet_scan_filter_select() raises:
     assert_equal(ids[0], 4)
     assert_equal(ids[1], 5)
     remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Aggregate processor
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_sum() raises:
+    """Grouped sum via the expression system."""
+    var cols = List[Array]()
+    cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
+    cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
+    var names = List[String]()
+    names.append("key")
+    names.append("val")
+    var batch = record_batch(cols^, names=names^)
+    var keys = List[AnyValue]()
+    keys.append(col("key"))
+    var vals = List[AnyValue]()
+    vals.append(col("val"))
+    var funcs = List[String]()
+    funcs.append("sum")
+
+    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2)
+    assert_equal(result.num_columns(), 2)  # key + sum
+
+    # Key column.
+    var k = result.columns[0].as_int64()
+    assert_equal(k[0], 1)
+    assert_equal(k[1], 2)
+
+    # Sum column (float64).
+    var s = result.columns[1].as_float64()
+    assert_equal(s[0], 90.0)  # 10 + 30 + 50
+    assert_equal(s[1], 60.0)  # 20 + 40
+
+
+def test_aggregate_count() raises:
+    """Grouped count via the expression system."""
+    var cols = List[Array]()
+    cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
+    cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
+    var names = List[String]()
+    names.append("key")
+    names.append("val")
+    var batch = record_batch(cols^, names=names^)
+    var keys = List[AnyValue]()
+    keys.append(col("key"))
+    var vals = List[AnyValue]()
+    vals.append(col("val"))
+    var funcs = List[String]()
+    funcs.append("count")
+
+    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2)
+    var c = result.columns[1].as_int64()
+    assert_equal(c[0], 3)  # key=1: 3 rows
+    assert_equal(c[1], 2)  # key=2: 2 rows
+
+
+def test_aggregate_small_morsel() raises:
+    """Aggregate with small morsel size forces multiple pulls."""
+    var cols = List[Array]()
+    cols.append(Array(array[int64]([1, 2, 1, 2, 1, 2])))
+    cols.append(Array(array[int64]([10, 20, 30, 40, 50, 60])))
+    var names = List[String]()
+    names.append("key")
+    names.append("val")
+    var batch = record_batch(cols^, names=names^)
+    var keys = List[AnyValue]()
+    keys.append(col("key"))
+    var vals = List[AnyValue]()
+    vals.append(col("val"))
+    var funcs = List[String]()
+    funcs.append("sum")
+
+    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
+    # Small morsel → multiple batches fed to grouper.
+    var ctx = ExecutionContext()
+    ctx.morsel_size = 2
+    var result = execute(plan, ctx)
+    assert_equal(result.num_rows(), 2)
+    var s = result.columns[1].as_float64()
+    assert_equal(s[0], 90.0)  # key=1: 10+30+50
+    assert_equal(s[1], 120.0) # key=2: 20+40+60
 
 
 def main() raises:

@@ -264,7 +264,7 @@ def _concat_single(existing: Array, single: Array) raises -> Array:
     return ab.finish()
 
 
-struct HashGrouper:
+struct HashGrouper(Movable):
     """Hash-based grouped aggregation engine (ClickHouse-style).
 
     Two-phase batch consumption:
@@ -305,17 +305,18 @@ struct HashGrouper:
     def num_groups(self) -> Int:
         return self._next_id
 
-    def consume(
-        mut self, keys: StructArray, values: List[Array]
-    ) raises:
-        """Two-phase batch consumption.
+    def consume_keys(
+        mut self, keys: StructArray
+    ) raises -> PrimitiveArray[uint32]:
+        """Hash keys and resolve group indices. Returns group_ids array.
 
-        Phase 1: hash keys → resolve per-row group indices.
-        Phase 2: each AggregateFunction.add_batch() scatter-updates.
+        Can be called multiple times — groups accumulate across calls.
+        New keys get new group IDs; existing keys return their previous ID.
         """
         var n = len(keys)
         if n == 0:
-            return
+            var empty = PrimitiveBuilder[uint32](0)
+            return empty.finish_typed()
 
         var key_cols = List[Array]()
         for k in range(len(keys.children)):
@@ -323,17 +324,31 @@ struct HashGrouper:
 
         var hashes = hash_(keys)
 
-        # Phase 1: resolve groups.
         var gid_builder = PrimitiveBuilder[uint32](capacity=n)
         for i in range(n):
             var h = UInt64(hashes.unsafe_get(i))
             var gid = self._probe_or_insert(key_cols, i, h)
             gid_builder.append(Scalar[uint32.native](gid))
-        var group_ids = gid_builder.finish_typed()
+        return gid_builder.finish_typed()
 
-        # Phase 2: scatter-update.
+    def consume_values(
+        mut self,
+        group_ids: PrimitiveArray[uint32],
+        values: List[Array],
+    ) raises:
+        """Scatter-update aggregate state using pre-resolved group_ids.
+
+        Each AggregateFunction does a single O(N) pass over the batch.
+        Values are processed and discarded — not stored.
+        """
         for a in range(len(self._functions)):
             self._functions[a].add_batch(group_ids, values[a])
+
+    def consume(
+        mut self, keys: StructArray, values: List[Array]
+    ) raises:
+        """Convenience: consume_keys + consume_values in one call."""
+        self.consume_values(self.consume_keys(keys), values)
 
     def finish(mut self, key_fields: List[Field]) raises -> RecordBatch:
         """Build result RecordBatch from key columns + finalized states."""

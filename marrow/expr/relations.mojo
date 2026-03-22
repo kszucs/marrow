@@ -40,6 +40,7 @@ comptime FILTER_NODE: UInt8 = 1
 comptime PROJECT_NODE: UInt8 = 2
 comptime IN_MEMORY_TABLE_NODE: UInt8 = 3
 comptime PARQUET_SCAN_NODE: UInt8 = 4
+comptime AGGREGATE_NODE: UInt8 = 5
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +199,56 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var resolved = resolve_columns(predicate, schema)
         var filt = Filter(input=self, predicate=resolved^)
         return AnyRelation(filt^)
+
+    def aggregate(
+        self,
+        keys: List[AnyValue],
+        values: List[AnyValue],
+        funcs: List[String],
+    ) raises -> AnyRelation:
+        """Grouped aggregation, returning a new plan node.
+
+        Args:
+            keys: Grouping key expressions (column references).
+            values: Value expressions to aggregate (one per func).
+            funcs: Aggregation function names ("sum", "min", etc.).
+
+        Returns:
+            Plan node whose schema has key columns + agg result columns.
+        """
+        from marrow.dtypes import float64, int64
+
+        var input_schema = self.schema()
+        var resolved_keys = List[AnyValue]()
+        for ref k in keys:
+            resolved_keys.append(resolve_columns(k, input_schema))
+        var resolved_vals = List[AnyValue]()
+        for ref v in values:
+            resolved_vals.append(resolve_columns(v, input_schema))
+
+        # Build output schema: key fields + agg result fields.
+        var fields = List[Field]()
+        for ref k in resolved_keys:
+            # Key expression must resolve to a column for naming.
+            var kdt = k.dtype()
+            if kdt:
+                fields.append(Field("key", kdt.value().copy()))
+            else:
+                fields.append(Field("key", input_schema.fields[0].dtype.copy()))
+        for i in range(len(funcs)):
+            if funcs[i] == "count":
+                fields.append(Field(funcs[i], int64))
+            else:
+                fields.append(Field(funcs[i], float64))
+
+        var agg = Aggregate(
+            input=self,
+            keys=resolved_keys^,
+            agg_exprs=resolved_vals^,
+            agg_funcs=funcs.copy(),
+            schema_=Schema(fields=fields^),
+        )
+        return AnyRelation(agg^)
 
     # --- downcast ---
 
@@ -404,6 +455,76 @@ struct ParquetScan(Relation):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"ParquetScan({self.path})")
+
+
+struct Aggregate(Relation):
+    """Grouped aggregation — groups input by key expressions and applies
+    aggregate functions to value expressions.
+
+    ``input``      — child relation.
+    ``keys``       — grouping key expressions (column references).
+    ``agg_exprs``  — value expressions to aggregate.
+    ``agg_funcs``  — aggregation function names ("sum", "min", "max", etc.).
+    ``schema_``    — output schema: key fields + aggregated value fields.
+    """
+
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var agg_exprs: List[AnyValue]
+    var agg_funcs: List[String]
+    var schema_: Schema
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var keys: List[AnyValue],
+        var agg_exprs: List[AnyValue],
+        var agg_funcs: List[String],
+        var schema_: Schema,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.agg_exprs = agg_exprs^
+        self.agg_funcs = agg_funcs^
+        self.schema_ = schema_^
+
+    def kind(self) -> UInt8:
+        return AGGREGATE_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def inputs(self) -> List[AnyRelation]:
+        var result = List[AnyRelation](capacity=1)
+        result.append(self.input)
+        return result^
+
+    def exprs(self) -> List[AnyValue]:
+        var result = List[AnyValue](
+            capacity=len(self.keys) + len(self.agg_exprs)
+        )
+        for ref e in self.keys:
+            result.append(e)
+        for ref e in self.agg_exprs:
+            result.append(e)
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Aggregate(keys=[")
+        for i in range(len(self.keys)):
+            if i > 0:
+                writer.write(", ")
+            self.keys[i].write_to(writer)
+        writer.write("], aggs=[")
+        for i in range(len(self.agg_funcs)):
+            if i > 0:
+                writer.write(", ")
+            writer.write(self.agg_funcs[i])
+            writer.write("(")
+            self.agg_exprs[i].write_to(writer)
+            writer.write(")")
+        writer.write("])")
 
 
 def parquet_scan(path: String) raises -> AnyRelation:
