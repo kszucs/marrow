@@ -309,13 +309,13 @@ def test_filter_strings_length_mismatch_raises() raises:
 def test_filter_array_dispatch_int32() raises:
     var a = AnyArray(array[int32]([10, 20, 30]))
     var result = filter_(a, array([False, True, True]))
-    assert_equal(result.length, 2)
+    assert_equal(result.length(), 2)
 
 
 def test_filter_array_dispatch_float32() raises:
     var a = AnyArray(array[float32]([1, 2, 3]))
     var result = filter_(a, array([True, False, True]))
-    assert_equal(result.length, 2)
+    assert_equal(result.length(), 2)
 
 
 def test_filter_array_dispatch_string() raises:
@@ -324,7 +324,7 @@ def test_filter_array_dispatch_string() raises:
     s.append("world")
     var a = AnyArray(s.finish_typed())
     var result = filter_(a, array([True, False]))
-    assert_equal(result.length, 1)
+    assert_equal(result.length(), 1)
 
 
 def test_filter_array_dispatch_length_mismatch_raises() raises:

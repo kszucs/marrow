@@ -82,7 +82,7 @@ def test_add_untyped() raises:
     var a = AnyArray(array[int64]([1, 2, 3]))
     var b = AnyArray(array[int64]([4, 5, 6]))
     var result = add(a, b)
-    assert_equal(result.length, 3)
+    assert_equal(result.length(), 3)
     var typed = result.as_primitive[int64]()
     assert_equal(typed[0], 5)
     assert_equal(typed[1], 7)

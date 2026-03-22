@@ -405,7 +405,7 @@ def test_list_builder_string_child() raises:
     var frozen = b.finish_typed()
     assert_equal(frozen.length, 1)
     var inner_val = frozen[0].value()
-    var inner = StringArray(inner_val)
+    var inner = inner_val.as_string()
     assert_equal(inner[0], "hello")
     assert_equal(inner[1], "world")
 
@@ -818,11 +818,11 @@ def test_any_builder_finish_dispatch_primitive() raises:
     b.append(99)
     var builder: AnyBuilder = b^
     var arr = builder.finish()
-    assert_equal(arr.length, 2)
+    assert_equal(arr.length(), 2)
     assert_equal(arr.as_int32()[0], 42)
     assert_equal(arr.as_int32()[1], 99)
     # data buffer is shrunk: 2 int32s = 8 bytes → 64 bytes
-    assert_equal(arr.buffers[0].size, 64)
+    assert_equal(arr.as_data().buffers[0].size, 64)
 
 
 def test_any_builder_finish_dispatch_string() raises:
@@ -833,9 +833,9 @@ def test_any_builder_finish_dispatch_string() raises:
     b.append("bar")
     var builder: AnyBuilder = b^
     var arr = builder.finish()
-    assert_equal(arr.length, 2)
+    assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.buffers[0].size, 64)
+    assert_equal(arr.as_data().buffers[0].size, 64)
 
 
 def test_any_builder_finish_dispatch_list() raises:
@@ -849,9 +849,9 @@ def test_any_builder_finish_dispatch_list() raises:
     b.append_valid()
     var builder: AnyBuilder = b^
     var arr = builder.finish()
-    assert_equal(arr.length, 2)
+    assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.buffers[0].size, 64)
+    assert_equal(arr.as_data().buffers[0].size, 64)
 
 
 def main() raises:

@@ -33,7 +33,7 @@ from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes
 
 # Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
-from builtin.simd import Scalar as _Scalar
+from std.builtin.simd import Scalar as _Scalar
 
 
 # ---------------------------------------------------------------------------
@@ -354,10 +354,11 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     @implicit
     def __init__(out self, typed: ListScalar) raises:
         from .dtypes import list_
+        from .arrays import ArrayData
         var child = typed._value.copy()
         var obb = BufferBuilder.alloc[DType.int32](2)
         obb.unsafe_set[DType.int32](0, 0)
-        obb.unsafe_set[DType.int32](1, Int32(child.length))
+        obb.unsafe_set[DType.int32](1, Int32(child.length()))
         var offsets = obb.finish()
         var bm: Optional[Bitmap] = None
         var nulls = 0
@@ -365,35 +366,40 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
             var bmb = BitmapBuilder.alloc(1)
             bm = bmb.finish(1)
             nulls = 1
-        self._data = AnyArray(
-            dtype=list_(child.dtype),
-            length=1,
-            nulls=nulls,
-            bitmap=bm^,
-            buffers=[offsets],
-            children=[child^],
-            offset=0,
+        self._data = AnyArray.from_data(
+            ArrayData(
+                dtype=list_(child.dtype()),
+                length=1,
+                nulls=nulls,
+                offset=0,
+                bitmap=bm^,
+                buffers=[offsets],
+                children=[child^.as_data()],
+            )
         )
 
     @implicit
     def __init__(out self, typed: StructScalar) raises:
+        from .arrays import ArrayData
         var bm: Optional[Bitmap] = None
         var nulls = 0
         if not typed._is_valid:
             var bmb = BitmapBuilder.alloc(1)
             bm = bmb.finish(1)
             nulls = 1
-        var children = List[AnyArray]()
+        var children = List[ArrayData]()
         for i in range(len(typed._value)):
-            children.append(typed._value[i]._data.copy())
-        self._data = AnyArray(
-            dtype=typed._dtype,
-            length=1,
-            nulls=nulls,
-            bitmap=bm^,
-            buffers=[],
-            children=children^,
-            offset=0,
+            children.append(typed._value[i]._data.as_data())
+        self._data = AnyArray.from_data(
+            ArrayData(
+                dtype=typed._dtype,
+                length=1,
+                nulls=nulls,
+                offset=0,
+                bitmap=bm^,
+                buffers=[],
+                children=children^,
+            )
         )
 
     def __init__(out self, *, data: AnyArray):
@@ -407,7 +413,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         return not self.is_valid()
 
     def dtype(self) -> DataType:
-        return self._data.dtype
+        return self._data.dtype()
 
     def as_primitive[T: DataType](self) raises -> PrimitiveScalar[T]:
         var arr = self._data.as_primitive[T]()
@@ -438,9 +444,8 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         if not self._data.is_valid(0):
             return StructScalar.null(arr.dtype)
         var fields = List[AnyScalar]()
-        var offset = self._data.offset
         for i in range(len(arr.children)):
-            fields.append(AnyScalar(data=arr.children[i].slice(offset, 1)))
+            fields.append(AnyScalar(data=arr.children[i].slice(arr.offset, 1)))
         return StructScalar(dtype=arr.dtype, value=fields^, is_valid=True)
 
     def write_to[W: Writer](self, mut writer: W):

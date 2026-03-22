@@ -94,9 +94,9 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
 def is_null(arr: AnyArray) raises -> AnyArray:
     """Runtime-typed is_null."""
     comptime for dtype in numeric_dtypes:
-        if arr.dtype == dtype:
-            return AnyArray(is_null[dtype](PrimitiveArray[dtype](data=arr)))
-    raise Error(t"is_null: unsupported dtype {arr.dtype}")
+        if arr.dtype() == dtype:
+            return AnyArray(is_null[dtype](arr.as_primitive[dtype]()))
+    raise Error(t"is_null: unsupported dtype {arr.dtype()}")
 
 
 def select[
@@ -124,16 +124,16 @@ def select[
 # TODO: use SIMD select instead of naive element-wise loop when possible
 def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
     """Runtime-typed select."""
-    if then_.dtype != else_.dtype:
-        raise Error(t"select: dtype mismatch: {then_.dtype} vs {else_.dtype}")
-    var bool_mask = PrimitiveArray[bool_dt](data=mask)
+    if then_.dtype() != else_.dtype():
+        raise Error(t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}")
+    var bool_mask = mask.as_primitive[bool_dt]()
     comptime for dtype in numeric_dtypes:
-        if then_.dtype == dtype:
+        if then_.dtype() == dtype:
             return AnyArray(
                 select[dtype](
                     bool_mask,
-                    PrimitiveArray[dtype](data=then_),
-                    PrimitiveArray[dtype](data=else_),
+                    then_.as_primitive[dtype](),
+                    else_.as_primitive[dtype](),
                 )
             )
-    raise Error(t"select: unsupported dtype {then_.dtype}")
+    raise Error(t"select: unsupported dtype {then_.dtype()}")

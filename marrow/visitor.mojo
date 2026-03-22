@@ -91,19 +91,20 @@ trait ArrayVisitor:
 
     def visit(mut self, array: AnyArray) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
+        var dt = array.dtype()
 
         comptime for dtype in primitive_dtypes:
-            if array.dtype == dtype:
-                self.visit[dtype](PrimitiveArray[dtype](data=array))
+            if dt == dtype:
+                self.visit[dtype](array.as_primitive[dtype]())
                 return
 
-        if array.dtype.is_string():
-            self.visit(StringArray(data=array))
-        elif array.dtype.is_list():
-            self.visit(ListArray(data=array))
-        elif array.dtype.is_fixed_size_list():
-            self.visit(FixedSizeListArray(data=array))
-        elif array.dtype.is_struct():
-            self.visit(StructArray(data=array))
+        if dt.is_string():
+            self.visit(array.as_string())
+        elif dt.is_list():
+            self.visit(array.as_list())
+        elif dt.is_fixed_size_list():
+            self.visit(array.as_fixed_size_list())
+        elif dt.is_struct():
+            self.visit(array.as_struct())
         else:
-            raise Error("visit: unsupported dtype ", array.dtype)
+            raise Error("visit: unsupported dtype ", dt)

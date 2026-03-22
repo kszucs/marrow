@@ -188,7 +188,7 @@ def test_equal_array_overload() raises:
     var a = AnyArray(array[int64]([1, 2, 3]))
     var b = AnyArray(array[int64]([1, 0, 3]))
     var result = equal(a, b)
-    assert_equal(result.length, 3)
+    assert_equal(result.length(), 3)
 
 
 def test_dtype_mismatch_raises() raises:

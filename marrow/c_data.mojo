@@ -424,7 +424,7 @@ def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
     - The heap-allocated child CArrowArray struct shells (their own release
       callbacks were already invoked by Arrow's recursive import).
     - The heap-allocated buffers pointer array.
-    - The heap-allocated AnyArray copy in private_data (drops Arc refs so the
+    - The heap-allocated ArrayData in private_data (drops Arc refs so the
       underlying Buffer/Bitmap memory is freed when the last ref goes).
     Nulls the release field per the Arrow spec.
     """
@@ -434,9 +434,9 @@ def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
         ptr[].children.free()
     if ptr[].buffers:
         ptr[].buffers.free()
-    var arr_ptr = ptr[].private_data.bitcast[AnyArray]()
-    arr_ptr.destroy_pointee()
-    arr_ptr.free()
+    var data_ptr = ptr[].private_data.bitcast[ArrayData]()
+    data_ptr.destroy_pointee()
+    data_ptr.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
 
@@ -486,14 +486,17 @@ struct CArrowArray(Copyable, Movable):
         if UnsafePointer(to=self.release).bitcast[UInt64]()[0] != 0:
             self.release(UnsafePointer(to=self))
 
-    def _to_array(
+    def to_data(
         self, dtype: DataType, owner: ArcPointer[Allocation]
-    ) raises -> AnyArray:
-        """Build an AnyArray from this CArrowArray, all buffers sharing one owner.
+    ) raises -> ArrayData:
+        """Build an ArrayData from this CArrowArray, all buffers sharing one owner.
 
-        All Buffer views hold a copy of `owner` (an ArcPointer, so
-        copying just bumps the ref-count).  The C release callback fires
-        automatically once the last buffer is dropped.
+        All Buffer views hold a copy of `owner` (an ArcPointer, so copying just
+        bumps the ref-count).  The C release callback fires automatically once
+        the last buffer is dropped.
+
+        Buffer sizes are dtype-dependent (same as Arrow C++ and arrow-rs).
+        Typed array construction is delegated to AnyArray.from_data().
         """
         # Buffer sizes must cover all elements including the offset, because the
         # raw C buffers start at element 0 regardless of the logical array offset.
@@ -511,70 +514,27 @@ struct CArrowArray(Copyable, Movable):
                 Int(length),
             )
         else:
-            # null bitmap pointer means all elements are valid
             bitmap = None
 
-        var buffers = List[Buffer](capacity=2)  # worst case scenario for string
-        var children = List[AnyArray](capacity=Int(self.n_children))
+        var buffers = List[Buffer](capacity=2)  # worst case for string
+        var children = List[ArrayData](capacity=Int(self.n_children))
 
         if dtype.is_bool():
-            if self.n_buffers != 2:
-                raise Error(
-                    "bool array must have 2 buffers, got ", self.n_buffers
-                )
-            if self.n_children != 0:
-                raise Error(
-                    "bool array must have 0 children, got ", self.n_children
-                )
-            var values = Buffer.from_foreign(
-                self.buffers[1],
-                math.ceildiv(Int(length), 8),
-                owner,
-            )
-            buffers.append(values^)
+            buffers.append(Buffer.from_foreign(
+                self.buffers[1], math.ceildiv(Int(length), 8), owner,
+            ))
         elif dtype.is_primitive():
-            if self.n_buffers != 2:
-                raise Error(
-                    "numeric array must have 2 buffers, got ", self.n_buffers
-                )
-            if self.n_children != 0:
-                raise Error(
-                    "numeric array must have 0 children, got ", self.n_children
-                )
-            var values = Buffer.from_foreign(
-                self.buffers[1], Int(length) * dtype.byte_width(), owner
-            )
-            buffers.append(values^)
+            buffers.append(Buffer.from_foreign(
+                self.buffers[1], Int(length) * dtype.byte_width(), owner,
+            ))
         elif dtype.is_list():
-            if self.n_buffers != 2:
-                raise Error(
-                    "list array must have 2 buffers, got ", self.n_buffers
-                )
-            if self.n_children != 1:
-                raise Error(
-                    "list array must have 1 child, got ", self.n_children
-                )
-            # list has only an offsets buffer; child data lives in self.children
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             buffers.append(offsets^)
-            # add the single values child array
-            var values_field = dtype.fields[0].copy()
-            var values_array = self.children[0][]._to_array(
-                values_field.dtype, owner
+            children.append(
+                self.children[0][].to_data(dtype.fields[0].dtype, owner)
             )
-            children.append(values_array^)
         elif dtype.is_string() or dtype.is_binary():
-            if self.n_buffers != 3:
-                raise Error(
-                    "string/binary array must have 3 buffers, got ",
-                    self.n_buffers,
-                )
-            if self.n_children != 0:
-                raise Error(
-                    "string/binary array must have 0 children, got ",
-                    self.n_children,
-                )
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             var data_len = offsets.unsafe_get[DType.int32](Int(length))
@@ -582,141 +542,74 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(offsets^)
             buffers.append(values^)
         elif dtype.is_fixed_size_list():
-            if self.n_buffers != 1:
-                raise Error(
-                    "fixed_size_list array must have 1 buffer, got ",
-                    self.n_buffers,
-                )
-            if self.n_children != 1:
-                raise Error(
-                    "fixed_size_list array must have 1 child, got ",
-                    self.n_children,
-                )
-            var values_field = dtype.fields[0].copy()
-            var values_array = self.children[0][]._to_array(
-                values_field.dtype, owner
+            children.append(
+                self.children[0][].to_data(dtype.fields[0].dtype, owner)
             )
-            children.append(values_array^)
         elif dtype.is_struct():
-            if self.n_buffers != 1:
-                raise Error(
-                    "struct array must have 1 buffer, got ", self.n_buffers
+            for i in range(Int(self.n_children)):
+                children.append(
+                    self.children[i][].to_data(dtype.fields[i].dtype, owner)
                 )
-            if self.n_children != Int64(len(dtype.fields)):
-                raise Error(
-                    "struct array must have ",
-                    len(dtype.fields),
-                    " children, got ",
-                    self.n_children,
-                )
-            for i in range(self.n_children):
-                var child_field = dtype.fields[i].copy()
-                var child_array = self.children[i][]._to_array(
-                    child_field.dtype, owner
-                )
-                children.append(child_array^)
         else:
-            raise Error("unsupported dtype for buffer import: ", dtype)
+            raise Error("to_data: unsupported dtype: ", dtype)
 
-        return AnyArray(
+        return ArrayData(
             dtype=dtype.copy(),
             length=Int(self.length),
             nulls=Int(self.null_count),
+            offset=Int(self.offset),
             bitmap=bitmap,
             buffers=buffers^,
             children=children^,
-            offset=Int(self.offset),
         )
 
-    def _to_device_array(
-        self,
-        dtype: DataType,
-        owner: ArcPointer[Allocation],
-        device_type: Int32,
-        device_id: Int64,
+    def to_array(
+        self, dtype: DataType, owner: ArcPointer[Allocation]
     ) raises -> AnyArray:
-        """Build an AnyArray from device-resident CArrowArray buffers.
-
-        TODO: Zero-copy import of device arrays requires wrapping raw device
-        pointers in Mojo's DeviceBuffer.  This is not yet supported because
-        DeviceBuffer construction needs an AsyncRT handle that is not provided
-        by the C Device Data Interface.  Once Mojo exposes an API to adopt a
-        raw device pointer into a DeviceBuffer, this method can be completed.
-        """
-        raise Error(
-            "_to_device_array: zero-copy device array import is not yet"
-            " implemented; Mojo does not yet expose a way to wrap raw device"
-            " pointers in DeviceBuffer without an AsyncRT handle"
-        )
+        """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data."""
+        return AnyArray.from_data(self.to_data(dtype, owner))
 
     @staticmethod
-    def from_array(
-        array: AnyArray,
-    ) raises -> CArrowArray:
-        """Build a CArrowArray value from a Mojo AnyArray for export.
+    def from_array(array: AnyArray) raises -> CArrowArray:
+        """Build a CArrowArray from a Mojo AnyArray.  Thin wrapper over from_data."""
+        return CArrowArray.from_data(array.as_data())
 
-        Buffer pointers in the returned struct point directly into the Mojo
-        AnyArray's ArcPointer-managed memory.  A heap-allocated copy of `array`
+    @staticmethod
+    def from_data(var data: ArrayData) raises -> CArrowArray:
+        """Build a CArrowArray value from an ArrayData for export.
+
+        Buffer pointers in the returned struct point directly into the
+        ArrayData's ArcPointer-managed memory.  A heap-allocated copy of `data`
         is stored in private_data to keep all ArcPointer ref-counts alive for
-        the lifetime of the export; `_release_exported_array` destroys that
-        copy (dropping the Arc refs) when the Arrow consumer is done.
+        the lifetime of the export; `_release_exported_array` destroys it
+        (dropping the Arc refs) when the Arrow consumer is done.
 
         Call `.to_pycapsule()` to wrap the result in a Python capsule, or pass
         `UnsafePointer(to=c_array)` directly to an Arrow importer.
         """
-        var dtype = array.dtype
-        var n_buffers: Int64
-        var n_children: Int64 = 0
+        # n_buffers and n_children come directly from ArrayData — no dtype branching.
+        var n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
+        var n_children = Int64(len(data.children))
 
-        if dtype.is_bool() or dtype.is_primitive():
-            n_buffers = 2
-        elif dtype.is_string() or dtype.is_binary():
-            n_buffers = 3
-        elif dtype.is_list():
-            n_buffers = 2
-            n_children = 1
-        elif dtype.is_fixed_size_list():
-            n_buffers = 1
-            n_children = 1
-        elif dtype.is_struct():
-            n_buffers = 1
-            n_children = Int64(len(dtype.fields))
-        else:
-            raise Error(
-                "CArrowArray.from_array: unsupported dtype: {}".format(dtype)
-            )
-
-        # Heap-allocate AnyArray copy to keep ArcPointer ref-counts alive.
-        var arr_heap = alloc[AnyArray](1)
-        arr_heap.init_pointee_copy(array)
+        # Heap-allocate ArrayData to keep ArcPointer ref-counts alive.
+        var data_heap = alloc[ArrayData](1)
+        data_heap.init_pointee_move(data^)
 
         # Heap-allocate the buffers pointer array.
+        # buffers[0] = validity bitmap (null pointer means all-valid).
+        # buffers[1..n] = data.buffers[0..n-1] in order.
         var buffers = alloc[OpaquePointer[MutAnyOrigin]](Int(n_buffers))
-
-        # Buffer[0] = validity bitmap (null pointer means all-valid).
-        if arr_heap[].bitmap:
+        if data_heap[].bitmap:
             buffers[0] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(
-                    arr_heap[].bitmap.value()._buffer.unsafe_ptr()
+                    data_heap[].bitmap.value()._buffer.unsafe_ptr()
                 )
             )
         else:
             buffers[0] = OpaquePointer[MutAnyOrigin]()
-
-        if dtype.is_bool() or dtype.is_primitive():
-            buffers[1] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
-            )
-        elif dtype.is_string() or dtype.is_binary():
-            buffers[1] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
-            )
-            buffers[2] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(arr_heap[].buffers[1].unsafe_ptr())
-            )
-        elif dtype.is_list():
-            buffers[1] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(arr_heap[].buffers[0].unsafe_ptr())
+        for i in range(len(data_heap[].buffers)):
+            buffers[1 + i] = OpaquePointer[MutAnyOrigin](
+                unsafe_from_address=Int(data_heap[].buffers[i].unsafe_ptr())
             )
 
         # Recursively build children; each child is moved onto the heap so the
@@ -729,23 +622,23 @@ struct CArrowArray(Copyable, Movable):
                 Int(n_children)
             )
             for i in range(Int(n_children)):
-                var child = CArrowArray.from_array(arr_heap[].children[i])
+                var child = CArrowArray.from_data(data_heap[].children[i].copy())
                 var child_ptr = alloc[CArrowArray](1)
                 child_ptr.init_pointee_move(child^)
                 children_ptr[i] = child_ptr
 
         return CArrowArray(
-            length=Int64(arr_heap[].length),
-            null_count=Int64(arr_heap[].nulls),
-            offset=Int64(arr_heap[].offset),
+            length=Int64(data_heap[].length),
+            null_count=Int64(data_heap[].nulls),
+            offset=Int64(data_heap[].offset),
             n_buffers=n_buffers,
             n_children=n_children,
             buffers=buffers,
             children=children_ptr,
             dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](),
             release=_release_exported_array,
-            # private_data keeps arr_heap alive; freed by _release_exported_array.
-            private_data=arr_heap.bitcast[NoneType](),
+            # private_data keeps data_heap alive; freed by _release_exported_array.
+            private_data=data_heap.bitcast[NoneType](),
         )
 
     @staticmethod
@@ -799,7 +692,7 @@ struct CArrowArray(Copyable, Movable):
         var owner = ArcPointer(
             Allocation.foreign(heap_c.bitcast[UInt8](), _release_imported_array)
         )
-        return heap_c[]._to_array(dtype, owner)
+        return heap_c[].to_array(dtype, owner)
 
 
 # ---------------------------------------------------------------------------
@@ -890,12 +783,18 @@ struct CArrowDeviceArray(Movable):
 
         # For CPU device type, delegate to the existing CArrowArray import path.
         if device_type == DeviceType.CPU:
-            return heap_c[].array._to_array(dtype, owner)
+            return heap_c[].array.to_array(dtype, owner)
 
         # For device memory, wrap each buffer pointer as a DEVICE buffer.
-        # The raw pointers in array.buffers point to device-resident memory.
-        return heap_c[].array._to_device_array(
-            dtype, owner, device_type, device_id
+        # TODO: Zero-copy import of device arrays requires wrapping raw device
+        # pointers in Mojo's DeviceBuffer.  This is not yet supported because
+        # DeviceBuffer construction needs an AsyncRT handle that is not provided
+        # by the C Device Data Interface.  Once Mojo exposes an API to adopt a
+        # raw device pointer into a DeviceBuffer, this can be completed.
+        raise Error(
+            "to_array: zero-copy device array import is not yet implemented;"
+            " Mojo does not yet expose a way to wrap raw device pointers in"
+            " DeviceBuffer without an AsyncRT handle"
         )
 
 
@@ -1097,7 +996,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             var struct_dtype = struct_(schema.fields)
             var arr = c_array.take_pointee().to_array(struct_dtype)
             var columns = List[AnyArray]()
-            for child in arr.children:
+            for child in arr.as_struct().children:
                 columns.append(child.copy())
             batches.append(RecordBatch(schema=schema, columns=columns^))
 

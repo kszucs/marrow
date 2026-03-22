@@ -30,8 +30,8 @@ def concat(arrays: List[AnyArray]) raises -> AnyArray:
         raise Error("concat: cannot concatenate an empty list of arrays")
     var total_length = 0
     for arr in arrays:
-        total_length += arr.length
-    var builder = make_builder(arrays[0].dtype, total_length)
+        total_length += arr.length()
+    var builder = make_builder(arrays[0].dtype(), total_length)
     for arr in arrays:
         builder.extend(arr)
     return builder.finish()

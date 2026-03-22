@@ -38,8 +38,8 @@ def _cosine_similarity_no_nulls[
     var op = result._buffer.ptr.bitcast[Scalar[native]]()
 
     # Flat values pointer from the child array
-    ref child = vectors.values
-    var vp = child.buffers[0].unsafe_ptr[native](child.offset)
+    var child_data = vectors.values.as_data()
+    var vp = child_data.buffers[0].unsafe_ptr[native](child_data.offset)
     var qp = query.buffer.unsafe_ptr[native](query.offset)
 
     # Pre-compute query norm
@@ -131,9 +131,9 @@ def _cosine_similarity_gpu[
 
     var n_values = n_vectors * dim
 
-    ref child = vectors.values
+    var child_data = vectors.values.as_data()
     var vec_dev = (
-        child.buffers[0].device_buffer().create_sub_buffer[native](0, n_values)
+        child_data.buffers[0].device_buffer().create_sub_buffer[native](0, n_values)
     )
     var query_dev = query.buffer.device_buffer().create_sub_buffer[native](
         0, dim

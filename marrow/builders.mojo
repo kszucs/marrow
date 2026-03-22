@@ -669,11 +669,8 @@ struct ListBuilder(Builder, Sized):
             self._length + n,
             UInt32(cur_child_len + child_end - child_start),
         )
-        var child_slice = arr.values.as_any()
-        child_slice.offset = child_start
-        child_slice.length = child_end - child_start
-        child_slice.nulls = 0
-        self._child.extend(child_slice^)
+        var child_slice = arr.values.slice(child_start, child_end - child_start)
+        self._child.extend(child_slice)
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
@@ -804,11 +801,8 @@ struct FixedSizeListBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.size
-        var child_slice = arr.values.as_any()
-        child_slice.offset = arr.offset * list_size
-        child_slice.length = n * list_size
-        child_slice.nulls = 0
-        self._child.extend(child_slice^)
+        var child_slice = arr.values.slice(arr.offset * list_size, n * list_size)
+        self._child.extend(child_slice)
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
@@ -963,18 +957,17 @@ struct StructBuilder(Builder, Sized):
         for ref child in self._children:
             frozen_children.append(child.finish())
         # construct the immutable result array
-        var result = AnyArray(
+        var result = StructArray(
             dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
-            bitmap=bm^,
-            buffers=[],
-            children=frozen_children^,
             offset=0,
+            bitmap=bm^,
+            children=frozen_children^,
         )
         # reset builder state for potential reuse
         self.reset()
-        return StructArray(data=result^)
+        return result^
 
     def finish(mut self) raises -> AnyArray:
         return self.finish_typed()

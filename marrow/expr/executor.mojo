@@ -305,15 +305,15 @@ struct BinaryProcessor(ValueProcessor):
         elif self.op == AND:
             return AnyArray(
                 and_(
-                    PrimitiveArray[bool_dt](data=l),
-                    PrimitiveArray[bool_dt](data=r),
+                    l.as_primitive[bool_dt](),
+                    r.as_primitive[bool_dt](),
                 )
             )
         elif self.op == OR:
             return AnyArray(
                 or_(
-                    PrimitiveArray[bool_dt](data=l),
-                    PrimitiveArray[bool_dt](data=r),
+                    l.as_primitive[bool_dt](),
+                    r.as_primitive[bool_dt](),
                 )
             )
         else:
@@ -337,7 +337,7 @@ struct UnaryProcessor(ValueProcessor):
         elif self.op == ABS:
             return abs_(c)
         elif self.op == NOT:
-            return AnyArray(not_(PrimitiveArray[bool_dt](data=c)))
+            return AnyArray(not_(c.as_primitive[bool_dt]()))
         else:
             raise Error("UnaryProcessor: unknown op ", self.op)
 
@@ -686,6 +686,7 @@ def _batch_to_struct(batch: RecordBatch) raises -> StructArray:
         dtype=struct_(fields),
         length=batch.num_rows(),
         nulls=0,
+        offset=0,
         bitmap=None,
         children=children^,
     )
@@ -751,6 +752,7 @@ struct AggregateProcessor(RelationProcessor):
                         dtype=struct_(key_struct_fields),
                         length=batch.num_rows(),
                         nulls=0,
+                        offset=0,
                         bitmap=None,
                         children=key_children^,
                     )
@@ -918,11 +920,11 @@ def execute(
 def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
     comptime for dt in numeric_dtypes:
-        if scalar_array.dtype == dt:
-            var val = PrimitiveArray[dt](data=scalar_array).unsafe_get(0)
+        if scalar_array.dtype() == dt:
+            var val = scalar_array.as_primitive[dt]().unsafe_get(0)
             var builder = PrimitiveBuilder[dt](length)
             for i in range(length):
                 builder._buffer.unsafe_set[dt.native](i, val)
             builder._length = length
             return AnyArray(builder.finish_typed())
-    raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype}")
+    raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype()}")

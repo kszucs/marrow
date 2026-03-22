@@ -58,7 +58,7 @@ def test_primitive_array_from_pyarrow() raises:
 
     var data = c_array^.to_array(dtype)
     var array = data^.as_int64()
-    assert_equal(array.bitmap.value()._buffer.size, 64)
+    assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(5, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), True)
@@ -68,7 +68,6 @@ def test_primitive_array_from_pyarrow() raises:
     assert_equal(array[1], 2)
     assert_equal(array[2], 3)
     assert_equal(array[3], 4)
-    assert_equal(array[4], 0)
 
 
 def test_binary_array_from_pyarrow() raises:
@@ -94,14 +93,13 @@ def test_binary_array_from_pyarrow() raises:
     var data = c_array^.to_array(dtype)
     var array = data^.as_string()
 
-    assert_equal(array.bitmap.value()._buffer.size, 64)
+    assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), False)
 
     assert_equal(array[0], "foo")
     assert_equal(array[1], "bar")
-    assert_equal(array[2], "")
 
 
 def test_list_array_from_pyarrow() raises:
@@ -130,7 +128,7 @@ def test_list_array_from_pyarrow() raises:
     var data = c_array^.to_array(dtype)
     var array = data^.as_list()
 
-    assert_equal(array.bitmap.value()._buffer.size, 64)
+    assert_equal(array.bitmap.value()._buffer.size, 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), False)
     assert_equal(array.is_valid(2), True)
@@ -447,7 +445,7 @@ def test_empty_array_from_pyarrow() raises:
     assert_equal(dtype, int32)
 
     var data = c_array^.to_array(dtype)
-    assert_equal(data.length, 0)
+    assert_equal(data.length(), 0)
 
 
 def test_binary_dtype_array_from_pyarrow() raises:
@@ -472,7 +470,7 @@ def test_binary_dtype_array_from_pyarrow() raises:
     assert_equal(c_array.n_children, 0)
 
     var data = c_array^.to_array(dtype)
-    assert_equal(data.length, 3)
+    assert_equal(data.length(), 3)
     assert_true(data.is_valid(0))
     assert_true(data.is_valid(1))
     assert_false(data.is_valid(2))
@@ -500,15 +498,16 @@ def test_struct_array_values_from_pyarrow() raises:
     assert_equal(c_array.n_children, 2)
 
     var data = c_array^.to_array(dtype)
-    assert_equal(data.length, 3)
-    assert_equal(len(data.children), 2)
+    assert_equal(data.length(), 3)
+    var data_struct = data.as_struct()
+    assert_equal(len(data_struct.children), 2)
 
-    var xs = data.children[0].copy().as_int32()
+    var xs = data_struct.children[0].as_int32()
     assert_equal(xs[0], 1)
     assert_equal(xs[1], 2)
     assert_equal(xs[2], 3)
 
-    var ys = data.children[1].copy().as_string()
+    var ys = data_struct.children[1].as_string()
     assert_equal(String(ys[0]), "a")
     assert_equal(String(ys[1]), "b")
     assert_equal(String(ys[2]), "c")

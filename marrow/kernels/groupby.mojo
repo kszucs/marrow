@@ -77,11 +77,9 @@ struct AggregateState(Movable):
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
     comptime for dt in primitive_dtypes:
-        if col.dtype == dt:
-            return Float64(
-                col.buffers[0].unsafe_get[dt.native](col.offset + row)
-            )
-    raise Error("unsupported dtype for aggregation: ", col.dtype)
+        if col.dtype() == dt:
+            return Float64(col.as_primitive[dt]().unsafe_get(row))
+    raise Error("unsupported dtype for aggregation: ", col.dtype())
 
 
 struct AggregateFunction(Copyable, Movable):
@@ -129,7 +127,7 @@ struct AggregateFunction(Copyable, Movable):
     ) raises:
         """Scatter-update: single O(N) pass over the batch."""
         var n = len(group_ids)
-        var has_bitmap = Bool(input_col.bitmap)
+        var has_bitmap = input_col.null_count() > 0
         var val_ptr = self.values.builder.as_primitive[float64]()
         var cnt_ptr = self.counts.builder.as_primitive[int64]()
 
@@ -226,8 +224,8 @@ def _cols_equal_at(
 ) raises -> Bool:
     """Compare one input row against a stored group row, column by column."""
     for k in range(len(keys)):
-        var input_null = Bool(keys[k].bitmap) and not keys[k].is_valid(row)
-        var stored_null = Bool(stored[k].bitmap) and not stored[k].is_valid(
+        var input_null = keys[k].null_count() > 0 and not keys[k].is_valid(row)
+        var stored_null = stored[k].null_count() > 0 and not stored[k].is_valid(
             group_idx
         )
         if input_null != stored_null:
@@ -236,18 +234,15 @@ def _cols_equal_at(
             continue
 
         comptime for dt in primitive_dtypes:
-            if keys[k].dtype == dt:
-                if keys[k].buffers[0].unsafe_get[dt.native](
-                    keys[k].offset + row
-                ) != stored[k].buffers[0].unsafe_get[dt.native](
-                    stored[k].offset + group_idx
-                ):
+            if keys[k].dtype() == dt:
+                if keys[k].as_primitive[dt]().unsafe_get(row) !=
+                    stored[k].as_primitive[dt]().unsafe_get(group_idx):
                     return False
                 break
 
-        if keys[k].dtype.is_string():
-            var sa = StringArray(data=keys[k])
-            var sb = StringArray(data=stored[k])
+        if keys[k].dtype().is_string():
+            var sa = keys[k].as_string()
+            var sb = stored[k].as_string()
             if String(sa.unsafe_get(UInt(row))) != String(
                 sb.unsafe_get(UInt(group_idx))
             ):
@@ -258,7 +253,7 @@ def _cols_equal_at(
 
 def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
     """Append a length-1 array slice to an existing array."""
-    var ab = make_builder(existing.dtype, existing.length + 1)
+    var ab = make_builder(existing.dtype(), existing.length() + 1)
     ab.extend(existing)
     ab.extend(single)
     return ab.finish()
@@ -477,11 +472,13 @@ def groupby(
     """Fused grouped aggregation on a single key column."""
     var children = List[AnyArray]()
     children.append(key.copy())
+    var key_data = key.as_data()
     var sa = StructArray(
-        dtype=struct_(Field("key", key.dtype.copy())),
-        length=key.length,
-        nulls=key.nulls,
-        bitmap=key.bitmap,
+        dtype=struct_(Field("key", key_data.dtype.copy())),
+        length=key_data.length,
+        nulls=key_data.nulls,
+        offset=key_data.offset,
+        bitmap=key_data.bitmap,
         children=children^,
     )
     return groupby(sa, values, aggregations)

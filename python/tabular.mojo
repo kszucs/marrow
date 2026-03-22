@@ -41,7 +41,7 @@ def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
 def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     """Convert schema + columns to a Python list of row dicts."""
     var builtins = Python.import_module("builtins")
-    var n_rows = columns[0].length if len(columns) > 0 else 0
+    var n_rows = columns[0].length() if len(columns) > 0 else 0
     var n_cols = len(columns)
     var col_objs = List[PythonObject]()
     var col_names = schema.names()
@@ -76,7 +76,7 @@ def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     for key in data:
         var name = String(py=key)
         var arr = AnyArray(py=data[key])
-        fields.append(Field(name=name, dtype=arr.dtype.copy()))
+        fields.append(Field(name=name, dtype=arr.dtype().copy()))
         columns.append(arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
@@ -91,7 +91,7 @@ def _build_from_arrays(
     for arr_obj in data:
         var arr = AnyArray(py=arr_obj)
         var name = String(py=names_obj[i])
-        fields.append(Field(name=name, dtype=arr.dtype.copy()))
+        fields.append(Field(name=name, dtype=arr.dtype().copy()))
         columns.append(arr^)
         i += 1
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)

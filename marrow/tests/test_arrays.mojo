@@ -58,17 +58,17 @@ def test_array_data_with_offset() raises:
     bitmap.set_bit(4, True)
 
     # Create ArrayData with offset=2
-    var array_data = AnyArray(
+    var array_data = AnyArray.from_data(ArrayData(
         dtype=int8,
         length=3,
         nulls=0,
+        offset=2,
         bitmap=bitmap.finish(10),
         buffers=[buffer.finish()],
         children=[],
-        offset=2,
-    )
+    ))
 
-    assert_equal(array_data.offset, 2)
+    assert_equal(array_data.as_data().offset, 2)
 
     # Test is_valid with offset
     assert_true(array_data.is_valid(0))  # Should check bitmap[2]
@@ -82,19 +82,19 @@ def test_array_data_fieldwise_init() raises:
     var buffer = buffer_b.finish()
 
     # Test creating ArrayData with all fields specified including offset
-    var array_data = AnyArray(
+    var array_data = AnyArray.from_data(ArrayData(
         dtype=int8,
         length=5,
         nulls=0,
+        offset=3,
         bitmap=None,
         buffers=[buffer],
         children=[],
-        offset=3,
-    )
+    ))
 
-    assert_equal(array_data.dtype, int8)
-    assert_equal(array_data.length, 5)
-    assert_equal(array_data.offset, 3)
+    assert_equal(array_data.dtype(), int8)
+    assert_equal(array_data.length(), 5)
+    assert_equal(array_data.as_data().offset, 3)
 
 
 def test_array_from_primitive() raises:
@@ -107,57 +107,54 @@ def test_array_from_string() raises:
     s.append("hello")
     s.append("world")
     var a: AnyArray = s.finish()
-    assert_equal(a.length, 2)
+    assert_equal(a.length(), 2)
 
 
 def test_array_from_list() raises:
     var ints_b = PrimitiveBuilder[int64]()
     var l = ListBuilder(AnyBuilder(ints_b^))
     var a: AnyArray = l.finish()
-    assert_true(a.dtype.is_list())
+    assert_true(a.dtype().is_list())
 
 
 def test_array_from_struct() raises:
     var fields = [Field("x", int32)]
     var s = StructBuilder(fields^, [], capacity=5)
     var a: AnyArray = s.finish()
-    assert_true(a.dtype.is_struct())
+    assert_true(a.dtype().is_struct())
 
 
 def test_array_copy() raises:
     var _sb = BufferBuilder.alloc[int8.native](3)
-    var src = AnyArray(
+    var src = AnyArray.from_data(ArrayData(
         dtype=int8,
         length=3,
         nulls=0,
+        offset=0,
         bitmap=None,
         buffers=[_sb.finish()],
         children=[],
-        offset=0,
-    )
+    ))
     var copy = src.copy()
-    assert_equal(copy.length, src.length)
-    assert_equal(copy.dtype, src.dtype)
-    assert_equal(copy.offset, src.offset)
-    # Mutating copy's length does not affect src
-    copy.length = 99
-    assert_equal(src.length, 3)
+    assert_equal(copy.length(), src.length())
+    assert_equal(copy.dtype(), src.dtype())
+    assert_equal(copy.as_data().offset, src.as_data().offset)
 
 
 def test_array_move() raises:
     var _ab = BufferBuilder.alloc[int8.native](5)
-    var a = AnyArray(
+    var a = AnyArray.from_data(ArrayData(
         dtype=int8,
         length=5,
         nulls=0,
+        offset=0,
         bitmap=None,
         buffers=[_ab.finish()],
         children=[],
-        offset=0,
-    )
+    ))
     var b = a^
-    assert_equal(b.length, 5)
-    assert_equal(b.dtype, int8)
+    assert_equal(b.length(), 5)
+    assert_equal(b.dtype(), int8)
 
 
 def test_boolean_array() raises:
@@ -385,7 +382,7 @@ def test_list_str() raises:
     assert_equal(len(lists), 1)
 
     var first_val = lists[0].value()
-    var first_value = StringArray(first_val)
+    var first_value = first_val.as_string()
     assert_equal(first_value[0], "hello")
     assert_equal(first_value[1], "world")
 
@@ -423,7 +420,7 @@ def test_list_of_list() raises:
     list2 = top_b.finish_typed()
 
     var top_val = list2[0].value()
-    top = ListArray(top_val)
+    top = top_val.as_list()
     middle_0 = top[0].value()
     bottom = middle_0.as_primitive[int64]()
     assert_equal(bottom[1], 2)
@@ -533,14 +530,14 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
     var fsl = builder.finish_typed()
 
     var slice0 = fsl[0]
-    assert_equal(slice0.dtype, int32)
-    assert_equal(slice0.length, 2)
-    assert_equal(slice0.offset, 0)
+    assert_equal(slice0.dtype(), int32)
+    assert_equal(slice0.length(), 2)
+    assert_equal(slice0.as_data().offset, 0)
 
     var slice1 = fsl[1]
-    assert_equal(slice1.dtype, int32)
-    assert_equal(slice1.length, 2)
-    assert_equal(slice1.offset, 2)
+    assert_equal(slice1.dtype(), int32)
+    assert_equal(slice1.length(), 2)
+    assert_equal(slice1.as_data().offset, 2)
 
 
 # # def test_fixed_size_list_pretty_print():
@@ -570,12 +567,12 @@ def test_struct_array() raises:
     assert_equal(struct_builder._capacity, 10)
 
     var data: AnyArray = struct_builder.finish()
-    assert_equal(data.length, 0)
-    assert_true(data.dtype.is_struct())
-    assert_equal(len(data.dtype.fields), 3)
-    assert_equal(data.dtype.fields[0].name, "id")
-    assert_equal(data.dtype.fields[1].name, "name")
-    assert_equal(data.dtype.fields[2].name, "active")
+    assert_equal(data.length(), 0)
+    assert_true(data.dtype().is_struct())
+    assert_equal(len(data.dtype().fields), 3)
+    assert_equal(data.dtype().fields[0].name, "id")
+    assert_equal(data.dtype().fields[1].name, "name")
+    assert_equal(data.dtype().fields[2].name, "active")
 
 
 def test_struct_array_unsafe_get() raises:
@@ -614,7 +611,7 @@ def test_chunked_array() raises:
     var chunked_array = ChunkedArray(int8, arrays^)
     assert_equal(chunked_array.length, 3)
 
-    assert_equal(chunked_array.chunk(0).length, 1)
+    assert_equal(chunked_array.chunk(0).length(), 1)
     var second_chunk = chunked_array.chunk(1).copy().as_uint8()
     assert_equal(second_chunk.length, 2)
     assert_equal(second_chunk[0], 0)
@@ -630,11 +627,11 @@ def test_combine_chunked_array() raises:
     assert_equal(chunked_array.chunk(1).copy().as_uint8()[1], 1)
 
     var combined_array = chunked_array^.combine_chunks()
-    assert_equal(combined_array.length, 3)
-    assert_equal(combined_array.dtype, uint8)
+    assert_equal(combined_array.length(), 3)
+    assert_equal(combined_array.dtype(), uint8)
     # Single concatenated values buffer: [0, 0, 1]
-    assert_equal(combined_array.buffers[0].unsafe_get(0), 0)
-    assert_equal(combined_array.buffers[0].unsafe_get(2), 1)
+    assert_equal(combined_array.as_data().buffers[0].unsafe_get(0), 0)
+    assert_equal(combined_array.as_data().buffers[0].unsafe_get(2), 1)
 
 
 def test_primitive_finish_shrinks() raises:
@@ -951,9 +948,9 @@ def test_list_array_getitem() raises:
     list_b.append_valid()  # [30, 40, 50]
     var lists = list_b.finish_typed()
     var first = lists[0].value()
-    assert_equal(first.length, 2)
+    assert_equal(first.length(), 2)
     var second = lists[1].value()
-    assert_equal(second.length, 3)
+    assert_equal(second.length(), 3)
 
 
 def test_list_array_getitem_bounds() raises:
@@ -1240,7 +1237,7 @@ def test_list_array_flatten() raises:
     list_b.append_valid()
     var lists = list_b.finish_typed()
     var flat = lists.flatten()
-    assert_equal(flat.length, 3)
+    assert_equal(flat.length(), 3)
 
 
 def test_list_array_value_lengths() raises:
@@ -1275,7 +1272,7 @@ def test_fixed_size_list_flatten() raises:
     builder.append_valid()
     var fsl = builder.finish_typed()
     var flat = fsl.flatten()
-    assert_equal(flat.length, 4)
+    assert_equal(flat.length(), 4)
 
 
 def test_struct_array_flatten() raises:
@@ -1293,8 +1290,8 @@ def test_struct_array_flatten() raises:
     var sa = sb.finish_typed()
     var flat = sa.flatten()
     assert_equal(len(flat), 2)
-    assert_equal(flat[0].length, 2)
-    assert_equal(flat[1].length, 2)
+    assert_equal(flat[0].length(), 2)
+    assert_equal(flat[1].length(), 2)
 
 
 # ---------------------------------------------------------------------------

@@ -164,7 +164,7 @@ def test_concat_string() raises:
         AnyArray(s1.finish_typed()),
         AnyArray(s2.finish_typed()),
     ]
-    var result = StringArray(data=concat(arrs))
+    var result = concat(arrs).as_string()
     assert_equal(result.length, 3)
     assert_equal(result[0], "hello")
     assert_equal(result[1], "world")
@@ -182,7 +182,7 @@ def test_concat_string_with_nulls() raises:
         AnyArray(s1.finish_typed()),
         AnyArray(s2.finish_typed()),
     ]
-    var result = StringArray(data=concat(arrs))
+    var result = concat(arrs).as_string()
     assert_equal(result.length, 4)
     assert_equal(result.null_count(), 1)
     assert_true(result.is_valid(0))
@@ -219,7 +219,7 @@ def test_concat_list() raises:
         AnyArray(lb1.finish_typed()),
         AnyArray(lb2.finish_typed()),
     ]
-    var result = ListArray(data=concat(arrs))
+    var result = concat(arrs).as_list()
     assert_equal(result.length, 3)
     var elem0 = result[0].value().as_primitive[int32]()
     assert_equal(elem0.length, 2)
@@ -249,7 +249,7 @@ def test_concat_list_with_nulls() raises:
         AnyArray(lb1.finish_typed()),
         AnyArray(lb2.finish_typed()),
     ]
-    var result = ListArray(data=concat(arrs))
+    var result = concat(arrs).as_list()
     assert_equal(result.length, 3)
     assert_equal(result.null_count(), 1)
     assert_true(result.is_valid(0))
@@ -286,7 +286,7 @@ def test_concat_fixed_size_list() raises:
         AnyArray(fsl1.finish_typed()),
         AnyArray(fsl2.finish_typed()),
     ]
-    var result = FixedSizeListArray(data=concat(arrs))
+    var result = concat(arrs).as_fixed_size_list()
     assert_equal(result.length, 3)
     var elem0 = result[0].as_primitive[float32]()
     assert_equal(elem0[0], 1.0)
@@ -318,7 +318,7 @@ def test_concat_fixed_size_list_with_offset() raises:
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
     var arrs: List[AnyArray] = [AnyArray(sliced), AnyArray(fsl2.finish_typed())]
-    var result = FixedSizeListArray(data=concat(arrs))
+    var result = concat(arrs).as_fixed_size_list()
     assert_equal(result.length, 3)
     var elem0 = result[0].as_primitive[float32]()
     assert_equal(elem0[0], 3.0)
@@ -360,7 +360,7 @@ def test_concat_struct() raises:
         AnyArray(sb1.finish_typed()),
         AnyArray(sb2.finish_typed()),
     ]
-    var result = StructArray(data=concat(arrs))
+    var result = concat(arrs).as_struct()
     assert_equal(result.length, 3)
     ref id_data = result.unsafe_get("id")
     var id_arr = id_data.as_primitive[int32]()

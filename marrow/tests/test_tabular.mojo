@@ -34,8 +34,8 @@ def test_record_batch_column_access_by_index() raises:
     columns.append(col_a^)
     columns.append(col_b^)
     var batch = RecordBatch(schema=schema, columns=columns^)
-    assert_equal(batch.column(0).length, 3)
-    assert_equal(batch.column(1).length, 3)
+    assert_equal(batch.column(0).length(), 3)
+    assert_equal(batch.column(1).length(), 3)
     assert_equal(batch.column(0).as_int32().unsafe_get(0), 10)
     assert_equal(batch.column(1).as_int64().unsafe_get(2), 300)
 

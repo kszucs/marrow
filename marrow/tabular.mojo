@@ -60,7 +60,7 @@ struct RecordBatch(
             struct_(schema.fields)
         )
         var columns = List[AnyArray]()
-        for child in struct_arr.children:
+        for child in struct_arr.as_struct().children:
             columns.append(child.copy())
         self = RecordBatch(schema=schema, columns=columns^)
 
@@ -75,7 +75,7 @@ struct RecordBatch(
         """Returns the number of rows (length of the first column, or 0)."""
         if len(self.columns) == 0:
             return 0
-        return self.columns[0].length
+        return self.columns[0].length()
 
     def num_columns(self) -> Int:
         """Returns the number of columns."""
@@ -215,6 +215,7 @@ struct RecordBatch(
             dtype=struct_(self.schema.fields),
             length=self.num_rows(),
             nulls=0,
+            offset=0,
             bitmap=None,
             children=cols^,
         )
@@ -253,7 +254,7 @@ def record_batch(
         )
     var fields = List[Field]()
     for i in range(len(columns)):
-        fields.append(Field(names[i], columns[i].dtype))
+        fields.append(Field(names[i], columns[i].dtype()))
     var schema = Schema(fields=fields^)
     return RecordBatch(schema=schema, columns=columns^)
 

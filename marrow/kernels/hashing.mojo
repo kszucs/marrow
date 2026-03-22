@@ -147,20 +147,20 @@ def hash_(keys: AnyArray) raises -> PrimitiveArray[uint64]:
     Returns:
         A uint64 array of per-element hashes.
     """
-    if keys.dtype == bool_:
-        return hash_[bool_](PrimitiveArray[bool_](data=keys))
+    if keys.dtype() == bool_:
+        return hash_[bool_](keys.as_primitive[bool_]())
 
     comptime for dtype in numeric_dtypes:
-        if keys.dtype == dtype:
+        if keys.dtype() == dtype:
             return hash_[dtype](keys.as_primitive[dtype]())
 
-    if keys.dtype.is_string():
+    if keys.dtype().is_string():
         return hash_(keys.as_string())
 
-    if keys.dtype.is_struct():
+    if keys.dtype().is_struct():
         return hash_(keys.as_struct())
 
-    raise Error("hash_: unsupported dtype ", keys.dtype)
+    raise Error("hash_: unsupported dtype ", keys.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +195,10 @@ def hash_identity[
 
 def hash_identity(keys: AnyArray) raises -> PrimitiveArray[uint64]:
     """Runtime-typed identity hash dispatch."""
-    if keys.dtype == bool_:
-        return hash_identity[bool_](PrimitiveArray[bool_](data=keys))
-    if keys.dtype == uint8:
+    if keys.dtype() == bool_:
+        return hash_identity[bool_](keys.as_primitive[bool_]())
+    if keys.dtype() == uint8:
         return hash_identity[uint8](keys.as_primitive[uint8]())
-    if keys.dtype == int8:
+    if keys.dtype() == int8:
         return hash_identity[int8](keys.as_primitive[int8]())
     raise Error("hash_identity: only supports bool, uint8, int8")

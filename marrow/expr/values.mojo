@@ -317,7 +317,7 @@ struct Literal(Value):
         return LITERAL
 
     def dtype(self) -> Optional[DataType]:
-        return self.value.dtype
+        return self.value.dtype()
 
     def inputs(self) -> List[AnyValue]:
         return List[AnyValue]()

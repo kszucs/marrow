@@ -761,7 +761,7 @@ def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
     var arr = to_array_fn(ptr[])
-    var schema_cap = CArrowSchema.from_dtype(arr.dtype).to_pycapsule()
+    var schema_cap = CArrowSchema.from_dtype(arr.dtype()).to_pycapsule()
     var array_cap = CArrowArray.from_array(arr).to_pycapsule()
     return Python.tuple(schema_cap, array_cap)
 
@@ -774,23 +774,23 @@ def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.DataType](
 
 # TODO: maybe introduce an AnyArray trait and rename AnyArray struct to AnyArray
 def _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> AnyArray:
-    return arr
+    return arr.as_any()
 
 
 def _str_to_array(arr: StringArray) -> AnyArray:
-    return arr
+    return arr.as_any()
 
 
 def _list_to_array(arr: ListArray) -> AnyArray:
-    return arr
+    return arr.as_any()
 
 
 def _fsl_to_array(arr: FixedSizeListArray) -> AnyArray:
-    return arr
+    return arr.as_any()
 
 
 def _struct_to_array(arr: StructArray) -> AnyArray:
-    return arr
+    return arr.as_any()
 
 
 
