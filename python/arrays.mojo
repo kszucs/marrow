@@ -42,7 +42,7 @@ from marrow.builders import (
     StructBuilder,
     make_builder,
 )
-from marrow.scalars import AnyScalar
+from marrow.scalars import AnyScalar, ListScalar
 from marrow.dtypes import DataType
 import marrow.dtypes as dt
 from pontoneer import SequenceProtocolBuilder
@@ -204,7 +204,7 @@ def _prim_scalar_getitem[T: DataType](
     var n = len(ptr[])
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
+    return AnyScalar(ptr[][index]).to_python_object()
 
 
 def _str_getitem(
@@ -214,7 +214,7 @@ def _str_getitem(
     var n = len(ptr[])
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
+    return AnyScalar(ptr[][index]).to_python_object()
 
 
 def _list_getitem(
@@ -224,7 +224,7 @@ def _list_getitem(
     var n = len(ptr[])
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
+    return AnyScalar(ptr[][index]).to_python_object()
 
 
 def _fsl_getitem(
@@ -234,7 +234,9 @@ def _fsl_getitem(
     var n = len(ptr[])
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(data=AnyArray(ptr[].copy()).slice(index, 1)).to_python_object()
+    return AnyScalar(
+        ListScalar(value=ptr[].unsafe_get(index), is_valid=ptr[].is_valid(index))
+    ).to_python_object()
 
 
 # ---------------------------------------------------------------------------

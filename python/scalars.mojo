@@ -26,7 +26,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
     """Convert a Mojo AnyScalar to a native Python value (int, float, bool, str, None)."""
     if scalar.is_null():
         return PythonObject(None)
-    var dtype = scalar.dtype()
+    var dtype = scalar.type()
     comptime for T in primitive_dtypes:
         if dtype == T:
             return PythonObject(scalar.as_primitive[T]().value())

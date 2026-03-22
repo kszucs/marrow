@@ -17,6 +17,7 @@ Scalar trait:
   Common interface implemented by all four typed scalars.
 """
 
+from std.memory import ArcPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
 
@@ -24,13 +25,12 @@ from .arrays import (
     PrimitiveArray,
     StringArray,
     ListArray,
+    FixedSizeListArray,
     StructArray,
     AnyArray,
 )
 from .builders import PrimitiveBuilder, StringBuilder
-from .buffers import Buffer, BufferBuilder
-from .bitmap import Bitmap, BitmapBuilder
-from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes
+from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes, list_, string
 
 # Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
 from std.builtin.simd import Scalar as _Scalar
@@ -44,7 +44,7 @@ from std.builtin.simd import Scalar as _Scalar
 trait Scalar(Copyable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
-    def dtype(self) -> DataType:
+    def type(self) -> DataType:
         ...
 
     def is_valid(self) -> Bool:
@@ -91,7 +91,7 @@ struct PrimitiveScalar[T: DataType](Boolable, Copyable, Movable, Writable, Equat
     def null() -> Self:
         return Self(is_valid=False)
 
-    def dtype(self) -> DataType:
+    def type(self) -> DataType:
         return Self.T
 
     def is_valid(self) -> Bool:
@@ -165,8 +165,7 @@ struct StringScalar(Copyable, Movable, Writable, Equatable):
     def null() raises -> Self:
         return Self(is_valid=False)
 
-    def dtype(self) -> DataType:
-        from .dtypes import string
+    def type(self) -> DataType:
         return string
 
     def is_valid(self) -> Bool:
@@ -188,8 +187,8 @@ struct StringScalar(Copyable, Movable, Writable, Equatable):
             b.append_null()
         return b.finish_typed()
 
-    def as_any(self) raises -> AnyScalar:
-        return AnyScalar(self)
+    def as_any(self) -> AnyScalar:
+        return self.copy()
 
     def __eq__(self, other: Self) -> Bool:
         if self.is_null() and other.is_null():
@@ -231,9 +230,8 @@ struct ListScalar(Copyable, Movable, Writable):
         self._value = value.copy()
         self._is_valid = is_valid
 
-    def dtype(self) raises -> DataType:
-        from .dtypes import list_
-        return list_(self._value.dtype)
+    def type(self) -> DataType:
+        return list_(self._value.type())
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -245,8 +243,8 @@ struct ListScalar(Copyable, Movable, Writable):
         """Get the child elements array."""
         return self._value.copy()
 
-    def as_any(self) raises -> AnyScalar:
-        return AnyScalar(self)
+    def as_any(self) -> AnyScalar:
+        return self.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -285,7 +283,7 @@ struct StructScalar(Copyable, Movable, Writable):
     def null(dtype: DataType) -> Self:
         return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
 
-    def dtype(self) -> DataType:
+    def type(self) -> DataType:
         return self._dtype
 
     def is_valid(self) -> Bool:
@@ -301,8 +299,8 @@ struct StructScalar(Copyable, Movable, Writable):
         """Return the i-th field as an AnyScalar."""
         return self._value[index].copy()
 
-    def as_any(self) raises -> AnyScalar:
-        return AnyScalar(self)
+    def as_any(self) -> AnyScalar:
+        return self.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -325,149 +323,94 @@ struct StructScalar(Copyable, Movable, Writable):
 
 
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
-    """A single Arrow value backed by a length-1 AnyArray.
+    """Type-erased scalar container backed by an ArcPointer.
 
-    Type-erased container. Converts implicitly from typed scalars by building
-    a temporary length-1 array — an O(1) allocation, not O(n).
+    Wraps any typed scalar on the heap behind an `ArcPointer`.
+    Copies are O(1) ref-count bumps + function-pointer copies.
+    Runtime dispatch goes through function-pointer trampolines (vtable).
     """
 
-    var _data: AnyArray
+    var _data: ArcPointer[NoneType]
+    var _virt_type: def (ArcPointer[NoneType]) -> DataType
+    var _virt_is_valid: def (ArcPointer[NoneType]) -> Bool
+    var _virt_drop: def (var ArcPointer[NoneType])
+
+    # --- trampolines ---
+
+    @staticmethod
+    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> DataType:
+        return rebind[ArcPointer[T]](ptr)[].type()
+
+    @staticmethod
+    def _tramp_is_valid[T: Scalar](ptr: ArcPointer[NoneType]) -> Bool:
+        return rebind[ArcPointer[T]](ptr)[].is_valid()
+
+    @staticmethod
+    def _tramp_drop[T: Scalar](var ptr: ArcPointer[NoneType]):
+        _ = rebind[ArcPointer[T]](ptr^)
+
+    # --- construction ---
 
     @implicit
-    def __init__[T: DataType](out self, typed: PrimitiveScalar[T]) raises:
-        var b = PrimitiveBuilder[T](1)
-        if typed._is_valid:
-            b.append(typed._value)
-        else:
-            b.append_null()
-        self._data = AnyArray(b.finish_typed())
+    def __init__[T: Scalar](out self, var typed: T):
+        var ptr = ArcPointer(typed^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_type = Self._tramp_type[T]
+        self._virt_is_valid = Self._tramp_is_valid[T]
+        self._virt_drop = Self._tramp_drop[T]
 
-    @implicit
-    def __init__(out self, typed: StringScalar) raises:
-        var b = StringBuilder(1)
-        if typed._is_valid:
-            b.append(typed._value)
-        else:
-            b.append_null()
-        self._data = AnyArray(b.finish_typed())
+    def __init__(out self, *, copy: Self):
+        self._data = copy._data
+        self._virt_type = copy._virt_type
+        self._virt_is_valid = copy._virt_is_valid
+        self._virt_drop = copy._virt_drop
 
-    @implicit
-    def __init__(out self, typed: ListScalar) raises:
-        from .dtypes import list_
-        from .arrays import ArrayData
-        var child = typed._value.copy()
-        var obb = BufferBuilder.alloc[DType.int32](2)
-        obb.unsafe_set[DType.int32](0, 0)
-        obb.unsafe_set[DType.int32](1, Int32(child.length()))
-        var offsets = obb.finish()
-        var bm: Optional[Bitmap] = None
-        var nulls = 0
-        if not typed._is_valid:
-            var bmb = BitmapBuilder.alloc(1)
-            bm = bmb.finish(1)
-            nulls = 1
-        self._data = AnyArray.from_data(
-            ArrayData(
-                dtype=list_(child.dtype()),
-                length=1,
-                nulls=nulls,
-                offset=0,
-                bitmap=bm^,
-                buffers=[offsets],
-                children=[child^.as_data()],
-            )
-        )
+    # --- vtable dispatch ---
 
-    @implicit
-    def __init__(out self, typed: StructScalar) raises:
-        from .arrays import ArrayData
-        var bm: Optional[Bitmap] = None
-        var nulls = 0
-        if not typed._is_valid:
-            var bmb = BitmapBuilder.alloc(1)
-            bm = bmb.finish(1)
-            nulls = 1
-        var children = List[ArrayData]()
-        for i in range(len(typed._value)):
-            children.append(typed._value[i]._data.as_data())
-        self._data = AnyArray.from_data(
-            ArrayData(
-                dtype=typed._dtype,
-                length=1,
-                nulls=nulls,
-                offset=0,
-                bitmap=bm^,
-                buffers=[],
-                children=children^,
-            )
-        )
-
-    def __init__(out self, *, data: AnyArray):
-        """Wrap an existing length-1 AnyArray directly."""
-        self._data = data.copy()
+    def type(self) -> DataType:
+        return self._virt_type(self._data)
 
     def is_valid(self) -> Bool:
-        return self._data.is_valid(0)
+        return self._virt_is_valid(self._data)
 
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-    def dtype(self) -> DataType:
-        return self._data.dtype()
+    def copy(self) -> AnyScalar:
+        return AnyScalar(copy=self)
 
-    def as_primitive[T: DataType](self) raises -> PrimitiveScalar[T]:
-        var arr = self._data.as_primitive[T]()
-        if not self._data.is_valid(0):
-            return PrimitiveScalar[T].null()
-        return PrimitiveScalar[T](arr.unsafe_get(0))
+    # --- typed downcasts ---
 
-    def as_string(self) raises -> StringScalar:
-        var arr = self._data.as_string()
-        if not self._data.is_valid(0):
-            return StringScalar.null()
-        return StringScalar(String(arr.unsafe_get(UInt(0))))
+    def as_primitive[T: DataType](self) -> PrimitiveScalar[T]:
+        return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[].copy()
 
-    def as_list(self) raises -> ListScalar:
-        var arr = self._data.as_list()
-        return ListScalar(
-            value=arr.unsafe_get(0), is_valid=self._data.is_valid(0)
-        )
+    def as_string(self) -> StringScalar:
+        return rebind[ArcPointer[StringScalar]](self._data)[].copy()
 
-    def as_fixed_size_list(self) raises -> ListScalar:
-        var arr = self._data.as_fixed_size_list()
-        return ListScalar(
-            value=arr.unsafe_get(0), is_valid=self._data.is_valid(0)
-        )
+    def as_list(self) -> ListScalar:
+        return rebind[ArcPointer[ListScalar]](self._data)[].copy()
 
-    def as_struct(self) raises -> StructScalar:
-        var arr = self._data.as_struct()
-        if not self._data.is_valid(0):
-            return StructScalar.null(arr.dtype)
-        var fields = List[AnyScalar]()
-        for i in range(len(arr.children)):
-            fields.append(AnyScalar(data=arr.children[i].slice(arr.offset, 1)))
-        return StructScalar(dtype=arr.dtype, value=fields^, is_valid=True)
+    def as_fixed_size_list(self) -> ListScalar:
+        return rebind[ArcPointer[ListScalar]](self._data)[].copy()
+
+    def as_struct(self) -> StructScalar:
+        return rebind[ArcPointer[StructScalar]](self._data)[].copy()
 
     def write_to[W: Writer](self, mut writer: W):
         if self.is_null():
             writer.write("null")
             return
-        try:
-            var dtype = self.dtype()
-            comptime for T in primitive_dtypes:
-                if dtype == T:
-                    writer.write(self.as_primitive[T]().value())
-                    return
-            if dtype.is_string():
-                writer.write(self.as_string().as_string())
-            elif dtype.is_list():
-                self.as_list().value().write_to(writer)
-            elif dtype.is_fixed_size_list():
-                self.as_fixed_size_list().value().write_to(writer)
-            elif dtype.is_struct():
-                self.as_struct().write_to(writer)
-        except:
-            writer.write("Scalar(?)")
+        var dtype = self.type()
+        comptime for T in primitive_dtypes:
+            if dtype == T:
+                self.as_primitive[T]().write_to(writer)
+                return
+        if dtype.is_string():
+            self.as_string().write_to(writer)
+        elif dtype.is_list() or dtype.is_fixed_size_list():
+            self.as_list().write_to(writer)
+        elif dtype.is_struct():
+            self.as_struct().write_to(writer)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -475,3 +418,6 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)
+
+    def __del__(deinit self):
+        self._virt_drop(self._data^)

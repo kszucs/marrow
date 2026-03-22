@@ -78,7 +78,7 @@ trait Array(
 struct AnyArray(
     ConvertibleFromPython,
     ConvertibleToPython,
-    ImplicitlyCopyable,
+    Copyable,
     Equatable,
     Movable,
     Writable,
@@ -418,7 +418,6 @@ struct PrimitiveArray[T: DataType](
     Array,
     ConvertibleFromPython,
     ConvertibleToPython,
-    ImplicitlyCopyable,
 ):
     """An immutable Arrow array of fixed-size primitive values (integers, floats, etc.).
     """
@@ -643,7 +642,6 @@ struct StringArray(
     Array,
     ConvertibleFromPython,
     ConvertibleToPython,
-    ImplicitlyCopyable,
 ):
     """An immutable Arrow array of variable-length UTF-8 strings."""
 
@@ -807,7 +805,6 @@ struct ListArray(
     Array,
     ConvertibleFromPython,
     ConvertibleToPython,
-    ImplicitlyCopyable,
 ):
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
@@ -970,7 +967,6 @@ struct FixedSizeListArray(
     Array,
     ConvertibleFromPython,
     ConvertibleToPython,
-    ImplicitlyCopyable,
 ):
     """An immutable Arrow array of fixed-size lists (each element is a sub-array of the same length).
     """
