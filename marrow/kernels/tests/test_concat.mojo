@@ -211,18 +211,20 @@ def test_concat_string_with_nulls() raises:
 def test_concat_list() raises:
     # Chunk 1: [[1, 2], [3]]
     var lb1 = ListBuilder(AnyBuilder(PrimitiveBuilder[int32]()), capacity=2)
-    var c1 = lb1.values().as_primitive[int32]()
-    c1[].append(1)
-    c1[].append(2)
+    var c1_any = lb1.values()
+    ref c1 = c1_any.as_primitive[int32]()
+    c1.append(1)
+    c1.append(2)
     lb1.append_valid()  # [1, 2]
-    c1[].append(3)
+    c1.append(3)
     lb1.append_valid()  # [3]
     # Chunk 2: [[4, 5, 6]]
     var lb2 = ListBuilder(AnyBuilder(PrimitiveBuilder[int32]()), capacity=1)
-    var c2 = lb2.values().as_primitive[int32]()
-    c2[].append(4)
-    c2[].append(5)
-    c2[].append(6)
+    var c2_any = lb2.values()
+    ref c2 = c2_any.as_primitive[int32]()
+    c2.append(4)
+    c2.append(5)
+    c2.append(6)
     lb2.append_valid()  # [4, 5, 6]
     var arrs: List[AnyArray] = [
         AnyArray(lb1.finish_typed()),
@@ -249,14 +251,16 @@ def test_concat_list() raises:
 
 def test_concat_list_with_nulls() raises:
     var lb1 = ListBuilder(AnyBuilder(PrimitiveBuilder[int32]()), capacity=2)
-    var c1 = lb1.values().as_primitive[int32]()
-    c1[].append(1)
+    var c1_any = lb1.values()
+    ref c1 = c1_any.as_primitive[int32]()
+    c1.append(1)
     lb1.append_valid()  # [1]
     lb1.append_null()  # null
     var lb2 = ListBuilder(AnyBuilder(PrimitiveBuilder[int32]()), capacity=1)
-    var c2 = lb2.values().as_primitive[int32]()
-    c2[].append(2)
-    c2[].append(3)
+    var c2_any = lb2.values()
+    ref c2 = c2_any.as_primitive[int32]()
+    c2.append(2)
+    c2.append(3)
     lb2.append_valid()  # [2, 3]
     var arrs: List[AnyArray] = [
         AnyArray(lb1.finish_typed()),

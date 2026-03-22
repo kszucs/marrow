@@ -144,8 +144,11 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     @implicit
     def __init__[T: Builder](out self, var value: T):
-        var ptr = ArcPointer(value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self = Self(ArcPointer(value^))
+
+    @implicit
+    def __init__[T: Builder](out self, ptr: ArcPointer[T]):
+        self._data = rebind[ArcPointer[NoneType]](ptr.copy())
         self._virt_length = Self._tramp_length[T]
         self._virt_null_count = Self._tramp_null_count[T]
         self._virt_dtype = Self._tramp_dtype[T]
@@ -193,32 +196,32 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._virt_reset(self._data)
 
     @always_inline
-    def as_primitive[T: DataType](self) -> ArcPointer[PrimitiveBuilder[T]]:
-        return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data.copy())
+    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveBuilder[T]:
+        return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data)[]
 
     @always_inline
-    def as_string(self) -> ArcPointer[StringBuilder]:
-        return rebind[ArcPointer[StringBuilder]](self._data.copy())
+    def as_string(ref self) -> ref[self._data[]] StringBuilder:
+        return rebind[ArcPointer[StringBuilder]](self._data)[]
 
     @always_inline
-    def as_list(self) -> ArcPointer[ListBuilder]:
-        return rebind[ArcPointer[ListBuilder]](self._data.copy())
+    def as_list(ref self) -> ref[self._data[]] ListBuilder:
+        return rebind[ArcPointer[ListBuilder]](self._data)[]
 
     @always_inline
-    def as_fixed_size_list(self) -> ArcPointer[FixedSizeListBuilder]:
-        return rebind[ArcPointer[FixedSizeListBuilder]](self._data.copy())
+    def as_fixed_size_list(ref self) -> ref[self._data[]] FixedSizeListBuilder:
+        return rebind[ArcPointer[FixedSizeListBuilder]](self._data)[]
 
     @always_inline
-    def as_struct(self) -> ArcPointer[StructBuilder]:
-        return rebind[ArcPointer[StructBuilder]](self._data.copy())
+    def as_struct(ref self) -> ref[self._data[]] StructBuilder:
+        return rebind[ArcPointer[StructBuilder]](self._data)[]
 
     def child(self, index: Int) -> AnyBuilder:
         """Access child builder by index (for composite types)."""
         var dt = self.dtype()
         if dt.is_list() or dt.is_fixed_size_list():
-            return self.as_list()[].values()
+            return self.as_list().values()
         else:
-            return self.as_struct()[].child(index)
+            return self.as_struct().child(index)
 
     def __del__(deinit self):
         self._virt_drop(self._data^)

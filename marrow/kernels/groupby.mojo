@@ -113,10 +113,10 @@ struct AggregateFunction(Copyable, Movable):
 
     def create(mut self) raises:
         """Initialize state for a newly created group."""
-        self.values.builder.as_primitive[float64]()[].append(
+        self.values.builder.as_primitive[float64]().append(
             Scalar[float64.native](0)
         )
-        self.counts.builder.as_primitive[int64]()[].append(
+        self.counts.builder.as_primitive[int64]().append(
             Scalar[int64.native](0)
         )
 
@@ -128,41 +128,41 @@ struct AggregateFunction(Copyable, Movable):
         """Scatter-update: single O(N) pass over the batch."""
         var n = len(group_ids)
         var has_bitmap = input_col.null_count() > 0
-        var val_ptr = self.values.builder.as_primitive[float64]()
-        var cnt_ptr = self.counts.builder.as_primitive[int64]()
+        ref val_ptr = self.values.builder.as_primitive[float64]()
+        ref cnt_ptr = self.counts.builder.as_primitive[int64]()
 
         for i in range(n):
             if has_bitmap and not input_col.is_valid(i):
                 continue
 
             var g = Int(group_ids.unsafe_get(i))
-            var cnt = Int(cnt_ptr[]._buffer.unsafe_get[int64.native](g))
+            var cnt = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
 
             if self.name == "count":
-                cnt_ptr[]._buffer.unsafe_set[int64.native](
+                cnt_ptr._buffer.unsafe_set[int64.native](
                     g, Scalar[int64.native](cnt + 1)
                 )
                 continue
 
             var val = _read_as_float64(input_col, i)
-            var cur = Float64(val_ptr[]._buffer.unsafe_get[float64.native](g))
+            var cur = Float64(val_ptr._buffer.unsafe_get[float64.native](g))
 
             if self.name == "sum" or self.name == "mean":
-                val_ptr[]._buffer.unsafe_set[float64.native](
+                val_ptr._buffer.unsafe_set[float64.native](
                     g, Scalar[float64.native](cur + val)
                 )
             elif self.name == "min":
                 if cnt == 0 or val < cur:
-                    val_ptr[]._buffer.unsafe_set[float64.native](
+                    val_ptr._buffer.unsafe_set[float64.native](
                         g, Scalar[float64.native](val)
                     )
             elif self.name == "max":
                 if cnt == 0 or val > cur:
-                    val_ptr[]._buffer.unsafe_set[float64.native](
+                    val_ptr._buffer.unsafe_set[float64.native](
                         g, Scalar[float64.native](val)
                     )
 
-            cnt_ptr[]._buffer.unsafe_set[int64.native](
+            cnt_ptr._buffer.unsafe_set[int64.native](
                 g, Scalar[int64.native](cnt + 1)
             )
 
@@ -179,13 +179,13 @@ struct AggregateFunction(Copyable, Movable):
         if self.name == "mean":
             # Compute value / count for each group.
             var b = PrimitiveBuilder[float64](capacity=num_groups)
-            var val_ptr = self.values.builder.as_primitive[float64]()
-            var cnt_ptr = self.counts.builder.as_primitive[int64]()
+            ref val_ptr = self.values.builder.as_primitive[float64]()
+            ref cnt_ptr = self.counts.builder.as_primitive[int64]()
             for g in range(num_groups):
-                var c = Int(cnt_ptr[]._buffer.unsafe_get[int64.native](g))
+                var c = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
                 if c > 0:
                     var v = Float64(
-                        val_ptr[]._buffer.unsafe_get[float64.native](g)
+                        val_ptr._buffer.unsafe_get[float64.native](g)
                     )
                     b.append(Scalar[float64.native](v / Float64(c)))
                 else:
@@ -197,12 +197,12 @@ struct AggregateFunction(Copyable, Movable):
 
         # sum, min, max — emit value if count > 0, else null.
         var b = PrimitiveBuilder[float64](capacity=num_groups)
-        var val_ptr = self.values.builder.as_primitive[float64]()
-        var cnt_ptr = self.counts.builder.as_primitive[int64]()
+        ref val_ptr = self.values.builder.as_primitive[float64]()
+        ref cnt_ptr = self.counts.builder.as_primitive[int64]()
         for g in range(num_groups):
-            var c = Int(cnt_ptr[]._buffer.unsafe_get[int64.native](g))
+            var c = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
             if c > 0:
-                b.append(val_ptr[]._buffer.unsafe_get[float64.native](g))
+                b.append(val_ptr._buffer.unsafe_get[float64.native](g))
             else:
                 b.append_null()
         return (

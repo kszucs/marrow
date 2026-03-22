@@ -40,7 +40,6 @@ from marrow.builders import (
     StringBuilder,
     ListBuilder,
     StructBuilder,
-    make_builder,
 )
 from marrow.scalars import AnyScalar, ListScalar
 from marrow.dtypes import DataType
@@ -453,6 +452,9 @@ trait PyConverter(ImplicitlyDestructible, Movable):
     def extend(mut self, values: PyObjectPtr) raises:
         ...
 
+    def builder(mut self) -> AnyBuilder:
+        ...
+
 
 # ---------------------------------------------------------------------------
 # PyAnyConverter — type-erased converter with dynamic dispatch
@@ -465,6 +467,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     var _data: ArcPointer[NoneType]
     var _virt_append: def(ArcPointer[NoneType], PyObjectPtr) raises
     var _virt_extend: def(ArcPointer[NoneType], PyObjectPtr) raises
+    var _virt_builder: def(ArcPointer[NoneType]) -> AnyBuilder
     var _virt_drop: def(var ArcPointer[NoneType])
 
     @staticmethod
@@ -480,6 +483,10 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         rebind[ArcPointer[T]](ptr)[].extend(values)
 
     @staticmethod
+    def _tramp_builder[T: PyConverter](ptr: ArcPointer[NoneType]) -> AnyBuilder:
+        return rebind[ArcPointer[T]](ptr.copy())[].builder()
+
+    @staticmethod
     def _tramp_drop[T: PyConverter](var ptr: ArcPointer[NoneType]):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
@@ -490,12 +497,14 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_append = Self._tramp_append[T]
         self._virt_extend = Self._tramp_extend[T]
+        self._virt_builder = Self._tramp_builder[T]
         self._virt_drop = Self._tramp_drop[T]
 
     def __copyinit__(out self, read copy: Self):
         self._data = copy._data.copy()
         self._virt_append = copy._virt_append
         self._virt_extend = copy._virt_extend
+        self._virt_builder = copy._virt_builder
         self._virt_drop = copy._virt_drop
 
     def append(mut self, value: PyObjectPtr) raises:
@@ -503,6 +512,9 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
     def extend(mut self, values: PyObjectPtr) raises:
         self._virt_extend(self._data, values)
+
+    def builder(mut self) -> AnyBuilder:
+        return self._virt_builder(self._data)
 
     def __del__(deinit self):
         self._virt_drop(self._data^)
@@ -518,14 +530,13 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(
-        out self,
-        builder: ArcPointer[PrimitiveBuilder[Self.T]],
-        has_nulls: Bool = True,
-    ):
-        self._builder = builder
+    def __init__(out self, has_nulls: Bool = True, capacity: Int = 0):
+        self._builder = ArcPointer(PrimitiveBuilder[Self.T](capacity))
         self._has_nulls = has_nulls
         self.py = PyHelpers()
+
+    def builder(mut self) -> AnyBuilder:
+        return self._builder.copy()
 
     def extend(mut self, values: PyObjectPtr) raises:
         ref b = self._builder[]
@@ -564,14 +575,13 @@ struct PyStringConverter(PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(
-        out self,
-        builder: ArcPointer[StringBuilder],
-        has_nulls: Bool = True,
-    ):
-        self._builder = builder
+    def __init__(out self, has_nulls: Bool = True, capacity: Int = 0):
+        self._builder = ArcPointer(StringBuilder(capacity))
         self._has_nulls = has_nulls
         self.py = PyHelpers()
+
+    def builder(mut self) -> AnyBuilder:
+        return self._builder.copy()
 
     @always_inline
     def _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
@@ -623,14 +633,18 @@ struct PyListConverter(PyConverter):
 
     def __init__(
         out self,
-        builder: ArcPointer[ListBuilder],
-        var child: PyAnyConverter,
+        dtype: dt.DataType,
         has_nulls: Bool = True,
-    ):
-        self._builder = builder
+        capacity: Int = 0,
+    ) raises:
+        var child = make_converter(dtype.fields[0].dtype, has_nulls)
+        self._builder = ArcPointer(ListBuilder(child.builder(), capacity))
         self._child = child^
         self._has_nulls = has_nulls
         self.py = PyHelpers()
+
+    def builder(mut self) -> AnyBuilder:
+        return self._builder.copy()
 
     def extend(mut self, values: PyObjectPtr) raises:
         ref builder = self._builder[]
@@ -671,17 +685,24 @@ struct PyStructConverter(PyConverter):
 
     def __init__(
         out self,
-        builder: ArcPointer[StructBuilder],
-        var children: List[PyAnyConverter],
         dtype: dt.DataType,
+        capacity: Int = 0,
     ) raises:
+        var children = List[PyAnyConverter](capacity=len(dtype.fields))
+        var child_builders = List[AnyBuilder](capacity=len(dtype.fields))
         var field_keys = List[PythonObject](capacity=len(dtype.fields))
         for i in range(len(dtype.fields)):
+            var child = make_converter(dtype.fields[i].dtype)
+            child_builders.append(child.builder())
+            children.append(child^)
             field_keys.append(PythonObject(dtype.fields[i].name))
-        self._builder = builder
+        self._builder = ArcPointer(StructBuilder(dtype.fields.copy(), child_builders^, capacity))
         self._children = children^
         self._field_keys = field_keys^
         self.py = PyHelpers()
+
+    def builder(mut self) -> AnyBuilder:
+        return self._builder.copy()
 
     def extend(mut self, values: PyObjectPtr) raises:
         var n_fields = len(self._children)
@@ -722,31 +743,19 @@ struct PyStructConverter(PyConverter):
 
 def make_converter(
     dtype: dt.DataType,
-    var builder: AnyBuilder,
     has_nulls: Bool = True,
+    capacity: Int = 0,
 ) raises -> PyAnyConverter:
-    """Create a typed converter wrapping the given builder."""
+    """Create a typed converter that owns its builder."""
     comptime for T in dt.primitive_dtypes:
         if dtype == T:
-            var builder = builder.as_primitive[T]()
-            return PyPrimitiveConverter[T](builder, has_nulls)
+            return PyPrimitiveConverter[T](has_nulls, capacity)
     if dtype.is_string():
-        var builder = builder.as_string()
-        return PyStringConverter(builder, has_nulls)
+        return PyStringConverter(has_nulls, capacity)
     elif dtype.is_list():
-        var builder = builder.as_list()
-        var values = builder[].values()
-        var child = make_converter(dtype.fields[0].dtype, values)
-        return PyListConverter(builder, child^, has_nulls)
+        return PyListConverter(dtype, has_nulls, capacity)
     elif dtype.is_struct():
-        var builder = builder.as_struct()
-        var children = List[PyAnyConverter](capacity=len(dtype.fields))
-        for i in range(len(dtype.fields)):
-            var field_builder = builder[].child(i)
-            children.append(
-                make_converter(dtype.fields[i].dtype, field_builder)
-            )
-        return PyStructConverter(builder, children^, dtype)
+        return PyStructConverter(dtype, capacity)
     else:
         raise Error("unsupported type: ", dtype)
 
@@ -835,9 +844,9 @@ def array(
             " (provide type= explicitly)"
         )
 
-    var builder = make_builder(dtype, len(obj))
-    var converter = make_converter(dtype, builder, has_nulls)
+    var converter = make_converter(dtype, has_nulls, len(obj))
     converter.extend(obj._obj_ptr)
+    var builder = converter.builder()
     return builder.finish().to_python_object()
 
 
