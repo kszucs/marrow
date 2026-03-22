@@ -16,23 +16,10 @@ def make_session() -> SessionContext:
     ctx = SessionContext()
 
     def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-        return pa.array(ma.add(ma.array(a), ma.array(b)))
+        return pa.array(ma.add(a, b))
 
     ctx.register_udf(
-        udf(ma.add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
-    )
-
-    def mojo_add_gpu(a: pa.Array, b: pa.Array) -> pa.Array:
-        return pa.array(ma.add_gpu(ma.array(a), ma.array(b)))
-
-    ctx.register_udf(
-        udf(
-            mojo_add_gpu,
-            [pa.int64(), pa.int64()],
-            pa.int64(),
-            "immutable",
-            name="mojo_add_gpu",
-        )
+        udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
     )
 
     return ctx
@@ -49,7 +36,6 @@ def main() -> None:
     )
     ctx.register_record_batches("orders", [[batch]])
 
-    print("=== CPU: mojo_add ===")
     result = pa.Table.from_batches(
         ctx.sql(
             "SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"
@@ -60,21 +46,6 @@ def main() -> None:
         quantity = result.column("quantity")[i].as_py()
         total = result.column("total")[i].as_py()
         print(f"  price={price}, quantity={quantity}, total={total}")
-
-    print("\n=== GPU: mojo_add_gpu ===")
-    try:
-        result = pa.Table.from_batches(
-            ctx.sql(
-                "SELECT price, quantity, mojo_add_gpu(price, quantity) AS total FROM orders"
-            ).collect()
-        )
-        for i in range(result.num_rows):
-            price = result.column("price")[i].as_py()
-            quantity = result.column("quantity")[i].as_py()
-            total = result.column("total")[i].as_py()
-            print(f"  price={price}, quantity={quantity}, total={total}")
-    except Exception as e:
-        print(f"  GPU kernel not available: {e}")
 
 
 if __name__ == "__main__":
