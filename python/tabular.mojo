@@ -391,6 +391,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[record_batch](
         "record_batch",
         docstring=(
+            "record_batch(data, /, *, names=None) -> RecordBatch\n--\n\n"
             "Create a RecordBatch from a dict of arrays, a list of arrays with"
             " names=, or any object implementing __arrow_c_record_batch__."
         ),
@@ -421,6 +422,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[table](
         "table",
         docstring=(
+            "table(data, /, *, names=None) -> Table\n--\n\n"
             "Create a Table from a dict of arrays, a list of arrays with"
             " names=, or any object implementing __arrow_c_stream__."
         ),

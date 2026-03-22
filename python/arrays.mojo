@@ -1079,8 +1079,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = struct_array_sp.def_len[StructArray.__len__]()
 
     mb.def_function[infer_type](
-        "infer_type", docstring="Infer the Arrow type of a Python sequence."
+        "infer_type", docstring="infer_type(obj, /) -> DataType\n--\n\nInfer the Arrow type of a Python sequence."
     )
     mb.def_function[array](
-        "array", docstring="Create a marrow array from a Python sequence."
+        "array", docstring="array(obj, /, *, type=None) -> Array\n--\n\nCreate a marrow array from a Python sequence."
     )

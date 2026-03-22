@@ -32,4 +32,4 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = schema_py.def_method[_schema_arrow_c_schema]("__arrow_c_schema__")
         .def_method[marrow_module]("__module__")
 
-    mb.def_function[schema]("schema", docstring="Create an Arrow schema from a list of fields or any Arrow-compatible object.")
+    mb.def_function[schema]("schema", docstring="schema(fields_or_schema, /) -> Schema\n--\n\nCreate an Arrow schema from a list of fields or any Arrow-compatible object.")

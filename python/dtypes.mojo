@@ -108,26 +108,26 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
     _ = mb.add_type[dt.DataType]("DataType").def_method[marrow_module]("__module__")
 
-    mb.def_function[bool_]("bool_", docstring="Create a boolean DataType.")
-    mb.def_function[int8]("int8", docstring="Create an int8 DataType.")
-    mb.def_function[int16]("int16", docstring="Create an int16 DataType.")
-    mb.def_function[int32]("int32", docstring="Create an int32 DataType.")
-    mb.def_function[int64]("int64", docstring="Create an int64 DataType.")
-    mb.def_function[uint8]("uint8", docstring="Create a uint8 DataType.")
-    mb.def_function[uint16]("uint16", docstring="Create a uint16 DataType.")
-    mb.def_function[uint32]("uint32", docstring="Create a uint32 DataType.")
-    mb.def_function[uint64]("uint64", docstring="Create a uint64 DataType.")
+    mb.def_function[bool_]("bool_", docstring="bool_() -> DataType\n--\n\nCreate a boolean DataType.")
+    mb.def_function[int8]("int8", docstring="int8() -> DataType\n--\n\nCreate an int8 DataType.")
+    mb.def_function[int16]("int16", docstring="int16() -> DataType\n--\n\nCreate an int16 DataType.")
+    mb.def_function[int32]("int32", docstring="int32() -> DataType\n--\n\nCreate an int32 DataType.")
+    mb.def_function[int64]("int64", docstring="int64() -> DataType\n--\n\nCreate an int64 DataType.")
+    mb.def_function[uint8]("uint8", docstring="uint8() -> DataType\n--\n\nCreate a uint8 DataType.")
+    mb.def_function[uint16]("uint16", docstring="uint16() -> DataType\n--\n\nCreate a uint16 DataType.")
+    mb.def_function[uint32]("uint32", docstring="uint32() -> DataType\n--\n\nCreate a uint32 DataType.")
+    mb.def_function[uint64]("uint64", docstring="uint64() -> DataType\n--\n\nCreate a uint64 DataType.")
     mb.def_function[float16](
-        "float16", docstring="Create a float16 DataType."
+        "float16", docstring="float16() -> DataType\n--\n\nCreate a float16 DataType."
     )
     mb.def_function[float32](
-        "float32", docstring="Create a float32 DataType."
+        "float32", docstring="float32() -> DataType\n--\n\nCreate a float32 DataType."
     )
     mb.def_function[float64](
-        "float64", docstring="Create a float64 DataType."
+        "float64", docstring="float64() -> DataType\n--\n\nCreate a float64 DataType."
     )
-    mb.def_function[string]("string", docstring="Create a string DataType.")
-    mb.def_function[binary]("binary", docstring="Create a binary DataType.")
-    mb.def_function[field]("field", docstring="Create an Arrow field.")
-    mb.def_function[list_]("list_", docstring="Create a list DataType.")
-    mb.def_function[struct_]("struct", docstring="Create a struct DataType.")
+    mb.def_function[string]("string", docstring="string() -> DataType\n--\n\nCreate a string DataType.")
+    mb.def_function[binary]("binary", docstring="binary() -> DataType\n--\n\nCreate a binary DataType.")
+    mb.def_function[field]("field", docstring="field(name: str, dtype: DataType, /) -> Field\n--\n\nCreate a Field with the given name and data type.")
+    mb.def_function[list_]("list_", docstring="list_(value_type: DataType, /) -> DataType\n--\n\nCreate a list DataType from a value type.")
+    mb.def_function[struct_]("struct", docstring="struct(fields: list[Field], /) -> DataType\n--\n\nCreate a struct DataType from a list of Fields.")
