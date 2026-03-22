@@ -502,7 +502,7 @@ def test_fixed_size_list_builder_size1() raises:
 
 
 def test_struct_builder_zero_length() raises:
-    var sb = StructBuilder([], [])
+    var sb = StructBuilder([])
     var frozen = sb.finish_typed()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_struct())
@@ -510,18 +510,13 @@ def test_struct_builder_zero_length() raises:
 
 def test_struct_builder_append_valid() raises:
     """Struct validity tracks correct; child builders drive field values."""
-    var id_b = PrimitiveBuilder[int64](3)
-    id_b.append(1)
-    id_b.append(2)
-    id_b.append(3)
-    var score_b = PrimitiveBuilder[float64](3)
-    score_b.append(0.1)
-    score_b.append(0.2)
-    score_b.append(0.3)
-
-    var fields: List[Field] = [Field("id", int64), Field("score", float64)]
-    var children: List[AnyBuilder] = [id_b^, score_b^]
-    var sb = StructBuilder(fields^, children^, capacity=3)
+    var sb = StructBuilder([field("id", int64), field("score", float64)], capacity=3)
+    sb.field_builder(0).as_primitive[int64]().append(1)
+    sb.field_builder(0).as_primitive[int64]().append(2)
+    sb.field_builder(0).as_primitive[int64]().append(3)
+    sb.field_builder(1).as_primitive[float64]().append(0.1)
+    sb.field_builder(1).as_primitive[float64]().append(0.2)
+    sb.field_builder(1).as_primitive[float64]().append(0.3)
     sb.append_valid()
     sb.append_valid()
     sb.append_valid()
@@ -537,13 +532,9 @@ def test_struct_builder_append_valid() raises:
 
 def test_struct_builder_append_null() raises:
     """Null struct entries — validity bitmap reflects nulls."""
-    var id_b = PrimitiveBuilder[int32](2)
-    id_b.append(10)
-    id_b.append(20)
-
-    var fields: List[Field] = [Field("id", int32)]
-    var children: List[AnyBuilder] = [id_b^]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("id", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(10)
+    sb.field_builder(0).as_primitive[int32]().append(20)
     sb.append_valid()
     sb.append_null()
     var frozen = sb.finish_typed()
@@ -554,13 +545,9 @@ def test_struct_builder_append_null() raises:
 
 def test_struct_builder_field_values_accessible() raises:
     """Child field values are accessible after finish."""
-    var x_b = PrimitiveBuilder[int32](2)
-    x_b.append(42)
-    x_b.append(99)
-
-    var fields: List[Field] = [Field("x", int32)]
-    var children: List[AnyBuilder] = [x_b^]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("x", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(42)
+    sb.field_builder(0).as_primitive[int32]().append(99)
     sb.append_valid()
     sb.append_valid()
     var frozen = sb.finish_typed()
@@ -573,23 +560,16 @@ def test_struct_builder_field_values_accessible() raises:
 
 def test_struct_builder_multi_type_fields() raises:
     """Struct with primitive, string, and bool fields."""
-    var id_b = PrimitiveBuilder[int64](2)
-    id_b.append(1)
-    id_b.append(2)
-    var name_b = StringBuilder(2)
-    name_b.append("alice")
-    name_b.append("bob")
-    var active_b = BoolBuilder(2)
-    active_b.append(True)
-    active_b.append_null()
-
-    var fields: List[Field] = [
-        Field("id", int64),
-        Field("name", string),
-        Field("active", bool_),
-    ]
-    var children: List[AnyBuilder] = [id_b^, name_b^, active_b^]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder(
+        [field("id", int64), field("name", string), field("active", bool_)],
+        capacity=2,
+    )
+    sb.field_builder(0).as_primitive[int64]().append(1)
+    sb.field_builder(0).as_primitive[int64]().append(2)
+    sb.field_builder(1).as_string().append("alice")
+    sb.field_builder(1).as_string().append("bob")
+    sb.field_builder(2).as_primitive[bool_]().append(True)
+    sb.field_builder(2).as_primitive[bool_]().append_null()
     sb.append_valid()
     sb.append_valid()
 
@@ -601,33 +581,21 @@ def test_struct_builder_multi_type_fields() raises:
     assert_equal(frozen.dtype.fields[2].name, "active")
 
 
-def test_struct_builder_child_accessor() raises:
-    var x_b = PrimitiveBuilder[int32](1)
-    x_b.append(7)
-    var y_b = PrimitiveBuilder[int32](1)
-    y_b.append(8)
+def test_struct_builder_field_builder() raises:
+    var sb = StructBuilder([field("x", int32), field("y", int32)])
 
-    var fields: List[Field] = [Field("x", int32), Field("y", int32)]
-    var children: List[AnyBuilder] = [x_b^, y_b^]
-    var sb = StructBuilder(fields^, children^)
+    sb.field_builder(0).as_primitive[int32]().append(7)
+    sb.field_builder(1).as_primitive[int32]().append(8)
     sb.append_valid()
 
-    assert_equal(sb.child(0).length(), 1)
-    assert_equal(sb.child(1).length(), 1)
+    assert_equal(sb.field_builder(0).length(), 1)
+    assert_equal(sb.field_builder(1).length(), 1)
 
 
 def test_struct_builder_capacity_growth() raises:
-    var id_b = PrimitiveBuilder[int32]()
-    id_b.append(0)
-    id_b.append(1)
-    id_b.append(2)
-    id_b.append(3)
-    id_b.append(4)
-
-    var fields: List[Field] = [Field("id", int32)]
-    var children: List[AnyBuilder] = [id_b^]
-    var sb = StructBuilder(fields^, children^)
-    for _ in range(5):
+    var sb = StructBuilder([field("id", int32)])
+    for i in range(5):
+        sb.field_builder(0).as_primitive[int32]().append(i)
         sb.append_valid()
     var frozen = sb.finish_typed()
     assert_equal(frozen.length, 5)
@@ -635,14 +603,9 @@ def test_struct_builder_capacity_growth() raises:
 
 def test_struct_builder_field_names_preserved() raises:
     """Field names survive builder → finish cycle."""
-    var a_b = PrimitiveBuilder[int8](1)
-    a_b.append(1)
-    var b_b = PrimitiveBuilder[int8](1)
-    b_b.append(2)
-
-    var fields: List[Field] = [Field("alpha", int8), Field("beta", int8)]
-    var children: List[AnyBuilder] = [a_b^, b_b^]
-    var sb = StructBuilder(fields^, children^)
+    var sb = StructBuilder([field("alpha", int8), field("beta", int8)])
+    sb.field_builder(0).as_primitive[int8]().append(1)
+    sb.field_builder(1).as_primitive[int8]().append(2)
     sb.append_valid()
     var frozen = sb.finish_typed()
     assert_equal(frozen.dtype.fields[0].name, "alpha")

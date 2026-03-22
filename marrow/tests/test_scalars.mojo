@@ -99,25 +99,25 @@ def test_string_scalar_write_to() raises:
 
 def test_scalar_from_primitive() raises:
     var typed = PrimitiveScalar[int32](Scalar[int32.native](99))
-    var erased = AnyScalar(typed)
+    var erased = AnyScalar(typed^)
     assert_true(erased.is_valid())
-    assert_equal(erased.dtype(), int32)
-    var back = erased.as_primitive[int32]()
+    assert_equal(erased.type(), int32)
+    ref back = erased.as_primitive[int32]()
     assert_equal(back.value(), 99)
 
 
 def test_scalar_from_string() raises:
     var typed = StringScalar("world")
-    var erased = AnyScalar(typed)
+    var erased = AnyScalar(typed^)
     assert_true(erased.is_valid())
-    assert_true(erased.dtype().is_string())
-    var back = erased.as_string()
+    assert_true(erased.type().is_string())
+    ref back = erased.as_string()
     assert_equal(back.as_string(), "world")
 
 
 def test_scalar_null() raises:
     var typed = PrimitiveScalar[int32].null()
-    var erased = AnyScalar(typed)
+    var erased = AnyScalar(typed^)
     assert_true(erased.is_null())
 
 

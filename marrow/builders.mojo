@@ -215,13 +215,17 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_struct(ref self) -> ref[self._data[]] StructBuilder:
         return rebind[ArcPointer[StructBuilder]](self._data)[]
 
+    @always_inline
+    def downcast[T: Builder](self) -> ArcPointer[T]:
+        return rebind[ArcPointer[T]](self._data.copy())
+
     def child(self, index: Int) -> AnyBuilder:
         """Access child builder by index (for composite types)."""
         var dt = self.dtype()
         if dt.is_list() or dt.is_fixed_size_list():
             return self.as_list().values()
         else:
-            return self.as_struct().child(index)
+            return self.as_struct().field_builder(index)
 
     def __del__(deinit self):
         self._virt_drop(self._data^)
@@ -861,18 +865,16 @@ struct StructBuilder(Builder, Sized):
     var _bitmap: BitmapBuilder
     var _children: List[AnyBuilder]
 
-    def __init__(
-        out self,
-        var fields: List[Field],
-        var field_builders: List[AnyBuilder],
-        capacity: Int = 0,
-    ):
+    def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
+        var children = List[AnyBuilder](capacity=len(fields))
+        for i in range(len(fields)):
+            children.append(make_builder(fields[i].dtype))
         self._dtype = struct_(fields)
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
-        self._children = field_builders^
+        self._children = children^
 
     def __len__(self) -> Int:
         return self._length
@@ -886,7 +888,7 @@ struct StructBuilder(Builder, Sized):
     def dtype(self) -> DataType:
         return self._dtype
 
-    def child(self, index: Int) -> AnyBuilder:
+    def field_builder(ref self, index: Int) -> ref[self._children] AnyBuilder:
         return self._children[index]
 
     def append_null(mut self) raises:
@@ -1014,10 +1016,7 @@ def make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
         var child = make_builder(dtype.fields[0].dtype)
         return FixedSizeListBuilder(child^, dtype.size, capacity)
     elif dtype.is_struct():
-        var children = List[AnyBuilder](capacity=len(dtype.fields))
-        for i in range(len(dtype.fields)):
-            children.append(make_builder(dtype.fields[i].dtype))
-        return StructBuilder(dtype.fields.copy(), children^, capacity)
+        return StructBuilder(dtype.fields.copy(), capacity)
     else:
         raise Error("unsupported type: ", dtype)
 

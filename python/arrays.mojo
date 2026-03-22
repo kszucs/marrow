@@ -40,6 +40,7 @@ from marrow.builders import (
     StringBuilder,
     ListBuilder,
     StructBuilder,
+    make_builder,
 )
 from marrow.scalars import AnyScalar, ListScalar
 from marrow.dtypes import DataType
@@ -530,8 +531,8 @@ struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, has_nulls: Bool = True, capacity: Int = 0):
-        self._builder = ArcPointer(PrimitiveBuilder[Self.T](capacity))
+    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+        self._builder = builder.downcast[PrimitiveBuilder[Self.T]]()
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
@@ -575,8 +576,8 @@ struct PyStringConverter(PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(out self, has_nulls: Bool = True, capacity: Int = 0):
-        self._builder = ArcPointer(StringBuilder(capacity))
+    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
+        self._builder = builder.downcast[StringBuilder]()
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
@@ -631,15 +632,11 @@ struct PyListConverter(PyConverter):
     var _has_nulls: Bool
     var py: PyHelpers
 
-    def __init__(
-        out self,
-        dtype: dt.DataType,
-        has_nulls: Bool = True,
-        capacity: Int = 0,
-    ) raises:
-        var child = make_converter(dtype.fields[0].dtype, has_nulls)
-        self._builder = ArcPointer(ListBuilder(child.builder(), capacity))
-        self._child = child^
+    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
+        self._builder = builder.downcast[ListBuilder]()
+        var child_dtype = self._builder[].dtype().fields[0].dtype
+        var child_builder = self._builder[].values()
+        self._child = make_converter(child_builder, True)
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
@@ -683,20 +680,16 @@ struct PyStructConverter(PyConverter):
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
-    def __init__(
-        out self,
-        dtype: dt.DataType,
-        capacity: Int = 0,
-    ) raises:
-        var children = List[PyAnyConverter](capacity=len(dtype.fields))
-        var child_builders = List[AnyBuilder](capacity=len(dtype.fields))
-        var field_keys = List[PythonObject](capacity=len(dtype.fields))
-        for i in range(len(dtype.fields)):
-            var child = make_converter(dtype.fields[i].dtype)
-            child_builders.append(child.builder())
-            children.append(child^)
+    def __init__(out self, builder: AnyBuilder) raises:
+        self._builder = builder.downcast[StructBuilder]()
+        var dtype = self._builder[].dtype()
+        var n = len(dtype.fields)
+        var children = List[PyAnyConverter](capacity=n)
+        var field_keys = List[PythonObject](capacity=n)
+        for i in range(n):
+            var child_builder = self._builder[].field_builder(i)
+            children.append(make_converter(child_builder))
             field_keys.append(PythonObject(dtype.fields[i].name))
-        self._builder = ArcPointer(StructBuilder(dtype.fields.copy(), child_builders^, capacity))
         self._children = children^
         self._field_keys = field_keys^
         self.py = PyHelpers()
@@ -741,21 +734,18 @@ struct PyStructConverter(PyConverter):
 # ---------------------------------------------------------------------------
 
 
-def make_converter(
-    dtype: dt.DataType,
-    has_nulls: Bool = True,
-    capacity: Int = 0,
-) raises -> PyAnyConverter:
-    """Create a typed converter that owns its builder."""
+def make_converter(builder: AnyBuilder, has_nulls: Bool = True) raises -> PyAnyConverter:
+    """Create a converter wrapping an existing builder (shared ArcPointer)."""
+    dtype = builder.dtype()
     comptime for T in dt.primitive_dtypes:
         if dtype == T:
-            return PyPrimitiveConverter[T](has_nulls, capacity)
+            return PyPrimitiveConverter[T](builder, has_nulls)
     if dtype.is_string():
-        return PyStringConverter(has_nulls, capacity)
+        return PyStringConverter(builder, has_nulls)
     elif dtype.is_list():
-        return PyListConverter(dtype, has_nulls, capacity)
+        return PyListConverter(builder, has_nulls)
     elif dtype.is_struct():
-        return PyStructConverter(dtype, capacity)
+        return PyStructConverter(builder)
     else:
         raise Error("unsupported type: ", dtype)
 
@@ -844,9 +834,9 @@ def array(
             " (provide type= explicitly)"
         )
 
-    var converter = make_converter(dtype, has_nulls, len(obj))
+    var builder = make_builder(dtype, len(obj))
+    var converter = make_converter(builder, has_nulls)
     converter.extend(obj._obj_ptr)
-    var builder = converter.builder()
     return builder.finish().to_python_object()
 
 

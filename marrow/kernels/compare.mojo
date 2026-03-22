@@ -124,12 +124,12 @@ def _binary_cmp[
     var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
         out_buf = BufferBuilder.alloc_device[DType.bool](ctx.value(), length)
-        lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
-        rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
+        lhs_ptr = left.buffer.device_ptr[native](left.offset)
+        rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         out_buf = BufferBuilder.alloc[DType.bool](length)
-        lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)
-        rhs_ptr = right.buffer.aligned_unsafe_ptr[native](right.offset)
+        lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
+        rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
 
     _elementwise_cmp_pack[T, func](
         out_buf.ptr,

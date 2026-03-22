@@ -365,24 +365,17 @@ def test_concat_fixed_size_list_with_offset() raises:
 
 def test_concat_struct() raises:
     # Chunk 1: [{id:1, score:0.5}, {id:2, score:0.6}]
-    var id1 = PrimitiveBuilder[int32]()
-    id1.append(1)
-    id1.append(2)
-    var score1 = PrimitiveBuilder[float32]()
-    score1.append(0.5)
-    score1.append(0.6)
-    var fields: List[Field] = [Field("id", int32), Field("score", float32)]
-    var children1: List[AnyBuilder] = [id1^, score1^]
-    var sb1 = StructBuilder(fields.copy(), children1^)
+    var sb1 = StructBuilder([field("id", int32), field("score", float32)])
+    sb1.field_builder(0).as_primitive[int32]().append(1)
+    sb1.field_builder(0).as_primitive[int32]().append(2)
+    sb1.field_builder(1).as_primitive[float32]().append(0.5)
+    sb1.field_builder(1).as_primitive[float32]().append(0.6)
     sb1.append_valid()
     sb1.append_valid()
     # Chunk 2: [{id:3, score:0.7}]
-    var id2 = PrimitiveBuilder[int32]()
-    id2.append(3)
-    var score2 = PrimitiveBuilder[float32]()
-    score2.append(0.7)
-    var children2: List[AnyBuilder] = [id2^, score2^]
-    var sb2 = StructBuilder(fields^, children2^)
+    var sb2 = StructBuilder([field("id", int32), field("score", float32)])
+    sb2.field_builder(0).as_primitive[int32]().append(3)
+    sb2.field_builder(1).as_primitive[float32]().append(0.7)
     sb2.append_valid()
     var arrs: List[AnyArray] = [
         AnyArray(sb1.finish_typed()),

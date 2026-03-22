@@ -62,7 +62,7 @@ trait Scalar(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: DataType](Boolable, Copyable, Movable, Writable, Equatable):
+struct PrimitiveScalar[T: DataType](Scalar, Boolable, Copyable, Movable, Writable, Equatable):
     """A single primitive value: holds a native Mojo scalar + validity flag."""
 
     var _value: _Scalar[Self.T.native]
@@ -114,7 +114,7 @@ struct PrimitiveScalar[T: DataType](Boolable, Copyable, Movable, Writable, Equat
         return b.finish_typed()
 
     def as_any(self) -> AnyScalar:
-        return self
+        return self.copy()
 
     def __eq__(self, other: Self) -> Bool:
         if self.is_null() and other.is_null():
@@ -146,7 +146,7 @@ struct PrimitiveScalar[T: DataType](Boolable, Copyable, Movable, Writable, Equat
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(Copyable, Movable, Writable, Equatable):
+struct StringScalar(Scalar, Copyable, Movable, Writable, Equatable):
     """A single string value: holds a String + validity flag."""
 
     var _value: String
@@ -220,7 +220,7 @@ struct StringScalar(Copyable, Movable, Writable, Equatable):
 # ---------------------------------------------------------------------------
 
 
-struct ListScalar(Copyable, Movable, Writable):
+struct ListScalar(Scalar, Copyable, Movable, Writable):
     """A single list value: holds an AnyArray of child elements + validity flag."""
 
     var _value: AnyArray
@@ -231,7 +231,7 @@ struct ListScalar(Copyable, Movable, Writable):
         self._is_valid = is_valid
 
     def type(self) -> DataType:
-        return list_(self._value.type())
+        return list_(self._value.dtype())
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -261,7 +261,7 @@ struct ListScalar(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct StructScalar(Copyable, Movable, Writable):
+struct StructScalar(Scalar, Copyable, Movable, Writable):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
     var _dtype: DataType

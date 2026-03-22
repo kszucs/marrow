@@ -108,6 +108,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
     _ = mb.add_type[dt.DataType]("DataType").def_method[marrow_module]("__module__")
 
+    mb.def_function[null]("null", docstring="null() -> DataType\n--\n\nCreate a null DataType.")
     mb.def_function[bool_]("bool_", docstring="bool_() -> DataType\n--\n\nCreate a boolean DataType.")
     mb.def_function[int8]("int8", docstring="int8() -> DataType\n--\n\nCreate an int8 DataType.")
     mb.def_function[int16]("int16", docstring="int16() -> DataType\n--\n\nCreate an int16 DataType.")

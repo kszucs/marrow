@@ -118,8 +118,7 @@ def test_array_from_list() raises:
 
 
 def test_array_from_struct() raises:
-    var fields = [Field("x", int32)]
-    var s = StructBuilder(fields^, [], capacity=5)
+    var s = StructBuilder([field("x", int32)], capacity=5)
     var a: AnyArray = s.finish()
     assert_true(a.dtype().is_struct())
 
@@ -558,13 +557,10 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
 
 
 def test_struct_array() raises:
-    var fields = [
-        Field("id", int64),
-        Field("name", string),
-        Field("active", bool_),
-    ]
-
-    var struct_builder = StructBuilder(fields^, [], capacity=10)
+    var struct_builder = StructBuilder(
+        [field("id", int64), field("name", string), field("active", bool_)],
+        capacity=10,
+    )
     assert_equal(len(struct_builder), 0)
     assert_equal(struct_builder._capacity, 10)
 
@@ -578,22 +574,13 @@ def test_struct_array() raises:
 
 
 def test_struct_array_unsafe_get() raises:
-    var a_b = PrimitiveBuilder[int32](5)
-    a_b.append(1)
-    a_b.append(2)
-    a_b.append(3)
-    a_b.append(4)
-    a_b.append(5)
-    var b_b = PrimitiveBuilder[int32](3)
-    b_b.append(10)
-    b_b.append(20)
-    b_b.append(30)
-    var fields: List[Field] = [
-        Field("int_data_a", int32),
-        Field("int_data_b", int32),
-    ]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder(
+        [field("int_data_a", int32), field("int_data_b", int32)], capacity=2
+    )
+    for v in [1, 2, 3, 4, 5]:
+        sb.field_builder(0).as_primitive[int32]().append(v)
+    for v in [10, 20, 30]:
+        sb.field_builder(1).as_primitive[int32]().append(v)
     sb.append_valid()
     sb.append_valid()
     var struct_array = sb.finish_typed()
@@ -827,12 +814,9 @@ def test_str_fixed_size_list_array() raises:
 
 
 def test_str_struct_array() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(1)
-    a_b.append(2)
-    var fields: List[Field] = [Field("x", int32)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("x", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish_typed()
@@ -888,13 +872,10 @@ def test_list_array_is_valid() raises:
 
 
 def test_struct_array_is_valid() raises:
-    var a_b = PrimitiveBuilder[int32](3)
-    a_b.append(10)
-    a_b.append(20)
-    a_b.append(30)
-    var fields: List[Field] = [Field("val", int32)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=3)
+    var sb = StructBuilder([field("val", int32)], capacity=3)
+    sb.field_builder(0).as_primitive[int32]().append(10)
+    sb.field_builder(0).as_primitive[int32]().append(20)
+    sb.field_builder(0).as_primitive[int32]().append(30)
     sb.append_valid()
     sb.append_null()
     sb.append_valid()
@@ -1018,15 +999,11 @@ def test_fixed_size_list_getitem_bounds() raises:
 
 
 def test_struct_array_field_by_index() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(1)
-    a_b.append(2)
-    var b_b = StringBuilder()
-    b_b.append("x")
-    b_b.append("y")
-    var fields: List[Field] = [Field("id", int32), Field("name", string)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("id", int32), field("name", string)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(1).as_string().append("x")
+    sb.field_builder(1).as_string().append("y")
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish_typed()
@@ -1043,12 +1020,9 @@ def test_struct_array_field_by_index() raises:
 
 
 def test_struct_array_field_by_name() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(10)
-    a_b.append(20)
-    var fields: List[Field] = [Field("val", int32)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("val", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(10)
+    sb.field_builder(0).as_primitive[int32]().append(20)
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish_typed()
@@ -1060,11 +1034,8 @@ def test_struct_array_field_by_name() raises:
 
 
 def test_struct_array_field_bounds() raises:
-    var a_b = PrimitiveBuilder[int32](1)
-    a_b.append(1)
-    var fields: List[Field] = [Field("x", int32)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=1)
+    var sb = StructBuilder([field("x", int32)], capacity=1)
+    sb.field_builder(0).as_primitive[int32]().append(1)
     sb.append_valid()
     var sa = sb.finish_typed()
     try:
@@ -1286,15 +1257,11 @@ def test_fixed_size_list_flatten() raises:
 
 
 def test_struct_array_flatten() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(1)
-    a_b.append(2)
-    var b_b = StringBuilder()
-    b_b.append("x")
-    b_b.append("y")
-    var fields: List[Field] = [Field("id", int32), Field("name", string)]
-    var children: List[AnyBuilder] = [AnyBuilder(a_b^), AnyBuilder(b_b^)]
-    var sb = StructBuilder(fields^, children^, capacity=2)
+    var sb = StructBuilder([field("id", int32), field("name", string)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(1).as_string().append("x")
+    sb.field_builder(1).as_string().append("y")
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish_typed()
@@ -1533,25 +1500,15 @@ def test_fixed_size_list_array_eq_unequal() raises:
 
 
 def test_struct_array_eq() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(1)
-    a_b.append(2)
-    var fields_a = List[Field]()
-    fields_a.append(Field("x", int32))
-    var children_a = List[AnyBuilder]()
-    children_a.append(AnyBuilder(a_b^))
-    var sa = StructBuilder(fields_a^, children_a^, capacity=2)
+    var sa = StructBuilder([field("x", int32)], capacity=2)
+    sa.field_builder(0).as_primitive[int32]().append(1)
+    sa.field_builder(0).as_primitive[int32]().append(2)
     sa.append_valid()
     sa.append_valid()
 
-    var b_b = PrimitiveBuilder[int32](2)
-    b_b.append(1)
-    b_b.append(2)
-    var fields_b = List[Field]()
-    fields_b.append(Field("x", int32))
-    var children_b = List[AnyBuilder]()
-    children_b.append(AnyBuilder(b_b^))
-    var sb = StructBuilder(fields_b^, children_b^, capacity=2)
+    var sb = StructBuilder([field("x", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
     sb.append_valid()
     sb.append_valid()
 
@@ -1559,25 +1516,15 @@ def test_struct_array_eq() raises:
 
 
 def test_struct_array_eq_unequal() raises:
-    var a_b = PrimitiveBuilder[int32](2)
-    a_b.append(1)
-    a_b.append(2)
-    var fields_a = List[Field]()
-    fields_a.append(Field("x", int32))
-    var children_a = List[AnyBuilder]()
-    children_a.append(AnyBuilder(a_b^))
-    var sa = StructBuilder(fields_a^, children_a^, capacity=2)
+    var sa = StructBuilder([field("x", int32)], capacity=2)
+    sa.field_builder(0).as_primitive[int32]().append(1)
+    sa.field_builder(0).as_primitive[int32]().append(2)
     sa.append_valid()
     sa.append_valid()
 
-    var b_b = PrimitiveBuilder[int32](2)
-    b_b.append(1)
-    b_b.append(99)
-    var fields_b = List[Field]()
-    fields_b.append(Field("x", int32))
-    var children_b = List[AnyBuilder]()
-    children_b.append(AnyBuilder(b_b^))
-    var sb = StructBuilder(fields_b^, children_b^, capacity=2)
+    var sb = StructBuilder([field("x", int32)], capacity=2)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(99)
     sb.append_valid()
     sb.append_valid()
 
@@ -1585,22 +1532,12 @@ def test_struct_array_eq_unequal() raises:
 
 
 def test_struct_array_eq_dtype_mismatch() raises:
-    var a_b = PrimitiveBuilder[int32](1)
-    a_b.append(1)
-    var fields_a = List[Field]()
-    fields_a.append(Field("x", int32))
-    var children_a = List[AnyBuilder]()
-    children_a.append(AnyBuilder(a_b^))
-    var sa = StructBuilder(fields_a^, children_a^, capacity=1)
+    var sa = StructBuilder([field("x", int32)], capacity=1)
+    sa.field_builder(0).as_primitive[int32]().append(1)
     sa.append_valid()
 
-    var b_b = PrimitiveBuilder[int32](1)
-    b_b.append(1)
-    var fields_b = List[Field]()
-    fields_b.append(Field("y", int32))  # different field name
-    var children_b = List[AnyBuilder]()
-    children_b.append(AnyBuilder(b_b^))
-    var sb = StructBuilder(fields_b^, children_b^, capacity=1)
+    var sb = StructBuilder([field("y", int32)], capacity=1)  # different field name
+    sb.field_builder(0).as_primitive[int32]().append(1)
     sb.append_valid()
 
     assert_false(sa.finish_typed() == sb.finish_typed())

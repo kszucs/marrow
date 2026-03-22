@@ -116,7 +116,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         scalar_py.def_method[_scalar_as_py]("as_py")
         .def_method[pymethod[AnyScalar.is_valid]()]("is_valid")
         .def_method[pymethod[AnyScalar.is_null]()]("is_null")
-        .def_method[pymethod[AnyScalar.dtype]()]("type")
+        .def_method[pymethod[AnyScalar.type]()]("type")
         .def_method[_scalar_str]("__str__")
         .def_method[_scalar_repr]("__repr__")
         .def_method[_scalar_bool]("__bool__")

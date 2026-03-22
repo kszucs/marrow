@@ -166,14 +166,14 @@ def _binary[
         # unaligned loads/stores
         buf = BufferBuilder.alloc_device[native](ctx.value(), length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
-        lhs_ptr = left.buffer.aligned_device_ptr[native](left.offset)
-        rhs_ptr = right.buffer.aligned_device_ptr[native](right.offset)
+        lhs_ptr = left.buffer.device_ptr[native](left.offset)
+        rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
         buf = BufferBuilder.alloc[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
-        lhs_ptr = left.buffer.aligned_unsafe_ptr[native](left.offset)
-        rhs_ptr = right.buffer.aligned_unsafe_ptr[native](right.offset)
+        lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
+        rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
 
     _elementwise_binary[T, func](out_ptr, lhs_ptr, rhs_ptr, length, ctx)
 

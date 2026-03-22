@@ -334,7 +334,7 @@ struct AnyArray(
         comptime for T in primitive_dtypes:
             if dt == T:
                 return AnyArray(PrimitiveArray[T](data))
-        if dt.is_string():
+        if dt.is_string() or dt.is_binary():
             return AnyArray(StringArray(data))
         elif dt.is_list():
             return AnyArray(ListArray(data))
