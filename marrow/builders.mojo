@@ -1070,6 +1070,14 @@ def array(values: List[Optional[Bool]]) raises -> BoolArray:
     return b.finish_typed()
 
 
+def array(values: List[String]) raises -> StringArray:
+    """Create a string array from a list of strings."""
+    var b = StringBuilder(len(values))
+    for i in range(len(values)):
+        b.append(values[i])
+    return b.finish_typed()
+
+
 def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
     """Create a primitive array of `size` null values."""
     var b = PrimitiveBuilder[T](capacity=size)

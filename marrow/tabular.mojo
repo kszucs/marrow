@@ -258,6 +258,8 @@ def record_batch(
     return RecordBatch(schema=schema, columns=columns^)
 
 
+
+
 struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
     """A schema together with a list of equal-length ChunkedArrays.
 

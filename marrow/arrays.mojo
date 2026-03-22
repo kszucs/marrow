@@ -1059,6 +1059,7 @@ struct StructArray(
 
         raise Error(t"Field {name} does not exist in this StructArray.")
 
+    # TODO: this method doesn't make sense
     def unsafe_get(
         self, name: StringSlice
     ) raises -> ref[self.children[0]] Array:

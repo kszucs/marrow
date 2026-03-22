@@ -1,8 +1,8 @@
 """Aggregate (reduction) kernels using std.algorithm reductions.
 
 Each reduction has:
-  - A typed overload: def[T: DataType](PrimitiveArray[T]) -> Scalar[T.native]
-  - A runtime-typed overload (where applicable): def(Array) raises -> Scalar[float64]
+  - A typed overload: ``def[T](PrimitiveArray[T]) -> PrimitiveScalar[T]``
+  - A runtime-typed overload: ``def(Array) -> AnyScalar``
 
 Bitmap-aware loading is fused into the stdlib's `input_fn` callback:
 null elements are replaced with the reduction's identity value so they
@@ -22,12 +22,14 @@ from ..bitmap import Bitmap
 from ..dtypes import (
     DataType,
     numeric_dtypes,
+    float64,
     bool_ as bool_dt,
 )
+from ..scalars import PrimitiveScalar, AnyScalar
 
 
 # ---------------------------------------------------------------------------
-# Generic reduction helper
+# Generic reduction helper (internal — returns Mojo Scalar for SIMD compat)
 # ---------------------------------------------------------------------------
 
 
@@ -142,18 +144,16 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-def sum_[T: DataType](array: PrimitiveArray[T]) raises -> Scalar[T.native]:
+def sum_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    return _reduce[T, "sum"](array, Scalar[T.native](0))
+    return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)))
 
 
-def sum_(array: Array) raises -> Scalar[DType.float64]:
-    """Runtime-typed sum, returns float64."""
+def sum_(array: Array) raises -> AnyScalar:
+    """Runtime-typed sum."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return sum_[dtype](PrimitiveArray[dtype](data=array)).cast[
-                DType.float64
-            ]()
+            return sum_[dtype](PrimitiveArray[dtype](data=array))
     raise Error("sum: unsupported dtype ", array.dtype)
 
 
@@ -162,19 +162,17 @@ def sum_(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-def product[T: DataType](array: PrimitiveArray[T]) raises -> Scalar[T.native]:
+def product[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
-    return _reduce[T, "product"](array, Scalar[T.native](1))
+    return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)))
 
 
-def product(array: Array) raises -> Scalar[DType.float64]:
-    """Runtime-typed product, returns float64."""
+def product(array: Array) raises -> AnyScalar:
+    """Runtime-typed product."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return product[dtype](PrimitiveArray[dtype](data=array)).cast[
-                DType.float64
-            ]()
+            return product[dtype](PrimitiveArray[dtype](data=array))
     raise Error("product: unsupported dtype ", array.dtype)
 
 
@@ -183,21 +181,21 @@ def product(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-def min_[T: DataType](array: PrimitiveArray[T]) raises -> Scalar[T.native]:
+def min_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Minimum of all valid (non-null) elements.
 
-    Returns Scalar[T].MAX_FINITE if empty or all null.
+    Returns MAX_FINITE if empty or all null.
     """
-    return _reduce[T, "min"](array, Scalar[T.native].MAX_FINITE)
+    return PrimitiveScalar[T](
+        _reduce[T, "min"](array, Scalar[T.native].MAX_FINITE)
+    )
 
 
-def min_(array: Array) raises -> Scalar[DType.float64]:
-    """Runtime-typed min, returns float64."""
+def min_(array: Array) raises -> AnyScalar:
+    """Runtime-typed min."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return min_[dtype](PrimitiveArray[dtype](data=array)).cast[
-                DType.float64
-            ]()
+            return min_[dtype](PrimitiveArray[dtype](data=array))
     raise Error("min_: unsupported dtype ", array.dtype)
 
 
@@ -206,21 +204,21 @@ def min_(array: Array) raises -> Scalar[DType.float64]:
 # ---------------------------------------------------------------------------
 
 
-def max_[T: DataType](array: PrimitiveArray[T]) raises -> Scalar[T.native]:
+def max_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Maximum of all valid (non-null) elements.
 
-    Returns Scalar[T].MIN_FINITE if empty or all null.
+    Returns MIN_FINITE if empty or all null.
     """
-    return _reduce[T, "max"](array, Scalar[T.native].MIN_FINITE)
+    return PrimitiveScalar[T](
+        _reduce[T, "max"](array, Scalar[T.native].MIN_FINITE)
+    )
 
 
-def max_(array: Array) raises -> Scalar[DType.float64]:
-    """Runtime-typed max, returns float64."""
+def max_(array: Array) raises -> AnyScalar:
+    """Runtime-typed max."""
     comptime for dtype in numeric_dtypes:
         if array.dtype == dtype:
-            return max_[dtype](PrimitiveArray[dtype](data=array)).cast[
-                DType.float64
-            ]()
+            return max_[dtype](PrimitiveArray[dtype](data=array))
     raise Error("max_: unsupported dtype ", array.dtype)
 
 

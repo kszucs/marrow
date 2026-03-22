@@ -447,18 +447,11 @@ def test_aggregate_sum() raises:
     var cols = List[Array]()
     cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
     cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
-    var names = List[String]()
-    names.append("key")
-    names.append("val")
-    var batch = record_batch(cols^, names=names^)
-    var keys = List[AnyValue]()
-    keys.append(col("key"))
-    var vals = List[AnyValue]()
-    vals.append(col("val"))
-    var funcs = List[String]()
-    funcs.append("sum")
+    var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
+    var plan = in_memory_table(batch).aggregate(
+        [col("key")], [col("val")], ["sum"]
+    )
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 2)  # key + sum
@@ -479,18 +472,11 @@ def test_aggregate_count() raises:
     var cols = List[Array]()
     cols.append(Array(array[int64]([1, 2, 1, 2, 1])))
     cols.append(Array(array[int64]([10, 20, 30, 40, 50])))
-    var names = List[String]()
-    names.append("key")
-    names.append("val")
-    var batch = record_batch(cols^, names=names^)
-    var keys = List[AnyValue]()
-    keys.append(col("key"))
-    var vals = List[AnyValue]()
-    vals.append(col("val"))
-    var funcs = List[String]()
-    funcs.append("count")
+    var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
+    var plan = in_memory_table(batch).aggregate(
+        [col("key")], [col("val")], ["count"]
+    )
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     var c = result.columns[1].as_int64()
@@ -503,19 +489,11 @@ def test_aggregate_small_morsel() raises:
     var cols = List[Array]()
     cols.append(Array(array[int64]([1, 2, 1, 2, 1, 2])))
     cols.append(Array(array[int64]([10, 20, 30, 40, 50, 60])))
-    var names = List[String]()
-    names.append("key")
-    names.append("val")
-    var batch = record_batch(cols^, names=names^)
-    var keys = List[AnyValue]()
-    keys.append(col("key"))
-    var vals = List[AnyValue]()
-    vals.append(col("val"))
-    var funcs = List[String]()
-    funcs.append("sum")
+    var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(keys, vals, funcs)
-    # Small morsel → multiple batches fed to grouper.
+    var plan = in_memory_table(batch).aggregate(
+        [col("key")], [col("val")], ["sum"]
+    )
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var result = execute(plan, ctx)
