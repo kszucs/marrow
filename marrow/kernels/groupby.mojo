@@ -13,7 +13,7 @@ Abstractions:
   - ``HashGrouper``: hash table + two-phase pipeline orchestration.
 """
 
-from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
+from ..arrays import PrimitiveArray, StructArray, AnyArray
 from ..builders import (
     PrimitiveBuilder,
     AnyBuilder,
@@ -33,6 +33,7 @@ from ..dtypes import (
 )
 from ..schema import Schema
 from ..tabular import RecordBatch
+from .hash_table import DictHashTable
 from .hashing import hash_
 
 
@@ -216,41 +217,6 @@ struct AggregateFunction(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-def _cols_equal_at(
-    ref keys: List[AnyArray],
-    row: Int,
-    ref stored: List[AnyArray],
-    group_idx: Int,
-) raises -> Bool:
-    """Compare one input row against a stored group row, column by column."""
-    for k in range(len(keys)):
-        var input_null = keys[k].null_count() > 0 and not keys[k].is_valid(row)
-        var stored_null = stored[k].null_count() > 0 and not stored[k].is_valid(
-            group_idx
-        )
-        if input_null != stored_null:
-            return False
-        if input_null:
-            continue
-
-        comptime for dt in primitive_dtypes:
-            if keys[k].dtype() == dt:
-                if keys[k].as_primitive[dt]().unsafe_get(row) != stored[
-                    k
-                ].as_primitive[dt]().unsafe_get(group_idx):
-                    return False
-                break
-
-        if keys[k].dtype().is_string():
-            ref sa = keys[k].as_string()
-            ref sb = stored[k].as_string()
-            if String(sa.unsafe_get(UInt(row))) != String(
-                sb.unsafe_get(UInt(group_idx))
-            ):
-                return False
-
-    return True
-
 
 def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
     """Append a length-1 array slice to an existing array."""
@@ -270,36 +236,25 @@ struct HashGrouper(Movable):
 
     Supports incremental consumption: ``consume()`` can be called
     multiple times with successive batches. State accumulates.
+
+    Uses ``DictHashTable`` — the same hash table struct used by ``HashJoin``.
+    NULL keys are treated as equal (same group), consistent with SQL
+    GROUP BY semantics (unlike join where NULL != NULL).
     """
 
-    # Open-addressing hash table.
-    var _table: List[Int32]
-    var _table_hashes: List[UInt64]
-    var _capacity: Int
-    var _mask: Int
-
-    # Per-group key storage (column-wise, for collision comparison).
+    var _table: DictHashTable[hash_]
     var _group_keys: List[AnyArray]
-    var _group_hashes: List[UInt64]
-    var _next_id: Int
-
-    # Aggregate functions.
     var _functions: List[AggregateFunction]
 
     def __init__(out self, agg_names: List[String]):
-        self._capacity = 64
-        self._mask = 63
-        self._table = List[Int32](length=64, fill=Int32(-1))
-        self._table_hashes = List[UInt64](length=64, fill=UInt64(0))
+        self._table = DictHashTable[hash_]()
         self._group_keys = List[AnyArray]()
-        self._group_hashes = List[UInt64]()
-        self._next_id = 0
         self._functions = List[AggregateFunction]()
         for i in range(len(agg_names)):
             self._functions.append(AggregateFunction(agg_names[i]))
 
     def num_groups(self) -> Int:
-        return self._next_id
+        return self._table.num_buckets()
 
     def consume_keys(
         mut self, keys: StructArray
@@ -314,16 +269,12 @@ struct HashGrouper(Movable):
             var empty = PrimitiveBuilder[uint32](0)
             return empty.finish()
 
-        var key_cols = List[AnyArray]()
-        for k in range(len(keys.children)):
-            key_cols.append(keys.children[k].copy())
-
-        var hashes = hash_(keys)
+        var hashes = self._table.hash_keys(keys)
 
         var gid_builder = PrimitiveBuilder[uint32](capacity=n)
         for i in range(n):
             var h = UInt64(hashes.unsafe_get(i))
-            var gid = self._probe_or_insert(key_cols, i, h)
+            var gid = self._probe_or_insert(keys, i, h)
             gid_builder.append(Scalar[uint32.native](gid))
         return gid_builder.finish()
 
@@ -346,7 +297,7 @@ struct HashGrouper(Movable):
 
     def finish(mut self, key_fields: List[Field]) raises -> RecordBatch:
         """Build result RecordBatch from key columns + finalized states."""
-        var num_groups = self._next_id
+        var num_groups = self._table.num_buckets()
         var result_fields = List[Field]()
         var result_cols = List[AnyArray]()
 
@@ -378,55 +329,33 @@ struct HashGrouper(Movable):
     # --- hash table internals ---
 
     def _probe_or_insert(
-        mut self, ref key_cols: List[AnyArray], row: Int, h: UInt64
+        mut self, keys: StructArray, row: Int, h: UInt64
     ) raises -> Int:
-        """Find existing group or insert new one."""
-        var slot = Int(h) & self._mask
+        """Find existing group or insert new one.
 
-        while self._table[slot] != -1:
-            if self._table_hashes[slot] == h:
-                var gid = Int(self._table[slot])
-                if _cols_equal_at(key_cols, row, self._group_keys, gid):
-                    return gid
-            slot = (slot + 1) & self._mask
+        Uses DictHashTable.find_or_insert() — bucket_id IS the group_id.
+        """
+        var prev = self._table.num_buckets()
+        var gid = self._table.find_or_insert(h)
 
-        var gid = self._next_id
-        self._table[slot] = Int32(gid)
-        self._table_hashes[slot] = h
-        self._group_hashes.append(h)
+        if gid < prev:
+            return gid  # existing group
 
+        # New group: store key row (one slice per column).
         if len(self._group_keys) == 0:
-            for k in range(len(key_cols)):
-                self._group_keys.append(key_cols[k].slice(row, 1).copy())
+            for k in range(len(keys.children)):
+                self._group_keys.append(keys.children[k].slice(row, 1).copy())
         else:
-            for k in range(len(key_cols)):
+            for k in range(len(keys.children)):
                 var new_val = _concat_single(
-                    self._group_keys[k], key_cols[k].slice(row, 1)
+                    self._group_keys[k], keys.children[k].slice(row, 1)
                 )
                 self._group_keys[k] = new_val^
 
         for a in range(len(self._functions)):
             self._functions[a].create()
 
-        self._next_id += 1
-        if self._next_id * 10 > self._capacity * 7:
-            self._grow()
-
         return gid
-
-    def _grow(mut self) raises:
-        """Double hash table capacity and rehash."""
-        self._capacity *= 2
-        self._mask = self._capacity - 1
-        self._table = List[Int32](length=self._capacity, fill=Int32(-1))
-        self._table_hashes = List[UInt64](length=self._capacity, fill=UInt64(0))
-        for gid in range(self._next_id):
-            var h = self._group_hashes[gid]
-            var slot = Int(h) & self._mask
-            while self._table[slot] != -1:
-                slot = (slot + 1) & self._mask
-            self._table[slot] = Int32(gid)
-            self._table_hashes[slot] = h
 
 
 # ---------------------------------------------------------------------------

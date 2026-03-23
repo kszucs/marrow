@@ -53,7 +53,7 @@ examples = { features = ["examples"] }
 ipython = ">=9.11.0,<10"
 jupyter = ">=1.1,<2"
 jupyter-cache = ">=1.0,<2"
-mojo = ">=0.26.2.0.dev2026030905,<0.26.3"
+mojo = "==0.26.3.0.dev2026032105"
 pontoneer = "==0.6.2-dev2026032105"
 pytest = ">=9.0.2,<10"
 pytest-benchmark = ">=5.2.3,<6"

@@ -16,6 +16,7 @@ from marrow.schema import Schema
 from marrow.arrays import AnyArray, ChunkedArray
 from marrow.dtypes import Field
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
+from marrow.kernels.join import hash_join
 from helpers import pymethod, def_display
 
 
@@ -350,6 +351,90 @@ def table(
     return Table.from_batches(schema, batch_list).to_python_object()
 
 
+def _record_batch_join(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    right: PythonObject,
+    keys: PythonObject,
+    right_keys: PythonObject,
+    join_type: PythonObject,
+) raises -> PythonObject:
+    """Join two RecordBatches on key column names.
+
+    Args:
+        right: Right-side RecordBatch.
+        keys: Python list of left key column names (strings).
+        right_keys: Python list of right key column names (strings), or None
+            to use the same names as ``keys``.
+        join_type: Join kind string ("inner", "left", "right", "full",
+            "semi", "anti").  Default: "inner".
+    """
+    from marrow.expr.relations import (
+        JOIN_INNER,
+        JOIN_LEFT,
+        JOIN_RIGHT,
+        JOIN_FULL,
+        JOIN_SEMI,
+        JOIN_ANTI,
+    )
+
+    ref left = ptr[]
+    ref right_rb = right.downcast_value_ptr[RecordBatch]()[]
+
+    # Resolve left key indices from column names.
+    var n_keys = Int(keys.__len__())
+    var left_on = List[Int]()
+    for i in range(n_keys):
+        var name = String(py=keys[i])
+        var idx = left.schema.get_field_index(name)
+        if idx == -1:
+            raise Error("Left key column '{}' not found.".format(name))
+        left_on.append(idx)
+
+    # Resolve right key indices.
+    var right_on = List[Int]()
+    var use_right_keys = Bool(right_keys is not PythonObject(None))
+    for i in range(n_keys):
+        if use_right_keys:
+            var name = String(py=right_keys[i])
+            var idx = right_rb.schema.get_field_index(name)
+            if idx == -1:
+                raise Error("Right key column '{}' not found.".format(name))
+            right_on.append(idx)
+        else:
+            var name = String(py=keys[i])
+            var idx = right_rb.schema.get_field_index(name)
+            if idx == -1:
+                raise Error("Right key column '{}' not found.".format(name))
+            right_on.append(idx)
+
+    # Parse join type string.
+    var kind_str = String(py=join_type)
+    var kind = JOIN_INNER
+    if kind_str == "left outer" or kind_str == "left":
+        kind = JOIN_LEFT
+    elif kind_str == "right outer" or kind_str == "right":
+        kind = JOIN_RIGHT
+    elif kind_str == "full outer" or kind_str == "full":
+        kind = JOIN_FULL
+    elif kind_str == "left semi" or kind_str == "semi":
+        kind = JOIN_SEMI
+    elif kind_str == "left anti" or kind_str == "anti":
+        kind = JOIN_ANTI
+
+    var left_sa = left.to_struct_array()
+    var right_sa = right_rb.to_struct_array()
+    var result_sa = hash_join(left_sa, right_sa, left_on, right_on, kind)
+
+    # Build output schema and RecordBatch from StructArray result.
+    var out_fields = List[Field]()
+    for ref f in result_sa.dtype.fields:
+        out_fields.append(f.copy())
+    return RecordBatch(
+        schema=Schema(fields=out_fields^),
+        columns=result_sa.children.copy(),
+    ).to_python_object()
+
+
 # ---------------------------------------------------------------------------
 # Module registration
 # ---------------------------------------------------------------------------
@@ -380,6 +465,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_array]("__arrow_c_array__")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_record_batch__")
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[_record_batch_join]("join")
     )
     _ = def_display[RecordBatch](rb_py)
     var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
