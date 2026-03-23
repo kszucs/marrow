@@ -4,7 +4,7 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray, StringArray, StructArray
 from marrow.builders import array, PrimitiveBuilder, StringBuilder
-from marrow.dtypes import int32, int64, float64, string, Field
+from marrow.dtypes import int32, int64, uint64, float64, string, Field
 from marrow.tabular import record_batch
 from marrow.kernels.filter import take
 from marrow.kernels.join import hash_join
@@ -507,6 +507,92 @@ def test_output_schema_column_name_collision() raises:
     assert_equal(result.dtype.fields[1].name, "v")
     assert_equal(result.dtype.fields[2].name, "k_right")
     assert_equal(result.dtype.fields[3].name, "v_right")
+
+
+# ---------------------------------------------------------------------------
+# hash_join — collision correctness
+# ---------------------------------------------------------------------------
+
+
+def _constant_hash(
+    keys: StructArray,
+) raises -> PrimitiveArray[uint64]:
+    """Degenerate hash function: all keys map to the same hash.
+
+    Forces every key into a single bucket — without key equality checks,
+    an inner join would produce N×M rows (all-pairs). With equality checks,
+    only actual matching keys produce output.
+    """
+    var n = len(keys)
+    var b = PrimitiveBuilder[uint64](capacity=n)
+    for i in range(n):
+        b.unsafe_append(Scalar[uint64.native](42))
+    return b.finish()
+
+
+def test_collision_inner_join() raises:
+    """With all hashes colliding, key equality filters to correct matches."""
+    from marrow.kernels.join import HashJoin
+    from marrow.kernels.hash_table import SwissHashTable
+
+    # left: k=[1,2,3], v=[10,20,30]
+    # right: k=[2,3,4], v=[100,200,300]
+    var lk = List[Int]()
+    lk.append(1)
+    lk.append(2)
+    lk.append(3)
+    var lv = List[Int]()
+    lv.append(10)
+    lv.append(20)
+    lv.append(30)
+    var left = _int32_struct(lk, lv)
+
+    var rk = List[Int]()
+    rk.append(2)
+    rk.append(3)
+    rk.append(4)
+    var rv = List[Int]()
+    rv.append(100)
+    rv.append(200)
+    rv.append(300)
+    var right = _int32_struct(rk, rv)
+
+    # Use degenerate hash — all keys hash to 42.
+    var join = HashJoin[_constant_hash]()
+    join.build(left, _left_on())
+    var result = join.probe(right, _right_on(), JOIN_INNER, JOIN_ALL)
+
+    # Only k=2 and k=3 match → 2 result rows.
+    # Without equality check this would be 3×3 = 9 (WRONG).
+    assert_equal(len(result), 2)
+
+
+def test_collision_left_join() raises:
+    """With all hashes colliding, left join produces correct unmatched rows."""
+    from marrow.kernels.join import HashJoin
+
+    var lk = List[Int]()
+    lk.append(1)
+    lk.append(2)
+    var lv = List[Int]()
+    lv.append(10)
+    lv.append(20)
+    var left = _int32_struct(lk, lv)
+
+    var rk = List[Int]()
+    rk.append(2)
+    rk.append(3)
+    var rv = List[Int]()
+    rv.append(100)
+    rv.append(200)
+    var right = _int32_struct(rk, rv)
+
+    var join = HashJoin[_constant_hash]()
+    join.build(left, _left_on())
+    var result = join.probe(right, _right_on(), JOIN_LEFT, JOIN_ALL)
+
+    # k=1 unmatched (left), k=2 matched → 2 result rows.
+    assert_equal(len(result), 2)
 
 
 def main() raises:

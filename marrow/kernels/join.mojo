@@ -34,8 +34,10 @@ from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
-from ..dtypes import DataType, Field, int32, uint64, struct_
-from .filter import take
+from ..dtypes import DataType, Field, int32, uint64, bool_ as bool_dt, struct_
+from .boolean import and_
+from .compare import equal
+from .filter import take, filter_
 from .hash_table import SwissHashTable
 from .hashing import rapidhash
 from ..expr.relations import (
@@ -49,6 +51,7 @@ from ..expr.relations import (
     JOIN_ALL,
     JOIN_ANY,
 )
+
 
 
 
@@ -118,23 +121,28 @@ trait Join(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct HashJoin(Join):
-    """Hash join using DictHashTable.
+struct HashJoin[
+    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
+](Join):
+    """Hash join using SwissHashTable.
 
     Build phase: hash left-side key columns, insert rows into hash table.
     Probe phase: hash right-side key columns, look up in hash table,
     emit index pairs via comptime-specialised branchless loop.
+    Equality post-pass: vectorized key comparison filters hash collisions.
 
     Stores the full build-side StructArray for output assembly via take().
     """
 
-    var _table: SwissHashTable[rapidhash]
+    var _table: SwissHashTable[Self.hash_fn]
+    var _build_keys: Optional[StructArray]  # key columns for equality checks
     var _build_dtype: DataType
     var _left_data: Optional[StructArray]
     var _num_rows: Int
 
     def __init__(out self):
-        self._table = SwissHashTable[rapidhash]()
+        self._table = SwissHashTable[Self.hash_fn]()
+        self._build_keys = None
         self._build_dtype = DataType(code=0)
         self._left_data = None
         self._num_rows = 0
@@ -143,9 +151,9 @@ struct HashJoin(Join):
         self._build_dtype = data.dtype
         self._num_rows = data.length
         self._left_data = data.copy()
-        # Re-init with capacity to avoid reallocs during insert loop.
-        self._table = SwissHashTable[rapidhash](capacity=self._num_rows)
+        self._table = SwissHashTable[Self.hash_fn](capacity=self._num_rows)
         var keys = data.select(key_indices)
+        self._build_keys = keys.copy()
         var hashes = self._table.hash_keys(keys)
         for i in range(self._num_rows):
             _ = self._table.insert(UInt64(hashes.unsafe_get(i)), Int32(i))
@@ -157,8 +165,138 @@ struct HashJoin(Join):
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
+        # Phase 1: collect candidate pairs from hash matches (branchless).
         var pairs = self._dispatch_probe(data, key_indices, kind, strictness)
-        return self._assemble(data, pairs, kind)
+        # Phase 2: vectorized equality filter — removes hash collisions.
+        var probe_keys = data.select(key_indices)
+        var verified = self._verify_keys(probe_keys, pairs)
+        # Phase 3: emit unmatched rows for outer/semi/anti joins.
+        var final = self._emit_unmatched(
+            verified^, len(data), kind, strictness
+        )
+        return self._assemble(data, final, kind)
+
+    def _equal_column(
+        self,
+        build_col: AnyArray,
+        probe_col: AnyArray,
+        pairs: IndexPairs,
+    ) raises -> PrimitiveArray[bool_dt]:
+        """Compare one key column at matched indices. Handles numeric + string."""
+        var lk = take(build_col.copy(), pairs.left_indices)
+        var rk = take(probe_col.copy(), pairs.right_indices)
+        if build_col.dtype().is_string():
+            # Scalar string comparison — equal() doesn't support strings yet.
+            var n = len(pairs.left_indices)
+            var b = PrimitiveBuilder[bool_dt](capacity=n)
+            ref ls = lk.as_string()
+            ref rs = rk.as_string()
+            for i in range(n):
+                var eq = String(ls.unsafe_get(UInt(i))) == String(
+                    rs.unsafe_get(UInt(i))
+                )
+                b.unsafe_append(Scalar[bool_dt.native](eq))
+            return b.finish()
+        return equal(lk, rk).as_primitive[bool_dt]().copy()
+
+    def _verify_keys(
+        self, probe_keys: StructArray, pairs: IndexPairs
+    ) raises -> IndexPairs:
+        """Vectorized equality check on candidate index pairs.
+
+        For each key column: gather build-side and probe-side values at
+        the matched indices, run vectorized equal(), AND into a combined
+        mask, then filter the pairs. This handles hash collisions correctly
+        while keeping the probe loop branchless.
+
+        For the common case (no collisions), all comparisons return True
+        and filter is a no-op.
+        """
+        ref build_keys = self._build_keys.value()
+        var n_keys = len(build_keys.children)
+
+        var mask = self._equal_column(
+            build_keys.children[0], probe_keys.children[0], pairs
+        )
+
+        for k in range(1, n_keys):
+            var col_eq = self._equal_column(
+                build_keys.children[k], probe_keys.children[k], pairs
+            )
+            mask = and_(mask.copy(), col_eq).copy()
+
+        ref bool_mask = mask
+        return IndexPairs(
+            filter_[int32](pairs.left_indices, bool_mask),
+            filter_[int32](pairs.right_indices, bool_mask),
+        )
+
+    def _emit_unmatched(
+        self,
+        var pairs: IndexPairs,
+        n_probe: Int,
+        kind: UInt8,
+        strictness: UInt8,
+    ) raises -> IndexPairs:
+        """Phase 3: add unmatched rows for outer/semi/anti joins.
+
+        Scans the verified pairs to determine which build/probe rows
+        were matched, then appends unmatched rows as needed.
+        INNER: returns pairs unchanged.
+        SEMI: emits matched build rows only.
+        ANTI: emits unmatched build rows only.
+        LEFT/RIGHT/FULL: appends unmatched rows from the appropriate side.
+        """
+        if kind == JOIN_INNER:
+            return pairs^
+
+        # Compute which build/probe rows appear in the verified pairs.
+        var matched_build = List[Bool](length=self._num_rows, fill=False)
+        var matched_probe = List[Bool](length=n_probe, fill=False)
+        var n_pairs = len(pairs.left_indices)
+        for i in range(n_pairs):
+            var lid = Int(pairs.left_indices.unsafe_get(i))
+            var rid = Int(pairs.right_indices.unsafe_get(i))
+            if lid >= 0:
+                matched_build[lid] = True
+            if rid >= 0:
+                matched_probe[rid] = True
+
+        if kind == JOIN_SEMI:
+            var lb = PrimitiveBuilder[int32](capacity=self._num_rows)
+            var rb = PrimitiveBuilder[int32](capacity=self._num_rows)
+            for i in range(self._num_rows):
+                if matched_build[i]:
+                    lb.append(Scalar[int32.native](i))
+                    rb.append(Scalar[int32.native](-1))
+            return IndexPairs(lb.finish(), rb.finish())
+
+        if kind == JOIN_ANTI:
+            var lb = PrimitiveBuilder[int32](capacity=self._num_rows)
+            var rb = PrimitiveBuilder[int32](capacity=self._num_rows)
+            for i in range(self._num_rows):
+                if not matched_build[i]:
+                    lb.append(Scalar[int32.native](i))
+                    rb.append(Scalar[int32.native](-1))
+            return IndexPairs(lb.finish(), rb.finish())
+
+        # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
+        var lb = PrimitiveBuilder[int32](capacity=n_pairs + self._num_rows)
+        var rb = PrimitiveBuilder[int32](capacity=n_pairs + n_probe)
+        for i in range(n_pairs):
+            lb.append(pairs.left_indices.unsafe_get(i))
+            rb.append(pairs.right_indices.unsafe_get(i))
+        if kind == JOIN_LEFT or kind == JOIN_FULL:
+            for i in range(self._num_rows):
+                if not matched_build[i]:
+                    lb.append(Scalar[int32.native](i))
+                    rb.append(Scalar[int32.native](-1))
+        if kind == JOIN_RIGHT or kind == JOIN_FULL:
+            for i in range(n_probe):
+                if not matched_probe[i]:
+                    lb.append(Scalar[int32.native](-1))
+                    rb.append(Scalar[int32.native](i))
+        return IndexPairs(lb.finish(), rb.finish())
 
     def build_dtype(self) -> DataType:
         return self._build_dtype
@@ -226,99 +364,38 @@ struct HashJoin(Join):
         data: StructArray,
         key_indices: List[Int],
     ) raises -> IndexPairs:
-        """Branchless probe loop: all kind/strictness decisions are comptime."""
+        """Phase 1: collect ALL candidate (build_row, probe_row) pairs from
+        hash matches. No equality check, no match tracking — just pair
+        collection. Equality filtering and unmatched-row emission happen
+        in probe() after this returns."""
         var probe_keys = data.select(key_indices)
         var n = len(probe_keys)
         var probe_hashes = self._table.hash_keys(probe_keys)
 
-        # Pre-allocate output builders to avoid reallocs in the hot loop.
         var est = n if n < self._num_rows else self._num_rows
         var left_indices = PrimitiveBuilder[int32](capacity=est)
         var right_indices = PrimitiveBuilder[int32](capacity=est)
-
-        # Only allocate match-tracking arrays when the join kind needs them.
-        # INNER+ALL never reads these — skip the 2×N allocation entirely.
-        alias need_matched_build = (
-            kind == JOIN_LEFT
-            or kind == JOIN_FULL
-            or kind == JOIN_SEMI
-            or kind == JOIN_ANTI
-            or strictness == JOIN_ANY
-        )
-        alias need_matched_probe = (
-            kind == JOIN_RIGHT or kind == JOIN_FULL
-        )
-        var matched_build = List[Bool]()
-        var matched_probe = List[Bool]()
-        comptime if need_matched_build:
-            matched_build = List[Bool](length=self._num_rows, fill=False)
-        comptime if need_matched_probe:
-            matched_probe = List[Bool](length=n, fill=False)
 
         for probe_row in range(n):
             var h = UInt64(probe_hashes.unsafe_get(probe_row))
             var bid = self._table.find(h)
             if bid == -1:
-                comptime if kind == JOIN_RIGHT or kind == JOIN_FULL:
-                    left_indices.unsafe_append(Scalar[int32.native](-1))
-                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
                 continue
 
-            # Walk the chain of build-side candidates.
             var entry = Int(self._table.bucket_head(bid))
             while entry != -1:
                 var build_row = self._table.entry_row(entry)
-                var br = Int(build_row)
                 var next_entry = Int(self._table.entry_next(entry))
 
-                comptime if kind == JOIN_SEMI:
-                    matched_build[br] = True
-                    break
-                comptime if kind == JOIN_ANTI:
-                    matched_build[br] = True
-                    break
-
-                comptime if kind != JOIN_SEMI and kind != JOIN_ANTI:
-                    comptime if strictness == JOIN_ANY:
-                        if matched_build[br]:
-                            entry = next_entry
-                            continue
-
+                comptime if strictness == JOIN_ANY:
+                    # For JOIN_ANY, emit only the first candidate per probe row.
                     left_indices.unsafe_append(Scalar[int32.native](build_row))
                     right_indices.unsafe_append(Scalar[int32.native](probe_row))
+                    break
 
-                    comptime if need_matched_build:
-                        matched_build[br] = True
-                    comptime if need_matched_probe:
-                        matched_probe[probe_row] = True
-
-                    comptime if strictness == JOIN_ANY:
-                        break
-
+                left_indices.unsafe_append(Scalar[int32.native](build_row))
+                right_indices.unsafe_append(Scalar[int32.native](probe_row))
                 entry = next_entry
-
-            comptime if kind == JOIN_RIGHT or kind == JOIN_FULL:
-                if not matched_probe[probe_row]:
-                    left_indices.unsafe_append(Scalar[int32.native](-1))
-                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
-
-        comptime if kind == JOIN_LEFT or kind == JOIN_FULL:
-            for i in range(self._num_rows):
-                if not matched_build[i]:
-                    left_indices.append(Scalar[int32.native](i))
-                    right_indices.append(Scalar[int32.native](-1))
-
-        comptime if kind == JOIN_SEMI:
-            for i in range(self._num_rows):
-                if matched_build[i]:
-                    left_indices.append(Scalar[int32.native](i))
-                    right_indices.append(Scalar[int32.native](-1))
-
-        comptime if kind == JOIN_ANTI:
-            for i in range(self._num_rows):
-                if not matched_build[i]:
-                    left_indices.append(Scalar[int32.native](i))
-                    right_indices.append(Scalar[int32.native](-1))
 
         return IndexPairs(left_indices.finish(), right_indices.finish())
 
