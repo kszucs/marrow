@@ -5,8 +5,8 @@ Run via:  pixi run profile marrow/kernels/tests/profile_filter.mojo
 
 from std.benchmark import keep
 
-from marrow.arrays import PrimitiveArray, arange
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import PrimitiveArray
+from marrow.builders import arange, PrimitiveBuilder
 from marrow.dtypes import int64, bool_
 from marrow.kernels.filter import filter_
 

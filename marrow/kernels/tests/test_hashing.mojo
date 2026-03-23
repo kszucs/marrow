@@ -1,7 +1,7 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.arrays import array, AnyArray, PrimitiveArray, StringArray
-from marrow.builders import PrimitiveBuilder, StringBuilder
+from marrow.arrays import AnyArray, PrimitiveArray, StringArray
+from marrow.builders import array, PrimitiveBuilder, StringBuilder
 from marrow.dtypes import int32, int64, uint8, uint64, float64, bool_
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_

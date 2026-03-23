@@ -4,7 +4,8 @@ from std.testing import assert_equal, assert_true, TestSuite
 from std.python import Python
 from std.os import remove
 
-from marrow.arrays import array, AnyArray
+from marrow.arrays import AnyArray
+from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.tabular import record_batch
 from marrow.expr import (

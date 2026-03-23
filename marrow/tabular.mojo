@@ -108,14 +108,14 @@ struct RecordBatch(
                 return False
         return True
 
-    def slice(self, offset: Int, length: Int) -> RecordBatch:
+    def slice(self, offset: Int, length: Int) raises -> RecordBatch:
         """Returns a zero-copy slice of this RecordBatch."""
         var sliced = List[AnyArray]()
         for col in self.columns:
             sliced.append(col.slice(offset, length))
         return RecordBatch(schema=self.schema, columns=sliced^)
 
-    def slice(self, offset: Int) -> RecordBatch:
+    def slice(self, offset: Int) raises -> RecordBatch:
         """Returns a zero-copy slice from offset to the end."""
         return self.slice(offset, self.num_rows() - offset)
 

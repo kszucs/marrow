@@ -15,8 +15,8 @@ from std.benchmark import (
     keep,
 )
 
-from marrow.arrays import PrimitiveArray, arange
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import PrimitiveArray
+from marrow.builders import arange, PrimitiveBuilder
 from marrow.dtypes import int64, float64, DataType
 from marrow.kernels.aggregate import sum_, product, min_, max_
 

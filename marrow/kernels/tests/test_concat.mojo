@@ -7,8 +7,6 @@ from std.testing import (
 )
 
 from marrow.arrays import (
-    array,
-    arange,
     AnyArray,
     PrimitiveArray,
     BoolArray,
@@ -19,6 +17,8 @@ from marrow.arrays import (
     ChunkedArray,
 )
 from marrow.builders import (
+    array,
+    arange,
     AnyBuilder,
     PrimitiveBuilder,
     StringBuilder,

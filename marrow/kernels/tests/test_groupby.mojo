@@ -1,13 +1,12 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import (
-    array,
     AnyArray,
     PrimitiveArray,
     StringArray,
     StructArray,
 )
-from marrow.builders import PrimitiveBuilder, StringBuilder
+from marrow.builders import array, PrimitiveBuilder, StringBuilder
 from marrow.dtypes import (
     int8,
     int32,

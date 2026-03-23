@@ -1,6 +1,9 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from marrow.arrays import *
 from marrow.builders import (
+    array,
+    arange,
+    nulls,
     AnyBuilder,
     BoolBuilder,
     PrimitiveBuilder,
@@ -14,31 +17,6 @@ from marrow.buffers import Buffer, BufferBuilder
 from marrow.bitmap import Bitmap, BitmapBuilder
 from marrow.kernels.filter import drop_nulls
 from std.reflection import call_location
-
-
-# @always_inline
-# def assert_bitmap_set(
-#     ptr: UnsafePointer[UInt8, ImmutExternalOrigin],
-#     n_bits: Int,
-#     expected_true_pos: List[Int],
-#     message: StringLiteral,
-# ) -> None:
-#     var list_pos = 0
-#     for i in range(n_bits):
-#         var expected_value = False
-#         if list_pos < len(expected_true_pos):
-#             if expected_true_pos[list_pos] == i:
-#                 expected_value = True
-#                 list_pos += 1
-#         var current_value = Bool((ptr[i // 8] >> UInt8(i % 8)) & 1)
-#         assert_equal(
-#             current_value,
-#             expected_value,
-#             String(
-#                 t"{message}: Bitmap index {i} is {current_value}, expected {expected_value} as per list position {list_pos}"
-#             )
-#             location=call_location(),
-#         )
 
 
 def test_array_data_with_offset() raises:

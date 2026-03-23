@@ -1,7 +1,7 @@
 from std.testing import assert_equal, TestSuite
 
-from marrow.arrays import array, AnyArray, PrimitiveArray, nulls
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import AnyArray, PrimitiveArray
+from marrow.builders import array, nulls, PrimitiveBuilder
 from marrow.dtypes import int32, int64
 from marrow.kernels.aggregate import sum_
 

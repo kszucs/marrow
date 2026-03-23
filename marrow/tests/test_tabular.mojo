@@ -1,10 +1,10 @@
 """Tests for RecordBatch and Table abstractions."""
 from std.testing import assert_equal, assert_true, TestSuite
 from marrow.tabular import RecordBatch, Table
-from marrow.arrays import array, AnyArray
+from marrow.arrays import AnyArray
 from marrow.schema import Schema
 from marrow.dtypes import int32, int64, float64, Field
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import array, PrimitiveBuilder
 
 
 def test_record_batch_construction() raises:

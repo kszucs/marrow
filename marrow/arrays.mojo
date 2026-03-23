@@ -102,6 +102,7 @@ struct AnyArray(
     var _virt_as_data: def (ArcPointer[NoneType]) raises -> ArrayData
     var _virt_eq: def (ArcPointer[NoneType], ArcPointer[NoneType]) -> Bool
     var _virt_drop: def (var ArcPointer[NoneType])
+    var _virt_slice: def (ArcPointer[NoneType], Int, Int) raises -> ArcPointer[NoneType]
 
     # --- trampolines ---
 
@@ -134,6 +135,20 @@ struct AnyArray(
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
+    @staticmethod
+    def _tramp_slice[T: Array](ptr: ArcPointer[NoneType], offset: Int, length: Int) raises -> ArcPointer[NoneType]:
+        # `slice` cannot return `AnyArray` directly because that would make
+        # `_virt_slice`'s type `def (...) -> AnyArray`, which creates a
+        # recursive struct definition (AnyArray containing a field whose type
+        # references AnyArray).  Instead, the trampoline returns a new
+        # ArcPointer[NoneType] holding the typed slice.  The caller
+        # (AnyArray.slice) then stamps a fresh AnyArray shell — copying the
+        # existing vtable (valid because slicing preserves the concrete type)
+        # and swapping in the new data pointer.  This heap-allocation may raise
+        # on OOM, hence the `raises` on both the trampoline and AnyArray.slice.
+        var result = rebind[ArcPointer[T]](ptr)[].slice(offset, length)
+        return rebind[ArcPointer[NoneType]](ArcPointer(result^))
+
     # --- construction ---
 
     @implicit
@@ -147,6 +162,7 @@ struct AnyArray(
         self._virt_as_data = Self._tramp_as_data[T]
         self._virt_eq = Self._tramp_eq[T]
         self._virt_drop = Self._tramp_drop[T]
+        self._virt_slice = Self._tramp_slice[T]
 
     def __init__(out self, *, copy: Self):
         self._data = copy._data
@@ -157,6 +173,7 @@ struct AnyArray(
         self._virt_as_data = copy._virt_as_data
         self._virt_eq = copy._virt_eq
         self._virt_drop = copy._virt_drop
+        self._virt_slice = copy._virt_slice
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
@@ -218,35 +235,14 @@ struct AnyArray(
     def is_valid(self, index: Int) -> Bool:
         return self._virt_is_valid(self._data, index)
 
-    def slice(self, offset: Int, length: Int = -1) -> AnyArray:
+    def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
         """Returns a zero-copy slice starting at offset with the given length.
 
         Matches PyArrow's Array.slice(offset, length) API.
         """
-        var actual_length = length if length >= 0 else self.length() - offset
-        var dt = self.dtype()
-        comptime for T in primitive_dtypes:
-            if dt == T:
-                return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[].slice(
-                    offset, actual_length
-                )
-        if dt.is_string():
-            return rebind[ArcPointer[StringArray]](self._data)[].slice(
-                offset, actual_length
-            )
-        elif dt.is_list():
-            return rebind[ArcPointer[ListArray]](self._data)[].slice(
-                offset, actual_length
-            )
-        elif dt.is_fixed_size_list():
-            return rebind[ArcPointer[FixedSizeListArray]](self._data)[].slice(
-                offset, actual_length
-            )
-        elif dt.is_struct():
-            return rebind[ArcPointer[StructArray]](self._data)[].slice(
-                offset, actual_length
-            )
-        return AnyArray(copy=self)
+        var result = AnyArray(copy=self)
+        result._data = self._virt_slice(self._data, offset, length)
+        return result^
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to the corresponding Python typed-array object."""
@@ -857,7 +853,10 @@ struct ListArray(
                 writer.write("...")
                 break
             if self.is_valid(i):
-                self.unsafe_get(i).write_to(writer)
+                try:
+                    self.unsafe_get(i).write_to(writer)
+                except:
+                    writer.write("?")
             else:
                 writer.write("NULL")
         writer.write("])")
@@ -870,7 +869,7 @@ struct ListArray(
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    def unsafe_get(self, index: Int) -> AnyArray:
+    def unsafe_get(self, index: Int) raises -> AnyArray:
         """Return a view of the child array for the list at the given index."""
         var start = Int(
             self.offsets.unsafe_get[DType.int32](self.offset + index)
@@ -935,7 +934,10 @@ struct ListArray(
                 return False
         for i in range(self.length):
             if self.is_valid(i):
-                if self.unsafe_get(i) != other.unsafe_get(i):
+                try:
+                    if self.unsafe_get(i) != other.unsafe_get(i):
+                        return False
+                except:
                     return False
         return True
 
@@ -1015,7 +1017,10 @@ struct FixedSizeListArray(
                 writer.write("...")
                 break
             if self.is_valid(i):
-                self.unsafe_get(i).write_to(writer)
+                try:
+                    self.unsafe_get(i).write_to(writer)
+                except:
+                    writer.write("?")
             else:
                 writer.write("NULL")
         writer.write("])")
@@ -1028,7 +1033,7 @@ struct FixedSizeListArray(
             return True
         return self.bitmap.value().is_valid(self.offset + index)
 
-    def unsafe_get(self, index: Int, out array_data: AnyArray):
+    def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
         var list_size = self.dtype.size
         var start = (self.offset + index) * list_size
         return self.values.slice(start, list_size)
@@ -1104,7 +1109,10 @@ struct FixedSizeListArray(
                 return False
         for i in range(self.length):
             if self.is_valid(i):
-                if self.unsafe_get(i) != other.unsafe_get(i):
+                try:
+                    if self.unsafe_get(i) != other.unsafe_get(i):
+                        return False
+                except:
                     return False
         return True
 

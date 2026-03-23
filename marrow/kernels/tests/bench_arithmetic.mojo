@@ -42,8 +42,8 @@ from std.sys import has_accelerator
 from std.time import perf_counter_ns
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import PrimitiveArray, arange
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import PrimitiveArray
+from marrow.builders import arange, PrimitiveBuilder
 from marrow.dtypes import int32, float32, float64, DataType
 from marrow.kernels.arithmetic import add
 

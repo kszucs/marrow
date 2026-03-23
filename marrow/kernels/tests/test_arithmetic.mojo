@@ -6,8 +6,8 @@ from std.testing import (
     TestSuite,
 )
 
-from marrow.arrays import array, arange, AnyArray, PrimitiveArray
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import AnyArray, PrimitiveArray
+from marrow.builders import array, arange, PrimitiveBuilder
 from marrow.dtypes import int32, int64, float32, float64
 from marrow.kernels.arithmetic import (
     add,

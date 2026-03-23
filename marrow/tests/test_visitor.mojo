@@ -1,6 +1,7 @@
 from std.testing import assert_equal, TestSuite
 
 from marrow.arrays import *
+from marrow.builders import array
 from marrow.dtypes import *
 from marrow.visitor import ArrayVisitor
 

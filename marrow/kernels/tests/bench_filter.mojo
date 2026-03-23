@@ -14,9 +14,9 @@ from std.benchmark import keep
 from std.bit import pop_count
 from std.time import perf_counter_ns
 
-from marrow.arrays import PrimitiveArray, arange
+from marrow.arrays import PrimitiveArray
 from marrow.bitmap import Bitmap, BitmapBuilder
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import arange, PrimitiveBuilder
 from marrow.buffers import BufferBuilder
 from marrow.dtypes import int64, bool_
 from marrow.kernels.filter import filter_, _filter_block
