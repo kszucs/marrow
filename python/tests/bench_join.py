@@ -1,10 +1,20 @@
-"""Benchmarks for hash join: marrow vs PyArrow vs Polars."""
+"""Benchmarks for hash join: marrow vs PyArrow vs Polars.
+
+All benchmarks run single-threaded for fair comparison with marrow.
+"""
+
+import os
 
 import pytest
 import pyarrow as pa
 import polars as pl
 import marrow as ma
 
+# Force single-threaded execution for fair comparison.
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["POLARS_MAX_THREADS"] = "1"
+pa.set_cpu_count(1)
+pa.set_io_thread_count(1)
 
 SIZES = [10_000, 100_000, 1_000_000]
 
