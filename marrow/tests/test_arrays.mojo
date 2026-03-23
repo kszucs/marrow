@@ -577,10 +577,14 @@ def test_struct_array_unsafe_get() raises:
     var sb = StructBuilder(
         [field("int_data_a", int32), field("int_data_b", int32)], capacity=2
     )
-    for v in [1, 2, 3, 4, 5]:
-        sb.field_builder(0).as_primitive[int32]().append(v)
-    for v in [10, 20, 30]:
-        sb.field_builder(1).as_primitive[int32]().append(v)
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(0).as_primitive[int32]().append(3)
+    sb.field_builder(0).as_primitive[int32]().append(4)
+    sb.field_builder(0).as_primitive[int32]().append(5)
+    sb.field_builder(1).as_primitive[int32]().append(10)
+    sb.field_builder(1).as_primitive[int32]().append(20)
+    sb.field_builder(1).as_primitive[int32]().append(30)
     sb.append_valid()
     sb.append_valid()
     var struct_array = sb.finish_typed()

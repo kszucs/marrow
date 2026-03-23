@@ -594,8 +594,8 @@ def test_struct_builder_field_builder() raises:
 
 def test_struct_builder_capacity_growth() raises:
     var sb = StructBuilder([field("id", int32)])
-    for i in range(5):
-        sb.field_builder(0).as_primitive[int32]().append(i)
+    for _ in range(5):
+        sb.field_builder(0).as_primitive[int32]().append(0)
         sb.append_valid()
     var frozen = sb.finish_typed()
     assert_equal(frozen.length, 5)

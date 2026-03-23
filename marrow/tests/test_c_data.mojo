@@ -185,9 +185,8 @@ def test_arrow_array_stream() raises:
         col1=Python.list(1.0, 2.0, 3.0, 4.0, 5.0),
         col2=Python.list("a", "b", "c", "d", "e"),
     )
-    var python = Python()
     var pyschema = pa.schema(
-        python.list(
+        Python.list(
             pa.field("col1", pa.int64()),
             pa.field("col2", pa.string()),
         )

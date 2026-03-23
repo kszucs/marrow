@@ -599,9 +599,11 @@ struct PrimitiveArray[T: DataType](
                     return False
         return True
 
+    # TODO: rename to_any()
     def as_any(self) -> AnyArray:
         return AnyArray(self.copy())
 
+    # TODO: rename to_data()
     def as_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(

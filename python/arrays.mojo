@@ -634,7 +634,6 @@ struct PyListConverter(PyConverter):
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder.downcast[ListBuilder]()
-        var child_dtype = self._builder[].dtype().fields[0].dtype
         var child_builder = self._builder[].values()
         self._child = make_converter(child_builder, True)
         self._has_nulls = has_nulls

@@ -146,13 +146,13 @@ def test_schema_from_pyarrow() raises:
 
 
 def test_schema_fn_empty() raises:
-    """schema([]) produces an empty schema."""
+    """Schema([]) produces an empty schema."""
     var s = schema([])
     assert_equal(len(s), 0)
 
 
 def test_schema_fn_single_field() raises:
-    """schema([field(...)]) produces a one-field schema."""
+    """Schema([field(...)]) produces a one-field schema."""
     var s = schema([field("x", int32)])
     assert_equal(len(s), 1)
     assert_equal(s.field(index=0).name, "x")
@@ -160,7 +160,7 @@ def test_schema_fn_single_field() raises:
 
 
 def test_schema_fn_multiple_fields() raises:
-    """schema([...]) with multiple fields preserves order and types."""
+    """Schema([...]) with multiple fields preserves order and types."""
     var s = schema([field("a", int64), field("b", float32), field("c", string)])
     assert_equal(len(s), 3)
     assert_equal(s.field(index=0).name, "a")
@@ -172,7 +172,7 @@ def test_schema_fn_multiple_fields() raises:
 
 
 def test_schema_fn_equals_struct_init() raises:
-    """schema([...]) produces the same result as Schema(fields=[...])."""
+    """Schema([...]) produces the same result as Schema(fields=[...])."""
     var s1 = schema(
         [field("x", int32, nullable=False), field("y", float64, nullable=False)]
     )
@@ -186,33 +186,33 @@ def test_schema_fn_equals_struct_init() raises:
 
 
 def test_field_fn_name_and_type() raises:
-    """field() sets name and dtype correctly."""
+    """Field() sets name and dtype correctly."""
     var f = field("x", int32)
     assert_equal(f.name, "x")
     assert_equal(f.dtype, int32)
 
 
 def test_field_fn_nullable_default_true() raises:
-    """field() defaults to nullable=True, matching PyArrow."""
+    """Field() defaults to nullable=True, matching PyArrow."""
     var f = field("x", int32)
     assert_true(f.nullable)
 
 
 def test_field_fn_nullable_false() raises:
-    """field(..., nullable=False) marks the field as non-nullable."""
+    """Field(..., nullable=False) marks the field as non-nullable."""
     var f = field("x", int32, nullable=False)
     assert_false(f.nullable)
 
 
 def test_field_fn_equals_field_struct() raises:
-    """field() and Field() with the same args produce equal fields."""
+    """Field() and Field() with the same args produce equal fields."""
     var f1 = field("x", int32, nullable=False)
     var f2 = Field("x", int32, False)
     assert_true(f1 == f2)
 
 
 def test_field_fn_various_types() raises:
-    """field() works for all primitive types."""
+    """Field() works for all primitive types."""
     assert_equal(field("a", int8).dtype, int8)
     assert_equal(field("b", int64).dtype, int64)
     assert_equal(field("c", float32).dtype, float32)
