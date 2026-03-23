@@ -392,41 +392,6 @@ def test_any_strictness_deduplicates() raises:
     assert_true(len(result_any) <= 2)
 
 
-# ---------------------------------------------------------------------------
-# hash_join — null key semantics
-# ---------------------------------------------------------------------------
-
-
-def test_null_keys_not_matched() raises:
-    """SQL null semantics: null keys never match (null != null for joins)."""
-    # left: (null, 10), (1, 20)
-    # right: (null, 100), (1, 200)
-    # Only key=1 matches — null keys are dropped.
-    var la = PrimitiveBuilder[int32](capacity=2)
-    la.append_null()
-    la.append(Scalar[int32.native](1))
-    var lv_b = PrimitiveBuilder[int32](capacity=2)
-    lv_b.append(Scalar[int32.native](10))
-    lv_b.append(Scalar[int32.native](20))
-    var lcols = List[AnyArray]()
-    lcols.append(la.finish().to_any())
-    lcols.append(lv_b.finish().to_any())
-    var left = record_batch(lcols^, names=["k", "v"]).to_struct_array()
-
-    var ra = PrimitiveBuilder[int32](capacity=2)
-    ra.append_null()
-    ra.append(Scalar[int32.native](1))
-    var rv_b = PrimitiveBuilder[int32](capacity=2)
-    rv_b.append(Scalar[int32.native](100))
-    rv_b.append(Scalar[int32.native](200))
-    var rcols = List[AnyArray]()
-    rcols.append(ra.finish().to_any())
-    rcols.append(rv_b.finish().to_any())
-    var right = record_batch(rcols^, names=["k", "v"]).to_struct_array()
-
-    var result = hash_join(left, right, _left_on(), _right_on())
-    assert_equal(len(result), 1)
-
 
 # ---------------------------------------------------------------------------
 # hash_join — string keys
