@@ -28,7 +28,8 @@ from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
-from ..arrays import PrimitiveArray, AnyArray
+from ..arrays import PrimitiveArray, StringArray, AnyArray
+from ..builders import PrimitiveBuilder
 from ..buffers import BufferBuilder
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
@@ -257,12 +258,44 @@ def greater_equal[
 
 
 # ---------------------------------------------------------------------------
+# String overloads
+# ---------------------------------------------------------------------------
+
+
+def equal(
+    left: StringArray, right: StringArray
+) raises -> PrimitiveArray[bool_dt]:
+    """Element-wise string equality."""
+    var n = len(left)
+    if len(right) != n:
+        raise Error(
+            "equal: string arrays must have the same length"
+        )
+    var builder = PrimitiveBuilder[bool_dt](capacity=n)
+    var bm = bitmap_and(left.bitmap, right.bitmap)
+    for i in range(n):
+        var eq = String(left.unsafe_get(UInt(i))) == String(
+            right.unsafe_get(UInt(i))
+        )
+        builder.unsafe_append(Scalar[bool_dt.native](eq))
+    return PrimitiveArray[bool_dt](
+        length=n,
+        nulls=n - bm.value().count_set_bits() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=builder.finish().buffer,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Runtime-typed overloads
 # ---------------------------------------------------------------------------
 
 
 def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed equal."""
+    if left.dtype().is_string():
+        return equal(left.as_string(), right.as_string()).to_any()
     return binary_array_dispatch["equal", bool_dt, equal[_]](left, right)
 
 
