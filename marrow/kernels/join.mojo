@@ -36,7 +36,7 @@ from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, Field, int32, uint64, struct_
 from .filter import take
-from .hash_table import DictHashTable
+from .hash_table import SwissHashTable
 from .hashing import hash_
 from ..expr.relations import (
     JOIN_INNER,
@@ -128,13 +128,13 @@ struct HashJoin(Join):
     Stores the full build-side StructArray for output assembly via take().
     """
 
-    var _table: DictHashTable[hash_]
+    var _table: SwissHashTable[hash_]
     var _build_dtype: DataType
     var _left_data: Optional[StructArray]
     var _num_rows: Int
 
     def __init__(out self):
-        self._table = DictHashTable[hash_]()
+        self._table = SwissHashTable[hash_]()
         self._build_dtype = DataType(code=0)
         self._left_data = None
         self._num_rows = 0
@@ -144,7 +144,7 @@ struct HashJoin(Join):
         self._num_rows = data.length
         self._left_data = data.copy()
         # Re-init with capacity to avoid reallocs during insert loop.
-        self._table = DictHashTable[hash_](capacity=self._num_rows)
+        self._table = SwissHashTable[hash_](capacity=self._num_rows)
         var keys = data.select(key_indices)
         var hashes = self._table.hash_keys(keys)
         for i in range(self._num_rows):

@@ -185,4 +185,5 @@ package/
 .vscode/
 
 .DS_Store
+*.trace
 
