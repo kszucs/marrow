@@ -1247,6 +1247,26 @@ struct StructArray(
         """
         return self.children[self._index_for_field_name(name)].copy()
 
+    def select(self, indices: List[Int]) raises -> Self:
+        """Return a new StructArray with only the fields at the given indices.
+
+        O(1) ref-count bumps per selected column — no data copied.
+        Matches RecordBatch.select(indices) API.
+        """
+        var fields = List[Field]()
+        var children = List[AnyArray]()
+        for idx in indices:
+            fields.append(self.dtype.fields[idx].copy())
+            children.append(self.children[idx].copy())
+        return Self(
+            dtype=struct_(fields^),
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            children=children^,
+        )
+
     def flatten(self) -> List[AnyArray]:
         """Return one AnyArray per field.
 

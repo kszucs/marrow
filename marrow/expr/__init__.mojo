@@ -88,6 +88,7 @@ from marrow.expr.relations import (
     InMemoryTable,
     ParquetScan,
     Aggregate,
+    Join,
     in_memory_table,
     parquet_scan,
     # Plan node kind constants
@@ -97,6 +98,27 @@ from marrow.expr.relations import (
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
     AGGREGATE_NODE,
+    JOIN_NODE,
+    # Join kind constants
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+    JOIN_CROSS,
+    JOIN_MARK,
+    JOIN_SINGLE,
+    # Join strictness constants
+    JOIN_ALL,
+    JOIN_ANY,
+    JOIN_ASOF,
+    # Join algorithm hints
+    JOIN_ALGO_AUTO,
+    JOIN_ALGO_HASH,
+    JOIN_ALGO_SORT_MERGE,
+    JOIN_ALGO_PIECEWISE,
+    JOIN_ALGO_GRACE_HASH,
 )
 from marrow.expr.rewrite import (
     Rewrite,
@@ -122,6 +144,7 @@ from marrow.expr.executor import (
     FilterProcessor,
     ProjectProcessor,
     AggregateProcessor,
+    JoinProcessor,
     Planner,
     execute,
 )

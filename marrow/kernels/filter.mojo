@@ -1,8 +1,8 @@
-"""Filter and selection kernels.
+"""Filter, take, and selection kernels.
 
-`filter` selects elements from an array based on a boolean selection array,
-producing a new array containing only the selected elements.
-
+``filter_``  — select elements where a boolean mask is True.
+``take``     — gather elements at arbitrary indices (index -1 → null).
+``drop_nulls`` — remove null elements using the validity bitmap.
 
 All functions support arrays with non-zero offsets (sliced arrays).
 """
@@ -15,7 +15,8 @@ from std.sys import size_of
 from ..arrays import PrimitiveArray, StringArray, AnyArray
 from ..buffers import Buffer, BufferBuilder
 from ..bitmap import Bitmap, BitmapBuilder
-from ..dtypes import DataType, bool_, uint32, string, numeric_dtypes
+from ..builders import PrimitiveBuilder, StringBuilder
+from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
 from .aggregate import sum_
 from .string import string_lengths
 
@@ -594,3 +595,81 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
             return drop_nulls[dtype](array.as_primitive[dtype]()).to_any()
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype())
+
+
+# ---------------------------------------------------------------------------
+# take — gather elements at arbitrary indices (index -1 → null)
+# ---------------------------------------------------------------------------
+
+
+def take[T: DataType](
+    array: PrimitiveArray[T], indices: PrimitiveArray[int32]
+) raises -> PrimitiveArray[T]:
+    """Gather elements from a primitive array at the given indices.
+
+    Args:
+        array: Source array.
+        indices: Row indices to gather. -1 produces a null output element.
+
+    Returns:
+        A new PrimitiveArray with one element per index.
+    """
+    var n = len(indices)
+    var builder = PrimitiveBuilder[T](capacity=n)
+    for i in range(n):
+        var idx = Int(indices.unsafe_get(i))
+        if idx == -1:
+            builder.append_null()
+        elif array.is_valid(idx):
+            builder.append(array.unsafe_get(idx))
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def take(array: StringArray, indices: PrimitiveArray[int32]) raises -> StringArray:
+    """Gather elements from a string array at the given indices.
+
+    Args:
+        array: Source string array.
+        indices: Row indices to gather. -1 produces a null output element.
+
+    Returns:
+        A new StringArray with one element per index.
+    """
+    var n = len(indices)
+    var builder = StringBuilder(capacity=n)
+    for i in range(n):
+        var idx = Int(indices.unsafe_get(i))
+        if idx == -1:
+            builder.append_null()
+        elif array.is_valid(idx):
+            builder.append(array.unsafe_get(UInt(idx)))
+        else:
+            builder.append_null()
+    return builder.finish()
+
+
+def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
+    """Gather elements from a type-erased array at the given indices.
+
+    Dispatches to the appropriate typed overload at runtime.
+
+    Args:
+        array: Source array (runtime-typed).
+        indices: Row indices to gather. -1 produces a null output element.
+
+    Returns:
+        A new AnyArray with one element per index.
+    """
+    if array.dtype() == bool_:
+        return take[bool_](array.as_primitive[bool_](), indices).to_any()
+
+    comptime for dt in numeric_dtypes:
+        if array.dtype() == dt:
+            return take[dt](array.as_primitive[dt](), indices).to_any()
+
+    if array.dtype().is_string():
+        return take(array.as_string(), indices).to_any()
+
+    raise Error("take: unsupported dtype ", array.dtype())

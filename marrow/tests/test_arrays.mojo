@@ -1266,6 +1266,87 @@ def test_struct_array_flatten() raises:
 
 
 # ---------------------------------------------------------------------------
+# StructArray.select tests
+# ---------------------------------------------------------------------------
+
+
+def test_struct_array_select_basic() raises:
+    """select returns a StructArray with only the requested fields."""
+    var sb = StructBuilder(
+        [field("a", int32), field("b", int32), field("c", int32)], capacity=2
+    )
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(1).as_primitive[int32]().append(10)
+    sb.field_builder(1).as_primitive[int32]().append(20)
+    sb.field_builder(2).as_primitive[int32]().append(100)
+    sb.field_builder(2).as_primitive[int32]().append(200)
+    sb.append_valid()
+    sb.append_valid()
+    var sa = sb.finish()
+
+    var indices = List[Int]()
+    indices.append(0)
+    indices.append(2)
+    var result = sa.select(indices)
+
+    assert_equal(len(result.children), 2)
+    assert_equal(result.dtype.fields[0].name, "a")
+    assert_equal(result.dtype.fields[1].name, "c")
+    assert_equal(len(result), 2)
+
+
+def test_struct_array_select_inherits_nulls_and_bitmap() raises:
+    """select preserves nulls count, bitmap, and offset from the source."""
+    var sb = StructBuilder(
+        [field("x", int32), field("y", int32)], capacity=3
+    )
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(0).as_primitive[int32]().append(3)
+    sb.field_builder(1).as_primitive[int32]().append(10)
+    sb.field_builder(1).as_primitive[int32]().append(20)
+    sb.field_builder(1).as_primitive[int32]().append(30)
+    sb.append_null()
+    sb.append_valid()
+    sb.append_valid()
+    var sa = sb.finish()
+    assert_equal(sa.null_count(), 1)
+
+    var indices = List[Int]()
+    indices.append(0)
+    var result = sa.select(indices)
+
+    assert_equal(result.null_count(), 1)
+    assert_equal(result.offset, sa.offset)
+    assert_true(result.bitmap.__bool__())  # bitmap is present
+
+
+def test_struct_array_select_inherits_offset() raises:
+    """select preserves the offset of the source array."""
+    var sb = StructBuilder(
+        [field("a", int32), field("b", int32)], capacity=3
+    )
+    sb.field_builder(0).as_primitive[int32]().append(1)
+    sb.field_builder(0).as_primitive[int32]().append(2)
+    sb.field_builder(0).as_primitive[int32]().append(3)
+    sb.field_builder(1).as_primitive[int32]().append(10)
+    sb.field_builder(1).as_primitive[int32]().append(20)
+    sb.field_builder(1).as_primitive[int32]().append(30)
+    sb.append_valid()
+    sb.append_valid()
+    sb.append_valid()
+    var sa = sb.finish().slice(1)  # offset = 1, length = 2
+
+    var indices = List[Int]()
+    indices.append(0)
+    var result = sa.select(indices)
+
+    assert_equal(result.offset, 1)
+    assert_equal(len(result), 2)
+
+
+# ---------------------------------------------------------------------------
 # Equality tests
 # ---------------------------------------------------------------------------
 

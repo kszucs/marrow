@@ -78,6 +78,7 @@ from marrow.expr.values import (
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
+from marrow.kernels.join import HashJoin
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -86,12 +87,22 @@ from marrow.expr.relations import (
     InMemoryTable,
     ParquetScan,
     Aggregate as PlanAggregate,
+    Join as PlanJoin,
     SCAN_NODE,
     FILTER_NODE,
     PROJECT_NODE,
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
     AGGREGATE_NODE,
+    JOIN_NODE,
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+    JOIN_ALL,
+    JOIN_ANY,
 )
 from marrow.parquet import read_table
 
@@ -774,6 +785,89 @@ struct AggregateProcessor(RelationProcessor):
 
 
 # ---------------------------------------------------------------------------
+# JoinProcessor — blocking hash join (build left, probe right)
+# ---------------------------------------------------------------------------
+
+
+struct JoinProcessor(RelationProcessor):
+    """Hash join processor: build left side entirely, then stream right.
+
+    Phase 1 (first ``pull()`` call):
+        Consume the entire left input into a single RecordBatch (blocking).
+
+    Phase 2 (subsequent ``pull()`` calls):
+        Pull one morsel from the right input, call ``hash_join``, emit result.
+
+    When the right input is exhausted, raise ``Exhausted``.
+
+    This is the "CollectLeft" strategy from DataFusion — simplest correct
+    approach, O(|left|) memory for the build side.
+    """
+
+    var left_proc: AnyRelationProcessor
+    var right_proc: AnyRelationProcessor
+    var left_key_indices: List[Int]
+    var right_key_indices: List[Int]
+    var kind: UInt8
+    var strictness: UInt8
+    var schema_: Schema
+    var ctx: ExecutionContext
+    var _index: Optional[HashJoin]
+    var _exhausted: Bool
+
+    def __init__(
+        out self,
+        var left_proc: AnyRelationProcessor,
+        var right_proc: AnyRelationProcessor,
+        var left_key_indices: List[Int],
+        var right_key_indices: List[Int],
+        kind: UInt8,
+        strictness: UInt8,
+        schema_: Schema,
+        ctx: ExecutionContext,
+    ):
+        self.left_proc = left_proc^
+        self.right_proc = right_proc^
+        self.left_key_indices = left_key_indices^
+        self.right_key_indices = right_key_indices^
+        self.kind = kind
+        self.strictness = strictness
+        self.schema_ = schema_
+        self.ctx = ctx
+        self._index = None
+        self._exhausted = False
+
+    def schema(self) -> Schema:
+        return self.schema_.copy()
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._exhausted:
+            raise Exhausted()
+
+        # Phase 1: consume entire left side and build hash index (once).
+        if not self._index:
+            var left_struct = self.left_proc.read_all().to_struct_array()
+            var index = HashJoin()
+            index.build(left_struct, self.left_key_indices)
+            self._index = index^
+
+        # Phase 2: pull one right morsel and probe the pre-built index.
+        try:
+            var right_morsel = self.right_proc.pull()
+            var result = self._index.value().probe(
+                right_morsel.to_struct_array(),
+                self.right_key_indices,
+                self.kind,
+                self.strictness,
+            )
+            return RecordBatch(schema=self.schema_.copy(), columns=result.children.copy())
+        except Exhausted:
+            self._exhausted = True
+        # Right side exhausted — propagate to caller.
+        raise Exhausted()
+
+
+# ---------------------------------------------------------------------------
 # Planner — builds processor hierarchies from expression trees
 # ---------------------------------------------------------------------------
 
@@ -880,6 +974,31 @@ struct Planner:
                 grouper=HashGrouper(arc[].agg_funcs),
                 schema_=arc[].schema(),
                 key_fields=key_fields^,
+            )
+        if k == JOIN_NODE:
+            var arc = expr.downcast[PlanJoin]()
+            var left_proc = self.build(arc[].left)
+            var right_proc = self.build(arc[].right)
+
+            # Extract positional key indices from pre-resolved Column exprs.
+            var left_key_indices = List[Int]()
+            for ref e in arc[].left_keys:
+                var col_arc = e.downcast[Column]()
+                left_key_indices.append(col_arc[].index)
+            var right_key_indices = List[Int]()
+            for ref e in arc[].right_keys:
+                var col_arc = e.downcast[Column]()
+                right_key_indices.append(col_arc[].index)
+
+            return JoinProcessor(
+                left_proc=left_proc^,
+                right_proc=right_proc^,
+                left_key_indices=left_key_indices^,
+                right_key_indices=right_key_indices^,
+                kind=arc[].join_kind,
+                strictness=arc[].strictness,
+                schema_=arc[].schema(),
+                ctx=self.ctx,
             )
         if k == SCAN_NODE:
             raise Error(
