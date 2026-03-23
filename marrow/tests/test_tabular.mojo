@@ -112,11 +112,11 @@ def test_record_batch_eq() raises:
     var schema = Schema(fields=[Field("x", int32), Field("y", int32)])
     var a = RecordBatch(
         schema,
-        [AnyArray(array[int32]([1, 2, 3])), AnyArray(array[int32]([4, 5, 6]))],
+        [array[int32]([1, 2, 3]).to_any(), array[int32]([4, 5, 6]).to_any()],
     )
     var b = RecordBatch(
         schema,
-        [AnyArray(array[int32]([1, 2, 3])), AnyArray(array[int32]([4, 5, 6]))],
+        [array[int32]([1, 2, 3]).to_any(), array[int32]([4, 5, 6]).to_any()],
     )
     assert_true(a == b)
 
@@ -124,8 +124,8 @@ def test_record_batch_eq() raises:
 def test_record_batch_eq_unequal() raises:
     """RecordBatches with different column values are not equal."""
     var schema = Schema(fields=[Field("x", int32)])
-    var a = RecordBatch(schema, [AnyArray(array[int32]([1, 2, 3]))])
-    var b = RecordBatch(schema, [AnyArray(array[int32]([1, 2, 99]))])
+    var a = RecordBatch(schema, [array[int32]([1, 2, 3]).to_any()])
+    var b = RecordBatch(schema, [array[int32]([1, 2, 99]).to_any()])
     assert_true(not (a == b))
 
 

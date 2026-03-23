@@ -75,7 +75,7 @@ def test_hash__string() raises:
     b.append("bar")
     b.append("foo")
     b.append("baz")
-    var keys = b.finish_typed()
+    var keys = b.finish()
 
     var h = hash_(keys)
     assert_equal(len(h), 4)
@@ -88,7 +88,7 @@ def test_hash__string_nulls() raises:
     b.append("a")
     b.append_null()
     b.append("b")
-    var keys = b.finish_typed()
+    var keys = b.finish()
 
     var h = hash_(keys)
     assert_equal(h[1], Scalar[uint64.native](NULL_HASH_SENTINEL))
@@ -110,7 +110,7 @@ def test_hash__dispatch_string() raises:
     var b = StringBuilder(2)
     b.append("x")
     b.append("x")
-    var a = AnyArray(b.finish_typed())
+    var a = AnyArray(b.finish())
 
     var h = hash_(a)
     assert_equal(h[0], h[1])

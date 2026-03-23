@@ -26,7 +26,7 @@ def _make_vectors(n_vectors: Int, dim: Int) raises -> FixedSizeListArray:
     var builder = FixedSizeListBuilder(AnyBuilder(b^), list_size=dim)
     for _ in range(n_vectors):
         builder.append_valid()
-    return builder.finish_typed()
+    return builder.finish()
 
 
 def _make_query(dim: Int) raises -> PrimitiveArray[float32]:
@@ -36,7 +36,7 @@ def _make_query(dim: Int) raises -> PrimitiveArray[float32]:
         b.unsafe_append(
             Scalar[float32.native](Float64((i * 11 + 17) % 1000) / 1000.0 - 0.5)
         )
-    return b.finish_typed()
+    return b.finish()
 
 
 def _bench_cpu(

@@ -16,7 +16,7 @@ def _make_vectors(*values: Float64, dim: Int) raises -> FixedSizeListArray:
     var builder = FixedSizeListBuilder(AnyBuilder(b^), list_size=dim)
     for _ in range(n_lists):
         builder.append_valid()
-    return builder.finish_typed()
+    return builder.finish()
 
 
 def _make_query(*values: Float64) raises -> PrimitiveArray[float32]:
@@ -24,7 +24,7 @@ def _make_query(*values: Float64) raises -> PrimitiveArray[float32]:
     var b = PrimitiveBuilder[float32](len(values))
     for v in values:
         b.append(Scalar[float32.native](v))
-    return b.finish_typed()
+    return b.finish()
 
 
 # TODO: use abs and place this to a common test utils module

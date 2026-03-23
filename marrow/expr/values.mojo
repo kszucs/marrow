@@ -523,7 +523,7 @@ def _make_literal[T: DataType](value: Scalar[T.native]) raises -> AnyValue:
     """Create a Literal expression from a typed scalar value."""
     var builder = PrimitiveBuilder[T](1)
     builder.unsafe_append(value)
-    return Literal(value=AnyArray(builder.finish_typed()))
+    return Literal(value=builder.finish().to_any())
 
 
 # ---------------------------------------------------------------------------

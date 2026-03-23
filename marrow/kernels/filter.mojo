@@ -524,14 +524,14 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     var mask = selection.as_bool().copy()
 
     if array.dtype() == bool_:
-        return AnyArray(filter_[bool_](array.as_primitive[bool_](), mask))
+        return filter_[bool_](array.as_primitive[bool_](), mask).to_any()
 
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
-            return AnyArray(filter_[dtype](array.as_primitive[dtype](), mask))
+            return filter_[dtype](array.as_primitive[dtype](), mask).to_any()
 
     if array.dtype().is_string():
-        return AnyArray(filter_(array.as_string(), mask))
+        return filter_(array.as_string(), mask).to_any()
 
     raise Error("filter: unsupported dtype ", array.dtype())
 
@@ -587,10 +587,10 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
         A new AnyArray with null elements removed.
     """
     if array.dtype() == bool_:
-        return AnyArray(drop_nulls[bool_](array.as_primitive[bool_]()))
+        return drop_nulls[bool_](array.as_primitive[bool_]()).to_any()
 
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
-            return AnyArray(drop_nulls[dtype](array.as_primitive[dtype]()))
+            return drop_nulls[dtype](array.as_primitive[dtype]()).to_any()
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype())

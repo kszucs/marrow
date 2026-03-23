@@ -303,19 +303,15 @@ struct BinaryProcessor(ValueProcessor):
         elif self.op == GE:
             return greater_equal(l, r)
         elif self.op == AND:
-            return AnyArray(
-                and_(
-                    l.as_primitive[bool_dt](),
-                    r.as_primitive[bool_dt](),
-                )
-            )
+            return and_(
+                l.as_primitive[bool_dt](),
+                r.as_primitive[bool_dt](),
+            ).to_any()
         elif self.op == OR:
-            return AnyArray(
-                or_(
-                    l.as_primitive[bool_dt](),
-                    r.as_primitive[bool_dt](),
-                )
-            )
+            return or_(
+                l.as_primitive[bool_dt](),
+                r.as_primitive[bool_dt](),
+            ).to_any()
         else:
             raise Error("BinaryProcessor: unknown op ", self.op)
 
@@ -337,7 +333,7 @@ struct UnaryProcessor(ValueProcessor):
         elif self.op == ABS:
             return abs_(c)
         elif self.op == NOT:
-            return AnyArray(not_(c.as_primitive[bool_dt]()))
+            return not_(c.as_primitive[bool_dt]()).to_any()
         else:
             raise Error("UnaryProcessor: unknown op ", self.op)
 
@@ -927,5 +923,5 @@ def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
             for i in range(length):
                 builder._buffer.unsafe_set[dt.native](i, val)
             builder._length = length
-            return AnyArray(builder.finish_typed())
+            return builder.finish().to_any()
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype()}")

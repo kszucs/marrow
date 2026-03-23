@@ -70,7 +70,7 @@ def hash_[
         else:
             builder.append(_h(_hash(buf.unsafe_get[T.native](off + i))))
 
-    return builder.finish_typed()
+    return builder.finish()
 
 
 def hash_(keys: StringArray) raises -> PrimitiveArray[uint64]:
@@ -88,7 +88,7 @@ def hash_(keys: StringArray) raises -> PrimitiveArray[uint64]:
         else:
             builder.append(_h(_hash(String(keys.unsafe_get(UInt(i))))))
 
-    return builder.finish_typed()
+    return builder.finish()
 
 
 def hash_(keys: StructArray) raises -> PrimitiveArray[uint64]:
@@ -131,7 +131,7 @@ def hash_(keys: StructArray) raises -> PrimitiveArray[uint64]:
                     )
                 )
             )
-        result = builder.finish_typed()
+        result = builder.finish()
 
     return result^
 
@@ -190,7 +190,7 @@ def hash_identity[
         else:
             builder.append(_h(Int(keys.unsafe_get(i)) + _OFFSET))
 
-    return builder.finish_typed()
+    return builder.finish()
 
 
 def hash_identity(keys: AnyArray) raises -> PrimitiveArray[uint64]:

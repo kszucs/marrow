@@ -174,7 +174,7 @@ def test_groupby_string_key() raises:
     b.append("b")
     b.append("a")
     b.append("b")
-    var keys = AnyArray(b.finish_typed())
+    var keys = AnyArray(b.finish())
     var vals = AnyArray(array[int32]([10, 20, 30, 40]))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)

@@ -60,7 +60,7 @@ trait Scalar(Copyable, Movable, Writable):
     def is_null(self) -> Bool:
         ...
 
-    def as_any(self) -> AnyScalar:
+    def to_any(deinit self) -> AnyScalar:
         ...
 
 
@@ -113,17 +113,17 @@ struct PrimitiveScalar[T: DataType](
         """Get the underlying native value. Undefined if null."""
         return self._value
 
-    def as_array(self) raises -> PrimitiveArray[Self.T]:
+    def to_array(self) raises -> PrimitiveArray[Self.T]:
         """Build a length-1 PrimitiveArray from this scalar."""
         var b = PrimitiveBuilder[Self.T](1)
         if self._is_valid:
             b.append(self._value)
         else:
             b.append_null()
-        return b.finish_typed()
+        return b.finish()
 
-    def as_any(self) -> AnyScalar:
-        return self.copy()
+    def to_any(deinit self) -> AnyScalar:
+        return self^
 
     def __eq__(self, other: Self) -> Bool:
         if self.is_null() and other.is_null():
@@ -183,21 +183,12 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def is_null(self) -> Bool:
         return not self._is_valid
 
-    def as_string(self) -> String:
+    def to_string(self) -> String:
         """Get the value as an owned String."""
         return self._value
 
-    def as_array(self) raises -> StringArray:
-        """Build a length-1 StringArray from this scalar."""
-        var b = StringBuilder(1)
-        if self._is_valid:
-            b.append(self._value)
-        else:
-            b.append_null()
-        return b.finish_typed()
-
-    def as_any(self) -> AnyScalar:
-        return self.copy()
+    def to_any(deinit self) -> AnyScalar:
+        return self^
 
     def __eq__(self, other: Self) -> Bool:
         if self.is_null() and other.is_null():
@@ -253,8 +244,8 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
         """Get the child elements array."""
         return self._value.copy()
 
-    def as_any(self) -> AnyScalar:
-        return self.copy()
+    def to_any(deinit self) -> AnyScalar:
+        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -309,8 +300,8 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         """Return the i-th field as an AnyScalar."""
         return self._value[index].copy()
 
-    def as_any(self) -> AnyScalar:
-        return self.copy()
+    def to_any(deinit self) -> AnyScalar:
+        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:

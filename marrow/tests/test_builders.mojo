@@ -34,7 +34,7 @@ from marrow.dtypes import *
 def test_bool_builder_zero_length() raises:
     var b = BoolBuilder()
     assert_equal(len(b), 0)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 0)
 
 
@@ -43,7 +43,7 @@ def test_bool_builder_append_null() raises:
     b.append(True)
     b.append_null()
     b.append(False)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -58,7 +58,7 @@ def test_bool_builder_null_count() raises:
     b.append_null()
     b.append_null()
     b.append(False)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.null_count(), 2)
 
 
@@ -67,7 +67,7 @@ def test_bool_builder_all_nulls() raises:
     b.append_null()
     b.append_null()
     b.append_null()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_equal(frozen.null_count(), 3)
     for i in range(3):
@@ -79,7 +79,7 @@ def test_bool_builder_all_false() raises:
     b.append(False)
     b.append(False)
     b.append(False)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_equal(frozen.null_count(), 0)
     for i in range(3):
@@ -104,7 +104,7 @@ def test_primitive_builder_int16() raises:
     var b = PrimitiveBuilder[int16](2)
     b.append(32767)
     b.append(-32768)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen[0], 32767)
     assert_equal(frozen[1], -32768)
 
@@ -113,7 +113,7 @@ def test_primitive_builder_uint32() raises:
     var b = PrimitiveBuilder[uint32](2)
     b.append(0)
     b.append(42)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen[0], 0)
     assert_equal(frozen[1], 42)
 
@@ -123,7 +123,7 @@ def test_primitive_builder_float32() raises:
     b.append(1.5)
     b.append(0.0)
     b.append(-3.14)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_true(frozen.is_valid(1))
@@ -134,7 +134,7 @@ def test_primitive_builder_float64() raises:
     var b = PrimitiveBuilder[float64](2)
     b.append(1.0)
     b.append_null()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.null_count(), 1)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -154,7 +154,7 @@ def test_primitive_builder_capacity_doubling() raises:
     b.append(8)
     b.append(9)
     assert_equal(len(b), 10)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen[0], 0)
     assert_equal(frozen[4], 4)
     assert_equal(frozen[9], 9)
@@ -177,7 +177,7 @@ def test_primitive_builder_null_count() raises:
     b.append_null()
     b.append(4)
     b.append_null()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.null_count(), 3)
 
 
@@ -185,7 +185,7 @@ def test_primitive_builder_all_nulls() raises:
     var b = PrimitiveBuilder[int64](4)
     for _ in range(4):
         b.append_null()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 4)
     assert_equal(frozen.null_count(), 4)
     for i in range(4):
@@ -202,7 +202,7 @@ def test_string_builder_append_null() raises:
     b.append("hello")
     b.append_null()
     b.append("world")
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -217,7 +217,7 @@ def test_string_builder_null_count() raises:
     b.append_null()
     b.append_null()
     b.append("b")
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 4)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -230,7 +230,7 @@ def test_string_builder_empty_string() raises:
     b.append("")
     b.append("x")
     b.append("")
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_equal(frozen[0], "")
     assert_equal(frozen[1], "x")
@@ -244,7 +244,7 @@ def test_string_builder_offsets_correct() raises:
     b.append("cde")  # bytes [2..5)
     b.append_null()  # bytes [5..5) — offset stays at 5
     b.append("f")  # bytes [5..6)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 4)
     assert_equal(frozen[0], "ab")
     assert_equal(frozen[1], "cde")
@@ -255,7 +255,7 @@ def test_string_builder_all_nulls() raises:
     var b = StringBuilder(2)
     b.append_null()
     b.append_null()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     assert_false(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -267,7 +267,7 @@ def test_string_builder_capacity_growth() raises:
     b.append("first")
     b.append("second")
     b.append("third")
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_equal(frozen[0], "first")
     assert_equal(frozen[1], "second")
@@ -281,7 +281,7 @@ def test_string_builder_append_string_slice() raises:
     var s2 = StringSlice("world")
     b.append(s1)
     b.append(s2)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     assert_equal(frozen[0], "hello")
     assert_equal(frozen[1], "world")
@@ -295,7 +295,7 @@ def test_string_builder_unsafe_append_string_slice() raises:
     var s2 = StringSlice("bye")
     b.unsafe_append(s1)
     b.unsafe_append(s2)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     assert_equal(frozen[0], "hi")
     assert_equal(frozen[1], "bye")
@@ -317,7 +317,7 @@ def test_string_builder_as_any_builder() raises:
 def test_list_builder_empty() raises:
     var child = PrimitiveBuilder[int32]()
     var b = ListBuilder(child^)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_list())
 
@@ -328,7 +328,7 @@ def test_list_builder_append_null() raises:
     b.append_valid()
     b.append_null()
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -342,7 +342,7 @@ def test_list_builder_null_count() raises:
     b.append_null()
     b.append_null()
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 4)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -355,7 +355,7 @@ def test_list_builder_empty_list() raises:
     var child = PrimitiveBuilder[int64]()
     var b = ListBuilder(child^)
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 1)
     assert_true(frozen.is_valid(0))
     var inner_val = frozen[0].value()
@@ -386,7 +386,7 @@ def test_list_builder_multiple_nulls_offsets() raises:
     b.append_valid()  # list with child elements [1, 2]
     b.append_null()  # null — child length unchanged
     b.append_null()  # null — child length unchanged
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -404,7 +404,7 @@ def test_list_builder_string_child() raises:
     str_b.append("world")
     var b = ListBuilder(str_b^)
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 1)
     var inner_val = frozen[0].value()
     ref inner = inner_val.as_string()
@@ -420,7 +420,7 @@ def test_list_builder_string_child() raises:
 def test_fixed_size_list_builder_zero_length() raises:
     var child = PrimitiveBuilder[int32]()
     var b = FixedSizeListBuilder(child^, list_size=4)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_fixed_size_list())
     assert_equal(frozen.dtype.size, 4)
@@ -435,7 +435,7 @@ def test_fixed_size_list_builder_float32() raises:
     var b = FixedSizeListBuilder(child^, list_size=2)
     b.append_valid()
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     ref first = frozen[0].as_float32()
     assert_equal(first.length, 2)
@@ -455,7 +455,7 @@ def test_fixed_size_list_builder_with_nulls() raises:
     b.append_valid()
     b.append_null()
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
@@ -487,7 +487,7 @@ def test_fixed_size_list_builder_size1() raises:
     b.append_valid()
     b.append_valid()
     b.append_valid()
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 3)
     ref first = frozen[0].as_int32()
     assert_equal(first.length, 1)
@@ -503,7 +503,7 @@ def test_fixed_size_list_builder_size1() raises:
 
 def test_struct_builder_zero_length() raises:
     var sb = StructBuilder([])
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_struct())
 
@@ -523,7 +523,7 @@ def test_struct_builder_append_valid() raises:
     sb.append_valid()
     sb.append_valid()
     assert_equal(len(sb), 3)
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.length, 3)
     assert_equal(len(frozen.dtype.fields), 2)
     assert_equal(frozen.dtype.fields[0].name, "id")
@@ -539,7 +539,7 @@ def test_struct_builder_append_null() raises:
     sb.field_builder(0).as_primitive[int32]().append(20)
     sb.append_valid()
     sb.append_null()
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.length, 2)
     assert_true(frozen.bitmap.value().is_valid(0))
     assert_false(frozen.bitmap.value().is_valid(1))
@@ -552,7 +552,7 @@ def test_struct_builder_field_values_accessible() raises:
     sb.field_builder(0).as_primitive[int32]().append(99)
     sb.append_valid()
     sb.append_valid()
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
 
     ref field_data = frozen.unsafe_get("x")
     ref x_arr = field_data.as_primitive[int32]()
@@ -575,7 +575,7 @@ def test_struct_builder_multi_type_fields() raises:
     sb.append_valid()
     sb.append_valid()
 
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.length, 2)
     assert_equal(len(frozen.dtype.fields), 3)
     assert_equal(frozen.dtype.fields[0].name, "id")
@@ -599,7 +599,7 @@ def test_struct_builder_capacity_growth() raises:
     for _ in range(5):
         sb.field_builder(0).as_primitive[int32]().append(0)
         sb.append_valid()
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.length, 5)
 
 
@@ -609,7 +609,7 @@ def test_struct_builder_field_names_preserved() raises:
     sb.field_builder(0).as_primitive[int8]().append(1)
     sb.field_builder(1).as_primitive[int8]().append(2)
     sb.append_valid()
-    var frozen = sb.finish_typed()
+    var frozen = sb.finish()
     assert_equal(frozen.dtype.fields[0].name, "alpha")
     assert_equal(frozen.dtype.fields[1].name, "beta")
 
@@ -731,7 +731,7 @@ def test_primitive_builder_finish_shrinks_data_buffer() raises:
     b.append(1)
     b.append(2)
     # capacity allocated 512 bytes; only 2 elements written
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 2 int32s = 8 bytes → 64-byte aligned = 64 bytes
     assert_equal(frozen.buffer.size, 64)
@@ -743,7 +743,7 @@ def test_string_builder_finish_shrinks_offsets_buffer() raises:
     b.append("hello")
     b.append("world")
     # capacity allocated 129 * 4 = 516 bytes for offsets; only 3 needed
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 3 uint32 offsets = 12 bytes → 64-byte aligned = 64 bytes
     assert_equal(frozen.offsets.size, 64)
@@ -759,7 +759,7 @@ def test_list_builder_finish_shrinks_offsets_buffer() raises:
     b.append_valid()  # list [10, 20]
     b.append_valid()  # list [30]
     # capacity allocated 129 * 4 = 516 bytes for offsets; only 3 needed
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 3 uint32 offsets = 12 bytes → 64-byte aligned = 64 bytes
     assert_equal(frozen.offsets.size, 64)
@@ -771,7 +771,7 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
     b.append(1)
     b.append_null()
     b.append(3)
-    var frozen = b.finish_typed()
+    var frozen = b.finish()
     assert_equal(frozen.nulls, 1)
     # 3 bits → 1 byte → 64-byte aligned = 64 bytes
     assert_equal(frozen.bitmap.value()._buffer.size, 64)
@@ -789,7 +789,7 @@ def test_any_builder_finish_dispatch_primitive() raises:
     assert_equal(arr.as_int32()[0], 42)
     assert_equal(arr.as_int32()[1], 99)
     # data buffer is shrunk: 2 int32s = 8 bytes → 64 bytes
-    assert_equal(arr.as_data().buffers[0].size, 64)
+    assert_equal(arr.to_data().buffers[0].size, 64)
 
 
 def test_any_builder_finish_dispatch_string() raises:
@@ -802,7 +802,7 @@ def test_any_builder_finish_dispatch_string() raises:
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.as_data().buffers[0].size, 64)
+    assert_equal(arr.to_data().buffers[0].size, 64)
 
 
 def test_any_builder_finish_dispatch_list() raises:
@@ -818,7 +818,7 @@ def test_any_builder_finish_dispatch_list() raises:
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.as_data().buffers[0].size, 64)
+    assert_equal(arr.to_data().buffers[0].size, 64)
 
 
 def main() raises:

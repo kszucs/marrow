@@ -17,7 +17,7 @@ Example
     var b = PrimitiveBuilder[int64](capacity=1024)
     b.append(42)
     b.append_null()
-    var arr = b.finish_typed()  # PrimitiveArray[int64]
+    var arr = b.finish()  # PrimitiveArray[int64]
 
     # Typed builders implicitly convert to AnyBuilder
     var child = PrimitiveBuilder[float32](capacity=64)
@@ -30,6 +30,7 @@ from .buffers import Buffer, BufferBuilder
 from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import *
 from .arrays import (
+    Array,
     AnyArray,
     BoolArray,
     PrimitiveArray,
@@ -46,6 +47,8 @@ from .arrays import (
 
 
 trait Builder(ImplicitlyDestructible, Movable):
+    comptime ArrayType: Array
+
     def length(self) -> Int:
         ...
 
@@ -64,7 +67,7 @@ trait Builder(ImplicitlyDestructible, Movable):
     def extend(mut self, arr: AnyArray) raises:
         ...
 
-    def finish(mut self) raises -> AnyArray:
+    def finish(mut self) raises -> Self.ArrayType:
         ...
 
     def reset(mut self):
@@ -126,10 +129,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         rebind[ArcPointer[T]](ptr)[].extend(arr)
 
     @staticmethod
-    def _tramp_finish[
-        T: Builder
-    ](ptr: ArcPointer[NoneType],) raises -> AnyArray:
-        return rebind[ArcPointer[T]](ptr)[].finish()
+    def _tramp_finish[T: Builder](ptr: ArcPointer[NoneType]) raises -> AnyArray:
+        return rebind[ArcPointer[T]](ptr)[].finish().to_any()
 
     @staticmethod
     def _tramp_reset[T: Builder](ptr: ArcPointer[NoneType]):
@@ -241,7 +242,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 struct PrimitiveBuilder[T: DataType](Builder, Sized):
     """Builder for fixed-size primitive arrays (integers, floats)."""
 
-    comptime scalar = Scalar[Self.T.native]
+    comptime ArrayType = PrimitiveArray[Self.T]
+
+    comptime ScalarType = Scalar[Self.T.native]
 
     var _length: Int
     var _capacity: Int
@@ -268,12 +271,12 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     def dtype(self) -> DataType:
         return Self.T
 
-    def append(mut self, value: Self.scalar) raises:
+    def append(mut self, value: Self.ScalarType) raises:
         self.reserve(1)
         self.unsafe_append(value)
 
     @always_inline
-    def unsafe_append(mut self, value: Self.scalar):
+    def unsafe_append(mut self, value: Self.ScalarType):
         """Append without bounds checking. Caller must ensure capacity."""
         self._bitmap.set_bit(self._length, True)
         self._buffer.unsafe_set[Self.T.native](self._length, value)
@@ -283,7 +286,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         comptime assert (
             Self.T == bool_
         ), "append(Bool) only supported for PrimitiveBuilder[bool_]"
-        self.append(Self.scalar(value))
+        self.append(Self.ScalarType(value))
 
     @always_inline
     def append_null(mut self) raises:
@@ -297,12 +300,12 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._null_count += 1
         self._length += 1
 
-    def extend(mut self, values: List[Self.scalar]) raises:
+    def extend(mut self, values: List[Self.ScalarType]) raises:
         self.reserve(len(values))
         for value in values:
             self.unsafe_append(value)
 
-    def extend(mut self, values: List[Self.scalar], valid: List[Bool]) raises:
+    def extend(mut self, values: List[Self.ScalarType], valid: List[Bool]) raises:
         for i in range(len(values)):
             if valid[i]:
                 self.append(values[i])
@@ -352,7 +355,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             self._buffer.resize[Self.T.native](new_cap)
             self._capacity = new_cap
 
-    def finish_typed(mut self) raises -> PrimitiveArray[Self.T]:
+    def finish(mut self) raises -> PrimitiveArray[Self.T]:
         # trim over-allocated buffer capacity down to actual length
         self._buffer.resize[Self.T.native](self._length)
         # only materialise the validity bitmap when there are nulls
@@ -374,8 +377,6 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> AnyArray:
-        return self.finish_typed()
 
     def reset(mut self):
         self._length = 0
@@ -394,6 +395,8 @@ struct StringBuilder(Builder, Sized):
     _offsets — uint32 offsets
     _values  — utf-8 byte data (grown on demand)
     """
+
+    comptime ArrayType = StringArray
 
     var _length: Int
     var _capacity: Int
@@ -530,7 +533,7 @@ struct StringBuilder(Builder, Sized):
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
         self._length += 1
 
-    def finish_typed(mut self) raises -> StringArray:
+    def finish(mut self) raises -> StringArray:
         # trim offsets buffer to length+1 entries (one past the last string)
         self._offsets.resize[DType.uint32](self._length + 1)
         # trim byte data buffer to the actual number of bytes written
@@ -557,8 +560,6 @@ struct StringBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> AnyArray:
-        return self.finish_typed()
 
     def reset(mut self):
         self._length = 0
@@ -577,6 +578,8 @@ struct ListBuilder(Builder, Sized):
     _offsets — uint32 offsets
     _child   — child element builder (AnyBuilder)
     """
+
+    comptime ArrayType = ListArray
 
     var _dtype: DataType
     var _length: Int
@@ -687,7 +690,7 @@ struct ListBuilder(Builder, Sized):
             self._offsets.resize[DType.uint32](new_cap + 1)
             self._capacity = new_cap
 
-    def finish_typed(mut self) raises -> ListArray:
+    def finish(mut self) raises -> ListArray:
         # trim offsets buffer to length+1 entries (one past the last list)
         self._offsets.resize[DType.uint32](self._length + 1)
         # only materialise the validity bitmap when there are nulls
@@ -712,8 +715,6 @@ struct ListBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> AnyArray:
-        return self.finish_typed()
 
     def reset(mut self):
         self._length = 0
@@ -731,6 +732,8 @@ struct FixedSizeListBuilder(Builder, Sized):
 
     _child — child element builder (AnyBuilder)
     """
+
+    comptime ArrayType = FixedSizeListArray
 
     var _dtype: DataType
     var _length: Int
@@ -820,7 +823,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             self._bitmap.resize(new_cap)
             self._capacity = new_cap
 
-    def finish_typed(mut self) raises -> FixedSizeListArray:
+    def finish(mut self) raises -> FixedSizeListArray:
         # no offset buffer to trim — child length is implicit (length * list_size)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
@@ -842,8 +845,6 @@ struct FixedSizeListBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> AnyArray:
-        return self.finish_typed()
 
     def reset(mut self):
         self._length = 0
@@ -861,6 +862,8 @@ struct StructBuilder(Builder, Sized):
 
     _children[i] — field builder for field i (AnyBuilder)
     """
+
+    comptime ArrayType = StructArray
 
     var _dtype: DataType
     var _length: Int
@@ -939,7 +942,7 @@ struct StructBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         for f in range(len(arr.children)):
-            self._children[f].extend(arr.children[f].as_any())
+            self._children[f].extend(arr.children[f].copy())
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
@@ -951,7 +954,7 @@ struct StructBuilder(Builder, Sized):
         for ref child in self._children:
             child.reserve(additional)
 
-    def finish_typed(mut self) raises -> StructArray:
+    def finish(mut self) raises -> StructArray:
         # no data buffers to trim — struct layout is encoded in child arrays
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
@@ -975,8 +978,6 @@ struct StructBuilder(Builder, Sized):
         self.reset()
         return result^
 
-    def finish(mut self) raises -> AnyArray:
-        return self.finish_typed()
 
     def reset(mut self):
         self._length = 0
@@ -1028,7 +1029,7 @@ def make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
 def array[T: DataType]() raises -> PrimitiveArray[T]:
     """Create an empty primitive array."""
     var b = PrimitiveBuilder[T](0)
-    return b.finish_typed()
+    return b.finish()
 
 
 def array[T: DataType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
@@ -1040,7 +1041,7 @@ def array[T: DataType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
             b.append(Scalar[T.native](value.value()))
         else:
             b.append_null()
-    return b.finish_typed()
+    return b.finish()
 
 
 def array[
@@ -1054,7 +1055,7 @@ def array[
             b.append(Scalar[T.native](value.value()))
         else:
             b.append_null()
-    return b.finish_typed()
+    return b.finish()
 
 
 def array(values: List[Optional[Bool]]) raises -> BoolArray:
@@ -1065,7 +1066,7 @@ def array(values: List[Optional[Bool]]) raises -> BoolArray:
             b.append(Scalar[bool_.native](value.value()))
         else:
             b.append_null()
-    return b.finish_typed()
+    return b.finish()
 
 
 def array(values: List[String]) raises -> StringArray:
@@ -1073,7 +1074,7 @@ def array(values: List[String]) raises -> StringArray:
     var b = StringBuilder(len(values))
     for i in range(len(values)):
         b.append(values[i])
-    return b.finish_typed()
+    return b.finish()
 
 
 def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
@@ -1081,7 +1082,7 @@ def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](capacity=size)
     b._length = size
     b._null_count = size
-    return b.finish_typed()
+    return b.finish()
 
 
 def arange[T: DataType](start: Int, end: Int) raises -> PrimitiveArray[T]:
@@ -1090,4 +1091,4 @@ def arange[T: DataType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](end - start)
     for i in range(start, end):
         b.append(Scalar[T.native](i))
-    return b.finish_typed()
+    return b.finish()

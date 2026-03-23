@@ -33,7 +33,7 @@ def test_sequential_fallback() raises:
     var b = array[int64]([10, 20, 30, 40, 50])
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == AnyArray(array[int64]([11, 22, 33, 44, 55])))
+    assert_true(result == array[int64]([11, 22, 33, 44, 55]).to_any())
 
 
 def test_large_add() raises:
@@ -86,7 +86,7 @@ def test_single_element() raises:
     var b = array[int64]([8])
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == AnyArray(array[int64]([50])))
+    assert_true(result == array[int64]([50]).to_any())
 
 
 def test_predicate() raises:
@@ -127,7 +127,7 @@ def test_dispatch_cpu_hint() raises:
         .build((col(0) + col(1)).with_dispatch(DISPATCH_CPU))
         .eval(batch)
     )
-    assert_true(result == AnyArray(array[int64]([6, 6, 6, 6, 6])))
+    assert_true(result == array[int64]([6, 6, 6, 6, 6]).to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +440,8 @@ def test_parquet_scan_filter_select() raises:
 def test_aggregate_sum() raises:
     """Grouped sum via the expression system."""
     var cols = List[AnyArray]()
-    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1])))
-    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50])))
+    cols.append(array[int64]([1, 2, 1, 2, 1]).to_any())
+    cols.append(array[int64]([10, 20, 30, 40, 50]).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -465,8 +465,8 @@ def test_aggregate_sum() raises:
 def test_aggregate_count() raises:
     """Grouped count via the expression system."""
     var cols = List[AnyArray]()
-    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1])))
-    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50])))
+    cols.append(array[int64]([1, 2, 1, 2, 1]).to_any())
+    cols.append(array[int64]([10, 20, 30, 40, 50]).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -482,8 +482,8 @@ def test_aggregate_count() raises:
 def test_aggregate_small_morsel() raises:
     """Aggregate with small morsel size forces multiple pulls."""
     var cols = List[AnyArray]()
-    cols.append(AnyArray(array[int64]([1, 2, 1, 2, 1, 2])))
-    cols.append(AnyArray(array[int64]([10, 20, 30, 40, 50, 60])))
+    cols.append(array[int64]([1, 2, 1, 2, 1, 2]).to_any())
+    cols.append(array[int64]([10, 20, 30, 40, 50, 60]).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(

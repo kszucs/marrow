@@ -31,7 +31,7 @@ def _make_mask(size: Int, selectivity_pct: Int) raises -> PrimitiveArray[bool_]:
     var b = PrimitiveBuilder[bool_](size)
     for i in range(size):
         b.append(Bool((i * 100) // size < selectivity_pct))
-    return b.finish_typed()
+    return b.finish()
 
 
 def _make_array_with_nulls(size: Int) raises -> PrimitiveArray[int64]:
@@ -41,7 +41,7 @@ def _make_array_with_nulls(size: Int) raises -> PrimitiveArray[int64]:
             b.append_null()
         else:
             b.append(Scalar[int64.native](i))
-    return b.finish_typed()
+    return b.finish()
 
 
 def _make_sel_word_uniform(pct: Int) -> UInt64:

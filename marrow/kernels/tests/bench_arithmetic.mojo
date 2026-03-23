@@ -61,7 +61,7 @@ def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
             b.append_null()
         else:
             b.append(Scalar[T.native](i))
-    return b.finish_typed()
+    return b.finish()
 
 
 # ---------------------------------------------------------------------------

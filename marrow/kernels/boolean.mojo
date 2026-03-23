@@ -95,7 +95,7 @@ def is_null(arr: AnyArray) raises -> AnyArray:
     """Runtime-typed is_null."""
     comptime for dtype in numeric_dtypes:
         if arr.dtype() == dtype:
-            return AnyArray(is_null[dtype](arr.as_primitive[dtype]()))
+            return is_null[dtype](arr.as_primitive[dtype]()).to_any()
     raise Error(t"is_null: unsupported dtype {arr.dtype()}")
 
 
@@ -118,7 +118,7 @@ def select[
         else:
             builder._buffer.unsafe_set[T.native](i, else_.unsafe_get(i))
     builder._length = length
-    return builder.finish_typed()
+    return builder.finish()
 
 
 # TODO: use SIMD select instead of naive element-wise loop when possible
@@ -131,11 +131,9 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
     ref bool_mask = mask.as_primitive[bool_dt]()
     comptime for dtype in numeric_dtypes:
         if then_.dtype() == dtype:
-            return AnyArray(
-                select[dtype](
-                    bool_mask,
-                    then_.as_primitive[dtype](),
-                    else_.as_primitive[dtype](),
-                )
-            )
+            return select[dtype](
+                bool_mask,
+                then_.as_primitive[dtype](),
+                else_.as_primitive[dtype](),
+            ).to_any()
     raise Error(t"select: unsupported dtype {then_.dtype()}")

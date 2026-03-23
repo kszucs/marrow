@@ -92,13 +92,11 @@ def binary_array_dispatch[
 
     comptime for dtype in numeric_dtypes:
         if left.dtype() == dtype:
-            return AnyArray(
-                func[dtype](
-                    left.as_primitive[dtype](),
-                    right.as_primitive[dtype](),
-                    ctx,
-                )
-            )
+            return func[dtype](
+                left.as_primitive[dtype](),
+                right.as_primitive[dtype](),
+                ctx,
+            ).to_any()
     raise Error(t"{name}: unsupported dtype {left.dtype()}")
 
 
@@ -135,13 +133,11 @@ def binary_array_dispatch[
 
     comptime for dtype in numeric_dtypes:
         if left.dtype() == dtype:
-            return AnyArray(
-                func[dtype](
-                    left.as_primitive[dtype](),
-                    right.as_primitive[dtype](),
-                    ctx,
-                )
-            )
+            return func[dtype](
+                left.as_primitive[dtype](),
+                right.as_primitive[dtype](),
+                ctx,
+            ).to_any()
     raise Error(t"{name}: unsupported dtype {left.dtype()}")
 
 
@@ -163,7 +159,7 @@ def unary_numeric_dispatch[
     """
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
-            return AnyArray(func[dtype](array.as_primitive[dtype]()))
+            return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(t"{name}: unsupported dtype {array.dtype()}")
 
 
@@ -181,12 +177,10 @@ def binary_float_dispatch[
 
     comptime for dtype in float_dtypes:
         if left.dtype() == dtype:
-            return AnyArray(
-                func[dtype](
-                    left.as_primitive[dtype](),
-                    right.as_primitive[dtype](),
-                )
-            )
+            return func[dtype](
+                left.as_primitive[dtype](),
+                right.as_primitive[dtype](),
+            ).to_any()
     raise Error(
         t"{name}: unsupported dtype {left.dtype()}, expected float type"
     )
@@ -210,7 +204,7 @@ def unary_float_dispatch[
     """
     comptime for dtype in float_dtypes:
         if array.dtype() == dtype:
-            return AnyArray(func[dtype](array.as_primitive[dtype]()))
+            return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(
         t"{name}: unsupported dtype {array.dtype()}, expected float type"
     )

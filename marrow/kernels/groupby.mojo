@@ -192,7 +192,7 @@ struct AggregateFunction(Copyable, Movable):
                     b.append_null()
             return (
                 Field(col_name, float64),
-                AnyArray(b.finish_typed()),
+                b.finish().to_any(),
             )
 
         # sum, min, max — emit value if count > 0, else null.
@@ -207,7 +207,7 @@ struct AggregateFunction(Copyable, Movable):
                 b.append_null()
         return (
             Field(col_name, float64),
-            AnyArray(b.finish_typed()),
+            b.finish().to_any(),
         )
 
 
@@ -312,7 +312,7 @@ struct HashGrouper(Movable):
         var n = len(keys)
         if n == 0:
             var empty = PrimitiveBuilder[uint32](0)
-            return empty.finish_typed()
+            return empty.finish()
 
         var key_cols = List[AnyArray]()
         for k in range(len(keys.children)):
@@ -325,7 +325,7 @@ struct HashGrouper(Movable):
             var h = UInt64(hashes.unsafe_get(i))
             var gid = self._probe_or_insert(key_cols, i, h)
             gid_builder.append(Scalar[uint32.native](gid))
-        return gid_builder.finish_typed()
+        return gid_builder.finish()
 
     def consume_values(
         mut self,
@@ -473,7 +473,7 @@ def groupby(
     """Fused grouped aggregation on a single key column."""
     var children = List[AnyArray]()
     children.append(key.copy())
-    var key_data = key.as_data()
+    var key_data = key.to_data()
     var sa = StructArray(
         dtype=struct_(Field("key", key_data.dtype.copy())),
         length=key_data.length,

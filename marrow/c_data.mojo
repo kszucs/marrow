@@ -582,7 +582,7 @@ struct CArrowArray(Copyable, Movable):
     def from_array(array: AnyArray) raises -> CArrowArray:
         """Build a CArrowArray from a Mojo AnyArray.  Thin wrapper over from_data.
         """
-        return CArrowArray.from_data(array.as_data())
+        return CArrowArray.from_data(array.to_data())
 
     @staticmethod
     def from_data(var data: ArrayData) raises -> CArrowArray:

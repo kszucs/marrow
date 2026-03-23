@@ -160,14 +160,14 @@ pb.append(10)
 pb.append(20)
 pb.append_null()
 pb.append(40)
-var arr: Int64Array = pb.finish_typed()
+var arr: Int64Array = pb.finish()
 
 # String
 var sb = StringBuilder()
 sb.append("hello")
 sb.append_null()
 sb.append("world")
-var strs: StringArray = sb.finish_typed()
+var strs: StringArray = sb.finish()
 
 # List of int32 — append child elements, then commit each list element
 var child = PrimitiveBuilder[int32]()
@@ -178,7 +178,7 @@ lb.append(True)                    # [1, 2] is the first list element
 lb.values().append(3)              # child element for the next list
 lb.append(True)                    # [3] is the second list element
 lb.append_null()                   # null third element
-var lists: ListArray = lb.finish_typed()
+var lists: ListArray = lb.finish()
 ```
 
 ### Display

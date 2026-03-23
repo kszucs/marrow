@@ -71,8 +71,8 @@ def test_concat_with_nulls() raises:
     b2.append(4)
     b2.append_null()
     var arrs: List[AnyArray] = [
-        AnyArray(b1.finish_typed()),
-        AnyArray(b2.finish_typed()),
+        b1.finish().to_any(),
+        b2.finish().to_any(),
     ]
     var tmp_with_nulls = concat(arrs)
     ref result = tmp_with_nulls.as_primitive[int32]()
@@ -109,8 +109,8 @@ def test_concat_with_offset_and_nulls() raises:
     b.append(1)
     b.append_null()
     b.append(3)
-    var sliced = b.finish_typed().slice(1, 2)  # [null, 3], offset=1
-    var arrs: List[AnyArray] = [AnyArray(sliced^), AnyArray(array[int32]([4]))]
+    var sliced = b.finish().slice(1, 2)  # [null, 3], offset=1
+    var arrs: List[AnyArray] = [(sliced^).to_any(), AnyArray(array[int32]([4]))]
     var tmp_offset_nulls = concat(arrs)
     ref result = tmp_offset_nulls.as_primitive[int32]()
     assert_equal(result.length, 3)
@@ -129,8 +129,8 @@ def test_concat_with_offset_and_nulls() raises:
 
 def test_concat_bool() raises:
     var arrs: List[AnyArray] = [
-        AnyArray(array([True, False, True])),
-        AnyArray(array([False, True])),
+        array([True, False, True]).to_any(),
+        array([False, True]).to_any(),
     ]
     var tmp_bool = concat(arrs)
     ref result = tmp_bool.as_primitive[bool_]()
@@ -146,7 +146,7 @@ def test_concat_bool_with_offset() raises:
     # [True, False, True, False] slice at offset=1 → [False, True, False]
     var a = array([True, False, True, False])
     var sliced = a.slice(1, 3)
-    var arrs: List[AnyArray] = [AnyArray(sliced^), AnyArray(array([True]))]
+    var arrs: List[AnyArray] = [(sliced^).to_any(), array([True]).to_any()]
     var tmp_bool_offset = concat(arrs)
     ref result = tmp_bool_offset.as_primitive[bool_]()
     assert_equal(result.length, 4)
@@ -168,8 +168,8 @@ def test_concat_string() raises:
     var s2 = StringBuilder()
     s2.append("foo")
     var arrs: List[AnyArray] = [
-        AnyArray(s1.finish_typed()),
-        AnyArray(s2.finish_typed()),
+        s1.finish().to_any(),
+        s2.finish().to_any(),
     ]
     var tmp_str = concat(arrs)
     ref result = tmp_str.as_string()
@@ -187,8 +187,8 @@ def test_concat_string_with_nulls() raises:
     var s2 = StringBuilder()
     s2.append("c")
     var arrs: List[AnyArray] = [
-        AnyArray(s1.finish_typed()),
-        AnyArray(s2.finish_typed()),
+        s1.finish().to_any(),
+        s2.finish().to_any(),
     ]
     var tmp_str_nulls = concat(arrs)
     ref result = tmp_str_nulls.as_string()
@@ -227,8 +227,8 @@ def test_concat_list() raises:
     c2.append(6)
     lb2.append_valid()  # [4, 5, 6]
     var arrs: List[AnyArray] = [
-        AnyArray(lb1.finish_typed()),
-        AnyArray(lb2.finish_typed()),
+        lb1.finish().to_any(),
+        lb2.finish().to_any(),
     ]
     var tmp_list = concat(arrs)
     ref result = tmp_list.as_list()
@@ -263,8 +263,8 @@ def test_concat_list_with_nulls() raises:
     c2.append(3)
     lb2.append_valid()  # [2, 3]
     var arrs: List[AnyArray] = [
-        AnyArray(lb1.finish_typed()),
-        AnyArray(lb2.finish_typed()),
+        lb1.finish().to_any(),
+        lb2.finish().to_any(),
     ]
     var tmp_list_nulls = concat(arrs)
     ref result = tmp_list_nulls.as_list()
@@ -303,8 +303,8 @@ def test_concat_fixed_size_list() raises:
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
     var arrs: List[AnyArray] = [
-        AnyArray(fsl1.finish_typed()),
-        AnyArray(fsl2.finish_typed()),
+        fsl1.finish().to_any(),
+        fsl2.finish().to_any(),
     ]
     var tmp_fsl = concat(arrs)
     ref result = tmp_fsl.as_fixed_size_list()
@@ -335,15 +335,15 @@ def test_concat_fixed_size_list_with_offset() raises:
     fsl.unsafe_append_valid()
     fsl.unsafe_append_valid()
     fsl.unsafe_append_valid()
-    var sliced = fsl.finish_typed().slice(1, 2)  # [[3.0, 4.0], [5.0, 6.0]]
+    var sliced = fsl.finish().slice(1, 2)  # [[3.0, 4.0], [5.0, 6.0]]
     var child2 = PrimitiveBuilder[float32]()
     child2.append(7.0)
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
     var arrs: List[AnyArray] = [
-        AnyArray(sliced^),
-        AnyArray(fsl2.finish_typed()),
+        (sliced^).to_any(),
+        fsl2.finish().to_any(),
     ]
     var tmp_fsl_offset = concat(arrs)
     ref result = tmp_fsl_offset.as_fixed_size_list()
@@ -381,8 +381,8 @@ def test_concat_struct() raises:
     sb2.field_builder(1).as_primitive[float32]().append(0.7)
     sb2.append_valid()
     var arrs: List[AnyArray] = [
-        AnyArray(sb1.finish_typed()),
-        AnyArray(sb2.finish_typed()),
+        sb1.finish().to_any(),
+        sb2.finish().to_any(),
     ]
     var tmp_struct = concat(arrs)
     ref result = tmp_struct.as_struct()

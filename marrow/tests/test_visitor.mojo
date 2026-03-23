@@ -30,7 +30,7 @@ struct ElementCounter(ArrayVisitor):
 def test_custom_visitor() raises:
     var a = array[int64]([10, 20, 30, 40])
     var counter = ElementCounter()
-    counter.visit(AnyArray(a^))
+    counter.visit((a^).to_any())
     assert_equal(counter.count, 4)
 
 
@@ -38,8 +38,8 @@ def test_chunked_array_default_dispatch() raises:
     """ChunkedArray.visit default delegates to visit(AnyArray) for each chunk.
     """
     var chunks: List[AnyArray] = [
-        AnyArray(array[int64]([1, 2, 3])),
-        AnyArray(array[int64]([4, 5])),
+        array[int64]([1, 2, 3]).to_any(),
+        array[int64]([4, 5]).to_any(),
     ]
     var chunked = ChunkedArray(int64, chunks^)
     var counter = ElementCounter()

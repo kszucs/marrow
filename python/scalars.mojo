@@ -31,7 +31,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
         if dtype == T:
             return PythonObject(scalar.as_primitive[T]().value())
     if dtype.is_string():
-        return PythonObject(scalar.as_string().as_string())
+        return PythonObject(scalar.as_string().to_string())
     elif dtype.is_list():
         return scalar.as_list().value().to_python_object()
     elif dtype.is_fixed_size_list():

@@ -15,7 +15,7 @@ def _make_mask(size: Int, selectivity_pct: Int) raises -> PrimitiveArray[bool_]:
     var b = PrimitiveBuilder[bool_](size)
     for i in range(size):
         b.append(Bool((i * 100) // size < selectivity_pct))
-    return b.finish_typed()
+    return b.finish()
 
 
 def main() raises:

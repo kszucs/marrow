@@ -42,9 +42,9 @@ def test_primitive_scalar_from_array() raises:
     assert_equal(s.value(), 20)
 
 
-def test_primitive_scalar_as_array() raises:
+def test_primitive_scalar_to_array() raises:
     var s = PrimitiveScalar[int32](Scalar[int32.native](7))
-    var arr = s.as_array()
+    var arr = s.to_array()
     assert_equal(len(arr), 1)
     assert_equal(arr[0], 7)
 
@@ -67,7 +67,7 @@ def test_primitive_scalar_write_to_null() raises:
 def test_string_scalar() raises:
     var s = StringScalar("hello")
     assert_true(s.is_valid())
-    assert_equal(s.as_string(), "hello")
+    assert_equal(s.to_string(), "hello")
 
 
 def test_string_scalar_null() raises:
@@ -81,10 +81,10 @@ def test_string_scalar_from_array() raises:
     var b = StringBuilder(2)
     b.append("foo")
     b.append("bar")
-    var arr = b.finish_typed()
+    var arr = b.finish()
     var s = arr[1]
     assert_true(s.is_valid())
-    assert_equal(s.as_string(), "bar")
+    assert_equal(s.to_string(), "bar")
 
 
 def test_string_scalar_write_to() raises:
@@ -112,7 +112,7 @@ def test_scalar_from_string() raises:
     assert_true(erased.is_valid())
     assert_true(erased.type().is_string())
     ref back = erased.as_string()
-    assert_equal(back.as_string(), "world")
+    assert_equal(back.to_string(), "world")
 
 
 def test_scalar_null() raises:

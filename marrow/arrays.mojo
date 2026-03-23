@@ -65,10 +65,10 @@ trait Array(
     def is_valid(self, index: Int) -> Bool:
         ...
 
-    def as_any(self) -> AnyArray:
+    def to_any(deinit self) -> AnyArray:
         ...
 
-    def as_data(self) raises -> ArrayData:
+    def to_data(self) raises -> ArrayData:
         ...
 
     def slice(self, offset: Int, length: Int) -> Self:
@@ -99,7 +99,7 @@ struct AnyArray(
     var _virt_dtype: def(ArcPointer[NoneType]) -> DataType
     var _virt_null_count: def(ArcPointer[NoneType]) -> Int
     var _virt_is_valid: def(ArcPointer[NoneType], Int) -> Bool
-    var _virt_as_data: def(ArcPointer[NoneType]) raises -> ArrayData
+    var _virt_to_data: def(ArcPointer[NoneType]) raises -> ArrayData
     var _virt_eq: def(ArcPointer[NoneType], ArcPointer[NoneType]) -> Bool
     var _virt_drop: def(var ArcPointer[NoneType])
     var _virt_slice: def(ArcPointer[NoneType], Int, Int) raises -> ArcPointer[
@@ -125,8 +125,8 @@ struct AnyArray(
         return rebind[ArcPointer[T]](ptr)[].is_valid(i)
 
     @staticmethod
-    def _tramp_as_data[T: Array](ptr: ArcPointer[NoneType]) raises -> ArrayData:
-        return rebind[ArcPointer[T]](ptr)[].as_data()
+    def _tramp_to_data[T: Array](ptr: ArcPointer[NoneType]) raises -> ArrayData:
+        return rebind[ArcPointer[T]](ptr)[].to_data()
 
     @staticmethod
     def _tramp_eq[
@@ -167,7 +167,7 @@ struct AnyArray(
         self._virt_dtype = Self._tramp_dtype[T]
         self._virt_null_count = Self._tramp_null_count[T]
         self._virt_is_valid = Self._tramp_is_valid[T]
-        self._virt_as_data = Self._tramp_as_data[T]
+        self._virt_to_data = Self._tramp_to_data[T]
         self._virt_eq = Self._tramp_eq[T]
         self._virt_drop = Self._tramp_drop[T]
         self._virt_slice = Self._tramp_slice[T]
@@ -178,7 +178,7 @@ struct AnyArray(
         self._virt_dtype = copy._virt_dtype
         self._virt_null_count = copy._virt_null_count
         self._virt_is_valid = copy._virt_is_valid
-        self._virt_as_data = copy._virt_as_data
+        self._virt_to_data = copy._virt_to_data
         self._virt_eq = copy._virt_eq
         self._virt_drop = copy._virt_drop
         self._virt_slice = copy._virt_slice
@@ -324,12 +324,12 @@ struct AnyArray(
 
     # --- generic layout (interop) ---
 
-    def as_data(self) raises -> ArrayData:
+    def to_data(self) raises -> ArrayData:
         """Extract a generic ArrayData layout for interop (C Data Interface, etc.).
 
         Not intended for hot paths — prefer typed downcast methods.
         """
-        return self._virt_as_data(self._data)
+        return self._virt_to_data(self._data)
 
     @staticmethod
     def from_data(data: ArrayData) raises -> AnyArray:
@@ -354,9 +354,9 @@ struct AnyArray(
 
     # --- common operations ---
 
-    def as_any(self) -> AnyArray:
-        """Returns an O(1) copy of this array as AnyArray."""
-        return AnyArray(copy=self)
+    def to_any(deinit self) -> AnyArray:
+        """Returns this array as AnyArray, transferring ownership."""
+        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         var dt = self.dtype()
@@ -398,7 +398,7 @@ struct AnyArray(
 struct ArrayData(Copyable, Movable):
     """Generic array layout — the old AnyArray wire format, now a pure DTO.
 
-    Produced by `typed_array.as_data()` or `any_array.as_data()` for use
+    Produced by `typed_array.to_data()` or `any_array.to_data()` for use
     in the C Data Interface, construction helpers, and other interop paths.
     Not stored inside AnyArray itself.
     """
@@ -461,7 +461,7 @@ struct PrimitiveArray[T: DataType](
         var b = PrimitiveBuilder[Self.T](capacity=len(values))
         for value in values:
             b.unsafe_append(value)
-        self = b.finish_typed()
+        self = b.finish()
 
     @always_inline
     def __len__(self) -> Int:
@@ -607,12 +607,10 @@ struct PrimitiveArray[T: DataType](
                     return False
         return True
 
-    # TODO: rename to_any()
-    def as_any(self) -> AnyArray:
-        return AnyArray(self.copy())
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
 
-    # TODO: rename to_data()
-    def as_data(self) -> ArrayData:
+    def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
             dtype=Self.T,
@@ -668,7 +666,7 @@ struct StringArray(
         var b = StringBuilder(capacity=len(values))
         for value in values:
             b.append(value)
-        self = b.finish_typed()
+        self = b.finish()
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -785,10 +783,10 @@ struct StringArray(
                     return False
         return True
 
-    def as_any(self) -> AnyArray:
-        return AnyArray(self.copy())
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
 
-    def as_data(self) -> ArrayData:
+    def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
             dtype=string,
@@ -953,10 +951,10 @@ struct ListArray(
                     return False
         return True
 
-    def as_any(self) -> AnyArray:
-        return AnyArray(self.copy())
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
 
-    def as_data(self) raises -> ArrayData:
+    def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
             dtype=self.dtype,
@@ -965,7 +963,7 @@ struct ListArray(
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.offsets],
-            children=[self.values.as_data()],
+            children=[self.values.to_data()],
         )
 
 
@@ -1073,7 +1071,7 @@ struct FixedSizeListArray(
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
-        var child_data = self.values.as_data()
+        var child_data = self.values.to_data()
         var new_buffers = List[Buffer](capacity=len(child_data.buffers))
         for i in range(len(child_data.buffers)):
             new_buffers.append(child_data.buffers[i].to_device(ctx))
@@ -1128,10 +1126,10 @@ struct FixedSizeListArray(
                     return False
         return True
 
-    def as_any(self) -> AnyArray:
-        return AnyArray(self.copy())
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
 
-    def as_data(self) raises -> ArrayData:
+    def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
             dtype=self.dtype,
@@ -1140,7 +1138,7 @@ struct FixedSizeListArray(
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[],
-            children=[self.values.as_data()],
+            children=[self.values.to_data()],
         )
 
 
@@ -1289,14 +1287,14 @@ struct StructArray(
                 return False
         return True
 
-    def as_any(self) -> AnyArray:
-        return AnyArray(self.copy())
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
 
-    def as_data(self) raises -> ArrayData:
+    def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         var children = List[ArrayData]()
         for c in self.children:
-            children.append(c.as_data())
+            children.append(c.to_data())
         return ArrayData(
             dtype=self.dtype,
             length=self.length,

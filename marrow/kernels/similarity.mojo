@@ -38,7 +38,7 @@ def _cosine_similarity_no_nulls[
     var op = result._buffer.ptr.bitcast[Scalar[native]]()
 
     # Flat values pointer from the child array
-    var child_data = vectors.values.as_data()
+    var child_data = vectors.values.to_data()
     var vp = child_data.buffers[0].unsafe_ptr[native](child_data.offset)
     var qp = query.buffer.unsafe_ptr[native](query.offset)
 
@@ -79,7 +79,7 @@ def _cosine_similarity_no_nulls[
             op[i] = Scalar[native](0)
 
     result._length = n_vectors
-    return result.finish_typed()
+    return result.finish()
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def _cosine_similarity_gpu[
 
     var n_values = n_vectors * dim
 
-    var child_data = vectors.values.as_data()
+    var child_data = vectors.values.to_data()
     var vec_dev = (
         child_data.buffers[0]
         .device_buffer()

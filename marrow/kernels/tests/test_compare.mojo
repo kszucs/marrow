@@ -106,8 +106,8 @@ def test_less_float64() raises:
     bb.unsafe_append(1.0)
     bb.unsafe_append(2.0)
     bb.unsafe_append(5.0)
-    var a = ab.finish_typed()
-    var b = bb.finish_typed()
+    var a = ab.finish()
+    var b = bb.finish()
     var result = less[float64](a, b)
 
     assert_equal(result[0], 0)  # 1.0 == 1.0
@@ -198,7 +198,7 @@ def test_dtype_mismatch_raises() raises:
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
-    var b = AnyArray(fb.finish_typed())
+    var b = AnyArray(fb.finish())
     var raised = False
     try:
         _ = equal(a, b)
