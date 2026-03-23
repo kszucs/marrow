@@ -145,6 +145,10 @@ trait HashTable(Movable):
         """Batch hash key columns using the table's hash function."""
         ...
 
+    def reserve(mut self, n: Int):
+        """Pre-allocate for n expected entries to avoid reallocs during build."""
+        ...
+
     def insert(mut self, h: UInt64, row: Int32) -> Int:
         """Append row to bucket for hash h. Create bucket if new.
         Return bucket_id."""
@@ -280,42 +284,48 @@ struct SwissHashTable[
         if slot < _GROUP_WIDTH:
             self._ctrl[self._capacity + slot] = val
 
+    def reserve(mut self, n: Int):
+        """Pre-allocate slot and chain capacity for n expected entries."""
+        var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
+        if needed > self._capacity:
+            # Grow slot array.
+            var old_ctrl = self._ctrl
+            var old_slots = self._slots
+            var old_cap = self._capacity
+            self._capacity = needed
+            self._mask = needed - 1
+            self._ctrl = alloc[UInt8](needed + _GROUP_WIDTH)
+            self._slots = alloc[Int32](needed)
+            memset(self._ctrl, _CTRL_EMPTY, needed + _GROUP_WIDTH)
+            # Re-insert existing entries.
+            for i in range(old_cap):
+                if old_ctrl[i] != _CTRL_EMPTY:
+                    var bid = Int(old_slots[i])
+                    var h = self._bucket_hashes[bid]
+                    var h2 = _h2(h)
+                    var pos = Int(h) & self._mask
+                    while True:
+                        var group = _Group(self._ctrl + pos)
+                        var empty_mask = group.match_empty()
+                        if empty_mask != 0:
+                            var bit = count_trailing_zeros(Int(empty_mask))
+                            var slot = (pos + bit) & self._mask
+                            self._set_ctrl(slot, h2)
+                            self._slots[slot] = Int32(bid)
+                            break
+                        pos = (pos + _GROUP_WIDTH) & self._mask
+            old_ctrl.free()
+            old_slots.free()
+        # Pre-allocate chain arrays.
+        self._heads.reserve(n)
+        self._rows.reserve(n)
+        self._next.reserve(n)
+        self._bucket_hashes.reserve(n)
+
     def hash_keys(
         self, keys: StructArray
     ) raises -> PrimitiveArray[uint64]:
         return Self.hash_fn(keys)
-
-    def _grow(mut self):
-        """Double capacity and rehash all occupied slots."""
-        var old_cap = self._capacity
-        var old_ctrl = self._ctrl
-        var old_slots = self._slots
-        var new_cap = old_cap * 2
-        self._capacity = new_cap
-        self._mask = new_cap - 1
-        self._ctrl = alloc[UInt8](new_cap + _GROUP_WIDTH)
-        self._slots = alloc[Int32](new_cap)
-        memset(self._ctrl, _CTRL_EMPTY, new_cap + _GROUP_WIDTH)
-
-        for i in range(old_cap):
-            if old_ctrl[i] != _CTRL_EMPTY:
-                var bid = Int(old_slots[i])
-                var h = self._bucket_hashes[bid]
-                var h2 = _h2(h)
-                var pos = Int(h) & self._mask
-                # Find empty slot in new table.
-                while True:
-                    var group = _Group(self._ctrl + pos)
-                    var empty_mask = group.match_empty()
-                    if empty_mask != 0:
-                        var bit = count_trailing_zeros(Int(empty_mask))
-                        var slot = (pos + bit) & self._mask
-                        self._set_ctrl(slot, h2)
-                        self._slots[slot] = Int32(bid)
-                        break
-                    pos = (pos + _GROUP_WIDTH) & self._mask
-        old_ctrl.free()
-        old_slots.free()
 
     def insert(mut self, h: UInt64, row: Int32) -> Int:
         var h2 = _h2(h)
@@ -343,7 +353,7 @@ struct SwissHashTable[
             if empty_mask != 0:
                 # Check load factor before inserting.
                 if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
-                    self._grow()
+                    self.reserve(self._capacity)
                     return self.insert(h, row)
 
                 var bit = count_trailing_zeros(Int(empty_mask))
@@ -397,7 +407,7 @@ struct SwissHashTable[
             var empty_mask = group.match_empty()
             if empty_mask != 0:
                 if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
-                    self._grow()
+                    self.reserve(self._capacity)
                     return self.find_or_insert(h)
 
                 var bit = count_trailing_zeros(Int(empty_mask))
@@ -449,6 +459,11 @@ struct DictHashTable[
         self._heads = List[Int32](capacity=capacity)
         self._rows = List[Int32](capacity=capacity)
         self._next = List[Int32](capacity=capacity)
+
+    def reserve(mut self, n: Int):
+        self._heads.reserve(n)
+        self._rows.reserve(n)
+        self._next.reserve(n)
 
     def hash_keys(
         self, keys: StructArray

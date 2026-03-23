@@ -151,7 +151,7 @@ struct HashJoin[
         self._build_dtype = data.dtype
         self._num_rows = data.length
         self._left_data = data.copy()
-        self._table = SwissHashTable[Self.hash_fn](capacity=self._num_rows)
+        self._table.reserve(self._num_rows)
         var keys = data.select(key_indices)
         self._build_keys = keys.copy()
         var hashes = self._table.hash_keys(keys)
@@ -182,21 +182,9 @@ struct HashJoin[
         probe_col: AnyArray,
         pairs: IndexPairs,
     ) raises -> PrimitiveArray[bool_dt]:
-        """Compare one key column at matched indices. Handles numeric + string."""
+        """Compare one key column at matched indices."""
         var lk = take(build_col.copy(), pairs.left_indices)
         var rk = take(probe_col.copy(), pairs.right_indices)
-        if build_col.dtype().is_string():
-            # Scalar string comparison — equal() doesn't support strings yet.
-            var n = len(pairs.left_indices)
-            var b = PrimitiveBuilder[bool_dt](capacity=n)
-            ref ls = lk.as_string()
-            ref rs = rk.as_string()
-            for i in range(n):
-                var eq = String(ls.unsafe_get(UInt(i))) == String(
-                    rs.unsafe_get(UInt(i))
-                )
-                b.unsafe_append(Scalar[bool_dt.native](eq))
-            return b.finish()
         return equal(lk, rk).as_primitive[bool_dt]().copy()
 
     def _verify_keys(
