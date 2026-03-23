@@ -25,24 +25,33 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `FixedSizeListArray` — fixed-size nested arrays (embedding vectors, coordinates)
 - `StructArray` — named-field structs
 - `ChunkedArray` — array split across multiple chunks
+- `AnyArray` — type-erased immutable array container (O(1) copy via `ArcPointer`)
 - `RecordBatch` — schema + column arrays, with slice, select, rename, add/remove/set column operations
 - `Table` — schema + chunked columns; `from_batches()`, `to_batches()`, `combine_chunks()`
+
+**Scalar types**
+- `PrimitiveScalar[T]`, `StringScalar`, `ListScalar`, `StructScalar` — typed scalars holding native values
+- `AnyScalar` — type-erased scalar backed by a length-1 `AnyArray`
 
 **Builders** — incrementally build immutable arrays
 - `PrimitiveBuilder[T]`, `StringBuilder`, `ListBuilder`, `FixedSizeListBuilder`, `StructBuilder`
 - `AnyBuilder` — type-erased builder using function-pointer vtable dispatch (O(1) copy via `ArcPointer`)
 
 **Compute kernels** (SIMD-vectorized, null-aware)
-- Arithmetic: `add`, `sub`, `mul`, `div`, `neg`, `abs_`, `min_`, `max_`
-- Comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` → `BoolArray`
+- Arithmetic: `add`, `sub`, `mul`, `div`, `floordiv`, `mod`, `neg`, `abs_`, `min_`, `max_`
+- Math (unary): `sign`, `sqrt`, `exp`, `exp2`, `log`, `log2`, `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sin`, `cos`
+- Math (binary): `pow_`
+- Comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` → `BoolArray` (CPU + GPU)
 - Aggregates: `sum_`, `product`, `min_`, `max_`, `any_`, `all_` (null-skipping)
+- Group-by: `groupby(keys, values, aggregations)` — fused hash+aggregate, returns `RecordBatch`
+- Hashing: `hash_` for primitive, string, and struct arrays
 - Selection: `filter_`, `drop_nulls`
 - Strings: `string_lengths`
 - Similarity: `cosine_similarity` (batch N-vectors vs 1 query, CPU SIMD + GPU)
 
 **Expression execution** (`marrow/expr`)
 - Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …)
-- Relational plan nodes: `InMemoryTable`, `Filter`, `Project`, `ParquetScan` with `.filter()` and `.select()` chaining
+- Relational plan nodes: `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate` with `.filter()`, `.select()`, `.aggregate()` chaining
 - Pull-based streaming executor: `Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results
 
 **Parquet I/O** (`marrow/parquet`)
@@ -184,10 +193,11 @@ print(strs)   # StringArray([hello, NULL, world])
 ### Compute kernels
 
 ```mojo
-from marrow.kernels.arithmetic import add, sub, mul, div
+from marrow.kernels.arithmetic import add, sub, mul, div, sqrt, log, sin
 from marrow.kernels.aggregate import sum_, min_, max_, any_, all_
 from marrow.kernels.filter import filter_, drop_nulls
 from marrow.kernels.compare import equal, less, greater_equal
+from marrow.kernels.groupby import groupby
 
 var x = array[int64]([1, 2, 3, 4])
 var y = array[int64]([10, 20, 30, 40])
@@ -200,6 +210,16 @@ var a = array[int64]([1, 2, 3, 4])
 var b = array[int64]([1, 3, 2, 4])
 var eq = equal(a, b)            # BoolArray([true, false, false, true])
 var lt = less(a, b)             # BoolArray([false, true, false, false])
+
+# Unary math (floating-point)
+var f = array[float64]([1.0, 4.0, 9.0, 16.0])
+var s = sqrt(f)                 # Float64Array([1.0, 2.0, 3.0, 4.0])
+var l = log(f)                  # natural log
+
+# Group-by
+var keys = array[int64]([1, 2, 1, 2, 1])
+var vals = array[float64]([10.0, 20.0, 30.0, 40.0, 50.0])
+var result = groupby(keys, [vals], ["sum"])   # RecordBatch: key=[1,2], sum=[90.0, 60.0]
 ```
 
 ### Expression execution
