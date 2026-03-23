@@ -305,7 +305,9 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         for value in values:
             self.unsafe_append(value)
 
-    def extend(mut self, values: List[Self.ScalarType], valid: List[Bool]) raises:
+    def extend(
+        mut self, values: List[Self.ScalarType], valid: List[Bool]
+    ) raises:
         for i in range(len(values)):
             if valid[i]:
                 self.append(values[i])
@@ -376,7 +378,6 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         # reset builder state for potential reuse
         self.reset()
         return result^
-
 
     def reset(mut self):
         self._length = 0
@@ -560,7 +561,6 @@ struct StringBuilder(Builder, Sized):
         self.reset()
         return result^
 
-
     def reset(mut self):
         self._length = 0
         self._capacity = 0
@@ -715,7 +715,6 @@ struct ListBuilder(Builder, Sized):
         self.reset()
         return result^
 
-
     def reset(mut self):
         self._length = 0
         self._capacity = 0
@@ -844,7 +843,6 @@ struct FixedSizeListBuilder(Builder, Sized):
         # reset builder state for potential reuse
         self.reset()
         return result^
-
 
     def reset(mut self):
         self._length = 0
@@ -977,7 +975,6 @@ struct StructBuilder(Builder, Sized):
         # reset builder state for potential reuse
         self.reset()
         return result^
-
 
     def reset(mut self):
         self._length = 0
