@@ -23,11 +23,10 @@ and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
 """
 
 from std.algorithm.functional import elementwise
-from std.sys import size_of
+from std.sys import size_of, has_accelerator
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
-
-from std.gpu.host import DeviceContext, get_gpu_target, has_accelerator
+from std.gpu.host import DeviceContext, get_gpu_target
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import BufferBuilder
