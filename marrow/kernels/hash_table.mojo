@@ -18,7 +18,7 @@ from std.memory import Span, alloc, memset
 from ..arrays import PrimitiveArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..dtypes import int32, uint64
-from .hashing import hash_
+from .hashing import rapidhash
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ trait HashTable(Movable):
 
 
 struct SwissHashTable[
-    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = hash_
+    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
 ](HashTable):
     """Flat open-addressing hash table with 7-bit stamps.
 
@@ -387,7 +387,7 @@ struct SwissHashTable[
 
 
 struct DictHashTable[
-    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = hash_
+    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
 ](HashTable):
     """Dict-backed hash table with flat chain-pointer storage.
 

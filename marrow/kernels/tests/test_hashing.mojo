@@ -5,7 +5,7 @@ from marrow.builders import array, PrimitiveBuilder, StringBuilder
 from marrow.dtypes import int32, int64, uint8, uint64, float64, bool_
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
-from marrow.kernels.hashing import hash_, NULL_HASH_SENTINEL
+from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 
 def _children(ref a: AnyArray, ref b: AnyArray) -> List[AnyArray]:
@@ -29,7 +29,7 @@ def _children1(ref a: AnyArray) -> List[AnyArray]:
 def test_hash__int32_deterministic() raises:
     """Same values produce same hashes."""
     var a = array[int32]([1, 2, 3, 1, 2])
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(len(h), 5)
     assert_equal(h[0], h[3])  # both are value 1
     assert_equal(h[1], h[4])  # both are value 2
@@ -38,7 +38,7 @@ def test_hash__int32_deterministic() raises:
 def test_hash__int32_distinct() raises:
     """Different values produce different hashes (probabilistic)."""
     var a = array[int32]([1, 2, 3])
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_true(h[0] != h[1])
     assert_true(h[1] != h[2])
 
@@ -46,7 +46,7 @@ def test_hash__int32_distinct() raises:
 def test_hash__int32_nulls() raises:
     """Null elements hash to NULL_HASH_SENTINEL."""
     var a = array[int32]([1, None, 2, None])
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(h[1], Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_equal(h[3], Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_true(h[0] != Scalar[uint64.native](NULL_HASH_SENTINEL))
@@ -54,13 +54,13 @@ def test_hash__int32_nulls() raises:
 
 def test_hash__empty() raises:
     var a = array[int32]()
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(len(h), 0)
 
 
 def test_hash__float64() raises:
     var a = array[float64]([1.5, 2.5, 1.5])
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(h[0], h[2])
 
 
@@ -77,7 +77,7 @@ def test_hash__string() raises:
     b.append("baz")
     var keys = b.finish()
 
-    var h = hash_(keys)
+    var h = rapidhash(keys)
     assert_equal(len(h), 4)
     assert_equal(h[0], h[2])  # both "foo"
     assert_true(h[0] != h[1])  # "foo" != "bar"
@@ -90,7 +90,7 @@ def test_hash__string_nulls() raises:
     b.append("b")
     var keys = b.finish()
 
-    var h = hash_(keys)
+    var h = rapidhash(keys)
     assert_equal(h[1], Scalar[uint64.native](NULL_HASH_SENTINEL))
 
 
@@ -101,7 +101,7 @@ def test_hash__string_nulls() raises:
 
 def test_hash__dispatch() raises:
     var a = AnyArray(array[int32]([1, 2, 1]))
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
 
@@ -112,7 +112,7 @@ def test_hash__dispatch_string() raises:
     b.append("x")
     var a = AnyArray(b.finish())
 
-    var h = hash_(a)
+    var h = rapidhash(a)
     assert_equal(h[0], h[1])
 
 
@@ -135,7 +135,7 @@ def test_hash_struct_two_fields() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = hash_(sa)
+    var h = rapidhash(sa)
     assert_equal(len(h), 4)
     # (1,10) != (1,20)
     assert_true(h[0] != h[1])
@@ -148,7 +148,7 @@ def test_hash_struct_two_fields() raises:
 def test_hash_struct_single_field() raises:
     """Single-field struct matches direct array hash."""
     var a = array[int32]([1, 2, 3])
-    var h1 = hash_(a)
+    var h1 = rapidhash(a)
 
     var arr = AnyArray(a^)
     var sa = StructArray(
@@ -159,7 +159,7 @@ def test_hash_struct_single_field() raises:
         bitmap=None,
         children=_children1(arr),
     )
-    var h2 = hash_(sa)
+    var h2 = rapidhash(sa)
     assert_equal(h1[0], h2[0])
     assert_equal(h1[1], h2[1])
     assert_equal(h1[2], h2[2])
@@ -179,7 +179,7 @@ def test_hash_dispatch_struct() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = hash_(AnyArray(sa^))
+    var h = rapidhash(AnyArray(sa^))
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])
