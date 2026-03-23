@@ -83,7 +83,9 @@ def _elementwise_cmp_pack[
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            comptime gpu_width = simd_width_of[
+                T.native, target=get_gpu_target()
+            ]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("_elementwise_cmp_pack: no GPU accelerator available")

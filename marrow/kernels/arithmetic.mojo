@@ -55,7 +55,9 @@ def _elementwise_unary[
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            comptime gpu_width = simd_width_of[
+                T.native, target=get_gpu_target()
+            ]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("_elementwise_unary: no GPU accelerator available")
@@ -90,7 +92,9 @@ def _elementwise_binary[
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            comptime gpu_width = simd_width_of[
+                T.native, target=get_gpu_target()
+            ]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("_elementwise_binary: no GPU accelerator available")
