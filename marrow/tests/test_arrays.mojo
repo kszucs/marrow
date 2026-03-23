@@ -36,15 +36,17 @@ def test_array_data_with_offset() raises:
     bitmap.set_bit(4, True)
 
     # Create ArrayData with offset=2
-    var array_data = AnyArray.from_data(ArrayData(
-        dtype=int8,
-        length=3,
-        nulls=0,
-        offset=2,
-        bitmap=bitmap.finish(10),
-        buffers=[buffer.finish()],
-        children=[],
-    ))
+    var array_data = AnyArray.from_data(
+        ArrayData(
+            dtype=int8,
+            length=3,
+            nulls=0,
+            offset=2,
+            bitmap=bitmap.finish(10),
+            buffers=[buffer.finish()],
+            children=[],
+        )
+    )
 
     assert_equal(array_data.as_data().offset, 2)
 
@@ -60,15 +62,17 @@ def test_array_data_fieldwise_init() raises:
     var buffer = buffer_b.finish()
 
     # Test creating ArrayData with all fields specified including offset
-    var array_data = AnyArray.from_data(ArrayData(
-        dtype=int8,
-        length=5,
-        nulls=0,
-        offset=3,
-        bitmap=None,
-        buffers=[buffer],
-        children=[],
-    ))
+    var array_data = AnyArray.from_data(
+        ArrayData(
+            dtype=int8,
+            length=5,
+            nulls=0,
+            offset=3,
+            bitmap=None,
+            buffers=[buffer],
+            children=[],
+        )
+    )
 
     assert_equal(array_data.dtype(), int8)
     assert_equal(array_data.length(), 5)
@@ -103,15 +107,17 @@ def test_array_from_struct() raises:
 
 def test_array_copy() raises:
     var _sb = BufferBuilder.alloc[int8.native](3)
-    var src = AnyArray.from_data(ArrayData(
-        dtype=int8,
-        length=3,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffers=[_sb.finish()],
-        children=[],
-    ))
+    var src = AnyArray.from_data(
+        ArrayData(
+            dtype=int8,
+            length=3,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[_sb.finish()],
+            children=[],
+        )
+    )
     var copy = src.copy()
     assert_equal(copy.length(), src.length())
     assert_equal(copy.dtype(), src.dtype())
@@ -120,15 +126,17 @@ def test_array_copy() raises:
 
 def test_array_move() raises:
     var _ab = BufferBuilder.alloc[int8.native](5)
-    var a = AnyArray.from_data(ArrayData(
-        dtype=int8,
-        length=5,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffers=[_ab.finish()],
-        children=[],
-    ))
+    var a = AnyArray.from_data(
+        ArrayData(
+            dtype=int8,
+            length=5,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[_ab.finish()],
+            children=[],
+        )
+    )
     var b = a^
     assert_equal(b.length(), 5)
     assert_equal(b.dtype(), int8)
@@ -981,7 +989,9 @@ def test_fixed_size_list_getitem_bounds() raises:
 
 
 def test_struct_array_field_by_index() raises:
-    var sb = StructBuilder([field("id", int32), field("name", string)], capacity=2)
+    var sb = StructBuilder(
+        [field("id", int32), field("name", string)], capacity=2
+    )
     sb.field_builder(0).as_primitive[int32]().append(1)
     sb.field_builder(0).as_primitive[int32]().append(2)
     sb.field_builder(1).as_string().append("x")
@@ -1239,7 +1249,9 @@ def test_fixed_size_list_flatten() raises:
 
 
 def test_struct_array_flatten() raises:
-    var sb = StructBuilder([field("id", int32), field("name", string)], capacity=2)
+    var sb = StructBuilder(
+        [field("id", int32), field("name", string)], capacity=2
+    )
     sb.field_builder(0).as_primitive[int32]().append(1)
     sb.field_builder(0).as_primitive[int32]().append(2)
     sb.field_builder(1).as_string().append("x")
@@ -1518,7 +1530,9 @@ def test_struct_array_eq_dtype_mismatch() raises:
     sa.field_builder(0).as_primitive[int32]().append(1)
     sa.append_valid()
 
-    var sb = StructBuilder([field("y", int32)], capacity=1)  # different field name
+    var sb = StructBuilder(
+        [field("y", int32)], capacity=1
+    )  # different field name
     sb.field_builder(0).as_primitive[int32]().append(1)
     sb.append_valid()
 

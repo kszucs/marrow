@@ -11,7 +11,13 @@ from marrow.arrays import (
     PrimitiveArray,
     BoolArray,
 )
-from marrow.builders import array, arange, nulls, PrimitiveBuilder, StringBuilder
+from marrow.builders import (
+    array,
+    arange,
+    nulls,
+    PrimitiveBuilder,
+    StringBuilder,
+)
 from marrow.dtypes import int32, int64, uint8, float32, bool_
 from marrow.kernels.filter import filter_, drop_nulls
 

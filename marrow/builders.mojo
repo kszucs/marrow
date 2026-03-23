@@ -196,7 +196,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._virt_reset(self._data)
 
     @always_inline
-    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveBuilder[T]:
+    def as_primitive[
+        T: DataType
+    ](ref self) -> ref[self._data[]] PrimitiveBuilder[T]:
         return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data)[]
 
     @always_inline
@@ -805,7 +807,9 @@ struct FixedSizeListBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.size
-        var child_slice = arr.values.slice(arr.offset * list_size, n * list_size)
+        var child_slice = arr.values.slice(
+            arr.offset * list_size, n * list_size
+        )
         self._child.extend(child_slice)
         self._length += n
 

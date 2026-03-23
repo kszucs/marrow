@@ -133,7 +133,9 @@ def _cosine_similarity_gpu[
 
     var child_data = vectors.values.as_data()
     var vec_dev = (
-        child_data.buffers[0].device_buffer().create_sub_buffer[native](0, n_values)
+        child_data.buffers[0]
+        .device_buffer()
+        .create_sub_buffer[native](0, n_values)
     )
     var query_dev = query.buffer.device_buffer().create_sub_buffer[native](
         0, dim

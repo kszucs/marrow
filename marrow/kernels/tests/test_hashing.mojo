@@ -126,7 +126,9 @@ def test_hash_struct_two_fields() raises:
     var a = AnyArray(array[int32]([1, 1, 2, 2]))
     var b = AnyArray(array[int32]([10, 20, 10, 20]))
     var sa = StructArray(
-        dtype=struct_(Field("a", a.dtype().copy()), Field("b", b.dtype().copy())),
+        dtype=struct_(
+            Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
+        ),
         length=4,
         nulls=0,
         offset=0,
@@ -168,7 +170,9 @@ def test_hash_dispatch_struct() raises:
     var a = AnyArray(array[int32]([1, 2, 1]))
     var b = AnyArray(array[int32]([3, 3, 3]))
     var sa = StructArray(
-        dtype=struct_(Field("a", a.dtype().copy()), Field("b", b.dtype().copy())),
+        dtype=struct_(
+            Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
+        ),
         length=3,
         nulls=0,
         offset=0,

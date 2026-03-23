@@ -52,7 +52,7 @@ struct ArcHandle(Copyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_length: def (ArcPointer[NoneType]) -> Int
+    var _virt_length: def(ArcPointer[NoneType]) -> Int
 
     @staticmethod
     def _tramp_length(ptr: ArcPointer[NoneType]) -> Int:
@@ -84,8 +84,10 @@ struct OwnedHandle(Movable):
     """
 
     var _owned: OwnedPointer[Arr]
-    var _ptr: UnsafePointer[Arr, MutAnyOrigin]   # cached at init, avoids origin mismatch
-    var _virt_length: def (UnsafePointer[Arr, MutAnyOrigin]) -> Int
+    var _ptr: UnsafePointer[
+        Arr, MutAnyOrigin
+    ]  # cached at init, avoids origin mismatch
+    var _virt_length: def(UnsafePointer[Arr, MutAnyOrigin]) -> Int
 
     @staticmethod
     def _tramp_length(ptr: UnsafePointer[Arr, MutAnyOrigin]) -> Int:

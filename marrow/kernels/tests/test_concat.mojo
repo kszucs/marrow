@@ -341,7 +341,10 @@ def test_concat_fixed_size_list_with_offset() raises:
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
     fsl2.unsafe_append_valid()
-    var arrs: List[AnyArray] = [AnyArray(sliced^), AnyArray(fsl2.finish_typed())]
+    var arrs: List[AnyArray] = [
+        AnyArray(sliced^),
+        AnyArray(fsl2.finish_typed()),
+    ]
     var tmp_fsl_offset = concat(arrs)
     ref result = tmp_fsl_offset.as_fixed_size_list()
     assert_equal(result.length, 3)

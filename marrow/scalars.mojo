@@ -30,7 +30,14 @@ from .arrays import (
     AnyArray,
 )
 from .builders import PrimitiveBuilder, StringBuilder
-from .dtypes import DataType, Field, primitive_dtypes, numeric_dtypes, list_, string
+from .dtypes import (
+    DataType,
+    Field,
+    primitive_dtypes,
+    numeric_dtypes,
+    list_,
+    string,
+)
 
 # Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
 from std.builtin.simd import Scalar as _Scalar
@@ -62,7 +69,9 @@ trait Scalar(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: DataType](Scalar, Boolable, Copyable, Movable, Writable, Equatable):
+struct PrimitiveScalar[T: DataType](
+    Boolable, Copyable, Equatable, Movable, Scalar, Writable
+):
     """A single primitive value: holds a native Mojo scalar + validity flag."""
 
     var _value: _Scalar[Self.T.native]
@@ -146,7 +155,7 @@ struct PrimitiveScalar[T: DataType](Scalar, Boolable, Copyable, Movable, Writabl
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(Scalar, Copyable, Movable, Writable, Equatable):
+struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     """A single string value: holds a String + validity flag."""
 
     var _value: String
@@ -220,8 +229,9 @@ struct StringScalar(Scalar, Copyable, Movable, Writable, Equatable):
 # ---------------------------------------------------------------------------
 
 
-struct ListScalar(Scalar, Copyable, Movable, Writable):
-    """A single list value: holds an AnyArray of child elements + validity flag."""
+struct ListScalar(Copyable, Movable, Scalar, Writable):
+    """A single list value: holds an AnyArray of child elements + validity flag.
+    """
 
     var _value: AnyArray
     var _is_valid: Bool
@@ -261,7 +271,7 @@ struct ListScalar(Scalar, Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct StructScalar(Scalar, Copyable, Movable, Writable):
+struct StructScalar(Copyable, Movable, Scalar, Writable):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
     var _dtype: DataType
@@ -331,9 +341,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_type: def (ArcPointer[NoneType]) -> DataType
-    var _virt_is_valid: def (ArcPointer[NoneType]) -> Bool
-    var _virt_drop: def (var ArcPointer[NoneType])
+    var _virt_type: def(ArcPointer[NoneType]) -> DataType
+    var _virt_is_valid: def(ArcPointer[NoneType]) -> Bool
+    var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
@@ -376,9 +386,11 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def is_null(self) -> Bool:
         return not self.is_valid()
 
-# --- typed downcasts ---
+    # --- typed downcasts ---
 
-    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
+    def as_primitive[
+        T: DataType
+    ](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
         return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[]
 
     def as_string(ref self) -> ref[self._data[]] StringScalar:

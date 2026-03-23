@@ -38,8 +38,8 @@ from .scalars import PrimitiveScalar, StringScalar, ListScalar
 
 
 trait Array(
-    Copyable,
     ConvertibleToPython,
+    Copyable,
     Equatable,
     ImplicitlyDestructible,
     Movable,
@@ -95,14 +95,16 @@ struct AnyArray(
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_length: def (ArcPointer[NoneType]) -> Int
-    var _virt_dtype: def (ArcPointer[NoneType]) -> DataType
-    var _virt_null_count: def (ArcPointer[NoneType]) -> Int
-    var _virt_is_valid: def (ArcPointer[NoneType], Int) -> Bool
-    var _virt_as_data: def (ArcPointer[NoneType]) raises -> ArrayData
-    var _virt_eq: def (ArcPointer[NoneType], ArcPointer[NoneType]) -> Bool
-    var _virt_drop: def (var ArcPointer[NoneType])
-    var _virt_slice: def (ArcPointer[NoneType], Int, Int) raises -> ArcPointer[NoneType]
+    var _virt_length: def(ArcPointer[NoneType]) -> Int
+    var _virt_dtype: def(ArcPointer[NoneType]) -> DataType
+    var _virt_null_count: def(ArcPointer[NoneType]) -> Int
+    var _virt_is_valid: def(ArcPointer[NoneType], Int) -> Bool
+    var _virt_as_data: def(ArcPointer[NoneType]) raises -> ArrayData
+    var _virt_eq: def(ArcPointer[NoneType], ArcPointer[NoneType]) -> Bool
+    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_slice: def(ArcPointer[NoneType], Int, Int) raises -> ArcPointer[
+        NoneType
+    ]
 
     # --- trampolines ---
 
@@ -127,7 +129,9 @@ struct AnyArray(
         return rebind[ArcPointer[T]](ptr)[].as_data()
 
     @staticmethod
-    def _tramp_eq[T: Array](ptr: ArcPointer[NoneType], other: ArcPointer[NoneType]) -> Bool:
+    def _tramp_eq[
+        T: Array
+    ](ptr: ArcPointer[NoneType], other: ArcPointer[NoneType]) -> Bool:
         return rebind[ArcPointer[T]](ptr)[] == rebind[ArcPointer[T]](other)[]
 
     @staticmethod
@@ -136,7 +140,11 @@ struct AnyArray(
         _ = typed^
 
     @staticmethod
-    def _tramp_slice[T: Array](ptr: ArcPointer[NoneType], offset: Int, length: Int) raises -> ArcPointer[NoneType]:
+    def _tramp_slice[
+        T: Array
+    ](ptr: ArcPointer[NoneType], offset: Int, length: Int) raises -> ArcPointer[
+        NoneType
+    ]:
         # `slice` cannot return `AnyArray` directly because that would make
         # `_virt_slice`'s type `def (...) -> AnyArray`, which creates a
         # recursive struct definition (AnyArray containing a field whose type
@@ -198,7 +206,9 @@ struct AnyArray(
         except:
             pass
         try:
-            self = AnyArray(py.downcast_value_ptr[FixedSizeListArray]()[].copy())
+            self = AnyArray(
+                py.downcast_value_ptr[FixedSizeListArray]()[].copy()
+            )
             return
         except:
             pass
@@ -262,7 +272,9 @@ struct AnyArray(
 
     # --- typed downcasts ---
 
-    def as_primitive[T: DataType](ref self) -> ref[self._data[]] PrimitiveArray[T]:
+    def as_primitive[
+        T: DataType
+    ](ref self) -> ref[self._data[]] PrimitiveArray[T]:
         return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[]
 
     def as_bool(ref self) -> ref[self._data[]] BoolArray:

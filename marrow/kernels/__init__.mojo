@@ -86,7 +86,9 @@ def binary_array_dispatch[
         A new AnyArray with the element-wise result.
     """
     if left.dtype() != right.dtype():
-        raise Error(t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}")
+        raise Error(
+            t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+        )
 
     comptime for dtype in numeric_dtypes:
         if left.dtype() == dtype:
@@ -127,7 +129,9 @@ def binary_array_dispatch[
         A new AnyArray wrapping ``PrimitiveArray[OutT]`` with the result.
     """
     if left.dtype() != right.dtype():
-        raise Error(t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}")
+        raise Error(
+            t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+        )
 
     comptime for dtype in numeric_dtypes:
         if left.dtype() == dtype:
@@ -171,7 +175,9 @@ def binary_float_dispatch[
 ](left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed binary dispatch restricted to floating-point dtypes."""
     if left.dtype() != right.dtype():
-        raise Error(t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}")
+        raise Error(
+            t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+        )
 
     comptime for dtype in float_dtypes:
         if left.dtype() == dtype:
@@ -181,7 +187,9 @@ def binary_float_dispatch[
                     right.as_primitive[dtype](),
                 )
             )
-    raise Error(t"{name}: unsupported dtype {left.dtype()}, expected float type")
+    raise Error(
+        t"{name}: unsupported dtype {left.dtype()}, expected float type"
+    )
 
 
 def unary_float_dispatch[
@@ -203,4 +211,6 @@ def unary_float_dispatch[
     comptime for dtype in float_dtypes:
         if array.dtype() == dtype:
             return AnyArray(func[dtype](array.as_primitive[dtype]()))
-    raise Error(t"{name}: unsupported dtype {array.dtype()}, expected float type")
+    raise Error(
+        t"{name}: unsupported dtype {array.dtype()}, expected float type"
+    )

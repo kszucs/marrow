@@ -591,8 +591,6 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
 
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
-            return AnyArray(
-                drop_nulls[dtype](array.as_primitive[dtype]())
-            )
+            return AnyArray(drop_nulls[dtype](array.as_primitive[dtype]()))
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype())

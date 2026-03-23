@@ -235,8 +235,9 @@ def _cols_equal_at(
 
         comptime for dt in primitive_dtypes:
             if keys[k].dtype() == dt:
-                if keys[k].as_primitive[dt]().unsafe_get(row) !=
-                    stored[k].as_primitive[dt]().unsafe_get(group_idx):
+                if keys[k].as_primitive[dt]().unsafe_get(row) != stored[
+                    k
+                ].as_primitive[dt]().unsafe_get(group_idx):
                     return False
                 break
 

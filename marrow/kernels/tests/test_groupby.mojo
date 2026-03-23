@@ -195,7 +195,9 @@ def test_groupby_multikey() raises:
     children.append(a.copy())
     children.append(b.copy())
     var keys = StructArray(
-        dtype=struct_(Field("a", a.dtype().copy()), Field("b", b.dtype().copy())),
+        dtype=struct_(
+            Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
+        ),
         length=4,
         nulls=0,
         offset=0,

@@ -520,13 +520,21 @@ struct CArrowArray(Copyable, Movable):
         var children = List[ArrayData](capacity=Int(self.n_children))
 
         if dtype.is_bool():
-            buffers.append(Buffer.from_foreign(
-                self.buffers[1], math.ceildiv(Int(length), 8), owner,
-            ))
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    math.ceildiv(Int(length), 8),
+                    owner,
+                )
+            )
         elif dtype.is_primitive():
-            buffers.append(Buffer.from_foreign(
-                self.buffers[1], Int(length) * dtype.byte_width(), owner,
-            ))
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    Int(length) * dtype.byte_width(),
+                    owner,
+                )
+            )
         elif dtype.is_list():
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
@@ -566,12 +574,14 @@ struct CArrowArray(Copyable, Movable):
     def to_array(
         self, dtype: DataType, owner: ArcPointer[Allocation]
     ) raises -> AnyArray:
-        """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data."""
+        """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data.
+        """
         return AnyArray.from_data(self.to_data(dtype, owner))
 
     @staticmethod
     def from_array(array: AnyArray) raises -> CArrowArray:
-        """Build a CArrowArray from a Mojo AnyArray.  Thin wrapper over from_data."""
+        """Build a CArrowArray from a Mojo AnyArray.  Thin wrapper over from_data.
+        """
         return CArrowArray.from_data(array.as_data())
 
     @staticmethod
@@ -622,7 +632,9 @@ struct CArrowArray(Copyable, Movable):
                 Int(n_children)
             )
             for i in range(Int(n_children)):
-                var child = CArrowArray.from_data(data_heap[].children[i].copy())
+                var child = CArrowArray.from_data(
+                    data_heap[].children[i].copy()
+                )
                 var child_ptr = alloc[CArrowArray](1)
                 child_ptr.init_pointee_move(child^)
                 children_ptr[i] = child_ptr

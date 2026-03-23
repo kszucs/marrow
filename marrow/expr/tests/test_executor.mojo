@@ -109,9 +109,7 @@ def test_chained_expression() raises:
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     # (a + b) * (a - b)
     var tmp_chained = (
-        Planner()
-        .build((col(0) + col(1)) * (col(0) - col(1)))
-        .eval(batch)
+        Planner().build((col(0) + col(1)) * (col(0) - col(1))).eval(batch)
     )
     ref result = tmp_chained.as_primitive[int64]()
     for i in range(256):
@@ -173,7 +171,9 @@ def test_select_multiple_columns() raises:
     var x = array[int64]([1, 2, 3, 4, 5])
     var y = array[int64]([10, 20, 30, 40, 50])
     var result = execute(
-        in_memory_table(record_batch([x^, y^], names=["x", "y"])).select("y", "x")
+        in_memory_table(record_batch([x^, y^], names=["x", "y"])).select(
+            "y", "x"
+        )
     )
     assert_equal(result.num_columns(), 2)
     assert_equal(result.schema.fields[0].name, "y")

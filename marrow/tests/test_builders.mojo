@@ -510,7 +510,9 @@ def test_struct_builder_zero_length() raises:
 
 def test_struct_builder_append_valid() raises:
     """Struct validity tracks correct; child builders drive field values."""
-    var sb = StructBuilder([field("id", int64), field("score", float64)], capacity=3)
+    var sb = StructBuilder(
+        [field("id", int64), field("score", float64)], capacity=3
+    )
     sb.field_builder(0).as_primitive[int64]().append(1)
     sb.field_builder(0).as_primitive[int64]().append(2)
     sb.field_builder(0).as_primitive[int64]().append(3)
