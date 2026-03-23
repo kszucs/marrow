@@ -34,7 +34,7 @@ from ..dtypes import (
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .hash_table import SwissHashTable
-from .hashing import hash_
+from .hashing import rapidhash
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +242,12 @@ struct HashGrouper(Movable):
     GROUP BY semantics (unlike join where NULL != NULL).
     """
 
-    var _table: SwissHashTable[hash_]
+    var _table: SwissHashTable[rapidhash]
     var _group_keys: List[AnyArray]
     var _functions: List[AggregateFunction]
 
     def __init__(out self, agg_names: List[String]):
-        self._table = SwissHashTable[hash_]()
+        self._table = SwissHashTable[rapidhash]()
         self._group_keys = List[AnyArray]()
         self._functions = List[AggregateFunction]()
         for i in range(len(agg_names)):
