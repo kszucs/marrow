@@ -11,9 +11,9 @@ Architecture:
   Each layer is independently swappable.
 """
 
-from std.bit import next_power_of_two
+from std.bit import count_trailing_zeros, next_power_of_two
 from std.hashlib import Hasher
-from std.memory import Span, alloc, memset
+from std.memory import Span, alloc, memset, pack_bits
 
 from ..arrays import PrimitiveArray, StructArray
 from ..builders import PrimitiveBuilder
@@ -182,48 +182,87 @@ trait HashTable(Movable):
 # ---------------------------------------------------------------------------
 
 
+comptime _GROUP_WIDTH: Int = 16
+"""Number of control bytes per group (matches Mojo Dict / abseil)."""
+
+comptime _CTRL_EMPTY: UInt8 = 0xFF
+"""Control byte for an empty slot."""
+
+
+@always_inline
+def _h2(h: UInt64) -> UInt8:
+    """Extract 7-bit H2 fingerprint from hash (top 7 bits)."""
+    return UInt8(h >> 57)
+
+
+struct _Group:
+    """SIMD group of 16 control bytes for parallel matching.
+
+    Loads 16 control bytes at once and uses SIMD comparison to produce
+    bitmasks of matching slots. Same pattern as Mojo Dict / abseil / hashbrown.
+    """
+
+    var ctrl: SIMD[DType.uint8, _GROUP_WIDTH]
+
+    @always_inline
+    def __init__(out self, ptr: UnsafePointer[UInt8, _]):
+        self.ctrl = ptr.load[width=_GROUP_WIDTH]()
+
+    @always_inline
+    def match_h2(self, h2: UInt8) -> UInt16:
+        """Bitmask of slots matching the H2 fingerprint."""
+        return pack_bits(
+            self.ctrl.eq(SIMD[DType.uint8, _GROUP_WIDTH](h2))
+        )
+
+    @always_inline
+    def match_empty(self) -> UInt16:
+        """Bitmask of empty slots."""
+        return pack_bits(
+            self.ctrl.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY))
+        )
+
+
 struct SwissHashTable[
     hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
 ](HashTable):
-    """Flat open-addressing hash table with 7-bit stamps.
+    """Swiss Table hash table with SIMD group matching.
 
-    Same design as Arrow's SwissTable / Rust's hashbrown:
-    - Flat slot array with open addressing and linear probing
-    - 7-bit stamp per slot for fast rejection (avoid full key compare)
-    - Slot stores bucket_id; chain pointers stored separately
+    Adopts Mojo Dict's design (16-slot groups, 7-bit H2 fingerprints,
+    SIMD parallel matching via ``pack_bits``). Control bytes use Dict
+    convention: 0xFF = EMPTY, 0x00-0x7F = H2 fingerprint.
 
-    Memory layout (per slot):
-      - ``_ctrl[slot]``: UInt8 control byte (0x80 = empty, low 7 bits = stamp)
-      - ``_slots[slot]``: Int32 bucket_id
+    Capacity is always ≥ ``_GROUP_WIDTH`` and a power of 2. The control
+    array is padded by ``_GROUP_WIDTH`` bytes to handle wrap-around
+    without branching (first group mirrored at the end).
 
-    Row indices stored in separate flat chain arrays (same as DictHashTable).
+    Row indices stored in flat chain arrays (no per-bucket heap alloc).
     """
 
-    alias EMPTY: UInt8 = 0x80
     alias _LOAD_FACTOR_NUM: Int = 7
     alias _LOAD_FACTOR_DEN: Int = 8
 
-    var _ctrl: UnsafePointer[UInt8, MutExternalOrigin]    # control bytes
-    var _slots: UnsafePointer[Int32, MutExternalOrigin]  # bucket_id per slot
-    var _capacity: Int                 # number of slots (power of 2)
-    var _mask: Int                     # _capacity - 1
-    var _count: Int                    # number of occupied slots
+    var _ctrl: UnsafePointer[UInt8, MutExternalOrigin]
+    var _slots: UnsafePointer[Int32, MutExternalOrigin]
+    var _capacity: Int
+    var _mask: Int
+    var _count: Int
 
     # Chain storage (flat arrays).
-    var _heads: List[Int32]            # bucket_id → first entry index (-1 = empty)
-    var _rows: List[Int32]             # entry → row index
-    var _next: List[Int32]             # entry → next entry in chain
-    var _bucket_hashes: List[UInt64]   # bucket_id → original hash (for rehash)
+    var _heads: List[Int32]
+    var _rows: List[Int32]
+    var _next: List[Int32]
+    var _bucket_hashes: List[UInt64]
 
     def __init__(out self, capacity: Int = 0):
-        var cap = Int(next_power_of_two(max(capacity * 2, 16)))
+        var cap = Int(next_power_of_two(max(capacity * 2, _GROUP_WIDTH)))
         self._capacity = cap
         self._mask = cap - 1
         self._count = 0
-        self._ctrl = alloc[UInt8](cap)
+        # Allocate ctrl + _GROUP_WIDTH padding for wrap-around mirroring.
+        self._ctrl = alloc[UInt8](cap + _GROUP_WIDTH)
         self._slots = alloc[Int32](cap)
-        for i in range(cap):
-            self._ctrl[i] = Self.EMPTY
+        memset(self._ctrl, _CTRL_EMPTY, cap + _GROUP_WIDTH)
         self._heads = List[Int32](capacity=capacity)
         self._rows = List[Int32](capacity=capacity)
         self._next = List[Int32](capacity=capacity)
@@ -235,14 +274,11 @@ struct SwissHashTable[
             self._slots.free()
 
     @always_inline
-    def _stamp(self, h: UInt64) -> UInt8:
-        """Extract 7-bit stamp from hash (high bits, avoids correlation with slot)."""
-        return UInt8(h >> 57)  # top 7 bits
-
-    @always_inline
-    def _slot_index(self, h: UInt64) -> Int:
-        """Slot index from hash (low bits)."""
-        return Int(h) & self._mask
+    def _set_ctrl(mut self, slot: Int, val: UInt8):
+        """Set control byte and mirror into padding if slot < _GROUP_WIDTH."""
+        self._ctrl[slot] = val
+        if slot < _GROUP_WIDTH:
+            self._ctrl[self._capacity + slot] = val
 
     def hash_keys(
         self, keys: StructArray
@@ -257,46 +293,42 @@ struct SwissHashTable[
         var new_cap = old_cap * 2
         self._capacity = new_cap
         self._mask = new_cap - 1
-        self._ctrl = alloc[UInt8](new_cap)
+        self._ctrl = alloc[UInt8](new_cap + _GROUP_WIDTH)
         self._slots = alloc[Int32](new_cap)
-        for i in range(new_cap):
-            self._ctrl[i] = Self.EMPTY
+        memset(self._ctrl, _CTRL_EMPTY, new_cap + _GROUP_WIDTH)
 
-        # Re-insert all occupied slots. We need the original hashes, but
-        # we only stored stamps. Reconstruct slot positions from bucket
-        # heads — each bucket's hash can be recovered by scanning the
-        # _heads array and finding which old slot held each bucket_id.
-        # Simpler: just scan old table and re-probe using stamp + slot.
-        # Since stamp = top 7 bits and slot = hash & old_mask, we can't
-        # fully recover the hash. Instead, store the full hash per bucket.
-        #
-        # WORKAROUND: We keep a _hashes list (one per bucket) for rehash.
-        # This is populated during insert.
         for i in range(old_cap):
-            if old_ctrl[i] != Self.EMPTY:
+            if old_ctrl[i] != _CTRL_EMPTY:
                 var bid = Int(old_slots[i])
                 var h = self._bucket_hashes[bid]
-                var stamp = self._stamp(h)
-                var slot = self._slot_index(h)
-                while self._ctrl[slot] != Self.EMPTY:
-                    slot = (slot + 1) & self._mask
-                self._ctrl[slot] = stamp
-                self._slots[slot] = Int32(bid)
+                var h2 = _h2(h)
+                var pos = Int(h) & self._mask
+                # Find empty slot in new table.
+                while True:
+                    var group = _Group(self._ctrl + pos)
+                    var empty_mask = group.match_empty()
+                    if empty_mask != 0:
+                        var bit = count_trailing_zeros(Int(empty_mask))
+                        var slot = (pos + bit) & self._mask
+                        self._set_ctrl(slot, h2)
+                        self._slots[slot] = Int32(bid)
+                        break
+                    pos = (pos + _GROUP_WIDTH) & self._mask
         old_ctrl.free()
         old_slots.free()
 
     def insert(mut self, h: UInt64, row: Int32) -> Int:
-        var stamp = self._stamp(h)
-        var slot = self._slot_index(h)
+        var h2 = _h2(h)
+        var pos = Int(h) & self._mask
 
-        # Probe for existing entry with matching stamp.
+        # Probe for existing bucket with matching hash.
         while True:
-            var ctrl = self._ctrl[slot]
-            if ctrl == Self.EMPTY:
-                break  # not found
-            if ctrl == stamp:
-                # Stamp matches — check if hash fully matches (trust 64-bit hash).
-                var bid = Int(self._slots[slot])
+            var group = _Group(self._ctrl + pos)
+            var match_mask = group.match_h2(h2)
+            while match_mask != 0:
+                var bit = count_trailing_zeros(Int(match_mask))
+                var slot_idx = (pos + bit) & self._mask
+                var bid = Int(self._slots[slot_idx])
                 if self._bucket_hashes[bid] == h:
                     # Existing bucket — append to chain.
                     var entry_idx = Int32(len(self._rows))
@@ -304,69 +336,81 @@ struct SwissHashTable[
                     self._next.append(self._heads[bid])
                     self._heads[bid] = entry_idx
                     return bid
-            slot = (slot + 1) & self._mask
+                match_mask &= match_mask - 1
 
-        # New bucket — insert into empty slot.
-        if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
-            self._grow()
-            # Re-probe after grow.
-            slot = self._slot_index(h)
-            while self._ctrl[slot] != Self.EMPTY:
-                slot = (slot + 1) & self._mask
+            # If any empty slot, hash is absent — insert here.
+            var empty_mask = group.match_empty()
+            if empty_mask != 0:
+                # Check load factor before inserting.
+                if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
+                    self._grow()
+                    return self.insert(h, row)
 
-        var bid = len(self._heads)
-        self._ctrl[slot] = stamp
-        self._slots[slot] = Int32(bid)
-        self._count += 1
-        self._bucket_hashes.append(h)
+                var bit = count_trailing_zeros(Int(empty_mask))
+                var slot = (pos + bit) & self._mask
+                var bid = len(self._heads)
+                self._set_ctrl(slot, h2)
+                self._slots[slot] = Int32(bid)
+                self._count += 1
+                self._bucket_hashes.append(h)
 
-        var entry_idx = Int32(len(self._rows))
-        self._rows.append(row)
-        self._next.append(Int32(-1))
-        self._heads.append(entry_idx)
-        return bid
+                var entry_idx = Int32(len(self._rows))
+                self._rows.append(row)
+                self._next.append(Int32(-1))
+                self._heads.append(entry_idx)
+                return bid
+
+            pos = (pos + _GROUP_WIDTH) & self._mask
 
     def find(self, h: UInt64) -> Int:
-        var stamp = self._stamp(h)
-        var slot = self._slot_index(h)
+        var h2 = _h2(h)
+        var pos = Int(h) & self._mask
         while True:
-            var ctrl = self._ctrl[slot]
-            if ctrl == Self.EMPTY:
-                return -1
-            if ctrl == stamp:
-                var bid = Int(self._slots[slot])
+            var group = _Group(self._ctrl + pos)
+            var match_mask = group.match_h2(h2)
+            while match_mask != 0:
+                var bit = count_trailing_zeros(Int(match_mask))
+                var slot_idx = (pos + bit) & self._mask
+                var bid = Int(self._slots[slot_idx])
                 if self._bucket_hashes[bid] == h:
                     return bid
-            slot = (slot + 1) & self._mask
+                match_mask &= match_mask - 1
+            if group.match_empty() != 0:
+                return -1
+            pos = (pos + _GROUP_WIDTH) & self._mask
 
     def find_or_insert(mut self, h: UInt64) -> Int:
-        var stamp = self._stamp(h)
-        var slot = self._slot_index(h)
+        var h2 = _h2(h)
+        var pos = Int(h) & self._mask
 
         while True:
-            var ctrl = self._ctrl[slot]
-            if ctrl == Self.EMPTY:
-                break
-            if ctrl == stamp:
-                var bid = Int(self._slots[slot])
+            var group = _Group(self._ctrl + pos)
+            var match_mask = group.match_h2(h2)
+            while match_mask != 0:
+                var bit = count_trailing_zeros(Int(match_mask))
+                var slot_idx = (pos + bit) & self._mask
+                var bid = Int(self._slots[slot_idx])
                 if self._bucket_hashes[bid] == h:
                     return bid
-            slot = (slot + 1) & self._mask
+                match_mask &= match_mask - 1
 
-        # New bucket — empty slot, no row stored.
-        if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
-            self._grow()
-            slot = self._slot_index(h)
-            while self._ctrl[slot] != Self.EMPTY:
-                slot = (slot + 1) & self._mask
+            var empty_mask = group.match_empty()
+            if empty_mask != 0:
+                if self._count * Self._LOAD_FACTOR_DEN >= self._capacity * Self._LOAD_FACTOR_NUM:
+                    self._grow()
+                    return self.find_or_insert(h)
 
-        var bid = len(self._heads)
-        self._ctrl[slot] = stamp
-        self._slots[slot] = Int32(bid)
-        self._count += 1
-        self._bucket_hashes.append(h)
-        self._heads.append(Int32(-1))
-        return bid
+                var bit = count_trailing_zeros(Int(empty_mask))
+                var slot = (pos + bit) & self._mask
+                var bid = len(self._heads)
+                self._set_ctrl(slot, h2)
+                self._slots[slot] = Int32(bid)
+                self._count += 1
+                self._bucket_hashes.append(h)
+                self._heads.append(Int32(-1))
+                return bid
+
+            pos = (pos + _GROUP_WIDTH) & self._mask
 
     def bucket_head(self, bid: Int) -> Int32:
         return self._heads[bid]

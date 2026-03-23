@@ -79,6 +79,7 @@ from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
+from marrow.kernels.hashing import rapidhash
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -812,7 +813,7 @@ struct JoinProcessor(RelationProcessor):
     var strictness: UInt8
     var schema_: Schema
     var ctx: ExecutionContext
-    var _index: Optional[HashJoin]
+    var _index: Optional[HashJoin[rapidhash]]
     var _exhausted: Bool
 
     def __init__(
@@ -847,7 +848,7 @@ struct JoinProcessor(RelationProcessor):
         # Phase 1: consume entire left side and build hash index (once).
         if not self._index:
             var left_struct = self.left_proc.read_all().to_struct_array()
-            var index = HashJoin()
+            var index = HashJoin[rapidhash]()
             index.build(left_struct, self.left_key_indices)
             self._index = index^
 
