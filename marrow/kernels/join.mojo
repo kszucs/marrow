@@ -51,20 +51,6 @@ from ..expr.relations import (
 )
 
 
-# ---------------------------------------------------------------------------
-# _has_any_null — SQL join null semantics (NULL != NULL)
-# ---------------------------------------------------------------------------
-
-
-def _has_any_null(keys: StructArray, row: Int) -> Bool:
-    """Return True if any key column has a null at this row."""
-    for k in range(len(keys.children)):
-        if keys.children[k].null_count() > 0 and not keys.children[k].is_valid(
-            row
-        ):
-            return True
-    return False
-
 
 # ---------------------------------------------------------------------------
 # IndexPairs — parallel index arrays produced by the probe phase
@@ -157,11 +143,11 @@ struct HashJoin(Join):
         self._build_dtype = data.dtype
         self._num_rows = data.length
         self._left_data = data.copy()
+        # Re-init with capacity to avoid reallocs during insert loop.
+        self._table = DictHashTable[hash_](capacity=self._num_rows)
         var keys = data.select(key_indices)
         var hashes = self._table.hash_keys(keys)
         for i in range(self._num_rows):
-            if _has_any_null(keys, i):
-                continue
             _ = self._table.insert(UInt64(hashes.unsafe_get(i)), Int32(i))
 
     def probe(
@@ -244,28 +230,47 @@ struct HashJoin(Join):
         var probe_keys = data.select(key_indices)
         var n = len(probe_keys)
         var probe_hashes = self._table.hash_keys(probe_keys)
-        var left_indices = PrimitiveBuilder[int32](capacity=n)
-        var right_indices = PrimitiveBuilder[int32](capacity=n)
-        var matched_build = List[Bool](length=self._num_rows, fill=False)
-        var matched_probe = List[Bool](length=n, fill=False)
+
+        # Pre-allocate output builders to avoid reallocs in the hot loop.
+        var est = n if n < self._num_rows else self._num_rows
+        var left_indices = PrimitiveBuilder[int32](capacity=est)
+        var right_indices = PrimitiveBuilder[int32](capacity=est)
+
+        # Only allocate match-tracking arrays when the join kind needs them.
+        # INNER+ALL never reads these — skip the 2×N allocation entirely.
+        alias need_matched_build = (
+            kind == JOIN_LEFT
+            or kind == JOIN_FULL
+            or kind == JOIN_SEMI
+            or kind == JOIN_ANTI
+            or strictness == JOIN_ANY
+        )
+        alias need_matched_probe = (
+            kind == JOIN_RIGHT or kind == JOIN_FULL
+        )
+        var matched_build = List[Bool]()
+        var matched_probe = List[Bool]()
+        comptime if need_matched_build:
+            matched_build = List[Bool](length=self._num_rows, fill=False)
+        comptime if need_matched_probe:
+            matched_probe = List[Bool](length=n, fill=False)
 
         for probe_row in range(n):
             var h = UInt64(probe_hashes.unsafe_get(probe_row))
-
-            # Null probe keys never match; for RIGHT/FULL emit as unmatched.
             var bid = self._table.find(h)
-            if _has_any_null(probe_keys, probe_row) or bid == -1:
+            if bid == -1:
                 comptime if kind == JOIN_RIGHT or kind == JOIN_FULL:
-                    left_indices.append(Scalar[int32.native](-1))
-                    right_indices.append(Scalar[int32.native](probe_row))
+                    left_indices.unsafe_append(Scalar[int32.native](-1))
+                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
                 continue
 
-            # Iterate over build-side candidates for this bucket.
-            for k in range(self._table.bucket_len(bid)):
-                var build_row = self._table.bucket_row(bid, k)
+            # Walk the chain of build-side candidates.
+            var entry = Int(self._table.bucket_head(bid))
+            while entry != -1:
+                var build_row = self._table.entry_row(entry)
                 var br = Int(build_row)
+                var next_entry = Int(self._table.entry_next(entry))
 
-                # SEMI/ANTI: only need existence — mark and stop.
                 comptime if kind == JOIN_SEMI:
                     matched_build[br] = True
                     break
@@ -273,41 +278,42 @@ struct HashJoin(Join):
                     matched_build[br] = True
                     break
 
-                # All other kinds: emit a pair.
                 comptime if kind != JOIN_SEMI and kind != JOIN_ANTI:
                     comptime if strictness == JOIN_ANY:
                         if matched_build[br]:
+                            entry = next_entry
                             continue
 
-                    left_indices.append(Scalar[int32.native](build_row))
-                    right_indices.append(Scalar[int32.native](probe_row))
-                    matched_build[br] = True
-                    matched_probe[probe_row] = True
+                    left_indices.unsafe_append(Scalar[int32.native](build_row))
+                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
+
+                    comptime if need_matched_build:
+                        matched_build[br] = True
+                    comptime if need_matched_probe:
+                        matched_probe[probe_row] = True
 
                     comptime if strictness == JOIN_ANY:
                         break
 
-            # RIGHT/FULL: if probe row found candidates but emitted nothing.
+                entry = next_entry
+
             comptime if kind == JOIN_RIGHT or kind == JOIN_FULL:
                 if not matched_probe[probe_row]:
-                    left_indices.append(Scalar[int32.native](-1))
-                    right_indices.append(Scalar[int32.native](probe_row))
+                    left_indices.unsafe_append(Scalar[int32.native](-1))
+                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
 
-        # Emit unmatched build rows for LEFT / FULL.
         comptime if kind == JOIN_LEFT or kind == JOIN_FULL:
             for i in range(self._num_rows):
                 if not matched_build[i]:
                     left_indices.append(Scalar[int32.native](i))
                     right_indices.append(Scalar[int32.native](-1))
 
-        # SEMI: emit matched build rows.
         comptime if kind == JOIN_SEMI:
             for i in range(self._num_rows):
                 if matched_build[i]:
                     left_indices.append(Scalar[int32.native](i))
                     right_indices.append(Scalar[int32.native](-1))
 
-        # ANTI: emit unmatched build rows.
         comptime if kind == JOIN_ANTI:
             for i in range(self._num_rows):
                 if not matched_build[i]:

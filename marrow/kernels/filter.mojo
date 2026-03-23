@@ -616,14 +616,13 @@ def take[T: DataType](
     """
     var n = len(indices)
     var builder = PrimitiveBuilder[T](capacity=n)
+    var has_nulls = array.null_count() > 0
     for i in range(n):
         var idx = Int(indices.unsafe_get(i))
-        if idx == -1:
-            builder.append_null()
-        elif array.is_valid(idx):
-            builder.append(array.unsafe_get(idx))
+        if idx == -1 or (has_nulls and not array.is_valid(idx)):
+            builder.unsafe_append_null()
         else:
-            builder.append_null()
+            builder.unsafe_append(array.unsafe_get(idx))
     return builder.finish()
 
 

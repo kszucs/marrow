@@ -130,10 +130,10 @@ trait HashTable(Movable):
     """Maps UInt64 hashes → sequential bucket IDs with row index storage.
 
     Each unique hash gets a sequential bucket ID (0, 1, 2, ...).
-    Each bucket holds a list of Int32 row indices.
+    Buckets are iterated via chain pointers (head → next → next → -1).
 
     Shared by join and groupby:
-      - Join uses ``insert()`` to build, ``find()`` + ``bucket_*`` to probe.
+      - Join uses ``insert()`` to build, chain iteration to probe.
       - GroupBy uses ``find_or_insert()`` for group_id assignment
         (bucket_id IS the group_id).
     """
@@ -159,12 +159,16 @@ trait HashTable(Movable):
         """
         ...
 
-    def bucket_len(self, bid: Int) -> Int:
-        """Number of row indices in bucket bid."""
+    def bucket_head(self, bid: Int) -> Int32:
+        """First entry index in bucket, -1 if empty."""
         ...
 
-    def bucket_row(self, bid: Int, k: Int) -> Int32:
-        """k-th row index in bucket bid."""
+    def entry_row(self, entry: Int) -> Int32:
+        """Row index stored at this entry."""
+        ...
+
+    def entry_next(self, entry: Int) -> Int32:
+        """Next entry in chain, -1 if end of bucket."""
         ...
 
     def num_buckets(self) -> Int:
@@ -180,23 +184,26 @@ trait HashTable(Movable):
 struct DictHashTable[
     hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = hash_
 ](HashTable):
-    """Dict-backed hash table.
+    """Dict-backed hash table with flat chain-pointer storage.
 
-    Maps UInt64 hash → bucket_id via ``Dict[UInt64, Int]``.
-    Buckets stored in ``List[List[Int32]]`` indexed by bucket_id.
-    Hash function passed as comptime parameter (default: ``hash_``).
+    Maps UInt64 hash → bucket_id via ``Dict[UInt64, Int, IdentityHasher]``.
+    Row indices stored in a single flat ``List[Int32]`` with chain pointers
+    for multi-row buckets — no per-bucket heap allocations.
 
-    Future alternatives (same HashTable trait):
-      - SIMDHashTable — open addressing with SIMD probing
-      - PerfectHashTable — direct array indexing for small-domain keys
+    Destruction is O(1) per flat array (3 arrays + 1 Dict) instead of
+    O(N) for N separate ``List[Int32]`` bucket allocations.
     """
 
-    var _map: Dict[UInt64, Int, IdentityHasher]
-    var _buckets: List[List[Int32]]
+    var _map: Dict[UInt64, Int, IdentityHasher]  # hash → bucket_id
+    var _heads: List[Int32]   # bucket_id → first entry index (-1 = empty)
+    var _rows: List[Int32]    # entry → row index (flat, all entries)
+    var _next: List[Int32]    # entry → next entry in chain (-1 = end)
 
-    def __init__(out self):
+    def __init__(out self, capacity: Int = 0):
         self._map = Dict[UInt64, Int, IdentityHasher]()
-        self._buckets = List[List[Int32]]()
+        self._heads = List[Int32](capacity=capacity)
+        self._rows = List[Int32](capacity=capacity)
+        self._next = List[Int32](capacity=capacity)
 
     def hash_keys(
         self, keys: StructArray
@@ -204,16 +211,22 @@ struct DictHashTable[
         return Self.hash_fn(keys)
 
     def insert(mut self, h: UInt64, row: Int32) -> Int:
+        var entry_idx = Int32(len(self._rows))
+        self._rows.append(row)
+
         var existing = self._map.get(h)
         if existing:
             var bid = existing.value()
-            self._buckets[bid].append(row)
+            # Prepend to existing chain.
+            self._next.append(self._heads[bid])
+            self._heads[bid] = entry_idx
             return bid
-        var bid = len(self._buckets)
+
+        # New bucket.
+        var bid = len(self._heads)
         self._map[h] = bid
-        var bucket = List[Int32]()
-        bucket.append(row)
-        self._buckets.append(bucket^)
+        self._next.append(Int32(-1))
+        self._heads.append(entry_idx)
         return bid
 
     def find(self, h: UInt64) -> Int:
@@ -226,16 +239,34 @@ struct DictHashTable[
         var existing = self._map.get(h)
         if existing:
             return existing.value()
-        var bid = len(self._buckets)
+        var bid = len(self._heads)
         self._map[h] = bid
-        self._buckets.append(List[Int32]())
+        self._heads.append(Int32(-1))  # empty bucket (no entries)
         return bid
 
-    def bucket_len(self, bid: Int) -> Int:
-        return len(self._buckets[bid])
+    def find_batch(
+        self, hashes: PrimitiveArray[uint64]
+    ) raises -> PrimitiveArray[int32]:
+        """Batch find: return bucket_id per hash (-1 if not found)."""
+        var n = len(hashes)
+        var builder = PrimitiveBuilder[int32](capacity=n)
+        for i in range(n):
+            var h = UInt64(hashes.unsafe_get(i))
+            var existing = self._map.get(h)
+            if existing:
+                builder.append(Scalar[int32.native](existing.value()))
+            else:
+                builder.append(Scalar[int32.native](-1))
+        return builder.finish()
 
-    def bucket_row(self, bid: Int, k: Int) -> Int32:
-        return self._buckets[bid][k]
+    def bucket_head(self, bid: Int) -> Int32:
+        return self._heads[bid]
+
+    def entry_row(self, entry: Int) -> Int32:
+        return self._rows[entry]
+
+    def entry_next(self, entry: Int) -> Int32:
+        return self._next[entry]
 
     def num_buckets(self) -> Int:
-        return len(self._buckets)
+        return len(self._heads)
