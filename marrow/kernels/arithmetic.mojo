@@ -12,7 +12,7 @@ to device; function parameters do).
 
 import std.math as math
 from std.algorithm.functional import elementwise
-from std.gpu.host import DeviceContext, get_gpu_target
+from std.gpu.host import DeviceContext, get_gpu_target, has_accelerator
 from std.sys import size_of
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
@@ -54,8 +54,11 @@ def _elementwise_unary[
         (output + i).store(func[W](input.load[width=W](i)))
 
     if ctx:
-        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
-        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("_elementwise_unary: no GPU accelerator available")
     else:
         comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
@@ -86,8 +89,11 @@ def _elementwise_binary[
         (output + i).store(func[W](lhs.load[width=W](i), rhs.load[width=W](i)))
 
     if ctx:
-        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
-        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("_elementwise_binary: no GPU accelerator available")
     else:
         comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](

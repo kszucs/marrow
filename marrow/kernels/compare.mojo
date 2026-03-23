@@ -27,7 +27,7 @@ from std.sys import size_of
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
-from std.gpu.host import DeviceContext, get_gpu_target
+from std.gpu.host import DeviceContext, get_gpu_target, has_accelerator
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import BufferBuilder
@@ -82,8 +82,11 @@ def _elementwise_cmp_pack[
             )
 
     if ctx:
-        comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
-        elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[T.native, target=get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("_elementwise_cmp_pack: no GPU accelerator available")
     else:
         comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
