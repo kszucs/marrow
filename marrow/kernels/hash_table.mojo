@@ -149,6 +149,10 @@ trait HashTable(Movable):
         """Pre-allocate for n expected entries to avoid reallocs during build."""
         ...
 
+    def build(mut self, hashes: PrimitiveArray[uint64]) raises:
+        """Batch insert all rows from a pre-computed hash array."""
+        ...
+
     def insert(mut self, h: UInt64, row: Int32) -> Int:
         """Append row to bucket for hash h. Create bucket if new.
         Return bucket_id."""
@@ -327,6 +331,54 @@ struct SwissHashTable[
     ) raises -> PrimitiveArray[uint64]:
         return Self.hash_fn(keys)
 
+    def build(mut self, hashes: PrimitiveArray[uint64]) raises:
+        """Batch insert all rows. Reserves capacity upfront so the inner
+        loop never needs to check load factor or grow."""
+        var n = len(hashes)
+        self.reserve(n)
+        for i in range(n):
+            var h = UInt64(hashes.unsafe_get(i))
+            var h2 = _h2(h)
+            var pos = Int(h) & self._mask
+
+            # Probe for existing bucket.
+            var found = False
+            while True:
+                var group = _Group(self._ctrl + pos)
+                var match_mask = group.match_h2(h2)
+                while match_mask != 0:
+                    var bit = count_trailing_zeros(Int(match_mask))
+                    var slot_idx = (pos + bit) & self._mask
+                    var bid = Int(self._slots[slot_idx])
+                    if self._bucket_hashes[bid] == h:
+                        var entry_idx = Int32(len(self._rows))
+                        self._rows.append(Int32(i))
+                        self._next.append(self._heads[bid])
+                        self._heads[bid] = entry_idx
+                        found = True
+                        break
+                    match_mask &= match_mask - 1
+                if found:
+                    break
+
+                var empty_mask = group.match_empty()
+                if empty_mask != 0:
+                    # New bucket — no load factor check (pre-reserved).
+                    var bit = count_trailing_zeros(Int(empty_mask))
+                    var slot = (pos + bit) & self._mask
+                    var bid = len(self._heads)
+                    self._set_ctrl(slot, h2)
+                    self._slots[slot] = Int32(bid)
+                    self._count += 1
+                    self._bucket_hashes.append(h)
+                    var entry_idx = Int32(len(self._rows))
+                    self._rows.append(Int32(i))
+                    self._next.append(Int32(-1))
+                    self._heads.append(entry_idx)
+                    break
+
+                pos = (pos + _GROUP_WIDTH) & self._mask
+
     def insert(mut self, h: UInt64, row: Int32) -> Int:
         var h2 = _h2(h)
         var pos = Int(h) & self._mask
@@ -464,6 +516,12 @@ struct DictHashTable[
         self._heads.reserve(n)
         self._rows.reserve(n)
         self._next.reserve(n)
+
+    def build(mut self, hashes: PrimitiveArray[uint64]) raises:
+        var n = len(hashes)
+        self.reserve(n)
+        for i in range(n):
+            _ = self.insert(UInt64(hashes.unsafe_get(i)), Int32(i))
 
     def hash_keys(
         self, keys: StructArray
