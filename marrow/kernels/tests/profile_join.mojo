@@ -17,6 +17,7 @@ from marrow.arrays import PrimitiveArray, AnyArray, StructArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import int64, int32, struct_, Field
 from marrow.kernels.join import HashJoin, hash_join
+from marrow.kernels.hashing import rapidhash
 from marrow.expr.relations import JOIN_INNER, JOIN_LEFT, JOIN_SEMI, JOIN_ALL
 
 
@@ -114,21 +115,12 @@ def bench_probe(
     # Phase A: hash probe keys
     var probe_keys = right.select(right_keys)
     var t0 = perf_counter_ns()
-    var probe_hashes = j._table.hash_keys(probe_keys)
+    var probe_hashes = rapidhash(probe_keys)
     var t_hash = perf_counter_ns() - t0
     print("    hash:     ", _fmt_us(t_hash))
 
-    # Phase B: find (Dict lookups)
+    # Phase B+C: collect pairs (probe_pairs with pre-computed hashes)
     var n = len(probe_keys)
-    t0 = perf_counter_ns()
-    for i in range(n):
-        var h = UInt64(probe_hashes.unsafe_get(i))
-        var bid = j._table.find(h)
-        keep(bid)
-    var t_find = perf_counter_ns() - t0
-    print("    find:     ", _fmt_us(t_find))
-
-    # Phase C: collect pairs (dispatch_probe with pre-computed hashes)
     t0 = perf_counter_ns()
     var pairs = j._dispatch_probe(probe_hashes, n, JOIN_INNER, JOIN_ALL)
     var t_pairs = perf_counter_ns() - t0

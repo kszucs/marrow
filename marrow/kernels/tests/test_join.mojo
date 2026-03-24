@@ -536,7 +536,6 @@ def _constant_hash(
 def test_collision_inner_join() raises:
     """With all hashes colliding, key equality filters to correct matches."""
     from marrow.kernels.join import HashJoin
-    from marrow.kernels.hash_table import SwissHashTable
 
     # left: k=[1,2,3], v=[10,20,30]
     # right: k=[2,3,4], v=[100,200,300]

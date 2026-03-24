@@ -242,19 +242,19 @@ struct HashGrouper(Movable):
     GROUP BY semantics (unlike join where NULL != NULL).
     """
 
-    var _table: SwissHashTable[rapidhash]
+    var _table: SwissHashTable
     var _group_keys: List[AnyArray]
     var _functions: List[AggregateFunction]
 
     def __init__(out self, agg_names: List[String]):
-        self._table = SwissHashTable[rapidhash]()
+        self._table = SwissHashTable()
         self._group_keys = List[AnyArray]()
         self._functions = List[AggregateFunction]()
         for i in range(len(agg_names)):
             self._functions.append(AggregateFunction(agg_names[i]))
 
     def num_groups(self) -> Int:
-        return self._table.num_buckets()
+        return self._table.num_keys()
 
     def consume_keys(
         mut self, keys: StructArray
@@ -263,19 +263,31 @@ struct HashGrouper(Movable):
 
         Can be called multiple times — groups accumulate across calls.
         New keys get new group IDs; existing keys return their previous ID.
+        Uses ``insert`` for pipelined hash table lookups.
         """
         var n = len(keys)
         if n == 0:
             var empty = PrimitiveBuilder[uint32](0)
             return empty.finish()
 
-        var hashes = self._table.hash_keys(keys)
+        var hashes = rapidhash(keys)
+        var prev = self._table.num_keys()
+        var bids = self._table.insert(hashes)
+        var new_groups = self._table.num_keys() - prev
 
+        # Register new groups: store key rows + create aggregate state.
+        if new_groups > 0:
+            var seen = List[Bool](length=new_groups, fill=False)
+            for i in range(n):
+                var gid = Int(bids.unsafe_get(i))
+                if gid >= prev and not seen[gid - prev]:
+                    seen[gid - prev] = True
+                    self._register_new_group(keys, i)
+
+        # Convert int32 bucket_ids → uint32 group_ids.
         var gid_builder = PrimitiveBuilder[uint32](capacity=n)
         for i in range(n):
-            var h = UInt64(hashes.unsafe_get(i))
-            var gid = self._probe_or_insert(keys, i, h)
-            gid_builder.append(Scalar[uint32.native](gid))
+            gid_builder.unsafe_append(Scalar[uint32.native](Int(bids.unsafe_get(i))))
         return gid_builder.finish()
 
     def consume_values(
@@ -297,7 +309,7 @@ struct HashGrouper(Movable):
 
     def finish(mut self, key_fields: List[Field]) raises -> RecordBatch:
         """Build result RecordBatch from key columns + finalized states."""
-        var num_groups = self._table.num_buckets()
+        var num_groups = self._table.num_keys()
         var result_fields = List[Field]()
         var result_cols = List[AnyArray]()
 
@@ -328,20 +340,10 @@ struct HashGrouper(Movable):
 
     # --- hash table internals ---
 
-    def _probe_or_insert(
-        mut self, keys: StructArray, row: Int, h: UInt64
-    ) raises -> Int:
-        """Find existing group or insert new one.
-
-        Uses SwissHashTable.find_or_insert() — bucket_id IS the group_id.
-        """
-        var prev = self._table.num_buckets()
-        var gid = self._table.find_or_insert(h)
-
-        if gid < prev:
-            return gid  # existing group
-
-        # New group: store key row (one slice per column).
+    def _register_new_group(
+        mut self, keys: StructArray, row: Int
+    ) raises:
+        """Store key row for a newly created group + create aggregate state."""
         if len(self._group_keys) == 0:
             for k in range(len(keys.children)):
                 self._group_keys.append(keys.children[k].slice(row, 1).copy())
@@ -354,8 +356,6 @@ struct HashGrouper(Movable):
 
         for a in range(len(self._functions)):
             self._functions[a].create()
-
-        return gid
 
 
 # ---------------------------------------------------------------------------

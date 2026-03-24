@@ -135,14 +135,14 @@ struct HashJoin[
     Stores the full build-side StructArray for output assembly via take().
     """
 
-    var _table: SwissHashTable[Self.hash_fn]
+    var _table: SwissHashTable
     var _build_keys: Optional[StructArray]  # key columns for equality checks
     var _build_dtype: DataType
     var _left_data: Optional[StructArray]
     var _num_rows: Int
 
     def __init__(out self):
-        self._table = SwissHashTable[Self.hash_fn]()
+        self._table = SwissHashTable()
         self._build_keys = None
         self._build_dtype = DataType(code=0)
         self._left_data = None
@@ -154,7 +154,7 @@ struct HashJoin[
         self._left_data = data.copy()
         var keys = data.select(key_indices)
         self._build_keys = keys.copy()
-        var hashes = self._table.hash_keys(keys)
+        var hashes = Self.hash_fn(keys)
         self._table.build(hashes)
 
     def probe(
@@ -165,7 +165,7 @@ struct HashJoin[
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
         var probe_keys = data.select(key_indices)
-        var probe_hashes = self._table.hash_keys(probe_keys)
+        var probe_hashes = Self.hash_fn(probe_keys)
         # Phase 1: collect candidate pairs from hash matches (branchless).
         var pairs = self._dispatch_probe(probe_hashes, len(data), kind, strictness)
         # Phase 2: vectorized equality filter — removes hash collisions.
@@ -353,24 +353,12 @@ struct HashJoin[
         n: Int,
     ) raises -> IndexPairs:
         """Phase 1: collect ALL candidate (build_row, probe_row) pairs.
-        Delegates to hash table's probe_pairs for pipelined lookups."""
-        var est = n if n < self._num_rows else self._num_rows
-        var left_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
-        var right_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
-
-        comptime if strictness == JOIN_ANY:
-            self._table.probe_pairs(
-                probe_hashes, left_indices, right_indices, single_match=True
-            )
-        else:
-            self._table.probe_pairs(
-                probe_hashes, left_indices, right_indices
-            )
-
-        return IndexPairs(
-            left_indices.finish(shrink_to_fit=False),
-            right_indices.finish(shrink_to_fit=False),
+        Delegates to hash table's probe for pipelined lookups."""
+        var single = strictness == JOIN_ANY
+        var pairs = self._table.probe(
+            probe_hashes, self._num_rows, single_match=single
         )
+        return IndexPairs(pairs[0].copy(), pairs[1].copy())
 
     def _assemble(
         self, right: StructArray, pairs: IndexPairs, kind: UInt8
