@@ -209,11 +209,14 @@ struct SwissHashTable[
     var _count: Int
     var _max_count: Int  # precomputed threshold: capacity * 7 / 8
 
-    # Chain storage (flat arrays).
-    var _heads: List[Int32]
-    var _rows: List[Int32]
-    var _next: List[Int32]
     var _bucket_hashes: List[UInt64]   # dense: bucket_id → hash
+    var _num_buckets: Int
+
+    # CSR (Compressed Sparse Row) storage for row indices.
+    # After build(): _offsets[bid]..._offsets[bid+1] is the range in _rows.
+    # During build pass 1: _counts[bid] accumulates rows per bucket.
+    var _offsets: List[Int]            # len = num_buckets + 1
+    var _rows: List[Int32]             # flat, grouped by bucket
 
     def __init__(out self, capacity: Int = 0):
         var cap = Int(next_power_of_two(max(capacity * 2, _GROUP_WIDTH)))
@@ -224,10 +227,10 @@ struct SwissHashTable[
         self._ctrl = alloc[UInt8](cap + _GROUP_WIDTH)
         self._slots = alloc[Int32](cap)
         memset(self._ctrl, _CTRL_EMPTY, cap + _GROUP_WIDTH)
-        self._heads = List[Int32](capacity=capacity)
-        self._rows = List[Int32](capacity=capacity)
-        self._next = List[Int32](capacity=capacity)
         self._bucket_hashes = List[UInt64](capacity=capacity)
+        self._num_buckets = 0
+        self._offsets = List[Int]()
+        self._rows = List[Int32]()
 
     def __del__(deinit self):
         if self._capacity > 0:
@@ -272,9 +275,6 @@ struct SwissHashTable[
                         pos = (pos + _GROUP_WIDTH) & self._mask
             old_ctrl.free()
             old_slots.free()
-        self._heads.reserve(n)
-        self._rows.reserve(n)
-        self._next.reserve(n)
         self._bucket_hashes.reserve(n)
 
     def hash_keys(
@@ -283,31 +283,36 @@ struct SwissHashTable[
         return Self.hash_fn(keys)
 
     def build(mut self, hashes: PrimitiveArray[uint64]) raises:
-        """Batch insert all rows. Reserves capacity upfront so the inner
-        loop never needs to check load factor or grow.
+        """Two-pass CSR build: assigns bucket IDs, then scatters rows.
 
-        Optimized for the common case: mostly unique keys, so most
-        inserts hit the empty-slot branch (no H2 match loop).
+        Pass 1: for each hash, find-or-create bucket in the Swiss Table.
+                Count rows per bucket.
+        Pass 2: compute prefix-sum offsets, scatter row indices into a
+                flat contiguous array grouped by bucket.
+
+        Result: _offsets[bid]..._offsets[bid+1] gives the row range.
+        No linked lists — probe iterates a contiguous memory range.
         """
         var n = len(hashes)
         self.reserve(n)
         var hash_ptr = hashes.buffer.unsafe_ptr[uint64.native](hashes.offset)
 
-        # Track next bucket_id and entry_id locally to avoid repeated
-        # len() calls on Lists in the hot loop.
-        var next_bid = len(self._heads)
-        var next_entry = len(self._rows)
+        # --- Pass 1: assign bucket IDs, count rows per bucket ---
+        # Temporarily store bucket_id per input row.
+        var row_bids = List[Int32](length=n, fill=Int32(0))
+        var next_bid = self._num_buckets
+        var counts = List[Int]()  # will be sized after pass 1
 
         for i in range(n):
             var h = UInt64(hash_ptr[i])
             var h2 = _h2(h)
             var pos = Int(h) & self._mask
 
-            # Prefetch next iteration's control bytes.
             if i + 8 < n:
-                prefetch(self._ctrl +(Int(UInt64(hash_ptr[i + 8])) & self._mask))
+                prefetch(self._ctrl + (Int(UInt64(hash_ptr[i + 8])) & self._mask))
 
-            # Probe for existing bucket (duplicate key).
+            # Find or create bucket.
+            var bid = -1
             var found = False
             while True:
                 var group = _Group(self._ctrl + pos)
@@ -315,12 +320,9 @@ struct SwissHashTable[
                 while match_mask != 0:
                     var bit = count_trailing_zeros(Int(match_mask))
                     var slot_idx = (pos + bit) & self._mask
-                    var bid = Int(self._slots[slot_idx])
-                    if self._bucket_hashes[bid] == h:
-                        self._rows.append(Int32(i))
-                        self._next.append(self._heads[bid])
-                        self._heads[bid] = Int32(next_entry)
-                        next_entry += 1
+                    var candidate = Int(self._slots[slot_idx])
+                    if self._bucket_hashes[candidate] == h:
+                        bid = candidate
                         found = True
                         break
                     match_mask &= match_mask - 1
@@ -331,59 +333,41 @@ struct SwissHashTable[
                 if empty_mask != 0:
                     var bit = count_trailing_zeros(Int(empty_mask))
                     var slot = (pos + bit) & self._mask
+                    bid = next_bid
                     self._set_ctrl(slot, h2)
-                    self._slots[slot] = Int32(next_bid)
+                    self._slots[slot] = Int32(bid)
                     self._count += 1
                     self._bucket_hashes.append(h)
-                    self._rows.append(Int32(i))
-                    self._next.append(Int32(-1))
-                    self._heads.append(Int32(next_entry))
                     next_bid += 1
-                    next_entry += 1
                     break
 
                 pos = (pos + _GROUP_WIDTH) & self._mask
 
-    def insert(mut self, h: UInt64, row: Int32) -> Int:
-        var h2 = _h2(h)
-        var pos = Int(h) & self._mask
+            row_bids[i] = Int32(bid)
 
-        while True:
-            var group = _Group(self._ctrl + pos)
-            var match_mask = group.match_h2(h2)
-            while match_mask != 0:
-                var bit = count_trailing_zeros(Int(match_mask))
-                var slot_idx = (pos + bit) & self._mask
-                var bid = Int(self._slots[slot_idx])
-                if self._bucket_hashes[bid] == h:
-                    var entry_idx = Int32(len(self._rows))
-                    self._rows.append(row)
-                    self._next.append(self._heads[bid])
-                    self._heads[bid] = entry_idx
-                    return bid
-                match_mask &= match_mask - 1
+        self._num_buckets = next_bid
 
-            var empty_mask = group.match_empty()
-            if empty_mask != 0:
-                if self._count >= self._max_count:
-                    self.reserve(self._capacity)
-                    return self.insert(h, row)
+        # --- Pass 2: prefix-sum + scatter ---
+        # Count rows per bucket.
+        counts = List[Int](length=self._num_buckets, fill=0)
+        for i in range(n):
+            counts[Int(row_bids[i])] += 1
 
-                var bit = count_trailing_zeros(Int(empty_mask))
-                var slot = (pos + bit) & self._mask
-                var bid = len(self._heads)
-                self._set_ctrl(slot, h2)
-                self._slots[slot] = Int32(bid)
-                self._bucket_hashes.append(h)
-                self._count += 1
+        # Prefix sum → offsets.
+        self._offsets = List[Int](length=self._num_buckets + 1, fill=0)
+        for b in range(self._num_buckets):
+            self._offsets[b + 1] = self._offsets[b] + counts[b]
 
-                var entry_idx = Int32(len(self._rows))
-                self._rows.append(row)
-                self._next.append(Int32(-1))
-                self._heads.append(entry_idx)
-                return bid
-
-            pos = (pos + _GROUP_WIDTH) & self._mask
+        # Scatter row indices into CSR rows array.
+        var total = self._offsets[self._num_buckets]
+        self._rows = List[Int32](length=total, fill=Int32(0))
+        # Reuse counts as write cursors.
+        for b in range(self._num_buckets):
+            counts[b] = self._offsets[b]
+        for i in range(n):
+            var bid = Int(row_bids[i])
+            self._rows[counts[bid]] = Int32(i)
+            counts[bid] += 1
 
     def probe_pairs(
         self,
@@ -410,13 +394,13 @@ struct SwissHashTable[
             if bid == -1:
                 continue
 
-            var entry = Int(self._heads[bid])
-            while entry != -1:
-                left_out.unsafe_append(Scalar[int32.native](self._rows[entry]))
+            var start = self._offsets[bid]
+            var end = self._offsets[bid + 1]
+            for j in range(start, end):
+                left_out.unsafe_append(Scalar[int32.native](self._rows[j]))
                 right_out.unsafe_append(Scalar[int32.native](probe_row))
                 if single_match:
                     break
-                entry = Int(self._next[entry])
 
     @always_inline
     def find(self, h: UInt64) -> Int:
@@ -459,15 +443,15 @@ struct SwissHashTable[
 
                 var bit = count_trailing_zeros(Int(empty_mask))
                 var slot = (pos + bit) & self._mask
-                var bid = len(self._heads)
+                var bid = self._num_buckets
                 self._set_ctrl(slot, h2)
                 self._slots[slot] = Int32(bid)
                 self._bucket_hashes.append(h)
                 self._count += 1
-                self._heads.append(Int32(-1))
+                self._num_buckets += 1
                 return bid
 
             pos = (pos + _GROUP_WIDTH) & self._mask
 
     def num_buckets(self) -> Int:
-        return len(self._heads)
+        return self._num_buckets
