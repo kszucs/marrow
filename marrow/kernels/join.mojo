@@ -357,8 +357,8 @@ struct HashJoin[
         collection. Equality filtering and unmatched-row emission happen
         in probe() after this returns."""
         var est = n if n < self._num_rows else self._num_rows
-        var left_indices = PrimitiveBuilder[int32](uninit_capacity=est)
-        var right_indices = PrimitiveBuilder[int32](uninit_capacity=est)
+        var left_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
+        var right_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
 
         for probe_row in range(n):
             var h = UInt64(probe_hashes.unsafe_get(probe_row))
@@ -381,7 +381,10 @@ struct HashJoin[
                 right_indices.unsafe_append(Scalar[int32.native](probe_row))
                 entry = next_entry
 
-        return IndexPairs(left_indices.finish(), right_indices.finish())
+        return IndexPairs(
+            left_indices.finish(shrink_to_fit=False),
+            right_indices.finish(shrink_to_fit=False),
+        )
 
     def _assemble(
         self, right: StructArray, pairs: IndexPairs, kind: UInt8

@@ -128,7 +128,7 @@ def _unary[
         buf = BufferBuilder.alloc_device[native](ctx.value(), length)
         in_ptr = array.buffer.aligned_device_ptr[native](array.offset)
     else:
-        buf = BufferBuilder.alloc[native](length)
+        buf = BufferBuilder.alloc_zeroed[native](length)
         in_ptr = array.buffer.aligned_unsafe_ptr[native](array.offset)
 
     _elementwise_unary[T, func](
@@ -181,7 +181,7 @@ def _binary[
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
-        buf = BufferBuilder.alloc[native](length)
+        buf = BufferBuilder.alloc_zeroed[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
         rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)

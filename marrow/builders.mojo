@@ -67,7 +67,7 @@ trait Builder(ImplicitlyDestructible, Movable):
     def extend(mut self, arr: AnyArray) raises:
         ...
 
-    def finish(mut self) raises -> Self.ArrayType:
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> Self.ArrayType:
         ...
 
     def reset(mut self):
@@ -252,26 +252,25 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     var _bitmap: BitmapBuilder
     var _buffer: BufferBuilder
 
-    def __init__(out self, capacity: Int = 0):
+    def __init__(out self, capacity: Int = 0, *, zeroed: Bool = True):
+        """Create a builder with the given initial capacity.
+
+        Args:
+            capacity: Initial element capacity.
+            zeroed: If True (default), zero-fill the data buffer. Pass
+                False when every element will be written via
+                ``unsafe_append`` — avoids wasted memset.
+        """
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
-        self._buffer = BufferBuilder.alloc[Self.T.native](capacity)
-
-    def __init__(out self, *, uninit_capacity: Int):
-        """Create a builder with uninitialized data buffer.
-
-        The bitmap is still zeroed (all-null). Use only when every
-        position will be written via ``unsafe_append`` before reading.
-        """
-        self._length = 0
-        self._capacity = uninit_capacity
-        self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(uninit_capacity)
-        self._buffer = BufferBuilder.alloc_uninit(
-            BufferBuilder._aligned_size[Self.T.native](uninit_capacity)
-        )
+        if zeroed:
+            self._buffer = BufferBuilder.alloc_zeroed[Self.T.native](capacity)
+        else:
+            self._buffer = BufferBuilder.alloc_uninit(
+                BufferBuilder._aligned_size[Self.T.native](capacity)
+            )
 
     def __len__(self) -> Int:
         return self._length
@@ -371,9 +370,10 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             self._buffer.resize[Self.T.native](new_cap)
             self._capacity = new_cap
 
-    def finish(mut self) raises -> PrimitiveArray[Self.T]:
-        # trim over-allocated buffer capacity down to actual length
-        self._buffer.resize[Self.T.native](self._length)
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> PrimitiveArray[Self.T]:
+        """Finish the builder, optionally skipping the shrink-to-fit realloc."""
+        if shrink_to_fit:
+            self._buffer.resize[Self.T.native](self._length)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
@@ -421,14 +421,14 @@ struct StringBuilder(Builder, Sized):
     var _values: BufferBuilder
 
     def __init__(out self, capacity: Int = 0, bytes_capacity: Int = 0):
-        var offsets = BufferBuilder.alloc[DType.uint32](capacity + 1)
+        var offsets = BufferBuilder.alloc_zeroed[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
         self._offsets = offsets^
-        self._values = BufferBuilder.alloc[DType.uint8](bytes_capacity)
+        self._values = BufferBuilder.alloc_zeroed[DType.uint8](bytes_capacity)
 
     def __len__(self) -> Int:
         return self._length
@@ -548,12 +548,11 @@ struct StringBuilder(Builder, Sized):
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
         self._length += 1
 
-    def finish(mut self) raises -> StringArray:
-        # trim offsets buffer to length+1 entries (one past the last string)
-        self._offsets.resize[DType.uint32](self._length + 1)
-        # trim byte data buffer to the actual number of bytes written
-        var used = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
-        self._values.resize[DType.uint8](used)
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> StringArray:
+        if shrink_to_fit:
+            self._offsets.resize[DType.uint32](self._length + 1)
+            var used = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
+            self._values.resize[DType.uint8](used)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
@@ -604,7 +603,7 @@ struct ListBuilder(Builder, Sized):
     var _child: AnyBuilder
 
     def __init__(out self, var child: AnyBuilder, capacity: Int = 0):
-        var offsets = BufferBuilder.alloc[DType.uint32](capacity + 1)
+        var offsets = BufferBuilder.alloc_zeroed[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
         var child_dtype = child.dtype().copy()
         self._dtype = list_(child_dtype^)
@@ -704,9 +703,9 @@ struct ListBuilder(Builder, Sized):
             self._offsets.resize[DType.uint32](new_cap + 1)
             self._capacity = new_cap
 
-    def finish(mut self) raises -> ListArray:
-        # trim offsets buffer to length+1 entries (one past the last list)
-        self._offsets.resize[DType.uint32](self._length + 1)
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> ListArray:
+        if shrink_to_fit:
+            self._offsets.resize[DType.uint32](self._length + 1)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap] = None
@@ -836,7 +835,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             self._bitmap.resize(new_cap)
             self._capacity = new_cap
 
-    def finish(mut self) raises -> FixedSizeListArray:
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> FixedSizeListArray:
         # no offset buffer to trim — child length is implicit (length * list_size)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
@@ -966,7 +965,7 @@ struct StructBuilder(Builder, Sized):
         for ref child in self._children:
             child.reserve(additional)
 
-    def finish(mut self) raises -> StructArray:
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> StructArray:
         # no data buffers to trim — struct layout is encoded in child arrays
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count

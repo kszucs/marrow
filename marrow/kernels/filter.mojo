@@ -314,7 +314,7 @@ def filter_[
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
-        var empty_buf = BufferBuilder.alloc[T.native](0)
+        var empty_buf = BufferBuilder.alloc_zeroed[T.native](0)
         return PrimitiveArray[T](
             length=0,
             nulls=0,
@@ -396,8 +396,8 @@ def filter_(
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
-        var empty_offsets = BufferBuilder.alloc[DType.uint32](1)
-        var empty_values = BufferBuilder.alloc[DType.uint8](0)
+        var empty_offsets = BufferBuilder.alloc_zeroed[DType.uint32](1)
+        var empty_values = BufferBuilder.alloc_zeroed[DType.uint8](0)
         return StringArray(
             length=0,
             nulls=0,
@@ -421,8 +421,8 @@ def filter_(
 
     # Allocate output buffers.
     # TODO: use alloc_uninit to spare zeroing the output buffers
-    var out_offsets = BufferBuilder.alloc[DType.uint32](out_len + 1)
-    var out_values = BufferBuilder.alloc[DType.uint8](total_bytes)
+    var out_offsets = BufferBuilder.alloc_zeroed[DType.uint32](out_len + 1)
+    var out_values = BufferBuilder.alloc_zeroed[DType.uint8](total_bytes)
     var out_off_ptr = out_offsets.unsafe_ptr[DType.uint32]()
     var out_val_ptr = out_values.unsafe_ptr[DType.uint8]()
     var bm: Optional[Bitmap] = None

@@ -188,6 +188,6 @@ def main() raises:
     print("Marrow hash join profiling")
     print("==========================")
 
-    run_size(10_000, warmup=5, iters=20)
-    run_size(100_000, warmup=3, iters=10)
-    run_size(1_000_000, warmup=1, iters=5)
+    run_size(10_000, warmup=10, iters=100)
+    run_size(100_000, warmup=5, iters=50)
+    run_size(1_000_000, warmup=3, iters=20)
