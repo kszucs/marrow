@@ -237,7 +237,7 @@ struct HashGrouper(Movable):
     Supports incremental consumption: ``consume()`` can be called
     multiple times with successive batches. State accumulates.
 
-    Uses ``DictHashTable`` — the same hash table struct used by ``HashJoin``.
+    Uses ``SwissHashTable`` — the same hash table struct used by ``HashJoin``.
     NULL keys are treated as equal (same group), consistent with SQL
     GROUP BY semantics (unlike join where NULL != NULL).
     """
@@ -333,7 +333,7 @@ struct HashGrouper(Movable):
     ) raises -> Int:
         """Find existing group or insert new one.
 
-        Uses DictHashTable.find_or_insert() — bucket_id IS the group_id.
+        Uses SwissHashTable.find_or_insert() — bucket_id IS the group_id.
         """
         var prev = self._table.num_buckets()
         var gid = self._table.find_or_insert(h)

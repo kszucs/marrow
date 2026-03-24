@@ -3,7 +3,7 @@
 Public API
 ----------
 ``hash_join``   — equijoin two StructArrays on positional key columns.
-``HashJoin``    — hash join using DictHashTable; reusable across morsels.
+``HashJoin``    — hash join using SwissHashTable; reusable across morsels.
 
 Traits
 ------
@@ -26,7 +26,7 @@ Supported strictness:
   JOIN_ANY    — return at most one matching right row per left row
 
 Future join algorithms (implement the Join trait):
-  RadixHashJoin   — partitioned hash join (DictHashTable + RadixPartitioner)
+  RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 """
 
@@ -118,7 +118,7 @@ trait Join(Movable):
 
 
 # ---------------------------------------------------------------------------
-# HashJoin — hash join using DictHashTable
+# HashJoin — hash join using SwissHashTable
 # ---------------------------------------------------------------------------
 
 
@@ -352,34 +352,20 @@ struct HashJoin[
         probe_hashes: PrimitiveArray[uint64],
         n: Int,
     ) raises -> IndexPairs:
-        """Phase 1: collect ALL candidate (build_row, probe_row) pairs from
-        hash matches. No equality check, no match tracking — just pair
-        collection. Equality filtering and unmatched-row emission happen
-        in probe() after this returns."""
+        """Phase 1: collect ALL candidate (build_row, probe_row) pairs.
+        Delegates to hash table's probe_pairs for pipelined lookups."""
         var est = n if n < self._num_rows else self._num_rows
         var left_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
         var right_indices = PrimitiveBuilder[int32](capacity=est, zeroed=False)
 
-        for probe_row in range(n):
-            var h = UInt64(probe_hashes.unsafe_get(probe_row))
-            var bid = self._table.find(h)
-            if bid == -1:
-                continue
-
-            var entry = Int(self._table.bucket_head(bid))
-            while entry != -1:
-                var build_row = self._table.entry_row(entry)
-                var next_entry = Int(self._table.entry_next(entry))
-
-                comptime if strictness == JOIN_ANY:
-                    # For JOIN_ANY, emit only the first candidate per probe row.
-                    left_indices.unsafe_append(Scalar[int32.native](build_row))
-                    right_indices.unsafe_append(Scalar[int32.native](probe_row))
-                    break
-
-                left_indices.unsafe_append(Scalar[int32.native](build_row))
-                right_indices.unsafe_append(Scalar[int32.native](probe_row))
-                entry = next_entry
+        comptime if strictness == JOIN_ANY:
+            self._table.probe_pairs(
+                probe_hashes, left_indices, right_indices, single_match=True
+            )
+        else:
+            self._table.probe_pairs(
+                probe_hashes, left_indices, right_indices
+            )
 
         return IndexPairs(
             left_indices.finish(shrink_to_fit=False),
@@ -425,13 +411,13 @@ struct HashJoin[
 #     """Radix-partitioned hash join.
 #
 #     Partitions both sides by hash prefix bits using RadixPartitioner,
-#     then runs a standard hash join (DictHashTable) per partition.
+#     then runs a standard hash join (SwissHashTable) per partition.
 #     Enables partition-parallel execution and better cache locality.
 #
-#     Uses the SAME DictHashTable as HashJoin — only the Partitioner differs.
+#     Uses the SAME SwissHashTable as HashJoin — only the Partitioner differs.
 #     """
 #     var _partitioner: RadixPartitioner    # from hash_table.mojo
-#     var _tables: List[DictHashTable]      # one per partition
+#     var _tables: List[SwissHashTable]      # one per partition
 #     var _build_dtype: DataType
 #     var _left_data: Optional[StructArray]
 #     var _num_rows: Int
