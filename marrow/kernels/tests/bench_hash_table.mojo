@@ -6,18 +6,29 @@ Run with: pixi run bench_mojo -k bench_hash_table
 from std.benchmark import keep
 from std.time import perf_counter_ns
 
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import PrimitiveArray, AnyArray, StructArray
+from marrow.bitmap import Bitmap
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import uint64
-from marrow.kernels.hash_table import SwissHashTable
+from marrow.dtypes import uint64, struct_, Field
+from marrow.kernels.hashtable import SwissHashTable
+from marrow.kernels.hashing import rapidhash
 
 
-def _make_hashes(n: Int) raises -> PrimitiveArray[uint64]:
-    """Generate n distinct uint64 hashes (sequential values through rapidhash)."""
+def _make_keys(n: Int) raises -> StructArray:
+    """Generate a single-column StructArray with n distinct uint64 keys."""
     var b = PrimitiveBuilder[uint64](capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i * 0x9E3779B97F4A7C15 + 1))
-    return b.finish()
+    var children = List[AnyArray]()
+    children.append(b.finish().to_any())
+    return StructArray(
+        dtype=struct_(Field("k", uint64)),
+        length=n,
+        nulls=0,
+        offset=0,
+        bitmap=Optional[Bitmap](None),
+        children=children^,
+    )
 
 
 def _fmt(ns: UInt) -> String:
@@ -25,18 +36,18 @@ def _fmt(ns: UInt) -> String:
 
 
 def bench_build(n: Int, warmup: Int, iters: Int) raises:
-    var hashes = _make_hashes(n)
+    var keys = _make_keys(n)
 
     for _ in range(warmup):
-        var t = SwissHashTable[uint64]()
-        t.build(hashes)
+        var t = SwissHashTable[rapidhash]()
+        t.build(keys)
         keep(t.num_keys())
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var t = SwissHashTable[uint64]()
-        t.build(hashes)
+        var t = SwissHashTable[rapidhash]()
+        t.build(keys)
         total += perf_counter_ns() - t0
         keep(t.num_keys())
 
@@ -44,18 +55,18 @@ def bench_build(n: Int, warmup: Int, iters: Int) raises:
 
 
 def bench_insert(n: Int, warmup: Int, iters: Int) raises:
-    var hashes = _make_hashes(n)
+    var keys = _make_keys(n)
 
     for _ in range(warmup):
-        var t = SwissHashTable[uint64]()
-        var bids = t.insert(hashes)
+        var t = SwissHashTable[rapidhash]()
+        var bids = t.insert(keys)
         keep(t.num_keys())
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var t = SwissHashTable[uint64]()
-        var bids = t.insert(hashes)
+        var t = SwissHashTable[rapidhash]()
+        var bids = t.insert(keys)
         total += perf_counter_ns() - t0
         keep(t.num_keys())
 
@@ -63,18 +74,18 @@ def bench_insert(n: Int, warmup: Int, iters: Int) raises:
 
 
 def bench_probe(n: Int, warmup: Int, iters: Int) raises:
-    var hashes = _make_hashes(n)
-    var table = SwissHashTable[uint64]()
-    table.build(hashes)
+    var keys = _make_keys(n)
+    var table = SwissHashTable[rapidhash]()
+    table.build(keys)
 
     for _ in range(warmup):
-        var pairs = table.probe(hashes, n)
+        var pairs = table.probe(keys, keys, n)
         keep(len(pairs[0]))
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var pairs = table.probe(hashes, n)
+        var pairs = table.probe(keys, keys, n)
         total += perf_counter_ns() - t0
         keep(len(pairs[0]))
 
@@ -88,13 +99,13 @@ def run_size(n: Int, warmup: Int, iters: Int) raises:
     bench_probe(n, warmup, iters)
 
     # Throughput summary.
-    var hashes = _make_hashes(n)
+    var keys = _make_keys(n)
     var t0 = perf_counter_ns()
-    var t = SwissHashTable[uint64]()
-    t.build(hashes)
+    var t = SwissHashTable[rapidhash]()
+    t.build(keys)
     var build_ns = perf_counter_ns() - t0
     t0 = perf_counter_ns()
-    var pairs = t.probe(hashes, n)
+    var pairs = t.probe(keys, keys, n)
     var probe_ns = perf_counter_ns() - t0
     print(
         "  throughput:           build",
