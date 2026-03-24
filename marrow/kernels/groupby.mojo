@@ -242,12 +242,12 @@ struct HashGrouper(Movable):
     GROUP BY semantics (unlike join where NULL != NULL).
     """
 
-    var _table: SwissHashTable
+    var _table: SwissHashTable[uint64]
     var _group_keys: List[AnyArray]
     var _functions: List[AggregateFunction]
 
     def __init__(out self, agg_names: List[String]):
-        self._table = SwissHashTable()
+        self._table = SwissHashTable[uint64]()
         self._group_keys = List[AnyArray]()
         self._functions = List[AggregateFunction]()
         for i in range(len(agg_names)):

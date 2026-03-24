@@ -344,6 +344,30 @@ struct BufferBuilder(Movable):
         return result^
 
     @staticmethod
+    def alloc_filled[
+        I: Intable, //, T: DType = DType.uint8
+    ](length: I, fill: Scalar[T]) -> BufferBuilder:
+        """Allocate a 64-byte-aligned buffer filled with ``fill``."""
+        var byte_size = Self._aligned_size[T](Int(length))
+        var result = Self.alloc_uninit(byte_size)
+        memset(result.ptr, UInt8(fill), result.size)
+        return result^
+
+    @staticmethod
+    def alloc_uninit[
+        I: Intable, //, T: DType = DType.uint8
+    ](length: I) -> BufferBuilder:
+        """Allocate a 64-byte-aligned buffer for ``length`` elements of type T
+        without zero-filling.
+
+        Use only when the caller guarantees every element will be written
+        before the buffer is read.
+        """
+        var size = math.align_up(Self._aligned_size[T](Int(length)), 64)
+        var ptr = alloc[UInt8](size, alignment=64)
+        return BufferBuilder(ptr, size)
+
+    @staticmethod
     def alloc_uninit(byte_size: Int) -> BufferBuilder:
         """Allocate a 64-byte-aligned buffer without zero-filling.
 

@@ -28,14 +28,14 @@ def bench_build(n: Int, warmup: Int, iters: Int) raises:
     var hashes = _make_hashes(n)
 
     for _ in range(warmup):
-        var t = SwissHashTable()
+        var t = SwissHashTable[uint64]()
         t.build(hashes)
         keep(t.num_keys())
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var t = SwissHashTable()
+        var t = SwissHashTable[uint64]()
         t.build(hashes)
         total += perf_counter_ns() - t0
         keep(t.num_keys())
@@ -47,14 +47,14 @@ def bench_insert(n: Int, warmup: Int, iters: Int) raises:
     var hashes = _make_hashes(n)
 
     for _ in range(warmup):
-        var t = SwissHashTable()
+        var t = SwissHashTable[uint64]()
         var bids = t.insert(hashes)
         keep(t.num_keys())
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var t = SwissHashTable()
+        var t = SwissHashTable[uint64]()
         var bids = t.insert(hashes)
         total += perf_counter_ns() - t0
         keep(t.num_keys())
@@ -64,7 +64,7 @@ def bench_insert(n: Int, warmup: Int, iters: Int) raises:
 
 def bench_probe(n: Int, warmup: Int, iters: Int) raises:
     var hashes = _make_hashes(n)
-    var table = SwissHashTable()
+    var table = SwissHashTable[uint64]()
     table.build(hashes)
 
     for _ in range(warmup):
@@ -90,7 +90,7 @@ def run_size(n: Int, warmup: Int, iters: Int) raises:
     # Throughput summary.
     var hashes = _make_hashes(n)
     var t0 = perf_counter_ns()
-    var t = SwissHashTable()
+    var t = SwissHashTable[uint64]()
     t.build(hashes)
     var build_ns = perf_counter_ns() - t0
     t0 = perf_counter_ns()
