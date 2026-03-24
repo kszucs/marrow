@@ -135,14 +135,14 @@ struct HashJoin[
     Stores the full build-side StructArray for output assembly via take().
     """
 
-    var _table: SwissHashTable
+    var _table: SwissHashTable[uint64]
     var _build_keys: Optional[StructArray]  # key columns for equality checks
     var _build_dtype: DataType
     var _left_data: Optional[StructArray]
     var _num_rows: Int
 
     def __init__(out self):
-        self._table = SwissHashTable()
+        self._table = SwissHashTable[uint64]()
         self._build_keys = None
         self._build_dtype = DataType(code=0)
         self._left_data = None
