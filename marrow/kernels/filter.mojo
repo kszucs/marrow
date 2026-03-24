@@ -11,6 +11,7 @@ import std.math as math
 from std.bit import count_trailing_zeros, pop_count
 from std.memory import memcpy
 from std.sys import size_of
+from std.sys.info import simd_byte_width
 
 from ..arrays import PrimitiveArray, StringArray, AnyArray
 from ..buffers import Buffer, BufferBuilder
@@ -607,43 +608,94 @@ def take[T: DataType](
 ) raises -> PrimitiveArray[T]:
     """Gather elements from a primitive array at the given indices.
 
+    Uses SIMD gather for vectorized collection. Null indices produce
+    null output elements (used by outer joins for unmatched rows).
+    Source nulls are also propagated.
+
     Args:
         array: Source array.
-        indices: Row indices to gather. -1 produces a null output element.
+        indices: Row indices to gather. Null index → null output.
 
     Returns:
         A new PrimitiveArray with one element per index.
     """
+    comptime native = T.native
     var n = len(indices)
-    var builder = PrimitiveBuilder[T](capacity=n)
-    var has_nulls = array.null_count() > 0
-    for i in range(n):
-        var idx = Int(indices.unsafe_get(i))
-        if idx == -1 or (has_nulls and not array.is_valid(idx)):
-            builder.unsafe_append_null()
-        else:
-            builder.unsafe_append(array.unsafe_get(idx))
-    return builder.finish()
+    var src = array.buffer.unsafe_ptr[native](array.offset)
+    var idx_ptr = indices.buffer.unsafe_ptr[int32.native](indices.offset)
+    var buf = BufferBuilder.alloc_uninit(
+        BufferBuilder._aligned_size[native](n)
+    )
+    var out: UnsafePointer[Scalar[native], MutAnyOrigin]
+    out = buf.ptr.bitcast[Scalar[native]]()
+
+    var has_null_indices = indices.null_count() > 0
+    var has_src_nulls = array.null_count() > 0
+
+    # SIMD gather loop: load W indices, gather W values in parallel.
+    # Null indices are masked out (get default value 0).
+    alias W = simd_byte_width() // size_of[Scalar[native]]()
+    var i = 0
+    var bitmap = Optional[Bitmap](None)
+    var null_count = 0
+
+    if not has_null_indices and not has_src_nulls:
+        # Fast path: no nulls — pure SIMD gather, no bitmap.
+        while i + W <= n:
+            var offsets = idx_ptr.load[width=W](i).cast[DType.int64]()
+            var vals = src.gather[width=W, alignment=1](offsets)
+            (out + i).store(vals)
+            i += W
+        while i < n:
+            out[i] = src[Int(idx_ptr.load(i))]
+            i += 1
+    else:
+        # TODO: optimize this, the implementation below could be vectorized
+        # Slow path: null indices or source nulls — scalar + bitmap.
+        var bm_builder = BitmapBuilder.alloc(n)
+        while i < n:
+            if (has_null_indices and not indices.is_valid(i)) or (
+                has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))
+            ):
+                out[i] = Scalar[native](0)
+                bm_builder.set_bit(i, False)
+                null_count += 1
+            else:
+                out[i] = src[Int(idx_ptr.load(i))]
+                bm_builder.set_bit(i, True)
+            i += 1
+        if null_count > 0:
+            bitmap = bm_builder.finish(n)
+
+    return PrimitiveArray[T](
+        length=n,
+        nulls=null_count,
+        offset=0,
+        bitmap=bitmap^,
+        buffer=buf.finish(),
+    )
 
 
 def take(array: StringArray, indices: PrimitiveArray[int32]) raises -> StringArray:
     """Gather elements from a string array at the given indices.
 
+    Null indices produce null output elements.
+
     Args:
         array: Source string array.
-        indices: Row indices to gather. -1 produces a null output element.
+        indices: Row indices to gather. Null index → null output.
 
     Returns:
         A new StringArray with one element per index.
     """
     var n = len(indices)
+    var has_null_indices = indices.null_count() > 0
     var builder = StringBuilder(capacity=n)
     for i in range(n):
-        var idx = Int(indices.unsafe_get(i))
-        if idx == -1:
+        if has_null_indices and not indices.is_valid(i):
             builder.append_null()
-        elif array.is_valid(idx):
-            builder.append(array.unsafe_get(UInt(idx)))
+        elif array.is_valid(Int(indices.unsafe_get(i))):
+            builder.append(array.unsafe_get(UInt(indices.unsafe_get(i))))
         else:
             builder.append_null()
     return builder.finish()

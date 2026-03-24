@@ -19,6 +19,9 @@ from helpers import pyfunction
 def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     return _filter_overloaded(array, selection)
 
+def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
+    return equal(left, right)
+
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pyfunction[add]()](
@@ -57,7 +60,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pyfunction[drop_nulls]()](
         "drop_nulls", docstring="drop_nulls(array: Array, /) -> Array\n--\n\nDrop null values from an array."
     )
-    mb.def_function[pyfunction[equal]()](
+    mb.def_function[pyfunction[equal_]()](
         "equal", docstring="equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise equality, propagating nulls."
     )
     mb.def_function[pyfunction[not_equal]()](

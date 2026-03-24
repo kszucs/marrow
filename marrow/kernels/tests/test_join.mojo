@@ -65,10 +65,13 @@ def test_take_primitive_basic() raises:
     assert_equal(r[2], Scalar[int32.native](40))
 
 
-def test_take_minus_one_produces_null() raises:
-    """Index -1 in take produces a null output element."""
+def test_take_null_index_produces_null() raises:
+    """Null index in take produces a null output element."""
     var a: AnyArray = array[int32]([10, 20, 30])
-    var result = take(a.copy(), array[int32]([-1, 1]))
+    var idx = PrimitiveBuilder[int32](capacity=2)
+    idx.append_null()
+    idx.append(Scalar[int32.native](1))
+    var result = take(a.copy(), idx.finish())
     assert_equal(result.null_count(), 1)
     assert_false(result.is_valid(0))
     assert_true(result.is_valid(1))

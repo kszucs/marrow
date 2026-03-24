@@ -55,6 +55,7 @@ from ..expr.relations import (
 
 
 
+
 # ---------------------------------------------------------------------------
 # IndexPairs — parallel index arrays produced by the probe phase
 # ---------------------------------------------------------------------------
@@ -255,7 +256,7 @@ struct HashJoin[
             for i in range(self._num_rows):
                 if matched_build[i]:
                     lb.append(Scalar[int32.native](i))
-                    rb.append(Scalar[int32.native](-1))
+                    rb.append_null()
             return IndexPairs(lb.finish(), rb.finish())
 
         if kind == JOIN_ANTI:
@@ -264,7 +265,7 @@ struct HashJoin[
             for i in range(self._num_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
-                    rb.append(Scalar[int32.native](-1))
+                    rb.append_null()
             return IndexPairs(lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
@@ -277,11 +278,11 @@ struct HashJoin[
             for i in range(self._num_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
-                    rb.append(Scalar[int32.native](-1))
+                    rb.append_null()
         if kind == JOIN_RIGHT or kind == JOIN_FULL:
             for i in range(n_probe):
                 if not matched_probe[i]:
-                    lb.append(Scalar[int32.native](-1))
+                    lb.append_null()
                     rb.append(Scalar[int32.native](i))
         return IndexPairs(lb.finish(), rb.finish())
 
@@ -390,12 +391,16 @@ struct HashJoin[
         var out_cols = List[AnyArray]()
 
         for c in range(len(left.children)):
-            out_cols.append(take(left.children[c].copy(), pairs.left_indices))
+            out_cols.append(
+                take(left.children[c].copy(), pairs.left_indices)
+            )
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI and kind != JOIN_MARK:
             for c in range(len(right.children)):
                 out_cols.append(
-                    take(right.children[c].copy(), pairs.right_indices)
+                    take(
+                        right.children[c].copy(), pairs.right_indices
+                    )
                 )
 
         var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
