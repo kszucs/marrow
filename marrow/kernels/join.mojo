@@ -151,12 +151,10 @@ struct HashJoin[
         self._build_dtype = data.dtype
         self._num_rows = data.length
         self._left_data = data.copy()
-        self._table.reserve(self._num_rows)
         var keys = data.select(key_indices)
         self._build_keys = keys.copy()
         var hashes = self._table.hash_keys(keys)
-        for i in range(self._num_rows):
-            _ = self._table.insert(UInt64(hashes.unsafe_get(i)), Int32(i))
+        self._table.build(hashes)
 
     def probe(
         self,
@@ -165,10 +163,11 @@ struct HashJoin[
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
-        # Phase 1: collect candidate pairs from hash matches (branchless).
-        var pairs = self._dispatch_probe(data, key_indices, kind, strictness)
-        # Phase 2: vectorized equality filter — removes hash collisions.
         var probe_keys = data.select(key_indices)
+        var probe_hashes = self._table.hash_keys(probe_keys)
+        # Phase 1: collect candidate pairs from hash matches (branchless).
+        var pairs = self._dispatch_probe(probe_hashes, len(data), kind, strictness)
+        # Phase 2: vectorized equality filter — removes hash collisions.
         var verified = self._verify_keys(probe_keys, pairs)
         # Phase 3: emit unmatched rows for outer/semi/anti joins.
         var final = self._emit_unmatched(
@@ -319,50 +318,46 @@ struct HashJoin[
 
     def _dispatch_probe(
         self,
-        data: StructArray,
-        key_indices: List[Int],
+        probe_hashes: PrimitiveArray[uint64],
+        n: Int,
         kind: UInt8,
         strictness: UInt8,
     ) raises -> IndexPairs:
         """One-time runtime dispatch → comptime-specialised inner loop."""
         if kind == JOIN_INNER and strictness == JOIN_ALL:
-            return self._probe[JOIN_INNER, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_INNER, JOIN_ALL](probe_hashes, n)
         if kind == JOIN_INNER and strictness == JOIN_ANY:
-            return self._probe[JOIN_INNER, JOIN_ANY](data, key_indices)
+            return self._probe[JOIN_INNER, JOIN_ANY](probe_hashes, n)
         if kind == JOIN_LEFT and strictness == JOIN_ALL:
-            return self._probe[JOIN_LEFT, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_LEFT, JOIN_ALL](probe_hashes, n)
         if kind == JOIN_LEFT and strictness == JOIN_ANY:
-            return self._probe[JOIN_LEFT, JOIN_ANY](data, key_indices)
+            return self._probe[JOIN_LEFT, JOIN_ANY](probe_hashes, n)
         if kind == JOIN_RIGHT and strictness == JOIN_ALL:
-            return self._probe[JOIN_RIGHT, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_RIGHT, JOIN_ALL](probe_hashes, n)
         if kind == JOIN_RIGHT and strictness == JOIN_ANY:
-            return self._probe[JOIN_RIGHT, JOIN_ANY](data, key_indices)
+            return self._probe[JOIN_RIGHT, JOIN_ANY](probe_hashes, n)
         if kind == JOIN_FULL and strictness == JOIN_ALL:
-            return self._probe[JOIN_FULL, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_FULL, JOIN_ALL](probe_hashes, n)
         if kind == JOIN_FULL and strictness == JOIN_ANY:
-            return self._probe[JOIN_FULL, JOIN_ANY](data, key_indices)
+            return self._probe[JOIN_FULL, JOIN_ANY](probe_hashes, n)
         if kind == JOIN_SEMI:
-            return self._probe[JOIN_SEMI, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_SEMI, JOIN_ALL](probe_hashes, n)
         if kind == JOIN_ANTI:
-            return self._probe[JOIN_ANTI, JOIN_ALL](data, key_indices)
+            return self._probe[JOIN_ANTI, JOIN_ALL](probe_hashes, n)
         raise Error("hash_join: unsupported kind/strictness combination")
 
     def _probe[kind: UInt8, strictness: UInt8](
         self,
-        data: StructArray,
-        key_indices: List[Int],
+        probe_hashes: PrimitiveArray[uint64],
+        n: Int,
     ) raises -> IndexPairs:
         """Phase 1: collect ALL candidate (build_row, probe_row) pairs from
         hash matches. No equality check, no match tracking — just pair
         collection. Equality filtering and unmatched-row emission happen
         in probe() after this returns."""
-        var probe_keys = data.select(key_indices)
-        var n = len(probe_keys)
-        var probe_hashes = self._table.hash_keys(probe_keys)
-
         var est = n if n < self._num_rows else self._num_rows
-        var left_indices = PrimitiveBuilder[int32](capacity=est)
-        var right_indices = PrimitiveBuilder[int32](capacity=est)
+        var left_indices = PrimitiveBuilder[int32](uninit_capacity=est)
+        var right_indices = PrimitiveBuilder[int32](uninit_capacity=est)
 
         for probe_row in range(n):
             var h = UInt64(probe_hashes.unsafe_get(probe_row))

@@ -128,15 +128,21 @@ def bench_probe(
     var t_find = perf_counter_ns() - t0
     print("    find:     ", _fmt_us(t_find))
 
-    # Phase C: collect pairs (probe loop without assemble)
+    # Phase C: collect pairs (dispatch_probe with pre-computed hashes)
     t0 = perf_counter_ns()
-    var pairs = j._dispatch_probe(right, right_keys, JOIN_INNER, JOIN_ALL)
+    var pairs = j._dispatch_probe(probe_hashes, n, JOIN_INNER, JOIN_ALL)
     var t_pairs = perf_counter_ns() - t0
     print("    pairs:    ", _fmt_us(t_pairs))
 
-    # Phase D: assemble (take)
+    # Phase D: verify keys (vectorized equality)
     t0 = perf_counter_ns()
-    var result = j._assemble(right, pairs, JOIN_INNER)
+    var verified = j._verify_keys(probe_keys, pairs)
+    var t_verify = perf_counter_ns() - t0
+    print("    verify:   ", _fmt_us(t_verify))
+
+    # Phase E: assemble (take)
+    t0 = perf_counter_ns()
+    var result = j._assemble(right, verified, JOIN_INNER)
     var t_asm = perf_counter_ns() - t0
     print("    assemble: ", _fmt_us(t_asm))
 

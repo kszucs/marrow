@@ -259,6 +259,20 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._bitmap = BitmapBuilder.alloc(capacity)
         self._buffer = BufferBuilder.alloc[Self.T.native](capacity)
 
+    def __init__(out self, *, uninit_capacity: Int):
+        """Create a builder with uninitialized data buffer.
+
+        The bitmap is still zeroed (all-null). Use only when every
+        position will be written via ``unsafe_append`` before reading.
+        """
+        self._length = 0
+        self._capacity = uninit_capacity
+        self._null_count = 0
+        self._bitmap = BitmapBuilder.alloc(uninit_capacity)
+        self._buffer = BufferBuilder.alloc_uninit(
+            BufferBuilder._aligned_size[Self.T.native](uninit_capacity)
+        )
+
     def __len__(self) -> Int:
         return self._length
 
