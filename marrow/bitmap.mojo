@@ -528,7 +528,7 @@ struct BitmapBuilder(Movable):
     @staticmethod
     def alloc(length: Int) -> BitmapBuilder:
         """Allocate a zero-filled builder for `length` bits."""
-        return BitmapBuilder(BufferBuilder.alloc[DType.bool](length))
+        return BitmapBuilder(BufferBuilder.alloc_zeroed[DType.bool](length))
 
     @always_inline
     def unsafe_ptr(self) -> UnsafePointer[UInt8, MutExternalOrigin]:

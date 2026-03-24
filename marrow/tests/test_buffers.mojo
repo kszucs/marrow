@@ -40,23 +40,23 @@ def is_aligned[
 
 
 def test_buffer_init() raises:
-    var b = BufferBuilder.alloc(10)
+    var b = BufferBuilder.alloc_zeroed(10)
     assert_equal(b.size, 64)
     assert_true(is_aligned(b.ptr, 64))
 
 
 def test_alloc_bits() raises:
     # 10 bits → ceildiv(10,8)=2 bytes → aligned to 64
-    var b1 = BufferBuilder.alloc[DType.bool](10)
+    var b1 = BufferBuilder.alloc_zeroed[DType.bool](10)
     assert_equal(b1.size, 64)
 
     # 64*8+1 bits → ceildiv(513,8)=65 bytes → aligned to 128
-    var b2 = BufferBuilder.alloc[DType.bool](64 * 8 + 1)
+    var b2 = BufferBuilder.alloc_zeroed[DType.bool](64 * 8 + 1)
     assert_equal(b2.size, 128)
 
 
 def test_buffer_grow() raises:
-    var b = BufferBuilder.alloc(10)
+    var b = BufferBuilder.alloc_zeroed(10)
     b.unsafe_set(0, 111)
     assert_equal(b.size, 64)
     b.resize(20)
@@ -68,7 +68,7 @@ def test_buffer_grow() raises:
 
 
 def test_buffer_set_get() raises:
-    var buf = BufferBuilder.alloc(10)
+    var buf = BufferBuilder.alloc_zeroed(10)
     assert_equal(buf.size, 64)
 
     buf.unsafe_set(0, 42)
@@ -88,9 +88,9 @@ def test_buffer_set_get() raises:
 
 
 def test_buffer_swap() raises:
-    var one = BufferBuilder.alloc(10)
+    var one = BufferBuilder.alloc_zeroed(10)
     one.unsafe_set(0, 111)
-    var two = BufferBuilder.alloc(10)
+    var two = BufferBuilder.alloc_zeroed(10)
     two.unsafe_set(0, 222)
 
     swap(one, two)
@@ -100,7 +100,7 @@ def test_buffer_swap() raises:
 
 
 def test_bitmap_get_set() raises:
-    var b = BufferBuilder.alloc[DType.bool](10)
+    var b = BufferBuilder.alloc_zeroed[DType.bool](10)
     assert_equal(b.size, 64)
 
     assert_false(Bool((b.ptr[0] >> UInt8(0)) & 1))
@@ -176,7 +176,7 @@ def test_bitmap_extend() raises:
 
 
 def test_buffer_finish() raises:
-    var buf = BufferBuilder.alloc(10)
+    var buf = BufferBuilder.alloc_zeroed(10)
     buf.unsafe_set(0, 42)
     buf.unsafe_set(1, 99)
 
@@ -191,7 +191,7 @@ def test_buffer_finish() raises:
 def test_buffer_cpu_kind() raises:
     """CPU buffers from BufferBuilder.finish() have kind=CPU and are CPU-accessible.
     """
-    var b = BufferBuilder.alloc(64)
+    var b = BufferBuilder.alloc_zeroed(64)
     var frozen = b.finish()
     assert_true(frozen.is_cpu())
     assert_false(frozen.is_device())
@@ -236,7 +236,7 @@ def test_buffer_foreign_kind() raises:
 
 def test_buffer_no_device() raises:
     # CPU-allocated buffers have no device buffer
-    var buf = BufferBuilder.alloc(10)
+    var buf = BufferBuilder.alloc_zeroed(10)
     var frozen = buf.finish()
     assert_false(frozen.is_device())
 
@@ -244,7 +244,7 @@ def test_buffer_no_device() raises:
 def test_buffer_builder_resize_noop_same_size() raises:
     # Resize to a length that maps to the same byte allocation is a no-op:
     # the pointer must not change.
-    var buf = BufferBuilder.alloc[DType.int64](10)
+    var buf = BufferBuilder.alloc_zeroed[DType.int64](10)
     var ptr_before = buf.ptr
     buf.resize[DType.int64](10)
     assert_equal(buf.ptr, ptr_before)
@@ -253,7 +253,7 @@ def test_buffer_builder_resize_noop_same_size() raises:
 def test_buffer_builder_resize_noop_same_aligned_size() raises:
     # Different element counts that map to the same aligned byte size are also
     # no-ops (alignment is 64 bytes, so 1..8 int64 elements all fit in 64 bytes).
-    var buf = BufferBuilder.alloc[DType.int64](1)
+    var buf = BufferBuilder.alloc_zeroed[DType.int64](1)
     var ptr_before = buf.ptr
     buf.resize[DType.int64](8)  # still 64 bytes after alignment
     assert_equal(buf.ptr, ptr_before)
@@ -261,7 +261,7 @@ def test_buffer_builder_resize_noop_same_aligned_size() raises:
 
 def test_buffer_builder_resize_reallocates_when_larger() raises:
     # A resize that requires more bytes must produce a new allocation.
-    var buf = BufferBuilder.alloc[DType.int64](1)
+    var buf = BufferBuilder.alloc_zeroed[DType.int64](1)
     var ptr_before = buf.ptr
     buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → 128-byte aligned block
     assert_true(buf.ptr != ptr_before)
@@ -292,8 +292,8 @@ def test_bitmap_builder_resize_reallocates_when_larger() raises:
 
 
 def test_buffer_eq_equal() raises:
-    var b1 = BufferBuilder.alloc(10)
-    var b2 = BufferBuilder.alloc(10)
+    var b1 = BufferBuilder.alloc_zeroed(10)
+    var b2 = BufferBuilder.alloc_zeroed(10)
     b1.unsafe_set(0, 42)
     b1.unsafe_set(1, 99)
     b2.unsafe_set(0, 42)
@@ -302,22 +302,22 @@ def test_buffer_eq_equal() raises:
 
 
 def test_buffer_eq_unequal() raises:
-    var b1 = BufferBuilder.alloc(10)
-    var b2 = BufferBuilder.alloc(10)
+    var b1 = BufferBuilder.alloc_zeroed(10)
+    var b2 = BufferBuilder.alloc_zeroed(10)
     b1.unsafe_set(0, 42)
     b2.unsafe_set(0, 43)
     assert_false(b1.finish() == b2.finish())
 
 
 def test_buffer_eq_different_size() raises:
-    var b1 = BufferBuilder.alloc[DType.int32](10)  # 64 bytes
-    var b2 = BufferBuilder.alloc[DType.int32](20)  # 128 bytes
+    var b1 = BufferBuilder.alloc_zeroed[DType.int32](10)  # 64 bytes
+    var b2 = BufferBuilder.alloc_zeroed[DType.int32](20)  # 128 bytes
     assert_false(b1.finish() == b2.finish())
 
 
 def test_aligned_unsafe_ptr_zero_offset() raises:
     """With offset=0, aligned_unsafe_ptr equals unsafe_ptr."""
-    var bb = BufferBuilder.alloc[DType.int64](16)
+    var bb = BufferBuilder.alloc_zeroed[DType.int64](16)
     var buf = bb.finish()
     var ptr = buf.unsafe_ptr[DType.int64](0)
     var aligned = buf.aligned_unsafe_ptr[DType.int64](0)
@@ -327,7 +327,7 @@ def test_aligned_unsafe_ptr_zero_offset() raises:
 def test_aligned_unsafe_ptr_aligned_offset() raises:
     """Offset already on a 64-byte boundary stays unchanged."""
     # 64 bytes / 8 bytes per int64 = 8 elements per 64-byte block
-    var bb = BufferBuilder.alloc[DType.int64](32)
+    var bb = BufferBuilder.alloc_zeroed[DType.int64](32)
     var buf = bb.finish()
     var aligned = buf.aligned_unsafe_ptr[DType.int64](8)
     var expected = buf.unsafe_ptr[DType.int64](8)
@@ -338,7 +338,7 @@ def test_aligned_unsafe_ptr_unaligned_offset() raises:
     """Offset in the middle of a 64-byte block rounds down."""
     # int64: 8 bytes each, 64/8 = 8 elements per block
     # offset=5 → byte offset=40, align_down(40,64)=0 → element 0
-    var bb = BufferBuilder.alloc[DType.int64](32)
+    var bb = BufferBuilder.alloc_zeroed[DType.int64](32)
     var buf = bb.finish()
     var aligned = buf.aligned_unsafe_ptr[DType.int64](5)
     var expected = buf.unsafe_ptr[DType.int64](0)
@@ -349,7 +349,7 @@ def test_aligned_unsafe_ptr_second_block() raises:
     """Offset in the second 64-byte block rounds to start of that block."""
     # int32: 4 bytes each, 64/4 = 16 elements per block
     # offset=20 → byte offset=80, align_down(80,64)=64 → element 16
-    var bb = BufferBuilder.alloc[DType.int32](64)
+    var bb = BufferBuilder.alloc_zeroed[DType.int32](64)
     var buf = bb.finish()
     var aligned = buf.aligned_unsafe_ptr[DType.int32](20)
     var expected = buf.unsafe_ptr[DType.int32](16)

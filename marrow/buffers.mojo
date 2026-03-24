@@ -69,7 +69,7 @@ Transfer methods
 BufferBuilder lifecycle
 ------------------------
 CPU heap allocation (kind=CPU):
-  1. `var b = BufferBuilder.alloc[T](n)` — 64-byte-aligned heap allocation.
+  1. `var b = BufferBuilder.alloc_zeroed[T](n)` — 64-byte-aligned heap allocation.
   2. `b.unsafe_set(i, v)` / `b.simd_store(...)` — write through the mutable pointer.
   3. `var buf = b.finish()` — zero-cost transfer into an immutable CPU Buffer.
 
@@ -291,7 +291,7 @@ struct BufferBuilder(Movable):
     """Mutable contiguous memory region with 64-byte alignment.
 
     Two allocation modes:
-      - `BufferBuilder.alloc[T](n)` — Mojo heap (CPU); freeze with `finish()`.
+      - `BufferBuilder.alloc_zeroed[T](n)` — Mojo heap (CPU); freeze with `finish()`.
       - `BufferBuilder.alloc_host[T](ctx, n)` — pinned host memory; freeze with
         `finish(device_type)`.
 
@@ -329,20 +329,19 @@ struct BufferBuilder(Movable):
         else:
             return math.align_up(length * size_of[T](), 64)
 
-    # TODO: rename to alloc_zeroed
     @staticmethod
-    def alloc[
+    def alloc_zeroed[
         I: Intable, //, T: DType = DType.uint8
     ](length: I) -> BufferBuilder:
-        """Allocate a 64-byte-aligned buffer for `length` elements of type T.
+        """Allocate a 64-byte-aligned, zero-filled buffer for `length` elements of type T.
 
         For DType.bool, `length` is the number of bits; the buffer will hold
         ceildiv(length, 8) bytes, zero-padded to a 64-byte boundary.
         """
         var byte_size = Self._aligned_size[T](Int(length))
-        var ptr = alloc[UInt8](byte_size, alignment=64)
-        memset_zero(ptr, byte_size)
-        return BufferBuilder(ptr, byte_size)
+        var result = Self.alloc_uninit(byte_size)
+        memset_zero(result.ptr, result.size)
+        return result^
 
     @staticmethod
     def alloc_uninit(byte_size: Int) -> BufferBuilder:
@@ -410,7 +409,7 @@ struct BufferBuilder(Movable):
         A fresh zero-capacity CPU allocation is installed on this builder so
         it can continue to be used after the call.
         """
-        var new = Self.alloc(0)
+        var new = Self.alloc_zeroed(0)
         swap(self, new)
         # After swap: self has the fresh empty allocation; new has the old state.
         # We null new.ptr before returning so new.__del__ skips ptr.free() —
@@ -454,7 +453,7 @@ struct BufferBuilder(Movable):
                 self._host.value().context(), length
             )
         else:
-            new = BufferBuilder.alloc[T](length)
+            new = BufferBuilder.alloc_zeroed[T](length)
         memcpy(dest=new.ptr, src=self.ptr, count=min(new.size, self.size))
         swap(self, new)
 
@@ -756,7 +755,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
         """
         if not self.is_device():
             raise Error("to_cpu: buffer is not on device")
-        var builder = BufferBuilder.alloc(self.size)
+        var builder = BufferBuilder.alloc_zeroed(self.size)
         ctx.enqueue_copy(builder.ptr, self._owner[]._device.value())
         ctx.synchronize()
         return builder.finish()

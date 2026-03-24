@@ -132,7 +132,7 @@ def _binary_cmp[
         lhs_ptr = left.buffer.device_ptr[native](left.offset)
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
-        out_buf = BufferBuilder.alloc[DType.bool](length)
+        out_buf = BufferBuilder.alloc_zeroed[DType.bool](length)
         lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
         rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
 

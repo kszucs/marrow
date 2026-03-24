@@ -23,7 +23,7 @@ def test_array_data_with_offset() raises:
     """Test ArrayData with offset functionality."""
     # Create ArrayData with offset
     var bitmap = BitmapBuilder.alloc(10)
-    var buffer = BufferBuilder.alloc[int8.native](10)
+    var buffer = BufferBuilder.alloc_zeroed[int8.native](10)
 
     # Set some data in the buffer
     buffer.unsafe_set[int8.native](2, 100)
@@ -58,7 +58,7 @@ def test_array_data_with_offset() raises:
 
 def test_array_data_fieldwise_init() raises:
     """Test that @fieldwise_init decorator works with offset field."""
-    var buffer_b = BufferBuilder.alloc[int8.native](5)
+    var buffer_b = BufferBuilder.alloc_zeroed[int8.native](5)
     var buffer = buffer_b.finish()
 
     # Test creating ArrayData with all fields specified including offset
@@ -106,7 +106,7 @@ def test_array_from_struct() raises:
 
 
 def test_array_copy() raises:
-    var _sb = BufferBuilder.alloc[int8.native](3)
+    var _sb = BufferBuilder.alloc_zeroed[int8.native](3)
     var src = AnyArray.from_data(
         ArrayData(
             dtype=int8,
@@ -125,7 +125,7 @@ def test_array_copy() raises:
 
 
 def test_array_move() raises:
-    var _ab = BufferBuilder.alloc[int8.native](5)
+    var _ab = BufferBuilder.alloc_zeroed[int8.native](5)
     var a = AnyArray.from_data(
         ArrayData(
             dtype=int8,

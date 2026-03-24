@@ -19,7 +19,7 @@ def string_lengths(array: StringArray) -> PrimitiveArray[uint32]:
     """
     var n = len(array)
     var off = array.offset
-    var buf = BufferBuilder.alloc[DType.uint32](n)
+    var buf = BufferBuilder.alloc_zeroed[DType.uint32](n)
     for i in range(n):
         var start = array.offsets.unsafe_get[DType.uint32](off + i)
         var end = array.offsets.unsafe_get[DType.uint32](off + i + 1)

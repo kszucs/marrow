@@ -136,7 +136,9 @@ def rapidhash[
                 )
         return builder.finish()
 
-    var buf = BufferBuilder.alloc[uint64.native](n)
+    var buf = BufferBuilder.alloc_uninit(
+        BufferBuilder._aligned_size[uint64.native](n)
+    )
     var out_ptr: UnsafePointer[Scalar[uint64.native], MutAnyOrigin]
     out_ptr = buf.ptr.bitcast[Scalar[uint64.native]]()
     var in_ptr = keys.buffer.aligned_unsafe_ptr[native](keys.offset)

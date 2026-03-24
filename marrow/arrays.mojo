@@ -915,7 +915,7 @@ struct ListArray(
 
     def value_lengths(self) -> PrimitiveArray[int32]:
         """Return an array of list lengths for each element."""
-        var buf = BufferBuilder.alloc[DType.int32](self.length)
+        var buf = BufferBuilder.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
             var start = self.offsets.unsafe_get[DType.int32](self.offset + i)
             var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
