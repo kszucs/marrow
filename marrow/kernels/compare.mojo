@@ -28,7 +28,7 @@ from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
-from ..arrays import PrimitiveArray, StringArray, AnyArray
+from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..buffers import BufferBuilder
 from ..dtypes import DataType, bool_ as bool_dt
@@ -297,6 +297,27 @@ def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     if left.dtype().is_string():
         return equal(left.as_string(), right.as_string()).to_any()
     return binary_array_dispatch["equal", bool_dt, equal[_]](left, right)
+
+
+def equal(
+    left: StructArray, right: StructArray
+) raises -> PrimitiveArray[bool_dt]:
+    """Element-wise struct equality: all corresponding columns must match.
+
+    Returns a boolean array where element ``i`` is True iff
+    ``left[i] == right[i]`` across every child column.
+    """
+    from .boolean import and_
+
+    var n_keys = len(left.children)
+    var mask = equal(left.children[0].copy(), right.children[0].copy())
+    for k in range(1, n_keys):
+        mask = and_(
+            mask.as_primitive[bool_dt]().copy(),
+            equal(left.children[k].copy(), right.children[k].copy())
+                .as_primitive[bool_dt]().copy(),
+        )
+    return mask.as_primitive[bool_dt]().copy()
 
 
 def not_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:

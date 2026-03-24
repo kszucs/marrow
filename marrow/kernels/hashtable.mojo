@@ -14,10 +14,13 @@ from std.memory import pack_bits
 from std.sys import size_of
 from std.sys.intrinsics import prefetch
 
-from ..arrays import PrimitiveArray
+from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..buffers import BufferBuilder
 from ..dtypes import int32, uint64
+from .compare import equal
+from .filter import take, filter_
+from .hashing import rapidhash
 
 
 
@@ -106,17 +109,24 @@ comptime _PIPE_DEPTH: Int = 16
 """Number of probes pipelined in a single batch (prefetch window)."""
 
 
-struct SwissHashTable[T: DataType = uint64](Movable):
+struct SwissHashTable[
+    hasher: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
+](Movable):
     """Swiss Table hash table with SIMD group matching.
 
     Open-addressing hash table using the Swiss Table design (abseil /
-    Mojo Dict / hashbrown). Provides two main operations:
+    Mojo Dict / hashbrown). Accepts ``StructArray`` key columns and
+    handles hashing internally via the ``hash_fn`` parameter.
 
-    - **insert** — batch find-or-insert that returns a bucket ID per hash.
-      Used by groupby to assign group IDs.
-    - **build + probe** — two-phase hash join. ``build`` creates a row
-      index (CSR) from build-side hashes; ``probe`` looks up probe-side
-      hashes and returns matching ``(build_row, probe_row)`` index pairs.
+    Provides two main operations:
+
+    - **insert** — hash keys and batch find-or-insert, returning a bucket
+      ID per row.  Used by groupby to assign group IDs.
+    - **build + probe** — two-phase hash join.  ``build`` hashes build-side
+      keys, inserts them, and creates a CSR row index.  ``probe`` hashes
+      probe-side keys, looks them up, verifies key equality (filtering
+      hash collisions), and returns matching ``(build_row, probe_row)``
+      index pairs.
 
     Terminology
     -----------
@@ -163,13 +173,13 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
     Parameters
     ----------
-    ``T`` : DataType
-        Hash element type (default ``uint64``). Determines the scalar
-        type ``H`` and the H2 fingerprint shift width.
+    ``hash_fn``
+        Hash function mapping ``StructArray`` → ``PrimitiveArray[uint64]``.
+        Defaults to ``rapidhash``.
     """
 
-    comptime H = Scalar[Self.T.native]
-    """Hash scalar type — derived from ``T``."""
+    comptime H = UInt64
+    """Hash scalar type."""
 
     var _ctrl: BufferBuilder
     """Control bytes: 1 byte per slot + ``_GROUP_WIDTH`` padding for
@@ -220,7 +230,7 @@ struct SwissHashTable[T: DataType = uint64](Movable):
         self._max_count = cap * 7 // 8
         self._ctrl = BufferBuilder.alloc_filled(cap + _GROUP_WIDTH, fill=_CTRL_EMPTY)
         self._slots = BufferBuilder.alloc_uninit[DType.int32](cap)
-        self._bucket_hashes = BufferBuilder.alloc_uninit[Self.T.native](
+        self._bucket_hashes = BufferBuilder.alloc_uninit[DType.uint64](
             max(capacity, 16)
         )
         self._num_buckets = 0
@@ -271,12 +281,12 @@ struct SwissHashTable[T: DataType = uint64](Movable):
     @always_inline
     def _get_hash(self, index: Int) -> Self.H:
         """Read the full hash stored for bucket ``index``."""
-        return self._bucket_hashes.unsafe_get[Self.T.native](index)
+        return self._bucket_hashes.unsafe_get[DType.uint64](index)
 
     @always_inline
     def _set_hash(mut self, index: Int, h: Self.H):
         """Write the full hash for bucket ``index``."""
-        self._bucket_hashes.unsafe_set[Self.T.native](index, h)
+        self._bucket_hashes.unsafe_set[DType.uint64](index, h)
 
     @always_inline
     def _get_slot(self, index: Int) -> Int:
@@ -402,14 +412,14 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
         # Grow _bucket_hashes if needed.
         if n * size_of[Self.H]() > self._bucket_hashes.size:
-            self._bucket_hashes.resize[Self.T.native](n)
+            self._bucket_hashes.resize[DType.uint64](n)
 
     # ------------------------------------------------------------------
-    # Public API
+    # Hash-level operations (private)
     # ------------------------------------------------------------------
 
-    def insert(
-        mut self, hashes: PrimitiveArray[Self.T]
+    def _insert_hashes(
+        mut self, hashes: PrimitiveArray[uint64]
     ) raises -> PrimitiveArray[int32]:
         """Batch insert hashes, returning a bucket ID per input hash.
 
@@ -434,15 +444,15 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
         # Warm up the prefetch pipeline.
         for i in range(min(_PIPE_DEPTH, n)):
-            self._prefetch_ctrl(hashes.unsafe_get(i))
+            self._prefetch_ctrl(UInt64(hashes.unsafe_get(i)))
 
         for i in range(n):
-            var h = hashes.unsafe_get(i)
+            var h = UInt64(hashes.unsafe_get(i))
 
             # Prefetch ctrl bytes _PIPE_DEPTH iterations ahead.
             var ahead = i + _PIPE_DEPTH
             if ahead < n:
-                self._prefetch_ctrl(hashes.unsafe_get(ahead))
+                self._prefetch_ctrl(UInt64(hashes.unsafe_get(ahead)))
 
             # Find existing bucket.
             var bid = self._find_slot(h)
@@ -464,8 +474,8 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
         return bid_builder.finish()
 
-    def build(mut self, hashes: PrimitiveArray[Self.T]) raises:
-        """Insert hashes and build a CSR row index for ``probe()``.
+    def _build_hashes(mut self, hashes: PrimitiveArray[uint64]) raises:
+        """Insert hashes and build a CSR row index.
 
         Calls ``insert()`` to populate the hash table, then constructs
         Compressed Sparse Row (CSR) storage so that ``probe()`` can
@@ -477,7 +487,7 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
         Must be called before ``probe()``.
         """
-        var bids = self.insert(hashes)
+        var bids = self._insert_hashes(hashes)
         var n = len(bids)
         var nb = self._num_buckets
 
@@ -502,9 +512,9 @@ struct SwissHashTable[T: DataType = uint64](Movable):
             self._set_row(counts[bid], Int32(i))
             counts[bid] += 1
 
-    def probe(
+    def _probe_hashes(
         self,
-        hashes: PrimitiveArray[Self.T],
+        hashes: PrimitiveArray[uint64],
         num_build_rows: Int,
         single_match: Bool = False,
     ) raises -> Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]:
@@ -547,15 +557,15 @@ struct SwissHashTable[T: DataType = uint64](Movable):
 
         # Warm up the prefetch pipeline.
         for i in range(min(_PIPE_DEPTH, n)):
-            self._prefetch_ctrl(hashes.unsafe_get(i))
+            self._prefetch_ctrl(UInt64(hashes.unsafe_get(i)))
 
         for probe_row in range(n):
-            var h = hashes.unsafe_get(probe_row)
+            var h = UInt64(hashes.unsafe_get(probe_row))
 
             # Prefetch ctrl bytes _PIPE_DEPTH iterations ahead.
             var ahead = probe_row + _PIPE_DEPTH
             if ahead < n:
-                self._prefetch_ctrl(hashes.unsafe_get(ahead))
+                self._prefetch_ctrl(UInt64(hashes.unsafe_get(ahead)))
 
             var bid = self._find_slot(h)
             if bid == -1:
@@ -572,6 +582,68 @@ struct SwissHashTable[T: DataType = uint64](Movable):
         return (
             left_out.finish(shrink_to_fit=False),
             right_out.finish(shrink_to_fit=False),
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def insert(
+        mut self, keys: StructArray
+    ) raises -> PrimitiveArray[int32]:
+        """Hash keys and insert, returning a bucket ID per row.
+
+        Used by groupby to assign group IDs.  Does not store keys or
+        build a CSR index.
+        """
+        return self._insert_hashes(Self.hasher(keys))
+
+    def build(mut self, keys: StructArray) raises:
+        """Hash keys, insert, and build a CSR row index for ``probe()``.
+
+        Must be called before ``probe()``.
+        """
+        self._build_hashes(Self.hasher(keys))
+
+    def probe(
+        self,
+        build_keys: StructArray,
+        probe_keys: StructArray,
+        num_build_rows: Int,
+        single_match: Bool = False,
+    ) raises -> Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]:
+        """Hash probe keys, look up matches, verify key equality.
+
+        1. Hash ``probe_keys`` via ``hash_fn``.
+        2. Probe the hash table for candidate ``(build_row, probe_row)``
+           pairs.
+        3. Gather build/probe key values at matched indices and compare
+           with vectorized equality. Filter out hash-collision false
+           positives.
+
+        Args:
+            build_keys: Left (build) side key columns for equality verification.
+            probe_keys: Right (probe) side key columns to look up.
+            num_build_rows: Number of build-side rows (for capacity estimation).
+            single_match: If True, emit at most one match per probe row.
+
+        Returns:
+            ``(left_indices, right_indices)`` — verified matching row pairs.
+        """
+        var probe_hashes = Self.hasher(probe_keys)
+        var indices = self._probe_hashes(
+            probe_hashes, num_build_rows, single_match
+        )
+        ref build_indices = indices[0]
+        ref probe_indices = indices[1]
+
+        # Filter hash-collision false positives by key equality.
+        var mask = equal(
+            take(build_keys, build_indices), take(probe_keys, probe_indices)
+        )
+        return (
+            filter_[int32](build_indices, mask),
+            filter_[int32](probe_indices, mask),
         )
 
     def num_keys(self) -> Int:

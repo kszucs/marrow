@@ -38,7 +38,7 @@ from ..dtypes import DataType, Field, int32, uint64, bool_ as bool_dt, struct_
 from .boolean import and_
 from .compare import equal
 from .filter import take, filter_
-from .hash_table import SwissHashTable
+from .hashtable import SwissHashTable
 from .hashing import rapidhash
 from ..expr.relations import (
     JOIN_INNER,
@@ -56,29 +56,8 @@ from ..expr.relations import (
 
 
 
-# ---------------------------------------------------------------------------
-# IndexPairs — parallel index arrays produced by the probe phase
-# ---------------------------------------------------------------------------
-
-
-struct IndexPairs(Movable):
-    """Parallel (left_idx, right_idx) arrays produced by the probe phase.
-
-    For LEFT/FULL joins: right_idx = -1 for unmatched left (build) rows.
-    For RIGHT/FULL joins: left_idx = -1 for unmatched right (probe) rows.
-    For SEMI/ANTI: right_idx is always -1 (only left columns in output).
-    """
-
-    var left_indices: PrimitiveArray[int32]
-    var right_indices: PrimitiveArray[int32]
-
-    def __init__(
-        out self,
-        var left_indices: PrimitiveArray[int32],
-        var right_indices: PrimitiveArray[int32],
-    ):
-        self.left_indices = left_indices^
-        self.right_indices = right_indices^
+comptime IndexPairs = Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]
+"""Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +91,7 @@ trait Join(Movable):
         """DataType of the build side (for output schema construction)."""
         ...
 
-    def num_build_rows(self) -> Int:
+    def num_left_rows(self) -> Int:
         """Number of build-side rows."""
         ...
 
@@ -123,7 +102,7 @@ trait Join(Movable):
 
 
 struct HashJoin[
-    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
+    hasher: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 
@@ -135,94 +114,52 @@ struct HashJoin[
     Stores the full build-side StructArray for output assembly via take().
     """
 
-    var _table: SwissHashTable[uint64]
-    var _build_keys: Optional[StructArray]  # key columns for equality checks
-    var _build_dtype: DataType
+    var _table: SwissHashTable[Self.hasher]
+    var _left_key_indices: List[Int]
+    var _left_dtype: DataType
     var _left_data: Optional[StructArray]
-    var _num_rows: Int
+    var _left_rows: Int
 
     def __init__(out self):
-        self._table = SwissHashTable[uint64]()
-        self._build_keys = None
-        self._build_dtype = DataType(code=0)
+        self._table = SwissHashTable[Self.hasher]()
+        self._left_key_indices = List[Int]()
+        self._left_dtype = DataType(code=0)
         self._left_data = None
-        self._num_rows = 0
+        self._left_rows = 0
 
-    def build(mut self, data: StructArray, key_indices: List[Int]) raises:
-        self._build_dtype = data.dtype
-        self._num_rows = data.length
-        self._left_data = data.copy()
-        var keys = data.select(key_indices)
-        self._build_keys = keys.copy()
-        var hashes = Self.hash_fn(keys)
-        self._table.build(hashes)
+    def build(
+        mut self, left: StructArray, left_key_indices: List[Int]
+    ) raises:
+        self._left_dtype = left.dtype
+        self._left_rows = left.length
+        self._left_data = left.copy()
+        self._left_key_indices = left_key_indices.copy()
+        self._table.build(left.select(left_key_indices))
 
     def probe(
         self,
-        data: StructArray,
-        key_indices: List[Int],
+        right: StructArray,
+        right_key_indices: List[Int],
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
-        var probe_keys = data.select(key_indices)
-        var probe_hashes = Self.hash_fn(probe_keys)
-        # Phase 1: collect candidate pairs from hash matches (branchless).
-        var pairs = self._dispatch_probe(probe_hashes, len(data), kind, strictness)
-        # Phase 2: vectorized equality filter — removes hash collisions.
-        var verified = self._verify_keys(probe_keys, pairs)
-        # Phase 3: emit unmatched rows for outer/semi/anti joins.
+        var left_keys = self._left_data.value().select(self._left_key_indices)
+        var right_keys = right.select(right_key_indices)
+        var pairs = self._table.probe(
+            left_keys, right_keys, self._left_rows,
+            single_match=strictness == JOIN_ANY,
+        )
+        var verified = (pairs[0].copy(), pairs[1].copy())
+        # Emit unmatched rows for outer/semi/anti joins.
         var final = self._emit_unmatched(
-            verified^, len(data), kind, strictness
+            verified^, len(right), kind, strictness
         )
-        return self._assemble(data, final, kind)
-
-    def _equal_column(
-        self,
-        build_col: AnyArray,
-        probe_col: AnyArray,
-        pairs: IndexPairs,
-    ) raises -> PrimitiveArray[bool_dt]:
-        """Compare one key column at matched indices."""
-        var lk = take(build_col.copy(), pairs.left_indices)
-        var rk = take(probe_col.copy(), pairs.right_indices)
-        return equal(lk, rk).as_primitive[bool_dt]().copy()
-
-    def _verify_keys(
-        self, probe_keys: StructArray, pairs: IndexPairs
-    ) raises -> IndexPairs:
-        """Vectorized equality check on candidate index pairs.
-
-        For each key column: gather build-side and probe-side values at
-        the matched indices, run vectorized equal(), AND into a combined
-        mask, then filter the pairs. This handles hash collisions correctly
-        while keeping the probe loop branchless.
-
-        For the common case (no collisions), all comparisons return True
-        and filter is a no-op.
-        """
-        ref build_keys = self._build_keys.value()
-        var n_keys = len(build_keys.children)
-
-        var mask = self._equal_column(
-            build_keys.children[0], probe_keys.children[0], pairs
-        )
-
-        for k in range(1, n_keys):
-            var col_eq = self._equal_column(
-                build_keys.children[k], probe_keys.children[k], pairs
-            )
-            mask = and_(mask.copy(), col_eq).copy()
-
-        ref bool_mask = mask
-        return IndexPairs(
-            filter_[int32](pairs.left_indices, bool_mask),
-            filter_[int32](pairs.right_indices, bool_mask),
-        )
+        return self._assemble(right, final, kind)
 
     def _emit_unmatched(
         self,
         var pairs: IndexPairs,
-        n_probe: Int,
+        right_rows: Int,
         kind: UInt8,
         strictness: UInt8,
     ) raises -> IndexPairs:
@@ -239,68 +176,68 @@ struct HashJoin[
             return pairs^
 
         # Compute which build/probe rows appear in the verified pairs.
-        var matched_build = List[Bool](length=self._num_rows, fill=False)
-        var matched_probe = List[Bool](length=n_probe, fill=False)
-        var n_pairs = len(pairs.left_indices)
+        var matched_build = List[Bool](length=self._left_rows, fill=False)
+        var matched_probe = List[Bool](length=right_rows, fill=False)
+        var n_pairs = len(pairs[0])
         for i in range(n_pairs):
-            var lid = Int(pairs.left_indices.unsafe_get(i))
-            var rid = Int(pairs.right_indices.unsafe_get(i))
+            var lid = Int(pairs[0].unsafe_get(i))
+            var rid = Int(pairs[1].unsafe_get(i))
             if lid >= 0:
                 matched_build[lid] = True
             if rid >= 0:
                 matched_probe[rid] = True
 
         if kind == JOIN_SEMI:
-            var lb = PrimitiveBuilder[int32](capacity=self._num_rows)
-            var rb = PrimitiveBuilder[int32](capacity=self._num_rows)
-            for i in range(self._num_rows):
+            var lb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            var rb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            for i in range(self._left_rows):
                 if matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
-            return IndexPairs(lb.finish(), rb.finish())
+            return (lb.finish(), rb.finish())
 
         if kind == JOIN_ANTI:
-            var lb = PrimitiveBuilder[int32](capacity=self._num_rows)
-            var rb = PrimitiveBuilder[int32](capacity=self._num_rows)
-            for i in range(self._num_rows):
+            var lb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            var rb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            for i in range(self._left_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
-            return IndexPairs(lb.finish(), rb.finish())
+            return (lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
-        var lb = PrimitiveBuilder[int32](capacity=n_pairs + self._num_rows)
-        var rb = PrimitiveBuilder[int32](capacity=n_pairs + n_probe)
+        var lb = PrimitiveBuilder[int32](capacity=n_pairs + self._left_rows)
+        var rb = PrimitiveBuilder[int32](capacity=n_pairs + right_rows)
         for i in range(n_pairs):
-            lb.append(pairs.left_indices.unsafe_get(i))
-            rb.append(pairs.right_indices.unsafe_get(i))
+            lb.append(pairs[0].unsafe_get(i))
+            rb.append(pairs[1].unsafe_get(i))
         if kind == JOIN_LEFT or kind == JOIN_FULL:
-            for i in range(self._num_rows):
+            for i in range(self._left_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
                     rb.append_null()
         if kind == JOIN_RIGHT or kind == JOIN_FULL:
-            for i in range(n_probe):
+            for i in range(right_rows):
                 if not matched_probe[i]:
                     lb.append_null()
                     rb.append(Scalar[int32.native](i))
-        return IndexPairs(lb.finish(), rb.finish())
+        return (lb.finish(), rb.finish())
 
     def build_dtype(self) -> DataType:
-        return self._build_dtype
+        return self._left_dtype
 
-    def num_build_rows(self) -> Int:
-        return self._num_rows
+    def num_left_rows(self) -> Int:
+        return self._left_rows
 
     def output_dtype(self, probe: StructArray, kind: UInt8) -> DataType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
-        for ref f in self._build_dtype.fields:
+        for ref f in self._left_dtype.fields:
             fields.append(f.copy())
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI:
             var left_names = List[String]()
-            for ref f in self._build_dtype.fields:
+            for ref f in self._left_dtype.fields:
                 left_names.append(f.name)
             for ref f in probe.dtype.fields:
                 var name = f.name
@@ -315,51 +252,6 @@ struct HashJoin[
 
         return struct_(fields^)
 
-    # --- internal probe dispatch ---
-
-    def _dispatch_probe(
-        self,
-        probe_hashes: PrimitiveArray[uint64],
-        n: Int,
-        kind: UInt8,
-        strictness: UInt8,
-    ) raises -> IndexPairs:
-        """One-time runtime dispatch → comptime-specialised inner loop."""
-        if kind == JOIN_INNER and strictness == JOIN_ALL:
-            return self._probe[JOIN_INNER, JOIN_ALL](probe_hashes, n)
-        if kind == JOIN_INNER and strictness == JOIN_ANY:
-            return self._probe[JOIN_INNER, JOIN_ANY](probe_hashes, n)
-        if kind == JOIN_LEFT and strictness == JOIN_ALL:
-            return self._probe[JOIN_LEFT, JOIN_ALL](probe_hashes, n)
-        if kind == JOIN_LEFT and strictness == JOIN_ANY:
-            return self._probe[JOIN_LEFT, JOIN_ANY](probe_hashes, n)
-        if kind == JOIN_RIGHT and strictness == JOIN_ALL:
-            return self._probe[JOIN_RIGHT, JOIN_ALL](probe_hashes, n)
-        if kind == JOIN_RIGHT and strictness == JOIN_ANY:
-            return self._probe[JOIN_RIGHT, JOIN_ANY](probe_hashes, n)
-        if kind == JOIN_FULL and strictness == JOIN_ALL:
-            return self._probe[JOIN_FULL, JOIN_ALL](probe_hashes, n)
-        if kind == JOIN_FULL and strictness == JOIN_ANY:
-            return self._probe[JOIN_FULL, JOIN_ANY](probe_hashes, n)
-        if kind == JOIN_SEMI:
-            return self._probe[JOIN_SEMI, JOIN_ALL](probe_hashes, n)
-        if kind == JOIN_ANTI:
-            return self._probe[JOIN_ANTI, JOIN_ALL](probe_hashes, n)
-        raise Error("hash_join: unsupported kind/strictness combination")
-
-    def _probe[kind: UInt8, strictness: UInt8](
-        self,
-        probe_hashes: PrimitiveArray[uint64],
-        n: Int,
-    ) raises -> IndexPairs:
-        """Phase 1: collect ALL candidate (build_row, probe_row) pairs.
-        Delegates to hash table's probe for pipelined lookups."""
-        var single = strictness == JOIN_ANY
-        var pairs = self._table.probe(
-            probe_hashes, self._num_rows, single_match=single
-        )
-        return IndexPairs(pairs[0].copy(), pairs[1].copy())
-
     def _assemble(
         self, right: StructArray, pairs: IndexPairs, kind: UInt8
     ) raises -> StructArray:
@@ -369,14 +261,14 @@ struct HashJoin[
 
         for c in range(len(left.children)):
             out_cols.append(
-                take(left.children[c].copy(), pairs.left_indices)
+                take(left.children[c].copy(), pairs[0])
             )
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI and kind != JOIN_MARK:
             for c in range(len(right.children)):
                 out_cols.append(
                     take(
-                        right.children[c].copy(), pairs.right_indices
+                        right.children[c].copy(), pairs[1]
                     )
                 )
 

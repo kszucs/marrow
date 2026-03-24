@@ -66,7 +66,7 @@ def bench_build(left: StructArray, key_indices: List[Int], warmup: Int, iters: I
     for _ in range(warmup):
         var j = HashJoin()
         j.build(left, key_indices)
-        keep(j.num_build_rows())
+        keep(j.num_left_rows())
 
     var total_ns = UInt(0)
     for _ in range(iters):
@@ -74,7 +74,7 @@ def bench_build(left: StructArray, key_indices: List[Int], warmup: Int, iters: I
         var j = HashJoin()
         j.build(left, key_indices)
         total_ns += perf_counter_ns() - t0
-        keep(j.num_build_rows())
+        keep(j.num_left_rows())
 
     var avg = total_ns // UInt(iters)
     print("  build:  ", _fmt_us(avg), " avg over", iters, "iters")
@@ -89,7 +89,7 @@ def bench_probe(
     iters: Int,
 ) raises:
     """Time build + probe separately, with phase breakdown."""
-    from marrow.kernels.join import IndexPairs
+    from marrow.kernels.join import IndexPairs  # type alias
     from marrow.kernels.filter import take
 
     var j = HashJoin()
@@ -112,29 +112,18 @@ def bench_probe(
 
     # --- Phase breakdown (single run) ---
 
-    # Phase A: hash probe keys
-    var probe_keys = right.select(right_keys)
+    # Phase A+B: probe (hash + lookup + equality verify)
+    var lk = left.select(left_keys)
+    var rk = right.select(right_keys)
+    var n = len(rk)
     var t0 = perf_counter_ns()
-    var probe_hashes = rapidhash(probe_keys)
-    var t_hash = perf_counter_ns() - t0
-    print("    hash:     ", _fmt_us(t_hash))
-
-    # Phase B+C: collect pairs (probe_pairs with pre-computed hashes)
-    var n = len(probe_keys)
-    t0 = perf_counter_ns()
-    var pairs = j._dispatch_probe(probe_hashes, n, JOIN_INNER, JOIN_ALL)
+    var pairs = j._table.probe(lk, rk, len(left))
     var t_pairs = perf_counter_ns() - t0
-    print("    pairs:    ", _fmt_us(t_pairs))
+    print("    probe:    ", _fmt_us(t_pairs))
 
-    # Phase D: verify keys (vectorized equality)
+    # Phase C: assemble (take)
     t0 = perf_counter_ns()
-    var verified = j._verify_keys(probe_keys, pairs)
-    var t_verify = perf_counter_ns() - t0
-    print("    verify:   ", _fmt_us(t_verify))
-
-    # Phase E: assemble (take)
-    t0 = perf_counter_ns()
-    var result = j._assemble(right, verified, JOIN_INNER)
+    var result = j._assemble(right, pairs, JOIN_INNER)
     var t_asm = perf_counter_ns() - t0
     print("    assemble: ", _fmt_us(t_asm))
 

@@ -13,7 +13,7 @@ from std.memory import memcpy
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
-from ..arrays import PrimitiveArray, StringArray, AnyArray
+from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer, BufferBuilder
 from ..bitmap import Bitmap, BitmapBuilder
 from ..builders import PrimitiveBuilder, StringBuilder
@@ -724,3 +724,24 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
         return take(array.as_string(), indices).to_any()
 
     raise Error("take: unsupported dtype ", array.dtype())
+
+
+def take(
+    array: StructArray, indices: PrimitiveArray[int32]
+) raises -> StructArray:
+    """Gather rows from a StructArray at the given indices.
+
+    Applies ``take`` to each child column independently.
+    """
+    var children = List[AnyArray]()
+    for c in range(len(array.children)):
+        children.append(take(array.children[c].copy(), indices))
+    var out_length = len(indices)
+    return StructArray(
+        dtype=array.dtype.copy(),
+        length=out_length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=children^,
+    )

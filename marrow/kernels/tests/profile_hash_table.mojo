@@ -19,10 +19,12 @@ Run without profiler (prints timings only)::
 from std.benchmark import keep
 from std.time import perf_counter_ns
 
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import PrimitiveArray, AnyArray, StructArray
+from marrow.bitmap import Bitmap
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import uint64
-from marrow.kernels.hash_table import SwissHashTable
+from marrow.dtypes import uint64, struct_, Field
+from marrow.kernels.hashtable import SwissHashTable
+from marrow.kernels.hashing import rapidhash
 from std.sys import argv
 
 
@@ -31,12 +33,19 @@ from std.sys import argv
 # ---------------------------------------------------------------------------
 
 
-def _make_hashes(n: Int) raises -> PrimitiveArray[uint64]:
-    """Generate n distinct uint64 hashes (golden-ratio scatter)."""
+def _make_keys(n: Int) raises -> StructArray:
+    """Generate a single-column StructArray with n distinct uint64 keys."""
     var b = PrimitiveBuilder[uint64](capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i * 0x9E3779B97F4A7C15 + 1))
-    return b.finish()
+    var children = List[AnyArray]()
+    children.append(b.finish().to_any())
+    return StructArray(
+        dtype=struct_(Field("k", uint64)),
+        length=n, nulls=0, offset=0,
+        bitmap=Optional[Bitmap](None),
+        children=children^,
+    )
 
 
 def _fmt_us(ns: UInt) -> String:
@@ -68,14 +77,14 @@ def profile(n: Int) raises:
 
     # --- Data generation ---
     var t0 = perf_counter_ns()
-    var hashes = _make_hashes(n)
+    var keys = _make_keys(n)
     var t_gen = perf_counter_ns() - t0
     print("  data gen:   ", _fmt(t_gen))
 
     # --- Phase 1: insert only (no CSR) ---
     t0 = perf_counter_ns()
-    var table_insert = SwissHashTable[uint64]()
-    var bids = table_insert.insert(hashes)
+    var table_insert = SwissHashTable[rapidhash]()
+    var bids = table_insert.insert(keys)
     var t_insert = perf_counter_ns() - t0
     keep(table_insert.num_keys())
     print(
@@ -88,8 +97,8 @@ def profile(n: Int) raises:
 
     # --- Phase 2: build (insert + CSR construction) ---
     t0 = perf_counter_ns()
-    var table = SwissHashTable[uint64]()
-    table.build(hashes)
+    var table = SwissHashTable[rapidhash]()
+    table.build(keys)
     var t_build = perf_counter_ns() - t0
     keep(table.num_keys())
     print(
@@ -100,9 +109,9 @@ def profile(n: Int) raises:
         ")",
     )
 
-    # --- Phase 3: probe (all hashes match, 1:1) ---
+    # --- Phase 3: probe (all keys match, 1:1) ---
     t0 = perf_counter_ns()
-    var pairs = table.probe(hashes, n)
+    var pairs = table.probe(keys, keys, n)
     var t_probe = perf_counter_ns() - t0
     keep(len(pairs[0]))
     print(
@@ -115,7 +124,7 @@ def profile(n: Int) raises:
 
     # --- Phase 4: probe with single_match (semi-join) ---
     t0 = perf_counter_ns()
-    var pairs_single = table.probe(hashes, n, single_match=True)
+    var pairs_single = table.probe(keys, keys, n, single_match=True)
     var t_probe_single = perf_counter_ns() - t0
     keep(len(pairs_single[0]))
     print(
