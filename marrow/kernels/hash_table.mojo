@@ -2,7 +2,6 @@
 
 Provides:
   - ``HashTable`` trait — core interface for hash-based row indexing
-  - ``SwissHashTable`` — flat open-addressing hash table (primary, fast)
   - ``SwissHashTable`` — SIMD group matching with pipelined probing
   - ``Partition`` / ``Partitioner`` / ``NoPartition`` — partitioning layer
 
@@ -15,11 +14,10 @@ from std.bit import count_trailing_zeros, next_power_of_two
 from std.memory import alloc, memset, pack_bits
 from std.sys.intrinsics import prefetch, PrefetchOptions
 
-from ..arrays import PrimitiveArray, StructArray
+from ..arrays import PrimitiveArray
 from ..builders import PrimitiveBuilder
 from ..buffers import BufferBuilder
 from ..dtypes import int32, uint64
-from .hashing import rapidhash
 
 
 
@@ -99,44 +97,39 @@ struct NoPartition(Partitioner):
 
 
 trait HashTable(Movable):
-    """Maps UInt64 hashes → sequential bucket IDs with row index storage.
+    """Maps UInt64 hashes → sequential key IDs with row index storage.
 
     Shared by join and groupby:
-      - Join uses ``build()`` + ``probe_pairs()``
-      - GroupBy uses ``find_or_insert()`` + ``num_buckets()``
+      - Join uses ``build()`` + ``probe()``
+      - GroupBy uses ``insert()`` + ``num_keys()``
     """
 
-    def hash_keys(
-        self, keys: StructArray
-    ) raises -> PrimitiveArray[uint64]:
-        """Batch hash key columns using the table's hash function."""
+    def insert(
+        mut self, hashes: PrimitiveArray[uint64]
+    ) raises -> PrimitiveArray[int32]:
+        """Insert hashes into the table, returning a key ID per hash.
+        Existing hashes return their previous ID; new hashes get
+        sequential IDs starting from ``num_keys()``."""
         ...
 
     def build(mut self, hashes: PrimitiveArray[uint64]) raises:
-        """Batch insert all rows from a pre-computed hash array."""
+        """``insert`` + CSR row-index construction.
+        Required before ``probe``."""
         ...
 
-    def probe_pairs(
+    def probe(
         self,
         hashes: PrimitiveArray[uint64],
-        mut left_out: PrimitiveBuilder[int32],
-        mut right_out: PrimitiveBuilder[int32],
+        num_build_rows: Int,
         single_match: Bool = False,
-    ) raises:
-        """Find matching (build_row, probe_row) pairs with pipelined lookups.
-        If single_match, emit at most one match per probe row (JOIN_ANY)."""
+    ) raises -> Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]:
+        """Look up hashes against the built index, returning matching
+        (build_row, probe_row) index pairs. If single_match, emit at
+        most one match per probe row."""
         ...
 
-    def find(self, h: UInt64) -> Int:
-        """Find bucket_id for hash. Return -1 if not found."""
-        ...
-
-    def find_or_insert(mut self, h: UInt64) -> Int:
-        """Find or create bucket for hash. Return bucket_id (groupby)."""
-        ...
-
-    def num_buckets(self) -> Int:
-        """Number of unique keys (buckets created so far)."""
+    def num_keys(self) -> Int:
+        """Number of unique keys inserted so far."""
         ...
 
 
@@ -151,6 +144,9 @@ comptime _GROUP_WIDTH: Int = 16
 comptime _CTRL_EMPTY: UInt8 = 0xFF
 """Control byte for an empty slot."""
 
+comptime _PIPE_DEPTH: Int = 16
+"""Number of probes pipelined in a single batch (prefetch window)."""
+
 
 @always_inline
 def _h2(h: UInt64) -> UInt8:
@@ -158,37 +154,7 @@ def _h2(h: UInt64) -> UInt8:
     return UInt8(h >> 57)
 
 
-struct _Group:
-    """SIMD group of 16 control bytes for parallel matching.
-
-    Loads 16 control bytes at once and uses SIMD comparison to produce
-    bitmasks of matching slots. Same pattern as Mojo Dict / abseil / hashbrown.
-    """
-
-    var ctrl: SIMD[DType.uint8, _GROUP_WIDTH]
-
-    @always_inline
-    def __init__(out self, ptr: UnsafePointer[UInt8, _]):
-        self.ctrl = ptr.load[width=_GROUP_WIDTH]()
-
-    @always_inline
-    def match_h2(self, h2: UInt8) -> UInt16:
-        """Bitmask of slots matching the H2 fingerprint."""
-        return pack_bits(
-            self.ctrl.eq(SIMD[DType.uint8, _GROUP_WIDTH](h2))
-        )
-
-    @always_inline
-    def match_empty(self) -> UInt16:
-        """Bitmask of empty slots."""
-        return pack_bits(
-            self.ctrl.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY))
-        )
-
-# True pipelining would need to inline the find logic and interleave the individual memory loads across 4 probes — a much deeper rewrite.
-struct SwissHashTable[
-    hash_fn: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
-](HashTable):
+struct SwissHashTable(HashTable):
     """Swiss Table hash table with SIMD group matching.
 
     Adopts Mojo Dict's design (16-slot groups, 7-bit H2 fingerprints,
@@ -214,7 +180,6 @@ struct SwissHashTable[
 
     # CSR (Compressed Sparse Row) storage for row indices.
     # After build(): _offsets[bid]..._offsets[bid+1] is the range in _rows.
-    # During build pass 1: _counts[bid] accumulates rows per bucket.
     var _offsets: List[Int]            # len = num_buckets + 1
     var _rows: List[Int32]             # flat, grouped by bucket
 
@@ -244,6 +209,60 @@ struct SwissHashTable[
         if slot < _GROUP_WIDTH:
             self._ctrl[self._capacity + slot] = val
 
+    @staticmethod
+    @always_inline
+    def _match_h2(ctrl: UnsafePointer[UInt8, _], pos: Int, h2: UInt8) -> UInt16:
+        """SIMD bitmask of slots in the group at ``pos`` matching ``h2``."""
+        var group = (ctrl + pos).load[width=_GROUP_WIDTH]()
+        return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](h2)))
+
+    @staticmethod
+    @always_inline
+    def _match_empty(ctrl: UnsafePointer[UInt8, _], pos: Int) -> UInt16:
+        """SIMD bitmask of empty slots in the group at ``pos``."""
+        var group = (ctrl + pos).load[width=_GROUP_WIDTH]()
+        return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY)))
+
+    @always_inline
+    def _find(
+        self,
+        h: UInt64,
+        ctrl: UnsafePointer[UInt8, _],
+        slots: UnsafePointer[Int32, _],
+        mask: Int,
+    ) -> Int:
+        """Probe for a matching bucket. Returns bucket_id or -1."""
+        var h2 = _h2(h)
+        var pos = Int(h) & mask
+        while True:
+            var match_mask = Self._match_h2(ctrl, pos, h2)
+            while match_mask != 0:
+                var bit = count_trailing_zeros(Int(match_mask))
+                var slot_idx = (pos + bit) & mask
+                var candidate = Int(slots[slot_idx])
+                if self._bucket_hashes[candidate] == h:
+                    return candidate
+                match_mask &= match_mask - 1
+            if Self._match_empty(ctrl, pos) != 0:
+                return -1
+            pos = (pos + _GROUP_WIDTH) & mask
+
+    @always_inline
+    def _find_empty_slot(
+        self,
+        h: UInt64,
+        ctrl: UnsafePointer[UInt8, _],
+        mask: Int,
+    ) -> Int:
+        """Find the first empty slot for hash ``h``. Used during resize."""
+        var pos = Int(h) & mask
+        while True:
+            var empty_mask = Self._match_empty(ctrl, pos)
+            if empty_mask != 0:
+                var bit = count_trailing_zeros(Int(empty_mask))
+                return (pos + bit) & mask
+            pos = (pos + _GROUP_WIDTH) & mask
+
     def reserve(mut self, n: Int):
         """Pre-allocate slot and chain capacity for n expected entries."""
         var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
@@ -261,97 +280,83 @@ struct SwissHashTable[
                 if old_ctrl[i] != _CTRL_EMPTY:
                     var bid = Int(old_slots[i])
                     var h = self._bucket_hashes[bid]
-                    var h2 = _h2(h)
-                    var pos = Int(h) & self._mask
-                    while True:
-                        var group = _Group(self._ctrl + pos)
-                        var empty_mask = group.match_empty()
-                        if empty_mask != 0:
-                            var bit = count_trailing_zeros(Int(empty_mask))
-                            var slot = (pos + bit) & self._mask
-                            self._set_ctrl(slot, h2)
-                            self._slots[slot] = Int32(bid)
-                            break
-                        pos = (pos + _GROUP_WIDTH) & self._mask
+                    var slot = self._find_empty_slot(
+                        h, self._ctrl, self._mask
+                    )
+                    self._set_ctrl(slot, _h2(h))
+                    self._slots[slot] = Int32(bid)
             old_ctrl.free()
             old_slots.free()
         self._bucket_hashes.reserve(n)
 
-    def hash_keys(
-        self, keys: StructArray
-    ) raises -> PrimitiveArray[uint64]:
-        return Self.hash_fn(keys)
+    def insert(
+        mut self, hashes: PrimitiveArray[uint64]
+    ) raises -> PrimitiveArray[int32]:
+        """Insert hashes, returning a key ID per hash.
 
-    def build(mut self, hashes: PrimitiveArray[uint64]) raises:
-        """Two-pass CSR build: assigns bucket IDs, then scatters rows.
-
-        Pass 1: for each hash, find-or-create bucket in the Swiss Table.
-                Count rows per bucket.
-        Pass 2: compute prefix-sum offsets, scatter row indices into a
-                flat contiguous array grouped by bucket.
-
-        Result: _offsets[bid]..._offsets[bid+1] gives the row range.
-        No linked lists — probe iterates a contiguous memory range.
+        Prefetches ctrl bytes ``_PIPE_DEPTH`` iterations ahead to hide
+        memory latency. Existing hashes return their previous ID; new
+        hashes get sequential IDs starting from ``num_keys()``.
         """
         var n = len(hashes)
         self.reserve(n)
         var hash_ptr = hashes.buffer.unsafe_ptr[uint64.native](hashes.offset)
+        var ctrl = self._ctrl
+        var slots = self._slots
+        var mask = self._mask
 
-        # --- Pass 1: assign bucket IDs, count rows per bucket ---
-        # Temporarily store bucket_id per input row.
-        var row_bids = List[Int32](length=n, fill=Int32(0))
-        var next_bid = self._num_buckets
-        var counts = List[Int]()  # will be sized after pass 1
+        var bid_builder = PrimitiveBuilder[int32](capacity=n, zeroed=False)
+
+        # Warm up the prefetch pipeline.
+        for i in range(min(_PIPE_DEPTH, n)):
+            prefetch(ctrl + (Int(UInt64(hash_ptr[i])) & mask))
 
         for i in range(n):
             var h = UInt64(hash_ptr[i])
             var h2 = _h2(h)
-            var pos = Int(h) & self._mask
 
-            if i + 8 < n:
-                prefetch(self._ctrl + (Int(UInt64(hash_ptr[i + 8])) & self._mask))
+            # Prefetch ctrl bytes _PIPE_DEPTH iterations ahead.
+            var ahead = i + _PIPE_DEPTH
+            if ahead < n:
+                prefetch(ctrl + (Int(UInt64(hash_ptr[ahead])) & mask))
 
-            # Find or create bucket.
-            var bid = -1
-            var found = False
-            while True:
-                var group = _Group(self._ctrl + pos)
-                var match_mask = group.match_h2(h2)
-                while match_mask != 0:
-                    var bit = count_trailing_zeros(Int(match_mask))
-                    var slot_idx = (pos + bit) & self._mask
-                    var candidate = Int(self._slots[slot_idx])
-                    if self._bucket_hashes[candidate] == h:
-                        bid = candidate
-                        found = True
-                        break
-                    match_mask &= match_mask - 1
-                if found:
-                    break
+            # Find existing bucket.
+            var bid = self._find(h, ctrl, slots, mask)
 
-                var empty_mask = group.match_empty()
-                if empty_mask != 0:
-                    var bit = count_trailing_zeros(Int(empty_mask))
-                    var slot = (pos + bit) & self._mask
-                    bid = next_bid
-                    self._set_ctrl(slot, h2)
-                    self._slots[slot] = Int32(bid)
-                    self._count += 1
-                    self._bucket_hashes.append(h)
-                    next_bid += 1
-                    break
+            # Insert new bucket if not found.
+            if bid == -1:
+                if self._count >= self._max_count:
+                    self.reserve(self._capacity)
+                    ctrl = self._ctrl
+                    slots = self._slots
+                    mask = self._mask
 
-                pos = (pos + _GROUP_WIDTH) & self._mask
+                var slot = self._find_empty_slot(h, ctrl, mask)
+                bid = self._num_buckets
+                self._set_ctrl(slot, h2)
+                slots[slot] = Int32(bid)
+                self._count += 1
+                self._bucket_hashes.append(h)
+                self._num_buckets += 1
 
-            row_bids[i] = Int32(bid)
+            bid_builder.unsafe_append(Scalar[int32.native](bid))
 
-        self._num_buckets = next_bid
+        return bid_builder.finish()
 
-        # --- Pass 2: prefix-sum + scatter ---
+    def build(mut self, hashes: PrimitiveArray[uint64]) raises:
+        """``insert`` + CSR row-index construction.
+
+        After this call, ``_offsets[bid]..._offsets[bid+1]`` gives the
+        row range in ``_rows`` for each bucket. Required before
+        ``probe``.
+        """
+        var bids = self.insert(hashes)
+        var n = len(bids)
+
         # Count rows per bucket.
-        counts = List[Int](length=self._num_buckets, fill=0)
+        var counts = List[Int](length=self._num_buckets, fill=0)
         for i in range(n):
-            counts[Int(row_bids[i])] += 1
+            counts[Int(bids.unsafe_get(i))] += 1
 
         # Prefix sum → offsets.
         self._offsets = List[Int](length=self._num_buckets + 1, fill=0)
@@ -361,97 +366,72 @@ struct SwissHashTable[
         # Scatter row indices into CSR rows array.
         var total = self._offsets[self._num_buckets]
         self._rows = List[Int32](length=total, fill=Int32(0))
-        # Reuse counts as write cursors.
         for b in range(self._num_buckets):
             counts[b] = self._offsets[b]
         for i in range(n):
-            var bid = Int(row_bids[i])
+            var bid = Int(bids.unsafe_get(i))
             self._rows[counts[bid]] = Int32(i)
             counts[bid] += 1
 
-    def probe_pairs(
+    def probe(
         self,
         hashes: PrimitiveArray[uint64],
-        mut left_out: PrimitiveBuilder[int32],
-        mut right_out: PrimitiveBuilder[int32],
+        num_build_rows: Int,
         single_match: Bool = False,
-    ) raises:
-        """Pipelined probe: find matching (build_row, probe_row) pairs.
+    ) raises -> Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]:
+        """Look up hashes against the built index, returning matching
+        ``(build_row, probe_row)`` index pairs.
 
-        Prefetches ahead to hide memory latency. Writes directly into
-        the caller's pair builders.
+        Prefetches ctrl bytes ``_PIPE_DEPTH`` iterations ahead to hide
+        memory latency. Uses raw-pointer access to slots, bucket hashes,
+        offsets, and rows to avoid bounds-check overhead.
         """
         var n = len(hashes)
+        var est = min(n, num_build_rows)
+        var left_out = PrimitiveBuilder[int32](capacity=est, zeroed=False)
+        var right_out = PrimitiveBuilder[int32](capacity=est, zeroed=False)
+
+        if n == 0:
+            return (
+                left_out.finish(shrink_to_fit=False),
+                right_out.finish(shrink_to_fit=False),
+            )
+
         var hash_ptr = hashes.buffer.unsafe_ptr[uint64.native](hashes.offset)
         var ctrl = self._ctrl
         var mask = self._mask
+        var slots = self._slots
+        var off_ptr = self._offsets.unsafe_ptr()
+        var rows_ptr = self._rows.unsafe_ptr()
+
+        # Warm up the prefetch pipeline.
+        for i in range(min(_PIPE_DEPTH, n)):
+            prefetch(ctrl + (Int(UInt64(hash_ptr[i])) & mask))
 
         for probe_row in range(n):
-            if probe_row + 8 < n:
-                prefetch(ctrl + (Int(UInt64(hash_ptr[probe_row + 8])) & mask))
+            var h = UInt64(hash_ptr[probe_row])
 
-            var bid = self.find(UInt64(hash_ptr[probe_row]))
+            # Prefetch ctrl bytes _PIPE_DEPTH iterations ahead.
+            var ahead = probe_row + _PIPE_DEPTH
+            if ahead < n:
+                prefetch(ctrl + (Int(UInt64(hash_ptr[ahead])) & mask))
+
+            var bid = self._find(h, ctrl, slots, mask)
             if bid == -1:
                 continue
 
-            var start = self._offsets[bid]
-            var end = self._offsets[bid + 1]
+            var start = off_ptr[bid]
+            var end = off_ptr[bid + 1]
             for j in range(start, end):
-                left_out.unsafe_append(Scalar[int32.native](self._rows[j]))
+                left_out.unsafe_append(Scalar[int32.native](rows_ptr[j]))
                 right_out.unsafe_append(Scalar[int32.native](probe_row))
                 if single_match:
                     break
 
-    @always_inline
-    def find(self, h: UInt64) -> Int:
-        var h2 = _h2(h)
-        var pos = Int(h) & self._mask
-        while True:
-            var group = _Group(self._ctrl + pos)
-            var match_mask = group.match_h2(h2)
-            while match_mask != 0:
-                var bit = count_trailing_zeros(Int(match_mask))
-                var slot_idx = (pos + bit) & self._mask
-                var bid = Int(self._slots[slot_idx])
-                if self._bucket_hashes[bid] == h:
-                    return bid
-                match_mask &= match_mask - 1
-            if group.match_empty() != 0:
-                return -1
-            pos = (pos + _GROUP_WIDTH) & self._mask
+        return (
+            left_out.finish(shrink_to_fit=False),
+            right_out.finish(shrink_to_fit=False),
+        )
 
-    def find_or_insert(mut self, h: UInt64) -> Int:
-        var h2 = _h2(h)
-        var pos = Int(h) & self._mask
-
-        while True:
-            var group = _Group(self._ctrl + pos)
-            var match_mask = group.match_h2(h2)
-            while match_mask != 0:
-                var bit = count_trailing_zeros(Int(match_mask))
-                var slot_idx = (pos + bit) & self._mask
-                var bid = Int(self._slots[slot_idx])
-                if self._bucket_hashes[bid] == h:
-                    return bid
-                match_mask &= match_mask - 1
-
-            var empty_mask = group.match_empty()
-            if empty_mask != 0:
-                if self._count >= self._max_count:
-                    self.reserve(self._capacity)
-                    return self.find_or_insert(h)
-
-                var bit = count_trailing_zeros(Int(empty_mask))
-                var slot = (pos + bit) & self._mask
-                var bid = self._num_buckets
-                self._set_ctrl(slot, h2)
-                self._slots[slot] = Int32(bid)
-                self._bucket_hashes.append(h)
-                self._count += 1
-                self._num_buckets += 1
-                return bid
-
-            pos = (pos + _GROUP_WIDTH) & self._mask
-
-    def num_buckets(self) -> Int:
+    def num_keys(self) -> Int:
         return self._num_buckets

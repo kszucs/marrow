@@ -1,4 +1,4 @@
-"""Benchmarks for SwissHashTable: build, find, find_or_insert.
+"""Benchmarks for SwissHashTable: build, insert, probe.
 
 Run with: pixi run bench_mojo -k bench_hash_table
 """
@@ -10,7 +10,6 @@ from marrow.arrays import PrimitiveArray
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import uint64
 from marrow.kernels.hash_table import SwissHashTable
-from marrow.kernels.hashing import rapidhash
 
 
 def _make_hashes(n: Int) raises -> PrimitiveArray[uint64]:
@@ -29,119 +28,79 @@ def bench_build(n: Int, warmup: Int, iters: Int) raises:
     var hashes = _make_hashes(n)
 
     for _ in range(warmup):
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable()
         t.build(hashes)
-        keep(t.num_buckets())
+        keep(t.num_keys())
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var t = SwissHashTable[rapidhash]()
+        var t = SwissHashTable()
         t.build(hashes)
         total += perf_counter_ns() - t0
-        keep(t.num_buckets())
+        keep(t.num_keys())
 
-    print("  build:          ", _fmt(total // UInt(iters)))
+    print("  build:                ", _fmt(total // UInt(iters)))
 
 
-def bench_find(n: Int, warmup: Int, iters: Int) raises:
+def bench_insert(n: Int, warmup: Int, iters: Int) raises:
     var hashes = _make_hashes(n)
-    var table = SwissHashTable[rapidhash]()
+
+    for _ in range(warmup):
+        var t = SwissHashTable()
+        var bids = t.insert(hashes)
+        keep(t.num_keys())
+
+    var total = UInt(0)
+    for _ in range(iters):
+        var t0 = perf_counter_ns()
+        var t = SwissHashTable()
+        var bids = t.insert(hashes)
+        total += perf_counter_ns() - t0
+        keep(t.num_keys())
+
+    print("  insert: ", _fmt(total // UInt(iters)))
+
+
+def bench_probe(n: Int, warmup: Int, iters: Int) raises:
+    var hashes = _make_hashes(n)
+    var table = SwissHashTable()
     table.build(hashes)
 
     for _ in range(warmup):
-        var s = 0
-        for i in range(n):
-            s += table.find(UInt64(hashes.unsafe_get(i)))
-        keep(s)
+        var pairs = table.probe(hashes, n)
+        keep(len(pairs[0]))
 
     var total = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var s = 0
-        for i in range(n):
-            s += table.find(UInt64(hashes.unsafe_get(i)))
+        var pairs = table.probe(hashes, n)
         total += perf_counter_ns() - t0
-        keep(s)
+        keep(len(pairs[0]))
 
-    print("  find (hit):     ", _fmt(total // UInt(iters)))
-
-
-def bench_find_miss(n: Int, warmup: Int, iters: Int) raises:
-    var hashes = _make_hashes(n)
-    var table = SwissHashTable[rapidhash]()
-    table.build(hashes)
-
-    # Generate hashes that are NOT in the table.
-    var miss_hashes = _make_hashes(n)
-    var b = PrimitiveBuilder[uint64](capacity=n)
-    for i in range(n):
-        b.append(Scalar[uint64.native](UInt64(miss_hashes.unsafe_get(i)) + UInt64(n * 2)))
-    var misses = b.finish()
-
-    for _ in range(warmup):
-        var s = 0
-        for i in range(n):
-            s += table.find(UInt64(misses.unsafe_get(i)))
-        keep(s)
-
-    var total = UInt(0)
-    for _ in range(iters):
-        var t0 = perf_counter_ns()
-        var s = 0
-        for i in range(n):
-            s += table.find(UInt64(misses.unsafe_get(i)))
-        total += perf_counter_ns() - t0
-        keep(s)
-
-    print("  find (miss):    ", _fmt(total // UInt(iters)))
-
-
-def bench_find_or_insert(n: Int, warmup: Int, iters: Int) raises:
-    var hashes = _make_hashes(n)
-
-    for _ in range(warmup):
-        var t = SwissHashTable[rapidhash]()
-        t.reserve(n)
-        for i in range(n):
-            _ = t.find_or_insert(UInt64(hashes.unsafe_get(i)))
-        keep(t.num_buckets())
-
-    var total = UInt(0)
-    for _ in range(iters):
-        var t0 = perf_counter_ns()
-        var t = SwissHashTable[rapidhash]()
-        t.reserve(n)
-        for i in range(n):
-            _ = t.find_or_insert(UInt64(hashes.unsafe_get(i)))
-        total += perf_counter_ns() - t0
-        keep(t.num_buckets())
-
-    print("  find_or_insert: ", _fmt(total // UInt(iters)))
+    print("  probe:          ", _fmt(total // UInt(iters)))
 
 
 def run_size(n: Int, warmup: Int, iters: Int) raises:
     print("\n=== SwissHashTable", n, "entries ===")
+    bench_insert(n, warmup, iters)
     bench_build(n, warmup, iters)
-    bench_find(n, warmup, iters)
-    bench_find_miss(n, warmup, iters)
-    bench_find_or_insert(n, warmup, iters)
+    bench_probe(n, warmup, iters)
 
     # Throughput summary.
     var hashes = _make_hashes(n)
     var t0 = perf_counter_ns()
-    var t = SwissHashTable[rapidhash]()
+    var t = SwissHashTable()
     t.build(hashes)
     var build_ns = perf_counter_ns() - t0
     t0 = perf_counter_ns()
-    for i in range(n):
-        _ = t.find(UInt64(hashes.unsafe_get(i)))
-    var find_ns = perf_counter_ns() - t0
+    var pairs = t.probe(hashes, n)
+    var probe_ns = perf_counter_ns() - t0
     print(
-        "  throughput:      build",
+        "  throughput:           build",
         String(Int(UInt(n) * 1_000 // (build_ns + 1))),
-        "Mops/s, find",
-        String(Int(UInt(n) * 1_000 // (find_ns + 1))),
+        "Mops/s, probe",
+        String(Int(UInt(n) * 1_000 // (probe_ns + 1))),
         "Mops/s",
     )
 
