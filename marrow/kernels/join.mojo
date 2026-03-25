@@ -102,7 +102,7 @@ trait Join(Movable):
 
 
 struct HashJoin[
-    hasher: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
+    hasher: def (StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[uint64] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 

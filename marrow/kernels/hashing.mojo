@@ -6,21 +6,22 @@ column independently and combining hashes across columns.
 
 Public API:
   - ``rapidhash``: hash any array → PrimitiveArray[uint64]
+    - PrimitiveArray[bool_]: vectorized via precomputed hash + SIMD select
     - PrimitiveArray[T]: vectorized rapidhash (SIMD via elementwise)
     - StringArray: per-element AHash (variable-length fallback)
     - StructArray: per-column hash with combining (multi-key)
     - AnyArray: runtime-typed dispatch
-  - ``ahash``: original AHash-based per-element hash (scalar)
   - ``hash_identity``: identity hash for small integer types (bool, uint8, int8)
 
 Rapidhash port follows the C reference at https://github.com/Nicoshev/rapidhash
 """
 
 from std.algorithm.functional import elementwise
-from std.gpu.host import DeviceContext
+from std.gpu.host import DeviceContext, get_gpu_target
 from std.hashlib import hash as _hash
-from std.sys import size_of
-from std.sys.info import simd_byte_width
+from std.math import iota
+from std.sys import size_of, has_accelerator
+from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
@@ -95,57 +96,69 @@ def _rapidhash_fixed[byte_width: Int](value: UInt64) -> UInt64:
     )
 
 
-@always_inline
-def _combine(existing: UInt64, new: UInt64) -> UInt64:
-    """Combine two hash values (rapidhash-based, replaces polynomial combine)."""
-    return _rapid_mix(existing ^ UInt64(0x9E3779B97F4A7C15), new)
-
 
 # ---------------------------------------------------------------------------
 # rapidhash — vectorized hash for primitive arrays (SIMD via elementwise)
 # ---------------------------------------------------------------------------
 
-# FIXME: use the seeding from the Rust implementation
-def rapidhash[
-    T: DataType
-](keys: PrimitiveArray[T]) raises -> PrimitiveArray[uint64]:
-    """Vectorized rapidhash for primitive arrays.
 
-    Uses ``elementwise`` for SIMD processing (same pattern as arithmetic
-    kernels). Each SIMD lane independently computes the rapidhash of one
-    element. Null elements are overwritten with ``NULL_HASH_SENTINEL`` in
-    a post-pass.
+def _rapidhash_elementwise[
+    T: DataType,
+](
+    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
+    in_ptr: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
+    bm_offset: Int,
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Elementwise rapidhash dispatch — pointers as params for GPU DevicePassable.
 
-    Bool arrays use scalar path since they are bit-packed.
+    Computes rapidhash for each element. If ``bm_ptr`` is non-null, null
+    elements (bitmap bit unset) are replaced with ``NULL_HASH_SENTINEL``
+    using ``SIMD.select()`` for branchless evaluation on both CPU and GPU.
     """
     comptime native = T.native
     comptime byte_width = size_of[Scalar[native]]()
-    var n = len(keys)
-
-    # Bool arrays are bit-packed — can't use SIMD load. Use scalar path.
-    comptime if T == bool_:
-        var builder = PrimitiveBuilder[uint64](capacity=n)
-        var has_bitmap = Bool(keys.bitmap)
-        for i in range(n):
-            if has_bitmap and not keys.bitmap.value().is_valid(keys.offset + i):
-                builder.unsafe_append(_h(NULL_HASH_SENTINEL))
-            else:
-                var v = UInt64(keys.unsafe_get(i))
-                builder.unsafe_append(
-                    _h(_rapidhash_fixed[byte_width](v))
-                )
-        return builder.finish()
-
-    var buf = BufferBuilder.alloc_uninit(
-        BufferBuilder._aligned_size[uint64.native](n)
-    )
-    var out_ptr: UnsafePointer[Scalar[uint64.native], MutAnyOrigin]
-    out_ptr = buf.ptr.bitcast[Scalar[uint64.native]]()
-    var in_ptr = keys.buffer.aligned_unsafe_ptr[native](keys.offset)
 
     # Pre-compute seed (constant for all elements).
     # C: seed = 0; seed ^= rapid_mix(seed ^ secret[2], secret[1]); seed ^= len
-    var seed = _rapid_mix(RAPID_SECRET2, RAPID_SECRET1) ^ UInt64(byte_width)
+    comptime seed = _rapid_mix(RAPID_SECRET2, RAPID_SECRET1) ^ UInt64(byte_width)
+
+    @parameter
+    @always_inline
+    def _mul128_lo_hi[
+        W: Int
+    ](
+        a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]
+    ) -> Tuple[SIMD[DType.uint64, W], SIMD[DType.uint64, W]]:
+        """128-bit multiply returning (lo, hi) using 32-bit sub-products.
+
+        GPU-compatible: avoids uint128 which Metal does not support.
+        Decomposes a*b as: (a_hi*2^32 + a_lo) * (b_hi*2^32 + b_lo)
+        """
+        comptime lo32 = UInt64(0xFFFFFFFF)
+        var a_lo = a & lo32
+        var a_hi = a >> 32
+        var b_lo = b & lo32
+        var b_hi = b >> 32
+        var t0 = a_lo * b_lo
+        var t1 = a_lo * b_hi
+        var t2 = a_hi * b_lo
+        var t3 = a_hi * b_hi
+        var mid = (t0 >> 32) + (t1 & lo32) + (t2 & lo32)
+        var lo = (t0 & lo32) | (mid << 32)
+        var hi = t3 + (t1 >> 32) + (t2 >> 32) + (mid >> 32)
+        return (lo, hi)
+
+    @parameter
+    @always_inline
+    def _mix[
+        W: Int
+    ](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+        """rapid_mix: 128-bit multiply then XOR halves."""
+        var lo_hi = _mul128_lo_hi[W](a, b)
+        return lo_hi[0] ^ lo_hi[1]
 
     @parameter
     @always_inline
@@ -161,26 +174,150 @@ def rapidhash[
         var a = vals ^ RAPID_SECRET1
         var b = vals ^ seed
         # rapid_mum(&a, &b): 128-bit multiply per SIMD lane
-        var r = a.cast[DType.uint128]() * b.cast[DType.uint128]()
-        var lo = r.cast[DType.uint64]()
-        var hi = (r >> 64).cast[DType.uint64]()
+        var lo_hi = _mul128_lo_hi[W](a, b)
         # rapid_mix(a ^ secret[7], b ^ secret[1] ^ len)
-        var a2 = lo ^ RAPID_SECRET7
-        var b2 = hi ^ RAPID_SECRET1 ^ UInt64(byte_width)
-        var r2 = a2.cast[DType.uint128]() * b2.cast[DType.uint128]()
-        var result = r2.cast[DType.uint64]() ^ (r2 >> 64).cast[DType.uint64]()
-        for j in range(W):
-            out_ptr[i + j] = Scalar[uint64.native](result[j])
+        var hashes = _mix[W](
+            lo_hi[0] ^ RAPID_SECRET7,
+            lo_hi[1] ^ RAPID_SECRET1 ^ UInt64(byte_width),
+        )
 
-    # TODO: enable running it on gpu as well
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[uint64.native]]()
-    elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](n)
+        # Inline null handling: if bitmap present, select sentinel for null lanes.
+        if bm_ptr:
+            var abs_pos = bm_offset + i
+            var byte_idx = abs_pos >> 3
+            var bit_off = abs_pos & 7
+            var bits = (bm_ptr + byte_idx).bitcast[UInt32]().load[alignment=1]()
+            bits >>= UInt32(bit_off)
+            var valid = (
+                (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
+            ).cast[DType.bool]()
+            hashes = valid.select(hashes, NULL_HASH_SENTINEL)
 
-    # Post-pass: overwrite null positions with sentinel.
-    if keys.bitmap:
-        for i in range(n):
-            if not keys.bitmap.value().is_valid(keys.offset + i):
-                (out_ptr + i).store(Scalar[uint64.native](NULL_HASH_SENTINEL))
+        (out_ptr + i).store(hashes)
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[
+                DType.uint64, target=get_gpu_target()
+            ]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("rapidhash: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def _rapidhash_bool_elementwise(
+    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
+    data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
+    data_offset: Int,
+    bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
+    bm_offset: Int,
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Vectorized bool rapidhash — pointers as params for GPU DevicePassable.
+
+    Bool arrays are bit-packed so standard SIMD loads don't work. Instead,
+    precompute the two possible hashes (for 0 and 1), load W data bits via
+    the bitmap-mask pattern, and use ``SIMD.select()`` to pick the right hash.
+    A second ``select()`` handles nulls.
+    """
+    comptime hash_false = _rapidhash_fixed[size_of[Scalar[bool_.native]]()](
+        UInt64(0)
+    )
+    comptime hash_true = _rapidhash_fixed[size_of[Scalar[bool_.native]]()](
+        UInt64(1)
+    )
+
+    @parameter
+    @always_inline
+    def _load_bits[
+        W: Int
+    ](ptr: UnsafePointer[UInt8, ImmutAnyOrigin], abs_pos: Int) -> SIMD[
+        DType.bool, W
+    ]:
+        """Load W consecutive bits from a bit-packed buffer."""
+        var byte_idx = abs_pos >> 3
+        var bit_off = abs_pos & 7
+        var bits = (ptr + byte_idx).bitcast[UInt32]().load[alignment=1]()
+        bits >>= UInt32(bit_off)
+        return (
+            (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
+        ).cast[DType.bool]()
+
+    @parameter
+    @always_inline
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
+        var i = idx[0]
+        var data_bits = _load_bits[W](data_ptr, data_offset + i)
+        var hashes = data_bits.select(
+            SIMD[DType.uint64, W](hash_true),
+            SIMD[DType.uint64, W](hash_false),
+        )
+        if bm_ptr:
+            var valid = _load_bits[W](bm_ptr, bm_offset + i)
+            hashes = valid.select(hashes, NULL_HASH_SENTINEL)
+        (out_ptr + i).store(hashes)
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[
+                DType.uint64, target=get_gpu_target()
+            ]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("rapidhash: no GPU accelerator available for bool")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def rapidhash(
+    keys: PrimitiveArray[bool_],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[uint64]:
+    """Vectorized rapidhash for bool arrays.
+
+    Precomputes hash(false) and hash(true), loads data bits via the
+    bitmap-mask pattern, and uses ``SIMD.select()`` for branchless dispatch.
+    Works on both CPU and GPU.
+    """
+    var n = len(keys)
+
+    var buf: BufferBuilder
+    var data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin]
+    var data_offset = keys.offset
+    var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
+    var bm_offset = 0
+
+    if ctx:
+        buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+        data_ptr = keys.buffer.device_ptr[DType.uint8]()
+        if keys.bitmap:
+            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
+            bm_offset = keys.bitmap.value()._offset + keys.offset
+    else:
+        buf = BufferBuilder.alloc_uninit(
+            BufferBuilder._aligned_size[uint64.native](n)
+        )
+        data_ptr = keys.buffer.unsafe_ptr()
+        if keys.bitmap:
+            bm_ptr = keys.bitmap.value()._buffer.unsafe_ptr()
+            bm_offset = keys.bitmap.value()._offset + keys.offset
+
+    var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+
+    _rapidhash_bool_elementwise(
+        out_ptr, data_ptr, data_offset, bm_ptr, bm_offset, n, ctx
+    )
 
     return PrimitiveArray[uint64](
         length=n,
@@ -191,34 +328,64 @@ def rapidhash[
     )
 
 
-# ---------------------------------------------------------------------------
-# ahash — original AHash-based scalar hash (retained for strings)
-# ---------------------------------------------------------------------------
-
-
-def ahash[
+# FIXME: use the seeding from the Rust implementation
+def rapidhash[
     T: DataType
-](keys: PrimitiveArray[T]) raises -> PrimitiveArray[uint64]:
-    """Per-element AHash for a primitive array (scalar, not vectorized)."""
+](
+    keys: PrimitiveArray[T],
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[uint64]:
+    """Vectorized rapidhash for primitive arrays.
+
+    Uses ``elementwise`` for SIMD processing (same pattern as arithmetic
+    kernels). Each SIMD lane independently computes the rapidhash of one
+    element. Null elements are replaced with ``NULL_HASH_SENTINEL`` inline
+    using ``SIMD.select()``.
+
+    Dispatches to GPU when ``ctx`` is provided, CPU SIMD otherwise.
+    """
+    comptime native = T.native
     var n = len(keys)
-    var builder = PrimitiveBuilder[uint64](capacity=n)
-    var buf = keys.buffer
-    var off = keys.offset
-    var has_bitmap = Bool(keys.bitmap)
 
-    for i in range(n):
-        if has_bitmap and not keys.bitmap.value().is_valid(off + i):
-            builder.unsafe_append(_h(NULL_HASH_SENTINEL))
-        else:
-            builder.unsafe_append(
-                _h(_hash(buf.unsafe_get[T.native](off + i)))
-            )
+    var buf: BufferBuilder
+    var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
+    var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
+    var bm_offset = 0
 
-    return builder.finish()
+    if ctx:
+        buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+        in_ptr = keys.buffer.aligned_device_ptr[native](keys.offset)
+        if keys.bitmap:
+            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
+            bm_offset = keys.bitmap.value()._offset + keys.offset
+    else:
+        buf = BufferBuilder.alloc_uninit(
+            BufferBuilder._aligned_size[uint64.native](n)
+        )
+        in_ptr = keys.buffer.aligned_unsafe_ptr[native](keys.offset)
+        if keys.bitmap:
+            bm_ptr = keys.bitmap.value()._buffer.unsafe_ptr()
+            bm_offset = keys.bitmap.value()._offset + keys.offset
+
+    var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+
+    _rapidhash_elementwise[T](out_ptr, in_ptr, bm_ptr, bm_offset, n, ctx)
+
+    return PrimitiveArray[uint64](
+        length=n,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=buf.finish(),
+    )
 
 
-def ahash(keys: StringArray) raises -> PrimitiveArray[uint64]:
-    """Per-element AHash for a string array."""
+def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
+    """Hash each element of a string array.
+
+    Uses AHash for variable-length strings (rapidhash for strings requires
+    the full multi-branch rapidhash_internal — future work).
+    """
     var n = len(keys)
     var builder = PrimitiveBuilder[uint64](capacity=n)
     var has_bitmap = Bool(keys.bitmap)
@@ -234,34 +401,58 @@ def ahash(keys: StringArray) raises -> PrimitiveArray[uint64]:
     return builder.finish()
 
 
-def ahash(keys: AnyArray) raises -> PrimitiveArray[uint64]:
-    """Runtime-typed AHash dispatch."""
-    if keys.dtype() == bool_:
-        return ahash[bool_](keys.as_primitive[bool_]())
+def _combine_elementwise(
+    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
+    lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin],
+    rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Element-wise hash combine — pointers as params for GPU DevicePassable."""
 
-    comptime for dtype in numeric_dtypes:
-        if keys.dtype() == dtype:
-            return ahash[dtype](keys.as_primitive[dtype]())
+    @parameter
+    @always_inline
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
+        var i = idx[0]
+        var existing = lhs_ptr.load[width=W](i)
+        var new = rhs_ptr.load[width=W](i)
+        var mixed = existing ^ UInt64(0x9E3779B97F4A7C15)
+        # GPU-compatible 128-bit multiply (no uint128).
+        comptime lo32 = UInt64(0xFFFFFFFF)
+        var a_lo = mixed & lo32
+        var a_hi = mixed >> 32
+        var b_lo = new & lo32
+        var b_hi = new >> 32
+        var t0 = a_lo * b_lo
+        var t1 = a_lo * b_hi
+        var t2 = a_hi * b_lo
+        var t3 = a_hi * b_hi
+        var mid = (t0 >> 32) + (t1 & lo32) + (t2 & lo32)
+        var lo = (t0 & lo32) | (mid << 32)
+        var hi = t3 + (t1 >> 32) + (t2 >> 32) + (mid >> 32)
+        (out_ptr + i).store(lo ^ hi)
 
-    if keys.dtype().is_string():
-        return ahash(keys.as_string())
-
-    if keys.dtype().is_struct():
-        return rapidhash(keys.as_struct())
-
-    raise Error("ahash: unsupported dtype ", keys.dtype())
-
-
-def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
-    """Hash each element of a string array.
-
-    Uses AHash for variable-length strings (rapidhash for strings requires
-    the full multi-branch rapidhash_internal — future work).
-    """
-    return ahash(keys)
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[
+                DType.uint64, target=get_gpu_target()
+            ]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("_combine_elementwise: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
 
 
-def rapidhash(keys: StructArray) raises -> PrimitiveArray[uint64]:
+def rapidhash(
+    keys: StructArray,
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[uint64]:
     """Hash a struct array by combining per-field hashes column-wise.
 
     Each field is hashed independently via ``rapidhash(AnyArray)``
@@ -272,39 +463,62 @@ def rapidhash(keys: StructArray) raises -> PrimitiveArray[uint64]:
     if num_fields == 0:
         raise Error("rapidhash: empty struct array")
 
-    var result = rapidhash(keys.children[0])
+    var result = rapidhash(keys.children[0], ctx)
 
     for k in range(1, num_fields):
-        var field_hashes = rapidhash(keys.children[k])
-        var builder = PrimitiveBuilder[uint64](capacity=n)
-        for i in range(n):
-            builder.unsafe_append(
-                _h(
-                    _combine(
-                        UInt64(result.unsafe_get(i)),
-                        UInt64(field_hashes.unsafe_get(i)),
-                    )
-                )
+        var field_hashes = rapidhash(keys.children[k], ctx)
+
+        var buf: BufferBuilder
+        if ctx:
+            buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+        else:
+            buf = BufferBuilder.alloc_uninit(
+                BufferBuilder._aligned_size[uint64.native](n)
             )
-        result = builder.finish()
+        var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+
+        var lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
+        var rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
+        if ctx:
+            lhs_ptr = result.buffer.device_ptr[DType.uint64](result.offset)
+            rhs_ptr = field_hashes.buffer.device_ptr[DType.uint64](
+                field_hashes.offset
+            )
+        else:
+            lhs_ptr = result.buffer.unsafe_ptr[DType.uint64](result.offset)
+            rhs_ptr = field_hashes.buffer.unsafe_ptr[DType.uint64](
+                field_hashes.offset
+            )
+
+        _combine_elementwise(out_ptr, lhs_ptr, rhs_ptr, n, ctx)
+        result = PrimitiveArray[uint64](
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.finish(),
+        )
 
     return result^
 
 
-def rapidhash(keys: AnyArray) raises -> PrimitiveArray[uint64]:
+def rapidhash(
+    keys: AnyArray,
+    ctx: Optional[DeviceContext] = None,
+) raises -> PrimitiveArray[uint64]:
     """Runtime-typed rapidhash dispatch."""
     if keys.dtype() == bool_:
-        return rapidhash[bool_](keys.as_primitive[bool_]())
+        return rapidhash(keys.as_primitive[bool_](), ctx)
 
     comptime for dtype in numeric_dtypes:
         if keys.dtype() == dtype:
-            return rapidhash[dtype](keys.as_primitive[dtype]())
+            return rapidhash[dtype](keys.as_primitive[dtype](), ctx)
 
     if keys.dtype().is_string():
         return rapidhash(keys.as_string())
 
     if keys.dtype().is_struct():
-        return rapidhash(keys.as_struct())
+        return rapidhash(keys.as_struct(), ctx)
 
     raise Error("rapidhash: unsupported dtype ", keys.dtype())
 

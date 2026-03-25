@@ -10,6 +10,7 @@ Architecture:
 """
 
 from std.bit import count_trailing_zeros, next_power_of_two
+from std.gpu.host import DeviceContext
 from std.memory import pack_bits
 from std.sys import size_of
 from std.sys.intrinsics import prefetch
@@ -110,7 +111,7 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def (StructArray) raises -> PrimitiveArray[uint64] = rapidhash
+    hasher: def (StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[uint64] = rapidhash
 ](Movable):
     """Swiss Table hash table with SIMD group matching.
 
@@ -596,14 +597,14 @@ struct SwissHashTable[
         Used by groupby to assign group IDs.  Does not store keys or
         build a CSR index.
         """
-        return self._insert_hashes(Self.hasher(keys))
+        return self._insert_hashes(Self.hasher(keys, None))
 
     def build(mut self, keys: StructArray) raises:
         """Hash keys, insert, and build a CSR row index for ``probe()``.
 
         Must be called before ``probe()``.
         """
-        self._build_hashes(Self.hasher(keys))
+        self._build_hashes(Self.hasher(keys, None))
 
     def probe(
         self,
@@ -630,7 +631,7 @@ struct SwissHashTable[
         Returns:
             ``(left_indices, right_indices)`` — verified matching row pairs.
         """
-        var probe_hashes = Self.hasher(probe_keys)
+        var probe_hashes = Self.hasher(probe_keys, None)
         var indices = self._probe_hashes(
             probe_hashes, num_build_rows, single_match
         )

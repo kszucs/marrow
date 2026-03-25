@@ -1,5 +1,6 @@
 """Tests for the hash join kernel."""
 
+from std.gpu.host import DeviceContext
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray, StringArray, StructArray
@@ -519,6 +520,7 @@ def test_output_schema_column_name_collision() raises:
 
 def _constant_hash(
     keys: StructArray,
+    ctx: Optional[DeviceContext] = None,
 ) raises -> PrimitiveArray[uint64]:
     """Degenerate hash function: all keys map to the same hash.
 
