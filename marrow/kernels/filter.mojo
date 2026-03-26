@@ -14,7 +14,7 @@ from std.sys import size_of
 from std.sys.info import simd_byte_width
 
 from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
-from ..buffers import Buffer, BufferBuilder
+from ..buffers import Buffer
 from ..bitmap import Bitmap, BitmapBuilder
 from ..builders import PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
@@ -32,7 +32,7 @@ from .string import string_lengths
 def _filter_sparse[
     T: DType
 ](
-    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
     src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
     base: Int,
@@ -56,7 +56,7 @@ def _filter_sparse[
 def _filter_dense[
     T: DType
 ](
-    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
     src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
     base: Int,
@@ -92,7 +92,7 @@ def _filter_block[
     T: DType,
     SPARSE_THRESHOLD: Int = 24,
 ](
-    dst: UnsafePointer[Scalar[T], MutExternalOrigin],
+    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
     src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
     base: Int,
@@ -220,13 +220,13 @@ def _filter_bits(
 def _filter_values[
     T: DType
 ](
-    src_buf: Buffer,
+    src_buf: Buffer[],
     src_offset: Int,
     sel: BitmapView[_],
     sel_start: Int,
     sel_end: Int,
     out_len: Int,
-) -> Buffer:
+) -> Buffer[]:
     """Filter fixed-width values, keeping elements where selection is set.
 
     Uses run-merge for all-ones blocks (memcpy) and density-adaptive
@@ -245,7 +245,7 @@ def _filter_values[
     """
     comptime ELEM = size_of[Scalar[T]]()
     comptime ALL_ONES = ~UInt64(0)
-    var buf = BufferBuilder.alloc_uninit(out_len * ELEM)
+    var buf = Buffer.alloc_uninit(out_len * ELEM)
     var src = src_buf.unsafe_ptr[T](src_offset)
     var dst = buf.unsafe_ptr[T]()
     var out_pos = 0
@@ -315,7 +315,7 @@ def filter_[
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
-        var empty_buf = BufferBuilder.alloc_zeroed[T.native](0)
+        var empty_buf = Buffer.alloc_zeroed[T.native](0)
         return PrimitiveArray[T](
             length=0,
             nulls=0,
@@ -397,8 +397,8 @@ def filter_(
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
-        var empty_offsets = BufferBuilder.alloc_zeroed[DType.uint32](1)
-        var empty_values = BufferBuilder.alloc_zeroed[DType.uint8](0)
+        var empty_offsets = Buffer.alloc_zeroed[DType.uint32](1)
+        var empty_values = Buffer.alloc_zeroed[DType.uint8](0)
         return StringArray(
             length=0,
             nulls=0,
@@ -422,8 +422,8 @@ def filter_(
 
     # Allocate output buffers.
     # TODO: use alloc_uninit to spare zeroing the output buffers
-    var out_offsets = BufferBuilder.alloc_zeroed[DType.uint32](out_len + 1)
-    var out_values = BufferBuilder.alloc_zeroed[DType.uint8](total_bytes)
+    var out_offsets = Buffer.alloc_zeroed[DType.uint32](out_len + 1)
+    var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
     var out_off_ptr = out_offsets.unsafe_ptr[DType.uint32]()
     var out_val_ptr = out_values.unsafe_ptr[DType.uint8]()
     var bm: Optional[Bitmap] = None
@@ -627,7 +627,7 @@ def take[
     var n = len(indices)
     var src = array.buffer.unsafe_ptr[native](array.offset)
     var idx_ptr = indices.buffer.unsafe_ptr[int32.native](indices.offset)
-    var buf = BufferBuilder.alloc_uninit(BufferBuilder._aligned_size[native](n))
+    var buf = Buffer.alloc_uninit(Buffer._aligned_size[native](n))
     var out: UnsafePointer[Scalar[native], MutAnyOrigin]
     out = buf.ptr.bitcast[Scalar[native]]()
 

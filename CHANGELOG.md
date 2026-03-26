@@ -32,6 +32,8 @@
 
 ### Refactors
 
+- **Unified `Buffer[mut: Bool]`** (`marrow/buffers.mojo`): Merged `Buffer` and `BufferBuilder` into a single `Buffer[mut: Bool = False]` type with parametric mutability, following the same pattern as `BufferView[mut]` and `BitmapView[mut]`. `Buffer[mut=True]` is the mutable builder; `Buffer[mut=False]` is the immutable shared-ownership view. `finish()` is a zero-cost O(1) type transfer. All call sites updated across `bitmap.mojo`, `views.mojo`, `arrays.mojo`, `builders.mojo`, `c_data.mojo`, and all kernel files.
+
 - **Array trait + AnyArray rename** (`marrow/arrays.mojo`): Introduced `Array` trait (`type()`, `null_count()`, `is_valid()`, `as_any()`) implemented by all typed arrays. Renamed the type-erased `Array` struct to `AnyArray`, aligning with the existing `Builder`/`AnyArray` and `Value`/`AnyValue` naming convention. All kernel signatures updated accordingly.
 
 - **Scalar types hold native values** (`marrow/scalars.mojo`): `PrimitiveScalar[T]` now holds `SIMD[T.native, 1]` + `Bool` validity directly instead of a length-1 `PrimitiveArray`. `StringScalar` holds `String` + `Bool`. `ListScalar` holds `AnyArray` (child elements) + `Bool`. `StructScalar` holds `List[AnyArray]` (one per field) + `DataType` + `Bool`. `AnyScalar` remains a type-erased container backed by a length-1 `AnyArray` for uniform storage. Added a `Scalar` trait mirroring the `Array` trait.

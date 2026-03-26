@@ -31,7 +31,7 @@ from std.sys import size_of
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .buffers import Buffer, BufferBuilder
+from .buffers import Buffer
 from .bitmap import Bitmap, BitmapBuilder
 from .views import BufferView, BitmapView
 from .dtypes import *
@@ -410,7 +410,7 @@ struct ArrayData(Copyable, Movable):
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap]
-    var buffers: List[Buffer]
+    var buffers: List[Buffer[]]
     var children: List[ArrayData]
 
 
@@ -435,7 +435,7 @@ struct PrimitiveArray[T: DataType](
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap]
-    var buffer: Buffer
+    var buffer: Buffer[]
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -532,7 +532,7 @@ struct PrimitiveArray[T: DataType](
             Self.T.native != DType.bool
         ), "use values_bitmap() for bool arrays"
         return BufferView[Self.T.native, ImmutExternalOrigin](
-            ptr=self.buffer.ptr.bitcast[Scalar[Self.T.native]]() + self.offset,
+            ptr=self.buffer.unsafe_ptr[Self.T.native](self.offset),
             length=self.length,
         )
 
@@ -544,7 +544,7 @@ struct PrimitiveArray[T: DataType](
             Self.T == bool_
         ), "values_bitmap is only valid for BoolArray"
         return BitmapView[ImmutExternalOrigin](
-            ptr=self.buffer.ptr,
+            ptr=self.buffer.unsafe_ptr[DType.uint8](),
             offset=self.offset,
             length=self.length,
         )
@@ -556,7 +556,7 @@ struct PrimitiveArray[T: DataType](
         if self.bitmap:
             var bm = self.bitmap.value()
             return BitmapView[ImmutExternalOrigin](
-                ptr=bm._buffer.ptr,
+                ptr=bm._buffer.unsafe_ptr[DType.uint8](),
                 offset=bm._offset + self.offset,
                 length=self.length,
             )
@@ -713,8 +713,8 @@ struct StringArray(
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap]
-    var offsets: Buffer
-    var values: Buffer
+    var offsets: Buffer[]
+    var values: Buffer[]
 
     def __init__(out self, var *values: String, __list_literal__: ()) raises:
         """Constructs a string array from a list literal ["a", "b", ...].
@@ -878,7 +878,7 @@ struct ListArray(
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap]
-    var offsets: Buffer
+    var offsets: Buffer[]
     var values: AnyArray
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -975,7 +975,7 @@ struct ListArray(
 
     def value_lengths(self) -> PrimitiveArray[int32]:
         """Return an array of list lengths for each element."""
-        var buf = BufferBuilder.alloc_zeroed[DType.int32](self.length)
+        var buf = Buffer.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
             var start = self.offsets.unsafe_get[DType.int32](self.offset + i)
             var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
@@ -1132,7 +1132,7 @@ struct FixedSizeListArray(
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
         var child_data = self.values.to_data()
-        var new_buffers = List[Buffer](capacity=len(child_data.buffers))
+        var new_buffers = List[Buffer[]](capacity=len(child_data.buffers))
         for i in range(len(child_data.buffers)):
             new_buffers.append(child_data.buffers[i].to_device(ctx))
         var child_bm: Optional[Bitmap] = None

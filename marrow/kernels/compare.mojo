@@ -30,7 +30,7 @@ from std.gpu.host import DeviceContext, get_gpu_target
 
 from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
-from ..buffers import BufferBuilder
+from ..buffers import Buffer
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
 from .helpers import has_accelerator_support
@@ -124,15 +124,15 @@ def _binary_cmp[
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
-    var out_buf: BufferBuilder
+    var out_buf: Buffer[mut=True]
     var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
-        out_buf = BufferBuilder.alloc_device[DType.bool](ctx.value(), length)
+        out_buf = Buffer.alloc_device[DType.bool](ctx.value(), length)
         lhs_ptr = left.buffer.device_ptr[native](left.offset)
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
-        out_buf = BufferBuilder.alloc_zeroed[DType.bool](length)
+        out_buf = Buffer.alloc_zeroed[DType.bool](length)
         lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
         rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
 

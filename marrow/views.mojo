@@ -23,7 +23,7 @@ from std.math import iota
 from std.memory import memcpy, memset
 from std.builtin.device_passable import DevicePassable
 
-from .buffers import Buffer, BufferBuilder
+from .buffers import Buffer
 
 
 # ---------------------------------------------------------------------------
@@ -615,35 +615,35 @@ struct BitmapView[
 
     # --- Set operations (return Buffer with offset=0) ---
 
-    def intersection(self, other: BitmapView[_]) raises -> Buffer:
+    def intersection(self, other: BitmapView[_]) raises -> Buffer[]:
         """Return the bitwise AND of self and other."""
         return self._binop[_and](other)
 
-    def union(self, other: BitmapView[_]) raises -> Buffer:
+    def union(self, other: BitmapView[_]) raises -> Buffer[]:
         """Return the bitwise OR of self and other."""
         return self._binop[_or](other)
 
-    def symmetric_difference(self, other: BitmapView[_]) raises -> Buffer:
+    def symmetric_difference(self, other: BitmapView[_]) raises -> Buffer[]:
         """Return the bitwise XOR of self and other."""
         return self._binop[_xor](other)
 
-    def difference(self, other: BitmapView[_]) raises -> Buffer:
+    def difference(self, other: BitmapView[_]) raises -> Buffer[]:
         """Return self AND NOT other."""
         return self._binop[_and_not](other)
 
-    def __and__(self, other: BitmapView[_]) raises -> Buffer:
+    def __and__(self, other: BitmapView[_]) raises -> Buffer[]:
         return self.intersection(other)
 
-    def __or__(self, other: BitmapView[_]) raises -> Buffer:
+    def __or__(self, other: BitmapView[_]) raises -> Buffer[]:
         return self.union(other)
 
-    def __xor__(self, other: BitmapView[_]) raises -> Buffer:
+    def __xor__(self, other: BitmapView[_]) raises -> Buffer[]:
         return self.symmetric_difference(other)
 
-    def __sub__(self, other: BitmapView[_]) raises -> Buffer:
+    def __sub__(self, other: BitmapView[_]) raises -> Buffer[]:
         return self.difference(other)
 
-    def __invert__(self) -> Buffer:
+    def __invert__(self) -> Buffer[]:
         """Return the bitwise NOT of this view as a new Buffer (offset=0)."""
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
@@ -651,7 +651,7 @@ struct BitmapView[
 
         src, total_bytes, lead_bits, _ = self._aligned_byte_range()
 
-        var builder = BufferBuilder.alloc_uninit(total_bytes)
+        var builder = Buffer.alloc_uninit(total_bytes)
         var dst = builder.unsafe_ptr()
         for i in range(0, total_bytes, 64):
             comptime for j in range(unroll):
@@ -664,7 +664,7 @@ struct BitmapView[
         op: def[W: Int](
             SIMD[DType.uint8, W], SIMD[DType.uint8, W]
         ) -> SIMD[DType.uint8, W]
-    ](self, other: BitmapView[_]) raises -> Buffer:
+    ](self, other: BitmapView[_]) raises -> Buffer[]:
         """Apply a byte-level SIMD binary op. Output always has offset=0.
 
         Two code paths based on sub-byte alignment:
@@ -682,7 +682,7 @@ struct BitmapView[
         ptr_b, _, lead_bits_b, _ = other._aligned_byte_range()
 
         var src_b = ptr_b + ((lead_bits_b >> 3) - (lead_bits_a >> 3))
-        var builder = BufferBuilder.alloc_uninit(total_bytes)
+        var builder = Buffer.alloc_uninit(total_bytes)
         var dst = builder.unsafe_ptr()
 
         if lead_bits_a & 7 == lead_bits_b & 7:
@@ -751,7 +751,7 @@ def _and_not[
     return a & ~b
 
 
-def _normalize(buffer: Buffer, lead_bits: Int, length: Int) -> Buffer:
+def _normalize(buffer: Buffer[], lead_bits: Int, length: Int) -> Buffer[]:
     """Shift bits left by ``lead_bits`` so the result starts at offset 0.
 
     When ``lead_bits == 0`` (the common case for freshly-built arrays),
@@ -760,7 +760,7 @@ def _normalize(buffer: Buffer, lead_bits: Int, length: Int) -> Buffer:
     if lead_bits == 0:
         return buffer
     var out_bytes = math.align_up(math.ceildiv(length, 8), 64)
-    var dst = BufferBuilder.alloc_zeroed(out_bytes)
+    var dst = Buffer.alloc_zeroed(out_bytes)
     _copy_bits(
         dst.unsafe_ptr(),
         0,

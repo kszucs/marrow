@@ -6,7 +6,6 @@ from std.sys import size_of
 from .buffers import (
     Allocation,
     Buffer,
-    BufferBuilder,
     DeviceType,
 )
 from .bitmap import Bitmap
@@ -516,7 +515,7 @@ struct CArrowArray(Copyable, Movable):
         else:
             bitmap = None
 
-        var buffers = List[Buffer](capacity=2)  # worst case for string
+        var buffers = List[Buffer[]](capacity=2)  # worst case for string
         var children = List[ArrayData](capacity=Int(self.n_children))
 
         if dtype.is_bool():

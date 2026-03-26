@@ -26,7 +26,7 @@ Example
 
 from std.memory import memcpy, ArcPointer
 from std.sys import size_of
-from .buffers import Buffer, BufferBuilder
+from .buffers import Buffer
 from .bitmap import Bitmap, BitmapBuilder
 from .dtypes import *
 from .arrays import (
@@ -252,7 +252,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     var _capacity: Int
     var _null_count: Int
     var _bitmap: BitmapBuilder
-    var _buffer: BufferBuilder
+    var _buffer: Buffer[mut=True]
 
     def __init__(out self, capacity: Int = 0, *, zeroed: Bool = True):
         """Create a builder with the given initial capacity.
@@ -268,10 +268,10 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
         if zeroed:
-            self._buffer = BufferBuilder.alloc_zeroed[Self.T.native](capacity)
+            self._buffer = Buffer.alloc_zeroed[Self.T.native](capacity)
         else:
-            self._buffer = BufferBuilder.alloc_uninit(
-                BufferBuilder._aligned_size[Self.T.native](capacity)
+            self._buffer = Buffer.alloc_uninit(
+                Buffer._aligned_size[Self.T.native](capacity)
             )
 
     def __len__(self) -> Int:
@@ -421,18 +421,18 @@ struct StringBuilder(Builder, Sized):
     var _capacity: Int
     var _null_count: Int
     var _bitmap: BitmapBuilder
-    var _offsets: BufferBuilder
-    var _values: BufferBuilder
+    var _offsets: Buffer[mut=True]
+    var _values: Buffer[mut=True]
 
     def __init__(out self, capacity: Int = 0, bytes_capacity: Int = 0):
-        var offsets = BufferBuilder.alloc_zeroed[DType.uint32](capacity + 1)
+        var offsets = Buffer.alloc_zeroed[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
         self._bitmap = BitmapBuilder.alloc(capacity)
         self._offsets = offsets^
-        self._values = BufferBuilder.alloc_zeroed[DType.uint8](bytes_capacity)
+        self._values = Buffer.alloc_zeroed[DType.uint8](bytes_capacity)
 
     def __len__(self) -> Int:
         return self._length
@@ -603,11 +603,11 @@ struct ListBuilder(Builder, Sized):
     var _capacity: Int
     var _null_count: Int
     var _bitmap: BitmapBuilder
-    var _offsets: BufferBuilder
+    var _offsets: Buffer[mut=True]
     var _child: AnyBuilder
 
     def __init__(out self, var child: AnyBuilder, capacity: Int = 0):
-        var offsets = BufferBuilder.alloc_zeroed[DType.uint32](capacity + 1)
+        var offsets = Buffer.alloc_zeroed[DType.uint32](capacity + 1)
         offsets.unsafe_set[DType.uint32](0, 0)
         var child_dtype = child.dtype().copy()
         self._dtype = list_(child_dtype^)

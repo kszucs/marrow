@@ -17,7 +17,7 @@ from std.time import perf_counter_ns
 from marrow.arrays import PrimitiveArray
 from marrow.bitmap import Bitmap, BitmapBuilder
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.buffers import BufferBuilder
+from marrow.buffers import Buffer
 from marrow.dtypes import int64, bool_
 from marrow.kernels.filter import filter_, _filter_block
 
@@ -121,7 +121,7 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     var total_elems = n_blocks * BLOCK
     var arr = arange[int64](0, total_elems)
     var src = arr.buffer.unsafe_ptr[native](0)
-    var out_buf = BufferBuilder.alloc_zeroed[native](total_elems)
+    var out_buf = Buffer.alloc_zeroed[native](total_elems)
     var dst = out_buf.unsafe_ptr[native]()
 
     for _ in range(3):

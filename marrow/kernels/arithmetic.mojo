@@ -18,7 +18,7 @@ from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, AnyArray
-from ..buffers import Buffer, BufferBuilder
+from ..buffers import Buffer
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
 from . import (
     bitmap_and,
@@ -122,13 +122,13 @@ def _unary[
     comptime native = T.native
     var length = len(array)
 
-    var buf: BufferBuilder
+    var buf: Buffer[mut=True]
     var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
-        buf = BufferBuilder.alloc_device[native](ctx.value(), length)
+        buf = Buffer.alloc_device[native](ctx.value(), length)
         in_ptr = array.buffer.aligned_device_ptr[native](array.offset)
     else:
-        buf = BufferBuilder.alloc_zeroed[native](length)
+        buf = Buffer.alloc_zeroed[native](length)
         in_ptr = array.buffer.aligned_unsafe_ptr[native](array.offset)
 
     _elementwise_unary[T, func](
@@ -167,7 +167,7 @@ def _binary[
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
-    var buf: BufferBuilder
+    var buf: Buffer[mut=True]
     var out_ptr: UnsafePointer[Scalar[native], MutAnyOrigin]
     var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
@@ -175,13 +175,13 @@ def _binary[
         # FIXME: cannot use aligned pointers since the operands
         # may end up with different alignments; need to switch to
         # unaligned loads/stores
-        buf = BufferBuilder.alloc_device[native](ctx.value(), length)
+        buf = Buffer.alloc_device[native](ctx.value(), length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.device_ptr[native](left.offset)
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
-        buf = BufferBuilder.alloc_zeroed[native](length)
+        buf = Buffer.alloc_zeroed[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
         lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
         rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)

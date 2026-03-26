@@ -16,13 +16,13 @@ Copying a `Bitmap` is O(1) — it bumps the `Buffer`'s `ArcPointer` ref-count.
 
 BitmapBuilder
 -------------
-Mutable counterpart.  Wraps `BufferBuilder` for incremental construction.
+Mutable counterpart.  Wraps `Buffer[mut=True]` for incremental construction.
 Call `finish(length)` to freeze into an immutable `Bitmap`.
 """
 
 from std.memory import memcpy, memset
 
-from .buffers import Buffer, BufferBuilder
+from .buffers import Buffer
 from .views import BitmapView
 
 
@@ -38,11 +38,11 @@ struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
     Copying is O(1); the backing `Buffer` uses `ArcPointer` shared ownership.
     """
 
-    var _buffer: Buffer
+    var _buffer: Buffer[]
     var _offset: Int
     var _length: Int
 
-    def __init__(out self, buffer: Buffer, offset: Int, length: Int):
+    def __init__(out self, buffer: Buffer[], offset: Int, length: Int):
         self._buffer = buffer
         self._offset = offset
         self._length = length
@@ -88,7 +88,7 @@ struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
 struct BitmapBuilder(Movable):
     """Mutable bit-packed bitmap builder.
 
-    Wraps `BufferBuilder` with bit-level write operations.  Call `finish(length)`
+    Wraps `Buffer[mut=True]` with bit-level write operations.  Call `finish(length)`
     to freeze into an immutable `Bitmap`.
 
     Example:
@@ -98,18 +98,18 @@ struct BitmapBuilder(Movable):
         var bitmap = bm.finish(10)   # Bitmap of 10 bits, 2 set
     """
 
-    var _builder: BufferBuilder
+    var _builder: Buffer[mut=True]
 
-    def __init__(out self, var builder: BufferBuilder):
+    def __init__(out self, var builder: Buffer[mut=True]):
         self._builder = builder^
 
     @staticmethod
     def alloc(length: Int) -> BitmapBuilder:
         """Allocate a zero-filled builder for `length` bits."""
-        return BitmapBuilder(BufferBuilder.alloc_zeroed[DType.bool](length))
+        return BitmapBuilder(Buffer.alloc_zeroed[DType.bool](length))
 
     @always_inline
-    def unsafe_ptr(self) -> UnsafePointer[UInt8, MutExternalOrigin]:
+    def unsafe_ptr(self) -> UnsafePointer[UInt8, MutAnyOrigin]:
         """Return the raw mutable byte pointer (for low-level bit operations).
         """
         return self._builder.ptr

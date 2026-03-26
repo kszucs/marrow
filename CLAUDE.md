@@ -67,9 +67,9 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 ### Key Abstractions
 
 **Buffer** (`marrow/buffers.mojo`):
-- Immutable, ref-counted via `ArcPointer[Allocation]`
+- `Buffer[mut=False]` — immutable, ref-counted via `ArcPointer[Allocation]`
+- `Buffer[mut=True]` — mutable counterpart (replaces the former `BufferBuilder`); `finish()` freezes to `Buffer[mut=False]`
 - Allocation kinds: CPU (owned heap), FOREIGN (external with release callback), HOST (pinned GPU host memory), DEVICE (GPU memory)
-- `BufferBuilder` is the mutable counterpart; `finish()` transfers ownership to immutable `Buffer`
 - All buffers are 64-byte aligned and padded. Use `aligned_unsafe_ptr[T](offset)` / `aligned_device_ptr[T](offset)` when the array offset is non-zero to ensure SIMD loads start at a 64-byte boundary. Use `unsafe_ptr[T](offset)` / `device_ptr[T](offset)` only when exact element positioning is needed.
 
 **Bitmap** (`marrow/bitmap.mojo`):
@@ -101,7 +101,7 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 ```
 marrow/
 ├── dtypes.mojo           # Type system (DataType, Field)
-├── buffers.mojo          # Memory management (Buffer, BufferBuilder, Allocation)
+├── buffers.mojo          # Memory management (Buffer[mut], Allocation)
 ├── bitmap.mojo           # Bitmap, BitmapBuilder
 ├── arrays.mojo           # Array, PrimitiveArray, StringArray, ListArray,
 │                         # FixedSizeListArray, StructArray, ChunkedArray

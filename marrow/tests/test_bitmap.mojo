@@ -19,7 +19,7 @@ def _make(n_bits: Int, set_bits: List[Int]) -> Bitmap:
     return b.finish(n_bits)
 
 
-def _to_bm(buf: Buffer, n: Int) -> Bitmap:
+def _to_bm(buf: Buffer[], n: Int) -> Bitmap:
     """Wrap a Buffer as a Bitmap with offset=0."""
     return Bitmap(buf, 0, n)
 

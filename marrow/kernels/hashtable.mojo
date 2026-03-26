@@ -17,7 +17,7 @@ from std.sys.intrinsics import prefetch
 
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
-from ..buffers import BufferBuilder
+from ..buffers import Buffer
 from ..dtypes import int32, uint64
 from .compare import equal
 from .filter import take, filter_
@@ -183,11 +183,11 @@ struct SwissHashTable[
     comptime H = UInt64
     """Hash scalar type."""
 
-    var _ctrl: BufferBuilder
+    var _ctrl: Buffer[mut=True]
     """Control bytes: 1 byte per slot + ``_GROUP_WIDTH`` padding for
     SIMD loads at the end. ``0xFF`` = empty, ``0x00–0x7F`` = H2."""
 
-    var _slots: BufferBuilder
+    var _slots: Buffer[mut=True]
     """Bucket ID (Int32) stored at each slot position."""
 
     var _capacity: Int
@@ -202,18 +202,18 @@ struct SwissHashTable[
     var _max_count: Int
     """Resize threshold: ``_capacity * 7 / 8``."""
 
-    var _bucket_hashes: BufferBuilder
+    var _bucket_hashes: Buffer[mut=True]
     """Dense array of hashes indexed by bucket ID. Used to verify
     H2-matching candidates against the full hash."""
 
     var _num_buckets: Int
     """Number of unique keys (buckets) inserted so far."""
 
-    var _offsets: BufferBuilder
+    var _offsets: Buffer[mut=True]
     """CSR offsets: ``_offsets[bid]`` .. ``_offsets[bid+1]`` is the range
     in ``_rows`` for bucket ``bid``. Populated by ``build()``."""
 
-    var _rows: BufferBuilder
+    var _rows: Buffer[mut=True]
     """CSR row indices, grouped by bucket. Populated by ``build()``."""
 
     def __init__(out self, capacity: Int = 0):
@@ -230,16 +230,16 @@ struct SwissHashTable[
         self._mask = cap - 1
         self._count = 0
         self._max_count = cap * 7 // 8
-        self._ctrl = BufferBuilder.alloc_filled(
+        self._ctrl = Buffer.alloc_filled(
             cap + _GROUP_WIDTH, fill=_CTRL_EMPTY
         )
-        self._slots = BufferBuilder.alloc_uninit[DType.int32](cap)
-        self._bucket_hashes = BufferBuilder.alloc_uninit[DType.uint64](
+        self._slots = Buffer.alloc_uninit[DType.int32](cap)
+        self._bucket_hashes = Buffer.alloc_uninit[DType.uint64](
             max(capacity, 16)
         )
         self._num_buckets = 0
-        self._offsets = BufferBuilder.alloc_uninit(0)
-        self._rows = BufferBuilder.alloc_uninit(0)
+        self._offsets = Buffer.alloc_uninit(0)
+        self._rows = Buffer.alloc_uninit(0)
 
     # ------------------------------------------------------------------
     # Internal helpers — hash, ctrl, slot, bucket, CSR accessors
@@ -403,10 +403,10 @@ struct SwissHashTable[
             var old_ctrl = self._ctrl^
             var old_slots = self._slots^
 
-            self._ctrl = BufferBuilder.alloc_filled(
+            self._ctrl = Buffer.alloc_filled(
                 needed + _GROUP_WIDTH, fill=_CTRL_EMPTY
             )
-            self._slots = BufferBuilder.alloc_uninit[DType.int32](needed)
+            self._slots = Buffer.alloc_uninit[DType.int32](needed)
 
             for i in range(old_cap):
                 if old_ctrl.unsafe_get[DType.uint8](i) != _CTRL_EMPTY:
@@ -503,14 +503,14 @@ struct SwissHashTable[
             counts[Int(bids.unsafe_get(i))] += 1
 
         # Prefix sum → offsets.
-        self._offsets = BufferBuilder.alloc_uninit[DType.int64](nb + 1)
+        self._offsets = Buffer.alloc_uninit[DType.int64](nb + 1)
         self._set_offset(0, 0)
         for b in range(nb):
             self._set_offset(b + 1, self._get_offset(b) + counts[b])
 
         # Scatter row indices into CSR rows array.
         var total = self._get_offset(nb)
-        self._rows = BufferBuilder.alloc_uninit[DType.int32](total)
+        self._rows = Buffer.alloc_uninit[DType.int32](total)
         for b in range(nb):
             counts[b] = self._get_offset(b)
         for i in range(n):

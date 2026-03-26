@@ -2,7 +2,7 @@ import std.math as math
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.gpu.host import DeviceContext
 
-from marrow.buffers import Buffer, BufferBuilder, DeviceType
+from marrow.buffers import Buffer, DeviceType
 
 
 def test_buffer_device_kind() raises:
@@ -45,9 +45,9 @@ def test_buffer_host_kind() raises:
 
 
 def test_buffer_host_builder() raises:
-    """BufferBuilder.alloc_host + finish produce a valid HOST buffer."""
+    """Buffer.alloc_host + finish produce a valid HOST buffer."""
     var ctx = DeviceContext()
-    var b = BufferBuilder.alloc_host[DType.uint8](ctx, 64)
+    var b = Buffer.alloc_host[DType.uint8](ctx, 64)
     b.unsafe_set(0, 7)
     b.unsafe_set(1, 13)
     var buf = b.finish()
@@ -69,7 +69,7 @@ def test_buffer_host_builder() raises:
 def test_buffer_to_cpu_round_trip() raises:
     """Upload a CPU buffer to GPU then download back; data is preserved."""
     var ctx = DeviceContext()
-    var builder = BufferBuilder.alloc_zeroed[DType.uint8](64)
+    var builder = Buffer.alloc_zeroed[DType.uint8](64)
     builder.unsafe_set(0, 42)
     builder.unsafe_set(1, 99)
     var cpu_buf = builder.finish()

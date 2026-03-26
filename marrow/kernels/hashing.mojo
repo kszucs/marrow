@@ -26,7 +26,7 @@ from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import PrimitiveBuilder
-from ..buffers import BufferBuilder
+from ..buffers import Buffer
 from ..dtypes import (
     DataType,
     uint8,
@@ -301,21 +301,21 @@ def rapidhash(
     """
     var n = len(keys)
 
-    var buf: BufferBuilder
+    var buf: Buffer[mut=True]
     var data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin]
     var data_offset = keys.offset
     var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
     var bm_offset = 0
 
     if ctx:
-        buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+        buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         data_ptr = keys.buffer.device_ptr[DType.uint8]()
         if keys.bitmap:
             bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
             bm_offset = keys.bitmap.value()._offset + keys.offset
     else:
-        buf = BufferBuilder.alloc_uninit(
-            BufferBuilder._aligned_size[uint64.native](n)
+        buf = Buffer.alloc_uninit(
+            Buffer._aligned_size[uint64.native](n)
         )
         data_ptr = keys.buffer.unsafe_ptr()
         if keys.bitmap:
@@ -356,20 +356,20 @@ def rapidhash[
     comptime native = T.native
     var n = len(keys)
 
-    var buf: BufferBuilder
+    var buf: Buffer[mut=True]
     var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
     var bm_offset = 0
 
     if ctx:
-        buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+        buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         in_ptr = keys.buffer.aligned_device_ptr[native](keys.offset)
         if keys.bitmap:
             bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
             bm_offset = keys.bitmap.value()._offset + keys.offset
     else:
-        buf = BufferBuilder.alloc_uninit(
-            BufferBuilder._aligned_size[uint64.native](n)
+        buf = Buffer.alloc_uninit(
+            Buffer._aligned_size[uint64.native](n)
         )
         in_ptr = keys.buffer.aligned_unsafe_ptr[native](keys.offset)
         if keys.bitmap:
@@ -477,12 +477,12 @@ def rapidhash(
     for k in range(1, num_fields):
         var field_hashes = rapidhash(keys.children[k], ctx)
 
-        var buf: BufferBuilder
+        var buf: Buffer[mut=True]
         if ctx:
-            buf = BufferBuilder.alloc_device[DType.uint64](ctx.value(), n)
+            buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         else:
-            buf = BufferBuilder.alloc_uninit(
-                BufferBuilder._aligned_size[uint64.native](n)
+            buf = Buffer.alloc_uninit(
+                Buffer._aligned_size[uint64.native](n)
             )
         var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
 

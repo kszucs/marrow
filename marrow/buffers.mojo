@@ -1,12 +1,12 @@
-"""Arrow-compatible memory buffers: immutable types and mutable builders.
+"""Arrow-compatible memory buffers with parametric mutability.
 
 Buffer Kinds
 ------------
 A `Buffer` has one of four memory kinds, encoded in the `Allocation` it owns:
 
   CPU
-      Owned Mojo heap allocation.  Created exclusively by `BufferBuilder.finish()`.
-      The `Allocation` holds the raw pointer; `Allocation.__del__` calls `ptr.free()`.
+      Owned Mojo heap allocation.  Created by `Buffer.alloc_zeroed()` and
+      similar factory methods.  `Allocation.__del__` calls `ptr.free()`.
 
   FOREIGN
       External CPU memory provided by a producer (Arrow C Data Interface or Arrow C
@@ -23,23 +23,29 @@ A `Buffer` has one of four memory kinds, encoded in the `Allocation` it owns:
 
   DEVICE
       GPU device memory managed by Mojo's `DeviceBuffer` (AsyncRT reference-counted).
-      NOT CPU-accessible (`ptr` is null).  Created via `Buffer.from_device()` or by
-      calling `buffer.to_device(ctx)` on any CPU-accessible buffer.
-      The `Allocation._device` Optional field owns the `DeviceBuffer`; its destructor
-      cascades to `AsyncRT_DeviceBuffer_release`.
+      NOT CPU-accessible (`ptr` is null for `Buffer[mut=False]`).  Created via
+      `Buffer.from_device()` or `Buffer.alloc_device()`.
 
-CPU accessibility is encoded directly in `Buffer.ptr`: a non-null `ptr` means
-CPU-accessible (CPU, FOREIGN, HOST); a null `ptr` means device-only (DEVICE).
+CPU accessibility
+-----------------
+For `Buffer[mut=False]`: `ptr` is non-null for CPU/FOREIGN/HOST; null for DEVICE.
 `is_cpu()` and `is_device()` use this O(1) check.  `is_host()` checks `_owner._host`.
+
+For `Buffer[mut=True]`: `ptr` holds the mutable allocation pointer (CPU heap, pinned
+host, or GPU device pointer).  Use `is_cpu()` / `is_device()` only on `Buffer[mut=False]`.
 
 Ownership Model
 ---------------
-`Buffer` is `ImplicitlyCopyable`: copying a Buffer is O(1) and bumps the
+`Buffer[mut=False]` is `ImplicitlyCopyable`: copying a Buffer is O(1) and bumps the
 `ArcPointer[Allocation]` reference count.  The backing memory is freed / released
 only when the *last* copy is dropped.
 
-`BufferBuilder` is the mutable counterpart — it exclusively owns a writable pointer.
-`BufferBuilder.finish()` transfers that pointer into an owned CPU `Buffer`.
+`Buffer[mut=True]` is the mutable counterpart — it exclusively owns a writable
+pointer.  `Buffer[mut=True].finish()` transfers that pointer into an owned CPU/HOST/DEVICE
+`Buffer[mut=False]`.  Copying a `Buffer[mut=True]` is a compile-time error.
+
+Both modes share the same struct layout: `(size, ptr, _owner)`.  The `ArcPointer[Allocation]`
+is created eagerly at allocation time so `finish()` is a zero-cost type conversion.
 
 Allocation Invariant
 --------------------
@@ -66,23 +72,23 @@ Transfer methods
                                 returns a new CPU buffer.  HOST buffers are already
                                 CPU-accessible via `ptr` and do not need downloading.
 
-BufferBuilder lifecycle
-------------------------
+Buffer lifecycle
+-----------------
 CPU heap allocation (kind=CPU):
-  1. `var b = BufferBuilder.alloc_zeroed[T](n)` — 64-byte-aligned heap allocation.
+  1. `var b = Buffer.alloc_zeroed[T](n)` — 64-byte-aligned heap allocation.
   2. `b.unsafe_set(i, v)` / `b.simd_store(...)` — write through the mutable pointer.
   3. `var buf = b.finish()` — zero-cost transfer into an immutable CPU Buffer.
 
 Pinned host allocation (kind=HOST):
-  1. `var b = BufferBuilder.alloc_host[T](ctx, n)` — page-locked allocation via DeviceContext.
+  1. `var b = Buffer.alloc_host[T](ctx, n)` — page-locked allocation via DeviceContext.
   2. `b.unsafe_set(i, v)` / `b.simd_store(...)` — write through the mutable pointer.
   3. `var buf = b.finish()` — transfer into an immutable HOST Buffer.
 
 Bitmap operations
 -----------------
 Validity bitmaps use the dedicated `Bitmap` / `BitmapBuilder` types from
-`marrow.bitmap`, which wrap `Buffer` / `BufferBuilder` with bit-level and
-SIMD bulk operations.
+`marrow.bitmap`, which wrap `Buffer[mut=False]` / `Buffer[mut=True]` with bit-level
+and SIMD bulk operations.
 """
 
 from std.memory import (
@@ -101,7 +107,7 @@ struct DeviceType:
     """Device type constants from the Arrow C Device Data Interface / DLPack.
 
     Use these when constructing HOST or DEVICE buffers (`from_host`,
-    `from_device`, `BufferBuilder.finish`) and when exporting via
+    `from_device`, `Buffer.finish`) and when exporting via
     `CArrowDeviceArray`.  CPU and FOREIGN buffers always have `device_type()
     == DeviceType.CPU`.
     """
@@ -283,40 +289,72 @@ struct Allocation(Movable):
 
 
 # ---------------------------------------------------------------------------
-# BufferBuilder — mutable buffer for building arrays
+# Buffer — unified mutable/immutable buffer with parametric mutability
 # ---------------------------------------------------------------------------
 
 
-struct BufferBuilder(Movable):
-    """Mutable contiguous memory region with 64-byte alignment.
+# TODO: add assertions to ensure alignment and padding invariants hold
+struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
+    """Contiguous memory region with parametric mutability.
 
-    Two allocation modes:
-      - `BufferBuilder.alloc_zeroed[T](n)` — Mojo heap (CPU); freeze with `finish()`.
-      - `BufferBuilder.alloc_host[T](ctx, n)` — pinned host memory; freeze with
-        `finish(device_type)`.
+    `Buffer[mut=True]`  — mutable, exclusively owned.  Use `alloc_*` factory
+                          methods to allocate; write via `unsafe_set` /
+                          `simd_store`; freeze with `finish()`.
 
-    In both cases write via `unsafe_set()` / `simd_store()`, then call the
-    appropriate `finish*` method to obtain an immutable `Buffer`.
+    `Buffer[mut=False]` — immutable, shared ownership.  Copying is O(1) via
+                          `ArcPointer[Allocation]` ref-counting.
+
+    Both modes share the same three-field layout `(size, ptr, _owner)`.
+    The `ArcPointer[Allocation]` is created eagerly at allocation time so
+    `finish()` is a near-zero-cost type rebind (one ArcPointer copy).
+
+    CPU accessibility (mut=False only):
+      `is_cpu()` returns True for CPU, FOREIGN, and HOST kinds (ptr non-null).
+      `is_device()` returns True for DEVICE kind (ptr null).
+      Call `to_cpu(ctx)` before reading a DEVICE buffer on the CPU.
     """
 
-    var ptr: UnsafePointer[UInt8, MutExternalOrigin]
     var size: Int
-    var _host: Optional[HostBuffer[DType.uint8]]
-    """Set when allocated via `alloc_host`; None for CPU heap allocations."""
-    var _device: Optional[DeviceBuffer[DType.uint8]]
-    """Set when allocated via `alloc_device`; None otherwise."""
+    """Buffer size in bytes (always 64-byte aligned)."""
+
+    var ptr: UnsafePointer[UInt8, MutAnyOrigin]
+    """Mutable allocation pointer.
+    For `mut=True` CPU/HOST allocations: the CPU-accessible data pointer.
+    For `mut=True` DEVICE allocations: the GPU device pointer (used by kernels).
+    For `mut=False` CPU/HOST allocations: the CPU-accessible data pointer.
+    For `mut=False` DEVICE allocations: null (no CPU access; use device_ptr()).
+    """
+
+    var _owner: ArcPointer[Allocation]
+    """Shared ownership handle.  Ref-count is 1 for `mut=True` (exclusive)."""
+
+    # --- Lifecycle ---
 
     def __init__(
         out self,
-        ptr: UnsafePointer[UInt8, MutExternalOrigin],
         size: Int,
-        host: Optional[HostBuffer[DType.uint8]] = None,
-        device: Optional[DeviceBuffer[DType.uint8]] = None,
+        ptr: UnsafePointer[UInt8, MutAnyOrigin],
+        owner: ArcPointer[Allocation],
     ):
-        self.ptr = ptr
+        debug_assert(
+            Int(ptr) % 64 == 0 or Int(ptr) == 0,
+            "Buffer pointer must be 64-byte aligned",
+        )
+        debug_assert(
+            size % 64 == 0 or size == 0,
+            "Buffer size must be 64-byte aligned",
+        )
         self.size = size
-        self._host = host
-        self._device = device
+        self.ptr = ptr
+        self._owner = owner
+
+    def __init__(out self, *, copy: Self):
+        comptime assert not Self.mut, "cannot copy mutable Buffer[mut=True]; call finish() to freeze"
+        self.size = copy.size
+        self.ptr = copy.ptr
+        self._owner = copy._owner
+
+    # --- Internal alignment helper ---
 
     @staticmethod
     def _aligned_size[T: DType](length: Int) -> Int:
@@ -329,59 +367,63 @@ struct BufferBuilder(Movable):
         else:
             return math.align_up(length * size_of[T](), 64)
 
+    # --- Mutable factory methods (return Buffer[mut=True]) ---
+
     @staticmethod
     def alloc_zeroed[
         I: Intable, //, T: DType = DType.uint8
-    ](length: I) -> BufferBuilder:
+    ](length: I) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned, zero-filled buffer for `length` elements of type T.
 
         For DType.bool, `length` is the number of bits; the buffer will hold
         ceildiv(length, 8) bytes, zero-padded to a 64-byte boundary.
         """
-        var byte_size = Self._aligned_size[T](Int(length))
-        var result = Self.alloc_uninit(byte_size)
+        var byte_size = Buffer._aligned_size[T](Int(length))
+        var result = Buffer.alloc_uninit(byte_size)
         memset_zero(result.ptr, result.size)
         return result^
 
     @staticmethod
     def alloc_filled[
         I: Intable, //, T: DType = DType.uint8
-    ](length: I, fill: Scalar[T]) -> BufferBuilder:
+    ](length: I, fill: Scalar[T]) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned buffer filled with ``fill``."""
-        var byte_size = Self._aligned_size[T](Int(length))
-        var result = Self.alloc_uninit(byte_size)
+        var byte_size = Buffer._aligned_size[T](Int(length))
+        var result = Buffer.alloc_uninit(byte_size)
         memset(result.ptr, UInt8(fill), result.size)
         return result^
 
     @staticmethod
     def alloc_uninit[
         I: Intable, //, T: DType = DType.uint8
-    ](length: I) -> BufferBuilder:
+    ](length: I) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned buffer for ``length`` elements of type T
         without zero-filling.
 
         Use only when the caller guarantees every element will be written
         before the buffer is read.
         """
-        var size = math.align_up(Self._aligned_size[T](Int(length)), 64)
-        var ptr = alloc[UInt8](size, alignment=64)
-        return BufferBuilder(ptr, size)
+        var size = math.align_up(Buffer._aligned_size[T](Int(length)), 64)
+        var raw = alloc[UInt8](size, alignment=64)
+        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
+        return Buffer[mut=True](size=size, ptr=ptr, owner=ArcPointer(Allocation.cpu(ptr)))
 
     @staticmethod
-    def alloc_uninit(byte_size: Int) -> BufferBuilder:
+    def alloc_uninit(byte_size: Int) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned buffer without zero-filling.
 
         Use only when the caller guarantees every byte will be written
         before the buffer is read (e.g. SIMD loops that cover the full range).
         """
         var size = math.align_up(byte_size, 64)
-        var ptr = alloc[UInt8](size, alignment=64)
-        return BufferBuilder(ptr, size)
+        var raw = alloc[UInt8](size, alignment=64)
+        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
+        return Buffer[mut=True](size=size, ptr=ptr, owner=ArcPointer(Allocation.cpu(ptr)))
 
     @staticmethod
     def alloc_host[
         I: Intable, //, T: DType = DType.uint8
-    ](ctx: DeviceContext, length: I) raises -> BufferBuilder:
+    ](ctx: DeviceContext, length: I) raises -> Buffer[mut=True]:
         """Allocate page-locked (pinned) host memory for `length` elements of type T.
 
         Pinned memory is CPU-accessible and enables fast DMA transfers to/from
@@ -396,90 +438,142 @@ struct BufferBuilder(Movable):
             length: Number of elements (bits for DType.bool).
 
         Returns:
-            A BufferBuilder backed by pinned host memory.
+            A mutable Buffer backed by pinned host memory.
         """
-        var byte_size = Self._aligned_size[T](Int(length))
+        var byte_size = Buffer._aligned_size[T](Int(length))
         var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutExternalOrigin]](
-            host.unsafe_ptr()
-        )
+        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](host.unsafe_ptr())
         memset_zero(ptr, byte_size)
-        return BufferBuilder(ptr, byte_size, host)
+        return Buffer[mut=True](
+            size=byte_size, ptr=ptr, owner=ArcPointer(Allocation.host(host))
+        )
 
     @staticmethod
     def alloc_device[
         I: Intable, //, T: DType = DType.uint8
-    ](ctx: DeviceContext, length: I) raises -> BufferBuilder:
+    ](ctx: DeviceContext, length: I) raises -> Buffer[mut=True]:
         """Allocate a device (GPU) buffer for `length` elements of type T.
 
-        The returned builder exposes `ptr` as a `MutAnyOrigin` device pointer
+        The returned buffer exposes `ptr` as a `MutAnyOrigin` device pointer
         suitable for GPU kernel writes. Call `finish()` to obtain an immutable
-        device-resident `Buffer`.
+        device-resident `Buffer[mut=False]`.
         """
-        var byte_size = Self._aligned_size[T](Int(length))
+        var byte_size = Buffer._aligned_size[T](Int(length))
         var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutExternalOrigin]](
-            dev.unsafe_ptr()
+        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](dev.unsafe_ptr())
+        return Buffer[mut=True](
+            size=byte_size, ptr=ptr, owner=ArcPointer(Allocation.device(dev))
         )
-        return BufferBuilder(ptr, byte_size, device=dev)
 
-    def finish(mut self) -> Buffer:
-        """Snapshot the mutable builder into an immutable Buffer and reset state.
+    # --- Immutable factory methods (return Buffer[mut=False]) ---
 
-        For CPU builders (`alloc`): returns kind=CPU.
-        For HOST builders (`alloc_host`): returns kind=HOST.
-        For DEVICE builders (`alloc_device`): returns kind=DEVICE.
+    @staticmethod
+    def from_foreign[
+        I: Intable, //
+    ](
+        ptr: OpaquePointer[MutAnyOrigin],
+        size: I,
+        owner: ArcPointer[Allocation],
+    ) -> Buffer[mut=False]:
+        """Create an immutable view into foreign CPU memory.
 
-        A fresh zero-capacity CPU allocation is installed on this builder so
+        The caller passes an `ArcPointer[Allocation]` (the "keeper") that holds
+        the producer's release callback.  All `Buffer` views sharing the same
+        keeper bump its ref-count on copy; when the last view drops, the keeper
+        releases and the C callback fires automatically.
+
+        Precondition: `owner` must have been created with `Allocation.foreign(...)`.
+        """
+        return Buffer[mut=False](
+            size=Int(size),
+            ptr=rebind[UnsafePointer[UInt8, MutAnyOrigin]](ptr.bitcast[UInt8]()),
+            owner=owner,
+        )
+
+    @staticmethod
+    def from_host(host: HostBuffer[DType.uint8]) -> Buffer[mut=False]:
+        """Create a HOST (pinned) buffer from a Mojo HostBuffer.
+
+        The HostBuffer is moved into an `Allocation` behind `ArcPointer`;
+        its destructor cascades to `AsyncRT_DeviceBuffer_release` when the
+        last Buffer copy is dropped.
+
+        The CPU pointer is taken from `host.unsafe_ptr()` — it remains valid
+        for the lifetime of the Allocation.  `device_type()` is inferred from
+        the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
+        """
+        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](host.unsafe_ptr())
+        return Buffer[mut=False](
+            size=len(host),
+            ptr=ptr,
+            owner=ArcPointer(Allocation.host(host)),
+        )
+
+    @staticmethod
+    def from_device(dev: DeviceBuffer[DType.uint8], size: Int) -> Buffer[mut=False]:
+        """Create a DEVICE (GPU) buffer from a Mojo DeviceBuffer.
+
+        The DeviceBuffer is moved into an `Allocation` behind `ArcPointer`;
+        its destructor cascades to `AsyncRT_DeviceBuffer_release` when the
+        last Buffer copy is dropped.
+
+        `ptr` is set to null — call `to_cpu(ctx)` to read data on the CPU.
+        `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
+        metal→METAL).
+        """
+        return Buffer[mut=False](
+            size=size,
+            ptr=UnsafePointer[UInt8, MutAnyOrigin](),
+            owner=ArcPointer(Allocation.device(dev)),
+        )
+
+    # --- Mutability transition ---
+
+    def finish(mut self: Buffer[mut=True]) -> Buffer[mut=False]:
+        """Freeze the mutable buffer into an immutable Buffer and reset state.
+
+        For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
+        For HOST buffers (`alloc_host`): returns kind=HOST.
+        For DEVICE buffers (`alloc_device`): returns kind=DEVICE (ptr=null).
+
+        A fresh zero-capacity CPU allocation is installed on this buffer so
         it can continue to be used after the call.
         """
-        var new = Self.alloc_zeroed(0)
+        var new = Buffer.alloc_zeroed(0)
         swap(self, new)
         # After swap: self has the fresh empty allocation; new has the old state.
-        # We null new.ptr before returning so new.__del__ skips ptr.free() —
-        # the returned Buffer's Allocation owns the memory from this point on.
-        if new._device:
-            var result = Buffer.from_device(new._device.take(), new.size)
-            new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
-            return result
-        if new._host:
-            var result = Buffer.from_host(new._host.take())
-            new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
-            return result
-        var result = Buffer(
-            new.ptr.as_immutable(),
-            new.size,
-            ArcPointer(
-                Allocation.cpu(
-                    rebind[UnsafePointer[UInt8, MutAnyOrigin]](new.ptr)
-                )
-            ),
-        )
-        new.ptr = UnsafePointer[UInt8, MutExternalOrigin]()
-        return result
-
-    def resize[
-        I: Intable, //, T: DType = DType.uint8
-    ](mut self, length: I) raises:
-        """Resize the buffer to hold `length` elements of type T.
-
-        For HOST builders the new allocation is also pinned host memory using
-        the same `DeviceContext`; for CPU builders a plain heap allocation is used.
-
-        No-op if the new size maps to the same byte allocation as the current one.
-        """
-        var byte_size = Self._aligned_size[T](Int(length))
-        if byte_size == self.size:
-            return
-        var new: BufferBuilder
-        if self._host:
-            new = BufferBuilder.alloc_host[T](
-                self._host.value().context(), length
+        if new._owner[]._device:
+            # DEVICE allocation: null the CPU ptr (no CPU accessibility).
+            return Buffer[mut=False](
+                size=new.size,
+                ptr=UnsafePointer[UInt8, MutAnyOrigin](),
+                owner=new._owner,
             )
         else:
-            new = BufferBuilder.alloc_zeroed[T](length)
-        memcpy(dest=new.ptr, src=self.ptr, count=min(new.size, self.size))
-        swap(self, new)
+            # CPU or HOST allocation: preserve the CPU-accessible ptr.
+            return Buffer[mut=False](size=new.size, ptr=new.ptr, owner=new._owner)
+
+    # --- CPU/device checks (mut=False only) ---
+
+    @always_inline
+    def is_cpu(self: Buffer[mut=False]) -> Bool:
+        """Return True if the buffer is CPU-accessible (ptr is non-null).
+
+        True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
+        """
+        return self.ptr.__bool__()
+
+    @always_inline
+    def is_device(self: Buffer[mut=False]) -> Bool:
+        """Return True if the buffer lives on a GPU device (ptr is null)."""
+        return not self.ptr.__bool__()
+
+    @always_inline
+    def is_host(self: Buffer[mut=False]) -> Bool:
+        """Return True if the buffer is pinned host memory (HOST kind)."""
+        return self._owner[]._host.__bool__()
+
+    # --- Length helper (both modes) ---
 
     @always_inline
     def length[T: DType = DType.uint8](self) -> Int:
@@ -488,26 +582,35 @@ struct BufferBuilder(Movable):
         else:
             return self.size // size_of[T]()
 
-    @always_inline
-    def unsafe_ptr[
-        T: DType = DType.uint8
-    ](self) -> UnsafePointer[Scalar[T], MutExternalOrigin]:
-        return self.ptr.bitcast[Scalar[T]]()
+    # --- Write operations (mut=True only) ---
 
-    # TODO: use Indexable for index?
-    @always_inline
-    def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
-        comptime output = Scalar[T]
-        comptime if T == DType.bool:
-            var byte = self.ptr[index // 8]
-            return output((byte >> UInt8(index % 8)) & 1)
+    def resize[
+        I: Intable, //, T: DType = DType.uint8
+    ](mut self: Buffer[mut=True], length: I) raises:
+        """Resize the buffer to hold `length` elements of type T.
+
+        For HOST buffers the new allocation is also pinned host memory using
+        the same `DeviceContext`; for CPU buffers a plain heap allocation is used.
+
+        No-op if the new size maps to the same byte allocation as the current one.
+        """
+        var byte_size = Buffer._aligned_size[T](Int(length))
+        if byte_size == self.size:
+            return
+        var new: Buffer[mut=True]
+        if self._owner[]._host:
+            new = Buffer.alloc_host[T](
+                self._owner[]._host.value().context(), length
+            )
         else:
-            return self.ptr.bitcast[output]()[index]
+            new = Buffer.alloc_zeroed[T](length)
+        memcpy(dest=new.ptr, src=self.ptr, count=min(new.size, self.size))
+        swap(self, new)
 
     @always_inline
     def unsafe_set[
         T: DType = DType.uint8
-    ](mut self, index: Int, value: Scalar[T]):
+    ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
         comptime if T == DType.bool:
             var byte_index = index // 8
             var bit_mask = UInt8(1 << (index % 8))
@@ -520,162 +623,177 @@ struct BufferBuilder(Movable):
             self.ptr.bitcast[output]()[index] = value
 
     @always_inline
-    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
-        """Load W elements of type T at element index `index`."""
-        return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
-
-    @always_inline
-    def simd_store[T: DType, W: Int](mut self, index: Int, value: SIMD[T, W]):
+    def simd_store[T: DType, W: Int](
+        self: Buffer[mut=True], index: Int, value: SIMD[T, W]
+    ):
         """Store W elements of type T at element index `index`."""
         (self.ptr.bitcast[Scalar[T]]() + index).store(value)
 
-    def __del__(deinit self):
-        if self.ptr and not self._host:
-            # CPU heap allocation: free the pointer directly.
-            # HOST allocation: the _host HostBuffer field destructor cascades to
-            # AsyncRT release after this body; do NOT call ptr.free() on it.
-            # Null ptr: ownership was transferred by finish(); skip free.
-            self.ptr.free()
+    # --- Read operations (both modes) ---
 
-
-# ---------------------------------------------------------------------------
-# Buffer — immutable buffer for read-only array data
-# ---------------------------------------------------------------------------
-
-
-# TODO: add assertions to ensure alignment and padding invariants hold
-struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
-    """Immutable contiguous memory region.
-
-    CPU accessibility is encoded in `ptr`: a non-null ptr means the buffer is
-    CPU-accessible (CPU, FOREIGN, or HOST kinds); a null ptr means device-only
-    (DEVICE kind).  Use `is_cpu()` / `is_device()` for the primary check.
-
-    `is_cpu()` returns True for CPU, FOREIGN, and HOST (all have a valid ptr).
-    Calling `unsafe_get` or `unsafe_ptr` on a DEVICE buffer raises a debug assert.
-    Call `to_cpu(ctx)` to download device data before reading on the CPU.
-
-    `device_type()` and `device_id()` delegate to `_owner` (see `Allocation`).
-
-    Buffers are `ImplicitlyCopyable` with O(1) shared semantics: copying bumps the
-    internal `ArcPointer[Allocation]` ref-count without copying any data.
-    When the last copy is dropped the appropriate release fires (see Allocation).
-    """
-
-    var ptr: UnsafePointer[UInt8, ImmutExternalOrigin]
-    """CPU data pointer.  Non-null for CPU / FOREIGN / HOST; null for DEVICE."""
-
-    var size: Int
-    """Buffer size in bytes (always 64-byte aligned)."""
-
-    var _owner: ArcPointer[Allocation]
-    """Shared ownership handle."""
-
-    def __init__(
-        out self,
-        ptr: UnsafePointer[UInt8, ImmutExternalOrigin],
-        size: Int,
-        owner: ArcPointer[Allocation],
-    ):
+    @always_inline
+    def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         debug_assert(
-            Int(ptr) % 64 == 0 or Int(ptr) == 0,
-            "Buffer pointer must be 64-byte aligned",
+            self.ptr.__bool__(),
+            "cannot read device buffer, call to_cpu() first",
         )
+        comptime output = Scalar[T]
+        comptime if T == DType.bool:
+            var byte = self.ptr[index // 8]
+            return output((byte >> UInt8(index % 8)) & 1)
+        else:
+            return self.ptr.bitcast[output]()[index]
+
+    @always_inline
+    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
+        """Load W elements of type T at element index `index`."""
         debug_assert(
-            size % 64 == 0 or size == 0,
-            "Buffer size must be 64-byte aligned",
+            self.ptr.__bool__(),
+            "cannot read device buffer, call to_cpu() first",
         )
-        self.ptr = ptr
-        self.size = size
-        self._owner = owner
+        return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
 
-    def __init__(out self, *, copy: Self):
-        self.ptr = copy.ptr
-        self.size = copy.size
-        self._owner = copy._owner
+    # --- Typed pointer access ---
 
-    @staticmethod
-    def from_foreign[
-        I: Intable, //
-    ](
-        ptr: OpaquePointer[MutAnyOrigin],
-        size: I,
-        owner: ArcPointer[Allocation],
-    ) -> Buffer:
-        """Create an immutable view into foreign CPU memory.
+    @always_inline
+    def unsafe_ptr[
+        T: DType = DType.uint8
+    ](self: Buffer[mut=True]) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
+        """Return a typed mutable pointer to the start of the buffer."""
+        return self.ptr.bitcast[Scalar[T]]()
 
-        The caller passes an `ArcPointer[Allocation]` (the "keeper") that holds
-        the producer's release callback.  All `Buffer` views sharing the same
-        keeper bump its ref-count on copy; when the last view drops, the keeper
-        releases and the C callback fires automatically.
+    @always_inline
+    def unsafe_ptr[
+        T: DType = DType.uint8
+    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
+        """Return a typed immutable pointer to the element at offset.
 
-        Precondition: `owner` must have been created with `Allocation.foreign(...)`.
+        Precondition: `is_cpu()` must be True.
         """
-        return Buffer(
-            rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
-                ptr.bitcast[UInt8]()
-            ),
-            Int(size),
-            owner,
+        debug_assert(
+            self.is_cpu(),
+            "cannot read device buffer, call to_cpu() first",
         )
-
-    @staticmethod
-    def from_host(host: HostBuffer[DType.uint8]) -> Buffer:
-        """Create a HOST (pinned) buffer from a Mojo HostBuffer.
-
-        The HostBuffer is moved into an `Allocation` behind `ArcPointer`;
-        its destructor cascades to `AsyncRT_DeviceBuffer_release` when the
-        last Buffer copy is dropped.
-
-        The CPU pointer is taken from `host.unsafe_ptr()` — it remains valid
-        for the lifetime of the Allocation.  `device_type()` is inferred from
-        the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
-        """
-        return Buffer(
-            rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
-                host.unsafe_ptr()
-            ),
-            len(host),
-            ArcPointer(Allocation.host(host)),
-        )
-
-    @staticmethod
-    def from_device(dev: DeviceBuffer[DType.uint8], size: Int) -> Buffer:
-        """Create a DEVICE (GPU) buffer from a Mojo DeviceBuffer.
-
-        The DeviceBuffer is moved into an `Allocation` behind `ArcPointer`;
-        its destructor cascades to `AsyncRT_DeviceBuffer_release` when the
-        last Buffer copy is dropped.
-
-        `ptr` is set to null — call `to_cpu(ctx)` to read data on the CPU.
-        `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
-        metal→METAL).
-        """
-        return Buffer(
-            UnsafePointer[UInt8, ImmutExternalOrigin](),
-            size,
-            ArcPointer(Allocation.device(dev)),
+        return rebind[UnsafePointer[Scalar[T], ImmutExternalOrigin]](
+            self.ptr.bitcast[Scalar[T]]() + offset
         )
 
     @always_inline
-    def is_cpu(self) -> Bool:
-        """Return True if the buffer is CPU-accessible (ptr is non-null).
+    def aligned_unsafe_ptr[
+        T: DType = DType.uint8
+    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
+        """Return a typed pointer aligned down to a 64-byte boundary.
 
-        True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
+        Useful when `offset` is non-zero: the returned pointer starts at the
+        closest 64-byte-aligned element position ≤ offset.
+
+        Precondition: `is_cpu()` must be True.
         """
-        return self.ptr.__bool__()
+        debug_assert(
+            self.is_cpu(),
+            "cannot read device buffer, call to_cpu() first",
+        )
+        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
+        return rebind[UnsafePointer[Scalar[T], ImmutExternalOrigin]](
+            self.ptr.bitcast[Scalar[T]]() + aligned
+        )
+
+    # --- Device access (mut=False only) ---
+
+    def device_buffer(self: Buffer[mut=False]) -> DeviceBuffer[DType.uint8]:
+        """Return the DeviceBuffer handle.
+
+        Precondition: `is_device()` must be True.  The returned DeviceBuffer is
+        an `ImplicitlyCopyable` copy that bumps the AsyncRT ref-count; it is safe
+        to hold briefly for kernel calls.
+        """
+        debug_assert(self.is_device(), "not a device buffer")
+        return self._owner[]._device.value()
 
     @always_inline
-    def is_device(self) -> Bool:
-        """Return True if the buffer lives on a GPU device (ptr is null)."""
-        return not self.ptr.__bool__()
+    def device_ptr[
+        T: DType
+    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
+        """Return a typed device pointer into GPU memory at element offset.
+
+        Precondition: `is_device()` must be True.
+        """
+        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
 
     @always_inline
-    def is_host(self) -> Bool:
-        """Return True if the buffer is pinned host memory (HOST kind)."""
-        return self._owner[]._host.__bool__()
+    def aligned_device_ptr[
+        T: DType
+    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
+        """Return a typed device pointer aligned down to a 64-byte boundary.
 
-    def __eq__(self, other: Buffer) -> Bool:
+        Useful when `offset` is non-zero: the returned pointer starts at the
+        closest 64-byte-aligned element position ≤ offset.
+
+        Precondition: `is_device()` must be True.
+        """
+        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
+        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + aligned
+
+    # --- Device type / id ---
+
+    def device_type(self) raises -> Int32:
+        """Return the Arrow C Device Data Interface DeviceType value.
+
+        Delegates to `Allocation.device_type()`.
+        """
+        return self._owner[].device_type()
+
+    def device_id(self) raises -> Int64:
+        """Return the physical device index.  -1 for CPU and FOREIGN buffers.
+
+        Delegates to `Allocation.device_id()`, which reads from
+        `HostBuffer.context().id()` or `DeviceBuffer.context().id()` as needed.
+        """
+        return self._owner[].device_id()
+
+    # --- Transfer (mut=False only) ---
+
+    def to_device(self: Buffer[mut=False], ctx: DeviceContext) raises -> Buffer[mut=False]:
+        """Upload this CPU-accessible buffer to the GPU.
+
+        Returns a new DEVICE buffer with the same `device_id` as the context
+        device.
+
+        Precondition: `is_cpu()` must be True (CPU, FOREIGN, or HOST).
+
+        Returns:
+            A new Buffer with kind=DEVICE containing the uploaded data.
+        """
+        if self.is_device():
+            raise Error("to_device: buffer is already on device")
+        var dev = ctx.enqueue_create_buffer[DType.uint8](self.size)
+        ctx.enqueue_copy(dev, rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self.ptr))
+        return Buffer.from_device(dev, self.size)
+
+    def to_cpu(self: Buffer[mut=False], ctx: DeviceContext) raises -> Buffer[mut=False]:
+        """Download this DEVICE buffer to an owned CPU heap buffer.
+
+        HOST (pinned) buffers are already CPU-accessible via `ptr`; this method
+        is only needed for DEVICE buffers.
+
+        Precondition: `is_device()` must be True.
+
+        Returns:
+            A new Buffer with kind=CPU containing the downloaded data.
+        """
+        if not self.is_device():
+            raise Error("to_cpu: buffer is not on device")
+        var builder = Buffer.alloc_zeroed(self.size)
+        ctx.enqueue_copy(
+            rebind[UnsafePointer[UInt8, MutExternalOrigin]](builder.ptr),
+            self._owner[]._device.value(),
+        )
+        ctx.synchronize()
+        return builder.finish()
+
+    # --- Equatable ---
+
+    def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
         """Return True if both buffers have identical CPU-accessible contents.
 
         Compares full backing bytes using SIMD 64-byte blocks.
@@ -698,157 +816,7 @@ struct Buffer(Equatable, ImplicitlyCopyable, Movable, Writable):
                     return False
         return True
 
-    def device_type(self) raises -> Int32:
-        """Return the Arrow C Device Data Interface DeviceType value.
-
-        Delegates to `Allocation.device_type()`.
-        """
-        return self._owner[].device_type()
-
-    def device_id(self) raises -> Int64:
-        """Return the physical device index.  -1 for CPU and FOREIGN buffers.
-
-        Delegates to `Allocation.device_id()`, which reads from
-        `HostBuffer.context().id()` or `DeviceBuffer.context().id()` as needed.
-        """
-        return self._owner[].device_id()
-
-    def device_buffer(self) -> DeviceBuffer[DType.uint8]:
-        """Return the DeviceBuffer handle.
-
-        Precondition: `is_device()` must be True.  The returned DeviceBuffer is
-        an `ImplicitlyCopyable` copy that bumps the AsyncRT ref-count; it is safe
-        to hold briefly for kernel calls.
-        """
-        debug_assert(self.is_device(), "not a device buffer")
-        return self._owner[]._device.value()
-
-    @always_inline
-    def device_ptr[
-        T: DType
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
-        """Return a typed device pointer into GPU memory at element offset.
-
-        Precondition: `is_device()` must be True.
-        """
-        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
-
-    @always_inline
-    def aligned_device_ptr[
-        T: DType
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
-        """Return a typed device pointer aligned down to a 64-byte boundary.
-
-        Useful when `offset` is non-zero: the returned pointer starts at the
-        closest 64-byte-aligned element position ≤ offset.
-
-        Precondition: `is_device()` must be True.
-        """
-        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
-        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + aligned
-
-    # TODO: maybe should check for host buffer to copy that as well over the device
-    def to_device(self, ctx: DeviceContext) raises -> Buffer:
-        """Upload this CPU-accessible buffer to the GPU.
-
-        Returns a new DEVICE buffer with the same `device_id` as the context
-        device and `device_type` derived from the context (currently hardcoded
-        to 2 for CUDA; update when Mojo exposes per-context device-type queries).
-
-        Precondition: `is_cpu()` must be True (CPU, FOREIGN, or HOST).
-
-        Returns:
-            A new Buffer with kind=DEVICE containing the uploaded data.
-        """
-        if self.is_device():
-            raise Error("to_device: buffer is already on device")
-        var dev = ctx.enqueue_create_buffer[DType.uint8](self.size)
-        ctx.enqueue_copy(dev, self.ptr)
-        return Buffer.from_device(dev, self.size)
-
-    def to_cpu(self, ctx: DeviceContext) raises -> Buffer:
-        """Download this DEVICE buffer to an owned CPU heap buffer.
-
-        HOST (pinned) buffers are already CPU-accessible via `ptr`; this method
-        is only needed for DEVICE buffers.
-
-        Precondition: `is_device()` must be True.
-
-        Returns:
-            A new Buffer with kind=CPU containing the downloaded data.
-        """
-        if not self.is_device():
-            raise Error("to_cpu: buffer is not on device")
-        var builder = BufferBuilder.alloc_zeroed(self.size)
-        ctx.enqueue_copy(builder.ptr, self._owner[]._device.value())
-        ctx.synchronize()
-        return builder.finish()
-
-    @always_inline
-    def length[T: DType = DType.uint8](self) -> Int:
-        comptime if T == DType.bool:
-            return self.size * 8
-        else:
-            return self.size // size_of[T]()
-
-    @always_inline
-    def unsafe_ptr[
-        T: DType = DType.uint8
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
-        """Return a typed pointer to the element at offset.
-
-        Precondition: `is_cpu()` must be True.
-        """
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        return self.ptr.bitcast[Scalar[T]]() + offset
-
-    @always_inline
-    def aligned_unsafe_ptr[
-        T: DType = DType.uint8
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
-        """Return a typed pointer aligned down to a 64-byte boundary.
-
-        Useful when `offset` is non-zero: the returned pointer starts at the
-        closest 64-byte-aligned element position ≤ offset.
-
-        Precondition: `is_cpu()` must be True.
-        """
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
-        return self.ptr.bitcast[Scalar[T]]() + aligned
-
-    @always_inline
-    def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        comptime output = Scalar[T]
-        comptime if T == DType.bool:
-            var byte = self.ptr[index // 8]
-            return output((byte >> UInt8(index % 8)) & 1)
-        else:
-            return self.ptr.bitcast[output]()[index]
-
-    # have aligned_down(64) pointer methods
-
-    @always_inline
-    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
-        """Load W elements of type T at element index `index`.
-
-        Precondition: `is_cpu()` must be True.
-        """
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
+    # --- Writable ---
 
     def write_to[W: Writer](self, mut writer: W):
         """Write the buffer's bytes to a Writer."""
