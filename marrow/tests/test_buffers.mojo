@@ -4,7 +4,7 @@ from std.reflection import call_location
 from std.memory import ArcPointer
 
 from marrow.buffers import *
-from marrow.bitmap import Bitmap, BitmapBuilder
+from marrow.bitmap import Bitmap
 
 
 @always_inline
@@ -117,13 +117,13 @@ def test_bitmap_get_set() raises:
     assert_equal(Bitmap(frozen, 0, 10).view().count_set_bits(), 2)
 
 
-def _reset(mut bitmap: BitmapBuilder, n_bits: Int) raises:
+def _reset(mut bitmap: Bitmap[True], n_bits: Int) raises:
     bitmap.set_range(0, n_bits, False)
     assert_bitmap_set(bitmap.unsafe_ptr(), n_bits, [], "after _reset")
 
 
 def test_bitmap_range_set() raises:
-    var bitmap = BitmapBuilder.alloc(16)
+    var bitmap = Bitmap.alloc(16)
     var n_bits = 16
 
     bitmap.set_range(0, 10, True)
@@ -157,18 +157,18 @@ def test_bitmap_range_set() raises:
 
 
 def test_bitmap_extend() raises:
-    var src_b = BitmapBuilder.alloc(6)
+    var src_b = Bitmap.alloc(6)
     src_b.set_bit(0, True)
     src_b.set_bit(5, True)
     var src = src_b.finish(6)
 
-    var dst = BitmapBuilder.alloc(8)
+    var dst = Bitmap.alloc(8)
     dst.extend(src, 0, 6)
     assert_bitmap_set(dst.unsafe_ptr(), 8, [0, 5], "after extend")
 
     # extend into offset position
-    var dst2 = BitmapBuilder.alloc(8)
-    var src2_b = BitmapBuilder.alloc(2)
+    var dst2 = Bitmap.alloc(8)
+    var src2_b = Bitmap.alloc(2)
     src2_b.set_bit(0, True)
     var src2 = src2_b.finish(2)
     dst2.extend(src2, 6, 2)
@@ -269,26 +269,26 @@ def test_buffer_builder_resize_reallocates_when_larger() raises:
 
 def test_bitmap_builder_resize_noop_same_capacity() raises:
     # BitmapBuilder.resize delegates to Buffer[mut=True]; same capacity is a no-op.
-    var bm = BitmapBuilder.alloc(64)
-    var ptr_before = bm._builder.ptr
+    var bm = Bitmap.alloc(64)
+    var ptr_before = bm._buffer.ptr
     bm.resize(64)
-    assert_equal(bm._builder.ptr, ptr_before)
+    assert_equal(bm._buffer.ptr, ptr_before)
 
 
 def test_bitmap_builder_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a 64-byte block → no-op.
-    var bm = BitmapBuilder.alloc(1)
-    var ptr_before = bm._builder.ptr
+    var bm = Bitmap.alloc(1)
+    var ptr_before = bm._buffer.ptr
     bm.resize(511)
-    assert_equal(bm._builder.ptr, ptr_before)
+    assert_equal(bm._buffer.ptr, ptr_before)
 
 
 def test_bitmap_builder_resize_reallocates_when_larger() raises:
     # 513 bits require a second 64-byte block → reallocation.
-    var bm = BitmapBuilder.alloc(1)
-    var ptr_before = bm._builder.ptr
+    var bm = Bitmap.alloc(1)
+    var ptr_before = bm._buffer.ptr
     bm.resize(513)
-    assert_true(bm._builder.ptr != ptr_before)
+    assert_true(bm._buffer.ptr != ptr_before)
 
 
 def test_buffer_eq_equal() raises:

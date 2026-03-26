@@ -29,7 +29,7 @@ from std.benchmark import (
     keep,
 )
 
-from marrow.bitmap import Bitmap, BitmapBuilder
+from marrow.bitmap import Bitmap
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ from marrow.bitmap import Bitmap, BitmapBuilder
 
 def _make_alternating(size: Int) -> Bitmap:
     """Bitmap with alternating 0/1 bits (worst-case for popcount branching)."""
-    var b = BitmapBuilder.alloc(size)
+    var b = Bitmap.alloc(size)
     var i = 0
     while i < size:
         b.set_bit(i, True)
@@ -49,7 +49,7 @@ def _make_alternating(size: Int) -> Bitmap:
 
 def _make_half_set(size: Int) -> Bitmap:
     """Bitmap with the first half of bits set."""
-    var b = BitmapBuilder.alloc(size)
+    var b = Bitmap.alloc(size)
     b.set_range(0, size // 2, True)
     return b.finish(size)
 
@@ -149,7 +149,7 @@ def bench_invert(mut b: Bencher, size: Int) raises:
 
 @parameter
 def bench_set_range(mut b: Bencher, size: Int) raises:
-    var builder = BitmapBuilder.alloc(size)
+    var builder = Bitmap.alloc(size)
 
     @always_inline
     @parameter

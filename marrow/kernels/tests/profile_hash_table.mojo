@@ -45,7 +45,7 @@ def _make_keys(n: Int) raises -> StructArray:
         length=n,
         nulls=0,
         offset=0,
-        bitmap=Optional[Bitmap](None),
+        bitmap=Optional[Bitmap[]](None),
         children=children^,
     )
 

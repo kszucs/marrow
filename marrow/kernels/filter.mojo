@@ -15,7 +15,7 @@ from std.sys.info import simd_byte_width
 
 from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
-from ..bitmap import Bitmap, BitmapBuilder
+from ..bitmap import Bitmap
 from ..builders import PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
 from ..views import BitmapView
@@ -148,7 +148,7 @@ def _filter_bits(
     sel_start: Int,
     sel_end: Int,
     out_len: Int,
-) -> Tuple[Bitmap, Int]:
+) -> Tuple[Bitmap[], Int]:
     """Filter a bitmap, keeping bits where selection is set.
 
     Uses pext + deposit_bits in 64-bit blocks with run-merge for all-ones
@@ -167,7 +167,7 @@ def _filter_bits(
         validity bitmaps).
     """
     comptime ALL_ONES = ~UInt64(0)
-    var builder = BitmapBuilder.alloc(out_len)
+    var builder = Bitmap.alloc(out_len)
     var bm_pos = 0
     var zero_count = 0
     var i = sel_start
@@ -325,7 +325,7 @@ def filter_[
         )
 
     # Filter validity bitmap (shared by both paths).
-    var bm: Optional[Bitmap] = None
+    var bm: Optional[Bitmap[]] = None
     var null_count = 0
     if array.validity():
         var val_bm = array.validity().value()
@@ -426,13 +426,13 @@ def filter_(
     var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
     var out_off_ptr = out_offsets.unsafe_ptr[DType.uint32]()
     var out_val_ptr = out_values.unsafe_ptr[DType.uint8]()
-    var bm: Optional[Bitmap] = None
+    var bm: Optional[Bitmap[]] = None
     var null_count = 0
 
     if array.bitmap:
         # --- With bitmap: fused run-merging + bitmap filtering ---
         var src_bm = array.bitmap.value()
-        var bm_builder = BitmapBuilder.alloc(out_len)
+        var bm_builder = Bitmap.alloc(out_len)
         var byte_pos = UInt32(0)
         out_off_ptr[0] = 0
         var j = 0
@@ -560,14 +560,14 @@ def drop_nulls[
     var val = array.validity()
     if not val:
         # All valid: wrap as identity selection
-        var all_true = BitmapBuilder.alloc(len(array))
+        var all_true = Bitmap.alloc(len(array))
         all_true.set_range(0, len(array), True)
         var selection = PrimitiveArray[bool_](
             length=len(array),
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=all_true._builder.finish(),
+            buffer=all_true._buffer.finish(),
         )
         return filter_[T](array, selection)
     var bm_view = val.value()
@@ -638,7 +638,7 @@ def take[
     # Null indices are masked out (get default value 0).
     alias W = simd_byte_width() // size_of[Scalar[native]]()
     var i = 0
-    var bitmap = Optional[Bitmap](None)
+    var bitmap = Optional[Bitmap[]](None)
     var null_count = 0
 
     if not has_null_indices and not has_src_nulls:
@@ -654,7 +654,7 @@ def take[
     else:
         # TODO: optimize this, the implementation below could be vectorized
         # Slow path: null indices or source nulls — scalar + bitmap.
-        var bm_builder = BitmapBuilder.alloc(n)
+        var bm_builder = Bitmap.alloc(n)
         while i < n:
             if (has_null_indices and not indices.is_valid(i)) or (
                 has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))

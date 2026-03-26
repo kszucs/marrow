@@ -14,7 +14,7 @@ from marrow.builders import (
 )
 from marrow.dtypes import *
 from marrow.buffers import Buffer
-from marrow.bitmap import Bitmap, BitmapBuilder
+from marrow.bitmap import Bitmap
 from marrow.kernels.filter import drop_nulls
 from std.reflection import call_location
 
@@ -22,7 +22,7 @@ from std.reflection import call_location
 def test_array_data_with_offset() raises:
     """Test ArrayData with offset functionality."""
     # Create ArrayData with offset
-    var bitmap = BitmapBuilder.alloc(10)
+    var bitmap = Bitmap.alloc(10)
     var buffer = Buffer.alloc_zeroed[int8.native](10)
 
     # Set some data in the buffer

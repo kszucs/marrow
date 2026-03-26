@@ -32,7 +32,7 @@ from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .buffers import Buffer
-from .bitmap import Bitmap, BitmapBuilder
+from .bitmap import Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
@@ -409,7 +409,7 @@ struct ArrayData(Copyable, Movable):
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var buffers: List[Buffer[]]
     var children: List[ArrayData]
 
@@ -434,7 +434,7 @@ struct PrimitiveArray[T: DataType](
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var buffer: Buffer[]
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -607,7 +607,7 @@ struct PrimitiveArray[T: DataType](
 
     def to_device(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
         """Upload array data to the GPU."""
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if self.bitmap:
             bm = Bitmap(
                 self.bitmap.value()._buffer.to_device(ctx),
@@ -624,7 +624,7 @@ struct PrimitiveArray[T: DataType](
 
     def to_cpu(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
         """Download array data from the GPU to owned CPU heap buffers."""
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if self.bitmap:
             bm = Bitmap(
                 self.bitmap.value()._buffer.to_cpu(ctx),
@@ -712,7 +712,7 @@ struct StringArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var offsets: Buffer[]
     var values: Buffer[]
 
@@ -877,7 +877,7 @@ struct ListArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var offsets: Buffer[]
     var values: AnyArray
 
@@ -1045,7 +1045,7 @@ struct FixedSizeListArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var values: AnyArray
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -1135,7 +1135,7 @@ struct FixedSizeListArray(
         var new_buffers = List[Buffer[]](capacity=len(child_data.buffers))
         for i in range(len(child_data.buffers)):
             new_buffers.append(child_data.buffers[i].to_device(ctx))
-        var child_bm: Optional[Bitmap] = None
+        var child_bm: Optional[Bitmap[]] = None
         if child_data.bitmap:
             var bv = child_data.bitmap.value()
             child_bm = Bitmap(bv._buffer.to_device(ctx), 0, bv._length)
@@ -1150,7 +1150,7 @@ struct FixedSizeListArray(
                 children=child_data.children.copy(),
             )
         )
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if self.bitmap:
             var bv = self.bitmap.value()
             bm = Bitmap(bv._buffer.to_device(ctx), 0, bv._length)
@@ -1220,7 +1220,7 @@ struct StructArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap]
+    var bitmap: Optional[Bitmap[]]
     var children: List[AnyArray]
 
     def __init__(out self, *, py: PythonObject) raises:

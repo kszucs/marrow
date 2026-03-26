@@ -1,7 +1,7 @@
 """Boolean and bitwise kernels."""
 
 from ..arrays import PrimitiveArray, AnyArray
-from ..bitmap import Bitmap, BitmapBuilder
+from ..bitmap import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 from ..views import BitmapView
@@ -81,7 +81,7 @@ def not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
 def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
-    var builder = BitmapBuilder.alloc(length)
+    var builder = Bitmap.alloc(length)
     for i in range(length):
         builder.set_bit(i, not arr.is_valid(i))
     var bm = builder.finish(length)

@@ -15,7 +15,7 @@ from std.bit import pop_count
 from std.time import perf_counter_ns
 
 from marrow.arrays import PrimitiveArray
-from marrow.bitmap import Bitmap, BitmapBuilder
+from marrow.bitmap import Bitmap
 from marrow.builders import arange, PrimitiveBuilder
 from marrow.buffers import Buffer
 from marrow.dtypes import int64, bool_
@@ -159,7 +159,7 @@ def _bench_load_word(
     """
     # Build a bitmap large enough to hold all words (with bit_offset headroom)
     var n_bits = bit_offset + n_words * 64 + 64  # +64 padding
-    var builder = BitmapBuilder.alloc(n_bits)
+    var builder = Bitmap.alloc(n_bits)
     builder.set_range(0, n_bits, True)
     var bm = builder.finish(n_bits)
     # Wrap with a bit offset to exercise the shift path

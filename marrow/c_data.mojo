@@ -501,7 +501,7 @@ struct CArrowArray(Copyable, Movable):
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
-        var bitmap: Optional[Bitmap]
+        var bitmap: Optional[Bitmap[]]
         if self.buffers[0]:
             bitmap = Bitmap(
                 Buffer.from_foreign(

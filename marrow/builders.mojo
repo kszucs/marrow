@@ -27,7 +27,7 @@ Example
 from std.memory import memcpy, ArcPointer
 from std.sys import size_of
 from .buffers import Buffer
-from .bitmap import Bitmap, BitmapBuilder
+from .bitmap import Bitmap
 from .dtypes import *
 from .arrays import (
     Array,
@@ -251,7 +251,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: BitmapBuilder
+    var _bitmap: Bitmap[True]
     var _buffer: Buffer[mut=True]
 
     def __init__(out self, capacity: Int = 0, *, zeroed: Bool = True):
@@ -266,7 +266,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(capacity)
+        self._bitmap = Bitmap.alloc(capacity)
         if zeroed:
             self._buffer = Buffer.alloc_zeroed[Self.T.native](capacity)
         else:
@@ -380,7 +380,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             self._buffer.resize[Self.T.native](self._length)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # freeze the value buffer into an immutable Buffer
@@ -420,7 +420,7 @@ struct StringBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: BitmapBuilder
+    var _bitmap: Bitmap[True]
     var _offsets: Buffer[mut=True]
     var _values: Buffer[mut=True]
 
@@ -430,7 +430,7 @@ struct StringBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(capacity)
+        self._bitmap = Bitmap.alloc(capacity)
         self._offsets = offsets^
         self._values = Buffer.alloc_zeroed[DType.uint8](bytes_capacity)
 
@@ -559,7 +559,7 @@ struct StringBuilder(Builder, Sized):
             self._values.resize[DType.uint8](used)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # freeze offsets and byte data buffers into immutable Buffers
@@ -602,7 +602,7 @@ struct ListBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: BitmapBuilder
+    var _bitmap: Bitmap[True]
     var _offsets: Buffer[mut=True]
     var _child: AnyBuilder
 
@@ -614,7 +614,7 @@ struct ListBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(capacity)
+        self._bitmap = Bitmap.alloc(capacity)
         self._offsets = offsets^
         self._child = child^
 
@@ -712,7 +712,7 @@ struct ListBuilder(Builder, Sized):
             self._offsets.resize[DType.uint32](self._length + 1)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # freeze offsets buffer and recursively finish the child builder
@@ -755,7 +755,7 @@ struct FixedSizeListBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: BitmapBuilder
+    var _bitmap: Bitmap[True]
     var _child: AnyBuilder
 
     def __init__(
@@ -766,7 +766,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(capacity)
+        self._bitmap = Bitmap.alloc(capacity)
         self._child = child^
 
     def __len__(self) -> Int:
@@ -845,7 +845,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         # no offset buffer to trim — child length is implicit (length * list_size)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # recursively finish the child builder
@@ -886,7 +886,7 @@ struct StructBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: BitmapBuilder
+    var _bitmap: Bitmap[True]
     var _children: List[AnyBuilder]
 
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
@@ -897,7 +897,7 @@ struct StructBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = BitmapBuilder.alloc(capacity)
+        self._bitmap = Bitmap.alloc(capacity)
         self._children = children^
 
     def __len__(self) -> Int:
@@ -975,7 +975,7 @@ struct StructBuilder(Builder, Sized):
         # no data buffers to trim — struct layout is encoded in child arrays
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
-        var bm: Optional[Bitmap] = None
+        var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             bm = self._bitmap.finish(self._length)
         # recursively finish each field builder into a frozen child array

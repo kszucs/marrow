@@ -1,8 +1,8 @@
-"""Bitmap — immutable bit-packed validity buffer with SIMD operations.
+"""Bit-packed validity bitmap with parametric mutability.
 
-Bitmap
-------
-`Bitmap` wraps an immutable `Buffer` plus `_offset: Int` and `_length: Int`.
+Bitmap[mut=False] — immutable
+-------------------------------
+Wraps an immutable `Buffer[]` plus `_offset: Int` and `_length: Int`.
 
   _offset
       Bit offset into `_buffer`.  Enables zero-copy slicing: `slice(n, m)`
@@ -12,12 +12,20 @@ Bitmap
   _length
       Number of valid bits.
 
-Copying a `Bitmap` is O(1) — it bumps the `Buffer`'s `ArcPointer` ref-count.
+Copying a `Bitmap[]` is O(1) — it bumps the `Buffer`'s `ArcPointer` ref-count.
 
-BitmapBuilder
--------------
+Bitmap[mut=True] — mutable builder
+------------------------------------
 Mutable counterpart.  Wraps `Buffer[mut=True]` for incremental construction.
-Call `finish(length)` to freeze into an immutable `Bitmap`.
+`_offset` is always 0; `_length` is set when `finish(length)` is called.
+
+Call `finish(length)` to freeze into an immutable `Bitmap[]`.
+
+Example:
+    var bm = Bitmap.alloc(10)
+    bm.set_bit(0, True)
+    bm.set_bit(5, True)
+    var bitmap = bm.finish(10)   # Bitmap[] of 10 bits, 2 set
 """
 
 from std.memory import memcpy, memset
@@ -26,26 +34,48 @@ from .buffers import Buffer
 from .views import BitmapView
 
 
-# ---------------------------------------------------------------------------
-# Bitmap — immutable, bit-packed
-# ---------------------------------------------------------------------------
+struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
+    """Bit-packed validity bitmap with parametric mutability.
 
+    `Bitmap[mut=True]`  — mutable builder. Use `alloc()` factory.
+                          Write via `set_bit`, `set_range`, `deposit_bits`,
+                          `copy_bits`, `extend`, `resize`.
+                          `finish(length)` freezes to `Bitmap[mut=False]`.
 
-struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
-    """Immutable bit-packed validity bitmap.
-
-    Wraps a `Buffer` with a `_offset` (bit offset) and `_length` (bit count).
-    Copying is O(1); the backing `Buffer` uses `ArcPointer` shared ownership.
+    `Bitmap[mut=False]` — immutable, ref-counted shared ownership.
+                          Copying is O(1). Use `view()` and `slice()`.
     """
 
-    var _buffer: Buffer[]
+    var _buffer: Buffer[Self.mut]
     var _offset: Int
     var _length: Int
 
-    def __init__(out self, buffer: Buffer[], offset: Int, length: Int):
+    def __init__(out self: Bitmap[False], buffer: Buffer[], offset: Int, length: Int):
+        """Construct an immutable Bitmap from an existing buffer."""
         self._buffer = buffer
         self._offset = offset
         self._length = length
+
+    def __init__(out self: Bitmap[True], var buffer: Buffer[True]):
+        """Construct a mutable Bitmap from a mutable buffer."""
+        self._buffer = buffer^
+        self._offset = 0
+        self._length = 0
+
+    def __init__(out self, *, copy: Self):
+        comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
+        self._buffer = copy._buffer
+        self._offset = copy._offset
+        self._length = copy._length
+
+    # --- Factory ---
+
+    @staticmethod
+    def alloc(capacity: Int) -> Bitmap[True]:
+        """Allocate a zero-filled mutable bitmap for `capacity` bits."""
+        return Bitmap[True](Buffer.alloc_zeroed[DType.bool](capacity))
+
+    # --- Read methods (both modes) ---
 
     @always_inline
     def __len__(self) -> Int:
@@ -56,8 +86,18 @@ struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
         """Return the bit offset into the backing buffer."""
         return self._offset
 
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "Bitmap(offset=", self.bit_offset(), ", length=", self._length, ")"
+        )
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    # --- Immutable-only methods ---
+
     @always_inline
-    def view(ref self) -> BitmapView[ImmutOrigin(origin_of(self))]:
+    def view(ref self: Bitmap[False]) -> BitmapView[ImmutOrigin(origin_of(self))]:
         """Return a non-owning BitmapView over this bitmap's bits."""
         return BitmapView[ImmutOrigin(origin_of(self))](
             ptr=rebind[UnsafePointer[UInt8, ImmutOrigin(origin_of(self))]](
@@ -67,55 +107,19 @@ struct Bitmap(ImplicitlyCopyable, Movable, Sized, Writable):
             length=self._length,
         )
 
-    def slice(self, offset: Int, length: Int) -> Bitmap:
+    def slice(self: Bitmap[], offset: Int, length: Int) -> Bitmap[]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
-        return Bitmap(self._buffer, self.bit_offset() + offset, length)
+        return Bitmap[](self._buffer, self.bit_offset() + offset, length)
 
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(
-            "Bitmap(offset=", self.bit_offset(), ", length=", self._length, ")"
-        )
-
-    def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
-
-
-# ---------------------------------------------------------------------------
-# BitmapBuilder — mutable counterpart to Bitmap
-# ---------------------------------------------------------------------------
-
-
-struct BitmapBuilder(Movable):
-    """Mutable bit-packed bitmap builder.
-
-    Wraps `Buffer[mut=True]` with bit-level write operations.  Call `finish(length)`
-    to freeze into an immutable `Bitmap`.
-
-    Example:
-        var bm = BitmapBuilder.alloc(10)
-        bm.set_bit(0, True)
-        bm.set_bit(5, True)
-        var bitmap = bm.finish(10)   # Bitmap of 10 bits, 2 set
-    """
-
-    var _builder: Buffer[mut=True]
-
-    def __init__(out self, var builder: Buffer[mut=True]):
-        self._builder = builder^
-
-    @staticmethod
-    def alloc(length: Int) -> BitmapBuilder:
-        """Allocate a zero-filled builder for `length` bits."""
-        return BitmapBuilder(Buffer.alloc_zeroed[DType.bool](length))
+    # --- Mutable methods ---
 
     @always_inline
-    def unsafe_ptr(self) -> UnsafePointer[UInt8, MutAnyOrigin]:
-        """Return the raw mutable byte pointer (for low-level bit operations).
-        """
-        return self._builder.ptr
+    def unsafe_ptr(self: Bitmap[True]) -> UnsafePointer[UInt8, MutAnyOrigin]:
+        """Return the raw mutable byte pointer (for low-level bit operations)."""
+        return self._buffer.ptr
 
     @always_inline
-    def deposit_bits(mut self, bit_offset: Int, bits: UInt64, count: Int):
+    def deposit_bits(mut self: Bitmap[True], bit_offset: Int, bits: UInt64, count: Int):
         """Deposit `count` LSBs from `bits` into the builder at `bit_offset`.
 
         The builder must be zero-filled (from `alloc`), as this uses OR to set
@@ -124,7 +128,7 @@ struct BitmapBuilder(Movable):
         """
         if count == 0:
             return
-        var dst = self._builder.ptr
+        var dst = self._buffer.ptr
         var byte_idx = bit_offset >> 3
         var bit_off = bit_offset & 7
         var shifted = bits << UInt64(bit_off)
@@ -139,11 +143,11 @@ struct BitmapBuilder(Movable):
 
     # TODO: add safe apis
     @always_inline
-    def set_bit(mut self, index: Int, value: Bool):
+    def set_bit(mut self: Bitmap[True], index: Int, value: Bool):
         """Set or clear the bit at `index`."""
-        self._builder.unsafe_set[DType.bool](index, value)
+        self._buffer.unsafe_set[DType.bool](index, value)
 
-    def set_range(mut self, start: Int, length: Int, value: Bool):
+    def set_range(mut self: Bitmap[True], start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`.
 
         Handles byte-aligned bulk fills via `memset` for the middle bytes,
@@ -151,7 +155,7 @@ struct BitmapBuilder(Movable):
         """
         if length == 0:
             return
-        var ptr = self._builder.ptr
+        var ptr = self._buffer.ptr
         var end = start + length
         var start_byte = start >> 3
         var start_bit = start & 7
@@ -193,7 +197,7 @@ struct BitmapBuilder(Movable):
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
     def copy_bits(
-        mut self,
+        mut self: Bitmap[True],
         src_ptr: UnsafePointer[UInt8, _],
         src_offset: Int,
         dst_offset: Int,
@@ -209,7 +213,7 @@ struct BitmapBuilder(Movable):
         """
         if length == 0:
             return
-        var dst = self._builder.ptr
+        var dst = self._buffer.ptr
 
         # Short runs: bit-by-bit is faster than computing byte masks.
         if length < 16:
@@ -316,7 +320,7 @@ struct BitmapBuilder(Movable):
                     shifted & ~keep_mask
                 )
 
-    def extend(mut self, src: Bitmap, dst_start: Int, length: Int):
+    def extend(mut self: Bitmap[True], src: Bitmap[], dst_start: Int, length: Int):
         """Copy `length` bits from `src` (from its `_offset`) into self at `dst_start`.
 
         Replaces the `bitmap_extend` free function.
@@ -325,13 +329,13 @@ struct BitmapBuilder(Movable):
             src._buffer.unsafe_ptr(), src.bit_offset(), dst_start, length
         )
 
-    def resize(mut self, capacity: Int) raises:
+    def resize(mut self: Bitmap[True], capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits."""
-        self._builder.resize[DType.bool](capacity)
+        self._buffer.resize[DType.bool](capacity)
 
-    def finish(mut self, length: Int) -> Bitmap:
-        """Freeze the builder into an immutable `Bitmap` of `length` bits.
+    def finish(mut self: Bitmap[True], length: Int) -> Bitmap[]:
+        """Freeze the builder into an immutable `Bitmap[]` of `length` bits.
 
         The builder is reset to empty and can be reused after this call.
         """
-        return Bitmap(self._builder.finish(), 0, length)
+        return Bitmap[](self._buffer.finish(), 0, length)
