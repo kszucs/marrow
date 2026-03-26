@@ -150,7 +150,7 @@ def _binary_cmp[
 
     return PrimitiveArray[bool_dt](
         length=length,
-        nulls=length - bm.value().count_set_bits() if bm else 0,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=result_buf,
@@ -278,7 +278,7 @@ def equal(
         builder.unsafe_append(Scalar[bool_dt.native](eq))
     return PrimitiveArray[bool_dt](
         length=n,
-        nulls=n - bm.value().count_set_bits() if bm else 0,
+        nulls=n - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=builder.finish().buffer,

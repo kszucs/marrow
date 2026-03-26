@@ -138,7 +138,7 @@ def _unary[
     return PrimitiveArray[T](
         length=length,
         nulls=length
-        - array.bitmap.value().count_set_bits() if array.bitmap else 0,
+        - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
         offset=0,
         bitmap=array.bitmap,
         buffer=buf.finish(),
@@ -190,7 +190,7 @@ def _binary[
 
     return PrimitiveArray[T](
         length=length,
-        nulls=length - bm.value().count_set_bits() if bm else 0,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=buf.finish(),

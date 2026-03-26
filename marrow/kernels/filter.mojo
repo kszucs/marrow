@@ -448,7 +448,7 @@ def filter_(
                 var elem_start = offsets_ptr[off + i]
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
-                var valid = src_bm.is_valid(off + i)
+                var valid = src_bm.view().test(off + i)
                 bm_builder.set_bit(j, valid)
                 if not valid:
                     null_count += 1

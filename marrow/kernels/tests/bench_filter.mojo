@@ -163,7 +163,7 @@ def _bench_load_word(
     builder.set_range(0, n_bits, True)
     var bm = builder.finish(n_bits)
     # Wrap with a bit offset to exercise the shift path
-    var bm_view = Bitmap(bm._buffer, bit_offset, n_bits - bit_offset)
+    var bm_view = Bitmap(bm._buffer, bit_offset, n_bits - bit_offset).view()
 
     for _ in range(3):
         var acc = UInt64(0)

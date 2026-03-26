@@ -353,7 +353,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             var src = Bitmap(arr.buffer, arr.offset, n)
             for i in range(n):
                 self._buffer.unsafe_set[DType.bool](
-                    self._length + i, src.is_valid(i)
+                    self._length + i, src.view().test(i)
                 )
         else:
             memcpy(

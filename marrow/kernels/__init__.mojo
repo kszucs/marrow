@@ -53,7 +53,9 @@ def bitmap_and(
         return b
     if not b:
         return a
-    return a.value() & b.value()
+    var n = len(a.value())
+    var buf = a.value().view() & b.value().view()
+    return Bitmap(buf, 0, n)
 
 
 # ---------------------------------------------------------------------------
