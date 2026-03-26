@@ -235,7 +235,7 @@ def any_(array: PrimitiveArray[bool_dt]) raises -> Bool:
     )
     if not array.bitmap:
         return Bool(data_bv)
-    var validity_bv = array.bitmap.value().view()
+    var validity_bv = BitmapView(array.bitmap.value())
     var i = 0
     while i + 64 <= n:
         if (data_bv.load_word(i) & validity_bv.load_word(i)) != 0:
@@ -256,7 +256,7 @@ def all_(array: PrimitiveArray[bool_dt]) raises -> Bool:
     )
     if not array.bitmap:
         return data_bv.all_set()
-    var validity_bv = array.bitmap.value().view()
+    var validity_bv = BitmapView(array.bitmap.value())
     var i = 0
     while i + 64 <= n:
         var v = validity_bv.load_word(i)

@@ -1,7 +1,7 @@
 """Boolean and bitwise kernels."""
 
 from ..arrays import PrimitiveArray, AnyArray
-from ..bitmap import Bitmap
+from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 from ..views import BitmapView

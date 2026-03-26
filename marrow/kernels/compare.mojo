@@ -31,6 +31,7 @@ from std.gpu.host import DeviceContext, get_gpu_target
 from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
+from ..views import BitmapView
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
 from .helpers import has_accelerator_support
@@ -150,7 +151,7 @@ def _binary_cmp[
 
     return PrimitiveArray[bool_dt](
         length=length,
-        nulls=length - bm.value().view().count_set_bits() if bm else 0,
+        nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=result_buf,
@@ -278,7 +279,7 @@ def equal(
         builder.unsafe_append(Scalar[bool_dt.native](eq))
     return PrimitiveArray[bool_dt](
         length=n,
-        nulls=n - bm.value().view().count_set_bits() if bm else 0,
+        nulls=n - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=builder.finish().buffer,

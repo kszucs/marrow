@@ -29,7 +29,7 @@ from std.benchmark import (
     keep,
 )
 
-from marrow.bitmap import Bitmap
+from marrow.buffers import Bitmap
 
 
 # ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ from std.utils.index import IndexList
 from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
+from ..views import BitmapView
 from ..dtypes import (
     DataType,
     uint8,
@@ -400,7 +401,7 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
-        if has_bitmap and not keys.bitmap.value().view().test(keys.offset + i):
+        if has_bitmap and not BitmapView(keys.bitmap.value()).test(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
             builder.unsafe_append(_h(_hash(String(keys.unsafe_get(UInt(i))))))
@@ -554,7 +555,7 @@ def hash_identity[
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
-        if has_bitmap and not keys.bitmap.value().view().test(keys.offset + i):
+        if has_bitmap and not BitmapView(keys.bitmap.value()).test(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
             builder.unsafe_append(_h(Int(keys.unsafe_get(i)) + _OFFSET))

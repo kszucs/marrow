@@ -15,7 +15,7 @@ from std.sys.info import simd_byte_width
 
 from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
-from ..bitmap import Bitmap
+from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
 from ..views import BitmapView
@@ -448,7 +448,7 @@ def filter_(
                 var elem_start = offsets_ptr[off + i]
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
-                var valid = src_bm.view().test(off + i)
+                var valid = BitmapView(src_bm).test(off + i)
                 bm_builder.set_bit(j, valid)
                 if not valid:
                     null_count += 1
@@ -636,7 +636,7 @@ def take[
 
     # SIMD gather loop: load W indices, gather W values in parallel.
     # Null indices are masked out (get default value 0).
-    alias W = simd_byte_width() // size_of[Scalar[native]]()
+    comptime W = simd_byte_width() // size_of[Scalar[native]]()
     var i = 0
     var bitmap = Optional[Bitmap[]](None)
     var null_count = 0

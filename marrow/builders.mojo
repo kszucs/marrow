@@ -26,8 +26,8 @@ Example
 
 from std.memory import memcpy, ArcPointer
 from std.sys import size_of
-from .buffers import Buffer
-from .bitmap import Bitmap
+from .buffers import Buffer, Bitmap
+from .views import BitmapView
 from .dtypes import *
 from .arrays import (
     Array,
@@ -267,6 +267,8 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._capacity = capacity
         self._null_count = 0
         self._bitmap = Bitmap.alloc(capacity)
+        # TODO: always allocate uninit since finish() will trim the
+        # buffer to the actual length
         if zeroed:
             self._buffer = Buffer.alloc_zeroed[Self.T.native](capacity)
         else:
@@ -353,7 +355,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             var src = Bitmap(arr.buffer, arr.offset, n)
             for i in range(n):
                 self._buffer.unsafe_set[DType.bool](
-                    self._length + i, src.view().test(i)
+                    self._length + i, BitmapView(src).test(i)
                 )
         else:
             memcpy(

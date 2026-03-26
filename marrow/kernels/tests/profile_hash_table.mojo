@@ -20,7 +20,7 @@ from std.benchmark import keep
 from std.time import perf_counter_ns
 
 from marrow.arrays import PrimitiveArray, AnyArray, StructArray
-from marrow.bitmap import Bitmap
+from marrow.buffers import Bitmap
 from marrow.builders import PrimitiveBuilder
 from marrow.dtypes import uint64, struct_, Field
 from marrow.kernels.hashtable import SwissHashTable

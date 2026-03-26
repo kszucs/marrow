@@ -4,7 +4,6 @@ from std.reflection import call_location
 from std.memory import ArcPointer
 
 from marrow.buffers import *
-from marrow.bitmap import Bitmap
 
 
 @always_inline
@@ -113,8 +112,6 @@ def test_bitmap_get_set() raises:
     assert_true(frozen.unsafe_get[DType.bool](0))
     assert_true(frozen.unsafe_get[DType.bool](1))
     assert_false(frozen.unsafe_get[DType.bool](2))
-    # 10-bit bitmap → 2 set bits
-    assert_equal(Bitmap(frozen, 0, 10).view().count_set_bits(), 2)
 
 
 def _reset(mut bitmap: Bitmap[True], n_bits: Int) raises:

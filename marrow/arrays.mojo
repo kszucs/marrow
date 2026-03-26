@@ -31,8 +31,7 @@ from std.sys import size_of
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .buffers import Buffer
-from .bitmap import Bitmap
+from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
@@ -512,7 +511,7 @@ struct PrimitiveArray[T: DataType](
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return self.bitmap.value().view().test(self.offset + index)
+        return BitmapView(self.bitmap.value()).test(self.offset + index)
 
     @always_inline
     def unsafe_get(self, index: Int) -> Self.scalar:
@@ -583,7 +582,7 @@ struct PrimitiveArray[T: DataType](
         )
         if self.nulls == 0:
             return data_bv.count_set_bits()
-        var validity_bv = self.bitmap.value().view()
+        var validity_bv = BitmapView(self.bitmap.value())
         var count = 0
         var n = self.length
         var i = 0
@@ -655,7 +654,7 @@ struct PrimitiveArray[T: DataType](
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (self.bitmap.value().view() == other.bitmap.value().view()):
+            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
                 return False
         # Fast path: no nulls, no offset — full buffer SIMD comparison.
         if self.nulls == 0 and self.offset == 0 and other.offset == 0:
@@ -792,7 +791,7 @@ struct StringArray(
         """Return True if the element at the given index is not null."""
         if not self.bitmap:
             return True
-        return self.bitmap.value().view().test(self.offset + index)
+        return BitmapView(self.bitmap.value()).test(self.offset + index)
 
     def unsafe_get[
         self_origin: Origin[mut=False], //
@@ -835,7 +834,7 @@ struct StringArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (self.bitmap.value().view() == other.bitmap.value().view()):
+            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -937,7 +936,7 @@ struct ListArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return self.bitmap.value().view().test(self.offset + index)
+        return BitmapView(self.bitmap.value()).test(self.offset + index)
 
     def unsafe_get(self, index: Int) raises -> AnyArray:
         """Return a view of the child array for the list at the given index."""
@@ -1000,7 +999,7 @@ struct ListArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (self.bitmap.value().view() == other.bitmap.value().view()):
+            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -1101,7 +1100,7 @@ struct FixedSizeListArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return self.bitmap.value().view().test(self.offset + index)
+        return BitmapView(self.bitmap.value()).test(self.offset + index)
 
     def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
         var list_size = self.dtype.size
@@ -1175,7 +1174,7 @@ struct FixedSizeListArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (self.bitmap.value().view() == other.bitmap.value().view()):
+            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -1273,7 +1272,7 @@ struct StructArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return self.bitmap.value().view().test(self.offset + index)
+        return BitmapView(self.bitmap.value()).test(self.offset + index)
 
     def _index_for_field_name(self, name: StringSlice) raises -> Int:
         for idx, ref field in enumerate(self.dtype.fields):
@@ -1358,7 +1357,7 @@ struct StructArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (self.bitmap.value().view() == other.bitmap.value().view()):
+            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
                 return False
         if len(self.children) != len(other.children):
             return False

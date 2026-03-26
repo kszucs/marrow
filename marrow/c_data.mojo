@@ -6,9 +6,9 @@ from std.sys import size_of
 from .buffers import (
     Allocation,
     Buffer,
+    Bitmap,
     DeviceType,
 )
-from .bitmap import Bitmap
 
 import std.math as math
 

@@ -19,6 +19,7 @@ from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
+from ..views import BitmapView
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
 from . import (
     bitmap_and,
@@ -138,7 +139,7 @@ def _unary[
     return PrimitiveArray[T](
         length=length,
         nulls=length
-        - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
+        - BitmapView(array.bitmap.value()).count_set_bits() if array.bitmap else 0,
         offset=0,
         bitmap=array.bitmap,
         buffer=buf.finish(),
@@ -190,7 +191,7 @@ def _binary[
 
     return PrimitiveArray[T](
         length=length,
-        nulls=length - bm.value().view().count_set_bits() if bm else 0,
+        nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=buf.finish(),

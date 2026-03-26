@@ -18,7 +18,8 @@ Kernel implementations live in their respective modules:
 from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray, AnyArray
-from marrow.bitmap import Bitmap
+from marrow.buffers import Bitmap
+from marrow.views import BitmapView
 from marrow.dtypes import (
     DataType,
     bool_ as bool_dt,
@@ -54,7 +55,7 @@ def bitmap_and(
     if not b:
         return a
     var n = len(a.value())
-    var buf = a.value().view() & b.value().view()
+    var buf = BitmapView(a.value()) & BitmapView(b.value())
     return Bitmap(buf, 0, n)
 
 

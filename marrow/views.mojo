@@ -23,7 +23,7 @@ from std.math import iota
 from std.memory import memcpy, memset
 from std.builtin.device_passable import DevicePassable
 
-from .buffers import Buffer
+from .buffers import Buffer, Bitmap
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +224,14 @@ struct BitmapView[
         self._data = ptr
         self._offset = offset
         self._len = length
+
+    def __init__(out self: BitmapView[ImmutExternalOrigin], bm: Bitmap[False]):
+        """Construct a non-owning view over an immutable Bitmap."""
+        self._data = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+            bm._buffer.ptr
+        )
+        self._offset = bm._offset
+        self._len = bm._length
 
     def __init__(out self, *, copy: Self):
         self._data = copy._data

@@ -2,8 +2,9 @@
 
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.bitmap import Bitmap
+from marrow.buffers import Bitmap
 from marrow.buffers import Buffer
+from marrow.views import BitmapView
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ def _to_bm(buf: Buffer[], n: Int) -> Bitmap[]:
 def _count_naive(bm: Bitmap[]) -> Int:
     """Reference popcount: walks every bit via view().test()."""
     var n = 0
-    var v = bm.view()
+    var v = BitmapView(bm)
     for i in range(len(bm)):
         if v.test(i):
             n += 1
@@ -44,7 +45,7 @@ def test_builder_alloc_zero_fills() raises:
     var b = Bitmap.alloc(10)
     var bm = b.finish(10)
     for i in range(10):
-        assert_false(bm.view().test(i))
+        assert_false(BitmapView(bm).test(i))
 
 
 def test_builder_set_bit_true() raises:
@@ -53,14 +54,14 @@ def test_builder_set_bit_true() raises:
     b.set_bit(3, True)
     b.set_bit(7, True)
     var bm = b.finish(8)
-    assert_true(bm.view().test(0))
-    assert_false(bm.view().test(1))
-    assert_false(bm.view().test(2))
-    assert_true(bm.view().test(3))
-    assert_false(bm.view().test(4))
-    assert_false(bm.view().test(5))
-    assert_false(bm.view().test(6))
-    assert_true(bm.view().test(7))
+    assert_true(BitmapView(bm).test(0))
+    assert_false(BitmapView(bm).test(1))
+    assert_false(BitmapView(bm).test(2))
+    assert_true(BitmapView(bm).test(3))
+    assert_false(BitmapView(bm).test(4))
+    assert_false(BitmapView(bm).test(5))
+    assert_false(BitmapView(bm).test(6))
+    assert_true(BitmapView(bm).test(7))
 
 
 def test_builder_set_bit_false_clears() raises:
@@ -69,8 +70,8 @@ def test_builder_set_bit_false_clears() raises:
     b.set_bit(1, True)
     b.set_bit(1, False)
     var bm = b.finish(8)
-    assert_true(bm.view().test(0))
-    assert_false(bm.view().test(1))
+    assert_true(BitmapView(bm).test(0))
+    assert_false(BitmapView(bm).test(1))
 
 
 def test_builder_set_range_all_true() raises:
@@ -78,7 +79,7 @@ def test_builder_set_range_all_true() raises:
     b.set_range(0, 16, True)
     var bm = b.finish(16)
     for i in range(16):
-        assert_true(bm.view().test(i))
+        assert_true(BitmapView(bm).test(i))
 
 
 def test_builder_set_range_partial() raises:
@@ -87,11 +88,11 @@ def test_builder_set_range_partial() raises:
     b.set_range(4, 8, True)  # bits 4-11 set
     var bm = b.finish(16)
     for i in range(4):
-        assert_false(bm.view().test(i))
+        assert_false(BitmapView(bm).test(i))
     for i in range(4, 12):
-        assert_true(bm.view().test(i))
+        assert_true(BitmapView(bm).test(i))
     for i in range(12, 16):
-        assert_false(bm.view().test(i))
+        assert_false(BitmapView(bm).test(i))
 
 
 def test_builder_set_range_clear() raises:
@@ -100,11 +101,11 @@ def test_builder_set_range_clear() raises:
     b.set_range(3, 5, False)  # clear bits 3-7
     var bm = b.finish(16)
     for i in range(3):
-        assert_true(bm.view().test(i))
+        assert_true(BitmapView(bm).test(i))
     for i in range(3, 8):
-        assert_false(bm.view().test(i))
+        assert_false(BitmapView(bm).test(i))
     for i in range(8, 16):
-        assert_true(bm.view().test(i))
+        assert_true(BitmapView(bm).test(i))
 
 
 def test_builder_set_range_zero_length() raises:
@@ -112,7 +113,7 @@ def test_builder_set_range_zero_length() raises:
     b.set_range(0, 0, True)
     var bm = b.finish(8)
     for i in range(8):
-        assert_false(bm.view().test(i))
+        assert_false(BitmapView(bm).test(i))
 
 
 def test_builder_extend() raises:
@@ -125,12 +126,12 @@ def test_builder_extend() raises:
     var dst = Bitmap.alloc(8)
     dst.extend(src, 0, 6)
     var bm = dst.finish(8)
-    assert_true(bm.view().test(0))
-    assert_false(bm.view().test(1))
-    assert_false(bm.view().test(4))
-    assert_true(bm.view().test(5))
-    assert_false(bm.view().test(6))
-    assert_false(bm.view().test(7))
+    assert_true(BitmapView(bm).test(0))
+    assert_false(BitmapView(bm).test(1))
+    assert_false(BitmapView(bm).test(4))
+    assert_true(BitmapView(bm).test(5))
+    assert_false(BitmapView(bm).test(6))
+    assert_false(BitmapView(bm).test(7))
 
 
 def test_builder_extend_with_offset() raises:
@@ -143,9 +144,9 @@ def test_builder_extend_with_offset() raises:
     dst.extend(src, 6, 2)  # copy 2 bits starting at dst bit 6
     var bm = dst.finish(8)
     for i in range(6):
-        assert_false(bm.view().test(i))
-    assert_true(bm.view().test(6))
-    assert_false(bm.view().test(7))
+        assert_false(BitmapView(bm).test(i))
+    assert_true(BitmapView(bm).test(6))
+    assert_false(BitmapView(bm).test(7))
 
 
 def test_builder_finish_length() raises:
@@ -167,17 +168,17 @@ def test_len() raises:
 
 def test_is_valid_and_is_null() raises:
     var bm = _make(8, [1, 4, 6])
-    assert_false(bm.view().test(0))
-    assert_true(bm.view().test(1))
-    assert_false(bm.view().test(2))
-    assert_false(bm.view().test(3))
-    assert_true(bm.view().test(4))
-    assert_false(bm.view().test(5))
-    assert_true(bm.view().test(6))
-    assert_false(bm.view().test(7))
+    assert_false(BitmapView(bm).test(0))
+    assert_true(BitmapView(bm).test(1))
+    assert_false(BitmapView(bm).test(2))
+    assert_false(BitmapView(bm).test(3))
+    assert_true(BitmapView(bm).test(4))
+    assert_false(BitmapView(bm).test(5))
+    assert_true(BitmapView(bm).test(6))
+    assert_false(BitmapView(bm).test(7))
     # is_null is the inverse
-    assert_false(bm.view().test(0))
-    assert_true(bm.view().test(1))
+    assert_false(BitmapView(bm).test(0))
+    assert_true(BitmapView(bm).test(1))
 
 
 # ---------------------------------------------------------------------------
@@ -188,25 +189,25 @@ def test_is_valid_and_is_null() raises:
 def test_count_set_bits_empty() raises:
     var b = Bitmap.alloc(0)
     var bm = b.finish(0)
-    assert_equal(bm.view().count_set_bits(), 0)
+    assert_equal(BitmapView(bm).count_set_bits(), 0)
 
 
 def test_count_set_bits_none_set() raises:
     var bm = _make(16, [])
-    assert_equal(bm.view().count_set_bits(), 0)
+    assert_equal(BitmapView(bm).count_set_bits(), 0)
 
 
 def test_count_set_bits_all_set() raises:
     var b = Bitmap.alloc(16)
     b.set_range(0, 16, True)
     var bm = b.finish(16)
-    assert_equal(bm.view().count_set_bits(), 16)
+    assert_equal(BitmapView(bm).count_set_bits(), 16)
 
 
 def test_count_set_bits_known_pattern() raises:
     # bits 0, 3, 7, 8, 15 → 5 set bits
     var bm = _make(16, [0, 3, 7, 8, 15])
-    assert_equal(bm.view().count_set_bits(), 5)
+    assert_equal(BitmapView(bm).count_set_bits(), 5)
 
 
 def test_count_set_bits_partial_last_byte() raises:
@@ -214,7 +215,7 @@ def test_count_set_bits_partial_last_byte() raises:
     var b = Bitmap.alloc(10)
     b.set_range(0, 10, True)
     var bm = b.finish(10)
-    assert_equal(bm.view().count_set_bits(), 10)
+    assert_equal(BitmapView(bm).count_set_bits(), 10)
 
 
 def test_count_set_bits_with_offset() raises:
@@ -224,7 +225,7 @@ def test_count_set_bits_with_offset() raises:
     var full = b.finish(16)
     # slice starting at bit 4, length 8 → all 8 bits set
     var sliced = full.slice(4, 8)
-    assert_equal(sliced.view().count_set_bits(), 8)
+    assert_equal(BitmapView(sliced).count_set_bits(), 8)
 
 
 def test_count_set_bits_large() raises:
@@ -232,7 +233,7 @@ def test_count_set_bits_large() raises:
     var b = Bitmap.alloc(1024)
     b.set_range(0, 512, True)  # first half set
     var bm = b.finish(1024)
-    assert_equal(bm.view().count_set_bits(), 512)
+    assert_equal(BitmapView(bm).count_set_bits(), 512)
 
 
 def test_count_set_bits_large_offset_byte_aligned() raises:
@@ -246,7 +247,7 @@ def test_count_set_bits_large_offset_byte_aligned() raises:
     b.set_range(0, 800, True)
     var full = b.finish(800)
     var sliced = full.slice(576, 64)
-    assert_equal(sliced.view().count_set_bits(), 64)
+    assert_equal(BitmapView(sliced).count_set_bits(), 64)
 
 
 def test_count_set_bits_large_offset_with_shift() raises:
@@ -259,7 +260,7 @@ def test_count_set_bits_large_offset_with_shift() raises:
     b.set_range(0, 800, True)
     var full = b.finish(800)
     var sliced = full.slice(577, 48)
-    assert_equal(sliced.view().count_set_bits(), 48)
+    assert_equal(BitmapView(sliced).count_set_bits(), 48)
 
 
 def test_count_set_bits_large_offset_sparse() raises:
@@ -276,7 +277,7 @@ def test_count_set_bits_large_offset_sparse() raises:
     # Aligned range starts at byte 64, so ~23 leading bytes of all-ones
     # must be excluded from the count.
     var sliced = full.slice(700, 10)
-    assert_equal(sliced.view().count_set_bits(), 10)
+    assert_equal(BitmapView(sliced).count_set_bits(), 10)
 
 
 def test_count_set_bits_large_offset_none_set() raises:
@@ -292,7 +293,7 @@ def test_count_set_bits_large_offset_none_set() raises:
     var full = b.finish(1000)
     # Slice at bit 500, length 20 → all clear.
     var sliced = full.slice(500, 20)
-    assert_equal(sliced.view().count_set_bits(), 0)
+    assert_equal(BitmapView(sliced).count_set_bits(), 0)
 
 
 def test_count_set_bits_small_slice_in_large_bitmap() raises:
@@ -306,7 +307,7 @@ def test_count_set_bits_small_slice_in_large_bitmap() raises:
     var full = b.finish(2000)
     # Slice at bit 1003 (byte 125, shift 3), length 5.
     var sliced = full.slice(1003, 5)
-    assert_equal(sliced.view().count_set_bits(), 5)
+    assert_equal(BitmapView(sliced).count_set_bits(), 5)
 
 
 def test_count_set_bits_vs_naive_all_patterns() raises:
@@ -354,14 +355,14 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
             var bz = Bitmap.alloc(total)
             var fz = bz.finish(total)
             var sz = fz.slice(offset, size)
-            assert_equal(sz.view().count_set_bits(), _count_naive(sz))
+            assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
 
             # all-ones
             var bo = Bitmap.alloc(total)
             bo.set_range(0, total, True)
             var fo = bo.finish(total)
             var so = fo.slice(offset, size)
-            assert_equal(so.view().count_set_bits(), _count_naive(so))
+            assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
 
             # alternating (even bits set)
             var ba = Bitmap.alloc(total)
@@ -371,7 +372,7 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
                 k += 2
             var fa = ba.finish(total)
             var sa = fa.slice(offset, size)
-            assert_equal(sa.view().count_set_bits(), _count_naive(sa))
+            assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
 
 
 def test_count_set_bits_interior_slices() raises:
@@ -406,14 +407,14 @@ def test_count_set_bits_interior_slices() raises:
             var bz = Bitmap.alloc(total)
             var fz = bz.finish(total)
             var sz = fz.slice(offset, size)
-            assert_equal(sz.view().count_set_bits(), _count_naive(sz))
+            assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
 
             # all-ones: trailing bytes contain 1s, must be subtracted
             var bo = Bitmap.alloc(total)
             bo.set_range(0, total, True)
             var fo = bo.finish(total)
             var so = fo.slice(offset, size)
-            assert_equal(so.view().count_set_bits(), _count_naive(so))
+            assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
 
             # alternating (even bits set)
             var ba = Bitmap.alloc(total)
@@ -423,7 +424,7 @@ def test_count_set_bits_interior_slices() raises:
                 k += 2
             var fa = ba.finish(total)
             var sa = fa.slice(offset, size)
-            assert_equal(sa.view().count_set_bits(), _count_naive(sa))
+            assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
 
 
 def test_count_set_bits_trail_bits_exact_boundary() raises:
@@ -432,13 +433,13 @@ def test_count_set_bits_trail_bits_exact_boundary() raises:
     var b = Bitmap.alloc(512)
     b.set_range(0, 512, True)
     var bm = b.finish(512)
-    assert_equal(bm.view().count_set_bits(), 512)
+    assert_equal(BitmapView(bm).count_set_bits(), 512)
     # Slice ending exactly at byte 64 within a larger buffer.
     var large = Bitmap.alloc(1024)
     large.set_range(0, 1024, True)
     var fl = large.finish(1024)
     var s = fl.slice(0, 512)
-    assert_equal(s.view().count_set_bits(), 512)
+    assert_equal(BitmapView(s).count_set_bits(), 512)
 
 
 def test_count_set_bits_trail_bytes_only() raises:
@@ -449,7 +450,7 @@ def test_count_set_bits_trail_bytes_only() raises:
     full.set_range(0, 1000, True)
     var bm = full.finish(1000)
     var s = bm.slice(0, 8)
-    assert_equal(s.view().count_set_bits(), 8)
+    assert_equal(BitmapView(s).count_set_bits(), 8)
 
 
 def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
@@ -462,8 +463,8 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
     full.set_range(0, 1000, True)
     var bm = full.finish(1000)
     var s = bm.slice(520, 10)
-    assert_equal(s.view().count_set_bits(), 10)
-    assert_equal(s.view().count_set_bits(), _count_naive(s))
+    assert_equal(BitmapView(s).count_set_bits(), 10)
+    assert_equal(BitmapView(s).count_set_bits(), _count_naive(s))
 
 
 # ---------------------------------------------------------------------------
@@ -477,24 +478,24 @@ def test_slice_shares_buffer() raises:
     var s = bm.slice(4, 8)  # bits 4-11 of original
     assert_equal(len(s), 8)
     # bit 5 of original = index 1 in sliced view
-    assert_true(s.view().test(1))
+    assert_true(BitmapView(s).test(1))
     # bit 10 of original = index 6 in sliced view
-    assert_true(s.view().test(6))
+    assert_true(BitmapView(s).test(6))
     # bit 4 of original = index 0, not set
-    assert_false(s.view().test(0))
+    assert_false(BitmapView(s).test(0))
 
 
 def test_slice_single_bit() raises:
     var bm = _make(8, [3])
     var s = bm.slice(3, 1)
     assert_equal(len(s), 1)
-    assert_true(s.view().test(0))
+    assert_true(BitmapView(s).test(0))
 
 
 def test_slice_count_set_bits() raises:
     var bm = _make(16, [2, 3, 4, 5, 6])
     var s = bm.slice(2, 5)  # bits 2-6 → all 5 set
-    assert_equal(s.view().count_set_bits(), 5)
+    assert_equal(BitmapView(s).count_set_bits(), 5)
 
 
 # ---------------------------------------------------------------------------
@@ -504,41 +505,41 @@ def test_slice_count_set_bits() raises:
 
 def test_invert_all_zeros() raises:
     var bm = _make(8, [])
-    var inv = _to_bm(~bm.view(), len(bm))
+    var inv = _to_bm(~BitmapView(bm), len(bm))
     assert_equal(len(inv), 8)
     for i in range(8):
-        assert_true(inv.view().test(i))
+        assert_true(BitmapView(inv).test(i))
 
 
 def test_invert_all_ones() raises:
     var b = Bitmap.alloc(8)
     b.set_range(0, 8, True)
     var bm = b.finish(8)
-    var inv = _to_bm(~bm.view(), len(bm))
+    var inv = _to_bm(~BitmapView(bm), len(bm))
     for i in range(8):
-        assert_false(inv.view().test(i))
+        assert_false(BitmapView(inv).test(i))
 
 
 def test_invert_pattern() raises:
     # bits 1, 3, 5 set → inverted: 0, 2, 4, 6, 7 set
     var bm = _make(8, [1, 3, 5])
-    var inv = _to_bm(~bm.view(), len(bm))
-    assert_true(inv.view().test(0))
-    assert_false(inv.view().test(1))
-    assert_true(inv.view().test(2))
-    assert_false(inv.view().test(3))
-    assert_true(inv.view().test(4))
-    assert_false(inv.view().test(5))
-    assert_true(inv.view().test(6))
-    assert_true(inv.view().test(7))
+    var inv = _to_bm(~BitmapView(bm), len(bm))
+    assert_true(BitmapView(inv).test(0))
+    assert_false(BitmapView(inv).test(1))
+    assert_true(BitmapView(inv).test(2))
+    assert_false(BitmapView(inv).test(3))
+    assert_true(BitmapView(inv).test(4))
+    assert_false(BitmapView(inv).test(5))
+    assert_true(BitmapView(inv).test(6))
+    assert_true(BitmapView(inv).test(7))
 
 
 def test_invert_does_not_bleed_past_length() raises:
     """Bits beyond _length must be 0 in the result (no spurious set bits)."""
     var bm = _make(10, [])  # 10 bits, all clear
-    var inv = _to_bm(~bm.view(), len(bm))
+    var inv = _to_bm(~BitmapView(bm), len(bm))
     # only bits 0-9 are inverted; bits 10-15 of last byte must stay 0
-    assert_equal(inv.view().count_set_bits(), 10)
+    assert_equal(BitmapView(inv).count_set_bits(), 10)
 
 
 # ---------------------------------------------------------------------------
@@ -550,16 +551,16 @@ def test_and_basic() raises:
     # [1,0,1,0,1,0,1,0] & [1,1,0,0,1,1,0,0] = [1,0,0,0,1,0,0,0]
     var a = _make(8, [0, 2, 4, 6])
     var b = _make(8, [0, 1, 4, 5])
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(len(r),8)
-    assert_true(r.view().test(0))
-    assert_false(r.view().test(1))
-    assert_false(r.view().test(2))
-    assert_false(r.view().test(3))
-    assert_true(r.view().test(4))
-    assert_false(r.view().test(5))
-    assert_false(r.view().test(6))
-    assert_false(r.view().test(7))
+    assert_true(BitmapView(r).test(0))
+    assert_false(BitmapView(r).test(1))
+    assert_false(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
+    assert_true(BitmapView(r).test(4))
+    assert_false(BitmapView(r).test(5))
+    assert_false(BitmapView(r).test(6))
+    assert_false(BitmapView(r).test(7))
 
 
 def test_and_identity() raises:
@@ -568,18 +569,18 @@ def test_and_identity() raises:
     var ones_b = Bitmap.alloc(16)
     ones_b.set_range(0, 16, True)
     var ones = ones_b.finish(16)
-    var r = _to_bm(a.view() & ones.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(ones), len(a))
     for i in range(16):
-        assert_equal(r.view().test(i), a.view().test(i))
+        assert_equal(BitmapView(r).test(i), BitmapView(a).test(i))
 
 
 def test_and_annihilator() raises:
     # a & all-zeros == all-zeros
     var a = _make(16, [1, 5, 9, 13])
     var zeros = _make(16, [])
-    var r = _to_bm(a.view() & zeros.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(zeros), len(a))
     for i in range(16):
-        assert_false(r.view().test(i))
+        assert_false(BitmapView(r).test(i))
 
 
 def test_and_large() raises:
@@ -592,8 +593,8 @@ def test_and_large() raises:
     b2.set_range(256, 512, True)
     var b = b2.finish(1024)
 
-    var r = _to_bm(a.view() & b.view(), len(a))
-    assert_equal(r.view().count_set_bits(), 256)  # overlap in bits 256-511
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
+    assert_equal(BitmapView(r).count_set_bits(), 256)  # overlap in bits 256-511
 
 
 # ---------------------------------------------------------------------------
@@ -604,19 +605,19 @@ def test_and_large() raises:
 def test_or_basic() raises:
     var a = _make(8, [0, 2])
     var b = _make(8, [1, 2])
-    var r = _to_bm(a.view() | b.view(), len(a))
-    assert_true(r.view().test(0))
-    assert_true(r.view().test(1))
-    assert_true(r.view().test(2))
-    assert_false(r.view().test(3))
+    var r = _to_bm(BitmapView(a) | BitmapView(b), len(a))
+    assert_true(BitmapView(r).test(0))
+    assert_true(BitmapView(r).test(1))
+    assert_true(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
 
 
 def test_or_idempotent() raises:
     # a | a == a
     var a = _make(16, [0, 3, 7, 10])
-    var r = _to_bm(a.view() | a.view(), len(a))
+    var r = _to_bm(BitmapView(a) | BitmapView(a), len(a))
     for i in range(16):
-        assert_equal(r.view().test(i), a.view().test(i))
+        assert_equal(BitmapView(r).test(i), BitmapView(a).test(i))
 
 
 # ---------------------------------------------------------------------------
@@ -628,19 +629,19 @@ def test_xor_basic() raises:
     # [1,0,1,0] ^ [1,1,0,0] = [0,1,1,0]
     var a = _make(4, [0, 2])
     var b = _make(4, [0, 1])
-    var r = _to_bm(a.view() ^ b.view(), len(a))
-    assert_false(r.view().test(0))
-    assert_true(r.view().test(1))
-    assert_true(r.view().test(2))
-    assert_false(r.view().test(3))
+    var r = _to_bm(BitmapView(a) ^ BitmapView(b), len(a))
+    assert_false(BitmapView(r).test(0))
+    assert_true(BitmapView(r).test(1))
+    assert_true(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
 
 
 def test_xor_self_is_zero() raises:
     # a ^ a == all-zeros
     var a = _make(16, [1, 3, 5, 7])
-    var r = _to_bm(a.view() ^ a.view(), len(a))
+    var r = _to_bm(BitmapView(a) ^ BitmapView(a), len(a))
     for i in range(16):
-        assert_false(r.view().test(i))
+        assert_false(BitmapView(r).test(i))
 
 
 # ---------------------------------------------------------------------------
@@ -652,20 +653,20 @@ def test_and_not_basic() raises:
     # [1,0,1,0] & ~[1,1,0,0] = [1,0,1,0] & [0,0,1,1] = [0,0,1,0]
     var a = _make(4, [0, 2])
     var b = _make(4, [0, 1])
-    var r = _to_bm(a.view().difference(b.view()), len(a))
-    assert_false(r.view().test(0))
-    assert_false(r.view().test(1))
-    assert_true(r.view().test(2))
-    assert_false(r.view().test(3))
+    var r = _to_bm(BitmapView(a).difference(BitmapView(b)), len(a))
+    assert_false(BitmapView(r).test(0))
+    assert_false(BitmapView(r).test(1))
+    assert_true(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
 
 
 def test_and_not_with_none_mask() raises:
     # a.and_not(all-zeros) == a
     var a = _make(8, [0, 3, 7])
     var zeros = _make(8, [])
-    var r = _to_bm(a.view().difference(zeros.view()), len(a))
+    var r = _to_bm(BitmapView(a).difference(BitmapView(zeros)), len(a))
     for i in range(8):
-        assert_equal(r.view().test(i), a.view().test(i))
+        assert_equal(BitmapView(r).test(i), BitmapView(a).test(i))
 
 
 # ---------------------------------------------------------------------------
@@ -679,10 +680,10 @@ def test_and_with_same_nonzero_offset() raises:
     var full = _make(16, [2, 3, 4, 6, 10, 11, 12, 14])
     var a = full.slice(2, 8)  # bits 2-9 of original: [1,1,1,0,1,0,0,0]
     var b = full.slice(2, 8)  # same slice
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     # a & a == a
     for i in range(8):
-        assert_equal(r.view().test(i), a.view().test(i))
+        assert_equal(BitmapView(r).test(i), BitmapView(a).test(i))
 
 
 def test_and_same_shift_fast_path() raises:
@@ -697,18 +698,18 @@ def test_and_same_shift_fast_path() raises:
     # b slice indices: orig bits 3,4,7,8,11 → slice indices 0,1,4,5,8
     var a = fa.slice(3, 9)
     var b = fb.slice(3, 9)
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(len(r),9)
     # AND: intersection at slice indices 0,4,8
-    assert_true(r.view().test(0))
-    assert_false(r.view().test(1))
-    assert_false(r.view().test(2))
-    assert_false(r.view().test(3))
-    assert_true(r.view().test(4))
-    assert_false(r.view().test(5))
-    assert_false(r.view().test(6))
-    assert_false(r.view().test(7))
-    assert_true(r.view().test(8))
+    assert_true(BitmapView(r).test(0))
+    assert_false(BitmapView(r).test(1))
+    assert_false(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
+    assert_true(BitmapView(r).test(4))
+    assert_false(BitmapView(r).test(5))
+    assert_false(BitmapView(r).test(6))
+    assert_false(BitmapView(r).test(7))
+    assert_true(BitmapView(r).test(8))
 
 
 def test_or_same_shift_fast_path() raises:
@@ -717,13 +718,13 @@ def test_or_same_shift_fast_path() raises:
     var fb = _make(16, [3, 4])
     var a = fa.slice(3, 5)  # slice indices 0,2 set
     var b = fb.slice(3, 5)  # slice indices 0,1 set
-    var r = _to_bm(a.view() | b.view(), len(a))
+    var r = _to_bm(BitmapView(a) | BitmapView(b), len(a))
     assert_equal(len(r),5)
-    assert_true(r.view().test(0))
-    assert_true(r.view().test(1))
-    assert_true(r.view().test(2))
-    assert_false(r.view().test(3))
-    assert_false(r.view().test(4))
+    assert_true(BitmapView(r).test(0))
+    assert_true(BitmapView(r).test(1))
+    assert_true(BitmapView(r).test(2))
+    assert_false(BitmapView(r).test(3))
+    assert_false(BitmapView(r).test(4))
 
 
 def test_and_different_offsets() raises:
@@ -734,11 +735,11 @@ def test_and_different_offsets() raises:
     var fb = _make(16, [5, 7, 9, 11, 13])
     var a = fa.slice(3, 9)  # shift_a = 3
     var b = fb.slice(5, 9)  # shift_b = 5
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(len(r),9)
     # AND: both have indices 0,2,4,6,8 set → intersection is 0,2,4,6,8
     for i in range(9):
-        assert_equal(r.view().test(i), i % 2 == 0)
+        assert_equal(BitmapView(r).test(i), i % 2 == 0)
 
 
 def test_and_different_offsets_large_byte_delta() raises:
@@ -771,10 +772,10 @@ def test_and_different_offsets_large_byte_delta() raises:
     # b: slice at bit 500 (byte 62, shift 4), 16 bits → indices 0,2,4,6,8,10,12,14 set
     var b = full.slice(500, 16)
     # Same sub-byte shift (4), but byte_delta = 50 — well beyond a single SIMD width.
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(len(r),16)
     for i in range(16):
-        assert_equal(r.view().test(i), i % 2 == 0)
+        assert_equal(BitmapView(r).test(i), i % 2 == 0)
 
 
 def test_and_different_offsets_large_byte_delta_different_shift() raises:
@@ -790,11 +791,11 @@ def test_and_different_offsets_large_byte_delta_different_shift() raises:
     var full_b = _make(600, bits_b)
     var a = full_a.slice(100, 16)
     var b = full_b.slice(503, 16)
-    var r = _to_bm(a.view() & b.view(), len(a))
+    var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(len(r),16)
     # Both slices are all-ones, so AND should be all-ones.
     for i in range(16):
-        assert_true(r.view().test(i))
+        assert_true(BitmapView(r).test(i))
 
 
 def test_or_different_offsets_large_byte_delta() raises:
@@ -803,20 +804,20 @@ def test_or_different_offsets_large_byte_delta() raises:
     var full_b = _make(600, [500, 501, 502])
     var a = full_a.slice(100, 12)  # indices 0,4,8 set
     var b = full_b.slice(500, 12)  # indices 0,1,2 set
-    var r = _to_bm(a.view() | b.view(), len(a))
+    var r = _to_bm(BitmapView(a) | BitmapView(b), len(a))
     assert_equal(len(r),12)
-    assert_true(r.view().test(0))  # set in both
-    assert_true(r.view().test(1))  # set in b
-    assert_true(r.view().test(2))  # set in b
-    assert_false(r.view().test(3))
-    assert_true(r.view().test(4))  # set in a
-    assert_false(r.view().test(5))
-    assert_false(r.view().test(6))
-    assert_false(r.view().test(7))
-    assert_true(r.view().test(8))  # set in a
-    assert_false(r.view().test(9))
-    assert_false(r.view().test(10))
-    assert_false(r.view().test(11))
+    assert_true(BitmapView(r).test(0))  # set in both
+    assert_true(BitmapView(r).test(1))  # set in b
+    assert_true(BitmapView(r).test(2))  # set in b
+    assert_false(BitmapView(r).test(3))
+    assert_true(BitmapView(r).test(4))  # set in a
+    assert_false(BitmapView(r).test(5))
+    assert_false(BitmapView(r).test(6))
+    assert_false(BitmapView(r).test(7))
+    assert_true(BitmapView(r).test(8))  # set in a
+    assert_false(BitmapView(r).test(9))
+    assert_false(BitmapView(r).test(10))
+    assert_false(BitmapView(r).test(11))
 
 
 def test_xor_different_offsets_large_byte_delta() raises:
@@ -830,11 +831,11 @@ def test_xor_different_offsets_large_byte_delta() raises:
     var full_b = _make(700, bits_b)
     var a = full_a.slice(80, 16)  # byte 10, shift 0
     var b = full_b.slice(592, 16)  # byte 74, shift 0
-    var r = _to_bm(a.view() ^ b.view(), len(a))
+    var r = _to_bm(BitmapView(a) ^ BitmapView(b), len(a))
     assert_equal(len(r),16)
     # Both all-ones → XOR should be all-zeros.
     for i in range(16):
-        assert_false(r.view().test(i))
+        assert_false(BitmapView(r).test(i))
 
 
 def test_and_not_different_offsets_large_byte_delta() raises:
@@ -846,28 +847,28 @@ def test_and_not_different_offsets_large_byte_delta() raises:
     var full_b = _make(600, [500, 502, 504, 506])  # even indices set
     var a = full_a.slice(100, 16)  # all-ones
     var b = full_b.slice(500, 16)  # indices 0,2,4,6 set
-    var r = _to_bm(a.view().difference(b.view()), len(a))
+    var r = _to_bm(BitmapView(a).difference(BitmapView(b)), len(a))
     assert_equal(len(r),16)
     # a & ~b: clear bits where b is set → odd indices remain
     for i in range(16):
         if i < 8:
-            assert_equal(r.view().test(i), i % 2 != 0)
+            assert_equal(BitmapView(r).test(i), i % 2 != 0)
         else:
-            assert_true(r.view().test(i))
+            assert_true(BitmapView(r).test(i))
 
 
 def test_invert_with_offset() raises:
     var full = _make(16, [4, 5, 6, 7])
     var s = full.slice(4, 8)  # bits 4-11 → [1,1,1,1,0,0,0,0]
-    var inv = _to_bm(~s.view(), len(s))
-    assert_false(inv.view().test(0))
-    assert_false(inv.view().test(1))
-    assert_false(inv.view().test(2))
-    assert_false(inv.view().test(3))
-    assert_true(inv.view().test(4))
-    assert_true(inv.view().test(5))
-    assert_true(inv.view().test(6))
-    assert_true(inv.view().test(7))
+    var inv = _to_bm(~BitmapView(s), len(s))
+    assert_false(BitmapView(inv).test(0))
+    assert_false(BitmapView(inv).test(1))
+    assert_false(BitmapView(inv).test(2))
+    assert_false(BitmapView(inv).test(3))
+    assert_true(BitmapView(inv).test(4))
+    assert_true(BitmapView(inv).test(5))
+    assert_true(BitmapView(inv).test(6))
+    assert_true(BitmapView(inv).test(7))
 
 
 def test_invert_large_byte_offset() raises:
@@ -876,17 +877,17 @@ def test_invert_large_byte_offset() raises:
     # Set bits 577 and 578 of the full bitmap (slice indices 1 and 2).
     var full = _make(600, [577, 578])
     var s = full.slice(576, 24)
-    assert_false(s.view().test(0))
-    assert_true(s.view().test(1))
-    assert_true(s.view().test(2))
-    var inv = _to_bm(~s.view(), len(s))
+    assert_false(BitmapView(s).test(0))
+    assert_true(BitmapView(s).test(1))
+    assert_true(BitmapView(s).test(2))
+    var inv = _to_bm(~BitmapView(s), len(s))
     assert_equal(len(inv), 24)
-    assert_true(inv.view().test(0))
-    assert_false(inv.view().test(1))
-    assert_false(inv.view().test(2))
+    assert_true(BitmapView(inv).test(0))
+    assert_false(BitmapView(inv).test(1))
+    assert_false(BitmapView(inv).test(2))
     for i in range(3, 24):
-        assert_true(inv.view().test(i))
-    assert_equal(inv.view().count_set_bits(), 22)
+        assert_true(BitmapView(inv).test(i))
+    assert_equal(BitmapView(inv).count_set_bits(), 22)
 
 
 def test_invert_large_byte_offset_with_shift() raises:
@@ -895,28 +896,28 @@ def test_invert_large_byte_offset_with_shift() raises:
     # full bits 577, 578, 580 set → slice indices 0, 1, 3 set.
     var full = _make(600, [577, 578, 580])
     var s = full.slice(577, 8)
-    assert_true(s.view().test(0))
-    assert_true(s.view().test(1))
-    assert_false(s.view().test(2))
-    assert_true(s.view().test(3))
-    var inv = _to_bm(~s.view(), len(s))
+    assert_true(BitmapView(s).test(0))
+    assert_true(BitmapView(s).test(1))
+    assert_false(BitmapView(s).test(2))
+    assert_true(BitmapView(s).test(3))
+    var inv = _to_bm(~BitmapView(s), len(s))
     assert_equal(len(inv), 8)
-    assert_false(inv.view().test(0))
-    assert_false(inv.view().test(1))
-    assert_true(inv.view().test(2))
-    assert_false(inv.view().test(3))
-    assert_true(inv.view().test(4))
-    assert_true(inv.view().test(5))
-    assert_true(inv.view().test(6))
-    assert_true(inv.view().test(7))
-    assert_equal(inv.view().count_set_bits(), 5)
+    assert_false(BitmapView(inv).test(0))
+    assert_false(BitmapView(inv).test(1))
+    assert_true(BitmapView(inv).test(2))
+    assert_false(BitmapView(inv).test(3))
+    assert_true(BitmapView(inv).test(4))
+    assert_true(BitmapView(inv).test(5))
+    assert_true(BitmapView(inv).test(6))
+    assert_true(BitmapView(inv).test(7))
+    assert_equal(BitmapView(inv).count_set_bits(), 5)
 
 
 def test_and_length_mismatch_raises() raises:
     var a = _make(8, [0, 2])
     var b = _make(4, [0, 2])
     try:
-        _ = a.view() & b.view()
+        _ = BitmapView(a) & BitmapView(b)
         assert_true(False, "should have raised")
     except:
         pass
@@ -926,7 +927,7 @@ def test_or_length_mismatch_raises() raises:
     var a = _make(8, [0, 2])
     var b = _make(4, [0])
     try:
-        _ = a.view() | b.view()
+        _ = BitmapView(a) | BitmapView(b)
         assert_true(False, "should have raised")
     except:
         pass
@@ -936,7 +937,7 @@ def test_xor_length_mismatch_raises() raises:
     var a = _make(8, [0, 2])
     var b = _make(4, [0])
     try:
-        _ = a.view() ^ b.view()
+        _ = BitmapView(a) ^ BitmapView(b)
         assert_true(False, "should have raised")
     except:
         pass
@@ -946,7 +947,7 @@ def test_and_not_length_mismatch_raises() raises:
     var a = _make(8, [0, 2])
     var b = _make(4, [0])
     try:
-        _ = a.view().difference(b.view())
+        _ = BitmapView(a).difference(BitmapView(b))
         assert_true(False, "should have raised")
     except:
         pass
@@ -955,19 +956,19 @@ def test_and_not_length_mismatch_raises() raises:
 def test_bitmap_eq_equal_aligned() raises:
     var a = _make(8, [0, 3, 7])
     var b = _make(8, [0, 3, 7])
-    assert_true(a.view() == b.view())
+    assert_true(BitmapView(a) == BitmapView(b))
 
 
 def test_bitmap_eq_unequal() raises:
     var a = _make(8, [0, 3, 7])
     var b = _make(8, [0, 3, 6])
-    assert_false(a.view() == b.view())
+    assert_false(BitmapView(a) == BitmapView(b))
 
 
 def test_bitmap_eq_different_length() raises:
     var a = _make(8, [0, 3])
     var b = _make(9, [0, 3])
-    assert_false(a.view() == b.view())
+    assert_false(BitmapView(a) == BitmapView(b))
 
 
 def test_bitmap_eq_equal_offset() raises:
@@ -977,7 +978,7 @@ def test_bitmap_eq_equal_offset() raises:
     var base_b = _make(10, [2, 5, 9])
     var slice_a = base_a.slice(2, 8)  # logical bits [0..8) → original [2..10)
     var slice_b = base_b.slice(2, 8)
-    assert_true(slice_a.view() == slice_b.view())
+    assert_true(BitmapView(slice_a) == BitmapView(slice_b))
 
 
 def test_bitmap_eq_offset_mismatch() raises:
@@ -986,7 +987,7 @@ def test_bitmap_eq_offset_mismatch() raises:
     var base_b = _make(10, [3, 5, 9])
     var slice_a = base_a.slice(2, 8)
     var slice_b = base_b.slice(2, 8)
-    assert_false(slice_a.view() == slice_b.view())
+    assert_false(BitmapView(slice_a) == BitmapView(slice_b))
 
 
 def main() raises:
