@@ -53,9 +53,6 @@ from ..expr.relations import (
 )
 
 
-
-
-
 comptime IndexPairs = Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
 
@@ -102,7 +99,9 @@ trait Join(Movable):
 
 
 struct HashJoin[
-    hasher: def (StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[uint64] = rapidhash
+    hasher: def(StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[
+        uint64
+    ] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 
@@ -127,9 +126,7 @@ struct HashJoin[
         self._left_data = None
         self._left_rows = 0
 
-    def build(
-        mut self, left: StructArray, left_key_indices: List[Int]
-    ) raises:
+    def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
         self._left_dtype = left.dtype
         self._left_rows = left.length
         self._left_data = left.copy()
@@ -146,7 +143,9 @@ struct HashJoin[
         var left_keys = self._left_data.value().select(self._left_key_indices)
         var right_keys = right.select(right_key_indices)
         var pairs = self._table.probe(
-            left_keys, right_keys, self._left_rows,
+            left_keys,
+            right_keys,
+            self._left_rows,
             single_match=strictness == JOIN_ANY,
         )
         var verified = (pairs[0].copy(), pairs[1].copy())
@@ -260,17 +259,11 @@ struct HashJoin[
         var out_cols = List[AnyArray]()
 
         for c in range(len(left.children)):
-            out_cols.append(
-                take(left.children[c].copy(), pairs[0])
-            )
+            out_cols.append(take(left.children[c].copy(), pairs[0]))
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI and kind != JOIN_MARK:
             for c in range(len(right.children)):
-                out_cols.append(
-                    take(
-                        right.children[c].copy(), pairs[1]
-                    )
-                )
+                out_cols.append(take(right.children[c].copy(), pairs[1]))
 
         var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
         return StructArray(

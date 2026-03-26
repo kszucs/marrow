@@ -24,7 +24,6 @@ from .filter import take, filter_
 from .hashing import rapidhash
 
 
-
 # ---------------------------------------------------------------------------
 # Partitioner — splits rows into partitions by hash
 # ---------------------------------------------------------------------------
@@ -111,7 +110,9 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def (StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[uint64] = rapidhash
+    hasher: def(StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[
+        uint64
+    ] = rapidhash
 ](Movable):
     """Swiss Table hash table with SIMD group matching.
 
@@ -229,7 +230,9 @@ struct SwissHashTable[
         self._mask = cap - 1
         self._count = 0
         self._max_count = cap * 7 // 8
-        self._ctrl = BufferBuilder.alloc_filled(cap + _GROUP_WIDTH, fill=_CTRL_EMPTY)
+        self._ctrl = BufferBuilder.alloc_filled(
+            cap + _GROUP_WIDTH, fill=_CTRL_EMPTY
+        )
         self._slots = BufferBuilder.alloc_uninit[DType.int32](cap)
         self._bucket_hashes = BufferBuilder.alloc_uninit[DType.uint64](
             max(capacity, 16)
@@ -400,7 +403,9 @@ struct SwissHashTable[
             var old_ctrl = self._ctrl^
             var old_slots = self._slots^
 
-            self._ctrl = BufferBuilder.alloc_filled(needed + _GROUP_WIDTH, fill=_CTRL_EMPTY)
+            self._ctrl = BufferBuilder.alloc_filled(
+                needed + _GROUP_WIDTH, fill=_CTRL_EMPTY
+            )
             self._slots = BufferBuilder.alloc_uninit[DType.int32](needed)
 
             for i in range(old_cap):
@@ -589,9 +594,7 @@ struct SwissHashTable[
     # Public API
     # ------------------------------------------------------------------
 
-    def insert(
-        mut self, keys: StructArray
-    ) raises -> PrimitiveArray[int32]:
+    def insert(mut self, keys: StructArray) raises -> PrimitiveArray[int32]:
         """Hash keys and insert, returning a bucket ID per row.
 
         Used by groupby to assign group IDs.  Does not store keys or

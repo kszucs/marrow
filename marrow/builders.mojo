@@ -67,7 +67,9 @@ trait Builder(ImplicitlyDestructible, Movable):
     def extend(mut self, arr: AnyArray) raises:
         ...
 
-    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> Self.ArrayType:
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> Self.ArrayType:
         ...
 
     def reset(mut self):
@@ -370,7 +372,9 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             self._buffer.resize[Self.T.native](new_cap)
             self._capacity = new_cap
 
-    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> PrimitiveArray[Self.T]:
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> PrimitiveArray[Self.T]:
         """Finish the builder, optionally skipping the shrink-to-fit realloc."""
         if shrink_to_fit:
             self._buffer.resize[Self.T.native](self._length)
@@ -835,7 +839,9 @@ struct FixedSizeListBuilder(Builder, Sized):
             self._bitmap.resize(new_cap)
             self._capacity = new_cap
 
-    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> FixedSizeListArray:
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> FixedSizeListArray:
         # no offset buffer to trim — child length is implicit (length * list_size)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count

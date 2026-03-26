@@ -4,6 +4,7 @@ from ..arrays import PrimitiveArray, AnyArray
 from ..bitmap import Bitmap, BitmapBuilder
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
+from ..views import BitmapView
 
 
 def count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
@@ -16,11 +17,13 @@ def count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
         Number of True (and non-null) elements.
     """
     var n = len(array)
-    var data_bm = Bitmap(array.buffer, array.offset, n)
+    var data_bv = array.values_bitmap()
     if array.nulls > 0:
-        var combined = data_bm & array.bitmap.value()
-        return combined.count_set_bits()
-    return data_bm.count_set_bits()
+        var combined = data_bv & array.validity().value()
+        return BitmapView[ImmutExternalOrigin](
+            ptr=combined.ptr, offset=0, length=n
+        ).count_set_bits()
+    return data_bv.count_set_bits()
 
 
 def and_(
@@ -30,15 +33,15 @@ def and_(
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("and_: input arrays must have equal length")
-    var lhs_bm = Bitmap(lhs.buffer, lhs.offset, length)
-    var rhs_bm = Bitmap(rhs.buffer, rhs.offset, length)
-    var result_bm = lhs_bm & rhs_bm
+    var lhs_bv = lhs.values_bitmap()
+    var rhs_bv = rhs.values_bitmap()
+    var result_buf = lhs_bv & rhs_bv
     return PrimitiveArray[bool_dt](
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_bm._buffer,
+        buffer=result_buf,
     )
 
 
@@ -49,29 +52,29 @@ def or_(
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("or_: input arrays must have equal length")
-    var lhs_bm = Bitmap(lhs.buffer, lhs.offset, length)
-    var rhs_bm = Bitmap(rhs.buffer, rhs.offset, length)
-    var result_bm = lhs_bm | rhs_bm
+    var lhs_bv = lhs.values_bitmap()
+    var rhs_bv = rhs.values_bitmap()
+    var result_buf = lhs_bv | rhs_bv
     return PrimitiveArray[bool_dt](
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_bm._buffer,
+        buffer=result_buf,
     )
 
 
 def not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
     """Bitwise NOT of a bit-packed bool array."""
     var length = len(arr)
-    var bm = Bitmap(arr.buffer, arr.offset, length)
-    var result_bm = ~bm
+    var bv = arr.values_bitmap()
+    var result_buf = ~bv
     return PrimitiveArray[bool_dt](
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_bm._buffer,
+        buffer=result_buf,
     )
 
 
@@ -111,9 +114,9 @@ def select[
     if len(mask) != length or len(else_) != length:
         raise Error("select: input arrays must have equal length")
     var builder = PrimitiveBuilder[T](length)
-    var data_bm = Bitmap(mask.buffer, mask.offset, length)
+    var data_bv = mask.values_bitmap()
     for i in range(length):
-        if data_bm.is_valid(i):
+        if data_bv.test(i):
             builder._buffer.unsafe_set[T.native](i, then_.unsafe_get(i))
         else:
             builder._buffer.unsafe_set[T.native](i, else_.unsafe_get(i))

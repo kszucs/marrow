@@ -44,10 +44,16 @@ def _make_tables(n, selectivity=1.0):
         "pl_left": pl.DataFrame({"k": left_keys, "v": left_vals}),
         "pl_right": pl.DataFrame({"k": right_keys, "w": right_vals}),
         "ma_left": ma.record_batch(
-            {"k": ma.array(left_keys, type=ma.int64()), "v": ma.array(left_vals, type=ma.int64())}
+            {
+                "k": ma.array(left_keys, type=ma.int64()),
+                "v": ma.array(left_vals, type=ma.int64()),
+            }
         ),
         "ma_right": ma.record_batch(
-            {"k": ma.array(right_keys, type=ma.int64()), "w": ma.array(right_vals, type=ma.int64())}
+            {
+                "k": ma.array(right_keys, type=ma.int64()),
+                "w": ma.array(right_vals, type=ma.int64()),
+            }
         ),
     }
 

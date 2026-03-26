@@ -268,9 +268,7 @@ def equal(
     """Element-wise string equality."""
     var n = len(left)
     if len(right) != n:
-        raise Error(
-            "equal: string arrays must have the same length"
-        )
+        raise Error("equal: string arrays must have the same length")
     var builder = PrimitiveBuilder[bool_dt](capacity=n)
     var bm = bitmap_and(left.bitmap, right.bitmap)
     for i in range(n):
@@ -315,7 +313,8 @@ def equal(
         mask = and_(
             mask.as_primitive[bool_dt]().copy(),
             equal(left.children[k].copy(), right.children[k].copy())
-                .as_primitive[bool_dt]().copy(),
+            .as_primitive[bool_dt]()
+            .copy(),
         )
     return mask.as_primitive[bool_dt]().copy()
 

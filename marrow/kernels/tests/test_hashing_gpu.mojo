@@ -72,12 +72,8 @@ def test_rapidhash_gpu_nulls() raises:
     assert_equal(gpu_hashes.unsafe_get(2), cpu_hashes.unsafe_get(2))
     assert_equal(gpu_hashes.unsafe_get(4), cpu_hashes.unsafe_get(4))
     # Null positions should be sentinel
-    assert_equal(
-        UInt64(gpu_hashes.unsafe_get(1)), NULL_HASH_SENTINEL
-    )
-    assert_equal(
-        UInt64(gpu_hashes.unsafe_get(3)), NULL_HASH_SENTINEL
-    )
+    assert_equal(UInt64(gpu_hashes.unsafe_get(1)), NULL_HASH_SENTINEL)
+    assert_equal(UInt64(gpu_hashes.unsafe_get(3)), NULL_HASH_SENTINEL)
 
 
 def test_rapidhash_gpu_bool() raises:

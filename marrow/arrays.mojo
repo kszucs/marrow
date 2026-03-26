@@ -32,6 +32,7 @@ from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .buffers import Buffer, BufferBuilder
 from .bitmap import Bitmap, BitmapBuilder
+from .views import BufferView, BitmapView
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
 from .scalars import PrimitiveScalar, StringScalar, ListScalar
@@ -515,6 +516,50 @@ struct PrimitiveArray[T: DataType](
     @always_inline
     def unsafe_get(self, index: Int) -> Self.scalar:
         return self.buffer.unsafe_get[Self.T.native](index + self.offset)
+
+    # --- View accessors ---
+
+    def values(
+        self,
+    ) -> BufferView[Self.T.native, ImmutExternalOrigin]:
+        """Non-owning typed view of this array's data values (offset baked in).
+
+        For bool arrays, returns a BitmapView instead — use
+        ``values_bitmap()`` in that case.
+        """
+        comptime assert (
+            Self.T.native != DType.bool
+        ), "use values_bitmap() for bool arrays"
+        return BufferView[Self.T.native, ImmutExternalOrigin](
+            ptr=self.buffer.ptr.bitcast[Scalar[Self.T.native]]() + self.offset,
+            length=self.length,
+        )
+
+    def values_bitmap(
+        self,
+    ) -> BitmapView[ImmutExternalOrigin]:
+        """Bool data as a BitmapView (only for PrimitiveArray[bool_])."""
+        comptime assert (
+            Self.T == bool_
+        ), "values_bitmap is only valid for BoolArray"
+        return BitmapView[ImmutExternalOrigin](
+            ptr=self.buffer.ptr,
+            offset=self.offset,
+            length=self.length,
+        )
+
+    def validity(
+        self,
+    ) -> Optional[BitmapView[ImmutExternalOrigin]]:
+        """Validity bitmap as a BitmapView, or None if all-valid."""
+        if self.bitmap:
+            var bm = self.bitmap.value()
+            return BitmapView[ImmutExternalOrigin](
+                ptr=bm._buffer.ptr,
+                offset=bm._offset + self.offset,
+                length=self.length,
+            )
+        return None
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:
         if index < 0 or index >= self.length:

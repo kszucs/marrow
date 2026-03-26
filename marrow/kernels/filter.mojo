@@ -18,6 +18,7 @@ from ..buffers import Buffer, BufferBuilder
 from ..bitmap import Bitmap, BitmapBuilder
 from ..builders import PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
+from ..views import BitmapView
 from .aggregate import sum_
 from .string import string_lengths
 
@@ -142,8 +143,8 @@ def _pext(val: UInt64, mask: UInt64) -> UInt64:
 
 
 def _filter_bits(
-    src: Bitmap,
-    sel: Bitmap,
+    src: BitmapView[_],
+    sel: BitmapView[_],
     sel_start: Int,
     sel_end: Int,
     out_len: Int,
@@ -221,7 +222,7 @@ def _filter_values[
 ](
     src_buf: Buffer,
     src_offset: Int,
-    sel: Bitmap,
+    sel: BitmapView[_],
     sel_start: Int,
     sel_end: Int,
     out_len: Int,
@@ -234,7 +235,7 @@ def _filter_values[
     Args:
         src_buf: Source data buffer.
         src_offset: Element offset into src_buf.
-        sel: Selection bitmap (True = keep).
+        sel: Selection bitmap view (True = keep).
         sel_start: First 64-bit-aligned block with set bits in sel.
         sel_end: Past-the-end 64-bit-aligned block in sel.
         out_len: Pre-counted number of set bits in sel.
@@ -310,7 +311,7 @@ def filter_[
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = Bitmap(selection.buffer, selection.offset, n)
+    var sel_bm = selection.values_bitmap()
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -326,8 +327,8 @@ def filter_[
     # Filter validity bitmap (shared by both paths).
     var bm: Optional[Bitmap] = None
     var null_count = 0
-    if array.bitmap:
-        var val_bm = array.bitmap.value().slice(array.offset, n)
+    if array.validity():
+        var val_bm = array.validity().value()
         var filtered_bm, nc = _filter_bits(
             val_bm, sel_bm, sel_start, sel_end, out_len
         )
@@ -336,7 +337,7 @@ def filter_[
 
     # Filter data and return.
     comptime if T == bool_:
-        var data_bm = Bitmap(array.buffer, array.offset, n)
+        var data_bm = array.values_bitmap()
         var filtered_data, _ = _filter_bits(
             data_bm, sel_bm, sel_start, sel_end, out_len
         )
@@ -392,7 +393,7 @@ def filter_(
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = Bitmap(selection.buffer, selection.offset, n)
+    var sel_bm = selection.values_bitmap()
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
@@ -414,7 +415,7 @@ def filter_(
     # Compute total output bytes.
     var total_bytes = 0
     for i in range(n):
-        if sel_bm.is_valid(i):
+        if sel_bm.test(i):
             total_bytes += Int(offsets_ptr[off + i + 1]) - Int(
                 offsets_ptr[off + i]
             )
@@ -438,12 +439,12 @@ def filter_(
         var i = 0
 
         while i < n:
-            if not sel_bm.is_valid(i):
+            if not sel_bm.test(i):
                 i += 1
                 continue
 
             var run_start = i
-            while i < n and sel_bm.is_valid(i):
+            while i < n and sel_bm.test(i):
                 var elem_start = offsets_ptr[off + i]
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
@@ -475,12 +476,12 @@ def filter_(
         var i = 0
 
         while i < n:
-            if not sel_bm.is_valid(i):
+            if not sel_bm.test(i):
                 i += 1
                 continue
 
             var run_start = i
-            while i < n and sel_bm.is_valid(i):
+            while i < n and sel_bm.test(i):
                 var elem_start = offsets_ptr[off + i]
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
@@ -556,7 +557,8 @@ def drop_nulls[
     Returns:
         A new PrimitiveArray containing only valid elements.
     """
-    if not array.bitmap:
+    var val = array.validity()
+    if not val:
         # All valid: wrap as identity selection
         var all_true = BitmapBuilder.alloc(len(array))
         all_true.set_range(0, len(array), True)
@@ -568,13 +570,13 @@ def drop_nulls[
             buffer=all_true._builder.finish(),
         )
         return filter_[T](array, selection)
-    var bm = array.bitmap.value()
+    var bm_view = val.value()
     var selection = PrimitiveArray[bool_](
         length=len(array),
         nulls=0,
-        offset=bm.bit_offset() + array.offset,
+        offset=bm_view.bit_offset(),
         bitmap=None,
-        buffer=bm._buffer,
+        buffer=array.bitmap.value()._buffer,
     )
     return filter_[T](array, selection)
 
@@ -603,7 +605,9 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
 # ---------------------------------------------------------------------------
 
 
-def take[T: DataType](
+def take[
+    T: DataType
+](
     array: PrimitiveArray[T], indices: PrimitiveArray[int32]
 ) raises -> PrimitiveArray[T]:
     """Gather elements from a primitive array at the given indices.
@@ -623,9 +627,7 @@ def take[T: DataType](
     var n = len(indices)
     var src = array.buffer.unsafe_ptr[native](array.offset)
     var idx_ptr = indices.buffer.unsafe_ptr[int32.native](indices.offset)
-    var buf = BufferBuilder.alloc_uninit(
-        BufferBuilder._aligned_size[native](n)
-    )
+    var buf = BufferBuilder.alloc_uninit(BufferBuilder._aligned_size[native](n))
     var out: UnsafePointer[Scalar[native], MutAnyOrigin]
     out = buf.ptr.bitcast[Scalar[native]]()
 
@@ -676,7 +678,9 @@ def take[T: DataType](
     )
 
 
-def take(array: StringArray, indices: PrimitiveArray[int32]) raises -> StringArray:
+def take(
+    array: StringArray, indices: PrimitiveArray[int32]
+) raises -> StringArray:
     """Gather elements from a string array at the given indices.
 
     Null indices produce null output elements.

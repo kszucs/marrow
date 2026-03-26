@@ -861,7 +861,9 @@ struct JoinProcessor(RelationProcessor):
                 self.kind,
                 self.strictness,
             )
-            return RecordBatch(schema=self.schema_.copy(), columns=result.children.copy())
+            return RecordBatch(
+                schema=self.schema_.copy(), columns=result.children.copy()
+            )
         except Exhausted:
             self._exhausted = True
         # Right side exhausted — propagate to caller.

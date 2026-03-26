@@ -96,7 +96,6 @@ def _rapidhash_fixed[byte_width: Int](value: UInt64) -> UInt64:
     )
 
 
-
 # ---------------------------------------------------------------------------
 # rapidhash — vectorized hash for primitive arrays (SIMD via elementwise)
 # ---------------------------------------------------------------------------
@@ -123,15 +122,17 @@ def _rapidhash_elementwise[
 
     # Pre-compute seed (constant for all elements).
     # C: seed = 0; seed ^= rapid_mix(seed ^ secret[2], secret[1]); seed ^= len
-    comptime seed = _rapid_mix(RAPID_SECRET2, RAPID_SECRET1) ^ UInt64(byte_width)
+    comptime seed = _rapid_mix(RAPID_SECRET2, RAPID_SECRET1) ^ UInt64(
+        byte_width
+    )
 
     @parameter
     @always_inline
     def _mul128_lo_hi[
         W: Int
-    ](
-        a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]
-    ) -> Tuple[SIMD[DType.uint64, W], SIMD[DType.uint64, W]]:
+    ](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> Tuple[
+        SIMD[DType.uint64, W], SIMD[DType.uint64, W]
+    ]:
         """128-bit multiply returning (lo, hi) using 32-bit sub-products.
 
         GPU-compatible: avoids uint128 which Metal does not support.
@@ -155,7 +156,9 @@ def _rapidhash_elementwise[
     @always_inline
     def _mix[
         W: Int
-    ](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
+    ](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> SIMD[
+        DType.uint64, W
+    ]:
         """rapid_mix: 128-bit multiply then XOR halves."""
         var lo_hi = _mul128_lo_hi[W](a, b)
         return lo_hi[0] ^ lo_hi[1]
@@ -168,7 +171,9 @@ def _rapidhash_elementwise[
         var i = idx[0]
         # Zero-extend to uint64 (matches C's rapid_read32/rapid_read64).
         # Mask to byte_width bits to prevent sign-extension for <8-byte types.
-        comptime mask = ~UInt64(0) if byte_width >= 8 else (UInt64(1) << UInt64(byte_width * 8)) - 1
+        comptime mask = ~UInt64(0) if byte_width >= 8 else (
+            UInt64(1) << UInt64(byte_width * 8)
+        ) - 1
         var vals = in_ptr.load[width=W](i).cast[DType.uint64]() & mask
         # a = value ^ secret[1]; b = value ^ seed
         var a = vals ^ RAPID_SECRET1
@@ -204,7 +209,9 @@ def _rapidhash_elementwise[
         else:
             raise Error("rapidhash: no GPU accelerator available")
     else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        comptime cpu_width = simd_byte_width() // size_of[
+            Scalar[DType.uint64]
+        ]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
@@ -274,7 +281,9 @@ def _rapidhash_bool_elementwise(
         else:
             raise Error("rapidhash: no GPU accelerator available for bool")
     else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        comptime cpu_width = simd_byte_width() // size_of[
+            Scalar[DType.uint64]
+        ]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
@@ -394,9 +403,7 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
         if has_bitmap and not keys.bitmap.value().is_valid(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
-            builder.unsafe_append(
-                _h(_hash(String(keys.unsafe_get(UInt(i)))))
-            )
+            builder.unsafe_append(_h(_hash(String(keys.unsafe_get(UInt(i))))))
 
     return builder.finish()
 
@@ -443,7 +450,9 @@ def _combine_elementwise(
         else:
             raise Error("_combine_elementwise: no GPU accelerator available")
     else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[DType.uint64]]()
+        comptime cpu_width = simd_byte_width() // size_of[
+            Scalar[DType.uint64]
+        ]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )

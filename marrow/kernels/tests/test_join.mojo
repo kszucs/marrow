@@ -136,7 +136,8 @@ def test_inner_join_no_matches() raises:
 
 
 def test_inner_join_duplicate_keys_cartesian() raises:
-    """Inner join with duplicate keys on both sides produces Cartesian product."""
+    """Inner join with duplicate keys on both sides produces Cartesian product.
+    """
     # left: (1,a), (1,b)
     # right: (1,x), (1,y)
     # expected 4 rows: (1,a,1,x), (1,a,1,y), (1,b,1,x), (1,b,1,y)
@@ -251,7 +252,9 @@ def test_right_join_unmatched_right_rows() raises:
     rv.append(300)
     var right = _int32_struct(rk, rv)
 
-    var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_RIGHT)
+    var result = hash_join(
+        left, right, _left_on(), _right_on(), kind=JOIN_RIGHT
+    )
     assert_equal(len(result), 3)
     # Left side columns have nulls for unmatched rows.
     assert_equal(result.children[0].null_count(), 2)
@@ -364,7 +367,8 @@ def test_anti_join_basic() raises:
 
 
 def test_any_strictness_deduplicates() raises:
-    """JOIN_ANY: at most one output row per build row, no Cartesian explosion."""
+    """JOIN_ANY: at most one output row per build row, no Cartesian explosion.
+    """
     # left: (1,10), (1,20)  ← two rows with key=1
     # right: (1,100), (1,200)
     # With JOIN_ALL: 4 rows (Cartesian)
@@ -386,15 +390,24 @@ def test_any_strictness_deduplicates() raises:
     var right = _int32_struct(rk, rv)
 
     var result_all = hash_join(
-        left, right, _left_on(), _right_on(), kind=JOIN_INNER, strictness=JOIN_ALL
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        kind=JOIN_INNER,
+        strictness=JOIN_ALL,
     )
     assert_equal(len(result_all), 4)
 
     var result_any = hash_join(
-        left, right, _left_on(), _right_on(), kind=JOIN_INNER, strictness=JOIN_ANY
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        kind=JOIN_INNER,
+        strictness=JOIN_ANY,
     )
     assert_true(len(result_any) <= 2)
-
 
 
 # ---------------------------------------------------------------------------

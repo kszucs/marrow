@@ -46,7 +46,7 @@ def _reduce[
     """
     comptime native = T.native
     var length = len(array)
-    var arr_off = array.offset
+    var vals = array.values()
     var out = identity
 
     @always_inline
@@ -57,7 +57,7 @@ def _reduce[
         out = val[0]
 
     if array.bitmap:
-        var bitmap = array.bitmap.value()
+        var bm = array.validity().value()
 
         @always_inline
         @parameter
@@ -65,8 +65,8 @@ def _reduce[
             width: Int, rank: Int
         ](idx: IndexList[rank]) -> SIMD[native, width]:
             var i = idx[0]
-            var data = array.buffer.simd_load[native, width](arr_off + i)
-            return bitmap.mask[native, width](arr_off + i).select(
+            var data = vals.simd_load[width](i)
+            return bm.mask[native, width](i).select(
                 data, SIMD[native, width](identity)
             )
 
@@ -105,7 +105,7 @@ def _reduce[
         def input_fn[
             width: Int, rank: Int
         ](idx: IndexList[rank]) -> SIMD[native, width]:
-            return array.buffer.simd_load[native, width](arr_off + idx[0])
+            return vals.simd_load[width](idx[0])
 
         comptime if op == "sum":
             algo_sum[

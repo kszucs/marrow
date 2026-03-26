@@ -22,7 +22,9 @@ from marrow.kernels.hashing import (
 # ---------------------------------------------------------------------------
 
 
-def _assert_hash_eq(h: PrimitiveArray[uint64], idx: Int, expected: UInt64) raises:
+def _assert_hash_eq(
+    h: PrimitiveArray[uint64], idx: Int, expected: UInt64
+) raises:
     var got = UInt64(h.unsafe_get(idx))
     if got != expected:
         raise Error(
@@ -109,9 +111,7 @@ def test_scalar_matches_vectorized() raises:
         var scalar_h = _rapidhash_fixed[8](UInt64(arr.unsafe_get(i)))
         var vec_h = UInt64(h.unsafe_get(i))
         if scalar_h != vec_h:
-            raise Error(
-                "scalar/vectorized mismatch at index " + String(i)
-            )
+            raise Error("scalar/vectorized mismatch at index " + String(i))
 
 
 # ---------------------------------------------------------------------------

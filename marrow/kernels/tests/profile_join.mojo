@@ -60,7 +60,9 @@ def _fmt_us(ns: UInt) -> String:
 # ---------------------------------------------------------------------------
 
 
-def bench_build(left: StructArray, key_indices: List[Int], warmup: Int, iters: Int) raises:
+def bench_build(
+    left: StructArray, key_indices: List[Int], warmup: Int, iters: Int
+) raises:
     """Time the build phase only."""
     # Warmup
     for _ in range(warmup):
@@ -139,13 +141,17 @@ def bench_full(
     """Time full hash_join (build + probe + assemble)."""
     # Warmup
     for _ in range(warmup):
-        var r = hash_join(left, right, left_keys, right_keys, JOIN_INNER, JOIN_ALL)
+        var r = hash_join(
+            left, right, left_keys, right_keys, JOIN_INNER, JOIN_ALL
+        )
         keep(len(r))
 
     var total_ns = UInt(0)
     for _ in range(iters):
         var t0 = perf_counter_ns()
-        var r = hash_join(left, right, left_keys, right_keys, JOIN_INNER, JOIN_ALL)
+        var r = hash_join(
+            left, right, left_keys, right_keys, JOIN_INNER, JOIN_ALL
+        )
         total_ns += perf_counter_ns() - t0
         keep(len(r))
 

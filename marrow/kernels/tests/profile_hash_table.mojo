@@ -42,7 +42,9 @@ def _make_keys(n: Int) raises -> StructArray:
     children.append(b.finish().to_any())
     return StructArray(
         dtype=struct_(Field("k", uint64)),
-        length=n, nulls=0, offset=0,
+        length=n,
+        nulls=0,
+        offset=0,
         bitmap=Optional[Bitmap](None),
         children=children^,
     )

@@ -217,7 +217,6 @@ struct AggregateFunction(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-
 def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
     """Append a length-1 array slice to an existing array."""
     var ab = make_builder(existing.dtype(), existing.length() + 1)
@@ -286,7 +285,9 @@ struct HashGrouper(Movable):
         # Convert int32 bucket_ids → uint32 group_ids.
         var gid_builder = PrimitiveBuilder[uint32](capacity=n)
         for i in range(n):
-            gid_builder.unsafe_append(Scalar[uint32.native](Int(bids.unsafe_get(i))))
+            gid_builder.unsafe_append(
+                Scalar[uint32.native](Int(bids.unsafe_get(i)))
+            )
         return gid_builder.finish()
 
     def consume_values(
@@ -339,9 +340,7 @@ struct HashGrouper(Movable):
 
     # --- hash table internals ---
 
-    def _register_new_group(
-        mut self, keys: StructArray, row: Int
-    ) raises:
+    def _register_new_group(mut self, keys: StructArray, row: Int) raises:
         """Store key row for a newly created group + create aggregate state."""
         if len(self._group_keys) == 0:
             for k in range(len(keys.children)):

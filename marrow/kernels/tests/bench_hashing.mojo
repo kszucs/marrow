@@ -39,9 +39,7 @@ def _fmt(ns: UInt) -> String:
     return String(Int(ns // 1_000)) + " µs"
 
 
-def _bench_cpu[
-    T: DataType
-](n: Int, warmup: Int, iters: Int) raises -> UInt:
+def _bench_cpu[T: DataType](n: Int, warmup: Int, iters: Int) raises -> UInt:
     """CPU rapidhash benchmark. Returns avg ns."""
     var arr = PrimitiveBuilder[T](capacity=n)
     for i in range(n):
