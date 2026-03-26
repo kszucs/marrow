@@ -145,7 +145,7 @@ def _binary_cmp[
         ctx,
     )
 
-    var result_buf = out_buf.finish()
+    var result_buf = out_buf.to_immutable()
     if ctx:
         result_buf = result_buf.to_cpu(ctx.value())
 

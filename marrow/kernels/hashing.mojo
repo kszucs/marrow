@@ -334,7 +334,7 @@ def rapidhash(
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )
 
 
@@ -386,7 +386,7 @@ def rapidhash[
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )
 
 
@@ -506,7 +506,7 @@ def rapidhash(
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=buf.finish(),
+            buffer=buf.to_immutable(),
         )
 
     return result^

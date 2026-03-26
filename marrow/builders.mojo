@@ -295,7 +295,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     @always_inline
     def unsafe_append(mut self, value: Self.ScalarType):
         """Append without bounds checking. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, True)
+        self._bitmap.set(self._length)
         self._buffer.unsafe_set[Self.T.native](self._length, value)
         self._length += 1
 
@@ -313,7 +313,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     @always_inline
     def unsafe_append_null(mut self):
         """Append null without bounds checking. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, False)
+        self._bitmap.clear(self._length)
         self._null_count += 1
         self._length += 1
 
@@ -384,9 +384,9 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.finish(self._length)
+            bm = self._bitmap.to_immutable(self._length)
         # freeze the value buffer into an immutable Buffer
-        var values = self._buffer.finish()
+        var values = self._buffer.to_immutable()
         # construct the immutable result array
         var result = PrimitiveArray[Self.T](
             length=self._length,
@@ -460,7 +460,7 @@ struct StringBuilder(Builder, Sized):
         self.reserve(1)
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
-        self._bitmap.set_bit(index, False)
+        self._bitmap.clear(index)
         self._null_count += 1
         self._length += 1
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
@@ -535,7 +535,7 @@ struct StringBuilder(Builder, Sized):
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
         var next_offset = last_offset + UInt32(length)
-        self._bitmap.set_bit(index, True)
+        self._bitmap.set(index)
         self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
         memcpy(
             dest=self._values.ptr + Int(last_offset),
@@ -549,7 +549,7 @@ struct StringBuilder(Builder, Sized):
         """Append null without capacity checks. Caller must ensure capacity."""
         var index = self._length
         var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
-        self._bitmap.set_bit(index, False)
+        self._bitmap.clear(index)
         self._null_count += 1
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
         self._length += 1
@@ -563,10 +563,10 @@ struct StringBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.finish(self._length)
+            bm = self._bitmap.to_immutable(self._length)
         # freeze offsets and byte data buffers into immutable Buffers
-        var offsets = self._offsets.finish()
-        var values = self._values.finish()
+        var offsets = self._offsets.to_immutable()
+        var values = self._values.to_immutable()
         # construct the immutable result array
         var result = StringArray(
             length=self._length,
@@ -646,7 +646,7 @@ struct ListBuilder(Builder, Sized):
     @always_inline
     def unsafe_append_null(mut self):
         """Append null without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, False)
+        self._bitmap.clear(self._length)
         self._null_count += 1
         var child_length = self._child.length()
         self._offsets.unsafe_set[DType.uint32](
@@ -657,7 +657,7 @@ struct ListBuilder(Builder, Sized):
     @always_inline
     def unsafe_append_valid(mut self):
         """Append valid without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, True)
+        self._bitmap.set(self._length)
         var child_length = self._child.length()
         self._offsets.unsafe_set[DType.uint32](
             self._length + 1, UInt32(child_length)
@@ -716,9 +716,9 @@ struct ListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.finish(self._length)
+            bm = self._bitmap.to_immutable(self._length)
         # freeze offsets buffer and recursively finish the child builder
-        var offsets = self._offsets.finish()
+        var offsets = self._offsets.to_immutable()
         var values = self._child.finish()
         # construct the immutable result array
         var result = ListArray(
@@ -797,14 +797,14 @@ struct FixedSizeListBuilder(Builder, Sized):
     @always_inline
     def unsafe_append_null(mut self):
         """Append null without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, False)
+        self._bitmap.clear(self._length)
         self._null_count += 1
         self._length += 1
 
     @always_inline
     def unsafe_append_valid(mut self):
         """Append valid without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, True)
+        self._bitmap.set(self._length)
         self._length += 1
 
     def extend(mut self, arr: AnyArray) raises:
@@ -849,7 +849,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.finish(self._length)
+            bm = self._bitmap.to_immutable(self._length)
         # recursively finish the child builder
         var values = self._child.finish()
         # construct the immutable result array
@@ -934,14 +934,14 @@ struct StructBuilder(Builder, Sized):
     @always_inline
     def unsafe_append_null(mut self):
         """Append null without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, False)
+        self._bitmap.clear(self._length)
         self._null_count += 1
         self._length += 1
 
     @always_inline
     def unsafe_append_valid(mut self):
         """Append valid without capacity check. Caller must ensure capacity."""
-        self._bitmap.set_bit(self._length, True)
+        self._bitmap.set(self._length)
         self._length += 1
 
     def extend(mut self, arr: AnyArray) raises:
@@ -979,7 +979,7 @@ struct StructBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.finish(self._length)
+            bm = self._bitmap.to_immutable(self._length)
         # recursively finish each field builder into a frozen child array
         var frozen_children = List[AnyArray](capacity=len(self._children))
         for ref child in self._children:

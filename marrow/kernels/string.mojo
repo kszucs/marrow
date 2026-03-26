@@ -29,5 +29,5 @@ def string_lengths(array: StringArray) -> PrimitiveArray[uint32]:
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )

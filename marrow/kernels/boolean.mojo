@@ -83,8 +83,11 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
     var length = len(arr)
     var builder = Bitmap.alloc(length)
     for i in range(length):
-        builder.set_bit(i, not arr.is_valid(i))
-    var bm = builder.finish(length)
+        if not arr.is_valid(i):
+            builder.set(i)
+        else:
+            builder.clear(i)
+    var bm = builder.to_immutable(length)
     return PrimitiveArray[bool_dt](
         length=length,
         nulls=0,

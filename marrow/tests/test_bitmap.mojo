@@ -16,8 +16,8 @@ def _make(n_bits: Int, set_bits: List[Int]) -> Bitmap[]:
     """Build a Bitmap with exactly the specified bits set."""
     var b = Bitmap.alloc(n_bits)
     for i in range(len(set_bits)):
-        b.set_bit(set_bits[i], True)
-    return b.finish(n_bits)
+        b.set(set_bits[i])
+    return b.to_immutable(n_bits)
 
 
 def _to_bm(buf: Buffer[], n: Int) -> Bitmap[]:
@@ -43,17 +43,17 @@ def _count_naive(bm: Bitmap[]) -> Int:
 def test_builder_alloc_zero_fills() raises:
     """Freshly-allocated builder has all bits cleared."""
     var b = Bitmap.alloc(10)
-    var bm = b.finish(10)
+    var bm = b.to_immutable(10)
     for i in range(10):
         assert_false(BitmapView(bm).test(i))
 
 
 def test_builder_set_bit_true() raises:
     var b = Bitmap.alloc(8)
-    b.set_bit(0, True)
-    b.set_bit(3, True)
-    b.set_bit(7, True)
-    var bm = b.finish(8)
+    b.set(0)
+    b.set(3)
+    b.set(7)
+    var bm = b.to_immutable(8)
     assert_true(BitmapView(bm).test(0))
     assert_false(BitmapView(bm).test(1))
     assert_false(BitmapView(bm).test(2))
@@ -66,10 +66,10 @@ def test_builder_set_bit_true() raises:
 
 def test_builder_set_bit_false_clears() raises:
     var b = Bitmap.alloc(8)
-    b.set_bit(0, True)
-    b.set_bit(1, True)
-    b.set_bit(1, False)
-    var bm = b.finish(8)
+    b.set(0)
+    b.set(1)
+    b.clear(1)
+    var bm = b.to_immutable(8)
     assert_true(BitmapView(bm).test(0))
     assert_false(BitmapView(bm).test(1))
 
@@ -77,7 +77,7 @@ def test_builder_set_bit_false_clears() raises:
 def test_builder_set_range_all_true() raises:
     var b = Bitmap.alloc(16)
     b.set_range(0, 16, True)
-    var bm = b.finish(16)
+    var bm = b.to_immutable(16)
     for i in range(16):
         assert_true(BitmapView(bm).test(i))
 
@@ -86,7 +86,7 @@ def test_builder_set_range_partial() raises:
     # set_range sets exactly the requested range, leaving the rest unchanged
     var b = Bitmap.alloc(16)
     b.set_range(4, 8, True)  # bits 4-11 set
-    var bm = b.finish(16)
+    var bm = b.to_immutable(16)
     for i in range(4):
         assert_false(BitmapView(bm).test(i))
     for i in range(4, 12):
@@ -99,7 +99,7 @@ def test_builder_set_range_clear() raises:
     var b = Bitmap.alloc(16)
     b.set_range(0, 16, True)
     b.set_range(3, 5, False)  # clear bits 3-7
-    var bm = b.finish(16)
+    var bm = b.to_immutable(16)
     for i in range(3):
         assert_true(BitmapView(bm).test(i))
     for i in range(3, 8):
@@ -111,7 +111,7 @@ def test_builder_set_range_clear() raises:
 def test_builder_set_range_zero_length() raises:
     var b = Bitmap.alloc(8)
     b.set_range(0, 0, True)
-    var bm = b.finish(8)
+    var bm = b.to_immutable(8)
     for i in range(8):
         assert_false(BitmapView(bm).test(i))
 
@@ -119,13 +119,13 @@ def test_builder_set_range_zero_length() raises:
 def test_builder_extend() raises:
     # extend copies bits from a Bitmap into the builder at dst_start
     var src_b = Bitmap.alloc(6)
-    src_b.set_bit(0, True)
-    src_b.set_bit(5, True)
-    var src = src_b.finish(6)
+    src_b.set(0)
+    src_b.set(5)
+    var src = src_b.to_immutable(6)
 
     var dst = Bitmap.alloc(8)
     dst.extend(src, 0, 6)
-    var bm = dst.finish(8)
+    var bm = dst.to_immutable(8)
     assert_true(BitmapView(bm).test(0))
     assert_false(BitmapView(bm).test(1))
     assert_false(BitmapView(bm).test(4))
@@ -137,12 +137,12 @@ def test_builder_extend() raises:
 def test_builder_extend_with_offset() raises:
     # extend into a non-zero dst_start position
     var src_b = Bitmap.alloc(2)
-    src_b.set_bit(0, True)
-    var src = src_b.finish(2)
+    src_b.set(0)
+    var src = src_b.to_immutable(2)
 
     var dst = Bitmap.alloc(8)
     dst.extend(src, 6, 2)  # copy 2 bits starting at dst bit 6
-    var bm = dst.finish(8)
+    var bm = dst.to_immutable(8)
     for i in range(6):
         assert_false(BitmapView(bm).test(i))
     assert_true(BitmapView(bm).test(6))
@@ -152,7 +152,7 @@ def test_builder_extend_with_offset() raises:
 def test_builder_finish_length() raises:
     var b = Bitmap.alloc(20)
     b.set_range(0, 20, True)
-    var bm = b.finish(15)  # finish with fewer bits than allocated
+    var bm = b.to_immutable(15)  # finish with fewer bits than allocated
     assert_equal(len(bm), 15)
 
 
@@ -188,7 +188,7 @@ def test_is_valid_and_is_null() raises:
 
 def test_count_set_bits_empty() raises:
     var b = Bitmap.alloc(0)
-    var bm = b.finish(0)
+    var bm = b.to_immutable(0)
     assert_equal(BitmapView(bm).count_set_bits(), 0)
 
 
@@ -200,7 +200,7 @@ def test_count_set_bits_none_set() raises:
 def test_count_set_bits_all_set() raises:
     var b = Bitmap.alloc(16)
     b.set_range(0, 16, True)
-    var bm = b.finish(16)
+    var bm = b.to_immutable(16)
     assert_equal(BitmapView(bm).count_set_bits(), 16)
 
 
@@ -214,7 +214,7 @@ def test_count_set_bits_partial_last_byte() raises:
     # 10-bit bitmap: bits 0-7 all set, bits 8-9 both set
     var b = Bitmap.alloc(10)
     b.set_range(0, 10, True)
-    var bm = b.finish(10)
+    var bm = b.to_immutable(10)
     assert_equal(BitmapView(bm).count_set_bits(), 10)
 
 
@@ -222,7 +222,7 @@ def test_count_set_bits_with_offset() raises:
     # count_set_bits on a sliced bitmap respects _offset
     var b = Bitmap.alloc(16)
     b.set_range(0, 16, True)
-    var full = b.finish(16)
+    var full = b.to_immutable(16)
     # slice starting at bit 4, length 8 → all 8 bits set
     var sliced = full.slice(4, 8)
     assert_equal(BitmapView(sliced).count_set_bits(), 8)
@@ -232,7 +232,7 @@ def test_count_set_bits_large() raises:
     # exercises the SIMD loop for multi-SIMD-width bitmaps
     var b = Bitmap.alloc(1024)
     b.set_range(0, 512, True)  # first half set
-    var bm = b.finish(1024)
+    var bm = b.to_immutable(1024)
     assert_equal(BitmapView(bm).count_set_bits(), 512)
 
 
@@ -245,7 +245,7 @@ def test_count_set_bits_large_offset_byte_aligned() raises:
     # 800 bits all set, then slice at bit 576 (byte 72) for 64 bits.
     var b = Bitmap.alloc(800)
     b.set_range(0, 800, True)
-    var full = b.finish(800)
+    var full = b.to_immutable(800)
     var sliced = full.slice(576, 64)
     assert_equal(BitmapView(sliced).count_set_bits(), 64)
 
@@ -258,7 +258,7 @@ def test_count_set_bits_large_offset_with_shift() raises:
     """
     var b = Bitmap.alloc(800)
     b.set_range(0, 800, True)
-    var full = b.finish(800)
+    var full = b.to_immutable(800)
     var sliced = full.slice(577, 48)
     assert_equal(BitmapView(sliced).count_set_bits(), 48)
 
@@ -272,7 +272,7 @@ def test_count_set_bits_large_offset_sparse() raises:
     # Set every bit in a 1000-bit bitmap, then slice a narrow window.
     var b = Bitmap.alloc(1000)
     b.set_range(0, 1000, True)
-    var full = b.finish(1000)
+    var full = b.to_immutable(1000)
     # Slice at bit 700 (byte 87, shift 4), length 10.
     # Aligned range starts at byte 64, so ~23 leading bytes of all-ones
     # must be excluded from the count.
@@ -290,7 +290,7 @@ def test_count_set_bits_large_offset_none_set() raises:
     var b = Bitmap.alloc(1000)
     b.set_range(0, 500, True)  # bits 0-499 set
     b.set_range(520, 480, True)  # bits 520-999 set
-    var full = b.finish(1000)
+    var full = b.to_immutable(1000)
     # Slice at bit 500, length 20 → all clear.
     var sliced = full.slice(500, 20)
     assert_equal(BitmapView(sliced).count_set_bits(), 0)
@@ -304,7 +304,7 @@ def test_count_set_bits_small_slice_in_large_bitmap() raises:
     """
     var b = Bitmap.alloc(2000)
     b.set_range(0, 2000, True)
-    var full = b.finish(2000)
+    var full = b.to_immutable(2000)
     # Slice at bit 1003 (byte 125, shift 3), length 5.
     var sliced = full.slice(1003, 5)
     assert_equal(BitmapView(sliced).count_set_bits(), 5)
@@ -353,14 +353,14 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
 
             # all-zeros
             var bz = Bitmap.alloc(total)
-            var fz = bz.finish(total)
+            var fz = bz.to_immutable(total)
             var sz = fz.slice(offset, size)
             assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
 
             # all-ones
             var bo = Bitmap.alloc(total)
             bo.set_range(0, total, True)
-            var fo = bo.finish(total)
+            var fo = bo.to_immutable(total)
             var so = fo.slice(offset, size)
             assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
 
@@ -368,9 +368,9 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
             var ba = Bitmap.alloc(total)
             var k = 0
             while k < total:
-                ba.set_bit(k, True)
+                ba.set(k)
                 k += 2
-            var fa = ba.finish(total)
+            var fa = ba.to_immutable(total)
             var sa = fa.slice(offset, size)
             assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
 
@@ -405,14 +405,14 @@ def test_count_set_bits_interior_slices() raises:
 
             # all-zeros
             var bz = Bitmap.alloc(total)
-            var fz = bz.finish(total)
+            var fz = bz.to_immutable(total)
             var sz = fz.slice(offset, size)
             assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
 
             # all-ones: trailing bytes contain 1s, must be subtracted
             var bo = Bitmap.alloc(total)
             bo.set_range(0, total, True)
-            var fo = bo.finish(total)
+            var fo = bo.to_immutable(total)
             var so = fo.slice(offset, size)
             assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
 
@@ -420,9 +420,9 @@ def test_count_set_bits_interior_slices() raises:
             var ba = Bitmap.alloc(total)
             var k = 0
             while k < total:
-                ba.set_bit(k, True)
+                ba.set(k)
                 k += 2
-            var fa = ba.finish(total)
+            var fa = ba.to_immutable(total)
             var sa = fa.slice(offset, size)
             assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
 
@@ -432,12 +432,12 @@ def test_count_set_bits_trail_bits_exact_boundary() raises:
     # 512 bits = 64 bytes, exact fit: no lead or trail correction needed.
     var b = Bitmap.alloc(512)
     b.set_range(0, 512, True)
-    var bm = b.finish(512)
+    var bm = b.to_immutable(512)
     assert_equal(BitmapView(bm).count_set_bits(), 512)
     # Slice ending exactly at byte 64 within a larger buffer.
     var large = Bitmap.alloc(1024)
     large.set_range(0, 1024, True)
-    var fl = large.finish(1024)
+    var fl = large.to_immutable(1024)
     var s = fl.slice(0, 512)
     assert_equal(BitmapView(s).count_set_bits(), 512)
 
@@ -448,7 +448,7 @@ def test_count_set_bits_trail_bytes_only() raises:
     # byte_end=1, aligned_end=64, trail_bytes=63, trail_sub_byte=0.
     var full = Bitmap.alloc(1000)
     full.set_range(0, 1000, True)
-    var bm = full.finish(1000)
+    var bm = full.to_immutable(1000)
     var s = bm.slice(0, 8)
     assert_equal(BitmapView(s).count_set_bits(), 8)
 
@@ -461,7 +461,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
     # bit_end=530: byte_end=67, aligned_end=128, trail_bytes=61, trail_sub_byte=2.
     var full = Bitmap.alloc(1000)
     full.set_range(0, 1000, True)
-    var bm = full.finish(1000)
+    var bm = full.to_immutable(1000)
     var s = bm.slice(520, 10)
     assert_equal(BitmapView(s).count_set_bits(), 10)
     assert_equal(BitmapView(s).count_set_bits(), _count_naive(s))
@@ -514,7 +514,7 @@ def test_invert_all_zeros() raises:
 def test_invert_all_ones() raises:
     var b = Bitmap.alloc(8)
     b.set_range(0, 8, True)
-    var bm = b.finish(8)
+    var bm = b.to_immutable(8)
     var inv = _to_bm(~BitmapView(bm), len(bm))
     for i in range(8):
         assert_false(BitmapView(inv).test(i))
@@ -568,7 +568,7 @@ def test_and_identity() raises:
     var a = _make(16, [1, 5, 9, 13])
     var ones_b = Bitmap.alloc(16)
     ones_b.set_range(0, 16, True)
-    var ones = ones_b.finish(16)
+    var ones = ones_b.to_immutable(16)
     var r = _to_bm(BitmapView(a) & BitmapView(ones), len(a))
     for i in range(16):
         assert_equal(BitmapView(r).test(i), BitmapView(a).test(i))
@@ -587,11 +587,11 @@ def test_and_large() raises:
     # exercises the SIMD loop
     var b1 = Bitmap.alloc(1024)
     b1.set_range(0, 512, True)
-    var a = b1.finish(1024)
+    var a = b1.to_immutable(1024)
 
     var b2 = Bitmap.alloc(1024)
     b2.set_range(256, 512, True)
-    var b = b2.finish(1024)
+    var b = b2.to_immutable(1024)
 
     var r = _to_bm(BitmapView(a) & BitmapView(b), len(a))
     assert_equal(BitmapView(r).count_set_bits(), 256)  # overlap in bits 256-511

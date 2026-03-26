@@ -41,11 +41,11 @@ Ownership Model
 only when the *last* copy is dropped.
 
 `Buffer[mut=True]` is the mutable counterpart — it exclusively owns a writable
-pointer.  `Buffer[mut=True].finish()` transfers that pointer into an owned CPU/HOST/DEVICE
+pointer.  `Buffer[mut=True].to_immutable()` transfers that pointer into an owned CPU/HOST/DEVICE
 `Buffer[mut=False]`.  Copying a `Buffer[mut=True]` is a compile-time error.
 
 Both modes share the same struct layout: `(size, ptr, _owner)`.  The `ArcPointer[Allocation]`
-is created eagerly at allocation time so `finish()` is a zero-cost type conversion.
+is created eagerly at allocation time so `to_immutable()` is a zero-cost type conversion.
 
 Allocation Invariant
 --------------------
@@ -77,12 +77,12 @@ Buffer lifecycle
 CPU heap allocation (kind=CPU):
   1. `var b = Buffer.alloc_zeroed[T](n)` — 64-byte-aligned heap allocation.
   2. `b.unsafe_set(i, v)` / `b.simd_store(...)` — write through the mutable pointer.
-  3. `var buf = b.finish()` — zero-cost transfer into an immutable CPU Buffer.
+  3. `var buf = b.to_immutable()` — zero-cost transfer into an immutable CPU Buffer.
 
 Pinned host allocation (kind=HOST):
   1. `var b = Buffer.alloc_host[T](ctx, n)` — page-locked allocation via DeviceContext.
   2. `b.unsafe_set(i, v)` / `b.simd_store(...)` — write through the mutable pointer.
-  3. `var buf = b.finish()` — transfer into an immutable HOST Buffer.
+  3. `var buf = b.to_immutable()` — transfer into an immutable HOST Buffer.
 
 Bitmap operations
 -----------------
@@ -294,19 +294,19 @@ struct Allocation(Movable):
 
 
 # TODO: add assertions to ensure alignment and padding invariants hold
-struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
+struct Buffer[//, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     """Contiguous memory region with parametric mutability.
 
     `Buffer[mut=True]`  — mutable, exclusively owned.  Use `alloc_*` factory
                           methods to allocate; write via `unsafe_set` /
-                          `simd_store`; freeze with `finish()`.
+                          `simd_store`; freeze with `to_immutable()`.
 
     `Buffer[mut=False]` — immutable, shared ownership.  Copying is O(1) via
                           `ArcPointer[Allocation]` ref-counting.
 
     Both modes share the same three-field layout `(size, ptr, _owner)`.
     The `ArcPointer[Allocation]` is created eagerly at allocation time so
-    `finish()` is a near-zero-cost type rebind (one ArcPointer copy).
+    `to_immutable()` is a near-zero-cost type rebind (one ArcPointer copy).
 
     CPU accessibility (mut=False only):
       `is_cpu()` returns True for CPU, FOREIGN, and HOST kinds (ptr non-null).
@@ -317,7 +317,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     var size: Int
     """Buffer size in bytes (always 64-byte aligned)."""
 
-    var ptr: UnsafePointer[UInt8, MutAnyOrigin]
+    var ptr: UnsafePointer[UInt8, mut=mut]
     """Mutable allocation pointer.
     For `mut=True` CPU/HOST allocations: the CPU-accessible data pointer.
     For `mut=True` DEVICE allocations: the GPU device pointer (used by kernels).
@@ -333,7 +333,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     def __init__(
         out self,
         size: Int,
-        ptr: UnsafePointer[UInt8, MutAnyOrigin],
+        ptr: UnsafePointer[UInt8, mut=mut],
         owner: ArcPointer[Allocation],
     ):
         debug_assert(
@@ -349,23 +349,14 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         self._owner = owner
 
     def __init__(out self, *, copy: Self):
-        comptime assert not Self.mut, "cannot copy mutable Buffer[mut=True]; call finish() to freeze"
+        comptime assert not Self.mut, "cannot copy mutable Buffer[mut=True]; call to_immutable() to freeze"
         self.size = copy.size
         self.ptr = copy.ptr
         self._owner = copy._owner
 
-    # --- Internal alignment helper ---
-
     @staticmethod
     def _aligned_size[T: DType](length: Int) -> Int:
-        """Compute the 64-byte-aligned allocation size for `length` elements of type T.
-
-        For DType.bool, `length` is the number of bits.
-        """
-        comptime if T == DType.bool:
-            return math.align_up(math.ceildiv(length, 8), 64)
-        else:
-            return math.align_up(length * size_of[T](), 64)
+        return math.align_up(length * size_of[T](), 64)
 
     # --- Mutable factory methods (return Buffer[mut=True]) ---
 
@@ -373,13 +364,8 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     def alloc_zeroed[
         I: Intable, //, T: DType = DType.uint8
     ](length: I) -> Buffer[mut=True]:
-        """Allocate a 64-byte-aligned, zero-filled buffer for `length` elements of type T.
-
-        For DType.bool, `length` is the number of bits; the buffer will hold
-        ceildiv(length, 8) bytes, zero-padded to a 64-byte boundary.
-        """
-        var byte_size = Buffer._aligned_size[T](Int(length))
-        var result = Buffer.alloc_uninit(byte_size)
+        """Allocate a 64-byte-aligned, zero-filled buffer for `length` elements of type T."""
+        var result = Buffer.alloc_uninit[T](length)
         memset_zero(result.ptr, result.size)
         return result^
 
@@ -388,8 +374,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         I: Intable, //, T: DType = DType.uint8
     ](length: I, fill: Scalar[T]) -> Buffer[mut=True]:
         """Allocate a 64-byte-aligned buffer filled with ``fill``."""
-        var byte_size = Buffer._aligned_size[T](Int(length))
-        var result = Buffer.alloc_uninit(byte_size)
+        var result = Buffer.alloc_uninit[T](length)
         memset(result.ptr, UInt8(fill), result.size)
         return result^
 
@@ -403,22 +388,11 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         Use only when the caller guarantees every element will be written
         before the buffer is read.
         """
-        var size = math.align_up(Buffer._aligned_size[T](Int(length)), 64)
+        var size = Buffer._aligned_size[T](Int(length))
         var raw = alloc[UInt8](size, alignment=64)
         var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
         return Buffer[mut=True](size=size, ptr=ptr, owner=ArcPointer(Allocation.cpu(ptr)))
 
-    @staticmethod
-    def alloc_uninit(byte_size: Int) -> Buffer[mut=True]:
-        """Allocate a 64-byte-aligned buffer without zero-filling.
-
-        Use only when the caller guarantees every byte will be written
-        before the buffer is read (e.g. SIMD loops that cover the full range).
-        """
-        var size = math.align_up(byte_size, 64)
-        var raw = alloc[UInt8](size, alignment=64)
-        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
-        return Buffer[mut=True](size=size, ptr=ptr, owner=ArcPointer(Allocation.cpu(ptr)))
 
     @staticmethod
     def alloc_host[
@@ -428,14 +402,11 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
 
         Pinned memory is CPU-accessible and enables fast DMA transfers to/from
         the GPU.  Use `unsafe_set()` / `simd_store()` to write, then call
-        `finish()` to obtain an immutable HOST Buffer.
-
-        For DType.bool, `length` is the number of bits; the buffer will hold
-        ceildiv(length, 8) bytes, zero-padded to a 64-byte boundary.
+        `to_immutable()` to obtain an immutable HOST Buffer.
 
         Args:
             ctx:    DeviceContext used to allocate the HostBuffer.
-            length: Number of elements (bits for DType.bool).
+            length: Number of elements.
 
         Returns:
             A mutable Buffer backed by pinned host memory.
@@ -455,7 +426,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """Allocate a device (GPU) buffer for `length` elements of type T.
 
         The returned buffer exposes `ptr` as a `MutAnyOrigin` device pointer
-        suitable for GPU kernel writes. Call `finish()` to obtain an immutable
+        suitable for GPU kernel writes. Call `to_immutable()` to obtain an immutable
         device-resident `Buffer[mut=False]`.
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
@@ -486,7 +457,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """
         return Buffer[mut=False](
             size=Int(size),
-            ptr=rebind[UnsafePointer[UInt8, MutAnyOrigin]](ptr.bitcast[UInt8]()),
+            ptr=rebind[UnsafePointer[UInt8, mut=False]](ptr.bitcast[UInt8]()),
             owner=owner,
         )
 
@@ -502,7 +473,7 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         for the lifetime of the Allocation.  `device_type()` is inferred from
         the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
         """
-        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](host.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, mut=False]](host.unsafe_ptr())
         return Buffer[mut=False](
             size=len(host),
             ptr=ptr,
@@ -523,13 +494,13 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """
         return Buffer[mut=False](
             size=size,
-            ptr=UnsafePointer[UInt8, MutAnyOrigin](),
+            ptr=UnsafePointer[UInt8, mut=False](),
             owner=ArcPointer(Allocation.device(dev)),
         )
 
     # --- Mutability transition ---
 
-    def finish(mut self: Buffer[mut=True]) -> Buffer[mut=False]:
+    def to_immutable(mut self: Buffer[mut=True]) -> Buffer[mut=False]:
         """Freeze the mutable buffer into an immutable Buffer and reset state.
 
         For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
@@ -546,12 +517,16 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
             # DEVICE allocation: null the CPU ptr (no CPU accessibility).
             return Buffer[mut=False](
                 size=new.size,
-                ptr=UnsafePointer[UInt8, MutAnyOrigin](),
+                ptr=UnsafePointer[UInt8, mut=False](),
                 owner=new._owner,
             )
         else:
             # CPU or HOST allocation: preserve the CPU-accessible ptr.
-            return Buffer[mut=False](size=new.size, ptr=new.ptr, owner=new._owner)
+            return Buffer[mut=False](
+                size=new.size,
+                ptr=rebind[UnsafePointer[UInt8, mut=False]](new.ptr),
+                owner=new._owner,
+            )
 
     # --- CPU/device checks (mut=False only) ---
 
@@ -611,23 +586,9 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     def unsafe_set[
         T: DType = DType.uint8
     ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
-        comptime if T == DType.bool:
-            var byte_index = index // 8
-            var bit_mask = UInt8(1 << (index % 8))
-            if value:
-                self.ptr[byte_index] = self.ptr[byte_index] | bit_mask
-            else:
-                self.ptr[byte_index] = self.ptr[byte_index] & ~bit_mask
-        else:
-            comptime output = Scalar[T]
-            self.ptr.bitcast[output]()[index] = value
+        comptime output = Scalar[T]
+        self.ptr.bitcast[output]()[index] = value
 
-    @always_inline
-    def simd_store[T: DType, W: Int](
-        self: Buffer[mut=True], index: Int, value: SIMD[T, W]
-    ):
-        """Store W elements of type T at element index `index`."""
-        (self.ptr.bitcast[Scalar[T]]() + index).store(value)
 
     # --- Read operations (both modes) ---
 
@@ -638,65 +599,22 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
             "cannot read device buffer, call to_cpu() first",
         )
         comptime output = Scalar[T]
-        comptime if T == DType.bool:
-            var byte = self.ptr[index // 8]
-            return output((byte >> UInt8(index % 8)) & 1)
-        else:
-            return self.ptr.bitcast[output]()[index]
+        return self.ptr.bitcast[output]()[index]
 
-    @always_inline
-    def simd_load[T: DType, W: Int](self, index: Int) -> SIMD[T, W]:
-        """Load W elements of type T at element index `index`."""
-        debug_assert(
-            self.ptr.__bool__(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        return (self.ptr.bitcast[Scalar[T]]() + index).load[width=W]()
 
     # --- Typed pointer access ---
 
     @always_inline
     def unsafe_ptr[
         T: DType = DType.uint8
-    ](self: Buffer[mut=True]) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
-        """Return a typed mutable pointer to the start of the buffer."""
-        return self.ptr.bitcast[Scalar[T]]()
-
-    @always_inline
-    def unsafe_ptr[
-        T: DType = DType.uint8
-    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
-        """Return a typed immutable pointer to the element at offset.
-
-        Precondition: `is_cpu()` must be True.
-        """
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        return rebind[UnsafePointer[Scalar[T], ImmutExternalOrigin]](
-            self.ptr.bitcast[Scalar[T]]() + offset
-        )
-
-    @always_inline
-    def aligned_unsafe_ptr[
-        T: DType = DType.uint8
-    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], ImmutExternalOrigin]:
-        """Return a typed pointer aligned down to a 64-byte boundary.
-
-        Useful when `offset` is non-zero: the returned pointer starts at the
-        closest 64-byte-aligned element position ≤ offset.
-
-        Precondition: `is_cpu()` must be True.
-        """
-        debug_assert(
-            self.is_cpu(),
-            "cannot read device buffer, call to_cpu() first",
-        )
-        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
-        return rebind[UnsafePointer[Scalar[T], ImmutExternalOrigin]](
-            self.ptr.bitcast[Scalar[T]]() + aligned
-        )
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], mut=mut]:
+        """Return a typed pointer to the element at offset."""
+        comptime if not mut:
+            debug_assert(
+                self.ptr.__bool__(),
+                "cannot read device buffer, call to_cpu() first",
+            )
+        return self.ptr.bitcast[Scalar[T]]() + offset
 
     # --- Device access (mut=False only) ---
 
@@ -720,19 +638,6 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """
         return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
 
-    @always_inline
-    def aligned_device_ptr[
-        T: DType
-    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
-        """Return a typed device pointer aligned down to a 64-byte boundary.
-
-        Useful when `offset` is non-zero: the returned pointer starts at the
-        closest 64-byte-aligned element position ≤ offset.
-
-        Precondition: `is_device()` must be True.
-        """
-        var aligned = math.align_down(offset * size_of[T](), 64) // size_of[T]()
-        return self.device_buffer().unsafe_ptr().bitcast[Scalar[T]]() + aligned
 
     # --- Device type / id ---
 
@@ -789,10 +694,11 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
             self._owner[]._device.value(),
         )
         ctx.synchronize()
-        return builder.finish()
+        return builder.to_immutable()
 
     # --- Equatable ---
 
+    # TODO: remove this method, view already implements it
     def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
         """Return True if both buffers have identical CPU-accessible contents.
 
@@ -828,13 +734,13 @@ struct Buffer[mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
+struct Bitmap[//, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
     """Bit-packed validity bitmap with parametric mutability.
 
     `Bitmap[mut=True]`  — mutable builder. Use `alloc()` factory.
-                          Write via `set_bit`, `set_range`, `deposit_bits`,
-                          `copy_bits`, `extend`, `resize`.
-                          `finish(length)` freezes to `Bitmap[mut=False]`.
+                          Write via `set`, `clear`, `set_range`, `deposit_bits`,
+                          `copy_from`, `extend`, `resize`.
+                          `to_immutable(length)` freezes to `Bitmap[mut=False]`.
 
     `Bitmap[mut=False]` — immutable, ref-counted shared ownership.
                           Copying is O(1). Use `slice()`.
@@ -844,6 +750,7 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
     var _offset: Int
     var _length: Int
 
+    # TODO: reduce the number of overloads
     def __init__(out self: Bitmap[False], buffer: Buffer[], offset: Int, length: Int):
         """Construct an immutable Bitmap from an existing buffer."""
         self._buffer = buffer
@@ -865,9 +772,11 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
     # --- Factory ---
 
     @staticmethod
-    def alloc(capacity: Int) -> Bitmap[True]:
+    def alloc(capacity: Int) -> Self[mut=True]:
         """Allocate a zero-filled mutable bitmap for `capacity` bits."""
-        return Bitmap[True](Buffer.alloc_zeroed[DType.bool](capacity))
+        var byte_size = math.ceildiv(capacity, 8)
+        var buffer = Buffer.alloc_zeroed(byte_size)
+        return Self[mut=True](buffer^)
 
     # --- Read methods (both modes) ---
 
@@ -897,8 +806,8 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
     # --- Mutable methods ---
 
     @always_inline
-    def unsafe_ptr(self: Bitmap[True]) -> UnsafePointer[UInt8, MutAnyOrigin]:
-        """Return the raw mutable byte pointer (for low-level bit operations)."""
+    def unsafe_ptr(self) -> UnsafePointer[UInt8, mut=mut]:
+        """Return the raw byte pointer (mutable for Bitmap[True], immutable for Bitmap[False])."""
         return self._buffer.ptr
 
     @always_inline
@@ -924,11 +833,19 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
                 bits >> UInt64(64 - bit_off)
             )
 
-    # TODO: add safe apis
     @always_inline
-    def set_bit(mut self: Bitmap[True], index: Int, value: Bool):
-        """Set or clear the bit at `index`."""
-        self._buffer.unsafe_set[DType.bool](index, value)
+    def set(mut self: Bitmap[True], index: Int):
+        """Set the bit at `index` to 1."""
+        var byte_index = index // 8
+        var bit_mask = UInt8(1 << (index % 8))
+        self._buffer.ptr[byte_index] = self._buffer.ptr[byte_index] | bit_mask
+
+    @always_inline
+    def clear(mut self: Bitmap[True], index: Int):
+        """Clear the bit at `index` to 0."""
+        var byte_index = index // 8
+        var bit_mask = UInt8(1 << (index % 8))
+        self._buffer.ptr[byte_index] = self._buffer.ptr[byte_index] & ~bit_mask
 
     def set_range(mut self: Bitmap[True], start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`.
@@ -979,7 +896,7 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
         if end_byte > start_byte:
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
-    def copy_bits(
+    def copy_from(
         mut self: Bitmap[True],
         src_ptr: UnsafePointer[UInt8, _],
         src_offset: Int,
@@ -1106,17 +1023,17 @@ struct Bitmap[mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable):
     def extend(mut self: Bitmap[True], src: Bitmap[], dst_start: Int, length: Int):
         """Copy `length` bits from `src` (from its `_offset`) into self at `dst_start`.
         """
-        self.copy_bits(
+        self.copy_from(
             src._buffer.unsafe_ptr(), src.bit_offset(), dst_start, length
         )
 
     def resize(mut self: Bitmap[True], capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits."""
-        self._buffer.resize[DType.bool](capacity)
+        self._buffer.resize(math.ceildiv(capacity, 8))
 
-    def finish(mut self: Bitmap[True], length: Int) -> Bitmap[]:
+    def to_immutable(mut self: Bitmap[True], length: Int) -> Bitmap[]:
         """Freeze the builder into an immutable `Bitmap[]` of `length` bits.
 
         The builder is reset to empty and can be reused after this call.
         """
-        return Bitmap[](self._buffer.finish(), 0, length)
+        return Bitmap[](self._buffer.to_immutable(), 0, length)

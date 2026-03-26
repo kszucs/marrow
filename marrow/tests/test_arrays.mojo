@@ -31,9 +31,9 @@ def test_array_data_with_offset() raises:
     buffer.unsafe_set[int8.native](4, 300)
 
     # Set validity bits (bits 2, 3, 4 are set; offset=2 maps index 0→bit2, etc.)
-    bitmap.set_bit(2, True)
-    bitmap.set_bit(3, True)
-    bitmap.set_bit(4, True)
+    bitmap.set(2)
+    bitmap.set(3)
+    bitmap.set(4)
 
     # Create ArrayData with offset=2
     var array_data = AnyArray.from_data(
@@ -42,8 +42,8 @@ def test_array_data_with_offset() raises:
             length=3,
             nulls=0,
             offset=2,
-            bitmap=bitmap.finish(10),
-            buffers=[buffer.finish()],
+            bitmap=bitmap.to_immutable(10),
+            buffers=[buffer.to_immutable()],
             children=[],
         )
     )
@@ -59,7 +59,7 @@ def test_array_data_with_offset() raises:
 def test_array_data_fieldwise_init() raises:
     """Test that @fieldwise_init decorator works with offset field."""
     var buffer_b = Buffer.alloc_zeroed[int8.native](5)
-    var buffer = buffer_b.finish()
+    var buffer = buffer_b.to_immutable()
 
     # Test creating ArrayData with all fields specified including offset
     var array_data = AnyArray.from_data(
@@ -114,7 +114,7 @@ def test_array_copy() raises:
             nulls=0,
             offset=0,
             bitmap=None,
-            buffers=[_sb.finish()],
+            buffers=[_sb.to_immutable()],
             children=[],
         )
     )
@@ -133,7 +133,7 @@ def test_array_move() raises:
             nulls=0,
             offset=0,
             bitmap=None,
-            buffers=[_ab.finish()],
+            buffers=[_ab.to_immutable()],
             children=[],
         )
     )

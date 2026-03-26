@@ -40,7 +40,7 @@
 
 - **Scalar types hold native values** (`marrow/scalars.mojo`): `PrimitiveScalar[T]` now holds `SIMD[T.native, 1]` + `Bool` validity directly instead of a length-1 `PrimitiveArray`. `StringScalar` holds `String` + `Bool`. `ListScalar` holds `AnyArray` (child elements) + `Bool`. `StructScalar` holds `List[AnyArray]` (one per field) + `DataType` + `Bool`. `AnyScalar` remains a type-erased container backed by a length-1 `AnyArray` for uniform storage. Added a `Scalar` trait mirroring the `Array` trait.
 
-- **Filter kernel** (`marrow/kernels/filter.mojo`): Rewrote the inner loop using run-length encoding for high-selectivity cases (>80% pass rate: bulk `memcopy`) and a bit-scan iterator for low-selectivity cases. Validity bitmap writes use `Bitmap.copy_bits` for bulk transfers instead of per-element `set_bit` calls. Added profiling script and benchmark harness.
+- **Filter kernel** (`marrow/kernels/filter.mojo`): Rewrote the inner loop using run-length encoding for high-selectivity cases (>80% pass rate: bulk `memcopy`) and a bit-scan iterator for low-selectivity cases. Validity bitmap writes use `Bitmap.copy_from` for bulk transfers instead of per-element `set_bit` calls. Added profiling script and benchmark harness.
 
 - **Arithmetic kernel** (`marrow/kernels/arithmetic.mojo`): Extracted from `kernels/__init__.mojo` into a dedicated module. GPU elementwise ops (`_add_gpu`, `_sub_gpu`, `_mul_gpu`, `_div_gpu`) added alongside CPU SIMD paths.
 

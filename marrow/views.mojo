@@ -666,7 +666,7 @@ struct BitmapView[
                 comptime k = j * width
                 (dst + i + k).store(~(src + i + k).load[width=width]())
 
-        return _normalize(builder.finish(), lead_bits, self._len)
+        return _normalize(builder.to_immutable(), lead_bits, self._len)
 
     def _binop[
         op: def[W: Int](
@@ -715,7 +715,7 @@ struct BitmapView[
                     var hi = (src_b + i + k + 1).load[width=width]()
                     (dst + i + k).store(op(a, (lo >> rs) | (hi << ls)))
 
-        return _normalize(builder.finish(), lead_bits_a, self._len)
+        return _normalize(builder.to_immutable(), lead_bits_a, self._len)
 
     # --- Writable ---
 
@@ -776,7 +776,7 @@ def _normalize(buffer: Buffer[], lead_bits: Int, length: Int) -> Buffer[]:
         lead_bits,
         length,
     )
-    return dst.finish()
+    return dst.to_immutable()
 
 
 # ---------------------------------------------------------------------------

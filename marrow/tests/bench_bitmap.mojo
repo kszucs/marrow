@@ -42,16 +42,16 @@ def _make_alternating(size: Int) -> Bitmap:
     var b = Bitmap.alloc(size)
     var i = 0
     while i < size:
-        b.set_bit(i, True)
+        b.set(i)
         i += 2
-    return b.finish(size)
+    return b.to_immutable(size)
 
 
 def _make_half_set(size: Int) -> Bitmap:
     """Bitmap with the first half of bits set."""
     var b = Bitmap.alloc(size)
     b.set_range(0, size // 2, True)
-    return b.finish(size)
+    return b.to_immutable(size)
 
 
 # ---------------------------------------------------------------------------

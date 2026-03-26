@@ -142,7 +142,7 @@ def _unary[
         - BitmapView(array.bitmap.value()).count_set_bits() if array.bitmap else 0,
         offset=0,
         bitmap=array.bitmap,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )
 
 
@@ -194,7 +194,7 @@ def _binary[
         nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )
 
 

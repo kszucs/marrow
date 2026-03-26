@@ -214,7 +214,7 @@ def _filter_bits(
             builder.deposit_bits(bm_pos, compressed, count)
             zero_count += count - Int(pop_count(compressed))
 
-    return builder.finish(out_len), zero_count
+    return builder.to_immutable(out_len), zero_count
 
 
 def _filter_values[
@@ -283,7 +283,7 @@ def _filter_values[
                 dst, out_pos, src, i, sel_word
             )
 
-    return buf.finish()
+    return buf.to_immutable()
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +321,7 @@ def filter_[
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=empty_buf.finish(),
+            buffer=empty_buf.to_immutable(),
         )
 
     # Filter validity bitmap (shared by both paths).
@@ -404,8 +404,8 @@ def filter_(
             nulls=0,
             offset=0,
             bitmap=None,
-            offsets=empty_offsets.finish(),
-            values=empty_values.finish(),
+            offsets=empty_offsets.to_immutable(),
+            values=empty_values.to_immutable(),
         )
 
     var off = array.offset
@@ -449,7 +449,10 @@ def filter_(
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
                 var valid = BitmapView(src_bm).test(off + i)
-                bm_builder.set_bit(j, valid)
+                if valid:
+                    bm_builder.set(j)
+                else:
+                    bm_builder.clear(j)
                 if not valid:
                     null_count += 1
                 j += 1
@@ -466,7 +469,7 @@ def filter_(
                     count=run_bytes,
                 )
 
-        bm = bm_builder.finish(out_len)
+        bm = bm_builder.to_immutable(out_len)
 
     else:
         # --- No bitmap: run-merging only ---
@@ -504,8 +507,8 @@ def filter_(
         nulls=null_count,
         offset=0,
         bitmap=bm,
-        offsets=out_offsets.finish(),
-        values=out_values.finish(),
+        offsets=out_offsets.to_immutable(),
+        values=out_values.to_immutable(),
     )
 
 
@@ -567,7 +570,7 @@ def drop_nulls[
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=all_true._buffer.finish(),
+            buffer=all_true._buffer.to_immutable(),
         )
         return filter_[T](array, selection)
     var bm_view = val.value()
@@ -660,21 +663,21 @@ def take[
                 has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))
             ):
                 out[i] = Scalar[native](0)
-                bm_builder.set_bit(i, False)
+                bm_builder.clear(i)
                 null_count += 1
             else:
                 out[i] = src[Int(idx_ptr.load(i))]
-                bm_builder.set_bit(i, True)
+                bm_builder.set(i)
             i += 1
         if null_count > 0:
-            bitmap = bm_builder.finish(n)
+            bitmap = bm_builder.to_immutable(n)
 
     return PrimitiveArray[T](
         length=n,
         nulls=null_count,
         offset=0,
         bitmap=bitmap^,
-        buffer=buf.finish(),
+        buffer=buf.to_immutable(),
     )
 
 
