@@ -251,7 +251,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: Bitmap[True]
+    var _bitmap: Bitmap[mut=True]
     var _buffer: Buffer[mut=True]
 
     def __init__(out self, capacity: Int = 0, *, zeroed: Bool = True):
@@ -266,7 +266,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = Bitmap.alloc(capacity)
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
         # TODO: always allocate uninit since finish() will trim the
         # buffer to the actual length
         if zeroed:
@@ -345,7 +345,8 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(
-                    Bitmap(bm._buffer, bm._offset + arr.offset, n),
+                    # TODO: this should be simpler
+                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
                     self._length,
                     n,
                 )
@@ -422,7 +423,7 @@ struct StringBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: Bitmap[True]
+    var _bitmap: Bitmap[mut=True]
     var _offsets: Buffer[mut=True]
     var _values: Buffer[mut=True]
 
@@ -432,7 +433,7 @@ struct StringBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = Bitmap.alloc(capacity)
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._offsets = offsets^
         self._values = Buffer.alloc_zeroed[DType.uint8](bytes_capacity)
 
@@ -491,8 +492,9 @@ struct StringBuilder(Builder, Sized):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
+                # TODO: this should be simpler
                 self._bitmap.extend(
-                    Bitmap(bm._buffer, bm._offset + arr.offset, n),
+                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
                     self._length,
                     n,
                 )
@@ -604,7 +606,7 @@ struct ListBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: Bitmap[True]
+    var _bitmap: Bitmap[mut=True]
     var _offsets: Buffer[mut=True]
     var _child: AnyBuilder
 
@@ -616,7 +618,7 @@ struct ListBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = Bitmap.alloc(capacity)
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._offsets = offsets^
         self._child = child^
 
@@ -678,7 +680,7 @@ struct ListBuilder(Builder, Sized):
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(
-                    Bitmap(bm._buffer, bm._offset + arr.offset, n),
+                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
                     self._length,
                     n,
                 )
@@ -757,7 +759,7 @@ struct FixedSizeListBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: Bitmap[True]
+    var _bitmap: Bitmap[mut=True]
     var _child: AnyBuilder
 
     def __init__(
@@ -768,7 +770,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = Bitmap.alloc(capacity)
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._child = child^
 
     def __len__(self) -> Int:
@@ -821,7 +823,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             if arr.bitmap:
                 var bm = arr.bitmap.value()
                 self._bitmap.extend(
-                    Bitmap(bm._buffer, bm._offset + arr.offset, n),
+                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
                     self._length,
                     n,
                 )
@@ -888,7 +890,7 @@ struct StructBuilder(Builder, Sized):
     var _length: Int
     var _capacity: Int
     var _null_count: Int
-    var _bitmap: Bitmap[True]
+    var _bitmap: Bitmap[mut=True]
     var _children: List[AnyBuilder]
 
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
@@ -899,7 +901,7 @@ struct StructBuilder(Builder, Sized):
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
-        self._bitmap = Bitmap.alloc(capacity)
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._children = children^
 
     def __len__(self) -> Int:

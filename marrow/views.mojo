@@ -225,13 +225,13 @@ struct BitmapView[
         self._offset = offset
         self._len = length
 
-    def __init__(out self: BitmapView[ImmutExternalOrigin], bm: Bitmap[False]):
+    def __init__(out self: BitmapView[ImmutExternalOrigin], bm: Bitmap[mut=False]):
         """Construct a non-owning view over an immutable Bitmap."""
         self._data = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
-            bm._buffer.ptr
+            bm.buffer.ptr
         )
-        self._offset = bm._offset
-        self._len = bm._length
+        self._offset = bm.offset
+        self._len = bm.length
 
     def __init__(out self, *, copy: Self):
         self._data = copy._data

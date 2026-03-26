@@ -159,7 +159,7 @@ def _bench_load_word(
     """
     # Build a bitmap large enough to hold all words (with bit_offset headroom)
     var n_bits = bit_offset + n_words * 64 + 64  # +64 padding
-    var builder = Bitmap.alloc(n_bits)
+    var builder = Bitmap.alloc_zeroed(n_bits)
     builder.set_range(0, n_bits, True)
     var bm = builder.to_immutable(n_bits)
     # Wrap with a bit offset to exercise the shift path

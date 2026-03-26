@@ -167,7 +167,7 @@ def _filter_bits(
         validity bitmaps).
     """
     comptime ALL_ONES = ~UInt64(0)
-    var builder = Bitmap.alloc(out_len)
+    var builder = Bitmap.alloc_zeroed(out_len)
     var bm_pos = 0
     var zero_count = 0
     var i = sel_start
@@ -346,7 +346,7 @@ def filter_[
             nulls=null_count,
             offset=0,
             bitmap=bm,
-            buffer=filtered_data._buffer,
+            buffer=filtered_data.buffer,
         )
     else:
         var result_buf = _filter_values[T.native](
@@ -432,7 +432,7 @@ def filter_(
     if array.bitmap:
         # --- With bitmap: fused run-merging + bitmap filtering ---
         var src_bm = array.bitmap.value()
-        var bm_builder = Bitmap.alloc(out_len)
+        var bm_builder = Bitmap.alloc_zeroed(out_len)
         var byte_pos = UInt32(0)
         out_off_ptr[0] = 0
         var j = 0
@@ -563,14 +563,14 @@ def drop_nulls[
     var val = array.validity()
     if not val:
         # All valid: wrap as identity selection
-        var all_true = Bitmap.alloc(len(array))
+        var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)
         var selection = PrimitiveArray[bool_](
             length=len(array),
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=all_true._buffer.to_immutable(),
+            buffer=all_true.buffer.to_immutable(),
         )
         return filter_[T](array, selection)
     var bm_view = val.value()
@@ -579,7 +579,7 @@ def drop_nulls[
         nulls=0,
         offset=bm_view.bit_offset(),
         bitmap=None,
-        buffer=array.bitmap.value()._buffer,
+        buffer=array.bitmap.value().buffer,
     )
     return filter_[T](array, selection)
 
@@ -657,7 +657,7 @@ def take[
     else:
         # TODO: optimize this, the implementation below could be vectorized
         # Slow path: null indices or source nulls — scalar + bitmap.
-        var bm_builder = Bitmap.alloc(n)
+        var bm_builder = Bitmap.alloc_zeroed(n)
         while i < n:
             if (has_null_indices and not indices.is_valid(i)) or (
                 has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))

@@ -39,7 +39,7 @@ from marrow.buffers import Bitmap
 
 def _make_alternating(size: Int) -> Bitmap:
     """Bitmap with alternating 0/1 bits (worst-case for popcount branching)."""
-    var b = Bitmap.alloc(size)
+    var b = Bitmap.alloc_zeroed(size)
     var i = 0
     while i < size:
         b.set(i)
@@ -49,7 +49,7 @@ def _make_alternating(size: Int) -> Bitmap:
 
 def _make_half_set(size: Int) -> Bitmap:
     """Bitmap with the first half of bits set."""
-    var b = Bitmap.alloc(size)
+    var b = Bitmap.alloc_zeroed(size)
     b.set_range(0, size // 2, True)
     return b.to_immutable(size)
 
@@ -149,7 +149,7 @@ def bench_invert(mut b: Bencher, size: Int) raises:
 
 @parameter
 def bench_set_range(mut b: Bencher, size: Int) raises:
-    var builder = Bitmap.alloc(size)
+    var builder = Bitmap.alloc_zeroed(size)
 
     @always_inline
     @parameter

@@ -312,16 +312,16 @@ def rapidhash(
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         data_ptr = keys.buffer.device_ptr[DType.uint8]()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
-            bm_offset = keys.bitmap.value()._offset + keys.offset
+            bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
+            bm_offset = keys.bitmap.value().offset + keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
         data_ptr = keys.buffer.unsafe_ptr()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.unsafe_ptr()
-            bm_offset = keys.bitmap.value()._offset + keys.offset
+            bm_ptr = keys.bitmap.value().buffer.unsafe_ptr()
+            bm_offset = keys.bitmap.value().offset + keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
 
@@ -364,18 +364,18 @@ def rapidhash[
 
     if ctx:
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
-        in_ptr = keys.buffer.aligned_device_ptr[native](keys.offset)
+        in_ptr = keys.buffer.device_ptr[native](keys.offset)
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
-            bm_offset = keys.bitmap.value()._offset + keys.offset
+            bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
+            bm_offset = keys.bitmap.value().offset + keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
-        in_ptr = keys.buffer.aligned_unsafe_ptr[native](keys.offset)
+        in_ptr = keys.buffer.unsafe_ptr[native](keys.offset)
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.unsafe_ptr()
-            bm_offset = keys.bitmap.value()._offset + keys.offset
+            bm_ptr = keys.bitmap.value().buffer.unsafe_ptr()
+            bm_offset = keys.bitmap.value().offset + keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
 

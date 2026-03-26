@@ -5,7 +5,7 @@ from marrow.views import BitmapView
 
 
 def main() raises:
-    var b = Bitmap.alloc(16)
+    var b = Bitmap.alloc_zeroed(16)
     b.set_range(0, 16, True)
     var bm = b.to_immutable(16)
 

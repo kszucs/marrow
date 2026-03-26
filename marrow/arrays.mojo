@@ -408,8 +408,8 @@ struct ArrayData(Copyable, Movable):
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
-    var buffers: List[Buffer[]]
+    var bitmap: Optional[Bitmap[mut=False]]
+    var buffers: List[Buffer[mut=False]]
     var children: List[ArrayData]
 
 
@@ -433,8 +433,8 @@ struct PrimitiveArray[T: DataType](
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
-    var buffer: Buffer[]
+    var bitmap: Optional[Bitmap[mut=False]]
+    var buffer: Buffer[mut=False]
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -554,9 +554,10 @@ struct PrimitiveArray[T: DataType](
         """Validity bitmap as a BitmapView, or None if all-valid."""
         if self.bitmap:
             var bm = self.bitmap.value()
+            # TODO: should be simpler
             return BitmapView[ImmutExternalOrigin](
-                ptr=bm._buffer.unsafe_ptr[DType.uint8](),
-                offset=bm._offset + self.offset,
+                ptr=bm.buffer.unsafe_ptr[DType.uint8](),
+                offset=bm.offset + self.offset,
                 length=self.length,
             )
         return None
@@ -711,9 +712,9 @@ struct StringArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
-    var offsets: Buffer[]
-    var values: Buffer[]
+    var bitmap: Optional[Bitmap[mut=False]]
+    var offsets: Buffer[mut=False]
+    var values: Buffer[mut=False]
 
     def __init__(out self, var *values: String, __list_literal__: ()) raises:
         """Constructs a string array from a list literal ["a", "b", ...].
@@ -876,8 +877,8 @@ struct ListArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
-    var offsets: Buffer[]
+    var bitmap: Optional[Bitmap[mut=False]]
+    var offsets: Buffer[mut=False]
     var values: AnyArray
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -1044,7 +1045,7 @@ struct FixedSizeListArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
+    var bitmap: Optional[Bitmap[mut=False]]
     var values: AnyArray
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -1219,7 +1220,7 @@ struct StructArray(
     var length: Int
     var nulls: Int
     var offset: Int
-    var bitmap: Optional[Bitmap[]]
+    var bitmap: Optional[Bitmap[mut=False]]
     var children: List[AnyArray]
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -1449,6 +1450,3 @@ struct ChunkedArray(Copyable, Movable, Writable):
                 )
             )
         return concat(self.chunks)
-
-
-from .builders import array, nulls, arange

@@ -120,7 +120,7 @@ def _reset(mut bitmap: Bitmap[True], n_bits: Int) raises:
 
 
 def test_bitmap_range_set() raises:
-    var bitmap = Bitmap.alloc(16)
+    var bitmap = Bitmap.alloc_zeroed(16)
     var n_bits = 16
 
     bitmap.set_range(0, 10, True)
@@ -154,18 +154,18 @@ def test_bitmap_range_set() raises:
 
 
 def test_bitmap_extend() raises:
-    var src_b = Bitmap.alloc(6)
+    var src_b = Bitmap.alloc_zeroed(6)
     src_b.set(0)
     src_b.set(5)
     var src = src_b.to_immutable(6)
 
-    var dst = Bitmap.alloc(8)
+    var dst = Bitmap.alloc_zeroed(8)
     dst.extend(src, 0, 6)
     assert_bitmap_set(dst.unsafe_ptr(), 8, [0, 5], "after extend")
 
     # extend into offset position
-    var dst2 = Bitmap.alloc(8)
-    var src2_b = Bitmap.alloc(2)
+    var dst2 = Bitmap.alloc_zeroed(8)
+    var src2_b = Bitmap.alloc_zeroed(2)
     src2_b.set(0)
     var src2 = src2_b.to_immutable(2)
     dst2.extend(src2, 6, 2)
@@ -266,7 +266,7 @@ def test_buffer_builder_resize_reallocates_when_larger() raises:
 
 def test_bitmap_builder_resize_noop_same_capacity() raises:
     # BitmapBuilder.resize delegates to Buffer[mut=True]; same capacity is a no-op.
-    var bm = Bitmap.alloc(64)
+    var bm = Bitmap.alloc_zeroed(64)
     var ptr_before = bm._buffer.ptr
     bm.resize(64)
     assert_equal(bm._buffer.ptr, ptr_before)
@@ -274,7 +274,7 @@ def test_bitmap_builder_resize_noop_same_capacity() raises:
 
 def test_bitmap_builder_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a 64-byte block → no-op.
-    var bm = Bitmap.alloc(1)
+    var bm = Bitmap.alloc_zeroed(1)
     var ptr_before = bm._buffer.ptr
     bm.resize(511)
     assert_equal(bm._buffer.ptr, ptr_before)
@@ -282,7 +282,7 @@ def test_bitmap_builder_resize_noop_same_aligned_capacity() raises:
 
 def test_bitmap_builder_resize_reallocates_when_larger() raises:
     # 513 bits require a second 64-byte block → reallocation.
-    var bm = Bitmap.alloc(1)
+    var bm = Bitmap.alloc_zeroed(1)
     var ptr_before = bm._buffer.ptr
     bm.resize(513)
     assert_true(bm._buffer.ptr != ptr_before)
