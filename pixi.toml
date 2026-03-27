@@ -41,9 +41,11 @@ package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir ou
 # Run with: pixi run -e examples datafusion_udf
 [feature.examples.pypi-dependencies]
 datafusion = ">=44.0.0"
+lancedb = ">=0.30.1"
 
 [feature.examples.tasks]
 datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+lancedb = { cmd = "python examples/lancedb/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
 [environments]
 package = { features = ["package"], no-default-feature = true }
