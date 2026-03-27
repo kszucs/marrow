@@ -362,7 +362,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             memcpy(
                 dest=self._buffer.ptr.bitcast[Scalar[Self.T.native]]()
                 + self._length,
-                src=arr.buffer.unsafe_ptr[Self.T.native](arr.offset),
+                src=arr.buffer.ptr_at[Self.T.native](arr.offset),
                 count=n,
             )
         self._length += n

@@ -318,9 +318,9 @@ def rapidhash(
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
-        data_ptr = keys.buffer.unsafe_ptr()
+        data_ptr = keys.buffer.ptr
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.unsafe_ptr()
+            bm_ptr = keys.bitmap.value().buffer.ptr
             bm_offset = keys.bitmap.value().offset + keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
@@ -372,9 +372,9 @@ def rapidhash[
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
-        in_ptr = keys.buffer.unsafe_ptr[native](keys.offset)
+        in_ptr = keys.buffer.ptr_at[native](keys.offset)
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.unsafe_ptr()
+            bm_ptr = keys.bitmap.value().buffer.ptr
             bm_offset = keys.bitmap.value().offset + keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
@@ -495,8 +495,8 @@ def rapidhash(
                 field_hashes.offset
             )
         else:
-            lhs_ptr = result.buffer.unsafe_ptr[DType.uint64](result.offset)
-            rhs_ptr = field_hashes.buffer.unsafe_ptr[DType.uint64](
+            lhs_ptr = result.buffer.ptr_at[DType.uint64](result.offset)
+            rhs_ptr = field_hashes.buffer.ptr_at[DType.uint64](
                 field_hashes.offset
             )
 

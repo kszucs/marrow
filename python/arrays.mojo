@@ -207,6 +207,17 @@ def _prim_scalar_getitem[T: DataType](
     return AnyScalar(ptr[][index]).to_python_object()
 
 
+def _bool_array_getitem(
+    ptr: UnsafePointer[BoolArray, MutAnyOrigin],
+    index: Int,
+) raises -> PythonObject:
+    """Return a Python bool for the element at the given index."""
+    var n = len(ptr[])
+    if index < 0 or index >= n:
+        raise Error(t"index {index} out of bounds for length {n}")
+    return PythonObject(ptr[][index])
+
+
 def _str_getitem(
     ptr: UnsafePointer[StringArray, MutAnyOrigin],
     index: Int,
@@ -857,7 +868,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = def_display[BoolArray](bool_array_py)
     var bool_array_sp = SequenceProtocolBuilder[BoolArray](bool_array_py)
     _ = bool_array_sp.def_len[BoolArray.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.bool_]
+        _bool_array_getitem
     ]()
 
     # --- Numeric PrimitiveArrays ---

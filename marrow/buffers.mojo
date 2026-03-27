@@ -391,7 +391,11 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         var size = Buffer._aligned_size[T](Int(length))
         var raw = alloc[UInt8](size, alignment=64)
         var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
-        return Buffer[mut=True](size=size, ptr=ptr, owner=ArcPointer(Allocation.cpu(ptr)))
+        return Buffer[mut=True](
+            size=size,
+            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            owner=ArcPointer(Allocation.cpu(ptr)),
+        )
 
 
     @staticmethod
@@ -412,11 +416,13 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
             A mutable Buffer backed by pinned host memory.
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
-        var host = ctx.enqueue_create_hostbuffer[DType.uint8](byte_size)
+        var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
         var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](host.unsafe_ptr())
         memset_zero(ptr, byte_size)
         return Buffer[mut=True](
-            size=byte_size, ptr=ptr, owner=ArcPointer(Allocation.host(host))
+            size=byte_size,
+            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            owner=ArcPointer(Allocation.host(host)),
         )
 
     @staticmethod
@@ -430,10 +436,12 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         device-resident `Buffer[mut=False]`.
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
-        var dev = ctx.enqueue_createbuffer[DType.uint8](byte_size)
+        var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
         var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](dev.unsafe_ptr())
         return Buffer[mut=True](
-            size=byte_size, ptr=ptr, owner=ArcPointer(Allocation.device(dev))
+            size=byte_size,
+            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            owner=ArcPointer(Allocation.device(dev)),
         )
 
     # --- Immutable factory methods (return Buffer[mut=False]) ---
@@ -455,7 +463,11 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
 
         Precondition: `owner` must have been created with `Allocation.foreign(...)`.
         """
-        return Buffer[mut=False](size=Int(size), ptr=ptr, owner=owner)
+        return Buffer[mut=False](
+            size=Int(size),
+            ptr=rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](ptr),
+            owner=owner,
+        )
 
     @staticmethod
     def from_host(host: HostBuffer[DType.uint8]) -> Buffer[mut=False]:
@@ -598,17 +610,43 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
 
     # --- Typed pointer access ---
 
-    # @always_inline
-    # def unsafe_ptr[
-    #     T: DType = DType.uint8
-    # ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], mut=mut]:
-    #     """Return a typed pointer to the element at offset."""
-    #     comptime if not mut:
-    #         debug_assert(
-    #             self.ptr.__bool__(),
-    #             "cannot read device buffer, call to_cpu() first",
-    #         )
-    #     return self.ptr.bitcast[Scalar[T]]() + offset
+    @always_inline
+    def ptr_at[
+        T: DType = DType.uint8
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]:
+        """Return a typed raw pointer to the element at `offset`.
+
+        The bitcast is localized here so kernel code stays free of manual
+        pointer casts.  Prefer `BufferView` for bounds-checked or SIMD
+        access; use this only where a raw pointer is unavoidable.
+        """
+        debug_assert(
+            self.ptr.__bool__(),
+            "cannot access device buffer on CPU, call to_cpu() first",
+        )
+        return self.ptr.bitcast[Scalar[T]]() + offset
+
+    # TODO: fully remove this!
+    @always_inline
+    def aligned_ptr_at[
+        T: DType = DType.uint8
+    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]:
+        """Return a typed raw pointer aligned DOWN to the nearest 64-byte boundary
+        before element `offset`.
+
+        Use this instead of `ptr_at` when loading SIMD vectors starting at an
+        arbitrary element offset: SIMD loads must begin at a 64-byte-aligned
+        address; this method backs up to the correct boundary so the load is safe.
+        """
+        debug_assert(
+            self.ptr.__bool__(),
+            "cannot access device buffer on CPU, call to_cpu() first",
+        )
+        var byte_offset = offset * size_of[T]()
+        var aligned_byte = math.align_down(byte_offset, 64)
+        return rebind[UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]](
+            self.ptr.bitcast[Scalar[T]]() + aligned_byte // size_of[T]()
+        )
 
     # --- Device access (mut=False only) ---
 
@@ -690,6 +728,17 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         ctx.synchronize()
         return builder.to_immutable()
 
+    def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
+        """Compare two immutable buffers byte-by-byte (64-bit chunks for speed)."""
+        if self.size != other.size:
+            return False
+        var lhs = self.ptr.bitcast[UInt64]()
+        var rhs = other.ptr.bitcast[UInt64]()
+        for i in range(self.size // 8):
+            if lhs[i] != rhs[i]:
+                return False
+        return True
+
     def write_to[W: Writer](self, mut writer: W):
         """Write the buffer's bytes to a Writer."""
         writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")
@@ -717,17 +766,11 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     var length: Int
 
     # TODO: reduce the number of overloads
-    def __init__(out self, buffer: Buffer[mut=Self.mut], offset: Int, length: Int):
+    def __init__(out self, var buffer: Buffer[mut=Self.mut], offset: Int=0, length: Int=0):
         """Construct an immutable Bitmap from an existing buffer."""
         self.buffer = buffer
         self.offset = offset
         self.length = length
-
-    def __init__(out self, buffer: Buffer[mut=Self.mut]):
-        """Construct a mutable Bitmap from a mutable buffer."""
-        self.buffer = buffer^
-        self.offset = 0
-        self.length = buffer.size * 8
 
     def __init__(out self, *, copy: Self):
         comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
@@ -768,6 +811,15 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     def slice(self: Bitmap[], offset: Int, length: Int) -> Bitmap[]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return Bitmap[](self.buffer, self.bitoffset() + offset, length)
+
+    def __eq__(self: Bitmap[mut=False], other: Bitmap[mut=False]) -> Bool:
+        """Compare two immutable bitmaps bit-by-bit over their valid ranges."""
+        if self.length != other.length:
+            return False
+        for i in range(self.length):
+            if self.test(self.offset + i) != other.test(other.offset + i):
+                return False
+        return True
 
     # --- Mutable methods ---
 
@@ -997,7 +1049,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Copy `length` bits from `src` (from its `offset`) into self at `dst_start`.
         """
         self.copy_from(
-            src.buffer.unsafe_ptr(), src.bitoffset(), dst_start, length
+            src.buffer.ptr, src.bitoffset(), dst_start, length
         )
 
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:

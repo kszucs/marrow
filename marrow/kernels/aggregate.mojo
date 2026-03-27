@@ -17,7 +17,7 @@ from std.algorithm.reduction import (
 )
 from std.utils.index import Index, IndexList
 
-from ..arrays import PrimitiveArray, AnyArray
+from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..views import BitmapView
 from ..dtypes import (
     DataType,
@@ -227,15 +227,13 @@ def max_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def any_(array: PrimitiveArray[bool_dt]) raises -> Bool:
+def any_(array: BoolArray) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
-    var data_bv = BitmapView[ImmutExternalOrigin](
-        ptr=array.buffer.unsafe_ptr(), offset=array.offset, length=n
-    )
+    var data_bv = array.values_bitmap().slice(array.offset, n)
     if not array.bitmap:
         return Bool(data_bv)
-    var validity_bv = BitmapView(array.bitmap.value())
+    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)
     var i = 0
     while i + 64 <= n:
         if (data_bv.load_word(i) & validity_bv.load_word(i)) != 0:
@@ -248,15 +246,13 @@ def any_(array: PrimitiveArray[bool_dt]) raises -> Bool:
     return False
 
 
-def all_(array: PrimitiveArray[bool_dt]) raises -> Bool:
+def all_(array: BoolArray) raises -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     var n = len(array)
-    var data_bv = BitmapView[ImmutExternalOrigin](
-        ptr=array.buffer.unsafe_ptr(), offset=array.offset, length=n
-    )
+    var data_bv = array.values_bitmap().slice(array.offset, n)
     if not array.bitmap:
         return data_bv.all_set()
-    var validity_bv = BitmapView(array.bitmap.value())
+    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)
     var i = 0
     while i + 64 <= n:
         var v = validity_bv.load_word(i)

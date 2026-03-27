@@ -660,7 +660,7 @@ struct BitmapView[
         src, total_bytes, lead_bits, _ = self._aligned_byte_range()
 
         var builder = Buffer.alloc_uninit(total_bytes)
-        var dst = builder.unsafe_ptr()
+        var dst = builder.ptr
         for i in range(0, total_bytes, 64):
             comptime for j in range(unroll):
                 comptime k = j * width
@@ -691,7 +691,7 @@ struct BitmapView[
 
         var src_b = ptr_b + ((lead_bits_b >> 3) - (lead_bits_a >> 3))
         var builder = Buffer.alloc_uninit(total_bytes)
-        var dst = builder.unsafe_ptr()
+        var dst = builder.ptr
 
         if lead_bits_a & 7 == lead_bits_b & 7:
             for i in range(0, total_bytes, 64):
@@ -770,9 +770,9 @@ def _normalize(buffer: Buffer[], lead_bits: Int, length: Int) -> Buffer[]:
     var out_bytes = math.align_up(math.ceildiv(length, 8), 64)
     var dst = Buffer.alloc_zeroed(out_bytes)
     _copy_bits(
-        dst.unsafe_ptr(),
+        dst.ptr,
         0,
-        buffer.unsafe_ptr(),
+        buffer.ptr,
         lead_bits,
         length,
     )

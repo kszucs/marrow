@@ -1,84 +1,66 @@
 """Boolean and bitwise kernels."""
 
-from ..arrays import PrimitiveArray, AnyArray
+from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 from ..views import BitmapView
 
 
-def count_true(array: PrimitiveArray[bool_dt]) raises -> Int:
-    """Count True values in a bit-packed boolean array.
-
-    Args:
-        array: A bit-packed boolean array.
-
-    Returns:
-        Number of True (and non-null) elements.
-    """
-    var n = len(array)
-    var data_bv = array.values_bitmap()
-    if array.nulls > 0:
-        var combined = data_bv & array.validity().value()
-        return BitmapView[ImmutExternalOrigin](
-            ptr=combined.ptr, offset=0, length=n
-        ).count_set_bits()
-    return data_bv.count_set_bits()
+def count_true(array: BoolArray) -> Int:
+    """Count True (and non-null) values in a bit-packed boolean array."""
+    return array.true_count()
 
 
-def and_(
-    lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
-) raises -> PrimitiveArray[bool_dt]:
+def and_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:
     """Bitwise AND of two bit-packed bool arrays."""
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("and_: input arrays must have equal length")
-    var lhs_bv = lhs.values_bitmap()
-    var rhs_bv = rhs.values_bitmap()
+    var lhs_bv = lhs.values_bitmap().slice(lhs.offset, length)
+    var rhs_bv = rhs.values_bitmap().slice(rhs.offset, length)
     var result_buf = lhs_bv & rhs_bv
-    return PrimitiveArray[bool_dt](
+    return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_buf,
+        values=Bitmap[mut=False](result_buf, 0, length),
     )
 
 
-def or_(
-    lhs: PrimitiveArray[bool_dt], rhs: PrimitiveArray[bool_dt]
-) raises -> PrimitiveArray[bool_dt]:
+def or_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:
     """Bitwise OR of two bit-packed bool arrays."""
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("or_: input arrays must have equal length")
-    var lhs_bv = lhs.values_bitmap()
-    var rhs_bv = rhs.values_bitmap()
+    var lhs_bv = lhs.values_bitmap().slice(lhs.offset, length)
+    var rhs_bv = rhs.values_bitmap().slice(rhs.offset, length)
     var result_buf = lhs_bv | rhs_bv
-    return PrimitiveArray[bool_dt](
+    return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_buf,
+        values=Bitmap[mut=False](result_buf, 0, length),
     )
 
 
-def not_(arr: PrimitiveArray[bool_dt]) raises -> PrimitiveArray[bool_dt]:
+def not_(arr: BoolArray) raises -> BoolArray:
     """Bitwise NOT of a bit-packed bool array."""
     var length = len(arr)
-    var bv = arr.values_bitmap()
+    var bv = arr.values_bitmap().slice(arr.offset, length)
     var result_buf = ~bv
-    return PrimitiveArray[bool_dt](
+    return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        buffer=result_buf,
+        values=Bitmap[mut=False](result_buf, 0, length),
     )
 
 
-def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
+def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = Bitmap.alloc_zeroed(length)
@@ -88,13 +70,7 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> PrimitiveArray[bool_dt]:
         else:
             builder.clear(i)
     var bm = builder.to_immutable(length)
-    return PrimitiveArray[bool_dt](
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=bm._buffer,
-    )
+    return BoolArray(length=length, nulls=0, offset=0, bitmap=None, values=bm)
 
 
 def is_null(arr: AnyArray) raises -> AnyArray:
@@ -108,7 +84,7 @@ def is_null(arr: AnyArray) raises -> AnyArray:
 def select[
     T: DataType
 ](
-    mask: PrimitiveArray[bool_dt],
+    mask: BoolArray,
     then_: PrimitiveArray[T],
     else_: PrimitiveArray[T],
 ) raises -> PrimitiveArray[T]:
@@ -119,7 +95,7 @@ def select[
     var builder = PrimitiveBuilder[T](length)
     var data_bv = mask.values_bitmap()
     for i in range(length):
-        if data_bv.test(i):
+        if data_bv.test(mask.offset + i):
             builder._buffer.unsafe_set[T.native](i, then_.unsafe_get(i))
         else:
             builder._buffer.unsafe_set[T.native](i, else_.unsafe_get(i))
@@ -134,7 +110,7 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
         raise Error(
             t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}"
         )
-    ref bool_mask = mask.as_primitive[bool_dt]()
+    ref bool_mask = mask.as_bool()
     comptime for dtype in numeric_dtypes:
         if then_.dtype() == dtype:
             return select[dtype](

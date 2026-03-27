@@ -279,7 +279,7 @@ struct AnyArray(
         return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[]
 
     def as_bool(ref self) -> ref[self._data[]] BoolArray:
-        return self.as_primitive[bool_]()
+        return rebind[ArcPointer[BoolArray]](self._data)[]
 
     def as_int8(ref self) -> ref[self._data[]] PrimitiveArray[int8]:
         return self.as_primitive[int8]()
@@ -448,7 +448,7 @@ struct BoolArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            values=data.buffers[0],
+            values=Bitmap[mut=False](data.buffers[0], 0, data.buffers[0].size * 8),
         )
 
     def __str__(self) -> String:
@@ -494,10 +494,23 @@ struct BoolArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return self.bitmap[index]
+        return self.bitmap.value().test(self.offset + index)
+
+    def __len__(self) -> Int:
+        return self.length
+
+    def __getitem__(self, index: Int) -> Bool:
+        return self.values_bitmap().test(self.offset + index)
+
+    def values_bitmap(self) -> BitmapView[ImmutExternalOrigin]:
+        """Non-owning bit-level view of the values buffer (offset NOT baked in)."""
+        return BitmapView(self.values)
 
     def to_any(deinit self) -> AnyArray:
-        return AnyArray(self)
+        return AnyArray(self^)
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
 
     def to_data(self) raises -> ArrayData:
         return ArrayData(
@@ -506,46 +519,46 @@ struct BoolArray(
             nulls=self.nulls,
             offset=self.offset,
             bitmap=self.bitmap,
-            buffers=[self.values],
+            buffers=[self.values.buffer],
             children=[],
         )
 
+    def true_count(self) -> Int:
+        """Count True (and non-null) values."""
+        var data_bv = self.values_bitmap().slice(self.offset, self.length)
+        if self.nulls == 0:
+            return data_bv.count_set_bits()
+        var validity_bv = BitmapView(self.bitmap.value()).slice(self.offset, self.length)
+        var count = 0
+        var n = self.length
+        var i = 0
+        while i + 64 <= n:
+            count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
+            i += 64
+        if i < n:
+            var mask = (UInt64(1) << UInt64(n - i)) - 1
+            count += Int(pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask))
+        return count
 
+    def false_count(self) -> Int:
+        """Count False (and non-null) values."""
+        return self.length - self.nulls - self.true_count()
 
-    # def true_count(self) raises -> Int:
-    #     """Count True values. Only valid for BoolArray (PrimitiveArray[bool_]).
-    #     """
-    #     comptime assert (
-    #         Self.T == bool_
-    #     ), "true_count is only valid for BoolArray"
-    #     var data_bv = BitmapView[ImmutExternalOrigin](
-    #         ptr=self.buffer.unsafe_ptr(), offset=self.offset, length=self.length
-    #     )
-    #     if self.nulls == 0:
-    #         return data_bv.count_set_bits()
-    #     var validity_bv = BitmapView(self.bitmap.value())
-    #     var count = 0
-    #     var n = self.length
-    #     var i = 0
-    #     while i + 64 <= n:
-    #         count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
-    #         i += 64
-    #     if i < n:
-    #         var mask = (UInt64(1) << UInt64(n - i)) - 1
-    #         count += Int(
-    #             pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask)
-    #         )
-    #     return count
+    def __eq__(self, other: Self) -> Bool:
+        """Return True if both arrays have the same length, null pattern, and values."""
+        if self.length != other.length or self.nulls != other.nulls:
+            return False
+        for i in range(self.length):
+            var lv = self.is_valid(i)
+            var rv = other.is_valid(i)
+            if lv != rv:
+                return False
+            if lv and self[i] != other[i]:
+                return False
+        return True
 
-    # def false_count(self) raises -> Int:
-    #     """Count False values. Only valid for BoolArray (PrimitiveArray[bool_]).
-    #     """
-    #     comptime assert (
-    #         Self.T == bool_
-    #     ), "false_count is only valid for BoolArray"
-    #     return self.length - self.nulls - self.true_count()
-
-
+    def __ne__(self, other: Self) -> Bool:
+        return not Self.__eq__(self, other)
 
 
 @fieldwise_init
@@ -661,7 +674,9 @@ struct PrimitiveArray[T: DataType](
             Self.T.native != DType.bool
         ), "use values_bitmap() for bool arrays"
         return BufferView[Self.T.native, ImmutExternalOrigin](
-            ptr=self.buffer.unsafe_ptr[Self.T.native](self.offset),
+            ptr=rebind[UnsafePointer[Scalar[Self.T.native], ImmutExternalOrigin]](
+                self.buffer.ptr_at[Self.T.native](self.offset)
+            ),
             length=self.length,
         )
 
@@ -671,12 +686,7 @@ struct PrimitiveArray[T: DataType](
         """Validity bitmap as a BitmapView, or None if all-valid."""
         if self.bitmap:
             var bm = self.bitmap.value()
-            # TODO: should be simpler
-            return BitmapView[ImmutExternalOrigin](
-                ptr=bm.buffer.unsafe_ptr[DType.uint8](),
-                offset=bm.offset + self.offset,
-                length=self.length,
-            )
+            return BitmapView(bm.slice(self.offset, self.length))
         return None
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:

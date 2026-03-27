@@ -17,7 +17,7 @@ Kernel implementations live in their respective modules:
 
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import PrimitiveArray, AnyArray
+from marrow.arrays import BoolArray, PrimitiveArray, AnyArray
 from marrow.buffers import Bitmap
 from marrow.views import BitmapView
 from marrow.dtypes import (
@@ -128,6 +128,37 @@ def binary_array_dispatch[
 
     Returns:
         A new AnyArray wrapping ``PrimitiveArray[OutT]`` with the result.
+    """
+    if left.dtype() != right.dtype():
+        raise Error(
+            t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+        )
+
+    comptime for dtype in numeric_dtypes:
+        if left.dtype() == dtype:
+            return func[dtype](
+                left.as_primitive[dtype](),
+                right.as_primitive[dtype](),
+                ctx,
+            ).to_any()
+    raise Error(t"{name}: unsupported dtype {left.dtype()}")
+
+
+def bool_array_dispatch[
+    name: StringLiteral,
+    func: def[T: DataType](
+        PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
+    ) raises -> BoolArray,
+](
+    left: AnyArray,
+    right: AnyArray,
+    ctx: Optional[DeviceContext] = None,
+) raises -> AnyArray:
+    """Runtime-typed binary dispatch producing a BoolArray result (e.g. comparisons).
+
+    Parameters:
+        name: Operation name used in error messages.
+        func: The typed binary kernel to dispatch to (returns BoolArray).
     """
     if left.dtype() != right.dtype():
         raise Error(

@@ -13,7 +13,7 @@ from std.memory import memcpy
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
-from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
+from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder, StringBuilder
@@ -246,8 +246,8 @@ def _filter_values[
     comptime ELEM = size_of[Scalar[T]]()
     comptime ALL_ONES = ~UInt64(0)
     var buf = Buffer.alloc_uninit(out_len * ELEM)
-    var src = src_buf.unsafe_ptr[T](src_offset)
-    var dst = buf.unsafe_ptr[T]()
+    var src = src_buf.ptr_at[T](src_offset)
+    var dst = buf.ptr_at[T]()
     var out_pos = 0
     var i = sel_start
 
@@ -294,7 +294,7 @@ def _filter_values[
 def filter_[
     T: DataType
 ](
-    array: PrimitiveArray[T], selection: PrimitiveArray[bool_]
+    array: PrimitiveArray[T], selection: BoolArray
 ) raises -> PrimitiveArray[T]:
     """Filter a primitive array, keeping only elements where selection is True.
 
@@ -311,7 +311,7 @@ def filter_[
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values_bitmap()
+    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -324,7 +324,7 @@ def filter_[
             buffer=empty_buf.to_immutable(),
         )
 
-    # Filter validity bitmap (shared by both paths).
+    # Filter validity bitmap.
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
     if array.validity():
@@ -335,35 +335,73 @@ def filter_[
         bm = filtered_bm
         null_count = nc
 
-    # Filter data and return.
-    comptime if T == bool_:
-        var data_bm = array.values_bitmap()
-        var filtered_data, _ = _filter_bits(
-            data_bm, sel_bm, sel_start, sel_end, out_len
+    var result_buf = _filter_values[T.native](
+        array.buffer,
+        array.offset,
+        sel_bm,
+        sel_start,
+        sel_end,
+        out_len,
+    )
+    return PrimitiveArray[T](
+        length=out_len,
+        nulls=null_count,
+        offset=0,
+        bitmap=bm,
+        buffer=result_buf,
+    )
+
+
+def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
+    """Filter a bool array, keeping only elements where selection is True.
+
+    Args:
+        array: The input bool array.
+        selection: Boolean selection mask (True = keep).
+
+    Returns:
+        A new BoolArray containing only the selected elements.
+    """
+    var n = len(array)
+    if n != len(selection):
+        raise Error(
+            t"filter: array length {n} != selection length {len(selection)}"
         )
-        return PrimitiveArray[T](
-            length=out_len,
-            nulls=null_count,
+
+    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
+    var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
+
+    if out_len == 0:
+        var empty_bm = Bitmap.alloc_zeroed(0)
+        return BoolArray(
+            length=0,
+            nulls=0,
             offset=0,
-            bitmap=bm,
-            buffer=filtered_data.buffer,
+            bitmap=None,
+            values=empty_bm.to_immutable(0),
         )
-    else:
-        var result_buf = _filter_values[T.native](
-            array.buffer,
-            array.offset,
-            sel_bm,
-            sel_start,
-            sel_end,
-            out_len,
+
+    # Filter validity bitmap.
+    var bm: Optional[Bitmap[]] = None
+    var null_count = 0
+    if array.bitmap:
+        var val_bm = BitmapView(array.bitmap.value()).slice(array.offset, n)
+        var filtered_bm, nc = _filter_bits(
+            val_bm, sel_bm, sel_start, sel_end, out_len
         )
-        return PrimitiveArray[T](
-            length=out_len,
-            nulls=null_count,
-            offset=0,
-            bitmap=bm,
-            buffer=result_buf,
-        )
+        bm = filtered_bm
+        null_count = nc
+
+    # Filter data.
+    var data_bm = array.values_bitmap().slice(array.offset, n)
+    var filtered_data, _ = _filter_bits(data_bm, sel_bm, sel_start, sel_end, out_len)
+    return BoolArray(
+        length=out_len,
+        nulls=null_count,
+        offset=0,
+        bitmap=bm,
+        values=filtered_data,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +410,7 @@ def filter_[
 
 
 def filter_(
-    array: StringArray, selection: PrimitiveArray[bool_]
+    array: StringArray, selection: BoolArray
 ) raises -> StringArray:
     """Filter a string array, keeping only elements where selection is True.
 
@@ -393,7 +431,7 @@ def filter_(
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values_bitmap()
+    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
@@ -409,8 +447,8 @@ def filter_(
         )
 
     var off = array.offset
-    var offsets_ptr = array.offsets.unsafe_ptr[DType.uint32]()
-    var values_ptr = array.values.unsafe_ptr()
+    var offsets_ptr = array.offsets.ptr_at[DType.uint32]()
+    var values_ptr = array.values.ptr_at()
 
     # Compute total output bytes.
     var total_bytes = 0
@@ -424,8 +462,8 @@ def filter_(
     # TODO: use alloc_uninit to spare zeroing the output buffers
     var out_offsets = Buffer.alloc_zeroed[DType.uint32](out_len + 1)
     var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
-    var out_off_ptr = out_offsets.unsafe_ptr[DType.uint32]()
-    var out_val_ptr = out_values.unsafe_ptr[DType.uint8]()
+    var out_off_ptr = out_offsets.ptr_at[DType.uint32]()
+    var out_val_ptr = out_values.ptr_at[DType.uint8]()
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
 
@@ -530,7 +568,7 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     var mask = selection.as_bool().copy()
 
     if array.dtype() == bool_:
-        return filter_[bool_](array.as_primitive[bool_](), mask).to_any()
+        return filter_(array.as_bool().copy(), mask).to_any()
 
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
@@ -565,23 +603,36 @@ def drop_nulls[
         # All valid: wrap as identity selection
         var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)
-        var selection = PrimitiveArray[bool_](
+        var selection = BoolArray(
             length=len(array),
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=all_true.buffer.to_immutable(),
+            values=all_true.to_immutable(len(array)),
         )
         return filter_[T](array, selection)
-    var bm_view = val.value()
-    var selection = PrimitiveArray[bool_](
+    var selection = BoolArray(
         length=len(array),
         nulls=0,
-        offset=bm_view.bit_offset(),
+        offset=0,
         bitmap=None,
-        buffer=array.bitmap.value().buffer,
+        values=array.bitmap.value(),
     )
     return filter_[T](array, selection)
+
+
+def _drop_nulls_bool(array: BoolArray) raises -> BoolArray:
+    """Drop null elements from a bool array."""
+    if not array.bitmap:
+        return array.copy()
+    var selection = BoolArray(
+        length=len(array),
+        nulls=0,
+        offset=array.offset,
+        bitmap=None,
+        values=array.bitmap.value(),
+    )
+    return filter_(array, selection)
 
 
 def drop_nulls(array: AnyArray) raises -> AnyArray:
@@ -594,7 +645,7 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
         A new AnyArray with null elements removed.
     """
     if array.dtype() == bool_:
-        return drop_nulls[bool_](array.as_primitive[bool_]()).to_any()
+        return _drop_nulls_bool(array.as_bool().copy()).to_any()
 
     comptime for dtype in numeric_dtypes:
         if array.dtype() == dtype:
@@ -628,8 +679,8 @@ def take[
     """
     comptime native = T.native
     var n = len(indices)
-    var src = array.buffer.unsafe_ptr[native](array.offset)
-    var idx_ptr = indices.buffer.unsafe_ptr[int32.native](indices.offset)
+    var src = array.buffer.ptr_at[native](array.offset)
+    var idx_ptr = indices.buffer.ptr_at[int32.native](indices.offset)
     var buf = Buffer.alloc_uninit(Buffer._aligned_size[native](n))
     var out: UnsafePointer[Scalar[native], MutAnyOrigin]
     out = buf.ptr.bitcast[Scalar[native]]()

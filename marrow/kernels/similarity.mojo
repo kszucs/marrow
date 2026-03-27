@@ -39,8 +39,8 @@ def _cosine_similarity_no_nulls[
 
     # Flat values pointer from the child array
     var child_data = vectors.values.to_data()
-    var vp = child_data.buffers[0].unsafe_ptr[native](child_data.offset)
-    var qp = query.buffer.unsafe_ptr[native](query.offset)
+    var vp = child_data.buffers[0].ptr_at[native](child_data.offset)
+    var qp = query.buffer.ptr_at[native](query.offset)
 
     # Pre-compute query norm
     var norm_q = Scalar[native](0)

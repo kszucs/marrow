@@ -327,7 +327,7 @@ struct SwissHashTable[
         Each set bit ``k`` means ``ctrl[pos + k]`` has the same H2 as
         ``h``.  Use ``count_trailing_zeros`` to iterate the matches.
         """
-        var group = self._ctrl.unsafe_ptr().load[DType.uint8, _GROUP_WIDTH](pos)
+        var group = self._ctrl.ptr.load[width=_GROUP_WIDTH](pos)
         return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](Self._h2(h))))
 
     @always_inline
@@ -335,7 +335,7 @@ struct SwissHashTable[
         """Load the 16-byte ctrl group at ``pos`` and return a bitmask
         of empty (``0xFF``) slots.
         """
-        var group = self._ctrl.unsafe_ptr().load[DType.uint8, _GROUP_WIDTH](pos)
+        var group = self._ctrl.ptr.load[width=_GROUP_WIDTH](pos)
         return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY)))
 
     # ------------------------------------------------------------------

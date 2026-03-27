@@ -130,7 +130,7 @@ def _unary[
         in_ptr = array.buffer.aligned_device_ptr[native](array.offset)
     else:
         buf = Buffer.alloc_zeroed[native](length)
-        in_ptr = array.buffer.aligned_unsafe_ptr[native](array.offset)
+        in_ptr = array.buffer.aligned_ptr_at[native](array.offset)
 
     _elementwise_unary[T, func](
         buf.ptr.bitcast[Scalar[native]](), in_ptr, length, ctx
@@ -184,8 +184,8 @@ def _binary[
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
         buf = Buffer.alloc_zeroed[native](length)
         out_ptr = buf.ptr.bitcast[Scalar[native]]()
-        lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
-        rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
+        lhs_ptr = left.buffer.ptr_at[native](left.offset)
+        rhs_ptr = right.buffer.ptr_at[native](right.offset)
 
     _elementwise_binary[T, func](out_ptr, lhs_ptr, rhs_ptr, length, ctx)
 

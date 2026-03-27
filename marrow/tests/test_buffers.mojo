@@ -45,13 +45,13 @@ def test_buffer_init() raises:
 
 
 def test_alloc_bits() raises:
-    # 10 bits → ceildiv(10,8)=2 bytes → aligned to 64
+    # DType.bool is 1 byte per element; 10 bytes → aligned to 64
     var b1 = Buffer.alloc_zeroed[DType.bool](10)
     assert_equal(b1.size, 64)
 
-    # 64*8+1 bits → ceildiv(513,8)=65 bytes → aligned to 128
+    # 513 bytes → aligned to 576
     var b2 = Buffer.alloc_zeroed[DType.bool](64 * 8 + 1)
-    assert_equal(b2.size, 128)
+    assert_equal(b2.size, 576)
 
 
 def test_buffer_grow() raises:
@@ -99,14 +99,15 @@ def test_buffer_swap() raises:
 
 
 def test_bitmap_get_set() raises:
+    # DType.bool stores 1 byte per element (no bit-packing)
     var b = Buffer.alloc_zeroed[DType.bool](10)
     assert_equal(b.size, 64)
 
-    assert_false(Bool((b.ptr[0] >> UInt8(0)) & 1))
+    assert_false(Bool(b.ptr[0]))
     b.unsafe_set[DType.bool](0, True)
-    assert_true(Bool((b.ptr[0] >> UInt8(0)) & 1))
+    assert_true(Bool(b.ptr[0]))
     b.unsafe_set[DType.bool](1, True)
-    assert_true(Bool((b.ptr[0] >> UInt8(1)) & 1))
+    assert_true(Bool(b.ptr[1]))
 
     var frozen = b.to_immutable()
     assert_true(frozen.unsafe_get[DType.bool](0))
@@ -114,9 +115,9 @@ def test_bitmap_get_set() raises:
     assert_false(frozen.unsafe_get[DType.bool](2))
 
 
-def _reset(mut bitmap: Bitmap[True], n_bits: Int) raises:
+def _reset(mut bitmap: Bitmap[mut=True], n_bits: Int) raises:
     bitmap.set_range(0, n_bits, False)
-    assert_bitmap_set(bitmap.unsafe_ptr(), n_bits, [], "after _reset")
+    assert_bitmap_set(bitmap.buffer.ptr, n_bits, [], "after _reset")
 
 
 def test_bitmap_range_set() raises:
@@ -125,28 +126,28 @@ def test_bitmap_range_set() raises:
 
     bitmap.set_range(0, 10, True)
     assert_bitmap_set(
-        bitmap.unsafe_ptr(),
+        bitmap.buffer.ptr,
         n_bits,
         [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         "range 0-10",
     )
     bitmap.set_range(0, 10, False)
-    assert_bitmap_set(bitmap.unsafe_ptr(), n_bits, [], "reset")
+    assert_bitmap_set(bitmap.buffer.ptr, n_bits, [], "reset")
 
     bitmap.set_range(0, 0, True)
-    assert_bitmap_set(bitmap.unsafe_ptr(), n_bits, [], "range 0")
+    assert_bitmap_set(bitmap.buffer.ptr, n_bits, [], "range 0")
 
     var to_test = [0, 1, 7, 8, 15]
     for pos in range(len(to_test)):
         _reset(bitmap, n_bits)
         var start_bit = to_test[pos]
         bitmap.set_range(start_bit, 1, True)
-        assert_bitmap_set(bitmap.unsafe_ptr(), n_bits, [start_bit], "range  1")
+        assert_bitmap_set(bitmap.buffer.ptr, n_bits, [start_bit], "range  1")
         if to_test[pos] < n_bits - 1:
             _reset(bitmap, n_bits)
             bitmap.set_range(start_bit, 2, True)
             assert_bitmap_set(
-                bitmap.unsafe_ptr(),
+                bitmap.buffer.ptr,
                 n_bits,
                 [start_bit, start_bit + 1],
                 "range 2",
@@ -161,7 +162,7 @@ def test_bitmap_extend() raises:
 
     var dst = Bitmap.alloc_zeroed(8)
     dst.extend(src, 0, 6)
-    assert_bitmap_set(dst.unsafe_ptr(), 8, [0, 5], "after extend")
+    assert_bitmap_set(dst.buffer.ptr, 8, [0, 5], "after extend")
 
     # extend into offset position
     var dst2 = Bitmap.alloc_zeroed(8)
@@ -169,7 +170,7 @@ def test_bitmap_extend() raises:
     src2_b.set(0)
     var src2 = src2_b.to_immutable(2)
     dst2.extend(src2, 6, 2)
-    assert_bitmap_set(dst2.unsafe_ptr(), 8, [6], "extend at offset 6")
+    assert_bitmap_set(dst2.buffer.ptr, 8, [6], "extend at offset 6")
 
 
 def test_buffer_finish() raises:
@@ -267,25 +268,25 @@ def test_buffer_builder_resize_reallocates_when_larger() raises:
 def test_bitmap_builder_resize_noop_same_capacity() raises:
     # BitmapBuilder.resize delegates to Buffer[mut=True]; same capacity is a no-op.
     var bm = Bitmap.alloc_zeroed(64)
-    var ptr_before = bm._buffer.ptr
+    var ptr_before = bm.buffer.ptr
     bm.resize(64)
-    assert_equal(bm._buffer.ptr, ptr_before)
+    assert_equal(bm.buffer.ptr, ptr_before)
 
 
 def test_bitmap_builder_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a 64-byte block → no-op.
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm._buffer.ptr
+    var ptr_before = bm.buffer.ptr
     bm.resize(511)
-    assert_equal(bm._buffer.ptr, ptr_before)
+    assert_equal(bm.buffer.ptr, ptr_before)
 
 
 def test_bitmap_builder_resize_reallocates_when_larger() raises:
     # 513 bits require a second 64-byte block → reallocation.
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm._buffer.ptr
+    var ptr_before = bm.buffer.ptr
     bm.resize(513)
-    assert_true(bm._buffer.ptr != ptr_before)
+    assert_true(bm.buffer.ptr != ptr_before)
 
 
 def test_buffer_eq_equal() raises:
@@ -312,44 +313,44 @@ def test_buffer_eq_different_size() raises:
     assert_false(b1.to_immutable() == b2.to_immutable())
 
 
-def test_aligned_unsafe_ptr_zero_offset() raises:
-    """With offset=0, aligned_unsafe_ptr equals unsafe_ptr."""
+def test_aligned_ptr_at_zero_offset() raises:
+    """With offset=0, aligned_ptr_at equals ptr_at."""
     var bb = Buffer.alloc_zeroed[DType.int64](16)
     var buf = bb.to_immutable()
-    var ptr = buf.unsafe_ptr[DType.int64](0)
-    var aligned = buf.aligned_unsafe_ptr[DType.int64](0)
+    var ptr = buf.ptr_at[DType.int64](0)
+    var aligned = buf.aligned_ptr_at[DType.int64](0)
     assert_true(ptr == aligned)
 
 
-def test_aligned_unsafe_ptr_aligned_offset() raises:
+def test_aligned_ptr_at_aligned_offset() raises:
     """Offset already on a 64-byte boundary stays unchanged."""
     # 64 bytes / 8 bytes per int64 = 8 elements per 64-byte block
     var bb = Buffer.alloc_zeroed[DType.int64](32)
     var buf = bb.to_immutable()
-    var aligned = buf.aligned_unsafe_ptr[DType.int64](8)
-    var expected = buf.unsafe_ptr[DType.int64](8)
+    var aligned = buf.aligned_ptr_at[DType.int64](8)
+    var expected = buf.ptr_at[DType.int64](8)
     assert_true(aligned == expected)
 
 
-def test_aligned_unsafe_ptr_unaligned_offset() raises:
+def test_aligned_ptr_at_unaligned_offset() raises:
     """Offset in the middle of a 64-byte block rounds down."""
     # int64: 8 bytes each, 64/8 = 8 elements per block
     # offset=5 → byte offset=40, align_down(40,64)=0 → element 0
     var bb = Buffer.alloc_zeroed[DType.int64](32)
     var buf = bb.to_immutable()
-    var aligned = buf.aligned_unsafe_ptr[DType.int64](5)
-    var expected = buf.unsafe_ptr[DType.int64](0)
+    var aligned = buf.aligned_ptr_at[DType.int64](5)
+    var expected = buf.ptr_at[DType.int64](0)
     assert_true(aligned == expected)
 
 
-def test_aligned_unsafe_ptr_second_block() raises:
+def test_aligned_ptr_at_second_block() raises:
     """Offset in the second 64-byte block rounds to start of that block."""
     # int32: 4 bytes each, 64/4 = 16 elements per block
     # offset=20 → byte offset=80, align_down(80,64)=64 → element 16
     var bb = Buffer.alloc_zeroed[DType.int32](64)
     var buf = bb.to_immutable()
-    var aligned = buf.aligned_unsafe_ptr[DType.int32](20)
-    var expected = buf.unsafe_ptr[DType.int32](16)
+    var aligned = buf.aligned_ptr_at[DType.int32](20)
+    var expected = buf.ptr_at[DType.int32](16)
     assert_true(aligned == expected)
 
 

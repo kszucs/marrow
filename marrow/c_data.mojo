@@ -611,14 +611,14 @@ struct CArrowArray(Copyable, Movable):
         if data_heap[].bitmap:
             buffers[0] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(
-                    data_heap[].bitmap.value().buffer.unsafe_ptr()
+                    data_heap[].bitmap.value().buffer.ptr
                 )
             )
         else:
             buffers[0] = OpaquePointer[MutAnyOrigin]()
         for i in range(len(data_heap[].buffers)):
             buffers[1 + i] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(data_heap[].buffers[i].unsafe_ptr())
+                unsafe_from_address=Int(data_heap[].buffers[i].ptr)
             )
 
         # Recursively build children; each child is moved onto the heap so the

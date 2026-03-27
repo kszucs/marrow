@@ -28,13 +28,13 @@ from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
-from ..arrays import PrimitiveArray, StringArray, AnyArray, StructArray
-from ..builders import PrimitiveBuilder
+from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
 from ..views import BitmapView
 from ..dtypes import DataType, bool_ as bool_dt
-from . import bitmap_and, binary_array_dispatch
-from .helpers import has_accelerator_support
+from ..buffers import Bitmap
+from . import bitmap_and, bool_array_dispatch
+
 
 # ---------------------------------------------------------------------------
 # Elementwise compare + bit-pack — pointers as params for GPU DevicePassable
@@ -112,7 +112,7 @@ def _binary_cmp[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Binary comparison kernel — single-pass compare + bit-pack (CPU and GPU).
     """
     if len(left) != len(right):
@@ -134,8 +134,8 @@ def _binary_cmp[
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         out_buf = Buffer.alloc_zeroed[DType.bool](length)
-        lhs_ptr = left.buffer.unsafe_ptr[native](left.offset)
-        rhs_ptr = right.buffer.unsafe_ptr[native](right.offset)
+        lhs_ptr = left.buffer.ptr_at[native](left.offset)
+        rhs_ptr = right.buffer.ptr_at[native](right.offset)
 
     _elementwise_cmp_pack[T, func](
         out_buf.ptr,
@@ -149,12 +149,12 @@ def _binary_cmp[
     if ctx:
         result_buf = result_buf.to_cpu(ctx.value())
 
-    return PrimitiveArray[bool_dt](
+    return BoolArray(
         length=length,
         nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=result_buf,
+        values=Bitmap[mut=False](result_buf, 0, length),
     )
 
 
@@ -198,7 +198,7 @@ def equal[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise equality: result[i] = left[i] == right[i]."""
     return _binary_cmp[T, _eq[T.native, _], "equal"](left, right, ctx)
 
@@ -209,7 +209,7 @@ def not_equal[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
     return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right, ctx)
 
@@ -220,7 +220,7 @@ def less[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
     return _binary_cmp[T, _lt[T.native, _], "less"](left, right, ctx)
 
@@ -231,7 +231,7 @@ def less_equal[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
     return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right, ctx)
 
@@ -242,7 +242,7 @@ def greater[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
     return _binary_cmp[T, _gt[T.native, _], "greater"](left, right, ctx)
 
@@ -253,7 +253,7 @@ def greater_equal[
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
     return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right, ctx)
 
@@ -265,24 +265,25 @@ def greater_equal[
 
 def equal(
     left: StringArray, right: StringArray
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise string equality."""
     var n = len(left)
     if len(right) != n:
         raise Error("equal: string arrays must have the same length")
-    var builder = PrimitiveBuilder[bool_dt](capacity=n)
     var bm = bitmap_and(left.bitmap, right.bitmap)
+    var bm_builder = Bitmap.alloc_zeroed(n)
     for i in range(n):
         var eq = String(left.unsafe_get(UInt(i))) == String(
             right.unsafe_get(UInt(i))
         )
-        builder.unsafe_append(Scalar[bool_dt.native](eq))
-    return PrimitiveArray[bool_dt](
+        if eq:
+            bm_builder.set(i)
+    return BoolArray(
         length=n,
         nulls=n - BitmapView(bm.value()).count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=builder.finish().buffer,
+        values=bm_builder.to_immutable(n),
     )
 
 
@@ -295,12 +296,12 @@ def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed equal."""
     if left.dtype().is_string():
         return equal(left.as_string(), right.as_string()).to_any()
-    return binary_array_dispatch["equal", bool_dt, equal[_]](left, right)
+    return bool_array_dispatch["equal", equal[_]](left, right)
 
 
 def equal(
     left: StructArray, right: StructArray
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Element-wise struct equality: all corresponding columns must match.
 
     Returns a boolean array where element ``i`` is True iff
@@ -309,43 +310,35 @@ def equal(
     from .boolean import and_
 
     var n_keys = len(left.children)
-    var mask = equal(left.children[0].copy(), right.children[0].copy())
+    var mask = equal(left.children[0].copy(), right.children[0].copy()).as_bool().copy()
     for k in range(1, n_keys):
         mask = and_(
-            mask.as_primitive[bool_dt]().copy(),
-            equal(left.children[k].copy(), right.children[k].copy())
-            .as_primitive[bool_dt]()
-            .copy(),
+            mask,
+            equal(left.children[k].copy(), right.children[k].copy()).as_bool().copy(),
         )
-    return mask.as_primitive[bool_dt]().copy()
+    return mask^
 
 
 def not_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed not_equal."""
-    return binary_array_dispatch["not_equal", bool_dt, not_equal[_]](
-        left, right
-    )
+    return bool_array_dispatch["not_equal", not_equal[_]](left, right)
 
 
 def less(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed less."""
-    return binary_array_dispatch["less", bool_dt, less[_]](left, right)
+    return bool_array_dispatch["less", less[_]](left, right)
 
 
 def less_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed less_equal."""
-    return binary_array_dispatch["less_equal", bool_dt, less_equal[_]](
-        left, right
-    )
+    return bool_array_dispatch["less_equal", less_equal[_]](left, right)
 
 
 def greater(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed greater."""
-    return binary_array_dispatch["greater", bool_dt, greater[_]](left, right)
+    return bool_array_dispatch["greater", greater[_]](left, right)
 
 
 def greater_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed greater_equal."""
-    return binary_array_dispatch["greater_equal", bool_dt, greater_equal[_]](
-        left, right
-    )
+    return bool_array_dispatch["greater_equal", greater_equal[_]](left, right)
