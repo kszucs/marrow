@@ -419,6 +419,136 @@ struct ArrayData(Copyable, Movable):
 
 
 @fieldwise_init
+struct BoolArray(
+    Array,
+    ConvertibleFromPython,
+    ConvertibleToPython,
+):
+    """Immutable array of boolean values, packed as bits in a Bitmap buffer.
+
+    Null values are represented by a separate validity bitmap (if any), not
+    by a special bit pattern in the data buffer.  This allows for efficient
+    boolean operations using bitwise logic, without needing to check for nulls.
+    """
+
+    var length: Int
+    var nulls: Int
+    var offset: Int
+    var bitmap: Optional[Bitmap[mut=False]]
+    var values: Bitmap[mut=False]
+
+    def __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[Self]()[].copy()
+
+    def __init__(out self, data: ArrayData) raises:
+        if len(data.buffers) != 1:
+            raise Error("BoolArray requires exactly one buffer")
+        self = Self(
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            bitmap=data.bitmap,
+            values=data.buffers[0],
+        )
+
+    def __str__(self) -> String:
+        return String.write(self)
+
+    def type(self) -> DataType:
+        return bool_
+
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
+        """Zero-copy slice of this array.
+
+        Matches PyArrow's Array.slice(offset, length) API.
+        """
+        var actual_length = length if length >= 0 else self.length - offset
+        return Self(
+            length=actual_length,
+            nulls=self.nulls,
+            offset=self.offset + offset,
+            bitmap=self.bitmap,
+            values=self.values,
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("BoolArray([")
+        for i in range(self.length):
+            if i > 0:
+                writer.write(", ")
+            if i >= 10:
+                writer.write("...")
+                break
+            if self.is_valid(i):
+                writer.write("True" if self.values_bitmap().test(self.offset + i) else "False")
+            else:
+                writer.write("NULL")
+        writer.write("])")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def null_count(self) -> Int:
+        return self.nulls
+
+    def is_valid(self, index: Int) -> Bool:
+        if not self.bitmap:
+            return True
+        return self.bitmap[index]
+
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self)
+
+    def to_data(self) raises -> ArrayData:
+        return ArrayData(
+            dtype=bool_,
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            buffers=[self.values],
+            children=[],
+        )
+
+
+
+    # def true_count(self) raises -> Int:
+    #     """Count True values. Only valid for BoolArray (PrimitiveArray[bool_]).
+    #     """
+    #     comptime assert (
+    #         Self.T == bool_
+    #     ), "true_count is only valid for BoolArray"
+    #     var data_bv = BitmapView[ImmutExternalOrigin](
+    #         ptr=self.buffer.unsafe_ptr(), offset=self.offset, length=self.length
+    #     )
+    #     if self.nulls == 0:
+    #         return data_bv.count_set_bits()
+    #     var validity_bv = BitmapView(self.bitmap.value())
+    #     var count = 0
+    #     var n = self.length
+    #     var i = 0
+    #     while i + 64 <= n:
+    #         count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
+    #         i += 64
+    #     if i < n:
+    #         var mask = (UInt64(1) << UInt64(n - i)) - 1
+    #         count += Int(
+    #             pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask)
+    #         )
+    #     return count
+
+    # def false_count(self) raises -> Int:
+    #     """Count False values. Only valid for BoolArray (PrimitiveArray[bool_]).
+    #     """
+    #     comptime assert (
+    #         Self.T == bool_
+    #     ), "false_count is only valid for BoolArray"
+    #     return self.length - self.nulls - self.true_count()
+
+
+
+
+@fieldwise_init
 struct PrimitiveArray[T: DataType](
     Array,
     ConvertibleFromPython,
@@ -535,19 +665,6 @@ struct PrimitiveArray[T: DataType](
             length=self.length,
         )
 
-    def values_bitmap(
-        self,
-    ) -> BitmapView[ImmutExternalOrigin]:
-        """Bool data as a BitmapView (only for PrimitiveArray[bool_])."""
-        comptime assert (
-            Self.T == bool_
-        ), "values_bitmap is only valid for BoolArray"
-        return BitmapView[ImmutExternalOrigin](
-            ptr=self.buffer.unsafe_ptr[DType.uint8](),
-            offset=self.offset,
-            length=self.length,
-        )
-
     def validity(
         self,
     ) -> Optional[BitmapView[ImmutExternalOrigin]]:
@@ -571,39 +688,6 @@ struct PrimitiveArray[T: DataType](
 
     def null_count(self) -> Int:
         return self.nulls
-
-    def true_count(self) raises -> Int:
-        """Count True values. Only valid for BoolArray (PrimitiveArray[bool_]).
-        """
-        comptime assert (
-            Self.T == bool_
-        ), "true_count is only valid for BoolArray"
-        var data_bv = BitmapView[ImmutExternalOrigin](
-            ptr=self.buffer.unsafe_ptr(), offset=self.offset, length=self.length
-        )
-        if self.nulls == 0:
-            return data_bv.count_set_bits()
-        var validity_bv = BitmapView(self.bitmap.value())
-        var count = 0
-        var n = self.length
-        var i = 0
-        while i + 64 <= n:
-            count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
-            i += 64
-        if i < n:
-            var mask = (UInt64(1) << UInt64(n - i)) - 1
-            count += Int(
-                pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask)
-            )
-        return count
-
-    def false_count(self) raises -> Int:
-        """Count False values. Only valid for BoolArray (PrimitiveArray[bool_]).
-        """
-        comptime assert (
-            Self.T == bool_
-        ), "false_count is only valid for BoolArray"
-        return self.length - self.nulls - self.true_count()
 
     def to_device(self, ctx: DeviceContext) raises -> PrimitiveArray[Self.T]:
         """Upload array data to the GPU."""
@@ -683,7 +767,7 @@ struct PrimitiveArray[T: DataType](
         )
 
 
-comptime BoolArray = PrimitiveArray[bool_]
+# comptime BoolArray = PrimitiveArray[bool_]
 comptime Int8Array = PrimitiveArray[int8]
 comptime Int16Array = PrimitiveArray[int16]
 comptime Int32Array = PrimitiveArray[int32]

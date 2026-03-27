@@ -524,7 +524,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
     # --- CPU/device checks (mut=False only) ---
 
     @always_inline
-    def is_cpu(self: Buffer[mut=False]) -> Bool:
+    def is_cpu(self) -> Bool:
         """Return True if the buffer is CPU-accessible (ptr is non-null).
 
         True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
@@ -532,12 +532,13 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         return self.ptr.__bool__()
 
     @always_inline
-    def is_device(self: Buffer[mut=False]) -> Bool:
+    def is_device(self) -> Bool:
         """Return True if the buffer lives on a GPU device (ptr is null)."""
+        # TODO: these are not entirely correct conditions
         return not self.ptr.__bool__()
 
     @always_inline
-    def is_host(self: Buffer[mut=False]) -> Bool:
+    def is_host(self) -> Bool:
         """Return True if the buffer is pinned host memory (HOST kind)."""
         return self._owner[]._host.__bool__()
 
@@ -689,34 +690,6 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         ctx.synchronize()
         return builder.to_immutable()
 
-    # --- Equatable ---
-
-    # TODO: remove this method, view already implements it
-    def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
-        """Return True if both buffers have identical CPU-accessible contents.
-
-        Compares full backing bytes using SIMD 64-byte blocks.
-        Returns False if either buffer is device-resident (no CPU access).
-        """
-        if not self.is_cpu() or not other.is_cpu():
-            return False
-        if self.size != other.size:
-            return False
-        comptime width = simd_byte_width()
-        comptime unroll = 64 // width
-        var pa = self.ptr
-        var pb = other.ptr
-        for i in range(0, self.size, 64):
-            comptime for j in range(unroll):
-                comptime k = j * width
-                if (pa + i + k).load[width=width]() != (pb + i + k).load[
-                    width=width
-                ]():
-                    return False
-        return True
-
-    # --- Writable ---
-
     def write_to[W: Writer](self, mut writer: W):
         """Write the buffer's bytes to a Writer."""
         writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")
@@ -839,6 +812,13 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
         self.buffer.ptr[byte_index] = self.buffer.ptr[byte_index] & ~bit_mask
+
+    @always_inline
+    def test(self, index: Int) -> Bool:
+        """Return True if the bit at `index` is set to 1."""
+        var byte_index = index // 8
+        var bit_mask = UInt8(1 << (index % 8))
+        return (self.buffer.ptr[byte_index] & bit_mask) != 0
 
     def set_range(mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`.
@@ -1029,4 +1009,5 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
         The builder is reset to empty and can be reused after this call.
         """
-        return Bitmap[](self.buffer.to_immutable(), 0, length)
+        # TODO: should consume self
+        return Bitmap[mut=False](self.buffer.to_immutable(), 0, length)
