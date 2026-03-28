@@ -804,7 +804,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     """Bit-packed validity bitmap with parametric mutability.
 
     `Bitmap[mut=True]`  — mutable builder. Use `alloc()` factory.
-                          Write via `set`, `clear`, `set_range`, `deposit_bits`,
+                          Write via `set`, `clear`, `set_range`,
                           `extend`, `resize`.
                           `to_immutable(length)` freezes to `Bitmap[mut=False]`.
 
@@ -902,29 +902,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     # def unsafe_ptr(self) -> UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]:
     #     """Return the raw byte pointer (mutable for Bitmap[True], immutable for Bitmap[False])."""
     #     return self.buffer.ptr
-
-    @always_inline
-    def deposit_bits(mut self: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count: Int):
-        """Deposit `count` LSBs from `bits` into the builder at `bitoffset`.
-
-        The builder must be zero-filled (from `alloc`), as this uses OR to set
-        bits. Handles arbitrary bit alignment — writes up to 9 bytes when the
-        64-bit value straddles a byte boundary.
-        """
-        if count == 0:
-            return
-        var dst = self.buffer.ptr
-        var byte_idx = bitoffset >> 3
-        var bit_off = bitoffset & 7
-        var shifted = bits << UInt64(bit_off)
-        # OR the low 8 bytes.
-        var ptr64 = (dst + byte_idx).bitcast[UInt64]()
-        ptr64.store[alignment=1](ptr64.load[alignment=1]() | shifted)
-        # Handle overflow into the 9th byte when shifted bits spill past 64.
-        if bit_off > 0 and bit_off + count > 64:
-            dst[byte_idx + 8] = dst[byte_idx + 8] | UInt8(
-                bits >> UInt64(64 - bit_off)
-            )
 
     def set(mut self: Bitmap[mut=True], index: Int):
         """Set the bit at `index` to 1."""

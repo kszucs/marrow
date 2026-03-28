@@ -16,7 +16,7 @@ from marrow.dtypes import *
 from marrow.buffers import Buffer
 from marrow.buffers import Bitmap
 from marrow.kernels.filter import drop_nulls
-from marrow.kernels.boolean import count_true, count_false
+
 from std.reflection import call_location
 
 
@@ -1161,36 +1161,6 @@ def test_fixed_size_list_slice() raises:
     ref first = s[0].as_int32()
     assert_equal(first[0], 3)
     assert_equal(first[1], 4)
-
-
-# ---------------------------------------------------------------------------
-# BoolArray true_count / false_count
-# ---------------------------------------------------------------------------
-
-
-def test_bool_true_count() raises:
-    var a = array([True, True, False, True, False])
-    assert_equal(count_true(a), 3)
-    assert_equal(count_false(a), 2)
-
-
-def test_bool_true_count_with_nulls() raises:
-    var a = array([True, None, False, True])
-    assert_equal(count_true(a), 2)
-    assert_equal(count_false(a), 1)
-    assert_equal(a.null_count(), 1)
-
-
-def test_bool_all_false() raises:
-    var a = array([False, False, False])
-    assert_equal(count_true(a), 0)
-    assert_equal(count_false(a), 3)
-
-
-def test_bool_all_true() raises:
-    var a = array([True, True, True])
-    assert_equal(count_true(a), 3)
-    assert_equal(count_false(a), 0)
 
 
 # ---------------------------------------------------------------------------

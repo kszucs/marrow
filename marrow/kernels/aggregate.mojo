@@ -18,7 +18,6 @@ from std.algorithm.reduction import (
 from std.utils.index import Index, IndexList
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
-from ..views import BitmapView
 from ..dtypes import (
     DataType,
     numeric_dtypes,
@@ -230,18 +229,18 @@ def max_(array: AnyArray) raises -> AnyScalar:
 def any_(array: BoolArray) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
-    var data_bv = array.values().slice(array.offset, n)
+    var data_bv = array.values()
     if not array.bitmap:
         return Bool(data_bv)
-    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)
+    var validity_bv = array.validity().value()
     var i = 0
     while i + 64 <= n:
-        if (data_bv.load_word(i) & validity_bv.load_word(i)) != 0:
+        if (data_bv.load[DType.uint64](i) & validity_bv.load[DType.uint64](i)) != 0:
             return True
         i += 64
     if i < n:
         var mask = (UInt64(1) << UInt64(n - i)) - 1
-        if (data_bv.load_word(i) & validity_bv.load_word(i)) & mask != 0:
+        if (data_bv.load[DType.uint64](i) & validity_bv.load[DType.uint64](i)) & mask != 0:
             return True
     return False
 
@@ -249,19 +248,19 @@ def any_(array: BoolArray) raises -> Bool:
 def all_(array: BoolArray) raises -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     var n = len(array)
-    var data_bv = array.values().slice(array.offset, n)
+    var data_bv = array.values()
     if not array.bitmap:
         return data_bv.all_set()
-    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)
+    var validity_bv = array.validity().value()
     var i = 0
     while i + 64 <= n:
-        var v = validity_bv.load_word(i)
-        if (data_bv.load_word(i) & v) != v:
+        var v = validity_bv.load[DType.uint64](i)
+        if (data_bv.load[DType.uint64](i) & v) != v:
             return False
         i += 64
     if i < n:
         var mask = (UInt64(1) << UInt64(n - i)) - 1
-        var v = validity_bv.load_word(i) & mask
-        if (data_bv.load_word(i) & v) != v:
+        var v = validity_bv.load[DType.uint64](i) & mask
+        if (data_bv.load[DType.uint64](i) & v) != v:
             return False
     return True

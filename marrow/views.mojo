@@ -325,8 +325,8 @@ struct BitmapView[
         ).cast[DType.bool]()
 
     @always_inline
-    def load_word(self, index: Int) -> UInt64:
-        """Load 64 bits starting at logical position ``index``.
+    def load[T: DType](self, index: Int) -> Scalar[T]:
+        """Load ``sizeof[T]*8`` bits starting at logical position ``index``.
 
         Handles the view's bit offset correctly. Safe because Arrow buffers
         are 64-byte padded.
@@ -334,8 +334,8 @@ struct BitmapView[
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
-        var raw = (self._data + byte_idx).bitcast[UInt64]().load[alignment=1]()
-        return raw >> UInt64(bit_off)
+        var raw = (self._data + byte_idx).bitcast[T]().load[alignment=1]()
+        return raw >> Scalar[T](bit_off)
 
     # --- Slicing ---
 
@@ -512,13 +512,13 @@ struct BitmapView[
         # Word-level XOR comparison.
         var i = 0
         while i + 64 <= self._len:
-            if self.load_word(i) ^ other.load_word(i) != 0:
+            if self.load[DType.uint64](i) ^ other.load[DType.uint64](i) != 0:
                 return False
             i += 64
         if i < self._len:
             var tail = self._len - i
             var mask = (UInt64(1) << UInt64(tail)) - 1
-            if (self.load_word(i) ^ other.load_word(i)) & mask != 0:
+            if (self.load[DType.uint64](i) ^ other.load[DType.uint64](i)) & mask != 0:
                 return False
         return True
 

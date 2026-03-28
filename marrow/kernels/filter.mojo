@@ -86,8 +86,6 @@ def _filter_dense[
         offset += Int(pop_count(byte))
 
 
-# @always_inline
-@no_inline
 def _filter_block[
     T: DType,
     SPARSE_THRESHOLD: Int = 24,
@@ -142,6 +140,26 @@ def _pext(val: UInt64, mask: UInt64) -> UInt64:
 # ---------------------------------------------------------------------------
 
 
+@always_inline
+def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count: Int):
+    """Deposit `count` LSBs from `bits` into a zeroed bitmap at `bitoffset`.
+
+    Uses OR to set bits — the bitmap must be zero-initialised (via `alloc_zeroed`).
+    Handles arbitrary bit alignment, writing up to 9 bytes when the 64-bit value
+    straddles a byte boundary.
+    """
+    if count == 0:
+        return
+    var dst = bm.buffer.ptr
+    var byte_idx = bitoffset >> 3
+    var bit_off = bitoffset & 7
+    var shifted = bits << UInt64(bit_off)
+    var ptr64 = (dst + byte_idx).bitcast[UInt64]()
+    ptr64.store[alignment=1](ptr64.load[alignment=1]() | shifted)
+    if bit_off > 0 and bit_off + count > 64:
+        dst[byte_idx + 8] = dst[byte_idx + 8] | UInt8(bits >> UInt64(64 - bit_off))
+
+
 def _filter_bits(
     src: BitmapView[_],
     sel: BitmapView[_],
@@ -151,7 +169,7 @@ def _filter_bits(
 ) -> Tuple[Bitmap[], Int]:
     """Filter a bitmap, keeping bits where selection is set.
 
-    Uses pext + deposit_bits in 64-bit blocks with run-merge for all-ones
+    Uses pext + _deposit_bits in 64-bit blocks with run-merge for all-ones
     and all-zeros blocks.  Works for both validity bitmaps and bool data.
 
     Args:
@@ -173,31 +191,31 @@ def _filter_bits(
     var i = sel_start
 
     while i + 64 <= sel_end:
-        var sel_word = sel.load_word(i)
+        var sel_word = sel.load[DType.uint64](i)
         if sel_word == 0:
             i += 64
-            while i + 64 <= sel_end and sel.load_word(i) == 0:
+            while i + 64 <= sel_end and sel.load[DType.uint64](i) == 0:
                 i += 64
             continue
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load_word(i) == ALL_ONES:
+            while i + 64 <= sel_end and sel.load[DType.uint64](i) == ALL_ONES:
                 i += 64
             var j = run_start
             while j < i:
-                var src_word = src.load_word(j)
-                builder.deposit_bits(bm_pos, src_word, 64)
+                var src_word = src.load[DType.uint64](j)
+                _deposit_bits(builder, bm_pos, src_word, 64)
                 zero_count += 64 - Int(pop_count(src_word))
                 bm_pos += 64
                 j += 64
             continue
 
         # Mixed block: pext + deposit.
-        var src_word = src.load_word(i)
+        var src_word = src.load[DType.uint64](i)
         var count = Int(pop_count(sel_word))
         var compressed = _pext(src_word, sel_word)
-        builder.deposit_bits(bm_pos, compressed, count)
+        _deposit_bits(builder, bm_pos, compressed, count)
         zero_count += count - Int(pop_count(compressed))
         bm_pos += count
         i += 64
@@ -206,12 +224,12 @@ def _filter_bits(
     if i < sel_end:
         var tail = sel_end - i
         var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load_word(i) & mask
+        var sel_word = sel.load[DType.uint64](i) & mask
         if sel_word != 0:
-            var src_word = src.load_word(i)
+            var src_word = src.load[DType.uint64](i)
             var count = Int(pop_count(sel_word))
             var compressed = _pext(src_word, sel_word)
-            builder.deposit_bits(bm_pos, compressed, count)
+            _deposit_bits(builder, bm_pos, compressed, count)
             zero_count += count - Int(pop_count(compressed))
 
     builder.length = out_len
@@ -253,17 +271,18 @@ def _filter_values[
     var i = sel_start
 
     while i + 64 <= sel_end:
-        var sel_word = sel.load_word(i)
+        var sel_word = sel.load[DType.uint64](i)
         if sel_word == 0:
             i += 64
-            while i + 64 <= sel_end and sel.load_word(i) == 0:
+            while i + 64 <= sel_end and sel.load[DType.uint64](i) == 0:
                 i += 64
             continue
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load_word(i) == ALL_ONES:
+            while i + 64 <= sel_end and sel.load[DType.uint64](i) == ALL_ONES:
                 i += 64
+            # TODO: use buffer.extend()
             memcpy(
                 dest=(dst + out_pos).bitcast[UInt8](),
                 src=(src + run_start).bitcast[UInt8](),
@@ -278,7 +297,7 @@ def _filter_values[
     if i < sel_end:
         var tail = sel_end - i
         var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load_word(i) & mask
+        var sel_word = sel.load[DType.uint64](i) & mask
         if sel_word != 0:
             out_pos += _filter_block[T, SPARSE_THRESHOLD=64](
                 dst, out_pos, src, i, sel_word
@@ -502,6 +521,7 @@ def filter_(
             var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
             var run_bytes = src_byte_end - src_byte_start
             if run_bytes > 0:
+                # TODO: use buffer.extend()
                 memcpy(
                     dest=out_val_ptr + Int(byte_pos) - run_bytes,
                     src=values_ptr + src_byte_start,
@@ -536,6 +556,7 @@ def filter_(
             var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
             var run_bytes = src_byte_end - src_byte_start
             if run_bytes > 0:
+                # TODO: use buffer.extend()
                 memcpy(
                     dest=out_val_ptr + Int(byte_pos) - run_bytes,
                     src=values_ptr + src_byte_start,

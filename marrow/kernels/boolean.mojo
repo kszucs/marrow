@@ -1,34 +1,11 @@
 """Boolean and bitwise kernels."""
 
-from std.bit import pop_count
+
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
 from ..views import BitmapView
-
-
-def count_true(array: BoolArray) -> Int:
-    """Count True (and non-null) values in a bit-packed boolean array."""
-    var data_bv = array.values()
-    if array.nulls == 0:
-        return data_bv.count_set_bits()
-    var validity_bv = array.validity()
-    var count = 0
-    var n = array.length
-    var i = 0
-    while i + 64 <= n:
-        count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
-        i += 64
-    if i < n:
-        var mask = (UInt64(1) << UInt64(n - i)) - 1
-        count += Int(pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask))
-    return count
-
-
-def count_false(array: BoolArray) -> Int:
-    """Count False (and non-null) values in a bit-packed boolean array."""
-    return array.length - array.nulls - count_true(array)
 
 
 def and_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:

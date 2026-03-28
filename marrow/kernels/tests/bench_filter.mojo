@@ -144,42 +144,6 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     return Float64(total) / Float64(iters) / Float64(n_blocks)
 
 
-# ---------------------------------------------------------------------------
-# Bitmap.load_word micro-benchmarks
-# ---------------------------------------------------------------------------
-
-
-def _bench_load_word(
-    n_words: Int, bit_offset: Int, iters: Int
-) raises -> Float64:
-    """Benchmark Bitmap.load_word by reading n_words consecutive words.
-
-    Constructs a bitmap with the given bit_offset and reads n_words words
-    starting at logical position 0, measuring the average ns per word.
-    """
-    # Build a bitmap large enough to hold all words (with bit_offset headroom)
-    var n_bits = bit_offset + n_words * 64 + 64  # +64 padding
-    var builder = Bitmap.alloc_zeroed(n_bits)
-    builder.set_range(0, n_bits, True)
-    var bm = builder.to_immutable()
-    # Wrap with a bit offset to exercise the shift path
-    var bm_view = BitmapView(Bitmap(bm._buffer, bit_offset, n_bits - bit_offset))
-
-    for _ in range(3):
-        var acc = UInt64(0)
-        for w in range(n_words):
-            acc |= bm_view.load_word(w * 64)
-        keep(Int(acc))
-
-    var t0 = perf_counter_ns()
-    for _ in range(iters):
-        var acc = UInt64(0)
-        for w in range(n_words):
-            acc |= bm_view.load_word(w * 64)
-        keep(Int(acc))
-    var total = perf_counter_ns() - t0
-    return Float64(total) / Float64(iters) / Float64(n_words)
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -237,17 +201,3 @@ def main() raises:
         var ns = _bench_block(w, n_blocks, blk_iters)
         var pc = Int(pop_count(w))
         print(t"  clustered_{rpcts[pi]}pct            {ns} ns   {pc}")
-
-    # ── Bitmap.load_word ─────────────────────────────────────────────────
-    comptime lw_n_words = 1024  # 1024 words × 64 = 64k bits per iteration
-    comptime lw_iters = 2000
-
-    print()
-    print("=== Bitmap.load_word — varying bit_offset ===")
-    print("bit_offset  ns/word")
-    print("----------  -------")
-
-    comptime offsets = (0, 1, 3, 7, 8, 32, 63)
-    comptime for oi in range(7):
-        var ns = _bench_load_word(lw_n_words, offsets[oi], lw_iters)
-        print(t"  {offsets[oi]}           {ns} ns")
