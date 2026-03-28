@@ -158,7 +158,7 @@ def test_bitmap_extend() raises:
     var src_b = Bitmap.alloc_zeroed(6)
     src_b.set(0)
     src_b.set(5)
-    var src = src_b.to_immutable(6)
+    var src = src_b.to_immutable()
 
     var dst = Bitmap.alloc_zeroed(8)
     dst.extend(src, 0, 6)
@@ -168,7 +168,7 @@ def test_bitmap_extend() raises:
     var dst2 = Bitmap.alloc_zeroed(8)
     var src2_b = Bitmap.alloc_zeroed(2)
     src2_b.set(0)
-    var src2 = src2_b.to_immutable(2)
+    var src2 = src2_b.to_immutable()
     dst2.extend(src2, 6, 2)
     assert_bitmap_set(dst2.buffer.ptr, 8, [6], "extend at offset 6")
 

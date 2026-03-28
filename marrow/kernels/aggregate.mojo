@@ -230,7 +230,7 @@ def max_(array: AnyArray) raises -> AnyScalar:
 def any_(array: BoolArray) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
-    var data_bv = array.values_bitmap().slice(array.offset, n)
+    var data_bv = array.values().slice(array.offset, n)
     if not array.bitmap:
         return Bool(data_bv)
     var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)
@@ -249,7 +249,7 @@ def any_(array: BoolArray) raises -> Bool:
 def all_(array: BoolArray) raises -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     var n = len(array)
-    var data_bv = array.values_bitmap().slice(array.offset, n)
+    var data_bv = array.values().slice(array.offset, n)
     if not array.bitmap:
         return data_bv.all_set()
     var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, n)

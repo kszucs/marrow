@@ -623,36 +623,36 @@ struct BitmapView[
 
     # --- Set operations (return Buffer with offset=0) ---
 
-    def intersection(self, other: BitmapView[_]) raises -> Buffer[]:
+    def intersection(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise AND of self and other."""
         return self._binop[_and](other)
 
-    def union(self, other: BitmapView[_]) raises -> Buffer[]:
+    def union(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise OR of self and other."""
         return self._binop[_or](other)
 
-    def symmetric_difference(self, other: BitmapView[_]) raises -> Buffer[]:
+    def symmetric_difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise XOR of self and other."""
         return self._binop[_xor](other)
 
-    def difference(self, other: BitmapView[_]) raises -> Buffer[]:
+    def difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return self AND NOT other."""
         return self._binop[_and_not](other)
 
-    def __and__(self, other: BitmapView[_]) raises -> Buffer[]:
+    def __and__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.intersection(other)
 
-    def __or__(self, other: BitmapView[_]) raises -> Buffer[]:
+    def __or__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.union(other)
 
-    def __xor__(self, other: BitmapView[_]) raises -> Buffer[]:
+    def __xor__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.symmetric_difference(other)
 
-    def __sub__(self, other: BitmapView[_]) raises -> Buffer[]:
+    def __sub__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.difference(other)
 
-    def __invert__(self) -> Buffer[]:
-        """Return the bitwise NOT of this view as a new Buffer (offset=0)."""
+    def __invert__(self) -> Bitmap[mut=True]:
+        """Return the bitwise NOT of this view as a new Bitmap (offset=0)."""
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
         comptime unroll = 64 // width
@@ -666,13 +666,13 @@ struct BitmapView[
                 comptime k = j * width
                 (dst + i + k).store(~(src + i + k).load[width=width]())
 
-        return _normalize(builder.to_immutable(), lead_bits, self._len)
+        return _normalize(builder^, lead_bits, self._len)
 
     def _binop[
         op: def[W: Int](
             SIMD[DType.uint8, W], SIMD[DType.uint8, W]
         ) -> SIMD[DType.uint8, W]
-    ](self, other: BitmapView[_]) raises -> Buffer[]:
+    ](self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Apply a byte-level SIMD binary op. Output always has offset=0.
 
         Two code paths based on sub-byte alignment:
@@ -715,7 +715,7 @@ struct BitmapView[
                     var hi = (src_b + i + k + 1).load[width=width]()
                     (dst + i + k).store(op(a, (lo >> rs) | (hi << ls)))
 
-        return _normalize(builder.to_immutable(), lead_bits_a, self._len)
+        return _normalize(builder^, lead_bits_a, self._len)
 
     # --- Writable ---
 
@@ -759,14 +759,14 @@ def _and_not[
     return a & ~b
 
 
-def _normalize(buffer: Buffer[], lead_bits: Int, length: Int) -> Buffer[]:
+def _normalize(var buffer: Buffer[mut=True], lead_bits: Int, length: Int) -> Bitmap[mut=True]:
     """Shift bits left by ``lead_bits`` so the result starts at offset 0.
 
     When ``lead_bits == 0`` (the common case for freshly-built arrays),
-    returns the buffer unchanged.
+    wraps the buffer in a Bitmap unchanged.
     """
     if lead_bits == 0:
-        return buffer
+        return Bitmap[mut=True](buffer^, 0, length)
     var out_bytes = math.align_up(math.ceildiv(length, 8), 64)
     var dst = Buffer.alloc_zeroed(out_bytes)
     _copy_bits(
@@ -776,7 +776,7 @@ def _normalize(buffer: Buffer[], lead_bits: Int, length: Int) -> Buffer[]:
         lead_bits,
         length,
     )
-    return dst.to_immutable()
+    return Bitmap[mut=True](dst^, 0, length)
 
 
 # ---------------------------------------------------------------------------

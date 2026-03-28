@@ -435,7 +435,7 @@ struct BoolArray(
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var values: Bitmap[mut=False]
+    var buffer: Bitmap[mut=False]
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -448,7 +448,7 @@ struct BoolArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            values=Bitmap[mut=False](data.buffers[0], 0, data.buffers[0].size * 8),
+            buffer=Bitmap[mut=False](data.buffers[0], 0, data.buffers[0].size * 8),
         )
 
     def __str__(self) -> String:
@@ -468,7 +468,7 @@ struct BoolArray(
             nulls=self.nulls,
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=self.values,
+            buffer=self.buffer,
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -480,7 +480,7 @@ struct BoolArray(
                 writer.write("...")
                 break
             if self.is_valid(i):
-                writer.write("True" if self.values_bitmap().test(self.offset + i) else "False")
+                writer.write("True" if self.values().test(self.offset + i) else "False")
             else:
                 writer.write("NULL")
         writer.write("])")
@@ -500,11 +500,17 @@ struct BoolArray(
         return self.length
 
     def __getitem__(self, index: Int) -> Bool:
-        return self.values_bitmap().test(self.offset + index)
+        return self.values().test(self.offset + index)
 
-    def values_bitmap(self) -> BitmapView[ImmutExternalOrigin]:
-        """Non-owning bit-level view of the values buffer (offset NOT baked in)."""
-        return BitmapView(self.values)
+    def values(self) -> BitmapView[origin_of(self.buffer)]:
+        """Non-owning bit-level view of the values buffer."""
+        return BitmapView(
+            ptr=rebind[UnsafePointer[UInt8, origin_of(self.buffer)]](
+                self.buffer.buffer.ptr
+            ),
+            offset=self.offset,
+            length=self.length,
+        )
 
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
@@ -519,30 +525,9 @@ struct BoolArray(
             nulls=self.nulls,
             offset=self.offset,
             bitmap=self.bitmap,
-            buffers=[self.values.buffer],
+            buffers=[self.buffer.buffer],
             children=[],
         )
-
-    def true_count(self) -> Int:
-        """Count True (and non-null) values."""
-        var data_bv = self.values_bitmap().slice(self.offset, self.length)
-        if self.nulls == 0:
-            return data_bv.count_set_bits()
-        var validity_bv = BitmapView(self.bitmap.value()).slice(self.offset, self.length)
-        var count = 0
-        var n = self.length
-        var i = 0
-        while i + 64 <= n:
-            count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
-            i += 64
-        if i < n:
-            var mask = (UInt64(1) << UInt64(n - i)) - 1
-            count += Int(pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask))
-        return count
-
-    def false_count(self) -> Int:
-        """Count False (and non-null) values."""
-        return self.length - self.nulls - self.true_count()
 
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values."""
@@ -664,18 +649,30 @@ struct PrimitiveArray[T: DataType](
 
     def values(
         self,
-    ) -> BufferView[Self.T.native, ImmutExternalOrigin]:
+    ) -> BufferView[Self.T.native, origin_of(self.buffer)]:
         """Non-owning typed view of this array's data values (offset baked in).
 
         For bool arrays, returns a BitmapView instead — use
-        ``values_bitmap()`` in that case.
+        ``values()`` in that case.
         """
         comptime assert (
             Self.T.native != DType.bool
-        ), "use values_bitmap() for bool arrays"
-        return BufferView[Self.T.native, ImmutExternalOrigin](
-            ptr=rebind[UnsafePointer[Scalar[Self.T.native], ImmutExternalOrigin]](
-                self.buffer.ptr_at[Self.T.native](self.offset)
+        ), "use values() for bool arrays"
+        return self.buffer.as_view[Self.T.native](self.offset)
+
+    def device_values(
+        self,
+    ) -> BufferView[Self.T.native, ImmutAnyOrigin]:
+        """Non-owning typed view of this array's device-resident values (offset baked in).
+
+        Precondition: the buffer must have a device copy (``has_device()`` is True).
+        """
+        comptime assert (
+            Self.T.native != DType.bool
+        ), "use values() for bool arrays"
+        return BufferView[Self.T.native, ImmutAnyOrigin](
+            ptr=rebind[UnsafePointer[Scalar[Self.T.native], ImmutAnyOrigin]](
+                self.buffer.device_ptr[Self.T.native](self.offset)
             ),
             length=self.length,
         )

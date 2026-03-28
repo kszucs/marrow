@@ -45,6 +45,7 @@ from marrow.builders import (
 from marrow.scalars import AnyScalar, ListScalar
 from marrow.dtypes import DataType
 import marrow.dtypes as dt
+from marrow.kernels.boolean import count_true, count_false
 from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod, def_display
 
@@ -860,8 +861,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[BoolArray.type]()]("type")
         .def_method[pymethod[BoolArray.is_valid]()]("is_valid")
         .def_method[pymethod[BoolArray.slice]()]("slice")
-        .def_method[pymethod[BoolArray.true_count]()]("true_count")
-        .def_method[pymethod[BoolArray.false_count]()]("false_count")
+        .def_method[pymethod[count_true]()]("true_count")
+        .def_method[pymethod[count_false]()]("false_count")
         .def_method[arrow_c_array[_to_array[dt.bool_]]]("__arrow_c_array__")
         .def_method[arrow_c_schema[BoolArray.type]]("__arrow_c_schema__")
     )

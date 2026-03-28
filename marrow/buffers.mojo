@@ -101,6 +101,7 @@ from std.sys.info import simd_byte_width
 from std.sys import size_of
 import std.math as math
 from std.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
+from .views import BufferView, BitmapView
 
 
 struct DeviceType:
@@ -626,6 +627,24 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         )
         return self.ptr.bitcast[Scalar[T]]() + offset
 
+    # TODO: remove this method, .slice() should be preferred to be used from
+    # arrays and arraybuilders with both length and offset
+    @always_inline
+    def as_view[
+        T: DType = DType.uint8
+    ](self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
+        """Return a non-owning typed view over this buffer starting at `offset`.
+
+        The offset is baked into the view pointer so all view indexing is
+        zero-based. Prefer this over `ptr_at` for bounds-checked or SIMD access.
+        """
+        return BufferView[T, origin_of(self)](
+            ptr=rebind[UnsafePointer[Scalar[T], origin_of(self)]](
+                self.ptr.bitcast[Scalar[T]]() + offset
+            ),
+            length=(self.size - offset * size_of[T]()) // size_of[T](),
+        )
+
     # TODO: fully remove this!
     @always_inline
     def aligned_ptr_at[
@@ -785,7 +804,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Allocate a zero-filled mutable bitmap for `capacity` bits."""
         var byte_size = math.ceildiv(capacity, 8)
         var buffer = Buffer.alloc_zeroed(byte_size)
-        return Bitmap[mut=True](buffer^)
+        return Bitmap[mut=True](buffer^, 0, capacity)
 
     # --- Read methods (both modes) ---
 
@@ -808,6 +827,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     # --- Immutable-only methods ---
 
+    # TODO: this should return a bitmapview
     def slice(self: Bitmap[], offset: Int, length: Int) -> Bitmap[]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return Bitmap[](self.buffer, self.bitoffset() + offset, length)
@@ -921,6 +941,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         if end_byte > start_byte:
             memset(ptr + start_byte, fill, end_byte - start_byte)
 
+    # TODO: should receive a bitmapview or bitmap as src
     def copy_from(
         mut self: Bitmap[mut=True],
         src_ptr: UnsafePointer[UInt8, _],
@@ -1056,10 +1077,13 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Resize the underlying buffer to hold `capacity` bits."""
         self.buffer.resize(math.ceildiv(capacity, 8))
 
-    def to_immutable(mut self: Bitmap[mut=True], length: Int) -> Bitmap[mut=False]:
-        """Freeze the builder into an immutable `Bitmap[]` of `length` bits.
+    # TODO: it should be consuming self, and probably Bitmap[mut=True] should
+    # have an implicit constructor for creating a Bitmap from a Buffer[mut=True]
+    # to avoid the extra copy in the common case of building a Bitmap from
+    # scratch and then freezing it.
+    def to_immutable(deinit self: Bitmap[mut=True]) -> Bitmap[mut=False]:
+        """Consume and freeze the builder into an immutable `Bitmap[]`.
 
-        The builder is reset to empty and can be reused after this call.
+        Uses `self.length` as the number of meaningful bits.
         """
-        # TODO: should consume self
-        return Bitmap[mut=False](self.buffer.to_immutable(), 0, length)
+        return Bitmap[mut=False](self.buffer.to_immutable(), 0, self.length)

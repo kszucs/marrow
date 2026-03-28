@@ -385,7 +385,8 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.to_immutable(self._length)
+            self._bitmap.length = self._length
+            bm = self._bitmap.to_immutable()
         # freeze the value buffer into an immutable Buffer
         var values = self._buffer.to_immutable()
         # construct the immutable result array
@@ -565,7 +566,8 @@ struct StringBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.to_immutable(self._length)
+            self._bitmap.length = self._length
+            bm = self._bitmap.to_immutable()
         # freeze offsets and byte data buffers into immutable Buffers
         var offsets = self._offsets.to_immutable()
         var values = self._values.to_immutable()
@@ -718,7 +720,8 @@ struct ListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.to_immutable(self._length)
+            self._bitmap.length = self._length
+            bm = self._bitmap.to_immutable()
         # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets.to_immutable()
         var values = self._child.finish()
@@ -851,7 +854,8 @@ struct FixedSizeListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.to_immutable(self._length)
+            self._bitmap.length = self._length
+            bm = self._bitmap.to_immutable()
         # recursively finish the child builder
         var values = self._child.finish()
         # construct the immutable result array
@@ -946,6 +950,7 @@ struct StructBuilder(Builder, Sized):
         self._bitmap.set(self._length)
         self._length += 1
 
+    # TODO
     def extend(mut self, arr: AnyArray) raises:
         self.extend(arr.as_struct())
 
@@ -981,7 +986,8 @@ struct StructBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            bm = self._bitmap.to_immutable(self._length)
+            self._bitmap.length = self._length
+            bm = self._bitmap.to_immutable()
         # recursively finish each field builder into a frozen child array
         var frozen_children = List[AnyArray](capacity=len(self._children))
         for ref child in self._children:
@@ -1006,10 +1012,105 @@ struct StructBuilder(Builder, Sized):
 
 
 # ---------------------------------------------------------------------------
-# Type aliases
+# BoolBuilder — bit-packed boolean array builder
 # ---------------------------------------------------------------------------
 
-comptime BoolBuilder = PrimitiveBuilder[bool_]
+
+struct BoolBuilder(Builder, Sized):
+    """Builder for bit-packed BoolArray values."""
+
+    comptime ArrayType = BoolArray
+
+    var _length: Int
+    var _capacity: Int
+    var _null_count: Int
+    var _bitmap: Bitmap[mut=True]
+    var _buffer: Bitmap[mut=True]
+
+    def __init__(out self, capacity: Int = 0):
+        self._length = 0
+        self._capacity = capacity
+        self._null_count = 0
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
+        self._buffer = Bitmap.alloc_zeroed(capacity)
+
+    def __len__(self) -> Int:
+        return self._length
+
+    def length(self) -> Int:
+        return self._length
+
+    def null_count(self) -> Int:
+        return self._null_count
+
+    def dtype(self) -> DataType:
+        return bool_
+
+    def reserve(mut self, additional: Int) raises:
+        var needed = self._length + additional
+        if needed > self._capacity:
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._buffer.resize(new_cap)
+            self._capacity = new_cap
+
+    def append(mut self, value: Bool) raises:
+        self.reserve(1)
+        self._bitmap.set(self._length)
+        if value:
+            self._buffer.set(self._length)
+        else:
+            self._buffer.clear(self._length)
+        self._length += 1
+
+    def append_null(mut self) raises:
+        self.reserve(1)
+        self._bitmap.clear(self._length)
+        self._buffer.clear(self._length)
+        self._null_count += 1
+        self._length += 1
+
+    def extend(mut self, arr: AnyArray) raises:
+        self.extend(arr.as_bool())
+
+    def extend(mut self, b: BoolArray) raises:
+        self.reserve(b.length)
+        self._buffer.extend(b.buffer, self._length, b.length)
+        if b.nulls != 0:
+            if b.bitmap:
+                self._bitmap.extend(b.bitmap.value(), self._length, b.length)
+            self._null_count += b.nulls
+        else:
+            self._bitmap.set_range(self._length, b.length, True)
+        self._length += b.length
+
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> BoolArray:
+        var n = self._length
+        var null_count = self._null_count
+        var bm: Optional[Bitmap[]] = None
+        self._bitmap.length = n
+        self._buffer.length = n
+        if null_count != 0:
+            bm = self._bitmap.to_immutable()
+        var result = BoolArray(
+            length=n,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm^,
+            buffer=self._buffer.to_immutable(),
+        )
+        self._length = 0
+        self._null_count = 0
+        return result^
+
+    def reset(mut self):
+        self._length = 0
+        self._null_count = 0
+
+
+# ---------------------------------------------------------------------------
+# Type aliases
+# ---------------------------------------------------------------------------
 comptime Int8Builder = PrimitiveBuilder[int8]
 comptime Int16Builder = PrimitiveBuilder[int16]
 comptime Int32Builder = PrimitiveBuilder[int32]
@@ -1083,9 +1184,10 @@ def array(values: List[Optional[Bool]]) raises -> BoolArray:
     var b = BoolBuilder(len(values))
     for value in values:
         if value:
-            b.append(Scalar[bool_.native](value.value()))
+            b.append(Bool(value.value()))
         else:
             b.append_null()
+
     return b.finish()
 
 

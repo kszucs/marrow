@@ -261,3 +261,4 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - Use `deinit` for consuming parameters
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
+- **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly

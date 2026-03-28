@@ -161,7 +161,7 @@ def _bench_load_word(
     var n_bits = bit_offset + n_words * 64 + 64  # +64 padding
     var builder = Bitmap.alloc_zeroed(n_bits)
     builder.set_range(0, n_bits, True)
-    var bm = builder.to_immutable(n_bits)
+    var bm = builder.to_immutable()
     # Wrap with a bit offset to exercise the shift path
     var bm_view = BitmapView(Bitmap(bm._buffer, bit_offset, n_bits - bit_offset))
 

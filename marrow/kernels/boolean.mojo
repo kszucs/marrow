@@ -1,5 +1,6 @@
 """Boolean and bitwise kernels."""
 
+from std.bit import pop_count
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
@@ -9,7 +10,25 @@ from ..views import BitmapView
 
 def count_true(array: BoolArray) -> Int:
     """Count True (and non-null) values in a bit-packed boolean array."""
-    return array.true_count()
+    var data_bv = array.values().slice(array.offset, array.length)
+    if array.nulls == 0:
+        return data_bv.count_set_bits()
+    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, array.length)
+    var count = 0
+    var n = array.length
+    var i = 0
+    while i + 64 <= n:
+        count += Int(pop_count(data_bv.load_word(i) & validity_bv.load_word(i)))
+        i += 64
+    if i < n:
+        var mask = (UInt64(1) << UInt64(n - i)) - 1
+        count += Int(pop_count((data_bv.load_word(i) & validity_bv.load_word(i)) & mask))
+    return count
+
+
+def count_false(array: BoolArray) -> Int:
+    """Count False (and non-null) values in a bit-packed boolean array."""
+    return array.length - array.nulls - count_true(array)
 
 
 def and_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:
@@ -17,15 +36,12 @@ def and_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("and_: input arrays must have equal length")
-    var lhs_bv = lhs.values_bitmap().slice(lhs.offset, length)
-    var rhs_bv = rhs.values_bitmap().slice(rhs.offset, length)
-    var result_buf = lhs_bv & rhs_bv
     return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        values=Bitmap[mut=False](result_buf, 0, length),
+        buffer=(lhs.values() & rhs.values()).to_immutable(),
     )
 
 
@@ -34,43 +50,40 @@ def or_(lhs: BoolArray, rhs: BoolArray) raises -> BoolArray:
     var length = len(lhs)
     if len(rhs) != length:
         raise Error("or_: input arrays must have equal length")
-    var lhs_bv = lhs.values_bitmap().slice(lhs.offset, length)
-    var rhs_bv = rhs.values_bitmap().slice(rhs.offset, length)
-    var result_buf = lhs_bv | rhs_bv
     return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        values=Bitmap[mut=False](result_buf, 0, length),
+        buffer=(lhs.values() | rhs.values()).to_immutable(),
     )
 
 
 def not_(arr: BoolArray) raises -> BoolArray:
     """Bitwise NOT of a bit-packed bool array."""
     var length = len(arr)
-    var bv = arr.values_bitmap().slice(arr.offset, length)
-    var result_buf = ~bv
     return BoolArray(
         length=length,
         nulls=0,
         offset=0,
         bitmap=None,
-        values=Bitmap[mut=False](result_buf, 0, length),
+        buffer=(~arr.values()).to_immutable(),
     )
 
 
+# TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
 def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = Bitmap.alloc_zeroed(length)
+    builder.length = length
     for i in range(length):
         if not arr.is_valid(i):
             builder.set(i)
         else:
             builder.clear(i)
-    var bm = builder.to_immutable(length)
-    return BoolArray(length=length, nulls=0, offset=0, bitmap=None, values=bm)
+    var bm = builder.to_immutable()
+    return BoolArray(length=length, nulls=0, offset=0, bitmap=None, buffer=bm)
 
 
 def is_null(arr: AnyArray) raises -> AnyArray:
@@ -93,7 +106,7 @@ def select[
     if len(mask) != length or len(else_) != length:
         raise Error("select: input arrays must have equal length")
     var builder = PrimitiveBuilder[T](length)
-    var data_bv = mask.values_bitmap()
+    var data_bv = mask.values()
     for i in range(length):
         if data_bv.test(mask.offset + i):
             builder._buffer.unsafe_set[T.native](i, then_.unsafe_get(i))

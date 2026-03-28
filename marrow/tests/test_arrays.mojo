@@ -16,6 +16,7 @@ from marrow.dtypes import *
 from marrow.buffers import Buffer
 from marrow.buffers import Bitmap
 from marrow.kernels.filter import drop_nulls
+from marrow.kernels.boolean import count_true, count_false
 from std.reflection import call_location
 
 
@@ -42,7 +43,7 @@ def test_array_data_with_offset() raises:
             length=3,
             nulls=0,
             offset=2,
-            bitmap=bitmap.to_immutable(10),
+            bitmap=bitmap.to_immutable(),
             buffers=[buffer.to_immutable()],
             children=[],
         )
@@ -751,7 +752,7 @@ def test_str_primitive_array_with_nulls() raises:
 def test_str_bool_array() raises:
     var a = array([True, False, True])
     var s = String(a)
-    assert_true("PrimitiveArray" in s)
+    assert_true("BoolArray" in s)
 
 
 def test_str_string_array() raises:
@@ -1169,27 +1170,27 @@ def test_fixed_size_list_slice() raises:
 
 def test_bool_true_count() raises:
     var a = array([True, True, False, True, False])
-    assert_equal(a.true_count(), 3)
-    assert_equal(a.false_count(), 2)
+    assert_equal(count_true(a), 3)
+    assert_equal(count_false(a), 2)
 
 
 def test_bool_true_count_with_nulls() raises:
     var a = array([True, None, False, True])
-    assert_equal(a.true_count(), 2)
-    assert_equal(a.false_count(), 1)
+    assert_equal(count_true(a), 2)
+    assert_equal(count_false(a), 1)
     assert_equal(a.null_count(), 1)
 
 
 def test_bool_all_false() raises:
     var a = array([False, False, False])
-    assert_equal(a.true_count(), 0)
-    assert_equal(a.false_count(), 3)
+    assert_equal(count_true(a), 0)
+    assert_equal(count_false(a), 3)
 
 
 def test_bool_all_true() raises:
     var a = array([True, True, True])
-    assert_equal(a.true_count(), 3)
-    assert_equal(a.false_count(), 0)
+    assert_equal(count_true(a), 3)
+    assert_equal(count_false(a), 0)
 
 
 # ---------------------------------------------------------------------------

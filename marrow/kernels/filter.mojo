@@ -214,7 +214,8 @@ def _filter_bits(
             builder.deposit_bits(bm_pos, compressed, count)
             zero_count += count - Int(pop_count(compressed))
 
-    return builder.to_immutable(out_len), zero_count
+    builder.length = out_len
+    return builder.to_immutable(), zero_count
 
 
 def _filter_values[
@@ -311,7 +312,7 @@ def filter_[
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
+    var sel_bm = selection.values().slice(selection.offset, n)
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -368,7 +369,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
+    var sel_bm = selection.values().slice(selection.offset, n)
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -378,7 +379,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
             nulls=0,
             offset=0,
             bitmap=None,
-            values=empty_bm.to_immutable(0),
+            buffer=empty_bm.to_immutable(),
         )
 
     # Filter validity bitmap.
@@ -393,14 +394,14 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
         null_count = nc
 
     # Filter data.
-    var data_bm = array.values_bitmap().slice(array.offset, n)
+    var data_bm = array.values().slice(array.offset, n)
     var filtered_data, _ = _filter_bits(data_bm, sel_bm, sel_start, sel_end, out_len)
     return BoolArray(
         length=out_len,
         nulls=null_count,
         offset=0,
         bitmap=bm,
-        values=filtered_data,
+        buffer=filtered_data,
     )
 
 
@@ -431,7 +432,7 @@ def filter_(
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values_bitmap().slice(selection.offset, n)
+    var sel_bm = selection.values().slice(selection.offset, n)
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
@@ -507,7 +508,8 @@ def filter_(
                     count=run_bytes,
                 )
 
-        bm = bm_builder.to_immutable(out_len)
+        bm_builder.length = out_len
+        bm = bm_builder.to_immutable()
 
     else:
         # --- No bitmap: run-merging only ---
@@ -603,12 +605,13 @@ def drop_nulls[
         # All valid: wrap as identity selection
         var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)
+        all_true.length = len(array)
         var selection = BoolArray(
             length=len(array),
             nulls=0,
             offset=0,
             bitmap=None,
-            values=all_true.to_immutable(len(array)),
+            buffer=all_true.to_immutable(),
         )
         return filter_[T](array, selection)
     var selection = BoolArray(
@@ -616,7 +619,7 @@ def drop_nulls[
         nulls=0,
         offset=0,
         bitmap=None,
-        values=array.bitmap.value(),
+        buffer=array.bitmap.value(),
     )
     return filter_[T](array, selection)
 
@@ -630,7 +633,7 @@ def _drop_nulls_bool(array: BoolArray) raises -> BoolArray:
         nulls=0,
         offset=array.offset,
         bitmap=None,
-        values=array.bitmap.value(),
+        buffer=array.bitmap.value(),
     )
     return filter_(array, selection)
 
@@ -721,7 +724,8 @@ def take[
                 bm_builder.set(i)
             i += 1
         if null_count > 0:
-            bitmap = bm_builder.to_immutable(n)
+            bm_builder.length = n
+            bitmap = bm_builder.to_immutable()
 
     return PrimitiveArray[T](
         length=n,
