@@ -10,10 +10,10 @@ from ..views import BitmapView
 
 def count_true(array: BoolArray) -> Int:
     """Count True (and non-null) values in a bit-packed boolean array."""
-    var data_bv = array.values().slice(array.offset, array.length)
+    var data_bv = array.values()
     if array.nulls == 0:
         return data_bv.count_set_bits()
-    var validity_bv = BitmapView(array.bitmap.value()).slice(array.offset, array.length)
+    var validity_bv = array.validity()
     var count = 0
     var n = array.length
     var i = 0

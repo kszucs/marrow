@@ -296,7 +296,7 @@ struct Allocation(Movable):
 
 
 # TODO: add assertions to ensure alignment and padding invariants hold
-struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
+struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized):
     """Contiguous memory region with parametric mutability.
 
     `Buffer[mut=True]`  — mutable, exclusively owned.  Use `alloc_*` factory
@@ -760,6 +760,10 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """Return a zero-copy view of `length` bytes starting at `offset`."""
         return self.view(offset, length)
 
+    def __len__(self) -> Int:
+        """Return the buffer size in bytes."""
+        return self.size
+
     def __getitem__[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         """Return the byte at `index`."""
         # TODO: add boundschesk
@@ -794,31 +798,22 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     var buffer: Buffer[mut=Self.mut]
     var length: Int
-    # TODO: consider to remove offset and langth, since bitmapview can be used
-    # for the same purpose
-    # var offset: Int
-    # var length: Int
 
-    # TODO: reduce the number of overloads
-    def __init__(out self, var buffer: Buffer[mut=Self.mut]):
+    def __init__(out self, buffer: Buffer[mut=Self.mut]):
         """Construct an immutable Bitmap from an existing buffer."""
         self.buffer = buffer
-        self.offset = offset
-        self.length = length
+        self.length = len(buffer) * 8
 
     def __init__(out self, *, copy: Self):
         comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
         self.buffer = copy.buffer
         self.length = copy.length
-        # self.offset = copy.offset
 
 
     def __init__(out self: Bitmap[mut=True], values: List[Bool]) raises:
         """Construct a mutable Bitmap from a list of boolean values."""
         self.buffer = Buffer.alloc_zeroed(math.ceildiv(len(values), 8))
         self.length = len(values)
-        # self.offset = 0
-
         for i, ref v in enumerate(values):
             if v:
                 self.unsafe_set(i)
@@ -826,10 +821,8 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                 self.unsafe_clear(i)
 
     def __init__(out self: Bitmap[mut=True], length: Int, indices: List[Int]) raises:
-         """Construct a mutable Bitmap from a list of set bit indices."""
-        """Construct a mutable Bitmap of the given length, initialized to all zeros."""
+        """Construct a mutable Bitmap from a list of set bit indices."""
         self.buffer = Buffer.alloc_zeroed(math.ceildiv(length, 8))
-        # self.offset = 0
         self.length = length
         for idx in indices:
             self.set(idx)
@@ -849,11 +842,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     def __len__(self) -> Int:
         return self.length
 
-    # @always_inline
-    # def bitoffset(self) -> Int:
-    #     """Return the bit offset into the backing buffer."""
-    #     return self.offset
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
             "Bitmap(offset=", self.bitoffset(), ", length=", self.length, ")"
@@ -861,8 +849,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
-
-    # --- Immutable-only methods ---
 
     def view(self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of the bitmap starting at `offset` for `length` bits.
@@ -885,8 +871,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
             if self[i] != other[i]:
                 return False
         return True
-
-    # --- Mutable methods ---
 
     # @always_inline
     # def unsafe_ptr(self) -> UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]:

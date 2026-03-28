@@ -448,7 +448,7 @@ struct BoolArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            buffer=Bitmap[mut=False](data.buffers[0], 0, data.buffers[0].size * 8),
+            buffer=Bitmap(data.buffers[0])
         )
 
     def __str__(self) -> String:
@@ -504,13 +504,14 @@ struct BoolArray(
 
     def values(self) -> BitmapView[origin_of(self.buffer)]:
         """Non-owning bit-level view of the values buffer."""
-        return BitmapView(
-            ptr=rebind[UnsafePointer[UInt8, origin_of(self.buffer)]](
-                self.buffer.buffer.ptr
-            ),
-            offset=self.offset,
-            length=self.length,
-        )
+        return self.buffer.view(self.offset, self.length)
+
+    def validity(self) -> Optional[BitmapView[origin_of(self.bitmap.value())]]:
+        """Validity bitmap as a BitmapView, or None if all-valid."""
+        if self.bitmap:
+            return self.bitmap.value().view(self.offset, self.length)
+        else:
+            return None
 
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
@@ -682,9 +683,9 @@ struct PrimitiveArray[T: DataType](
     ) -> Optional[BitmapView[ImmutExternalOrigin]]:
         """Validity bitmap as a BitmapView, or None if all-valid."""
         if self.bitmap:
-            var bm = self.bitmap.value()
-            return BitmapView(bm.slice(self.offset, self.length))
-        return None
+            return self.bitmap.value().view(self.offset, self.length)
+        else:
+            return None
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:
         if index < 0 or index >= self.length:
