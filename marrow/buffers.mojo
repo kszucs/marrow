@@ -574,6 +574,22 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         memcpy(dest=new.ptr, src=self.ptr, count=min(new.size, self.size))
         swap(self, new)
 
+    def extend[
+        T: DType,
+        src_origin: Origin,
+    ](
+        mut self: Buffer[mut=True],
+        src: BufferView[T, src_origin],
+        dst_offset: Int,
+        count: Int,
+    ):
+        """Copy `count` elements of type T from `src` into self at `dst_offset`."""
+        memcpy(
+            dest=self.ptr_at[T](dst_offset),
+            src=src._data,
+            count=count,
+        )
+
     @always_inline
     def unsafe_set[
         T: DType = DType.uint8
@@ -789,7 +805,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     `Bitmap[mut=True]`  — mutable builder. Use `alloc()` factory.
                           Write via `set`, `clear`, `set_range`, `deposit_bits`,
-                          `copy_from`, `extend`, `resize`.
+                          `extend`, `resize`.
                           `to_immutable(length)` freezes to `Bitmap[mut=False]`.
 
     `Bitmap[mut=False]` — immutable, ref-counted shared ownership.
@@ -834,6 +850,16 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Allocate a zero-filled mutable bitmap for `capacity` bits."""
         var byte_size = math.ceildiv(capacity, 8)
         var buffer = Buffer.alloc_zeroed(byte_size)
+        return Bitmap[mut=True](buffer^, length=capacity)
+
+    @staticmethod
+    def alloc_uninit(capacity: Int) -> Bitmap[mut=True]:
+        """Allocate an uninitialized mutable bitmap for `capacity` bits.
+
+        Use only when every bit will be written before the bitmap is read.
+        """
+        var byte_size = math.ceildiv(capacity, 8)
+        var buffer = Buffer.alloc_uninit(byte_size)
         return Bitmap[mut=True](buffer^, length=capacity)
 
     # --- Read methods (both modes) ---
@@ -957,82 +983,33 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
             self.clear(index)
 
     def set_range(mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool):
-        """Set `length` bits starting at `start` to `value`.
+        """Set `length` bits starting at `start` to `value`."""
+        self.view()._set_range(start, length, value)
 
-        Handles byte-aligned bulk fills via `memset` for the middle bytes,
-        with partial masks at the boundaries.
-        """
-        if length == 0:
-            return
-        var ptr = self.buffer.ptr
-        var end = start + length
-        var start_byte = start >> 3
-        var start_bit = start & 7
-        var end_byte = end >> 3
-        var end_bit = end & 7
+    def extend[
+        src_origin: Origin[_],
+    ](mut self: Bitmap[mut=True], src: BitmapView[src_origin], dst_start: Int, length: Int):
+        """Copy `length` bits from `src` into self at `dst_start`.
 
-        var fill = UInt8(255 if value else 0)
-
-        if start_byte == end_byte:
-            # All bits in one byte
-            var mask = UInt8((1 << end_bit) - 1) & (
-                UInt8(0xFF) << UInt8(start_bit)
-            )
-            if value:
-                ptr[start_byte] = ptr[start_byte] | mask
-            else:
-                ptr[start_byte] = ptr[start_byte] & ~mask
-            return
-
-        # Leading partial byte
-        if start_bit != 0:
-            var mask = UInt8(0xFF) << UInt8(start_bit)
-            if value:
-                ptr[start_byte] = ptr[start_byte] | mask
-            else:
-                ptr[start_byte] = ptr[start_byte] & ~mask
-            start_byte += 1
-
-        # Trailing partial byte
-        if end_bit != 0:
-            var mask = UInt8((1 << end_bit) - 1)
-            if value:
-                ptr[end_byte] = ptr[end_byte] | mask
-            else:
-                ptr[end_byte] = ptr[end_byte] & ~mask
-
-        # Full middle bytes
-        if end_byte > start_byte:
-            memset(ptr + start_byte, fill, end_byte - start_byte)
-
-    # TODO: should receive a bitmapview or bitmap as src
-    def copy_from(
-        mut self: Bitmap[mut=True],
-        src_ptr: UnsafePointer[UInt8, _],
-        srcoffset: Int,
-        dstoffset: Int,
-        length: Int,
-    ):
-        """Bulk-copy `length` bits from `src_ptr` at bit `srcoffset` into
-        self at bit `dstoffset`.
-
-        Three code paths ordered by expected frequency:
-        1. Same sub-byte alignment: memcpy for middle bytes, masks at edges.
-        2. Different alignment: shift-and-merge byte-by-byte.
-        3. Short runs (< 16 bits): bit-by-bit fallback to avoid setup overhead.
+        Three code paths:
+        1. Same sub-byte alignment → memcpy for middle bytes.
+        2. Different alignment → shift-and-merge byte-by-byte.
+        3. Short runs (< 16 bits) → bit-by-bit fallback.
         """
         if length == 0:
             return
         var dst = self.buffer.ptr
+        var dst_offset = dst_start
+        var src_ptr = src._data
+        var src_offset = src._offset
 
-        # Short runs: bit-by-bit is faster than computing byte masks.
         if length < 16:
             for i in range(length):
-                var s_byte = (srcoffset + i) >> 3
-                var s_bit = (srcoffset + i) & 7
+                var s_byte = (src_offset + i) >> 3
+                var s_bit = (src_offset + i) & 7
                 var val = (src_ptr[s_byte] >> UInt8(s_bit)) & 1
-                var d_byte = (dstoffset + i) >> 3
-                var d_bit = (dstoffset + i) & 7
+                var d_byte = (dst_offset + i) >> 3
+                var d_bit = (dst_offset + i) & 7
                 var d_mask = UInt8(1 << d_bit)
                 if val:
                     dst[d_byte] = dst[d_byte] | d_mask
@@ -1040,19 +1017,17 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                     dst[d_byte] = dst[d_byte] & ~d_mask
             return
 
-        var src_bit = srcoffset & 7
-        var dst_bit = dstoffset & 7
+        var src_bit = src_offset & 7
+        var dst_bit = dst_offset & 7
 
         if src_bit == dst_bit:
-            # Same sub-byte alignment: can use memcpy for the bulk.
-            var src_byte = srcoffset >> 3
-            var dst_byte = dstoffset >> 3
-            var end_bit = dstoffset + length
+            var src_byte = src_offset >> 3
+            var dst_byte = dst_offset >> 3
+            var end_bit = dst_offset + length
             var end_byte = end_bit >> 3
             var end_sub = end_bit & 7
 
             if dst_bit != 0:
-                # Merge leading partial byte.
                 var keep_mask = UInt8((1 << dst_bit) - 1)
                 dst[dst_byte] = (dst[dst_byte] & keep_mask) | (
                     src_ptr[src_byte] & ~keep_mask
@@ -1060,32 +1035,24 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                 src_byte += 1
                 dst_byte += 1
 
-            # Full middle bytes via memcpy.
             if end_byte > dst_byte:
-                memcpy(
-                    dest=dst + dst_byte,
-                    src=src_ptr + src_byte,
-                    count=end_byte - dst_byte,
-                )
+                memcpy(dest=dst + dst_byte, src=src_ptr + src_byte, count=end_byte - dst_byte)
 
             if end_sub != 0:
-                # Merge trailing partial byte.
                 var trail_byte_src = src_byte + (end_byte - dst_byte)
                 var keep_mask = UInt8(0xFF) << UInt8(end_sub)
                 dst[end_byte] = (dst[end_byte] & keep_mask) | (
                     src_ptr[trail_byte_src] & ~keep_mask
                 )
         else:
-            # Different sub-byte alignment: shift-and-merge byte-by-byte.
-            var src_byte = srcoffset >> 3
-            var dst_byte_start = dstoffset >> 3
-            var end_bit = dstoffset + length
+            var src_byte = src_offset >> 3
+            var dst_byte_start = dst_offset >> 3
+            var end_bit = dst_offset + length
             var end_byte = end_bit >> 3
             var end_sub = end_bit & 7
             var delta = src_bit - dst_bit
 
             if dst_bit != 0:
-                # Leading partial byte.
                 var keep_mask = UInt8((1 << dst_bit) - 1)
                 var shifted: UInt8
                 if delta > 0:
@@ -1101,8 +1068,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                 )
                 dst_byte_start += 1
 
-            # Full middle bytes.
-            var src_bit_pos = srcoffset + ((dst_byte_start << 3) - dstoffset)
+            var src_bit_pos = src_offset + ((dst_byte_start << 3) - dst_offset)
             for j in range(dst_byte_start, end_byte):
                 var sb = src_bit_pos >> 3
                 var so = src_bit_pos & 7
@@ -1115,7 +1081,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                 src_bit_pos += 8
 
             if end_sub != 0:
-                # Trailing partial byte.
                 var sb = src_bit_pos >> 3
                 var so = src_bit_pos & 7
                 var shifted: UInt8
@@ -1126,16 +1091,11 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                         src_ptr[sb + 1] << UInt8(8 - so)
                     )
                 var keep_mask = UInt8(0xFF) << UInt8(end_sub)
-                dst[end_byte] = (dst[end_byte] & keep_mask) | (
-                    shifted & ~keep_mask
-                )
+                dst[end_byte] = (dst[end_byte] & keep_mask) | (shifted & ~keep_mask)
 
     def extend(mut self: Bitmap[mut=True], src: Bitmap[], dst_start: Int, length: Int):
-        """Copy `length` bits from `src` (from its `offset`) into self at `dst_start`.
-        """
-        self.copy_from(
-            src.buffer.ptr, src.bitoffset(), dst_start, length
-        )
+        """Copy `length` bits from `src` into self at `dst_start`."""
+        self.extend(src.view(0, length), dst_start, length)
 
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits."""

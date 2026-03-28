@@ -300,9 +300,6 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         self._length += 1
 
     def append(mut self, value: Bool) raises:
-        comptime assert (
-            Self.T == bool_
-        ), "append(Bool) only supported for PrimitiveBuilder[bool_]"
         self.append(Self.ScalarType(value))
 
     @always_inline
@@ -344,27 +341,11 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
-                self._bitmap.extend(
-                    # TODO: this should be simpler
-                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
-                    self._length,
-                    n,
-                )
+                self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        comptime if Self.T == bool_:
-            var src = Bitmap(arr.buffer, arr.offset, n)
-            for i in range(n):
-                self._buffer.unsafe_set[DType.bool](
-                    self._length + i, BitmapView(src).test(i)
-                )
-        else:
-            memcpy(
-                dest=self._buffer.ptr.bitcast[Scalar[Self.T.native]]()
-                + self._length,
-                src=arr.buffer.ptr_at[Self.T.native](arr.offset),
-                count=n,
-            )
+
+        self._buffer.extend(arr.values(), self._length, n)
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
@@ -495,12 +476,7 @@ struct StringBuilder(Builder, Sized):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
-                # TODO: this should be simpler
-                self._bitmap.extend(
-                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
-                    self._length,
-                    n,
-                )
+                self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
         var cur_bytes = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
@@ -686,11 +662,7 @@ struct ListBuilder(Builder, Sized):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
-                self._bitmap.extend(
-                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
-                    self._length,
-                    n,
-                )
+                self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
         var child_start = Int(arr.offsets.unsafe_get[DType.int32](arr.offset))
@@ -832,11 +804,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
-                self._bitmap.extend(
-                    Bitmap(bm.buffer, bm.offset + arr.offset, n),
-                    self._length,
-                    n,
-                )
+                self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.size

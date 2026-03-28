@@ -347,6 +347,7 @@ struct BitmapView[
 
     # --- Bulk read operations ---
 
+    # TODO: optimize this
     def all_set(self) -> Bool:
         """Return True if all bits in the view are set."""
         if self._len == 0:
@@ -547,71 +548,52 @@ struct BitmapView[
         var bit_mask = UInt8(1 << (abs_index & 7))
         self._data[byte_index] = self._data[byte_index] ^ bit_mask
 
+    def _set_range(self: BitmapView[mut=True, origin=_], start: Int, length: Int, value: Bool):
+        """Set `length` bits starting at `start` (relative to view start) to `value`."""
+        if length == 0:
+            return
+        var abs_start = self._offset + start
+        var end = abs_start + length
+        var start_byte = abs_start >> 3
+        var start_bit = abs_start & 7
+        var end_byte = end >> 3
+        var end_bit = end & 7
+        var fill = UInt8(255 if value else 0)
+        var ptr = self._data
+
+        if start_byte == end_byte:
+            var mask = UInt8((1 << end_bit) - 1) & (UInt8(0xFF) << UInt8(start_bit))
+            if value:
+                ptr[start_byte] = ptr[start_byte] | mask
+            else:
+                ptr[start_byte] = ptr[start_byte] & ~mask
+            return
+
+        if start_bit != 0:
+            var mask = UInt8(0xFF) << UInt8(start_bit)
+            if value:
+                ptr[start_byte] = ptr[start_byte] | mask
+            else:
+                ptr[start_byte] = ptr[start_byte] & ~mask
+            start_byte += 1
+
+        if end_bit != 0:
+            var mask = UInt8((1 << end_bit) - 1)
+            if value:
+                ptr[end_byte] = ptr[end_byte] | mask
+            else:
+                ptr[end_byte] = ptr[end_byte] & ~mask
+
+        if end_byte > start_byte:
+            memset(ptr + start_byte, fill, end_byte - start_byte)
+
     def set_all(self: BitmapView[mut=True, origin=_]):
         """Set all bits in the view to 1."""
-        _set_range(self._data, self._offset, self._len, True)
+        self._set_range(0, self._len, True)
 
     def clear_all(self: BitmapView[mut=True, origin=_]):
         """Set all bits in the view to 0."""
-        _set_range(self._data, self._offset, self._len, False)
-
-    def toggle_all(self: BitmapView[mut=True, origin=_]):
-        """Invert all bits in the view."""
-        # Word-level NOT over the logical range.
-        var i = 0
-        while i + 64 <= self._len:
-            var word = self.load_word(i)
-            self.deposit_bits(i, ~word, 64)
-            i += 64
-        if i < self._len:
-            var tail = self._len - i
-            var mask = (UInt64(1) << UInt64(tail)) - 1
-            var word = self.load_word(i) & mask
-            self.deposit_bits(i, ~word & mask, tail)
-
-    @always_inline
-    def deposit_bits(
-        self: BitmapView[mut=True, origin=_],
-        bit_offset: Int,
-        bits: UInt64,
-        count: Int,
-    ):
-        """Deposit ``count`` LSBs from ``bits`` into the view at
-        ``bit_offset``.
-
-        The view must be zero-filled for the target range, as this uses OR
-        to set bits.
-        """
-        if count == 0:
-            return
-        var abs_offset = self._offset + bit_offset
-        var byte_idx = abs_offset >> 3
-        var bit_off = abs_offset & 7
-        var shifted = bits << UInt64(bit_off)
-        var ptr64 = (self._data + byte_idx).bitcast[UInt64]()
-        ptr64.store[alignment=1](ptr64.load[alignment=1]() | shifted)
-        if bit_off > 0 and bit_off + count > 64:
-            self._data[byte_idx + 8] = self._data[byte_idx + 8] | UInt8(
-                bits >> UInt64(64 - bit_off)
-            )
-
-    def copy_from[
-        src_origin: Origin[_]
-    ](
-        self: BitmapView[mut=True, origin=_],
-        src: BitmapView[src_origin],
-        dst_start: Int,
-        length: Int,
-    ):
-        """Bulk-copy ``length`` bits from ``src`` (from its start) into self
-        at ``dst_start``."""
-        _copy_bits(
-            self._data,
-            self._offset + dst_start,
-            src._data,
-            src._offset,
-            length,
-        )
+        self._set_range(0, self._len, False)
 
     # --- Set operations (return Buffer with offset=0) ---
 
@@ -645,69 +627,88 @@ struct BitmapView[
 
     def __invert__(self) -> Bitmap[mut=True]:
         """Return the bitwise NOT of this view as a new Bitmap (offset=0)."""
+        return self._unop[_invert]()
+
+    def _unop[
+        op: def[W: Int](SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]
+    ](self) -> Bitmap[mut=True]:
+        """Apply a byte-level SIMD unary op. Output always has offset=0."""
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
         comptime unroll = 64 // width
 
-        src, total_bytes, lead_bits, _ = self._aligned_byte_range()
+        src, _, lead_bits, _ = self._aligned_byte_range()
+        var byte_shift = lead_bits >> 3
+        var bit_shift = lead_bits & 7
+        var builder = Bitmap.alloc_uninit(self._len)
+        var out_bytes = builder.buffer.size
+        var dst = builder.buffer.ptr
 
-        var builder = Buffer.alloc_uninit(total_bytes)
-        var dst = builder.ptr
-        for i in range(0, total_bytes, 64):
-            comptime for j in range(unroll):
-                comptime k = j * width
-                (dst + i + k).store(~(src + i + k).load[width=width]())
+        if bit_shift == 0:
+            for i in range(0, out_bytes, 64):
+                comptime for j in range(unroll):
+                    comptime k = j * width
+                    (dst + i + k).store(op((src + byte_shift + i + k).load[width=width]()))
+        else:
+            var rshift = UInt8(bit_shift)
+            var lshift = UInt8(8 - bit_shift)
+            for i in range(0, out_bytes, 64):
+                comptime for j in range(unroll):
+                    comptime k = j * width
+                    var lo = (src + byte_shift + i + k).load[width=width]()
+                    var hi = (src + byte_shift + i + k + 1).load[width=width]()
+                    (dst + i + k).store(op((lo >> rshift) | (hi << lshift)))
 
-        return _normalize(builder^, lead_bits, self._len)
+        return builder^
 
     def _binop[
         op: def[W: Int](
             SIMD[DType.uint8, W], SIMD[DType.uint8, W]
         ) -> SIMD[DType.uint8, W]
     ](self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
-        """Apply a byte-level SIMD binary op. Output always has offset=0.
-
-        Two code paths based on sub-byte alignment:
-        - Same sub-byte offset: direct SIMD op, no bit shifting.
-        - Different sub-byte offset: ``other`` is bit-shifted to align with
-          ``self`` via overlapping loads.
-        """
+        """Apply a byte-level SIMD binary op. Output always has offset=0."""
         if self._len != len(other):
             raise Error("BitmapView lengths must match")
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
         comptime unroll = 64 // width
 
-        src_a, total_bytes, lead_bits_a, _ = self._aligned_byte_range()
-        ptr_b, _, lead_bits_b, _ = other._aligned_byte_range()
+        src_a, _, lead_bits_a, _ = self._aligned_byte_range()
+        src_b, _, lead_bits_b, _ = other._aligned_byte_range()
+        var byte_shift_a = lead_bits_a >> 3
+        var bit_shift_a = lead_bits_a & 7
+        var byte_shift_b = lead_bits_b >> 3
+        var bit_shift_b = lead_bits_b & 7
+        var builder = Bitmap.alloc_uninit(self._len)
+        var out_bytes = builder.buffer.size
+        var dst = builder.buffer.ptr
 
-        var src_b = ptr_b + ((lead_bits_b >> 3) - (lead_bits_a >> 3))
-        var builder = Buffer.alloc_uninit(total_bytes)
-        var dst = builder.ptr
-
-        if lead_bits_a & 7 == lead_bits_b & 7:
-            for i in range(0, total_bytes, 64):
+        if bit_shift_a == 0 and bit_shift_b == 0:
+            for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    (dst + i + k).store(
-                        op(
-                            (src_a + i + k).load[width=width](),
-                            (src_b + i + k).load[width=width](),
-                        )
-                    )
+                    (dst + i + k).store(op(
+                        (src_a + byte_shift_a + i + k).load[width=width](),
+                        (src_b + byte_shift_b + i + k).load[width=width](),
+                    ))
         else:
-            var in_byte_shift = (lead_bits_b - lead_bits_a) & 7
-            var rs = UInt8(in_byte_shift)
-            var ls = UInt8(8 - in_byte_shift)
-            for i in range(0, total_bytes, 64):
+            var rs_a = UInt8(bit_shift_a)
+            var ls_a = UInt8(8 - bit_shift_a)
+            var rs_b = UInt8(bit_shift_b)
+            var ls_b = UInt8(8 - bit_shift_b)
+            for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    var a = (src_a + i + k).load[width=width]()
-                    var lo = (src_b + i + k).load[width=width]()
-                    var hi = (src_b + i + k + 1).load[width=width]()
-                    (dst + i + k).store(op(a, (lo >> rs) | (hi << ls)))
+                    var lo_a = (src_a + byte_shift_a + i + k).load[width=width]()
+                    var hi_a = (src_a + byte_shift_a + i + k + 1).load[width=width]()
+                    var lo_b = (src_b + byte_shift_b + i + k).load[width=width]()
+                    var hi_b = (src_b + byte_shift_b + i + k + 1).load[width=width]()
+                    (dst + i + k).store(op(
+                        (lo_a >> rs_a) | (hi_a << ls_a),
+                        (lo_b >> rs_b) | (hi_b << ls_b),
+                    ))
 
-        return _normalize(builder^, lead_bits_a, self._len)
+        return builder^
 
     # --- Writable ---
 
@@ -721,6 +722,12 @@ struct BitmapView[
 # ---------------------------------------------------------------------------
 # SIMD byte-level binary op helpers
 # ---------------------------------------------------------------------------
+
+
+@always_inline
+@always_inline
+def _invert[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
+    return ~x
 
 
 @always_inline
@@ -749,182 +756,3 @@ def _and_not[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a & ~b
-
-
-def _normalize(var buffer: Buffer[mut=True], lead_bits: Int, length: Int) -> Bitmap[mut=True]:
-    """Shift bits left by ``lead_bits`` so the result starts at offset 0.
-
-    When ``lead_bits == 0`` (the common case for freshly-built arrays),
-    wraps the buffer in a Bitmap unchanged.
-    """
-    if lead_bits == 0:
-        return Bitmap[mut=True](buffer^, 0, length)
-    var out_bytes = math.align_up(math.ceildiv(length, 8), 64)
-    var dst = Buffer.alloc_zeroed(out_bytes)
-    _copy_bits(
-        dst.ptr,
-        0,
-        buffer.ptr,
-        lead_bits,
-        length,
-    )
-    return Bitmap[mut=True](dst^, 0, length)
-
-
-# ---------------------------------------------------------------------------
-# Bit-level helpers (ported from BitmapBuilder)
-# ---------------------------------------------------------------------------
-
-
-def _set_range[
-    origin: MutOrigin
-](ptr: UnsafePointer[UInt8, origin], abs_start: Int, length: Int, value: Bool):
-    """Set ``length`` bits starting at absolute bit ``abs_start``."""
-    if length == 0:
-        return
-    var end = abs_start + length
-    var start_byte = abs_start >> 3
-    var start_bit = abs_start & 7
-    var end_byte = end >> 3
-    var end_bit = end & 7
-    var fill = UInt8(255 if value else 0)
-
-    if start_byte == end_byte:
-        var mask = UInt8((1 << end_bit) - 1) & (UInt8(0xFF) << UInt8(start_bit))
-        if value:
-            ptr[start_byte] = ptr[start_byte] | mask
-        else:
-            ptr[start_byte] = ptr[start_byte] & ~mask
-        return
-
-    if start_bit != 0:
-        var mask = UInt8(0xFF) << UInt8(start_bit)
-        if value:
-            ptr[start_byte] = ptr[start_byte] | mask
-        else:
-            ptr[start_byte] = ptr[start_byte] & ~mask
-        start_byte += 1
-
-    if end_bit != 0:
-        var mask = UInt8((1 << end_bit) - 1)
-        if value:
-            ptr[end_byte] = ptr[end_byte] | mask
-        else:
-            ptr[end_byte] = ptr[end_byte] & ~mask
-
-    if end_byte > start_byte:
-        memset(ptr + start_byte, fill, end_byte - start_byte)
-
-
-def _copy_bits[
-    dst_origin: MutOrigin
-](
-    dst: UnsafePointer[UInt8, dst_origin],
-    dst_offset: Int,
-    src_ptr: UnsafePointer[UInt8, _],
-    src_offset: Int,
-    length: Int,
-):
-    """Bulk-copy ``length`` bits between arbitrary bit offsets.
-
-    Three code paths:
-    1. Same sub-byte alignment → memcpy for middle bytes.
-    2. Different alignment → shift-and-merge byte-by-byte.
-    3. Short runs (< 16 bits) → bit-by-bit fallback.
-    """
-    if length == 0:
-        return
-
-    if length < 16:
-        for i in range(length):
-            var s_byte = (src_offset + i) >> 3
-            var s_bit = (src_offset + i) & 7
-            var val = (src_ptr[s_byte] >> UInt8(s_bit)) & 1
-            var d_byte = (dst_offset + i) >> 3
-            var d_bit = (dst_offset + i) & 7
-            var d_mask = UInt8(1 << d_bit)
-            if val:
-                dst[d_byte] = dst[d_byte] | d_mask
-            else:
-                dst[d_byte] = dst[d_byte] & ~d_mask
-        return
-
-    var src_bit = src_offset & 7
-    var dst_bit = dst_offset & 7
-
-    if src_bit == dst_bit:
-        var src_byte = src_offset >> 3
-        var dst_byte = dst_offset >> 3
-        var end_bit = dst_offset + length
-        var end_byte = end_bit >> 3
-        var end_sub = end_bit & 7
-
-        if dst_bit != 0:
-            var keep_mask = UInt8((1 << dst_bit) - 1)
-            dst[dst_byte] = (dst[dst_byte] & keep_mask) | (
-                src_ptr[src_byte] & ~keep_mask
-            )
-            src_byte += 1
-            dst_byte += 1
-
-        if end_byte > dst_byte:
-            memcpy(
-                dest=dst + dst_byte,
-                src=src_ptr + src_byte,
-                count=end_byte - dst_byte,
-            )
-
-        if end_sub != 0:
-            var trail_byte_src = src_byte + (end_byte - dst_byte)
-            var keep_mask = UInt8(0xFF) << UInt8(end_sub)
-            dst[end_byte] = (dst[end_byte] & keep_mask) | (
-                src_ptr[trail_byte_src] & ~keep_mask
-            )
-    else:
-        var src_byte = src_offset >> 3
-        var dst_byte_start = dst_offset >> 3
-        var end_bit = dst_offset + length
-        var end_byte = end_bit >> 3
-        var end_sub = end_bit & 7
-        var delta = src_bit - dst_bit
-
-        if dst_bit != 0:
-            var keep_mask = UInt8((1 << dst_bit) - 1)
-            var shifted: UInt8
-            if delta > 0:
-                shifted = (src_ptr[src_byte] >> UInt8(delta)) | (
-                    src_ptr[src_byte + 1] << UInt8(8 - delta)
-                )
-            else:
-                shifted = src_ptr[src_byte] << UInt8(-delta)
-                if src_byte > 0:
-                    shifted |= src_ptr[src_byte - 1] >> UInt8(8 + delta)
-            dst[dst_byte_start] = (dst[dst_byte_start] & keep_mask) | (
-                shifted & ~keep_mask
-            )
-            dst_byte_start += 1
-
-        var src_bit_pos = src_offset + ((dst_byte_start << 3) - dst_offset)
-        for j in range(dst_byte_start, end_byte):
-            var sb = src_bit_pos >> 3
-            var so = src_bit_pos & 7
-            if so == 0:
-                dst[j] = src_ptr[sb]
-            else:
-                dst[j] = (src_ptr[sb] >> UInt8(so)) | (
-                    src_ptr[sb + 1] << UInt8(8 - so)
-                )
-            src_bit_pos += 8
-
-        if end_sub != 0:
-            var sb = src_bit_pos >> 3
-            var so = src_bit_pos & 7
-            var shifted: UInt8
-            if so == 0:
-                shifted = src_ptr[sb]
-            else:
-                shifted = (src_ptr[sb] >> UInt8(so)) | (
-                    src_ptr[sb + 1] << UInt8(8 - so)
-                )
-            var keep_mask = UInt8(0xFF) << UInt8(end_sub)
-            dst[end_byte] = (dst[end_byte] & keep_mask) | (shifted & ~keep_mask)
