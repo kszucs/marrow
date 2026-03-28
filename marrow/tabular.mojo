@@ -385,6 +385,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                 batches.append(RecordBatch(schema=self.schema, columns=cols^))
             return batches^
 
+        # TODO: this in the middle import it not nice
         # Fallback: combine chunks into a single batch.
         from .kernels.concat import concat
 

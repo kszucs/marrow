@@ -91,6 +91,7 @@ Validity bitmaps use the dedicated `Bitmap` / `BitmapBuilder` types from
 and SIMD bulk operations.
 """
 
+from std.builtin.builtin_slice import ContiguousSlice
 from std.memory import (
     memset_zero,
     memcpy,
@@ -509,30 +510,14 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
 
     # --- Mutability transition ---
 
-    def to_immutable(mut self: Buffer[mut=True]) -> Buffer[mut=False]:
-        """Freeze the mutable buffer into an immutable Buffer and reset state.
+    def to_immutable(deinit self: Buffer[mut=True]) -> Buffer[mut=False]:
+        """Consume the mutable buffer and return an immutable Buffer.
 
         For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
         For HOST buffers (`alloc_host`): returns kind=HOST.
-        For DEVICE buffers (`alloc_device`): returns kind=DEVICE (ptr=null).
-
-        A fresh zero-capacity CPU allocation is installed on this buffer so
-        it can continue to be used after the call.
+        For DEVICE buffers (`alloc_device`): returns kind=DEVICE.
         """
-        # TODO: preferably it should consume
-        var new = Buffer.alloc_uninit(0)
-        swap(self, new)
-        # After swap: self has the fresh empty allocation; new has the old state.
-        if new._owner[]._device:
-            # DEVICE allocation: null the CPU ptr (no CPU accessibility).
-            return Buffer[mut=False](
-                size=new.size,
-                ptr=UnsafePointer[UInt8, ExternalOrigin[mut=False]](),
-                owner=new._owner,
-            )
-        else:
-            # CPU or HOST allocation: preserve the CPU-accessible ptr.
-            return Buffer[mut=False](size=new.size, ptr=new.ptr, owner=new._owner)
+        return Buffer[mut=False](size=self.size, ptr=self.ptr, owner=self._owner^)
 
     # --- CPU/device checks (mut=False only) ---
 
@@ -745,7 +730,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
             self._owner[]._device.value(),
         )
         ctx.synchronize()
-        return builder.to_immutable()
+        return builder^.to_immutable()
 
     def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
         """Compare two immutable buffers byte-by-byte (64-bit chunks for speed)."""
@@ -797,6 +782,16 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         self.offset = copy.offset
         self.length = copy.length
 
+    def __init__(out self: Bitmap[mut=True], values: List[Bool]):
+        """Construct a mutable Bitmap from a list of boolean values."""
+        var n = len(values)
+        var byte_size = math.ceildiv(n, 8)
+        var buffer = Buffer.alloc_zeroed(byte_size)
+        self = Bitmap[mut=True](buffer^, 0, n)
+        for i in range(n):
+            if values[i]:
+                self.set(i)
+
     # --- Factory ---
 
     @staticmethod
@@ -827,7 +822,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     # --- Immutable-only methods ---
 
-    # TODO: this should return a bitmapview
     def slice(self: Bitmap[], offset: Int, length: Int) -> Bitmap[]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return Bitmap[](self.buffer, self.bitoffset() + offset, length)
@@ -837,7 +831,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         if self.length != other.length:
             return False
         for i in range(self.length):
-            if self.test(self.offset + i) != other.test(other.offset + i):
+            if self[i] != other[i]:
                 return False
         return True
 
@@ -886,11 +880,31 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         self.buffer.ptr[byte_index] = self.buffer.ptr[byte_index] & ~bit_mask
 
     @always_inline
-    def test(self, index: Int) -> Bool:
-        """Return True if the bit at `index` is set to 1."""
-        var byte_index = index // 8
-        var bit_mask = UInt8(1 << (index % 8))
+    def test(self, raw_index: Int) -> Bool:
+        """Return True if the bit at `raw_index` (not offset-adjusted) is set."""
+        var byte_index = raw_index // 8
+        var bit_mask = UInt8(1 << (raw_index % 8))
         return (self.buffer.ptr[byte_index] & bit_mask) != 0
+
+    @always_inline
+    def __getitem__(self, index: Int) -> Bool:
+        """Return the bit at logical `index` (0-based within this bitmap's window)."""
+        var i = index if index >= 0 else index + self.length
+        debug_assert(0 <= i < self.length, "bitmap index out of bounds")
+        return self.test(self.offset + i)
+
+    @always_inline
+    def __getitem__(self: Bitmap[], slc: ContiguousSlice) -> Bitmap[]:
+        """Return a zero-copy sub-bitmap for the given slice."""
+        var start, end = slc.indices(self.length)
+        return self.slice(start, end - start)
+
+    def __setitem__(mut self: Bitmap[mut=True], index: Int, value: Bool):
+        """Set or clear the bit at `index`."""
+        if value:
+            self.set(index)
+        else:
+            self.clear(index)
 
     def set_range(mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`.
@@ -1086,4 +1100,4 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
         Uses `self.length` as the number of meaningful bits.
         """
-        return Bitmap[mut=False](self.buffer.to_immutable(), 0, self.length)
+        return Bitmap[mut=False](self.buffer^.to_immutable(), 0, self.length)

@@ -1076,7 +1076,7 @@ struct ListArray(
             nulls=0,
             offset=0,
             bitmap=None,
-            buffer=buf.to_immutable(),
+            buffer=buf^.to_immutable(),
         )
 
     def __eq__(self, other: Self) -> Bool:

@@ -109,7 +109,7 @@ def test_bitmap_get_set() raises:
     b.unsafe_set[DType.bool](1, True)
     assert_true(Bool(b.ptr[1]))
 
-    var frozen = b.to_immutable()
+    var frozen = b^.to_immutable()
     assert_true(frozen.unsafe_get[DType.bool](0))
     assert_true(frozen.unsafe_get[DType.bool](1))
     assert_false(frozen.unsafe_get[DType.bool](2))
@@ -158,7 +158,7 @@ def test_bitmap_extend() raises:
     var src_b = Bitmap.alloc_zeroed(6)
     src_b.set(0)
     src_b.set(5)
-    var src = src_b.to_immutable()
+    var src = src_b^.to_immutable()
 
     var dst = Bitmap.alloc_zeroed(8)
     dst.extend(src, 0, 6)
@@ -168,7 +168,7 @@ def test_bitmap_extend() raises:
     var dst2 = Bitmap.alloc_zeroed(8)
     var src2_b = Bitmap.alloc_zeroed(2)
     src2_b.set(0)
-    var src2 = src2_b.to_immutable()
+    var src2 = src2_b^.to_immutable()
     dst2.extend(src2, 6, 2)
     assert_bitmap_set(dst2.buffer.ptr, 8, [6], "extend at offset 6")
 
@@ -178,7 +178,7 @@ def test_buffer_finish() raises:
     buf.unsafe_set(0, 42)
     buf.unsafe_set(1, 99)
 
-    var frozen = buf.to_immutable()
+    var frozen = buf^.to_immutable()
     # Reads still work on the frozen buffer.
     assert_equal(frozen.unsafe_get(0), 42)
     assert_equal(frozen.unsafe_get(1), 99)
@@ -190,7 +190,7 @@ def test_buffer_cpu_kind() raises:
     """CPU buffers from Buffer[mut=True].to_immutable() have kind=CPU and are CPU-accessible.
     """
     var b = Buffer.alloc_zeroed(64)
-    var frozen = b.to_immutable()
+    var frozen = b^.to_immutable()
     assert_true(frozen.is_cpu())
     assert_false(frozen.is_device())
     assert_false(frozen.is_host())
@@ -235,7 +235,7 @@ def test_buffer_foreign_kind() raises:
 def test_buffer_no_device() raises:
     # CPU-allocated buffers have no device buffer
     var buf = Buffer.alloc_zeroed(10)
-    var frozen = buf.to_immutable()
+    var frozen = buf^.to_immutable()
     assert_false(frozen.is_device())
 
 
@@ -296,7 +296,7 @@ def test_buffer_eq_equal() raises:
     b1.unsafe_set(1, 99)
     b2.unsafe_set(0, 42)
     b2.unsafe_set(1, 99)
-    assert_true(b1.to_immutable() == b2.to_immutable())
+    assert_true(b1^.to_immutable() == b2^.to_immutable())
 
 
 def test_buffer_eq_unequal() raises:
@@ -304,19 +304,19 @@ def test_buffer_eq_unequal() raises:
     var b2 = Buffer.alloc_zeroed(10)
     b1.unsafe_set(0, 42)
     b2.unsafe_set(0, 43)
-    assert_false(b1.to_immutable() == b2.to_immutable())
+    assert_false(b1^.to_immutable() == b2^.to_immutable())
 
 
 def test_buffer_eq_different_size() raises:
     var b1 = Buffer.alloc_zeroed[DType.int32](10)  # 64 bytes
     var b2 = Buffer.alloc_zeroed[DType.int32](20)  # 128 bytes
-    assert_false(b1.to_immutable() == b2.to_immutable())
+    assert_false(b1^.to_immutable() == b2^.to_immutable())
 
 
 def test_aligned_ptr_at_zero_offset() raises:
     """With offset=0, aligned_ptr_at equals ptr_at."""
     var bb = Buffer.alloc_zeroed[DType.int64](16)
-    var buf = bb.to_immutable()
+    var buf = bb^.to_immutable()
     var ptr = buf.ptr_at[DType.int64](0)
     var aligned = buf.aligned_ptr_at[DType.int64](0)
     assert_true(ptr == aligned)
@@ -326,7 +326,7 @@ def test_aligned_ptr_at_aligned_offset() raises:
     """Offset already on a 64-byte boundary stays unchanged."""
     # 64 bytes / 8 bytes per int64 = 8 elements per 64-byte block
     var bb = Buffer.alloc_zeroed[DType.int64](32)
-    var buf = bb.to_immutable()
+    var buf = bb^.to_immutable()
     var aligned = buf.aligned_ptr_at[DType.int64](8)
     var expected = buf.ptr_at[DType.int64](8)
     assert_true(aligned == expected)
@@ -337,7 +337,7 @@ def test_aligned_ptr_at_unaligned_offset() raises:
     # int64: 8 bytes each, 64/8 = 8 elements per block
     # offset=5 → byte offset=40, align_down(40,64)=0 → element 0
     var bb = Buffer.alloc_zeroed[DType.int64](32)
-    var buf = bb.to_immutable()
+    var buf = bb^.to_immutable()
     var aligned = buf.aligned_ptr_at[DType.int64](5)
     var expected = buf.ptr_at[DType.int64](0)
     assert_true(aligned == expected)
@@ -348,7 +348,7 @@ def test_aligned_ptr_at_second_block() raises:
     # int32: 4 bytes each, 64/4 = 16 elements per block
     # offset=20 → byte offset=80, align_down(80,64)=64 → element 16
     var bb = Buffer.alloc_zeroed[DType.int32](64)
-    var buf = bb.to_immutable()
+    var buf = bb^.to_immutable()
     var aligned = buf.aligned_ptr_at[DType.int32](20)
     var expected = buf.ptr_at[DType.int32](16)
     assert_true(aligned == expected)

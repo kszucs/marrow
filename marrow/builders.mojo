@@ -386,9 +386,11 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             self._bitmap.length = self._length
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze the value buffer into an immutable Buffer
-        var values = self._buffer.to_immutable()
+        var values = self._buffer^.to_immutable()
+        self._buffer = Buffer.alloc_zeroed[Self.T.native](0)
         # construct the immutable result array
         var result = PrimitiveArray[Self.T](
             length=self._length,
@@ -567,10 +569,13 @@ struct StringBuilder(Builder, Sized):
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             self._bitmap.length = self._length
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets and byte data buffers into immutable Buffers
-        var offsets = self._offsets.to_immutable()
-        var values = self._values.to_immutable()
+        var offsets = self._offsets^.to_immutable()
+        self._offsets = Buffer.alloc_zeroed[DType.uint32](0)
+        var values = self._values^.to_immutable()
+        self._values = Buffer.alloc_zeroed(0)
         # construct the immutable result array
         var result = StringArray(
             length=self._length,
@@ -721,9 +726,11 @@ struct ListBuilder(Builder, Sized):
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             self._bitmap.length = self._length
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets buffer and recursively finish the child builder
-        var offsets = self._offsets.to_immutable()
+        var offsets = self._offsets^.to_immutable()
+        self._offsets = Buffer.alloc_zeroed[DType.uint32](0)
         var values = self._child.finish()
         # construct the immutable result array
         var result = ListArray(
@@ -855,7 +862,8 @@ struct FixedSizeListBuilder(Builder, Sized):
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             self._bitmap.length = self._length
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
         # recursively finish the child builder
         var values = self._child.finish()
         # construct the immutable result array
@@ -987,7 +995,8 @@ struct StructBuilder(Builder, Sized):
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
             self._bitmap.length = self._length
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
         # recursively finish each field builder into a frozen child array
         var frozen_children = List[AnyArray](capacity=len(self._children))
         for ref child in self._children:
@@ -1091,13 +1100,16 @@ struct BoolBuilder(Builder, Sized):
         self._bitmap.length = n
         self._buffer.length = n
         if null_count != 0:
-            bm = self._bitmap.to_immutable()
+            bm = self._bitmap^.to_immutable()
+            self._bitmap = Bitmap.alloc_zeroed(0)
+        var data = self._buffer^.to_immutable()
+        self._buffer = Bitmap.alloc_zeroed(0)
         var result = BoolArray(
             length=n,
             nulls=null_count,
             offset=0,
             bitmap=bm^,
-            buffer=self._buffer.to_immutable(),
+            buffer=data^,
         )
         self._length = 0
         self._null_count = 0

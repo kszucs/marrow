@@ -775,7 +775,7 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
     var frozen = b.finish()
     assert_equal(frozen.nulls, 1)
     # 3 bits → 1 byte → 64-byte aligned = 64 bytes
-    assert_equal(frozen.bitmap.value()._buffer.size, 64)
+    assert_equal(frozen.bitmap.value().buffer.size, 64)
 
 
 def test_any_builder_finish_dispatch_primitive() raises:
