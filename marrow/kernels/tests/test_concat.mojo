@@ -133,13 +133,13 @@ def test_concat_bool() raises:
         array([False, True]).to_any(),
     ]
     var tmp_bool = concat(arrs)
-    ref result = tmp_bool.as_primitive[bool_]()
+    ref result = tmp_bool.as_bool()
     assert_equal(result.length, 5)
-    assert_true(result[0].__bool__())
-    assert_false(result[1].__bool__())
-    assert_true(result[2].__bool__())
-    assert_false(result[3].__bool__())
-    assert_true(result[4].__bool__())
+    assert_true(result[0])
+    assert_false(result[1])
+    assert_true(result[2])
+    assert_false(result[3])
+    assert_true(result[4])
 
 
 def test_concat_bool_with_offset() raises:
@@ -148,12 +148,12 @@ def test_concat_bool_with_offset() raises:
     var sliced = a.slice(1, 3)
     var arrs: List[AnyArray] = [(sliced^).to_any(), array([True]).to_any()]
     var tmp_bool_offset = concat(arrs)
-    ref result = tmp_bool_offset.as_primitive[bool_]()
+    ref result = tmp_bool_offset.as_bool()
     assert_equal(result.length, 4)
-    assert_false(result[0].__bool__())
-    assert_true(result[1].__bool__())
-    assert_false(result[2].__bool__())
-    assert_true(result[3].__bool__())
+    assert_false(result[0])
+    assert_true(result[1])
+    assert_false(result[2])
+    assert_true(result[3])
 
 
 # ---------------------------------------------------------------------------

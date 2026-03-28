@@ -189,7 +189,12 @@ struct AnyArray(
 
         # Try downcasting from a marrow Python object.
         try:
-            comptime for T in primitive_dtypes:
+            try:
+                self = AnyArray(py.downcast_value_ptr[BoolArray]()[].copy())
+                return
+            except:
+                pass
+            comptime for T in numeric_dtypes:
                 try:
                     self = AnyArray(
                         py.downcast_value_ptr[PrimitiveArray[T]]()[].copy()
@@ -258,7 +263,9 @@ struct AnyArray(
     def to_python_object(var self) raises -> PythonObject:
         """Convert to the corresponding Python typed-array object."""
         var dt = self.dtype()
-        comptime for T in primitive_dtypes:
+        if dt == bool_:
+            return self.as_bool().copy().to_python_object()
+        comptime for T in numeric_dtypes:
             if dt == T:
                 return self.as_primitive[T]().copy().to_python_object()
         if dt.is_string():
@@ -340,7 +347,9 @@ struct AnyArray(
         7-field layout is the natural representation.
         """
         var dt = data.dtype
-        comptime for T in primitive_dtypes:
+        if dt == bool_:
+            return AnyArray(BoolArray(data))
+        comptime for T in numeric_dtypes:
             if dt == T:
                 return AnyArray(PrimitiveArray[T](data))
         if dt.is_string() or dt.is_binary():
@@ -361,7 +370,10 @@ struct AnyArray(
 
     def write_to[W: Writer](self, mut writer: W):
         var dt = self.dtype()
-        comptime for T in primitive_dtypes:
+        if dt == bool_:
+            self.as_bool().write_to(writer)
+            return
+        comptime for T in numeric_dtypes:
             if dt == T:
                 self.as_primitive[T]().write_to(writer)
                 return
@@ -640,7 +652,7 @@ struct PrimitiveArray[T: DataType](
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return BitmapView(self.bitmap.value()).test(self.offset + index)
+        return self.bitmap.value().test(self.offset + index)
 
     @always_inline
     def unsafe_get(self, index: Int) -> Self.scalar:
@@ -680,7 +692,7 @@ struct PrimitiveArray[T: DataType](
 
     def validity(
         self,
-    ) -> Optional[BitmapView[ImmutExternalOrigin]]:
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
         """Validity bitmap as a BitmapView, or None if all-valid."""
         if self.bitmap:
             return self.bitmap.value().view(self.offset, self.length)
@@ -701,11 +713,7 @@ struct PrimitiveArray[T: DataType](
         """Upload array data to the GPU."""
         var bm: Optional[Bitmap[]] = None
         if self.bitmap:
-            bm = Bitmap(
-                self.bitmap.value()._buffer.to_device(ctx),
-                0,
-                self.bitmap.value()._length,
-            )
+            bm = self.bitmap.value().to_device(ctx)
         return PrimitiveArray[Self.T](
             length=self.length,
             nulls=self.nulls,
@@ -718,11 +726,7 @@ struct PrimitiveArray[T: DataType](
         """Download array data from the GPU to owned CPU heap buffers."""
         var bm: Optional[Bitmap[]] = None
         if self.bitmap:
-            bm = Bitmap(
-                self.bitmap.value()._buffer.to_cpu(ctx),
-                0,
-                self.bitmap.value()._length,
-            )
+            bm = self.bitmap.value().to_cpu(ctx)
         return PrimitiveArray[Self.T](
             length=self.length,
             nulls=self.nulls,
@@ -747,7 +751,7 @@ struct PrimitiveArray[T: DataType](
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
+            if not (self.bitmap.value() == other.bitmap.value()):
                 return False
         # Fast path: no nulls, no offset — full buffer SIMD comparison.
         if self.nulls == 0 and self.offset == 0 and other.offset == 0:
@@ -884,7 +888,7 @@ struct StringArray(
         """Return True if the element at the given index is not null."""
         if not self.bitmap:
             return True
-        return BitmapView(self.bitmap.value()).test(self.offset + index)
+        return self.bitmap.value().test(self.offset + index)
 
     def unsafe_get[
         self_origin: Origin[mut=False], //
@@ -927,7 +931,7 @@ struct StringArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
+            if not (self.bitmap.value() == other.bitmap.value()):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -1029,7 +1033,7 @@ struct ListArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return BitmapView(self.bitmap.value()).test(self.offset + index)
+        return self.bitmap.value().test(self.offset + index)
 
     def unsafe_get(self, index: Int) raises -> AnyArray:
         """Return a view of the child array for the list at the given index."""
@@ -1092,7 +1096,7 @@ struct ListArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
+            if not (self.bitmap.value() == other.bitmap.value()):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -1193,7 +1197,7 @@ struct FixedSizeListArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return BitmapView(self.bitmap.value()).test(self.offset + index)
+        return self.bitmap.value().test(self.offset + index)
 
     def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
         var list_size = self.dtype.size
@@ -1229,8 +1233,7 @@ struct FixedSizeListArray(
             new_buffers.append(child_data.buffers[i].to_device(ctx))
         var child_bm: Optional[Bitmap[]] = None
         if child_data.bitmap:
-            var bv = child_data.bitmap.value()
-            child_bm = Bitmap(bv._buffer.to_device(ctx), 0, bv._length)
+            child_bm = child_data.bitmap.value().to_device(ctx)
         var new_child = AnyArray.from_data(
             ArrayData(
                 dtype=child_data.dtype,
@@ -1244,8 +1247,7 @@ struct FixedSizeListArray(
         )
         var bm: Optional[Bitmap[]] = None
         if self.bitmap:
-            var bv = self.bitmap.value()
-            bm = Bitmap(bv._buffer.to_device(ctx), 0, bv._length)
+            bm = self.bitmap.value().to_device(ctx)
         return FixedSizeListArray(
             dtype=self.dtype,
             length=self.length,
@@ -1267,7 +1269,7 @@ struct FixedSizeListArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
+            if not (self.bitmap.value() == other.bitmap.value()):
                 return False
         for i in range(self.length):
             if self.is_valid(i):
@@ -1365,7 +1367,7 @@ struct StructArray(
     def is_valid(self, index: Int) -> Bool:
         if not self.bitmap:
             return True
-        return BitmapView(self.bitmap.value()).test(self.offset + index)
+        return self.bitmap.value().test(self.offset + index)
 
     def _index_for_field_name(self, name: StringSlice) raises -> Int:
         for idx, ref field in enumerate(self.dtype.fields):
@@ -1450,7 +1452,7 @@ struct StructArray(
         if self.bitmap.__bool__() != other.bitmap.__bool__():
             return False
         if self.bitmap:
-            if not (BitmapView(self.bitmap.value()) == BitmapView(other.bitmap.value())):
+            if not (self.bitmap.value() == other.bitmap.value()):
                 return False
         if len(self.children) != len(other.children):
             return False

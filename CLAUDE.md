@@ -70,7 +70,7 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - `Buffer[mut=False]` — immutable, ref-counted via `ArcPointer[Allocation]`
 - `Buffer[mut=True]` — mutable counterpart (replaces the former `BufferBuilder`); `finish()` freezes to `Buffer[mut=False]`
 - Allocation kinds: CPU (owned heap), FOREIGN (external with release callback), HOST (pinned GPU host memory), DEVICE (GPU memory)
-- All buffers are 64-byte aligned and padded. Use `aligned_unsafe_ptr[T](offset)` / `aligned_device_ptr[T](offset)` when the array offset is non-zero to ensure SIMD loads start at a 64-byte boundary. Use `unsafe_ptr[T](offset)` / `device_ptr[T](offset)` only when exact element positioning is needed.
+- All buffers are 64-byte aligned and padded. Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for computation. Avoid naked pointer arithmetic — do not use raw pointer types directly in kernel or array code.
 
 **Bitmap** (`marrow/bitmap.mojo`):
 - Immutable, bit-packed validity buffer wrapping a `Buffer`

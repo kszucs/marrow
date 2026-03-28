@@ -483,7 +483,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         for the lifetime of the Allocation.  `device_type()` is inferred from
         the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
         """
-        var ptr = rebind[UnsafePointer[UInt8, mut=False]](host.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](host.unsafe_ptr())
         return Buffer[mut=False](
             size=len(host),
             ptr=ptr,
@@ -504,7 +504,9 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         """
         return Buffer[mut=False](
             size=size,
-            ptr=UnsafePointer[UInt8, mut=False](),
+            ptr=rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+                UnsafePointer[UInt8, ImmutAnyOrigin](unsafe_from_address=0)
+            ),
             owner=ArcPointer(Allocation.device(dev)),
         )
 
@@ -723,7 +725,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         """
         if self.is_device():
             raise Error("to_device: buffer is already on device")
-        var dev = ctx.enqueue_createbuffer[DType.uint8](self.size)
+        var dev = ctx.enqueue_create_buffer[DType.uint8](self.size)
         ctx.enqueue_copy(dev, rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self.ptr))
         return Buffer.from_device(dev, self.size)
 
@@ -748,8 +750,8 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         ctx.synchronize()
         return builder^.to_immutable()
 
-    def __eq__(self: Buffer[mut=False], other: Buffer[mut=False]) -> Bool:
-        """Compare two immutable buffers byte-by-byte (64-bit chunks for speed)."""
+    def __eq__(self: Buffer[mut=_], other: Buffer[mut=_]) -> Bool:
+        """Compare two buffers byte-by-byte (64-bit chunks for speed)."""
         if self.size != other.size:
             return False
         var lhs = self.ptr.bitcast[UInt64]()
@@ -815,10 +817,16 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     var buffer: Buffer[mut=Self.mut]
     var length: Int
 
-    def __init__(out self, buffer: Buffer[mut=Self.mut]):
-        """Construct an immutable Bitmap from an existing buffer."""
-        self.buffer = buffer
-        self.length = len(buffer) * 8
+    def __init__(out self, var buffer: Buffer[mut=Self.mut]):
+        """Construct a Bitmap from an existing buffer (length = buffer bytes * 8)."""
+        var n = len(buffer) * 8
+        self.buffer = buffer^
+        self.length = n
+
+    def __init__(out self, var buffer: Buffer[mut=Self.mut], *, length: Int):
+        """Construct a Bitmap with an explicit bit length."""
+        self.buffer = buffer^
+        self.length = length
 
     def __init__(out self, *, copy: Self):
         comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
@@ -869,28 +877,27 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         return self.length
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(
-            "Bitmap(offset=", self.bitoffset(), ", length=", self.length, ")"
-        )
+        writer.write("Bitmap(length=", self.length, ")")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
+    # TODO: the proper lifetime is probably the underlying buffer's ArcPointer ref-count
     def view(self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of the bitmap starting at `offset` for `length` bits.
 
         If `length` is -1 (the default), the view extends to the end of the bitmap.
         """
-        if length == -1:
-            length = self.length - offset
-        return BitmapView[origin_of(self)](ptr=self.buffer.ptr, offset=offset, length=length)     )
+        var n = length if length >= 0 else self.length - offset
+        var ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](self.buffer.ptr)
+        return BitmapView[origin_of(self)](ptr=ptr, offset=offset, length=n)
 
     def slice(self, offset: Int, length: Int) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return self.view(offset, length)
 
-    def __eq__(self: Bitmap[mut=False], other: Bitmap[mut=False]) -> Bool:
-        """Compare two immutable bitmaps bit-by-bit over their valid ranges."""
+    def __eq__(self: Bitmap[mut=_], other: Bitmap[mut=_]) -> Bool:
+        """Compare two bitmaps bit-by-bit over their valid ranges."""
         if self.length != other.length:
             return False
         for i in range(self.length):
@@ -944,11 +951,11 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Return the bit at logical `index` (0-based within this bitmap's window)."""
         var i = index if index >= 0 else index + self.length
         debug_assert(0 <= i < self.length, "bitmap index out of bounds")
-        return self.test(self.offset + i)
+        return self.test(i)
 
     @always_inline
-    def __getitem__(self: Bitmap[], slc: ContiguousSlice) -> Bitmap[]:
-        """Return a zero-copy sub-bitmap for the given slice."""
+    def __getitem__(self: Bitmap[], slc: ContiguousSlice) -> BitmapView[origin_of(self)]:
+        """Return a zero-copy sub-bitmap view for the given slice."""
         var start, end = slc.indices(self.length)
         return self.slice(start, end - start)
 
@@ -961,11 +968,43 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     def set_range(mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool):
         """Set `length` bits starting at `start` to `value`."""
-        self.view()._set_range(start, length, value)
+        if length == 0:
+            return
+        var end = start + length
+        var start_byte = start >> 3
+        var start_bit = start & 7
+        var end_byte = end >> 3
+        var end_bit = end & 7
+        var fill = UInt8(255 if value else 0)
+        var ptr = self.buffer.ptr
 
-    def extend[
-        src_origin: Origin[_],
-    ](mut self: Bitmap[mut=True], src: BitmapView[src_origin], dst_start: Int, length: Int):
+        if start_byte == end_byte:
+            var mask = UInt8((1 << end_bit) - 1) & (UInt8(0xFF) << UInt8(start_bit))
+            if value:
+                ptr[start_byte] = ptr[start_byte] | mask
+            else:
+                ptr[start_byte] = ptr[start_byte] & ~mask
+            return
+
+        if start_bit != 0:
+            var mask = UInt8(0xFF) << UInt8(start_bit)
+            if value:
+                ptr[start_byte] = ptr[start_byte] | mask
+            else:
+                ptr[start_byte] = ptr[start_byte] & ~mask
+            start_byte += 1
+
+        if end_bit != 0:
+            var mask = UInt8((1 << end_bit) - 1)
+            if value:
+                ptr[end_byte] = ptr[end_byte] | mask
+            else:
+                ptr[end_byte] = ptr[end_byte] & ~mask
+
+        if end_byte > start_byte:
+            memset(ptr + start_byte, fill, end_byte - start_byte)
+
+    def extend(mut self: Bitmap[mut=True], src: BitmapView[_], dst_start: Int, length: Int):
         """Copy `length` bits from `src` into self at `dst_start`.
 
         Three code paths:
@@ -1078,13 +1117,17 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Resize the underlying buffer to hold `capacity` bits."""
         self.buffer.resize(math.ceildiv(capacity, 8))
 
-    # TODO: it should be consuming self, and probably Bitmap[mut=True] should
-    # have an implicit constructor for creating a Bitmap from a Buffer[mut=True]
-    # to avoid the extra copy in the common case of building a Bitmap from
-    # scratch and then freezing it.
+    def to_device(self: Bitmap[mut=False], ctx: DeviceContext) raises -> Bitmap[mut=False]:
+        """Upload bitmap to the GPU; returns a new device-resident Bitmap."""
+        return Bitmap[mut=False](self.buffer.to_device(ctx), length=self.length)
+
+    def to_cpu(self: Bitmap[mut=False], ctx: DeviceContext) raises -> Bitmap[mut=False]:
+        """Download bitmap from the GPU to owned CPU heap buffers."""
+        return Bitmap[mut=False](self.buffer.to_cpu(ctx), length=self.length)
+
     def to_immutable(deinit self: Bitmap[mut=True]) -> Bitmap[mut=False]:
         """Consume and freeze the builder into an immutable `Bitmap[]`.
 
         Uses `self.length` as the number of meaningful bits.
         """
-        return Bitmap[mut=False](self.buffer^.to_immutable(), 0, self.length)
+        return Bitmap[mut=False](self.buffer^.to_immutable(), length=self.length)

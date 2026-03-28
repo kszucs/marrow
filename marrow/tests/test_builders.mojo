@@ -542,8 +542,8 @@ def test_struct_builder_append_null() raises:
     sb.append_null()
     var frozen = sb.finish()
     assert_equal(frozen.length, 2)
-    assert_true(BitmapView(frozen.bitmap.value()).test(0))
-    assert_false(BitmapView(frozen.bitmap.value()).test(1))
+    assert_true(frozen.bitmap.value().test(0))
+    assert_false(frozen.bitmap.value().test(1))
 
 
 def test_struct_builder_field_values_accessible() raises:

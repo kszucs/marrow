@@ -145,10 +145,10 @@ def _binary_cmp[
 
     return BoolArray(
         length=length,
-        nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=Bitmap[mut=False](result_buf, 0, length),
+        buffer=Bitmap[mut=False](result_buf, length=length),
     )
 
 
@@ -275,7 +275,7 @@ def equal(
             bm_builder.set(i)
     return BoolArray(
         length=n,
-        nulls=n - BitmapView(bm.value()).count_set_bits() if bm else 0,
+        nulls=n - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=bm_builder.to_immutable(),

@@ -48,6 +48,27 @@ def not_(arr: BoolArray) raises -> BoolArray:
     )
 
 
+def and_(lhs: AnyArray, rhs: AnyArray) raises -> AnyArray:
+    """Runtime-typed AND: dispatches to the typed BoolArray overload."""
+    if lhs.dtype() != bool_dt or rhs.dtype() != bool_dt:
+        raise Error("and_: inputs must be bool arrays")
+    return and_(lhs.as_bool(), rhs.as_bool()).to_any()
+
+
+def or_(lhs: AnyArray, rhs: AnyArray) raises -> AnyArray:
+    """Runtime-typed OR: dispatches to the typed BoolArray overload."""
+    if lhs.dtype() != bool_dt or rhs.dtype() != bool_dt:
+        raise Error("or_: inputs must be bool arrays")
+    return or_(lhs.as_bool(), rhs.as_bool()).to_any()
+
+
+def not_(arr: AnyArray) raises -> AnyArray:
+    """Runtime-typed NOT: dispatches to the typed BoolArray overload."""
+    if arr.dtype() != bool_dt:
+        raise Error("not_: input must be a bool array")
+    return not_(arr.as_bool()).to_any()
+
+
 # TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
 def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
     """Return a bool array that is True where arr has a null value."""

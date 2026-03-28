@@ -11,7 +11,7 @@ from marrow.views import BitmapView
 # ---------------------------------------------------------------------------
 
 
-def _count_naive(bm: Bitmap[]) -> Int:
+def _count_naive(bm: BitmapView[_]) -> Int:
     """Reference popcount."""
     var n = 0
     for i in range(len(bm)):
@@ -238,7 +238,7 @@ def test_count_set_bits_small_slice_in_large_bitmap() raises:
     var full = b^.to_immutable()
     # Slice at bit 1003 (byte 125, shift 3), length 5.
     var sliced = full.slice(1003, 5)
-    assert_equal(BitmapView(sliced).count_set_bits(), 5)
+    assert_equal(sliced.count_set_bits(), 5)
 
 
 def test_count_set_bits_vs_naive_all_patterns() raises:
@@ -286,14 +286,14 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
             var bz = Bitmap.alloc_zeroed(total)
             var fz = bz^.to_immutable()
             var sz = fz.slice(offset, size)
-            assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
+            assert_equal(sz.count_set_bits(), _count_naive(sz))
 
             # all-ones
             var bo = Bitmap.alloc_zeroed(total)
             bo.set_range(0, total, True)
             var fo = bo^.to_immutable()
             var so = fo.slice(offset, size)
-            assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
+            assert_equal(so.count_set_bits(), _count_naive(so))
 
             # alternating (even bits set)
             var ba = Bitmap.alloc_zeroed(total)
@@ -303,7 +303,7 @@ def test_count_set_bits_vs_naive_all_patterns() raises:
                 k += 2
             var fa = ba^.to_immutable()
             var sa = fa.slice(offset, size)
-            assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
+            assert_equal(sa.count_set_bits(), _count_naive(sa))
 
 
 def test_count_set_bits_interior_slices() raises:
@@ -338,14 +338,14 @@ def test_count_set_bits_interior_slices() raises:
             var bz = Bitmap.alloc_zeroed(total)
             var fz = bz^.to_immutable()
             var sz = fz.slice(offset, size)
-            assert_equal(BitmapView(sz).count_set_bits(), _count_naive(sz))
+            assert_equal(sz.count_set_bits(), _count_naive(sz))
 
             # all-ones: trailing bytes contain 1s, must be subtracted
             var bo = Bitmap.alloc_zeroed(total)
             bo.set_range(0, total, True)
             var fo = bo^.to_immutable()
             var so = fo.slice(offset, size)
-            assert_equal(BitmapView(so).count_set_bits(), _count_naive(so))
+            assert_equal(so.count_set_bits(), _count_naive(so))
 
             # alternating (even bits set)
             var ba = Bitmap.alloc_zeroed(total)
@@ -355,7 +355,7 @@ def test_count_set_bits_interior_slices() raises:
                 k += 2
             var fa = ba^.to_immutable()
             var sa = fa.slice(offset, size)
-            assert_equal(BitmapView(sa).count_set_bits(), _count_naive(sa))
+            assert_equal(sa.count_set_bits(), _count_naive(sa))
 
 
 def test_count_set_bits_trail_bits_exact_boundary() raises:
@@ -364,13 +364,13 @@ def test_count_set_bits_trail_bits_exact_boundary() raises:
     var b = Bitmap.alloc_zeroed(512)
     b.set_range(0, 512, True)
     var bm = b^.to_immutable()
-    assert_equal(BitmapView(bm).count_set_bits(), 512)
+    assert_equal(bm.view().count_set_bits(), 512)
     # Slice ending exactly at byte 64 within a larger buffer.
     var large = Bitmap.alloc_zeroed(1024)
     large.set_range(0, 1024, True)
     var fl = large^.to_immutable()
     var s = fl.slice(0, 512)
-    assert_equal(BitmapView(s).count_set_bits(), 512)
+    assert_equal(s.count_set_bits(), 512)
 
 
 def test_count_set_bits_trail_bytes_only() raises:
@@ -381,7 +381,7 @@ def test_count_set_bits_trail_bytes_only() raises:
     full.set_range(0, 1000, True)
     var bm = full^.to_immutable()
     var s = bm.slice(0, 8)
-    assert_equal(BitmapView(s).count_set_bits(), 8)
+    assert_equal(s.count_set_bits(), 8)
 
 
 def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
@@ -394,8 +394,8 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
     full.set_range(0, 1000, True)
     var bm = full^.to_immutable()
     var s = bm.slice(520, 10)
-    assert_equal(BitmapView(s).count_set_bits(), 10)
-    assert_equal(BitmapView(s).count_set_bits(), _count_naive(s))
+    assert_equal(s.count_set_bits(), 10)
+    assert_equal(s.count_set_bits(), _count_naive(s))
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +426,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
 # def test_slice_count_set_bits() raises:
 #     var bm = _make(16, [2, 3, 4, 5, 6])
 #     var s = bm.slice(2, 5)  # bits 2-6 → all 5 set
-#     assert_equal(BitmapView(s).count_set_bits(), 5)
+#     assert_equal(s.count_set_bits(), 5)
 
 
 # def test_slice_getitem_syntax() raises:
@@ -485,7 +485,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
 #     var bm = _make(10, [])  # 10 bits, all clear
 #     var inv = (~BitmapView(bm)).to_immutable()
 #     # only bits 0-9 are inverted; bits 10-15 of last byte must stay 0
-#     assert_equal(BitmapView(inv).count_set_bits(), 10)
+#     assert_equal(inv.count_set_bits(), 10)
 
 
 # # ---------------------------------------------------------------------------
@@ -540,7 +540,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
 #     var b = b2^.to_immutable()
 
 #     var r = (BitmapView(a) & BitmapView(b)).to_immutable()
-#     assert_equal(BitmapView(r).count_set_bits(), 256)  # overlap in bits 256-511
+#     assert_equal(r.count_set_bits(), 256)  # overlap in bits 256-511
 
 
 # ---------------------------------------------------------------------------
@@ -833,7 +833,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
 #     assert_false(inv[2])
 #     for i in range(3, 24):
 #         assert_true(inv[i])
-#     assert_equal(BitmapView(inv).count_set_bits(), 22)
+#     assert_equal(inv.count_set_bits(), 22)
 
 
 # def test_invert_large_byte_offset_with_shift() raises:
@@ -856,7 +856,7 @@ def test_count_set_bits_lead_and_trail_bytes_nonzero() raises:
 #     assert_true(inv[5])
 #     assert_true(inv[6])
 #     assert_true(inv[7])
-#     assert_equal(BitmapView(inv).count_set_bits(), 5)
+#     assert_equal(inv.count_set_bits(), 5)
 
 
 # def test_and_length_mismatch_raises() raises:

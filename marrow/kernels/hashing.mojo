@@ -313,7 +313,7 @@ def rapidhash(
         data_ptr = keys.buffer.device_ptr[DType.uint8]()
         if keys.bitmap:
             bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
-            bm_offset = keys.bitmap.value().offset + keys.offset
+            bm_offset = keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
@@ -321,7 +321,7 @@ def rapidhash(
         data_ptr = keys.buffer.ptr
         if keys.bitmap:
             bm_ptr = keys.bitmap.value().buffer.ptr
-            bm_offset = keys.bitmap.value().offset + keys.offset
+            bm_offset = keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
 
@@ -367,7 +367,7 @@ def rapidhash[
         in_ptr = keys.buffer.device_ptr[native](keys.offset)
         if keys.bitmap:
             bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
-            bm_offset = keys.bitmap.value().offset + keys.offset
+            bm_offset = keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
@@ -375,7 +375,7 @@ def rapidhash[
         in_ptr = keys.buffer.ptr_at[native](keys.offset)
         if keys.bitmap:
             bm_ptr = keys.bitmap.value().buffer.ptr
-            bm_offset = keys.bitmap.value().offset + keys.offset
+            bm_offset = keys.offset
 
     var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
 
@@ -401,7 +401,7 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
-        if has_bitmap and not BitmapView(keys.bitmap.value()).test(keys.offset + i):
+        if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
             builder.unsafe_append(_h(_hash(String(keys.unsafe_get(UInt(i))))))
@@ -555,7 +555,7 @@ def hash_identity[
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
-        if has_bitmap and not BitmapView(keys.bitmap.value()).test(keys.offset + i):
+        if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
             builder.unsafe_append(_h(Int(keys.unsafe_get(i)) + _OFFSET))

@@ -1,6 +1,6 @@
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.arrays import PrimitiveArray, AnyArray
+from marrow.arrays import PrimitiveArray, BoolArray, AnyArray
 from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
@@ -28,12 +28,11 @@ def _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
 
 def _exec_pred(
     expr: AnyValue, batch: RecordBatch
-) raises -> PrimitiveArray[bool_dt]:
+) raises -> BoolArray:
     """Helper: build a value processor and evaluate predicate against the batch.
     """
     var tmp = Planner().build(expr).eval(batch)
-    ref result = tmp.as_primitive[bool_dt]()
-    return result.copy()
+    return tmp.as_bool().copy()
 
 
 # ---------------------------------------------------------------------------
@@ -157,11 +156,11 @@ def test_equal_pred() raises:
     var result = _exec_pred(
         col(0) == col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 0)
-    assert_equal(result[2], 1)
-    assert_equal(result[3], 0)
-    assert_equal(result[4], 1)
+    assert_true(result[0])
+    assert_false(result[1])
+    assert_true(result[2])
+    assert_false(result[3])
+    assert_true(result[4])
 
 
 def test_less_pred() raises:
@@ -171,10 +170,10 @@ def test_less_pred() raises:
     var result = _exec_pred(
         col(0) < col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 0)
-    assert_equal(result[2], 0)
-    assert_equal(result[3], 1)
+    assert_true(result[0])
+    assert_false(result[1])
+    assert_false(result[2])
+    assert_true(result[3])
 
 
 def test_greater_equal_pred() raises:
@@ -184,10 +183,10 @@ def test_greater_equal_pred() raises:
     var result = _exec_pred(
         col(0) >= col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 0)
-    assert_equal(result[2], 1)
-    assert_equal(result[3], 1)
+    assert_true(result[0])
+    assert_false(result[1])
+    assert_true(result[2])
+    assert_true(result[3])
 
 
 # ---------------------------------------------------------------------------
@@ -203,10 +202,10 @@ def test_and_pred() raises:
     var result = _exec_pred(
         (col(0) < col(1)) & (col(0) != lit[int64](3)), batch
     )
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 0)
-    assert_equal(result[2], 0)
-    assert_equal(result[3], 0)
+    assert_true(result[0])
+    assert_false(result[1])
+    assert_false(result[2])
+    assert_false(result[3])
 
 
 def test_not_pred() raises:
@@ -216,11 +215,11 @@ def test_not_pred() raises:
     var result = _exec_pred(
         ~(col(0) == col(1)), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 1)
-    assert_equal(result[2], 0)
-    assert_equal(result[3], 1)
-    assert_equal(result[4], 1)
+    assert_true(result[0])
+    assert_true(result[1])
+    assert_false(result[2])
+    assert_true(result[3])
+    assert_true(result[4])
 
 
 # ---------------------------------------------------------------------------

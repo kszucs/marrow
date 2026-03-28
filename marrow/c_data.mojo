@@ -509,8 +509,7 @@ struct CArrowArray(Copyable, Movable):
                     math.ceildiv(Int(length), 8),
                     owner,
                 ),
-                0,
-                Int(length),
+                length=Int(length),
             )
         else:
             bitmap = None

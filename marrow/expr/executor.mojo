@@ -315,15 +315,9 @@ struct BinaryProcessor(ValueProcessor):
         elif self.op == GE:
             return greater_equal(l, r)
         elif self.op == AND:
-            return and_(
-                l.as_primitive[bool_dt](),
-                r.as_primitive[bool_dt](),
-            ).to_any()
+            return and_(l, r)
         elif self.op == OR:
-            return or_(
-                l.as_primitive[bool_dt](),
-                r.as_primitive[bool_dt](),
-            ).to_any()
+            return or_(l, r)
         else:
             raise Error("BinaryProcessor: unknown op ", self.op)
 
@@ -345,7 +339,7 @@ struct UnaryProcessor(ValueProcessor):
         elif self.op == ABS:
             return abs_(c)
         elif self.op == NOT:
-            return not_(c.as_primitive[bool_dt]()).to_any()
+            return not_(c)
         else:
             raise Error("UnaryProcessor: unknown op ", self.op)
 

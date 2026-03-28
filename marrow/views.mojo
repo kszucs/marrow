@@ -334,7 +334,7 @@ struct BitmapView[
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
-        var raw = (self._data + byte_idx).bitcast[T]().load[alignment=1]()
+        var raw = (self._data + byte_idx).bitcast[Scalar[T]]().load[alignment=1]()
         return raw >> Scalar[T](bit_off)
 
     # --- Slicing ---
@@ -547,53 +547,6 @@ struct BitmapView[
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
         self._data[byte_index] = self._data[byte_index] ^ bit_mask
-
-    def _set_range(self: BitmapView[mut=True, origin=_], start: Int, length: Int, value: Bool):
-        """Set `length` bits starting at `start` (relative to view start) to `value`."""
-        if length == 0:
-            return
-        var abs_start = self._offset + start
-        var end = abs_start + length
-        var start_byte = abs_start >> 3
-        var start_bit = abs_start & 7
-        var end_byte = end >> 3
-        var end_bit = end & 7
-        var fill = UInt8(255 if value else 0)
-        var ptr = self._data
-
-        if start_byte == end_byte:
-            var mask = UInt8((1 << end_bit) - 1) & (UInt8(0xFF) << UInt8(start_bit))
-            if value:
-                ptr[start_byte] = ptr[start_byte] | mask
-            else:
-                ptr[start_byte] = ptr[start_byte] & ~mask
-            return
-
-        if start_bit != 0:
-            var mask = UInt8(0xFF) << UInt8(start_bit)
-            if value:
-                ptr[start_byte] = ptr[start_byte] | mask
-            else:
-                ptr[start_byte] = ptr[start_byte] & ~mask
-            start_byte += 1
-
-        if end_bit != 0:
-            var mask = UInt8((1 << end_bit) - 1)
-            if value:
-                ptr[end_byte] = ptr[end_byte] | mask
-            else:
-                ptr[end_byte] = ptr[end_byte] & ~mask
-
-        if end_byte > start_byte:
-            memset(ptr + start_byte, fill, end_byte - start_byte)
-
-    def set_all(self: BitmapView[mut=True, origin=_]):
-        """Set all bits in the view to 1."""
-        self._set_range(0, self._len, True)
-
-    def clear_all(self: BitmapView[mut=True, origin=_]):
-        """Set all bits in the view to 0."""
-        self._set_range(0, self._len, False)
 
     # --- Set operations (return Buffer with offset=0) ---
 

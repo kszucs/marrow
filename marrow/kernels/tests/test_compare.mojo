@@ -1,4 +1,4 @@
-from std.testing import assert_equal, TestSuite
+from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import PrimitiveArray, AnyArray
 from marrow.builders import array, PrimitiveBuilder
@@ -25,11 +25,11 @@ def test_equal_true_and_false() raises:
     var b = array[int64]([1, 0, 3, 0, 5])
     var result = equal[int64](a, b)
 
-    assert_equal(result[0], 1)  # 1 == 1
-    assert_equal(result[1], 0)  # 2 != 0
-    assert_equal(result[2], 1)  # 3 == 3
-    assert_equal(result[3], 0)  # 4 != 0
-    assert_equal(result[4], 1)  # 5 == 5
+    assert_true(result[0])   # 1 == 1
+    assert_false(result[1])  # 2 != 0
+    assert_true(result[2])   # 3 == 3
+    assert_false(result[3])  # 4 != 0
+    assert_true(result[4])   # 5 == 5
 
 
 def test_not_equal() raises:
@@ -38,9 +38,9 @@ def test_not_equal() raises:
     var b = array[int64]([1, 9, 3])
     var result = not_equal[int64](a, b)
 
-    assert_equal(result[0], 0)  # 1 == 1
-    assert_equal(result[1], 1)  # 2 != 9
-    assert_equal(result[2], 0)  # 3 == 3
+    assert_false(result[0])  # 1 == 1
+    assert_true(result[1])   # 2 != 9
+    assert_false(result[2])  # 3 == 3
 
 
 def test_less() raises:
@@ -49,10 +49,10 @@ def test_less() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less[int64](a, b)
 
-    assert_equal(result[0], 1)  # 1 < 5
-    assert_equal(result[1], 0)  # 5 > 1
-    assert_equal(result[2], 0)  # 3 == 3, not strictly less
-    assert_equal(result[3], 1)  # 10 < 20
+    assert_true(result[0])   # 1 < 5
+    assert_false(result[1])  # 5 > 1
+    assert_false(result[2])  # 3 == 3, not strictly less
+    assert_true(result[3])   # 10 < 20
 
 
 def test_less_equal() raises:
@@ -61,10 +61,10 @@ def test_less_equal() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less_equal[int64](a, b)
 
-    assert_equal(result[0], 1)  # 1 <= 5
-    assert_equal(result[1], 0)  # 5 > 1
-    assert_equal(result[2], 1)  # 3 <= 3
-    assert_equal(result[3], 1)  # 10 <= 20
+    assert_true(result[0])   # 1 <= 5
+    assert_false(result[1])  # 5 > 1
+    assert_true(result[2])   # 3 <= 3
+    assert_true(result[3])   # 10 <= 20
 
 
 def test_greater() raises:
@@ -73,10 +73,10 @@ def test_greater() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater[int64](a, b)
 
-    assert_equal(result[0], 1)  # 5 > 1
-    assert_equal(result[1], 0)  # 1 < 5
-    assert_equal(result[2], 0)  # 3 == 3
-    assert_equal(result[3], 1)  # 20 > 10
+    assert_true(result[0])   # 5 > 1
+    assert_false(result[1])  # 1 < 5
+    assert_false(result[2])  # 3 == 3
+    assert_true(result[3])   # 20 > 10
 
 
 def test_greater_equal() raises:
@@ -85,10 +85,10 @@ def test_greater_equal() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater_equal[int64](a, b)
 
-    assert_equal(result[0], 1)  # 5 >= 1
-    assert_equal(result[1], 0)  # 1 < 5
-    assert_equal(result[2], 1)  # 3 >= 3
-    assert_equal(result[3], 1)  # 20 >= 10
+    assert_true(result[0])   # 5 >= 1
+    assert_false(result[1])  # 1 < 5
+    assert_true(result[2])   # 3 >= 3
+    assert_true(result[3])   # 20 >= 10
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +110,9 @@ def test_less_float64() raises:
     var b = bb.finish()
     var result = less[float64](a, b)
 
-    assert_equal(result[0], 0)  # 1.0 == 1.0
-    assert_equal(result[1], 0)  # 2.5 > 2.0
-    assert_equal(result[2], 1)  # 3.0 < 5.0
+    assert_false(result[0])  # 1.0 == 1.0
+    assert_false(result[1])  # 2.5 > 2.0
+    assert_true(result[2])   # 3.0 < 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ def test_length_mismatch_raises() raises:
         _ = equal[int64](a, b)
     except:
         raised = True
-    assert_equal(raised, True)
+    assert_true(raised)
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +141,8 @@ def test_single_element() raises:
     """Comparisons work on length-1 arrays."""
     var a = array[int64]([7])
     var b = array[int64]([7])
-    var eq = equal[int64](a, b)
-    assert_equal(eq[0], 1)
-
-    var lt = less[int64](a, b)
-    assert_equal(lt[0], 0)
+    assert_true(equal[int64](a, b)[0])
+    assert_false(less[int64](a, b)[0])
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +158,8 @@ def test_non_aligned_length() raises:
     var result = less[int64](a, b)
 
     for i in range(n):
-        var expected = Int(a[i].value() < b[i].value())
-        assert_equal(Int(result[i].value()), expected)
+        var expected = a[i].value() < b[i].value()
+        assert_equal(result[i], expected)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +201,7 @@ def test_dtype_mismatch_raises() raises:
         _ = equal(a, b)
     except:
         raised = True
-    assert_equal(raised, True)
+    assert_true(raised)
 
 
 def main() raises:

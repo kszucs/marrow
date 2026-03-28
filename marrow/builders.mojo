@@ -1052,10 +1052,10 @@ struct BoolBuilder(Builder, Sized):
 
     def extend(mut self, b: BoolArray) raises:
         self.reserve(b.length)
-        self._buffer.extend(b.buffer, self._length, b.length)
+        self._buffer.extend(b.values(), self._length, b.length)
         if b.nulls != 0:
             if b.bitmap:
-                self._bitmap.extend(b.bitmap.value(), self._length, b.length)
+                self._bitmap.extend(b.validity().value(), self._length, b.length)
             self._null_count += b.nulls
         else:
             self._bitmap.set_range(self._length, b.length, True)
@@ -1110,7 +1110,9 @@ comptime Float64Builder = PrimitiveBuilder[float64]
 
 def make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
     """Create the right builder tree for any dtype."""
-    comptime for T in primitive_dtypes:
+    if dtype == bool_:
+        return BoolBuilder(capacity)
+    comptime for T in numeric_dtypes:
         if dtype == T:
             return PrimitiveBuilder[T](capacity)
     if dtype.is_string():

@@ -127,7 +127,7 @@ def _unary[
     var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
         buf = Buffer.alloc_device[native](ctx.value(), length)
-        in_ptr = array.buffer.aligned_device_ptr[native](array.offset)
+        in_ptr = array.buffer.device_ptr[native](array.offset)
     else:
         buf = Buffer.alloc_zeroed[native](length)
         in_ptr = array.buffer.aligned_ptr_at[native](array.offset)
@@ -139,7 +139,7 @@ def _unary[
     return PrimitiveArray[T](
         length=length,
         nulls=length
-        - BitmapView(array.bitmap.value()).count_set_bits() if array.bitmap else 0,
+        - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
         offset=0,
         bitmap=array.bitmap,
         buffer=buf.to_immutable(),
@@ -191,7 +191,7 @@ def _binary[
 
     return PrimitiveArray[T](
         length=length,
-        nulls=length - BitmapView(bm.value()).count_set_bits() if bm else 0,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
         buffer=buf.to_immutable(),

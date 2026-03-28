@@ -331,7 +331,7 @@ def filter_[
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values().slice(selection.offset, n)
+    var sel_bm = selection.values()
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -388,7 +388,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values().slice(selection.offset, n)
+    var sel_bm = selection.values()
     var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
 
     if out_len == 0:
@@ -405,7 +405,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
     if array.bitmap:
-        var val_bm = BitmapView(array.bitmap.value()).slice(array.offset, n)
+        var val_bm = array.bitmap.value().view(array.offset, n)
         var filtered_bm, nc = _filter_bits(
             val_bm, sel_bm, sel_start, sel_end, out_len
         )
@@ -413,7 +413,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
         null_count = nc
 
     # Filter data.
-    var data_bm = array.values().slice(array.offset, n)
+    var data_bm = array.values()
     var filtered_data, _ = _filter_bits(data_bm, sel_bm, sel_start, sel_end, out_len)
     return BoolArray(
         length=out_len,
@@ -451,7 +451,7 @@ def filter_(
             t"filter: array length {n} != selection length {len(selection)}"
         )
 
-    var sel_bm = selection.values().slice(selection.offset, n)
+    var sel_bm = selection.values()
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
@@ -506,7 +506,7 @@ def filter_(
                 var elem_start = offsets_ptr[off + i]
                 var elem_end = offsets_ptr[off + i + 1]
                 byte_pos += elem_end - elem_start
-                var valid = BitmapView(src_bm).test(off + i)
+                var valid = src_bm.test(off + i)
                 if valid:
                     bm_builder.set(j)
                 else:
@@ -638,7 +638,7 @@ def drop_nulls[
     var selection = BoolArray(
         length=len(array),
         nulls=0,
-        offset=0,
+        offset=array.offset,
         bitmap=None,
         buffer=array.bitmap.value(),
     )
