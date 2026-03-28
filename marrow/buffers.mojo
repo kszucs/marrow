@@ -747,6 +747,33 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable):
         """Write the buffer's bytes to a Writer."""
         writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")
 
+    def view(self, offset: Int = 0, length: Int = -1) -> BufferView[origin_of(self)]:
+        """Return a zero-copy view of the buffer starting at `offset` for `length` bytes.
+
+        If `length` is -1 (the default), the view extends to the end of the buffer.
+        """
+        if length == -1:
+            length = self.size - offset
+        return BufferView[origin_of(self)](ptr=self.ptr, length=length)
+
+    def slice(self, offset: Int, length: Int) -> BufferView[origin_of(self)]:
+        """Return a zero-copy view of `length` bytes starting at `offset`."""
+        return self.view(offset, length)
+
+    def __getitem__[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
+        """Return the byte at `index`."""
+        # TODO: add boundschesk
+        return self.unsafe_get[T](index)
+
+    def __setitem__[T: DType = DType.uint8](self: Buffer[mut=True], index: Int, value: Scalar[T]):
+        """Set the byte at `index` to `value`."""
+        # TODO: add bounds check
+        self.unsafe_set[T](index, value)
+
+    def __getitem__(self, slice: ContiguousSlice) -> BufferView[origin_of(self)]:
+        """Return a view of the buffer for the given slice."""
+        var start, end = slc.indices(self.length)
+        return self.slice(start, end - start)
 
 # ---------------------------------------------------------------------------
 # Bitmap — bit-packed validity bitmap with parametric mutability
@@ -766,11 +793,14 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     """
 
     var buffer: Buffer[mut=Self.mut]
-    var offset: Int
     var length: Int
+    # TODO: consider to remove offset and langth, since bitmapview can be used
+    # for the same purpose
+    # var offset: Int
+    # var length: Int
 
     # TODO: reduce the number of overloads
-    def __init__(out self, var buffer: Buffer[mut=Self.mut], offset: Int=0, length: Int=0):
+    def __init__(out self, var buffer: Buffer[mut=Self.mut]):
         """Construct an immutable Bitmap from an existing buffer."""
         self.buffer = buffer
         self.offset = offset
@@ -779,18 +809,30 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     def __init__(out self, *, copy: Self):
         comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
         self.buffer = copy.buffer
-        self.offset = copy.offset
         self.length = copy.length
+        # self.offset = copy.offset
 
-    def __init__(out self: Bitmap[mut=True], values: List[Bool]):
+
+    def __init__(out self: Bitmap[mut=True], values: List[Bool]) raises:
         """Construct a mutable Bitmap from a list of boolean values."""
-        var n = len(values)
-        var byte_size = math.ceildiv(n, 8)
-        var buffer = Buffer.alloc_zeroed(byte_size)
-        self = Bitmap[mut=True](buffer^, 0, n)
-        for i in range(n):
-            if values[i]:
-                self.set(i)
+        self.buffer = Buffer.alloc_zeroed(math.ceildiv(len(values), 8))
+        self.length = len(values)
+        # self.offset = 0
+
+        for i, ref v in enumerate(values):
+            if v:
+                self.unsafe_set(i)
+            else:
+                self.unsafe_clear(i)
+
+    def __init__(out self: Bitmap[mut=True], length: Int, indices: List[Int]) raises:
+         """Construct a mutable Bitmap from a list of set bit indices."""
+        """Construct a mutable Bitmap of the given length, initialized to all zeros."""
+        self.buffer = Buffer.alloc_zeroed(math.ceildiv(length, 8))
+        # self.offset = 0
+        self.length = length
+        for idx in indices:
+            self.set(idx)
 
     # --- Factory ---
 
@@ -799,7 +841,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """Allocate a zero-filled mutable bitmap for `capacity` bits."""
         var byte_size = math.ceildiv(capacity, 8)
         var buffer = Buffer.alloc_zeroed(byte_size)
-        return Bitmap[mut=True](buffer^, 0, capacity)
+        return Bitmap[mut=True](buffer^, length=capacity)
 
     # --- Read methods (both modes) ---
 
@@ -807,10 +849,10 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     def __len__(self) -> Int:
         return self.length
 
-    @always_inline
-    def bitoffset(self) -> Int:
-        """Return the bit offset into the backing buffer."""
-        return self.offset
+    # @always_inline
+    # def bitoffset(self) -> Int:
+    #     """Return the bit offset into the backing buffer."""
+    #     return self.offset
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -822,9 +864,18 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     # --- Immutable-only methods ---
 
-    def slice(self: Bitmap[], offset: Int, length: Int) -> Bitmap[]:
+    def view(self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
+        """Return a zero-copy view of the bitmap starting at `offset` for `length` bits.
+
+        If `length` is -1 (the default), the view extends to the end of the bitmap.
+        """
+        if length == -1:
+            length = self.length - offset
+        return BitmapView[origin_of(self)](ptr=self.buffer.ptr, offset=offset, length=length)     )
+
+    def slice(self, offset: Int, length: Int) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
-        return Bitmap[](self.buffer, self.bitoffset() + offset, length)
+        return self.view(offset, length)
 
     def __eq__(self: Bitmap[mut=False], other: Bitmap[mut=False]) -> Bool:
         """Compare two immutable bitmaps bit-by-bit over their valid ranges."""
@@ -865,22 +916,37 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                 bits >> UInt64(64 - bit_off)
             )
 
-    @always_inline
     def set(mut self: Bitmap[mut=True], index: Int):
+        """Set the bit at `index` to 1."""
+        # TODO: add bounds check
+        self.unsafe_set(index)
+
+    @always_inline
+    def unsafe_set(mut self: Bitmap[mut=True], index: Int):
         """Set the bit at `index` to 1."""
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
         self.buffer.ptr[byte_index] = self.buffer.ptr[byte_index] | bit_mask
 
-    @always_inline
     def clear(mut self: Bitmap[mut=True], index: Int):
+        """Clear the bit at `index` to 0."""
+        # TODO: add bounds check
+        self.unsafe_clear(index)
+
+    @always_inline
+    def unsafe_clear(mut self: Bitmap[mut=True], index: Int):
         """Clear the bit at `index` to 0."""
         var byte_index = index // 8
         var bit_mask = UInt8(1 << (index % 8))
         self.buffer.ptr[byte_index] = self.buffer.ptr[byte_index] & ~bit_mask
 
-    @always_inline
     def test(self, raw_index: Int) -> Bool:
+        """Return True if the bit at `raw_index` (not offset-adjusted) is set."""
+        # TODO: add bounds check
+        return self.unsafe_test(raw_index)
+
+    @always_inline
+    def unsafe_test(self, raw_index: Int) -> Bool:
         """Return True if the bit at `raw_index` (not offset-adjusted) is set."""
         var byte_index = raw_index // 8
         var bit_mask = UInt8(1 << (raw_index % 8))
