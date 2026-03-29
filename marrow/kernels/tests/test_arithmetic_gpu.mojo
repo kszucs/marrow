@@ -1,5 +1,6 @@
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 from std.gpu.host import DeviceContext
+from std.sys.info import CompilationTarget
 
 from marrow.builders import array, arange
 from marrow.dtypes import int32, float32

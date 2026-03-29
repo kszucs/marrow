@@ -23,7 +23,7 @@ and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
 """
 
 from std.algorithm.functional import elementwise
-from std.sys import size_of, has_accelerator
+from std.sys import size_of
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
@@ -32,7 +32,7 @@ from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import BufferBuilder
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, binary_array_dispatch
-
+from .helpers import has_accelerator_support
 
 # ---------------------------------------------------------------------------
 # Elementwise compare + bit-pack — pointers as params for GPU DevicePassable
@@ -81,16 +81,13 @@ def _elementwise_cmp_pack[
             )
 
     if ctx:
-        comptime if has_accelerator() and T.native != DType.float64:
+        comptime if has_accelerator_support[T.native]():
             comptime gpu_width = simd_width_of[
                 T.native, target=get_gpu_target()
             ]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
-            raise Error(
-                "_elementwise_cmp_pack: type not supported on GPU (float64 is"
-                " unsupported on Metal)"
-            )
+            raise Error("_elementwise_cmp_pack: type not supported on GPU")
     else:
         comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
