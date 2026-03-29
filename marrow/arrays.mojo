@@ -538,7 +538,7 @@ struct BoolArray(
             nulls=self.nulls,
             offset=self.offset,
             bitmap=self.bitmap,
-            buffers=[self.buffer.buffer],
+            buffers=[self.buffer._buffer],
             children=[],
         )
 
@@ -901,7 +901,7 @@ struct StringArray(
         var end_offset = self.offsets.unsafe_get[DType.uint32](offset_idx + 1)
         var length = Int(end_offset) - Int(start_offset)
         var ptr = (
-            (self.values.ptr + Int(start_offset))
+            (self.values.unsafe_ptr() + Int(start_offset))
             .mut_cast[False]()
             .unsafe_origin_cast[self_origin]()
         )

@@ -150,7 +150,7 @@ def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count:
     """
     if count == 0:
         return
-    var dst = bm.buffer.ptr
+    var dst = bm.unsafe_ptr()
     var byte_idx = bitoffset >> 3
     var bit_off = bitoffset & 7
     var shifted = bits << UInt64(bit_off)
@@ -232,8 +232,7 @@ def _filter_bits(
             _deposit_bits(builder, bm_pos, compressed, count)
             zero_count += count - Int(pop_count(compressed))
 
-    builder.length = out_len
-    return builder.to_immutable(), zero_count
+    return builder.to_immutable(length=out_len), zero_count
 
 
 def _filter_values[
@@ -528,8 +527,7 @@ def filter_(
                     count=run_bytes,
                 )
 
-        bm_builder.length = out_len
-        bm = bm_builder.to_immutable()
+        bm = bm_builder.to_immutable(length=out_len)
 
     else:
         # --- No bitmap: run-merging only ---
@@ -626,7 +624,6 @@ def drop_nulls[
         # All valid: wrap as identity selection
         var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)
-        all_true.length = len(array)
         var selection = BoolArray(
             length=len(array),
             nulls=0,
@@ -707,7 +704,7 @@ def take[
     var idx_ptr = indices.buffer.ptr_at[int32.native](indices.offset)
     var buf = Buffer.alloc_uninit(Buffer._aligned_size[native](n))
     var out: UnsafePointer[Scalar[native], MutAnyOrigin]
-    out = buf.ptr.bitcast[Scalar[native]]()
+    out = buf.ptr_at[native](0)
 
     var has_null_indices = indices.null_count() > 0
     var has_src_nulls = array.null_count() > 0
@@ -745,8 +742,7 @@ def take[
                 bm_builder.set(i)
             i += 1
         if null_count > 0:
-            bm_builder.length = n
-            bitmap = bm_builder.to_immutable()
+            bitmap = bm_builder.to_immutable(length=n)
 
     return PrimitiveArray[T](
         length=n,

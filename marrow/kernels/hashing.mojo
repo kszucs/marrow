@@ -312,18 +312,18 @@ def rapidhash(
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         data_ptr = keys.buffer.device_ptr[DType.uint8]()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
+            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
             bm_offset = keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
-        data_ptr = keys.buffer.ptr
+        data_ptr = keys.buffer.unsafe_ptr()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.ptr
+            bm_ptr = keys.bitmap.value().unsafe_ptr()
             bm_offset = keys.offset
 
-    var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+    var out_ptr = buf.ptr_at[DType.uint64](0)
 
     _rapidhash_bool_elementwise(
         out_ptr, data_ptr, data_offset, bm_ptr, bm_offset, n, ctx
@@ -366,7 +366,7 @@ def rapidhash[
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         in_ptr = keys.buffer.device_ptr[native](keys.offset)
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.device_ptr[DType.uint8]()
+            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
             bm_offset = keys.offset
     else:
         buf = Buffer.alloc_uninit(
@@ -374,10 +374,10 @@ def rapidhash[
         )
         in_ptr = keys.buffer.ptr_at[native](keys.offset)
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().buffer.ptr
+            bm_ptr = keys.bitmap.value().unsafe_ptr()
             bm_offset = keys.offset
 
-    var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+    var out_ptr = buf.ptr_at[DType.uint64](0)
 
     _rapidhash_elementwise[T](out_ptr, in_ptr, bm_ptr, bm_offset, n, ctx)
 
@@ -485,7 +485,7 @@ def rapidhash(
             buf = Buffer.alloc_uninit(
                 Buffer._aligned_size[uint64.native](n)
             )
-        var out_ptr = buf.ptr.bitcast[Scalar[DType.uint64]]()
+        var out_ptr = buf.ptr_at[DType.uint64](0)
 
         var lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
         var rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]

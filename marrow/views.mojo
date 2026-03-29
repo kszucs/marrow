@@ -610,8 +610,8 @@ struct BitmapView[
         var byte_shift = lead_bits >> 3
         var bit_shift = lead_bits & 7
         var builder = Bitmap.alloc_uninit(self._len)
-        var out_bytes = builder.buffer.size
-        var dst = builder.buffer.ptr
+        var out_bytes = builder.byte_count()
+        var dst = builder.unsafe_ptr()
 
         if bit_shift == 0:
             for i in range(0, out_bytes, 64):
@@ -649,8 +649,8 @@ struct BitmapView[
         var byte_shift_b = lead_bits_b >> 3
         var bit_shift_b = lead_bits_b & 7
         var builder = Bitmap.alloc_uninit(self._len)
-        var out_bytes = builder.buffer.size
-        var dst = builder.buffer.ptr
+        var out_bytes = builder.byte_count()
+        var dst = builder.unsafe_ptr()
 
         if bit_shift_a == 0 and bit_shift_b == 0:
             for i in range(0, out_bytes, 64):

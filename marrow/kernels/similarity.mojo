@@ -35,7 +35,7 @@ def _cosine_similarity_no_nulls[
     comptime width = simd_byte_width() // size_of[native]()
 
     var result = PrimitiveBuilder[T](n_vectors)
-    var op = result._buffer.ptr.bitcast[Scalar[native]]()
+    var op = result._buffer.ptr_at[native](0)
 
     # Flat values pointer from the child array
     var child_data = vectors.values.to_data()

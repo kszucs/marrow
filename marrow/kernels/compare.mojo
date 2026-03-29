@@ -136,7 +136,7 @@ def _binary_cmp[
         out_buf = Buffer.alloc_zeroed[DType.bool](length)
         lhs_ptr = left.buffer.ptr_at[native](left.offset)
         rhs_ptr = right.buffer.ptr_at[native](right.offset)
-    _elementwise_cmp_pack[T, func](out_buf.ptr, lhs_ptr, rhs_ptr, length, ctx)
+    _elementwise_cmp_pack[T, func](out_buf.ptr_at[DType.uint8](0), lhs_ptr, rhs_ptr, length, ctx)
 
     var result_buf = out_buf.to_immutable()
     if ctx:
@@ -265,7 +265,6 @@ def equal(
         raise Error("equal: string arrays must have the same length")
     var bm = bitmap_and(left.bitmap, right.bitmap)
     var bm_builder = Bitmap.alloc_zeroed(n)
-    bm_builder.length = n
     for i in range(n):
         var eq = String(left.unsafe_get(UInt(i))) == String(
             right.unsafe_get(UInt(i))

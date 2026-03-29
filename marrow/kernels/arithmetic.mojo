@@ -133,7 +133,7 @@ def _unary[
         in_ptr = array.buffer.ptr_at[native](array.offset)
 
     _elementwise_unary[T, func](
-        buf.ptr.bitcast[Scalar[native]](), in_ptr, length, ctx
+        buf.ptr_at[native](0), in_ptr, length, ctx
     )
 
     return PrimitiveArray[T](
@@ -177,13 +177,13 @@ def _binary[
         # may end up with different alignments; need to switch to
         # unaligned loads/stores
         buf = Buffer.alloc_device[native](ctx.value(), length)
-        out_ptr = buf.ptr.bitcast[Scalar[native]]()
+        out_ptr = buf.ptr_at[native](0)
         lhs_ptr = left.buffer.device_ptr[native](left.offset)
         rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
         buf = Buffer.alloc_zeroed[native](length)
-        out_ptr = buf.ptr.bitcast[Scalar[native]]()
+        out_ptr = buf.ptr_at[native](0)
         lhs_ptr = left.buffer.ptr_at[native](left.offset)
         rhs_ptr = right.buffer.ptr_at[native](right.offset)
 

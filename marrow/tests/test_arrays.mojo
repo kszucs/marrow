@@ -627,7 +627,7 @@ def test_primitive_finish_shrinks() raises:
 
     var values_buffer = frozen.buffer
     # 2 int64 values = 16 bytes, but buffer padded to 64 bytes for alignment
-    assert_equal(values_buffer.size, 64)
+    assert_equal(len(values_buffer), 64)
 
 
 def test_primitive_finish_via_append() raises:

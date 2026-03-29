@@ -260,7 +260,7 @@ struct SwissHashTable[
     @always_inline
     def _prefetch_ctrl(self, h: Self.H):
         """Prefetch the ctrl group for hash ``h`` into L1 cache."""
-        prefetch(self._ctrl.ptr + Int(h & Self.H(self._mask)))
+        prefetch(self._ctrl.unsafe_ptr() + Int(h & Self.H(self._mask)))
 
     @always_inline
     def _get_offset(self, index: Int) -> Int:
@@ -327,7 +327,7 @@ struct SwissHashTable[
         Each set bit ``k`` means ``ctrl[pos + k]`` has the same H2 as
         ``h``.  Use ``count_trailing_zeros`` to iterate the matches.
         """
-        var group = self._ctrl.ptr.load[width=_GROUP_WIDTH](pos)
+        var group = self._ctrl.unsafe_ptr().load[width=_GROUP_WIDTH](pos)
         return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](Self._h2(h))))
 
     @always_inline
@@ -335,7 +335,7 @@ struct SwissHashTable[
         """Load the 16-byte ctrl group at ``pos`` and return a bitmask
         of empty (``0xFF``) slots.
         """
-        var group = self._ctrl.ptr.load[width=_GROUP_WIDTH](pos)
+        var group = self._ctrl.unsafe_ptr().load[width=_GROUP_WIDTH](pos)
         return pack_bits(group.eq(SIMD[DType.uint8, _GROUP_WIDTH](_CTRL_EMPTY)))
 
     # ------------------------------------------------------------------
@@ -417,7 +417,7 @@ struct SwissHashTable[
                     self._set_slot(slot, bid)
 
         # Grow _bucket_hashes if needed.
-        if n * size_of[Self.H]() > self._bucket_hashes.size:
+        if n * size_of[Self.H]() > len(self._bucket_hashes):
             self._bucket_hashes.resize[DType.uint64](n)
 
     # ------------------------------------------------------------------

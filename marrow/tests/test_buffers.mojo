@@ -17,27 +17,27 @@ def is_aligned[
 
 def test_buffer_init() raises:
     var b = Buffer.alloc_zeroed(10)
-    assert_equal(b.size, 64)
-    assert_true(is_aligned(b.ptr, 64))
+    assert_equal(len(b), 64)
+    assert_true(is_aligned(b.unsafe_ptr(), 64))
 
 
 def test_alloc_bits() raises:
     var b1 = Buffer.alloc_zeroed[DType.bool](10)
-    assert_equal(b1.size, 64)
+    assert_equal(len(b1), 64)
 
     # 64*8+1 bits → needs two 64-byte blocks
     var b2 = Buffer.alloc_zeroed[DType.bool](64 * 8 + 1)
-    assert_equal(b2.size, 576)
+    assert_equal(len(b2), 576)
 
 
 def test_buffer_grow() raises:
     var b = Buffer.alloc_zeroed(10)
     b.unsafe_set(0, 111)
     b.resize(20)
-    assert_equal(b.size, 64)  # still fits in the same 64-byte block
+    assert_equal(len(b), 64)  # still fits in the same 64-byte block
     assert_equal(b.unsafe_get(0), 111)
     b.resize(80)
-    assert_equal(b.size, 128)  # grew into a second block
+    assert_equal(len(b), 128)  # grew into a second block
     assert_equal(b.unsafe_get(0), 111)  # data preserved
 
 
@@ -72,7 +72,7 @@ def test_buffer_finish() raises:
     var frozen = buf^.to_immutable()
     assert_equal(frozen.unsafe_get(0), 42)
     assert_equal(frozen.unsafe_get(1), 99)
-    assert_equal(frozen.size, 64)
+    assert_equal(len(frozen), 64)
     assert_equal(frozen.length(), 64)
 
 
@@ -155,24 +155,24 @@ def test_buffer_no_device() raises:
 
 def test_buffer_resize_noop_same_size() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](10)
-    var ptr_before = buf.ptr
+    var ptr_before = buf.unsafe_ptr()
     buf.resize[DType.int64](10)
-    assert_equal(buf.ptr, ptr_before)
+    assert_equal(buf.unsafe_ptr(), ptr_before)
 
 
 def test_buffer_resize_noop_same_aligned_size() raises:
     # 1 and 8 int64 elements both fit in the initial 64-byte block
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var ptr_before = buf.ptr
+    var ptr_before = buf.unsafe_ptr()
     buf.resize[DType.int64](8)
-    assert_equal(buf.ptr, ptr_before)
+    assert_equal(buf.unsafe_ptr(), ptr_before)
 
 
 def test_buffer_resize_reallocates_when_larger() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var ptr_before = buf.ptr
+    var ptr_before = buf.unsafe_ptr()
     buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → new 128-byte block
-    assert_true(buf.ptr != ptr_before)
+    assert_true(buf.unsafe_ptr() != ptr_before)
 
 
 # ---------------------------------------------------------------------------
@@ -217,24 +217,24 @@ def test_bitmap_eq() raises:
 
 def test_bitmap_resize_noop_same_capacity() raises:
     var bm = Bitmap.alloc_zeroed(64)
-    var ptr_before = bm.buffer.ptr
+    var ptr_before = bm.unsafe_ptr()
     bm.resize(64)
-    assert_equal(bm.buffer.ptr, ptr_before)
+    assert_equal(bm.unsafe_ptr(), ptr_before)
 
 
 def test_bitmap_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a single 64-byte block
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm.buffer.ptr
+    var ptr_before = bm.unsafe_ptr()
     bm.resize(511)
-    assert_equal(bm.buffer.ptr, ptr_before)
+    assert_equal(bm.unsafe_ptr(), ptr_before)
 
 
 def test_bitmap_resize_reallocates_when_larger() raises:
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm.buffer.ptr
+    var ptr_before = bm.unsafe_ptr()
     bm.resize(513)  # needs a second 64-byte block
-    assert_true(bm.buffer.ptr != ptr_before)
+    assert_true(bm.unsafe_ptr() != ptr_before)
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +365,10 @@ def test_bitmap_setitem() raises:
 
 
 def test_bitmap_length_field() raises:
-    # Setting .length truncates the logical view without reallocating
+    # Setting ._length truncates the logical view without reallocating
     var bm = Bitmap.alloc_zeroed(20)
     bm.set_range(0, 20, True)
-    bm.length = 15
+    bm._length = 15
     assert_equal(len(bm), 15)
 
 

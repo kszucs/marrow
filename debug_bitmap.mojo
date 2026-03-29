@@ -7,10 +7,10 @@ from marrow.views import BitmapView
 def main() raises:
     var b = Bitmap.alloc_zeroed(16)
     b.set_range(0, 16, True)
-    var bm = b.to_immutable(16)
+    var bm = b.to_immutable(length=16)
 
     print("Before any BitmapView:")
-    print("  byte0:", bm._buffer.ptr[0])
+    print("  byte0:", bm.unsafe_ptr()[0])
 
     # Create BitmapView from Bitmap, let it die
     print("\n--- Creating BitmapView(bm) #1 ---")
@@ -24,7 +24,7 @@ def main() raises:
         _ = tmp^
 
     print("After view #1 destroyed + stress:")
-    print("  byte0:", bm._buffer.ptr[0])
+    print("  byte0:", bm.unsafe_ptr()[0])
 
     # Create BitmapView as temporary
     print("\n--- BitmapView(bm).test(0) ---")
@@ -37,7 +37,7 @@ def main() raises:
         _ = tmp^
 
     print("After BitmapView temporary + stress:")
-    print("  byte0:", bm._buffer.ptr[0])
+    print("  byte0:", bm.unsafe_ptr()[0])
 
     # Now count_set_bits
     print("\n--- BitmapView(bm).count_set_bits() ---")

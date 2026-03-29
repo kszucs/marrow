@@ -12,7 +12,7 @@ from marrow.views import BufferView, BitmapView
 def test_bufferview_len() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
     var view = buf.view[DType.int32]()
-    assert_equal(len(view), buf.size // 4)
+    assert_equal(len(view), len(buf) // 4)
 
 
 def test_bufferview_getitem() raises:

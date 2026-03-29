@@ -123,7 +123,7 @@ def test_bufferview_gpu_scale() raises:
 
     var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
     var dst_ptr: UnsafePointer[Scalar[DType.int32], MutAnyOrigin] = (
-        dev_dst.ptr.bitcast[Scalar[DType.int32]]()
+        dev_dst.ptr_at[DType.int32](0)
     )
     var dst = BufferView[DType.int32, MutAnyOrigin](ptr=dst_ptr, length=4)
     _scale_by_two[DType.int32](src, dst, 4, ctx)
@@ -158,7 +158,7 @@ def test_bufferview_gpu_scale_float32() raises:
 
     var dev_dst = Buffer.alloc_device[DType.float32](ctx, 4)
     var dst_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin] = (
-        dev_dst.ptr.bitcast[Scalar[DType.float32]]()
+        dev_dst.ptr_at[DType.float32](0)
     )
     var dst = BufferView[DType.float32, MutAnyOrigin](ptr=dst_ptr, length=4)
     _scale_by_two[DType.float32](src, dst, 4, ctx)
@@ -185,7 +185,7 @@ def test_bitmapview_gpu_bits_to_bytes() raises:
     bm.set(4)
 
     # Upload bitmap data to GPU
-    var dev_bm = bm^.to_immutable().buffer.to_device(ctx)
+    var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
 
     # Build a BitmapView backed by device memory and run the GPU kernel
     var bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin] = (
@@ -194,7 +194,7 @@ def test_bitmapview_gpu_bits_to_bytes() raises:
     var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=0, length=8)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
-    _bits_to_bytes(bv, dev_dst.ptr, 8, ctx)
+    _bits_to_bytes(bv, dev_dst.unsafe_ptr(),8, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())
@@ -221,7 +221,7 @@ def test_bitmapview_gpu_with_offset() raises:
     bm.set(8)
     bm.set(10)
 
-    var dev_bm = bm^.to_immutable().buffer.to_device(ctx)
+    var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
 
     var bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin] = (
         dev_bm.device_ptr[DType.uint8](0)
@@ -230,7 +230,7 @@ def test_bitmapview_gpu_with_offset() raises:
     var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=8, length=4)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 4)
-    _bits_to_bytes(bv, dev_dst.ptr, 4, ctx)
+    _bits_to_bytes(bv, dev_dst.unsafe_ptr(),4, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())

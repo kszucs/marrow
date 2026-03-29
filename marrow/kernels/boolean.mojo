@@ -74,7 +74,6 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = Bitmap.alloc_zeroed(length)
-    builder.length = length
     for i in range(length):
         if not arr.is_valid(i):
             builder.set(i)

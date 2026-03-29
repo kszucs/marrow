@@ -735,7 +735,7 @@ def test_primitive_builder_finish_shrinks_data_buffer() raises:
     var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 2 int32s = 8 bytes → 64-byte aligned = 64 bytes
-    assert_equal(frozen.buffer.size, 64)
+    assert_equal(len(frozen.buffer), 64)
 
 
 def test_string_builder_finish_shrinks_offsets_buffer() raises:
@@ -747,7 +747,7 @@ def test_string_builder_finish_shrinks_offsets_buffer() raises:
     var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 3 uint32 offsets = 12 bytes → 64-byte aligned = 64 bytes
-    assert_equal(frozen.offsets.size, 64)
+    assert_equal(len(frozen.offsets), 64)
 
 
 def test_list_builder_finish_shrinks_offsets_buffer() raises:
@@ -763,7 +763,7 @@ def test_list_builder_finish_shrinks_offsets_buffer() raises:
     var frozen = b.finish()
     assert_equal(frozen.length, 2)
     # 3 uint32 offsets = 12 bytes → 64-byte aligned = 64 bytes
-    assert_equal(frozen.offsets.size, 64)
+    assert_equal(len(frozen.offsets), 64)
 
 
 def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
@@ -775,7 +775,7 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
     var frozen = b.finish()
     assert_equal(frozen.nulls, 1)
     # 3 bits → 1 byte → 64-byte aligned = 64 bytes
-    assert_equal(frozen.bitmap.value().buffer.size, 64)
+    assert_equal(frozen.bitmap.value().byte_count(), 64)
 
 
 def test_any_builder_finish_dispatch_primitive() raises:
@@ -790,7 +790,7 @@ def test_any_builder_finish_dispatch_primitive() raises:
     assert_equal(arr.as_int32()[0], 42)
     assert_equal(arr.as_int32()[1], 99)
     # data buffer is shrunk: 2 int32s = 8 bytes → 64 bytes
-    assert_equal(arr.to_data().buffers[0].size, 64)
+    assert_equal(len(arr.to_data().buffers[0]), 64)
 
 
 def test_any_builder_finish_dispatch_string() raises:
@@ -803,7 +803,7 @@ def test_any_builder_finish_dispatch_string() raises:
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.to_data().buffers[0].size, 64)
+    assert_equal(len(arr.to_data().buffers[0]), 64)
 
 
 def test_any_builder_finish_dispatch_list() raises:
@@ -819,7 +819,7 @@ def test_any_builder_finish_dispatch_list() raises:
     var arr = builder.finish()
     assert_equal(arr.length(), 2)
     # offsets buffer shrunk: 3 uint32s = 12 bytes → 64 bytes
-    assert_equal(arr.to_data().buffers[0].size, 64)
+    assert_equal(len(arr.to_data().buffers[0]), 64)
 
 
 def main() raises:

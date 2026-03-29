@@ -366,8 +366,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            self._bitmap.length = self._length
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze the value buffer into an immutable Buffer
         var values = self._buffer^.to_immutable()
@@ -444,7 +443,7 @@ struct StringBuilder(Builder, Sized):
     def append_null(mut self) raises:
         self.reserve(1)
         var index = self._length
-        var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
+        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
         self._bitmap.clear(index)
         self._null_count += 1
         self._length += 1
@@ -479,7 +478,7 @@ struct StringBuilder(Builder, Sized):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var cur_bytes = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
+        var cur_bytes = Int(self._offsets.unsafe_get[DType.uint32](self._length))
         for i in range(n):
             var orig = Int(arr.offsets.unsafe_get[DType.uint32](arr.offset + i))
             self._offsets.unsafe_set[DType.uint32](
@@ -489,8 +488,8 @@ struct StringBuilder(Builder, Sized):
             self._length + n, UInt32(cur_bytes + chunk_bytes)
         )
         memcpy(
-            dest=self._values.ptr + cur_bytes,
-            src=arr.values.ptr + chunk_start,
+            dest=self._values.ptr_at[DType.uint8](cur_bytes),
+            src=arr.values.unsafe_ptr() + chunk_start,
             count=chunk_bytes,
         )
         self._length += n
@@ -505,7 +504,7 @@ struct StringBuilder(Builder, Sized):
 
     def reserve_bytes(mut self, additional: Int) raises:
         """Pre-allocate space in the byte data buffer."""
-        var needed = self._values.size + additional
+        var needed = len(self._values) + additional
         self._values.resize[DType.uint8](needed)
 
     @always_inline
@@ -514,12 +513,12 @@ struct StringBuilder(Builder, Sized):
         """
         var length = len(s)
         var index = self._length
-        var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
+        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
         var next_offset = last_offset + UInt32(length)
         self._bitmap.set(index)
         self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
         memcpy(
-            dest=self._values.ptr + Int(last_offset),
+            dest=self._values.ptr_at[DType.uint8](Int(last_offset)),
             src=s.unsafe_ptr(),
             count=length,
         )
@@ -529,7 +528,7 @@ struct StringBuilder(Builder, Sized):
     def unsafe_append_null(mut self):
         """Append null without capacity checks. Caller must ensure capacity."""
         var index = self._length
-        var last_offset = self._offsets.ptr.bitcast[UInt32]()[index]
+        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
         self._bitmap.clear(index)
         self._null_count += 1
         self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
@@ -538,14 +537,13 @@ struct StringBuilder(Builder, Sized):
     def finish(mut self, *, shrink_to_fit: Bool = True) raises -> StringArray:
         if shrink_to_fit:
             self._offsets.resize[DType.uint32](self._length + 1)
-            var used = Int(self._offsets.ptr.bitcast[UInt32]()[self._length])
+            var used = Int(self._offsets.unsafe_get[DType.uint32](self._length))
             self._values.resize[DType.uint8](used)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            self._bitmap.length = self._length
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets and byte data buffers into immutable Buffers
         var offsets = self._offsets^.to_immutable()
@@ -697,8 +695,7 @@ struct ListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            self._bitmap.length = self._length
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets^.to_immutable()
@@ -829,8 +826,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            self._bitmap.length = self._length
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # recursively finish the child builder
         var values = self._child.finish()
@@ -962,8 +958,7 @@ struct StructBuilder(Builder, Sized):
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
         if null_count != 0:
-            self._bitmap.length = self._length
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=self._length)
             self._bitmap = Bitmap.alloc_zeroed(0)
         # recursively finish each field builder into a frozen child array
         var frozen_children = List[AnyArray](capacity=len(self._children))
@@ -1065,12 +1060,10 @@ struct BoolBuilder(Builder, Sized):
         var n = self._length
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
-        self._bitmap.length = n
-        self._buffer.length = n
         if null_count != 0:
-            bm = self._bitmap^.to_immutable()
+            bm = self._bitmap^.to_immutable(length=n)
             self._bitmap = Bitmap.alloc_zeroed(0)
-        var data = self._buffer^.to_immutable()
+        var data = self._buffer^.to_immutable(length=n)
         self._buffer = Bitmap.alloc_zeroed(0)
         var result = BoolArray(
             length=n,
