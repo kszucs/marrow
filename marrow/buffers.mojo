@@ -499,15 +499,14 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         its destructor cascades to `AsyncRT_DeviceBuffer_release` when the
         last Buffer copy is dropped.
 
-        `ptr` is set to null — call `to_cpu(ctx)` to read data on the CPU.
+        `ptr` holds the device pointer — call `to_cpu(ctx)` to read on CPU.
         `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
         metal→METAL).
         """
+        var ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](dev.unsafe_ptr())
         return Buffer[mut=False](
             size=size,
-            ptr=rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
-                UnsafePointer[UInt8, ImmutAnyOrigin](unsafe_from_address=0)
-            ),
+            ptr=ptr,
             owner=ArcPointer(Allocation.device(dev)),
         )
 
@@ -518,32 +517,27 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
 
         For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
         For HOST buffers (`alloc_host`): returns kind=HOST.
-        For DEVICE buffers (`alloc_device`): returns kind=DEVICE with null ptr.
+        For DEVICE buffers (`alloc_device`): returns kind=DEVICE; ``ptr`` holds
+        the device pointer so ``view()`` works without a separate ``device_view``
+        call.
         """
-        var imm_ptr: UnsafePointer[UInt8, ImmutExternalOrigin]
-        if self._owner[]._device:
-            imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
-                UnsafePointer[UInt8, ImmutAnyOrigin](unsafe_from_address=0)
-            )
-        else:
-            imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self._ptr)
+        var imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self._ptr)
         return Buffer[mut=False](size=self._size, ptr=imm_ptr, owner=self._owner^)
 
     # --- CPU/device checks (mut=False only) ---
 
     @always_inline
     def is_cpu(self) -> Bool:
-        """Return True if the buffer is CPU-accessible (ptr is non-null).
+        """Return True if the buffer is CPU-accessible.
 
         True for CPU, FOREIGN, and HOST kinds; False for DEVICE.
         """
-        return self._ptr.__bool__()
+        return not self._owner[]._device.__bool__()
 
     @always_inline
     def is_device(self) -> Bool:
-        """Return True if the buffer lives on a GPU device (ptr is null)."""
-        # TODO: these are not entirely correct conditions
-        return not self._ptr.__bool__()
+        """Return True if the buffer lives on a GPU device."""
+        return self._owner[]._device.__bool__()
 
     @always_inline
     def is_host(self) -> Bool:
@@ -595,7 +589,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
     ):
         """Copy `count` elements of type T from `src` into self at `dst_offset`."""
         memcpy(
-            dest=self.ptr_at[T](dst_offset),
+            dest=self._ptr.bitcast[Scalar[T]]() + dst_offset,
             src=src._data,
             count=count,
         )
@@ -620,33 +614,6 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         return self._ptr.bitcast[output]()[index]
 
 
-    # --- Typed pointer access ---
-
-    @always_inline
-    def unsafe_ptr(self) -> UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]:
-        """Return the raw byte pointer.
-
-        Use `ptr_at[T](offset)` or `view[T]()` for typed or bounds-checked access.
-        This method exists as a low-level escape hatch for interop code.
-        """
-        return self._ptr
-
-    @always_inline
-    def ptr_at[
-        T: DType = DType.uint8
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]:
-        """Return a typed raw pointer to the element at `offset`.
-
-        The bitcast is localized here so kernel code stays free of manual
-        pointer casts.  Prefer `BufferView` for bounds-checked or SIMD
-        access; use this only where a raw pointer is unavoidable.
-        """
-        debug_assert(
-            self._ptr.__bool__(),
-            "cannot access device buffer on CPU, call to_cpu() first",
-        )
-        return self._ptr.bitcast[Scalar[T]]() + offset
-
     # --- Device access (mut=False only) ---
 
     def devicebuffer(self: Buffer[mut=False]) -> DeviceBuffer[DType.uint8]:
@@ -660,14 +627,33 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         return self._owner[]._device.value()
 
     @always_inline
-    def device_ptr[
-        T: DType
-    ](self: Buffer[mut=False], offset: Int = 0) -> UnsafePointer[Scalar[T], MutAnyOrigin]:
-        """Return a typed device pointer into GPU memory at element offset.
+    def device_view[
+        T: DType = DType.uint8
+    ](self: Buffer[mut=False], offset: Int = 0) -> BufferView[T, MutAnyOrigin]:
+        """Mutable view backed by the GPU device pointer at element ``offset``.
 
+        Returns a ``MutAnyOrigin`` view suitable for GPU kernel writes.
         Precondition: `is_device()` must be True.
         """
-        return self.devicebuffer().unsafe_ptr().bitcast[Scalar[T]]() + offset
+        var ptr = rebind[UnsafePointer[Scalar[T], MutAnyOrigin]](
+            self._ptr.bitcast[Scalar[T]]() + offset
+        )
+        return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)
+
+    @always_inline
+    def device_view[
+        T: DType = DType.uint8
+    ](self: Buffer[mut=True], offset: Int = 0) -> BufferView[T, MutAnyOrigin]:
+        """Typed MutAnyOrigin view for a mutable GPU-allocated buffer.
+
+        For buffers created with ``alloc_device``, ``_ptr`` holds the device
+        pointer (originally ``MutAnyOrigin``, stored as ``MutExternalOrigin``).
+        This method reinterprets it as ``MutAnyOrigin`` for GPU kernel writes.
+        """
+        var ptr = rebind[UnsafePointer[Scalar[T], MutAnyOrigin]](
+            self._ptr.bitcast[Scalar[T]]() + offset
+        )
+        return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)
 
 
     # --- Device type / id ---
@@ -747,8 +733,10 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
     ](ref self, offset: Int = 0, length: Int = -1) -> BufferView[T, origin_of(self)]:
         """Return a non-owning typed view over this buffer.
 
-        `offset` and `length` are in units of `T` elements (bytes when T=uint8).
-        If `length` is -1 (the default), the view extends to the end of the buffer.
+        ``_ptr`` always holds the right pointer — CPU address for CPU/HOST
+        buffers, device address for DEVICE buffers — so no dispatch is needed.
+        ``offset`` and ``length`` are in units of ``T`` elements (bytes when
+        ``T=uint8``).
         """
         var n = length if length >= 0 else (self._size // size_of[T]()) - offset
         var ptr = rebind[UnsafePointer[Scalar[T], origin_of(self)]](self._ptr)
@@ -887,15 +875,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
             if self[i] != other[i]:
                 return False
         return True
-
-    @always_inline
-    def unsafe_ptr(self) -> UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]:
-        """Return the raw byte pointer (mutable for Bitmap[True], immutable for Bitmap[False]).
-
-        Use `view()` or `BitmapView` for bounds-checked or SIMD access.
-        This method exists as a low-level escape hatch for interop code.
-        """
-        return self._buffer._ptr
 
     def byte_count(self) -> Int:
         """Return the size of the backing buffer in bytes."""

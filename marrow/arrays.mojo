@@ -518,12 +518,22 @@ struct BoolArray(
         """Non-owning bit-level view of the values buffer."""
         return self.buffer.view(self.offset, self.length)
 
-    def validity(self) -> Optional[BitmapView[origin_of(self.bitmap.value())]]:
-        """Validity bitmap as a BitmapView, or None if all-valid."""
-        if self.bitmap:
-            return self.bitmap.value().view(self.offset, self.length)
-        else:
-            return None
+    def validity(self) -> BitmapView[ImmutAnyOrigin]:
+        """Validity bitmap as a BitmapView, or zero-length if all-valid.
+
+        Automatically returns a device-backed view when the bitmap is
+        device-resident, and a host-backed view otherwise.
+        """
+        if not self.bitmap:
+            return BitmapView[ImmutAnyOrigin](
+                ptr=UnsafePointer[UInt8, ImmutAnyOrigin](), offset=0, length=0
+            )
+        var bv = self.bitmap.value()._buffer.view[DType.uint8]()
+        return BitmapView[ImmutAnyOrigin](
+            ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](bv.unsafe_ptr()),
+            offset=self.offset,
+            length=self.length,
+        )
 
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
@@ -686,19 +696,27 @@ struct PrimitiveArray[T: DataType](
         ), "use values() for bool arrays"
         return BufferView[Self.T.native, ImmutAnyOrigin](
             ptr=rebind[UnsafePointer[Scalar[Self.T.native], ImmutAnyOrigin]](
-                self.buffer.device_ptr[Self.T.native](self.offset)
+                self.buffer.device_view[Self.T.native](self.offset).unsafe_ptr()
             ),
             length=self.length,
         )
 
-    def validity(
-        self,
-    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
-        """Validity bitmap as a BitmapView, or None if all-valid."""
-        if self.bitmap:
-            return self.bitmap.value().view(self.offset, self.length)
-        else:
-            return None
+    def validity(self) -> BitmapView[ImmutAnyOrigin]:
+        """Validity bitmap as a BitmapView, or zero-length if all-valid.
+
+        Automatically returns a device-backed view when the bitmap is
+        device-resident, and a host-backed view otherwise.
+        """
+        if not self.bitmap:
+            return BitmapView[ImmutAnyOrigin](
+                ptr=UnsafePointer[UInt8, ImmutAnyOrigin](), offset=0, length=0
+            )
+        var bv = self.bitmap.value()._buffer.view[DType.uint8]()
+        return BitmapView[ImmutAnyOrigin](
+            ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](bv.unsafe_ptr()),
+            offset=self.offset,
+            length=self.length,
+        )
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:
         if index < 0 or index >= self.length:
@@ -901,8 +919,8 @@ struct StringArray(
         var end_offset = self.offsets.unsafe_get[DType.uint32](offset_idx + 1)
         var length = Int(end_offset) - Int(start_offset)
         var ptr = (
-            (self.values.unsafe_ptr() + Int(start_offset))
-            .mut_cast[False]()
+            self.values.view[DType.uint8](Int(start_offset))
+            .unsafe_ptr()
             .unsafe_origin_cast[self_origin]()
         )
         return StringSlice[self_origin](ptr=ptr, length=length)

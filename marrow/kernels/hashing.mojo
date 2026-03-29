@@ -27,7 +27,7 @@ from std.utils.index import IndexList
 from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
-from ..views import BitmapView
+from ..views import BitmapView, BufferView
 from ..dtypes import (
     DataType,
     uint8,
@@ -218,21 +218,22 @@ def _rapidhash_elementwise[
         )
 
 
-def _rapidhash_bool_elementwise(
-    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
-    data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
-    data_offset: Int,
-    bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
-    bm_offset: Int,
+def _rapidhash_bool_elementwise[
+    out_origin: Origin[mut=True],
+](
+    output: BufferView[DType.uint64, out_origin],
+    data: BitmapView[_],
+    validity: BitmapView[_],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Vectorized bool rapidhash — pointers as params for GPU DevicePassable.
+    """Vectorized bool rapidhash — views as params for GPU DevicePassable.
 
     Bool arrays are bit-packed so standard SIMD loads don't work. Instead,
     precompute the two possible hashes (for 0 and 1), load W data bits via
     the bitmap-mask pattern, and use ``SIMD.select()`` to pick the right hash.
-    A second ``select()`` handles nulls.
+    A second ``select()`` handles nulls. A zero-length ``validity`` view means
+    no validity bitmap is present.
     """
     comptime hash_false = _rapidhash_fixed[size_of[Scalar[bool_.native]]()](
         UInt64(0)
@@ -243,15 +244,12 @@ def _rapidhash_bool_elementwise(
 
     @parameter
     @always_inline
-    def _load_bits[
-        W: Int
-    ](ptr: UnsafePointer[UInt8, ImmutAnyOrigin], abs_pos: Int) -> SIMD[
-        DType.bool, W
-    ]:
-        """Load W consecutive bits from a bit-packed buffer."""
+    def _load_bits[W: Int](bv: BitmapView[_], i: Int) -> SIMD[DType.bool, W]:
+        """Load W consecutive bits from a bit-packed BitmapView."""
+        var abs_pos = bv.bit_offset() + i
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
-        var bits = (ptr + byte_idx).bitcast[UInt32]().load[alignment=1]()
+        var bits = bv.load[DType.uint32](byte_idx)
         bits >>= UInt32(bit_off)
         return (
             (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
@@ -263,15 +261,15 @@ def _rapidhash_bool_elementwise(
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
         var i = idx[0]
-        var data_bits = _load_bits[W](data_ptr, data_offset + i)
+        var data_bits = _load_bits[W](data, i)
         var hashes = data_bits.select(
             SIMD[DType.uint64, W](hash_true),
             SIMD[DType.uint64, W](hash_false),
         )
-        if bm_ptr:
-            var valid = _load_bits[W](bm_ptr, bm_offset + i)
+        if len(validity) != 0:
+            var valid = _load_bits[W](validity, i)
             hashes = valid.select(hashes, NULL_HASH_SENTINEL)
-        (out_ptr + i).store(hashes)
+        output.store[W](i, hashes)
 
     if ctx:
         comptime if has_accelerator():
@@ -301,33 +299,20 @@ def rapidhash(
     Works on both CPU and GPU.
     """
     var n = len(keys)
-
     var buf: Buffer[mut=True]
-    var data_ptr: UnsafePointer[UInt8, ImmutAnyOrigin]
-    var data_offset = keys.offset
-    var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
-    var bm_offset = 0
-
     if ctx:
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
-        data_ptr = keys.buffer.device_ptr[DType.uint8]()
-        if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
-            bm_offset = keys.offset
     else:
-        buf = Buffer.alloc_uninit(
-            Buffer._aligned_size[uint64.native](n)
-        )
-        data_ptr = keys.buffer.unsafe_ptr()
-        if keys.bitmap:
-            bm_ptr = keys.bitmap.value().unsafe_ptr()
-            bm_offset = keys.offset
+        buf = Buffer.alloc_uninit(Buffer._aligned_size[uint64.native](n))
 
-    var out_ptr = buf.ptr_at[DType.uint64](0)
-
-    _rapidhash_bool_elementwise(
-        out_ptr, data_ptr, data_offset, bm_ptr, bm_offset, n, ctx
+    var data = BitmapView[ImmutAnyOrigin](
+        ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](
+            keys.buffer.view[DType.uint8]().unsafe_ptr()
+        ),
+        offset=keys.offset,
+        length=n,
     )
+    _rapidhash_bool_elementwise(buf.view[DType.uint64](), data, keys.validity(), n, ctx)
 
     return PrimitiveArray[uint64](
         length=n,
@@ -364,20 +349,20 @@ def rapidhash[
 
     if ctx:
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
-        in_ptr = keys.buffer.device_ptr[native](keys.offset)
+        in_ptr = keys.buffer.device_view[native](keys.offset).unsafe_ptr()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.device_ptr[DType.uint8]()
+            bm_ptr = keys.bitmap.value()._buffer.device_view[DType.uint8]().unsafe_ptr()
             bm_offset = keys.offset
     else:
         buf = Buffer.alloc_uninit(
             Buffer._aligned_size[uint64.native](n)
         )
-        in_ptr = keys.buffer.ptr_at[native](keys.offset)
+        in_ptr = keys.buffer.view[native](keys.offset).unsafe_ptr()
         if keys.bitmap:
-            bm_ptr = keys.bitmap.value().unsafe_ptr()
+            bm_ptr = keys.bitmap.value()._buffer.view[DType.uint8]().unsafe_ptr()
             bm_offset = keys.offset
 
-    var out_ptr = buf.ptr_at[DType.uint64](0)
+    var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
 
     _rapidhash_elementwise[T](out_ptr, in_ptr, bm_ptr, bm_offset, n, ctx)
 
@@ -485,20 +470,20 @@ def rapidhash(
             buf = Buffer.alloc_uninit(
                 Buffer._aligned_size[uint64.native](n)
             )
-        var out_ptr = buf.ptr_at[DType.uint64](0)
+        var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
 
         var lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
         var rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
         if ctx:
-            lhs_ptr = result.buffer.device_ptr[DType.uint64](result.offset)
-            rhs_ptr = field_hashes.buffer.device_ptr[DType.uint64](
+            lhs_ptr = result.buffer.device_view[DType.uint64](result.offset).unsafe_ptr()
+            rhs_ptr = field_hashes.buffer.device_view[DType.uint64](
                 field_hashes.offset
-            )
+            ).unsafe_ptr()
         else:
-            lhs_ptr = result.buffer.ptr_at[DType.uint64](result.offset)
-            rhs_ptr = field_hashes.buffer.ptr_at[DType.uint64](
+            lhs_ptr = result.buffer.view[DType.uint64](result.offset).unsafe_ptr()
+            rhs_ptr = field_hashes.buffer.view[DType.uint64](
                 field_hashes.offset
-            )
+            ).unsafe_ptr()
 
         _combine_elementwise(out_ptr, lhs_ptr, rhs_ptr, n, ctx)
         result = PrimitiveArray[uint64](

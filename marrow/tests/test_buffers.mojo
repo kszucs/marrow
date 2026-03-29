@@ -18,7 +18,7 @@ def is_aligned[
 def test_buffer_init() raises:
     var b = Buffer.alloc_zeroed(10)
     assert_equal(len(b), 64)
-    assert_true(is_aligned(b.unsafe_ptr(), 64))
+    assert_true(is_aligned(b.view[DType.uint8]().unsafe_ptr(), 64))
 
 
 def test_alloc_bits() raises:
@@ -155,24 +155,24 @@ def test_buffer_no_device() raises:
 
 def test_buffer_resize_noop_same_size() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](10)
-    var ptr_before = buf.unsafe_ptr()
+    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
     buf.resize[DType.int64](10)
-    assert_equal(buf.unsafe_ptr(), ptr_before)
+    assert_equal(Int(buf.view[DType.uint8]().unsafe_ptr()), addr_before)
 
 
 def test_buffer_resize_noop_same_aligned_size() raises:
     # 1 and 8 int64 elements both fit in the initial 64-byte block
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var ptr_before = buf.unsafe_ptr()
+    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
     buf.resize[DType.int64](8)
-    assert_equal(buf.unsafe_ptr(), ptr_before)
+    assert_equal(Int(buf.view[DType.uint8]().unsafe_ptr()), addr_before)
 
 
 def test_buffer_resize_reallocates_when_larger() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var ptr_before = buf.unsafe_ptr()
+    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
     buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → new 128-byte block
-    assert_true(buf.unsafe_ptr() != ptr_before)
+    assert_true(Int(buf.view[DType.uint8]().unsafe_ptr()) != addr_before)
 
 
 # ---------------------------------------------------------------------------
@@ -217,24 +217,24 @@ def test_bitmap_eq() raises:
 
 def test_bitmap_resize_noop_same_capacity() raises:
     var bm = Bitmap.alloc_zeroed(64)
-    var ptr_before = bm.unsafe_ptr()
+    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
     bm.resize(64)
-    assert_equal(bm.unsafe_ptr(), ptr_before)
+    assert_equal(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()), addr_before)
 
 
 def test_bitmap_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a single 64-byte block
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm.unsafe_ptr()
+    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
     bm.resize(511)
-    assert_equal(bm.unsafe_ptr(), ptr_before)
+    assert_equal(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()), addr_before)
 
 
 def test_bitmap_resize_reallocates_when_larger() raises:
     var bm = Bitmap.alloc_zeroed(1)
-    var ptr_before = bm.unsafe_ptr()
+    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
     bm.resize(513)  # needs a second 64-byte block
-    assert_true(bm.unsafe_ptr() != ptr_before)
+    assert_true(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()) != addr_before)
 
 
 # ---------------------------------------------------------------------------

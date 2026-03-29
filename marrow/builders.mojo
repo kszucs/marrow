@@ -488,8 +488,8 @@ struct StringBuilder(Builder, Sized):
             self._length + n, UInt32(cur_bytes + chunk_bytes)
         )
         memcpy(
-            dest=self._values.ptr_at[DType.uint8](cur_bytes),
-            src=arr.values.unsafe_ptr() + chunk_start,
+            dest=self._values.view[DType.uint8](cur_bytes).unsafe_ptr(),
+            src=arr.values.view[DType.uint8](chunk_start).unsafe_ptr(),
             count=chunk_bytes,
         )
         self._length += n
@@ -518,7 +518,7 @@ struct StringBuilder(Builder, Sized):
         self._bitmap.set(index)
         self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
         memcpy(
-            dest=self._values.ptr_at[DType.uint8](Int(last_offset)),
+            dest=self._values.view[DType.uint8](Int(last_offset)).unsafe_ptr(),
             src=s.unsafe_ptr(),
             count=length,
         )
@@ -1050,7 +1050,7 @@ struct BoolBuilder(Builder, Sized):
         self._buffer.extend(b.values(), self._length, b.length)
         if b.nulls != 0:
             if b.bitmap:
-                self._bitmap.extend(b.validity().value(), self._length, b.length)
+                self._bitmap.extend(b.validity(), self._length, b.length)
             self._null_count += b.nulls
         else:
             self._bitmap.set_range(self._length, b.length, True)

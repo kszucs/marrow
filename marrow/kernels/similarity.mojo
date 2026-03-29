@@ -35,12 +35,12 @@ def _cosine_similarity_no_nulls[
     comptime width = simd_byte_width() // size_of[native]()
 
     var result = PrimitiveBuilder[T](n_vectors)
-    var op = result._buffer.ptr_at[native](0)
+    var op = result._buffer.view[native]().unsafe_ptr()
 
     # Flat values pointer from the child array
     var child_data = vectors.values.to_data()
-    var vp = child_data.buffers[0].ptr_at[native](child_data.offset)
-    var qp = query.buffer.ptr_at[native](query.offset)
+    var vp = child_data.buffers[0].view[native](child_data.offset).unsafe_ptr()
+    var qp = query.buffer.view[native](query.offset).unsafe_ptr()
 
     # Pre-compute query norm
     var norm_q = Scalar[native](0)

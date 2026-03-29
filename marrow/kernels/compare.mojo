@@ -30,7 +30,7 @@ from std.gpu.host import DeviceContext, get_gpu_target
 
 from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
-from ..views import BitmapView
+from ..views import BitmapView, BufferView
 from ..dtypes import DataType, bool_ as bool_dt
 from ..buffers import Bitmap
 from . import bitmap_and, bool_array_dispatch
@@ -46,16 +46,17 @@ def _elementwise_cmp_pack[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         DType.bool, W
     ],
+    out_origin: Origin[mut=True],
 ](
-    output: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    lhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
-    rhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    output: BufferView[DType.uint8, out_origin],
+    lhs: BufferView[T.native, _],
+    rhs: BufferView[T.native, _],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
     """Compare elements and bit-pack via elementwise.
 
-    Pointers are function parameters (not closure captures) so they transfer
+    Views are function parameters (not closure captures) so they transfer
     correctly to GPU via DevicePassable.
     Safe to load beyond length: buffers are 64-byte aligned and padded.
     """
@@ -77,10 +78,8 @@ def _elementwise_cmp_pack[
         comptime packs = (W + 7) // 8
         comptime for k in range(packs):
             var off = base + k * 8
-            var cmp = func[8](lhs.load[width=8](off), rhs.load[width=8](off))
-            (output + off // 8).store(
-                (cmp.cast[DType.uint8]() << shifts).reduce_or()
-            )
+            var cmp = func[8](lhs.load[8](off), rhs.load[8](off))
+            output.store[1](off // 8, (cmp.cast[DType.uint8]() << shifts).reduce_or())
 
     if ctx:
         comptime if has_accelerator_support[T.native]():
@@ -125,30 +124,39 @@ def _binary_cmp[
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
-    var out_buf: Buffer[mut=True]
-    var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
-    var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
-        out_buf = Buffer.alloc_device[DType.bool](ctx.value(), length)
-        lhs_ptr = left.buffer.device_ptr[native](left.offset)
-        rhs_ptr = right.buffer.device_ptr[native](right.offset)
+        var out_buf = Buffer.alloc_device[DType.bool](ctx.value(), length)
+        _elementwise_cmp_pack[T, func](
+            out_buf.device_view[DType.uint8](),
+            left.buffer.device_view[native](left.offset),
+            right.buffer.device_view[native](right.offset),
+            length,
+            ctx,
+        )
+        var result_buf = out_buf.to_immutable().to_cpu(ctx.value())
+        return BoolArray(
+            length=length,
+            nulls=length - bm.value().view().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=Bitmap[mut=False](result_buf, length=length),
+        )
     else:
-        out_buf = Buffer.alloc_zeroed[DType.bool](length)
-        lhs_ptr = left.buffer.ptr_at[native](left.offset)
-        rhs_ptr = right.buffer.ptr_at[native](right.offset)
-    _elementwise_cmp_pack[T, func](out_buf.ptr_at[DType.uint8](0), lhs_ptr, rhs_ptr, length, ctx)
-
-    var result_buf = out_buf.to_immutable()
-    if ctx:
-        result_buf = result_buf.to_cpu(ctx.value())
-
-    return BoolArray(
-        length=length,
-        nulls=length - bm.value().view().count_set_bits() if bm else 0,
-        offset=0,
-        bitmap=bm,
-        buffer=Bitmap[mut=False](result_buf, length=length),
-    )
+        var out_buf = Buffer.alloc_zeroed[DType.bool](length)
+        _elementwise_cmp_pack[T, func](
+            out_buf.view[DType.uint8](),
+            left.buffer.view[native](left.offset),
+            right.buffer.view[native](right.offset),
+            length,
+        )
+        var result_buf = out_buf.to_immutable()
+        return BoolArray(
+            length=length,
+            nulls=length - bm.value().view().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=Bitmap[mut=False](result_buf, length=length),
+        )
 
 
 # ---------------------------------------------------------------------------

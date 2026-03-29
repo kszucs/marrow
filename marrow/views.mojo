@@ -56,7 +56,7 @@ struct BufferView[
     """
 
     var _data: UnsafePointer[Scalar[Self.T], Self.origin]
-    var _len: Int
+    var _length: Int
 
     # --- DevicePassable ---
 
@@ -79,25 +79,25 @@ struct BufferView[
         length: Int,
     ):
         self._data = ptr
-        self._len = length
+        self._length = length
 
     # --- Sized ---
 
     @always_inline
     def __len__(self) -> Int:
-        return self._len
+        return self._length
 
     # --- Boolable ---
 
     @always_inline
     def __bool__(self) -> Bool:
-        return self._len > 0
+        return self._length > 0
 
     # --- Element access ---
 
     @always_inline
     def __getitem__(self, index: Int) -> Scalar[Self.T]:
-        debug_assert(0 <= index < self._len, "BufferView index out of bounds")
+        debug_assert(0 <= index < self._length, "BufferView index out of bounds")
         return self._data[index]
 
     @always_inline
@@ -105,13 +105,13 @@ struct BufferView[
         var start: Int
         var end: Int
         var step: Int
-        start, end, step = slc.indices(self._len)
+        start, end, step = slc.indices(self._length)
         debug_assert(step == 1, "BufferView slice step must be 1")
         return Self(ptr=self._data + start, length=end - start)
 
     @always_inline
     def __contains__(self, value: Scalar[Self.T]) -> Bool:
-        for i in range(self._len):
+        for i in range(self._length):
             if self._data[i] == value:
                 return True
         return False
@@ -121,9 +121,8 @@ struct BufferView[
         return self._data[index]
 
     @always_inline
-    def unsafe_set(self, index: Int, value: Scalar[Self.T]):
-        comptime assert Self.mut, "cannot write to immutable BufferView"
-        self._data[index] = value
+    def unsafe_set(self: BufferView[mut=True, T=Self.T, origin=_], index: Int, value: Scalar[Self.T]):
+        self._data.store(index, value)
 
     # --- SIMD ---
 
@@ -135,11 +134,16 @@ struct BufferView[
     def store[W: Int](self: BufferView[mut=True, T=Self.T, origin=_], index: Int, value: SIMD[Self.T, W]):
         self._data.store(index, value)
 
+    @always_inline
+    def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
+        """SIMD gather: load W elements at positions given by `offsets`."""
+        return self._data.gather[width=W, alignment=1](offsets)
+
     # --- Slicing ---
 
     @always_inline
     def slice(self, offset: Int, length: Int = -1) -> Self:
-        var actual = length if length >= 0 else self._len - offset
+        var actual = length if length >= 0 else self._length - offset
         return Self(ptr=self._data + offset, length=actual)
 
     # --- Raw pointer access ---
@@ -156,10 +160,10 @@ struct BufferView[
         """Apply a SIMD function in-place over all elements."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
         var i = 0
-        while i + width <= self._len:
+        while i + width <= self._length:
             self._data.store(i, func[width](self._data.load[width=width](i)))
             i += width
-        while i < self._len:
+        while i < self._length:
             self._data[i] = func[1](self._data[i])
             i += 1
 
@@ -170,14 +174,14 @@ struct BufferView[
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
         var total = 0
         var i = 0
-        while i + width <= self._len:
+        while i + width <= self._length:
             total += Int(
                 func[width](self._data.load[width=width](i))
                 .cast[DType.uint8]()
                 .reduce_add()
             )
             i += width
-        while i < self._len:
+        while i < self._length:
             if func[1](self._data[i]):
                 total += 1
             i += 1
@@ -186,7 +190,7 @@ struct BufferView[
     # --- Writable ---
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"BufferView(length={self._len})")
+        writer.write(t"BufferView(length={self._length})")
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +223,7 @@ struct BitmapView[
 
     var _data: UnsafePointer[UInt8, Self.origin]
     var _offset: Int  # bit offset into _data
-    var _len: Int  # number of logical bits
+    var _length: Int  # number of logical bits
 
     # --- DevicePassable ---
 
@@ -244,25 +248,25 @@ struct BitmapView[
     ):
         self._data = ptr
         self._offset = offset
-        self._len = length
+        self._length = length
 
     # --- Sized ---
 
     @always_inline
     def __len__(self) -> Int:
-        return self._len
+        return self._length
 
     # --- Boolable (any bit set) ---
 
     def __bool__(self) -> Bool:
         """Return True if any bit in the view is set."""
-        if self._len == 0:
+        if self._length == 0:
             return False
 
         comptime width = simd_width_of[DType.uint8]()
         var ptr = self._data
         var bit_start = self._offset
-        var bit_end = bit_start + self._len
+        var bit_end = bit_start + self._length
         var byte_start = bit_start >> 3
         var byte_end = (bit_end + 7) >> 3
         var nbytes = byte_end - byte_start
@@ -304,7 +308,7 @@ struct BitmapView[
         var start: Int
         var end: Int
         var step: Int
-        start, end, step = slc.indices(self._len)
+        start, end, step = slc.indices(self._length)
         debug_assert(step == 1, "BitmapView slice step must be 1")
         return Self(
             ptr=self._data, offset=self._offset + start, length=end - start
@@ -341,7 +345,7 @@ struct BitmapView[
         ).cast[DType.bool]()
 
     @always_inline
-    def load[T: DType](self, index: Int) -> Scalar[T]:
+    def load_bits[T: DType](self, index: Int) -> Scalar[T]:
         """Load ``sizeof[T]*8`` bits starting at logical position ``index``.
 
         Handles the view's bit offset correctly. Safe because Arrow buffers
@@ -352,6 +356,26 @@ struct BitmapView[
         var bit_off = abs_pos & 7
         var raw = (self._data + byte_idx).bitcast[Scalar[T]]().load[alignment=1]()
         return raw >> Scalar[T](bit_off)
+
+    @always_inline
+    def load[T: DType](self, byte_offset: Int) -> Scalar[T]:
+        """Load a T-sized word from bitmap data at raw ``byte_offset``.
+
+        No ``_offset`` adjustment — the caller is responsible for computing
+        the correct byte address. Safe because Arrow buffers are 64-byte padded.
+        """
+        return (self._data + byte_offset).bitcast[Scalar[T]]().load[alignment=1]()
+
+    @always_inline
+    def store[T: DType](
+        self: BitmapView[mut=True, origin=_], byte_offset: Int, val: Scalar[T]
+    ):
+        """Store a T-sized word into bitmap data at raw ``byte_offset``.
+
+        No ``_offset`` adjustment — the caller is responsible for computing
+        the correct byte address.
+        """
+        (self._data + byte_offset).bitcast[Scalar[T]]().store(val)
 
     # --- Slicing ---
 
@@ -366,13 +390,13 @@ struct BitmapView[
     # TODO: optimize this
     def all_set(self) -> Bool:
         """Return True if all bits in the view are set."""
-        if self._len == 0:
+        if self._length == 0:
             return True
 
         comptime width = simd_width_of[DType.uint8]()
         var ptr = self._data
         var bit_start = self._offset
-        var bit_end = bit_start + self._len
+        var bit_end = bit_start + self._length
         var byte_start = bit_start >> 3
         var byte_end = (bit_end + 7) >> 3
         var nbytes = byte_end - byte_start
@@ -413,7 +437,7 @@ struct BitmapView[
         full range is always safe.
         """
         var byte_start = self._offset >> 3
-        var bit_end = self._offset + self._len
+        var bit_end = self._offset + self._length
         var byte_end = (bit_end + 7) >> 3
         var aligned_start = math.align_down(byte_start, 64)
         var aligned_end = math.align_up(byte_end, 64)
@@ -440,7 +464,7 @@ struct BitmapView[
         comptime t1_bytes = 512
         comptime t2_iters = 64 // width
 
-        if self._len == 0:
+        if self._length == 0:
             return (0, 0, 0)
 
         ptr, total_bytes, lead_bits, trail_bits = self._aligned_byte_range()
@@ -509,9 +533,9 @@ struct BitmapView[
             return (0, 0, 0)
 
         var start = max(0, first_byte * 8 - lead_bits)
-        var end = min(self._len, last_byte * 8 - lead_bits)
+        var end = min(self._length, last_byte * 8 - lead_bits)
         start = (start // 64) * 64
-        end = min(self._len, ((end + 63) // 64) * 64)
+        end = min(self._length, ((end + 63) // 64) * 64)
         return (count, start, end)
 
     def count_set_bits(self) -> Int:
@@ -523,18 +547,18 @@ struct BitmapView[
 
     def __eq__(self, other: BitmapView[_]) -> Bool:
         """Return True if both views have identical logical bit patterns."""
-        if self._len != len(other):
+        if self._length != len(other):
             return False
         # Word-level XOR comparison.
         var i = 0
-        while i + 64 <= self._len:
-            if self.load[DType.uint64](i) ^ other.load[DType.uint64](i) != 0:
+        while i + 64 <= self._length:
+            if self.load_bits[DType.uint64](i) ^ other.load_bits[DType.uint64](i) != 0:
                 return False
             i += 64
-        if i < self._len:
-            var tail = self._len - i
+        if i < self._length:
+            var tail = self._length - i
             var mask = (UInt64(1) << UInt64(tail)) - 1
-            if (self.load[DType.uint64](i) ^ other.load[DType.uint64](i)) & mask != 0:
+            if (self.load_bits[DType.uint64](i) ^ other.load_bits[DType.uint64](i)) & mask != 0:
                 return False
         return True
 
@@ -609,9 +633,9 @@ struct BitmapView[
         src, _, lead_bits, _ = self._aligned_byte_range()
         var byte_shift = lead_bits >> 3
         var bit_shift = lead_bits & 7
-        var builder = Bitmap.alloc_uninit(self._len)
+        var builder = Bitmap.alloc_uninit(self._length)
         var out_bytes = builder.byte_count()
-        var dst = builder.unsafe_ptr()
+        var dst = builder._buffer.view[DType.uint8]().unsafe_ptr()
 
         if bit_shift == 0:
             for i in range(0, out_bytes, 64):
@@ -636,7 +660,7 @@ struct BitmapView[
         ) -> SIMD[DType.uint8, W]
     ](self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Apply a byte-level SIMD binary op. Output always has offset=0."""
-        if self._len != len(other):
+        if self._length != len(other):
             raise Error("BitmapView lengths must match")
         comptime width = simd_width_of[DType.uint8]()
         comptime assert 64 % width == 0
@@ -648,9 +672,9 @@ struct BitmapView[
         var bit_shift_a = lead_bits_a & 7
         var byte_shift_b = lead_bits_b >> 3
         var bit_shift_b = lead_bits_b & 7
-        var builder = Bitmap.alloc_uninit(self._len)
+        var builder = Bitmap.alloc_uninit(self._length)
         var out_bytes = builder.byte_count()
-        var dst = builder.unsafe_ptr()
+        var dst = builder._buffer.view[DType.uint8]().unsafe_ptr()
 
         if bit_shift_a == 0 and bit_shift_b == 0:
             for i in range(0, out_bytes, 64):
@@ -682,7 +706,7 @@ struct BitmapView[
     # --- Writable ---
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"BitmapView(offset={self._offset}, length={self._len})")
+        writer.write(t"BitmapView(offset={self._offset}, length={self._length})")
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

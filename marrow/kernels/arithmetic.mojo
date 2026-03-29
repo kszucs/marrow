@@ -19,7 +19,7 @@ from std.utils.index import IndexList
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
-from ..views import BitmapView
+from ..views import BitmapView, BufferView
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
 from . import (
     bitmap_and,
@@ -39,9 +39,10 @@ from .helpers import has_accelerator_support
 def _elementwise_unary[
     T: DataType,
     func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
+    out_origin: Origin[mut=True],
 ](
-    output: UnsafePointer[Scalar[T.native], MutAnyOrigin],
-    input: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    output: BufferView[T.native, out_origin],
+    input: BufferView[T.native, _],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
@@ -53,7 +54,7 @@ def _elementwise_unary[
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
         var i = idx[0]
-        (output + i).store(func[W](input.load[width=W](i)))
+        output.store[W](i, func[W](input.load[W](i)))
 
     if ctx:
         comptime if has_accelerator_support[T.native]():
@@ -75,10 +76,11 @@ def _elementwise_binary[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         T.native, W
     ],
+    out_origin: Origin[mut=True],
 ](
-    output: UnsafePointer[Scalar[T.native], MutAnyOrigin],
-    lhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
-    rhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    output: BufferView[T.native, out_origin],
+    lhs: BufferView[T.native, _],
+    rhs: BufferView[T.native, _],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
@@ -90,7 +92,7 @@ def _elementwise_binary[
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
         var i = idx[0]
-        (output + i).store(func[W](lhs.load[width=W](i), rhs.load[width=W](i)))
+        output.store[W](i, func[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx:
         comptime if has_accelerator_support[T.native]():
@@ -119,31 +121,41 @@ def _unary[
     array: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
 ) raises -> PrimitiveArray[T]:
-    """Unary kernel: allocates output, resolves pointers, calls elementwise."""
+    """Unary kernel: allocates output, resolves views, calls elementwise."""
     comptime native = T.native
     var length = len(array)
 
-    var buf: Buffer[mut=True]
-    var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
-        buf = Buffer.alloc_device[native](ctx.value(), length)
-        in_ptr = array.buffer.device_ptr[native](array.offset)
+        var buf = Buffer.alloc_device[native](ctx.value(), length)
+        _elementwise_unary[T, func](
+            buf.device_view[native](),
+            array.buffer.device_view[native](array.offset),
+            length,
+            ctx,
+        )
+        return PrimitiveArray[T](
+            length=length,
+            nulls=length
+            - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
+            offset=0,
+            bitmap=array.bitmap,
+            buffer=buf.to_immutable(),
+        )
     else:
-        buf = Buffer.alloc_zeroed[native](length)
-        in_ptr = array.buffer.ptr_at[native](array.offset)
-
-    _elementwise_unary[T, func](
-        buf.ptr_at[native](0), in_ptr, length, ctx
-    )
-
-    return PrimitiveArray[T](
-        length=length,
-        nulls=length
-        - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
-        offset=0,
-        bitmap=array.bitmap,
-        buffer=buf.to_immutable(),
-    )
+        var buf = Buffer.alloc_zeroed[native](length)
+        _elementwise_unary[T, func](
+            buf.view[native](),
+            array.buffer.view[native](array.offset),
+            length,
+        )
+        return PrimitiveArray[T](
+            length=length,
+            nulls=length
+            - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
+            offset=0,
+            bitmap=array.bitmap,
+            buffer=buf.to_immutable(),
+        )
 
 
 def _binary[
@@ -157,7 +169,7 @@ def _binary[
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
 ) raises -> PrimitiveArray[T]:
-    """Binary kernel: allocates output, resolves pointers, calls elementwise."""
+    """Binary kernel: allocates output, resolves views, calls elementwise."""
     if len(left) != len(right):
         raise Error(
             t"{name} arrays must have the same length, got {len(left)} and"
@@ -168,34 +180,41 @@ def _binary[
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
-    var buf: Buffer[mut=True]
-    var out_ptr: UnsafePointer[Scalar[native], MutAnyOrigin]
-    var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
-    var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
         # FIXME: cannot use aligned pointers since the operands
         # may end up with different alignments; need to switch to
         # unaligned loads/stores
-        buf = Buffer.alloc_device[native](ctx.value(), length)
-        out_ptr = buf.ptr_at[native](0)
-        lhs_ptr = left.buffer.device_ptr[native](left.offset)
-        rhs_ptr = right.buffer.device_ptr[native](right.offset)
+        var buf = Buffer.alloc_device[native](ctx.value(), length)
+        _elementwise_binary[T, func](
+            buf.device_view[native](),
+            left.buffer.device_view[native](left.offset),
+            right.buffer.device_view[native](right.offset),
+            length,
+            ctx,
+        )
+        return PrimitiveArray[T](
+            length=length,
+            nulls=length - bm.value().view().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=buf.to_immutable(),
+        )
     else:
         # FIXME: use alloc_uninit to spare the zeroing of the output buffer
-        buf = Buffer.alloc_zeroed[native](length)
-        out_ptr = buf.ptr_at[native](0)
-        lhs_ptr = left.buffer.ptr_at[native](left.offset)
-        rhs_ptr = right.buffer.ptr_at[native](right.offset)
-
-    _elementwise_binary[T, func](out_ptr, lhs_ptr, rhs_ptr, length, ctx)
-
-    return PrimitiveArray[T](
-        length=length,
-        nulls=length - bm.value().view().count_set_bits() if bm else 0,
-        offset=0,
-        bitmap=bm,
-        buffer=buf.to_immutable(),
-    )
+        var buf = Buffer.alloc_zeroed[native](length)
+        _elementwise_binary[T, func](
+            buf.view[native](),
+            left.buffer.view[native](left.offset),
+            right.buffer.view[native](right.offset),
+            length,
+        )
+        return PrimitiveArray[T](
+            length=length,
+            nulls=length - bm.value().view().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=buf.to_immutable(),
+        )
 
 
 # ---------------------------------------------------------------------------

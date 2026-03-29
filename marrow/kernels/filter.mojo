@@ -34,7 +34,7 @@ def _filter_sparse[
 ](
     dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
     base: Int,
     sel_word: UInt64,
 ):
@@ -58,7 +58,7 @@ def _filter_dense[
 ](
     dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
     base: Int,
     sel_word: UInt64,
 ):
@@ -92,7 +92,7 @@ def _filter_block[
 ](
     dst: UnsafePointer[Scalar[T], MutAnyOrigin],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutExternalOrigin],
+    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
     base: Int,
     sel_word: UInt64,
 ) -> Int:
@@ -150,14 +150,17 @@ def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count:
     """
     if count == 0:
         return
-    var dst = bm.unsafe_ptr()
+    var ptr = bm._buffer.view[DType.uint8]().unsafe_ptr()
     var byte_idx = bitoffset >> 3
     var bit_off = bitoffset & 7
     var shifted = bits << UInt64(bit_off)
-    var ptr64 = (dst + byte_idx).bitcast[UInt64]()
-    ptr64.store[alignment=1](ptr64.load[alignment=1]() | shifted)
+    (ptr + byte_idx).bitcast[UInt64]().store[alignment=1](
+        (ptr + byte_idx).bitcast[UInt64]().load[alignment=1]() | shifted
+    )
     if bit_off > 0 and bit_off + count > 64:
-        dst[byte_idx + 8] = dst[byte_idx + 8] | UInt8(bits >> UInt64(64 - bit_off))
+        (ptr + byte_idx + 8).store[alignment=1](
+            (ptr + byte_idx + 8).load[alignment=1]() | UInt8(bits >> UInt64(64 - bit_off))
+        )
 
 
 def _filter_bits(
@@ -191,20 +194,20 @@ def _filter_bits(
     var i = sel_start
 
     while i + 64 <= sel_end:
-        var sel_word = sel.load[DType.uint64](i)
+        var sel_word = sel.load_bits[DType.uint64](i)
         if sel_word == 0:
             i += 64
-            while i + 64 <= sel_end and sel.load[DType.uint64](i) == 0:
+            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
                 i += 64
             continue
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load[DType.uint64](i) == ALL_ONES:
+            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES:
                 i += 64
             var j = run_start
             while j < i:
-                var src_word = src.load[DType.uint64](j)
+                var src_word = src.load_bits[DType.uint64](j)
                 _deposit_bits(builder, bm_pos, src_word, 64)
                 zero_count += 64 - Int(pop_count(src_word))
                 bm_pos += 64
@@ -212,7 +215,7 @@ def _filter_bits(
             continue
 
         # Mixed block: pext + deposit.
-        var src_word = src.load[DType.uint64](i)
+        var src_word = src.load_bits[DType.uint64](i)
         var count = Int(pop_count(sel_word))
         var compressed = _pext(src_word, sel_word)
         _deposit_bits(builder, bm_pos, compressed, count)
@@ -224,9 +227,9 @@ def _filter_bits(
     if i < sel_end:
         var tail = sel_end - i
         var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load[DType.uint64](i) & mask
+        var sel_word = sel.load_bits[DType.uint64](i) & mask
         if sel_word != 0:
-            var src_word = src.load[DType.uint64](i)
+            var src_word = src.load_bits[DType.uint64](i)
             var count = Int(pop_count(sel_word))
             var compressed = _pext(src_word, sel_word)
             _deposit_bits(builder, bm_pos, compressed, count)
@@ -264,22 +267,22 @@ def _filter_values[
     comptime ELEM = size_of[Scalar[T]]()
     comptime ALL_ONES = ~UInt64(0)
     var buf = Buffer.alloc_uninit(out_len * ELEM)
-    var src = src_buf.ptr_at[T](src_offset)
-    var dst = buf.ptr_at[T]()
+    var src = src_buf.view[T](src_offset).unsafe_ptr().unsafe_origin_cast[ImmutAnyOrigin]()
+    var dst = buf.view[T]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin]()
     var out_pos = 0
     var i = sel_start
 
     while i + 64 <= sel_end:
-        var sel_word = sel.load[DType.uint64](i)
+        var sel_word = sel.load_bits[DType.uint64](i)
         if sel_word == 0:
             i += 64
-            while i + 64 <= sel_end and sel.load[DType.uint64](i) == 0:
+            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
                 i += 64
             continue
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load[DType.uint64](i) == ALL_ONES:
+            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES:
                 i += 64
             # TODO: use buffer.extend()
             memcpy(
@@ -296,7 +299,7 @@ def _filter_values[
     if i < sel_end:
         var tail = sel_end - i
         var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load[DType.uint64](i) & mask
+        var sel_word = sel.load_bits[DType.uint64](i) & mask
         if sel_word != 0:
             out_pos += _filter_block[T, SPARSE_THRESHOLD=64](
                 dst, out_pos, src, i, sel_word
@@ -346,8 +349,8 @@ def filter_[
     # Filter validity bitmap.
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
-    if array.validity():
-        var val_bm = array.validity().value()
+    var val_bm = array.validity()
+    if len(val_bm) != 0:
         var filtered_bm, nc = _filter_bits(
             val_bm, sel_bm, sel_start, sel_end, out_len
         )
@@ -466,8 +469,8 @@ def filter_(
         )
 
     var off = array.offset
-    var offsets_ptr = array.offsets.ptr_at[DType.uint32]()
-    var values_ptr = array.values.ptr_at()
+    var offsets_ptr = array.offsets.view[DType.uint32]().unsafe_ptr()
+    var values_ptr = array.values.view[DType.uint8]().unsafe_ptr()
 
     # Compute total output bytes.
     var total_bytes = 0
@@ -481,8 +484,8 @@ def filter_(
     # TODO: use alloc_uninit to spare zeroing the output buffers
     var out_offsets = Buffer.alloc_zeroed[DType.uint32](out_len + 1)
     var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
-    var out_off_ptr = out_offsets.ptr_at[DType.uint32]()
-    var out_val_ptr = out_values.ptr_at[DType.uint8]()
+    var out_off_ptr = out_offsets.view[DType.uint32]().unsafe_ptr()
+    var out_val_ptr = out_values.view[DType.uint8]().unsafe_ptr()
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
 
@@ -620,7 +623,7 @@ def drop_nulls[
         A new PrimitiveArray containing only valid elements.
     """
     var val = array.validity()
-    if not val:
+    if len(val) == 0:
         # All valid: wrap as identity selection
         var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)
@@ -700,11 +703,10 @@ def take[
     """
     comptime native = T.native
     var n = len(indices)
-    var src = array.buffer.ptr_at[native](array.offset)
-    var idx_ptr = indices.buffer.ptr_at[int32.native](indices.offset)
+    var src = array.buffer.view[native](array.offset)
+    var idx_ptr = indices.buffer.view[int32.native](indices.offset).unsafe_ptr()
     var buf = Buffer.alloc_uninit(Buffer._aligned_size[native](n))
-    var out: UnsafePointer[Scalar[native], MutAnyOrigin]
-    out = buf.ptr_at[native](0)
+    var out = buf.view[native]()
 
     var has_null_indices = indices.null_count() > 0
     var has_src_nulls = array.null_count() > 0
@@ -720,11 +722,11 @@ def take[
         # Fast path: no nulls — pure SIMD gather, no bitmap.
         while i + W <= n:
             var offsets = idx_ptr.load[width=W](i).cast[DType.int64]()
-            var vals = src.gather[width=W, alignment=1](offsets)
-            (out + i).store(vals)
+            var vals = src.gather[W](offsets)
+            out.store[W](i, vals)
             i += W
         while i < n:
-            out[i] = src[Int(idx_ptr.load(i))]
+            out.unsafe_set(i, src[Int(idx_ptr.load(i))])
             i += 1
     else:
         # TODO: optimize this, the implementation below could be vectorized
@@ -734,11 +736,11 @@ def take[
             if (has_null_indices and not indices.is_valid(i)) or (
                 has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))
             ):
-                out[i] = Scalar[native](0)
+                out.unsafe_set(i, Scalar[native](0))
                 bm_builder.clear(i)
                 null_count += 1
             else:
-                out[i] = src[Int(idx_ptr.load(i))]
+                out.unsafe_set(i, src[Int(idx_ptr.load(i))])
                 bm_builder.set(i)
             i += 1
         if null_count > 0:

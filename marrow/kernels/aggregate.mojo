@@ -56,7 +56,7 @@ def _reduce[
         out = val[0]
 
     if array.bitmap:
-        var bm = array.validity().value()
+        var bm = array.validity()
 
         @always_inline
         @parameter
@@ -232,15 +232,15 @@ def any_(array: BoolArray) raises -> Bool:
     var data_bv = array.values()
     if not array.bitmap:
         return Bool(data_bv)
-    var validity_bv = array.validity().value()
+    var validity_bv = array.validity()
     var i = 0
     while i + 64 <= n:
-        if (data_bv.load[DType.uint64](i) & validity_bv.load[DType.uint64](i)) != 0:
+        if (data_bv.load_bits[DType.uint64](i) & validity_bv.load_bits[DType.uint64](i)) != 0:
             return True
         i += 64
     if i < n:
         var mask = (UInt64(1) << UInt64(n - i)) - 1
-        if (data_bv.load[DType.uint64](i) & validity_bv.load[DType.uint64](i)) & mask != 0:
+        if (data_bv.load_bits[DType.uint64](i) & validity_bv.load_bits[DType.uint64](i)) & mask != 0:
             return True
     return False
 
@@ -251,16 +251,16 @@ def all_(array: BoolArray) raises -> Bool:
     var data_bv = array.values()
     if not array.bitmap:
         return data_bv.all_set()
-    var validity_bv = array.validity().value()
+    var validity_bv = array.validity()
     var i = 0
     while i + 64 <= n:
-        var v = validity_bv.load[DType.uint64](i)
-        if (data_bv.load[DType.uint64](i) & v) != v:
+        var v = validity_bv.load_bits[DType.uint64](i)
+        if (data_bv.load_bits[DType.uint64](i) & v) != v:
             return False
         i += 64
     if i < n:
         var mask = (UInt64(1) << UInt64(n - i)) - 1
-        var v = validity_bv.load[DType.uint64](i) & mask
-        if (data_bv.load[DType.uint64](i) & v) != v:
+        var v = validity_bv.load_bits[DType.uint64](i) & mask
+        if (data_bv.load_bits[DType.uint64](i) & v) != v:
             return False
     return True

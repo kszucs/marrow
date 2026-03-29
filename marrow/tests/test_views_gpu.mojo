@@ -24,7 +24,7 @@ from marrow.views import BitmapView, BufferView
 def _scale_by_two[
     T: DType
 ](
-    src: BufferView[T, ImmutAnyOrigin],
+    src: BufferView[T, MutAnyOrigin],
     dst: BufferView[T, MutAnyOrigin],
     length: Int,
     ctx: DeviceContext,
@@ -116,16 +116,13 @@ def test_bufferview_gpu_scale() raises:
     var dev_src = cpu_buf^.to_immutable().to_device(ctx)
 
     # Build a BufferView backed by device memory and run the GPU kernel
-    var src_ptr: UnsafePointer[Scalar[DType.int32], ImmutAnyOrigin] = (
-        dev_src.device_ptr[DType.int32](0)
-    )
-    var src = BufferView[DType.int32, ImmutAnyOrigin](ptr=src_ptr, length=4)
+    var src = dev_src.device_view[DType.int32]()
 
     var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
-    var dst_ptr: UnsafePointer[Scalar[DType.int32], MutAnyOrigin] = (
-        dev_dst.ptr_at[DType.int32](0)
+    var dst = BufferView[DType.int32, MutAnyOrigin](
+        ptr=dev_dst.view[DType.int32]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+        length=4,
     )
-    var dst = BufferView[DType.int32, MutAnyOrigin](ptr=dst_ptr, length=4)
     _scale_by_two[DType.int32](src, dst, 4, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
@@ -151,16 +148,13 @@ def test_bufferview_gpu_scale_float32() raises:
     cpu_buf.unsafe_set[DType.float32](3, Float32(4.5))
     var dev_src = cpu_buf^.to_immutable().to_device(ctx)
 
-    var src_ptr: UnsafePointer[Scalar[DType.float32], ImmutAnyOrigin] = (
-        dev_src.device_ptr[DType.float32](0)
-    )
-    var src = BufferView[DType.float32, ImmutAnyOrigin](ptr=src_ptr, length=4)
+    var src = dev_src.device_view[DType.float32]()
 
     var dev_dst = Buffer.alloc_device[DType.float32](ctx, 4)
-    var dst_ptr: UnsafePointer[Scalar[DType.float32], MutAnyOrigin] = (
-        dev_dst.ptr_at[DType.float32](0)
+    var dst = BufferView[DType.float32, MutAnyOrigin](
+        ptr=dev_dst.view[DType.float32]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+        length=4,
     )
-    var dst = BufferView[DType.float32, MutAnyOrigin](ptr=dst_ptr, length=4)
     _scale_by_two[DType.float32](src, dst, 4, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
@@ -188,13 +182,11 @@ def test_bitmapview_gpu_bits_to_bytes() raises:
     var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
 
     # Build a BitmapView backed by device memory and run the GPU kernel
-    var bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin] = (
-        dev_bm.device_ptr[DType.uint8](0)
-    )
+    var bm_ptr = dev_bm.device_view[DType.uint8]().unsafe_ptr().mut_cast[False]()
     var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=0, length=8)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
-    _bits_to_bytes(bv, dev_dst.unsafe_ptr(),8, ctx)
+    _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 8, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())
@@ -223,14 +215,12 @@ def test_bitmapview_gpu_with_offset() raises:
 
     var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
 
-    var bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin] = (
-        dev_bm.device_ptr[DType.uint8](0)
-    )
+    var bm_ptr = dev_bm.device_view[DType.uint8]().unsafe_ptr().mut_cast[False]()
     # View of 4 bits starting at bit offset 8
     var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=8, length=4)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 4)
-    _bits_to_bytes(bv, dev_dst.unsafe_ptr(),4, ctx)
+    _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 4, ctx)
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())
