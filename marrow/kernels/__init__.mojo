@@ -54,7 +54,6 @@ def bitmap_and(
         return b
     if not b:
         return a
-    var n = len(a.value())
     return (a.value().view() & b.value().view()).to_immutable()
 
 

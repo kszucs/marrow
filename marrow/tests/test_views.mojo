@@ -11,7 +11,7 @@ from marrow.views import BufferView, BitmapView
 
 def test_bufferview_len() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     assert_equal(len(view), buf.size // 4)
 
 
@@ -21,7 +21,7 @@ def test_bufferview_getitem() raises:
     buf.unsafe_set[DType.int32](1, Int32(20))
     buf.unsafe_set[DType.int32](2, Int32(30))
     buf.unsafe_set[DType.int32](3, Int32(40))
-    var view = buf.as_view[DType.int32](0)
+    var view = buf.view[DType.int32](0)
     assert_equal(view[0], 10)
     assert_equal(view[1], 20)
     assert_equal(view[2], 30)
@@ -30,13 +30,13 @@ def test_bufferview_getitem() raises:
 
 def test_bufferview_bool_nonempty() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     assert_true(view.__bool__())
 
 
 def test_bufferview_bool_empty() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](0)
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     assert_false(view.__bool__())
 
 
@@ -44,7 +44,7 @@ def test_bufferview_contains() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
     buf.unsafe_set[DType.int32](0, Int32(7))
     buf.unsafe_set[DType.int32](1, Int32(42))
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     assert_true(42 in view)
     assert_false(99 in view)
 
@@ -53,7 +53,7 @@ def test_bufferview_slice() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         buf.unsafe_set[DType.int32](i, Int32(i * 10))
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     var sub = view.slice(2, 3)
     assert_equal(len(sub), 3)
     assert_equal(sub[0], 20)
@@ -66,7 +66,7 @@ def test_bufferview_load() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         buf.unsafe_set[DType.int32](i, Int32(i + 1))
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     var v = view.load[4](0)
     assert_equal(v[0], 1)
     assert_equal(v[1], 2)
@@ -76,7 +76,7 @@ def test_bufferview_load() raises:
 
 def test_bufferview_store() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
-    var view = buf.as_view[DType.int32](0)
+    var view = buf.view[DType.int32](0)
     view.store[4](0, SIMD[DType.int32, 4](5, 6, 7, 8))
     assert_equal(view[0], 5)
     assert_equal(view[1], 6)
@@ -87,7 +87,7 @@ def test_bufferview_store() raises:
 def test_bufferview_unsafe_ptr() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
     buf.unsafe_set[DType.int32](0, 99)
-    var view = buf.as_view[DType.int32]()
+    var view = buf.view[DType.int32]()
     assert_equal(view.unsafe_ptr()[0], 99)
 
 
@@ -96,7 +96,7 @@ def test_bufferview_offset_baked_in() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         buf.unsafe_set[DType.int32](i, Int32(i * 2))
-    var view = buf.as_view[DType.int32](3)
+    var view = buf.view[DType.int32](3)
     assert_equal(view[0], 6)
     assert_equal(view[1], 8)
 
@@ -111,7 +111,7 @@ def test_bufferview_implicit_copy() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
     buf.unsafe_set[DType.int32](0, Int32(11))
     buf.unsafe_set[DType.int32](1, Int32(22))
-    var original = buf.as_view[DType.int32]()
+    var original = buf.view[DType.int32]()
     var copy = original  # implicit copy via TrivialRegisterPassable
     assert_equal(copy[0], 11)
     assert_equal(copy[1], 22)

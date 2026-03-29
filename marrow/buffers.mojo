@@ -319,6 +319,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
     var size: Int
     """Buffer size in bytes (always 64-byte aligned)."""
 
+    # TODO: make this protected to discourage direct access
     var ptr: UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]
     """Mutable allocation pointer.
     For `mut=True` CPU/HOST allocations: the CPU-accessible data pointer.
@@ -637,25 +638,6 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         )
         return self.ptr.bitcast[Scalar[T]]() + offset
 
-    # TODO: remove this method, .slice() should be preferred to be used from
-    # arrays and arraybuilders with both length and offset
-    @always_inline
-    def as_view[
-        T: DType = DType.uint8
-    ](ref self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
-        """Return a non-owning typed view over this buffer starting at `offset`.
-
-        The offset is baked into the view pointer so all view indexing is
-        zero-based. Prefer this over `ptr_at` for bounds-checked or SIMD access.
-        The view borrows from and inherits the mutability of the buffer:
-        a ``Buffer[mut=True]`` yields a ``BufferView[mut=True]``.
-        """
-        return BufferView[T, origin_of(self)](
-            ptr=rebind[UnsafePointer[Scalar[T], origin_of(self)]](
-                self.ptr.bitcast[Scalar[T]]() + offset
-            ),
-            length=(self.size - offset * size_of[T]()) // size_of[T](),
-        )
 
     # TODO: fully remove this!
     @always_inline
@@ -774,18 +756,23 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
         """Write the buffer's bytes to a Writer."""
         writer.write(t"Buffer(ptr={self.ptr}, size={self.size})")
 
-    def view(self, offset: Int = 0, length: Int = -1) -> BufferView[origin_of(self)]:
-        """Return a zero-copy view of the buffer starting at `offset` for `length` bytes.
+    def view[
+        T: DType = DType.uint8
+    ](ref self, offset: Int = 0, length: Int = -1) -> BufferView[T, origin_of(self)]:
+        """Return a non-owning typed view over this buffer.
 
+        `offset` and `length` are in units of `T` elements (bytes when T=uint8).
         If `length` is -1 (the default), the view extends to the end of the buffer.
         """
-        if length == -1:
-            length = self.size - offset
-        return BufferView[origin_of(self)](ptr=self.ptr, length=length)
+        var n = length if length >= 0 else (self.size // size_of[T]()) - offset
+        var ptr = rebind[UnsafePointer[Scalar[T], origin_of(self)]](self.ptr)
+        return BufferView(ptr=ptr + offset, length=n)
 
-    def slice(self, offset: Int, length: Int) -> BufferView[origin_of(self)]:
-        """Return a zero-copy view of `length` bytes starting at `offset`."""
-        return self.view(offset, length)
+    def slice[
+        T: DType = DType.uint8
+    ](ref self, offset: Int, length: Int) -> BufferView[T, origin_of(self)]:
+        """Return a non-owning typed view of `length` T-elements starting at `offset`."""
+        return self.view[T](offset, length)
 
     def __len__(self) -> Int:
         """Return the buffer size in bytes."""
@@ -823,6 +810,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
                           Copying is O(1). Use `slice()`.
     """
 
+    # TODO: make these protected to discourage direct access
     var buffer: Buffer[mut=Self.mut]
     var length: Int
 
@@ -841,7 +829,6 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         comptime assert not Self.mut, "cannot copy mutable Bitmap[mut=True]"
         self.buffer = copy.buffer
         self.length = copy.length
-
 
     def __init__(out self: Bitmap[mut=True], values: List[Bool]) raises:
         """Construct a mutable Bitmap from a list of boolean values."""
@@ -891,7 +878,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
 
-    # TODO: the proper lifetime is probably the underlying buffer's ArcPointer ref-count
+    # TODO: ensure that properly covered by tests
     def view(self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of the bitmap starting at `offset` for `length` bits.
 
@@ -899,7 +886,9 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         """
         var n = length if length >= 0 else self.length - offset
         var ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](self.buffer.ptr)
-        return BitmapView[origin_of(self)](ptr=ptr, offset=offset, length=n)
+        var byte_offset = offset // 8
+        var bit_offset = offset % 8
+        return BitmapView(ptr=ptr + byte_offset, offset=bit_offset, length=n)
 
     def slice(self, offset: Int, length: Int) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of `length` bits starting at `offset`."""

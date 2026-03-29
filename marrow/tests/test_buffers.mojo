@@ -649,5 +649,162 @@ def test_bitmapview_invert_pattern() raises:
     assert_true(inv[7])
 
 
+def test_bitmapview_invert_no_bleed_past_length() raises:
+    """~view must not set bits beyond _len (non-byte-aligned length)."""
+    var bm = Bitmap(10, [])  # 10 bits, all clear
+    var inv = ~bm.view()
+    assert_equal(inv.view().count_set_bits(), 10)
+
+
+def test_bitmapview_invert_with_offset() raises:
+    """~view on a non-zero-offset slice inverts only the slice bits."""
+    var bm = Bitmap(16, [4, 5, 6, 7])
+    var s = bm.slice(4, 8)  # bits 4-11 → [1,1,1,1,0,0,0,0]
+    var inv = ~s
+    assert_false(inv[0])
+    assert_false(inv[1])
+    assert_false(inv[2])
+    assert_false(inv[3])
+    assert_true(inv[4])
+    assert_true(inv[5])
+    assert_true(inv[6])
+    assert_true(inv[7])
+
+
+# ---------------------------------------------------------------------------
+# Bitmap — zero-length
+# ---------------------------------------------------------------------------
+
+
+def test_bitmap_empty() raises:
+    var b = Bitmap.alloc_zeroed(0)
+    assert_equal(len(b), 0)
+
+
+# ---------------------------------------------------------------------------
+# BitmapView — difference (AND-NOT)
+# ---------------------------------------------------------------------------
+
+
+def test_bitmapview_difference_basic() raises:
+    # [1,0,1,0] & ~[1,1,0,0] = [0,0,1,0]
+    var a = Bitmap(4, [0, 2])
+    var b = Bitmap(4, [0, 1])
+    var r = a.view().difference(b.view())
+    assert_false(r[0])
+    assert_false(r[1])
+    assert_true(r[2])
+    assert_false(r[3])
+
+
+def test_bitmapview_difference_identity() raises:
+    # a & ~(all-zeros) == a
+    var a = Bitmap(8, [0, 3, 7])
+    var zeros = Bitmap(8, [])
+    var r = a.view().difference(zeros.view())
+    for i in range(8):
+        assert_equal(r[i], a[i])
+
+
+def test_bitmapview_difference_annihilator() raises:
+    # a & ~a == all-zeros
+    var a = Bitmap(8, [0, 3, 7])
+    var r = a.view().difference(a.view())
+    for i in range(8):
+        assert_false(r[i])
+
+
+# ---------------------------------------------------------------------------
+# BitmapView — binary ops on sliced (offset) views
+# ---------------------------------------------------------------------------
+
+
+def test_bitmapview_and_with_offset() raises:
+    """AND of two sliced bitmaps sharing the same non-zero sub-byte offset."""
+    var bm = Bitmap(16, [2, 3, 4, 6])
+    var a = bm.slice(2, 6)   # logical [0..6) maps to original [2..8)
+    var b = bm.slice(2, 6)   # same slice: a & a == a
+    var r = a & b
+    for i in range(6):
+        assert_equal(r[i], a[i])
+
+
+def test_bitmapview_or_with_offset() raises:
+    """OR of two sliced bitmaps with a non-zero offset."""
+    var fa = Bitmap(16, [3, 5])
+    var fb = Bitmap(16, [3, 4])
+    var a = fa.slice(3, 5)   # slice indices 0, 2 set
+    var b = fb.slice(3, 5)   # slice indices 0, 1 set
+    var r = a | b
+    assert_true(r[0])   # in both
+    assert_true(r[1])   # only b
+    assert_true(r[2])   # only a
+    assert_false(r[3])
+    assert_false(r[4])
+
+
+def test_bitmapview_xor_with_offset() raises:
+    """XOR of two sliced bitmaps with the same non-zero offset."""
+    var fa = Bitmap(16, [3, 5])
+    var fb = Bitmap(16, [3, 4])
+    var a = fa.slice(3, 5)   # slice indices 0, 2 set
+    var b = fb.slice(3, 5)   # slice indices 0, 1 set
+    var r = a ^ b
+    assert_false(r[0])  # 1 ^ 1 = 0
+    assert_true(r[1])   # 0 ^ 1 = 1
+    assert_true(r[2])   # 1 ^ 0 = 1
+    assert_false(r[3])
+    assert_false(r[4])
+
+
+# ---------------------------------------------------------------------------
+# BitmapView — length-mismatch raises
+# ---------------------------------------------------------------------------
+
+
+def test_bitmapview_and_length_mismatch_raises() raises:
+    var a = Bitmap(8, [0, 2])
+    var b = Bitmap(4, [0, 2])
+    var raised = False
+    try:
+        _ = a.view() & b.view()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_bitmapview_or_length_mismatch_raises() raises:
+    var a = Bitmap(8, [0, 2])
+    var b = Bitmap(4, [0])
+    var raised = False
+    try:
+        _ = a.view() | b.view()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_bitmapview_xor_length_mismatch_raises() raises:
+    var a = Bitmap(8, [0, 2])
+    var b = Bitmap(4, [0])
+    var raised = False
+    try:
+        _ = a.view() ^ b.view()
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_bitmapview_difference_length_mismatch_raises() raises:
+    var a = Bitmap(8, [0, 2])
+    var b = Bitmap(4, [0])
+    var raised = False
+    try:
+        _ = a.view().difference(b.view())
+    except:
+        raised = True
+    assert_true(raised)
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

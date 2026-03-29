@@ -571,6 +571,7 @@ struct PrimitiveArray[T: DataType](
     comptime dtype = Self.T
     comptime scalar = Scalar[Self.T.native]
 
+    # TODO: make these protected to discourage direct access
     var length: Int
     var nulls: Int
     var offset: Int
@@ -671,7 +672,7 @@ struct PrimitiveArray[T: DataType](
         comptime assert (
             Self.T.native != DType.bool
         ), "use values() for bool arrays"
-        return self.buffer.as_view[Self.T.native](self.offset)
+        return self.buffer.view[Self.T.native](self.offset, self.length)
 
     def device_values(
         self,
