@@ -642,11 +642,13 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
     @always_inline
     def as_view[
         T: DType = DType.uint8
-    ](self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
+    ](ref self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
         """Return a non-owning typed view over this buffer starting at `offset`.
 
         The offset is baked into the view pointer so all view indexing is
         zero-based. Prefer this over `ptr_at` for bounds-checked or SIMD access.
+        The view borrows from and inherits the mutability of the buffer:
+        a ``Buffer[mut=True]`` yields a ``BufferView[mut=True]``.
         """
         return BufferView[T, origin_of(self)](
             ptr=rebind[UnsafePointer[Scalar[T], origin_of(self)]](

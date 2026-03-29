@@ -37,8 +37,10 @@ struct BufferView[
     T: DType,
     origin: Origin[mut=mut],
 ](
+    DevicePassable,
     ImplicitlyCopyable,
     Sized,
+    TrivialRegisterPassable,
     Writable,
 ):
     """Non-owning, typed, DevicePassable view over contiguous element data.
@@ -56,6 +58,17 @@ struct BufferView[
     var _data: UnsafePointer[Scalar[Self.T], Self.origin]
     var _len: Int
 
+    # --- DevicePassable ---
+
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, target: MutOpaquePointer[_]):
+        target.bitcast[Self.device_type]()[] = self
+
+    @staticmethod
+    def get_type_name() -> String:
+        return String(t"BufferView[{Self.T}]")
+
     # --- lifecycle ---
 
     @always_inline
@@ -67,10 +80,6 @@ struct BufferView[
     ):
         self._data = ptr
         self._len = length
-
-    def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._len = copy._len
 
     # --- Sized ---
 
@@ -119,12 +128,11 @@ struct BufferView[
     # --- SIMD ---
 
     @always_inline
-    def simd_load[W: Int](self, index: Int) -> SIMD[Self.T, W]:
+    def load[W: Int](self, index: Int) -> SIMD[Self.T, W]:
         return self._data.load[width=W](index)
 
     @always_inline
-    def simd_store[W: Int](self, index: Int, value: SIMD[Self.T, W]):
-        comptime assert Self.mut, "cannot write to immutable BufferView"
+    def store[W: Int](self: BufferView[mut=True, T=Self.T, origin=_], index: Int, value: SIMD[Self.T, W]):
         self._data.store(index, value)
 
     # --- Slicing ---
@@ -192,8 +200,10 @@ struct BitmapView[
     origin: Origin[mut=mut],
 ](
     Boolable,
+    DevicePassable,
     ImplicitlyCopyable,
     Sized,
+    TrivialRegisterPassable,
     Writable,
 ):
     """Non-owning, DevicePassable view over bit-packed data.
@@ -211,6 +221,17 @@ struct BitmapView[
     var _offset: Int  # bit offset into _data
     var _len: Int  # number of logical bits
 
+    # --- DevicePassable ---
+
+    comptime device_type: AnyType = Self
+
+    def _to_device_type(self, target: MutOpaquePointer[_]):
+        target.bitcast[Self.device_type]()[] = self
+
+    @staticmethod
+    def get_type_name() -> String:
+        return String("BitmapView")
+
     # --- lifecycle ---
 
     @always_inline
@@ -224,11 +245,6 @@ struct BitmapView[
         self._data = ptr
         self._offset = offset
         self._len = length
-
-    def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._offset = copy._offset
-        self._len = copy._len
 
     # --- Sized ---
 
