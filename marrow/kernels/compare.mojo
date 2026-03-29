@@ -30,14 +30,14 @@ from std.gpu.host import DeviceContext, get_gpu_target
 
 from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
 from ..buffers import Buffer
-from ..views import BitmapView, BufferView
+from ..views import BitmapView
 from ..dtypes import DataType, bool_ as bool_dt
 from ..buffers import Bitmap
 from . import bitmap_and, bool_array_dispatch
 
 
 # ---------------------------------------------------------------------------
-# Elementwise compare + bit-pack — BufferViews as params for GPU DevicePassable
+# Elementwise compare + bit-pack — pointers as params for GPU DevicePassable
 # ---------------------------------------------------------------------------
 
 
@@ -46,18 +46,16 @@ def _elementwise_cmp_pack[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         DType.bool, W
     ],
-    lhs_origin: Origin,
-    rhs_origin: Origin,
 ](
     output: UnsafePointer[Scalar[DType.uint8], MutAnyOrigin],
-    lhs: BufferView[T.native, lhs_origin],
-    rhs: BufferView[T.native, rhs_origin],
+    lhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
+    rhs: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
     """Compare elements and bit-pack via elementwise.
 
-    BufferViews are function parameters (not closure captures) so they transfer
+    Pointers are function parameters (not closure captures) so they transfer
     correctly to GPU via DevicePassable.
     Safe to load beyond length: buffers are 64-byte aligned and padded.
     """
@@ -79,7 +77,7 @@ def _elementwise_cmp_pack[
         comptime packs = (W + 7) // 8
         comptime for k in range(packs):
             var off = base + k * 8
-            var cmp = func[8](lhs._data.load[width=8](off), rhs._data.load[width=8](off))
+            var cmp = func[8](lhs.load[width=8](off), rhs.load[width=8](off))
             (output + off // 8).store(
                 (cmp.cast[DType.uint8]() << shifts).reduce_or()
             )
@@ -128,16 +126,17 @@ def _binary_cmp[
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
     var out_buf: Buffer[mut=True]
+    var lhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
+    var rhs_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
     if ctx:
         out_buf = Buffer.alloc_device[DType.bool](ctx.value(), length)
-        _elementwise_cmp_pack[T, func](
-            out_buf.ptr, left.device_values(), right.device_values(), length, ctx
-        )
+        lhs_ptr = left.buffer.device_ptr[native](left.offset)
+        rhs_ptr = right.buffer.device_ptr[native](right.offset)
     else:
         out_buf = Buffer.alloc_zeroed[DType.bool](length)
-        _elementwise_cmp_pack[T, func](
-            out_buf.ptr, left.values(), right.values(), length
-        )
+        lhs_ptr = left.buffer.ptr_at[native](left.offset)
+        rhs_ptr = right.buffer.ptr_at[native](right.offset)
+    _elementwise_cmp_pack[T, func](out_buf.ptr, lhs_ptr, rhs_ptr, length, ctx)
 
     var result_buf = out_buf.to_immutable()
     if ctx:

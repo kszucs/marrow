@@ -517,9 +517,16 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
 
         For CPU buffers (`alloc_zeroed`, `alloc_uninit`): returns kind=CPU.
         For HOST buffers (`alloc_host`): returns kind=HOST.
-        For DEVICE buffers (`alloc_device`): returns kind=DEVICE.
+        For DEVICE buffers (`alloc_device`): returns kind=DEVICE with null ptr.
         """
-        return Buffer[mut=False](size=self.size, ptr=self.ptr, owner=self._owner^)
+        var imm_ptr: UnsafePointer[UInt8, ImmutExternalOrigin]
+        if self._owner[]._device:
+            imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+                UnsafePointer[UInt8, ImmutAnyOrigin](unsafe_from_address=0)
+            )
+        else:
+            imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self.ptr)
+        return Buffer[mut=False](size=self.size, ptr=imm_ptr, owner=self._owner^)
 
     # --- CPU/device checks (mut=False only) ---
 
