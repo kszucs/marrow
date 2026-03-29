@@ -622,6 +622,7 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
 
     # --- Typed pointer access ---
 
+    # TODO: avoid having methods returning naked pointers
     @always_inline
     def ptr_at[
         T: DType = DType.uint8
@@ -637,29 +638,6 @@ struct Buffer[*, mut: Bool = False](ImplicitlyCopyable, Movable, Writable, Sized
             "cannot access device buffer on CPU, call to_cpu() first",
         )
         return self.ptr.bitcast[Scalar[T]]() + offset
-
-
-    # TODO: fully remove this!
-    @always_inline
-    def aligned_ptr_at[
-        T: DType = DType.uint8
-    ](self, offset: Int = 0) -> UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]:
-        """Return a typed raw pointer aligned DOWN to the nearest 64-byte boundary
-        before element `offset`.
-
-        Use this instead of `ptr_at` when loading SIMD vectors starting at an
-        arbitrary element offset: SIMD loads must begin at a 64-byte-aligned
-        address; this method backs up to the correct boundary so the load is safe.
-        """
-        debug_assert(
-            self.ptr.__bool__(),
-            "cannot access device buffer on CPU, call to_cpu() first",
-        )
-        var byte_offset = offset * size_of[T]()
-        var aligned_byte = math.align_down(byte_offset, 64)
-        return rebind[UnsafePointer[Scalar[T], ExternalOrigin[mut=Self.mut]]](
-            self.ptr.bitcast[Scalar[T]]() + aligned_byte // size_of[T]()
-        )
 
     # --- Device access (mut=False only) ---
 
@@ -1109,6 +1087,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
 
     def extend(mut self: Bitmap[mut=True], src: Bitmap[], dst_start: Int, length: Int):
         """Copy `length` bits from `src` into self at `dst_start`."""
+        # TODO: do we need extend on view? if not move it here
         self.extend(src.view(0, length), dst_start, length)
 
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:

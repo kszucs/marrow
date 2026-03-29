@@ -176,38 +176,6 @@ def test_buffer_resize_reallocates_when_larger() raises:
 
 
 # ---------------------------------------------------------------------------
-# Buffer — aligned pointer helpers
-# ---------------------------------------------------------------------------
-
-
-def test_aligned_ptr_at_zero_offset() raises:
-    var bb = Buffer.alloc_zeroed[DType.int64](16)
-    var buf = bb^.to_immutable()
-    assert_true(buf.ptr_at[DType.int64](0) == buf.aligned_ptr_at[DType.int64](0))
-
-
-def test_aligned_ptr_at_aligned_offset() raises:
-    # 8 int64 elements = 64 bytes = exactly one block boundary
-    var bb = Buffer.alloc_zeroed[DType.int64](32)
-    var buf = bb^.to_immutable()
-    assert_true(buf.aligned_ptr_at[DType.int64](8) == buf.ptr_at[DType.int64](8))
-
-
-def test_aligned_ptr_at_unaligned_offset() raises:
-    # offset 5 → byte 40; align_down(40, 64) = 0 → element 0
-    var bb = Buffer.alloc_zeroed[DType.int64](32)
-    var buf = bb^.to_immutable()
-    assert_true(buf.aligned_ptr_at[DType.int64](5) == buf.ptr_at[DType.int64](0))
-
-
-def test_aligned_ptr_at_second_block() raises:
-    # int32: 4 bytes each; offset 20 → byte 80; align_down(80, 64) = 64 → element 16
-    var bb = Buffer.alloc_zeroed[DType.int32](64)
-    var buf = bb^.to_immutable()
-    assert_true(buf.aligned_ptr_at[DType.int32](20) == buf.ptr_at[DType.int32](16))
-
-
-# ---------------------------------------------------------------------------
 # Bitmap — set / clear / test
 # ---------------------------------------------------------------------------
 

@@ -130,7 +130,7 @@ def _unary[
         in_ptr = array.buffer.device_ptr[native](array.offset)
     else:
         buf = Buffer.alloc_zeroed[native](length)
-        in_ptr = array.buffer.aligned_ptr_at[native](array.offset)
+        in_ptr = array.buffer.ptr_at[native](array.offset)
 
     _elementwise_unary[T, func](
         buf.ptr.bitcast[Scalar[native]](), in_ptr, length, ctx
