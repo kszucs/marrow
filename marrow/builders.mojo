@@ -272,9 +272,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         if zeroed:
             self._buffer = Buffer.alloc_zeroed[Self.T.native](capacity)
         else:
-            self._buffer = Buffer.alloc_uninit(
-                Buffer._aligned_size[Self.T.native](capacity)
-            )
+            self._buffer = Buffer.alloc_uninit[Self.T.native](capacity)
 
     def __len__(self) -> Int:
         return self._length

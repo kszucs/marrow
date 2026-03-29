@@ -303,7 +303,7 @@ def rapidhash(
     if ctx:
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
     else:
-        buf = Buffer.alloc_uninit(Buffer._aligned_size[uint64.native](n))
+        buf = Buffer.alloc_uninit[uint64.native](n)
 
     var data = BitmapView[ImmutAnyOrigin](
         ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](
@@ -354,9 +354,7 @@ def rapidhash[
             bm_ptr = keys.bitmap.value()._buffer.device_view[DType.uint8]().unsafe_ptr()
             bm_offset = keys.offset
     else:
-        buf = Buffer.alloc_uninit(
-            Buffer._aligned_size[uint64.native](n)
-        )
+        buf = Buffer.alloc_uninit[uint64.native](n)
         in_ptr = keys.buffer.view[native](keys.offset).unsafe_ptr()
         if keys.bitmap:
             bm_ptr = keys.bitmap.value()._buffer.view[DType.uint8]().unsafe_ptr()
@@ -467,9 +465,7 @@ def rapidhash(
         if ctx:
             buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         else:
-            buf = Buffer.alloc_uninit(
-                Buffer._aligned_size[uint64.native](n)
-            )
+            buf = Buffer.alloc_uninit[uint64.native](n)
         var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
 
         var lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]

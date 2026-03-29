@@ -705,7 +705,7 @@ def take[
     var n = len(indices)
     var src = array.buffer.view[native](array.offset)
     var idx_ptr = indices.buffer.view[int32.native](indices.offset).unsafe_ptr()
-    var buf = Buffer.alloc_uninit(Buffer._aligned_size[native](n))
+    var buf = Buffer.alloc_uninit[native](n)
     var out = buf.view[native]()
 
     var has_null_indices = indices.null_count() > 0
