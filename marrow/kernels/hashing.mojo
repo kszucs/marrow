@@ -110,10 +110,11 @@ def _rapidhash_fixed[byte_width: Int](value: UInt64) -> UInt64:
 
 def _rapidhash_elementwise[
     T: DataType,
+    v_origin: Origin[mut=False],
 ](
     out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
     in_: BufferView[T.native, _],
-    validity: BitmapView[ImmutAnyOrigin],
+    validity: Optional[BitmapView[v_origin]],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
@@ -194,10 +195,11 @@ def _rapidhash_elementwise[
 
         # Inline null handling: if bitmap present, select sentinel for null lanes.
         if validity:
-            var abs_pos = validity.bit_offset() + i
+            var bv = validity.value()
+            var abs_pos = bv.bit_offset() + i
             var byte_idx = abs_pos >> 3
             var bit_off = abs_pos & 7
-            var bits = validity.load[DType.uint32](byte_idx)
+            var bits = bv.load[DType.uint32](byte_idx)
             bits >>= UInt32(bit_off)
             var valid = (
                 (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
@@ -225,10 +227,11 @@ def _rapidhash_elementwise[
 
 def _rapidhash_bool_elementwise[
     out_origin: Origin[mut=True],
+    v_origin: Origin[mut=False],
 ](
     output: BufferView[DType.uint64, out_origin],
     data: BitmapView[_],
-    validity: BitmapView[_],
+    validity: Optional[BitmapView[v_origin]],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
@@ -237,8 +240,8 @@ def _rapidhash_bool_elementwise[
     Bool arrays are bit-packed so standard SIMD loads don't work. Instead,
     precompute the two possible hashes (for 0 and 1), load W data bits via
     the bitmap-mask pattern, and use ``SIMD.select()`` to pick the right hash.
-    A second ``select()`` handles nulls. A zero-length ``validity`` view means
-    no validity bitmap is present.
+    A second ``select()`` handles nulls. ``validity`` is None when all values
+    are valid.
     """
     comptime hash_false = _rapidhash_fixed[size_of[Scalar[bool_.native]]()](
         UInt64(0)
@@ -271,8 +274,9 @@ def _rapidhash_bool_elementwise[
             SIMD[DType.uint64, W](hash_true),
             SIMD[DType.uint64, W](hash_false),
         )
-        if len(validity) != 0:
-            var valid = _load_bits[W](validity, i)
+        if validity:
+            var bv = validity.value()
+            var valid = _load_bits[W](bv, i)
             hashes = valid.select(hashes, NULL_HASH_SENTINEL)
         output.store[W](i, hashes)
 

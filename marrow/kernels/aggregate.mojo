@@ -56,7 +56,7 @@ def _reduce[
         out = val[0]
 
     if array.bitmap:
-        var bm = array.validity()
+        var bm = array.validity().value()
 
         @always_inline
         @parameter
@@ -232,7 +232,7 @@ def any_(array: BoolArray) raises -> Bool:
     var data_bv = array.values()
     if not array.bitmap:
         return Bool(data_bv)
-    var validity_bv = array.validity()
+    var validity_bv = array.validity().value()
     var i = 0
     while i + 64 <= n:
         if (
@@ -257,7 +257,7 @@ def all_(array: BoolArray) raises -> Bool:
     var data_bv = array.values()
     if not array.bitmap:
         return data_bv.all_set()
-    var validity_bv = array.validity()
+    var validity_bv = array.validity().value()
     var i = 0
     while i + 64 <= n:
         var v = validity_bv.load_bits[DType.uint64](i)

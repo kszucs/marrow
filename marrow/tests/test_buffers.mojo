@@ -32,23 +32,23 @@ def test_alloc_bits() raises:
 
 def test_buffer_grow() raises:
     var b = Buffer.alloc_zeroed(10)
-    b.unsafe_set(0, 111)
+    b[0] = 111
     b.resize(20)
     assert_equal(len(b), 64)  # still fits in the same 64-byte block
-    assert_equal(b.unsafe_get(0), 111)
+    assert_equal(b[0], 111)
     b.resize(80)
     assert_equal(len(b), 128)  # grew into a second block
-    assert_equal(b.unsafe_get(0), 111)  # data preserved
+    assert_equal(b[0], 111)  # data preserved
 
 
 def test_buffer_set_get() raises:
     var buf = Buffer.alloc_zeroed(10)
-    buf.unsafe_set(0, 42)
-    buf.unsafe_set(1, 43)
-    buf.unsafe_set(2, 44)
-    assert_equal(buf.unsafe_get(0), 42)
-    assert_equal(buf.unsafe_get(1), 43)
-    assert_equal(buf.unsafe_get(2), 44)
+    buf[0] = 42
+    buf[1] = 43
+    buf[2] = 44
+    assert_equal(buf[0], 42)
+    assert_equal(buf[1], 43)
+    assert_equal(buf[2], 44)
     assert_equal(buf.length[DType.uint16](), 32)  # 64 bytes / 2 bytes each
     # reinterpreting as uint16: bytes 0+1 → 42 + (43<<8)
     assert_equal(buf.unsafe_get[DType.uint16](0), 42 + (43 << 8))
@@ -57,21 +57,21 @@ def test_buffer_set_get() raises:
 
 def test_buffer_swap() raises:
     var one = Buffer.alloc_zeroed(10)
-    one.unsafe_set(0, 111)
+    one[0] = 111
     var two = Buffer.alloc_zeroed(10)
-    two.unsafe_set(0, 222)
+    two[0] = 222
     swap(one, two)
-    assert_equal(one.unsafe_get(0), 222)
-    assert_equal(two.unsafe_get(0), 111)
+    assert_equal(one[0], 222)
+    assert_equal(two[0], 111)
 
 
 def test_buffer_finish() raises:
     var buf = Buffer.alloc_zeroed(10)
-    buf.unsafe_set(0, 42)
-    buf.unsafe_set(1, 99)
+    buf[0] = 42
+    buf[1] = 99
     var frozen = buf^.to_immutable()
-    assert_equal(frozen.unsafe_get(0), 42)
-    assert_equal(frozen.unsafe_get(1), 99)
+    assert_equal(frozen[0], 42)
+    assert_equal(frozen[1], 99)
     assert_equal(len(frozen), 64)
     assert_equal(frozen.length(), 64)
 
@@ -79,18 +79,18 @@ def test_buffer_finish() raises:
 def test_buffer_eq_equal() raises:
     var b1 = Buffer.alloc_zeroed(10)
     var b2 = Buffer.alloc_zeroed(10)
-    b1.unsafe_set(0, 42)
-    b1.unsafe_set(1, 99)
-    b2.unsafe_set(0, 42)
-    b2.unsafe_set(1, 99)
+    b1[0] = 42
+    b1[1] = 99
+    b2[0] = 42
+    b2[1] = 99
     assert_true(b1 == b2)
 
 
 def test_buffer_eq_unequal() raises:
     var b1 = Buffer.alloc_zeroed(10)
     var b2 = Buffer.alloc_zeroed(10)
-    b1.unsafe_set(0, 42)
-    b2.unsafe_set(0, 43)
+    b1[0] = 42
+    b2[0] = 43
     assert_false(b1 == b2)
 
 

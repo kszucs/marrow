@@ -1062,7 +1062,9 @@ struct BoolBuilder(Builder, Sized):
         self._buffer.extend(b.values(), self._length, b.length)
         if b.nulls != 0:
             if b.bitmap:
-                self._bitmap.extend(b.validity(), self._length, b.length)
+                self._bitmap.extend(
+                    b.validity().value(), self._length, b.length
+                )
             self._null_count += b.nulls
         else:
             self._bitmap.set_range(self._length, b.length, True)

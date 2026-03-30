@@ -363,10 +363,9 @@ def filter_[
     # Filter validity bitmap.
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
-    var val_bm = array.validity()
-    if len(val_bm) != 0:
+    if var val_bm := array.validity():
         var filtered_bm, nc = _filter_bits(
-            val_bm, sel_bm, sel_start, sel_end, out_len
+            val_bm.value(), sel_bm, sel_start, sel_end, out_len
         )
         bm = filtered_bm
         null_count = nc
@@ -636,8 +635,7 @@ def drop_nulls[
     Returns:
         A new PrimitiveArray containing only valid elements.
     """
-    var val = array.validity()
-    if len(val) == 0:
+    if not array.bitmap:
         # All valid: wrap as identity selection
         var all_true = Bitmap.alloc_zeroed(len(array))
         all_true.set_range(0, len(array), True)

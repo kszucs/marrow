@@ -318,9 +318,6 @@ struct Buffer[*, mut: Bool = False](
       Call `to_cpu(ctx)` before reading a DEVICE buffer on the CPU.
     """
 
-    var _size: Int
-    """Buffer size in bytes (always 64-byte aligned)."""
-
     var _ptr: UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]
     """Raw allocation pointer.
     For `mut=True` CPU/HOST allocations: the CPU-accessible data pointer.
@@ -329,6 +326,9 @@ struct Buffer[*, mut: Bool = False](
     For `mut=False` DEVICE allocations: null (no CPU access; use device_ptr()).
     Use `unsafe_ptr()` for raw access; prefer `ptr_at()`, `view()`, or `BufferView` methods.
     """
+
+    var _size: Int
+    """Buffer size in bytes (always 64-byte aligned)."""
 
     var _owner: ArcPointer[Allocation]
     """Shared ownership handle.  Ref-count is 1 for `mut=True` (exclusive)."""
