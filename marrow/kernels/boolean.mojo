@@ -106,10 +106,10 @@ def select[
     var data_bv = mask.values()
     for i in range(length):
         if data_bv.test(mask.offset + i):
-            builder._buffer.unsafe_set[T.native](i, then_.unsafe_get(i))
+            builder.unsafe_set(i, then_.unsafe_get(i))
         else:
-            builder._buffer.unsafe_set[T.native](i, else_.unsafe_get(i))
-    builder._length = length
+            builder.unsafe_set(i, else_.unsafe_get(i))
+    builder.set_length(length)
     return builder.finish()
 
 

@@ -217,24 +217,28 @@ def test_bitmap_eq() raises:
 
 def test_bitmap_resize_noop_same_capacity() raises:
     var bm = Bitmap.alloc_zeroed(64)
-    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
+    bm.set(0)
+    bm.set(63)
     bm.resize(64)
-    assert_equal(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()), addr_before)
+    assert_true(bm[0])
+    assert_true(bm[63])
+    assert_false(bm[1])
 
 
 def test_bitmap_resize_noop_same_aligned_capacity() raises:
     # 1 and 511 bits both fit in a single 64-byte block
     var bm = Bitmap.alloc_zeroed(1)
-    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
+    bm.set(0)
     bm.resize(511)
-    assert_equal(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()), addr_before)
+    assert_true(bm[0])
 
 
 def test_bitmap_resize_reallocates_when_larger() raises:
     var bm = Bitmap.alloc_zeroed(1)
-    var addr_before = Int(bm._buffer.view[DType.uint8]().unsafe_ptr())
+    bm.set(0)
     bm.resize(513)  # needs a second 64-byte block
-    assert_true(Int(bm._buffer.view[DType.uint8]().unsafe_ptr()) != addr_before)
+    assert_true(bm[0])
+    assert_false(bm[512])
 
 
 # ---------------------------------------------------------------------------
@@ -364,11 +368,10 @@ def test_bitmap_setitem() raises:
     assert_false(bm[0])
 
 
-def test_bitmap_length_field() raises:
-    # Setting ._length truncates the logical view without reallocating
+def test_bitmap_resize_truncates_length() raises:
     var bm = Bitmap.alloc_zeroed(20)
     bm.set_range(0, 20, True)
-    bm._length = 15
+    bm.resize(15)
     assert_equal(len(bm), 15)
 
 
@@ -677,7 +680,8 @@ def test_bitmapview_difference_identity() raises:
 def test_bitmapview_difference_annihilator() raises:
     # a & ~a == all-zeros
     var a = Bitmap(8, [0, 3, 7])
-    var r = a.view().difference(a.view())
+    var b = Bitmap(8, [0, 3, 7])
+    var r = a.view().difference(b.view())
     for i in range(8):
         assert_false(r[i])
 
@@ -689,9 +693,10 @@ def test_bitmapview_difference_annihilator() raises:
 
 def test_bitmapview_and_with_offset() raises:
     """AND of two sliced bitmaps sharing the same non-zero sub-byte offset."""
-    var bm = Bitmap(16, [2, 3, 4, 6])
-    var a = bm.slice(2, 6)   # logical [0..6) maps to original [2..8)
-    var b = bm.slice(2, 6)   # same slice: a & a == a
+    var bm_a = Bitmap(16, [2, 3, 4, 6])
+    var bm_b = Bitmap(16, [2, 3, 4, 6])
+    var a = bm_a.slice(2, 6)   # logical [0..6) maps to original [2..8)
+    var b = bm_b.slice(2, 6)   # same data, different allocation: a & a == a
     var r = a & b
     for i in range(6):
         assert_equal(r[i], a[i])

@@ -137,35 +137,25 @@ struct AggregateFunction(Copyable, Movable):
                 continue
 
             var g = Int(group_ids.unsafe_get(i))
-            var cnt = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
+            var cnt = Int(cnt_ptr.unsafe_get(g))
 
             if self.name == "count":
-                cnt_ptr._buffer.unsafe_set[int64.native](
-                    g, Scalar[int64.native](cnt + 1)
-                )
+                cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
                 continue
 
             var val = _read_as_float64(input_col, i)
-            var cur = Float64(val_ptr._buffer.unsafe_get[float64.native](g))
+            var cur = Float64(val_ptr.unsafe_get(g))
 
             if self.name == "sum" or self.name == "mean":
-                val_ptr._buffer.unsafe_set[float64.native](
-                    g, Scalar[float64.native](cur + val)
-                )
+                val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
             elif self.name == "min":
                 if cnt == 0 or val < cur:
-                    val_ptr._buffer.unsafe_set[float64.native](
-                        g, Scalar[float64.native](val)
-                    )
+                    val_ptr.unsafe_set(g, Scalar[float64.native](val))
             elif self.name == "max":
                 if cnt == 0 or val > cur:
-                    val_ptr._buffer.unsafe_set[float64.native](
-                        g, Scalar[float64.native](val)
-                    )
+                    val_ptr.unsafe_set(g, Scalar[float64.native](val))
 
-            cnt_ptr._buffer.unsafe_set[int64.native](
-                g, Scalar[int64.native](cnt + 1)
-            )
+            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
 
     def finish(
         mut self, col_name: String, num_groups: Int
@@ -183,11 +173,9 @@ struct AggregateFunction(Copyable, Movable):
             ref val_ptr = self.values.builder.as_primitive[float64]()
             ref cnt_ptr = self.counts.builder.as_primitive[int64]()
             for g in range(num_groups):
-                var c = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
+                var c = Int(cnt_ptr.unsafe_get(g))
                 if c > 0:
-                    var v = Float64(
-                        val_ptr._buffer.unsafe_get[float64.native](g)
-                    )
+                    var v = Float64(val_ptr.unsafe_get(g))
                     b.append(Scalar[float64.native](v / Float64(c)))
                 else:
                     b.append_null()
@@ -201,9 +189,9 @@ struct AggregateFunction(Copyable, Movable):
         ref val_ptr = self.values.builder.as_primitive[float64]()
         ref cnt_ptr = self.counts.builder.as_primitive[int64]()
         for g in range(num_groups):
-            var c = Int(cnt_ptr._buffer.unsafe_get[int64.native](g))
+            var c = Int(cnt_ptr.unsafe_get(g))
             if c > 0:
-                b.append(val_ptr._buffer.unsafe_get[float64.native](g))
+                b.append(val_ptr.unsafe_get(g))
             else:
                 b.append_null()
         return (

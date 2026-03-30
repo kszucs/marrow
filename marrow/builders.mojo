@@ -283,6 +283,18 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
+    def unsafe_get(self, index: Int) -> Scalar[Self.T.native]:
+        """Read element at index without bounds checking."""
+        return self._buffer.unsafe_get[Self.T.native](index)
+
+    def unsafe_set(mut self, index: Int, value: Scalar[Self.T.native]):
+        """Write element at index without bounds checking."""
+        self._buffer.unsafe_set[Self.T.native](index, value)
+
+    def set_length(mut self, n: Int):
+        """Commit the builder length after direct bulk population."""
+        self._length = n
+
     def dtype(self) -> DataType:
         return Self.T
 
@@ -1175,7 +1187,7 @@ def array(values: List[String]) raises -> StringArray:
 def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
     """Create a primitive array of `size` null values."""
     var b = PrimitiveBuilder[T](capacity=size)
-    b._length = size
+    b.set_length(size)
     b._null_count = size
     return b.finish()
 

@@ -852,7 +852,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         self.write_to(writer)
 
     # TODO: ensure that properly covered by tests
-    def view(self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
+    def view(ref self, offset: Int = 0, length: Int = -1) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of the bitmap starting at `offset` for `length` bits.
 
         If `length` is -1 (the default), the view extends to the end of the bitmap.
@@ -863,7 +863,7 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         var bit_offset = offset % 8
         return BitmapView(ptr=ptr + byte_offset, offset=bit_offset, length=n)
 
-    def slice(self, offset: Int, length: Int) -> BitmapView[origin_of(self)]:
+    def slice(ref self, offset: Int, length: Int) -> BitmapView[origin_of(self)]:
         """Return a zero-copy view of `length` bits starting at `offset`."""
         return self.view(offset, length)
 
@@ -1085,8 +1085,17 @@ struct Bitmap[*, mut: Bool = False](ImplicitlyCopyable, Movable, Sized, Writable
         self.extend(src.view(0, length), dst_start, length)
 
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:
-        """Resize the underlying buffer to hold `capacity` bits."""
+        """Resize the underlying buffer to hold `capacity` bits.
+
+        When shrinking, the logical length is truncated to `capacity`.
+        """
         self._buffer.resize(math.ceildiv(capacity, 8))
+        if capacity < self._length:
+            self._length = capacity
+
+    def is_device(self) -> Bool:
+        """Return True if the bitmap lives on a GPU device."""
+        return self._buffer.is_device()
 
     def to_device(self: Bitmap[mut=False], ctx: DeviceContext) raises -> Bitmap[mut=False]:
         """Upload bitmap to the GPU; returns a new device-resident Bitmap."""

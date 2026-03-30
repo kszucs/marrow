@@ -35,7 +35,6 @@ def _cosine_similarity_no_nulls[
     comptime width = simd_byte_width() // size_of[native]()
 
     var result = PrimitiveBuilder[T](n_vectors)
-    var op = result._buffer.view[native]().unsafe_ptr()
 
     # Flat values pointer from the child array
     var child_data = vectors.values.to_data()
@@ -74,11 +73,11 @@ def _cosine_similarity_no_nulls[
 
         var denom = math.sqrt(norm_v) * query_norm
         if denom > 0:
-            op[i] = dot / denom
+            result.unsafe_set(i, dot / denom)
         else:
-            op[i] = Scalar[native](0)
+            result.unsafe_set(i, Scalar[native](0))
 
-    result._length = n_vectors
+    result.set_length(n_vectors)
     return result.finish()
 
 

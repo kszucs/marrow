@@ -610,7 +610,7 @@ struct CArrowArray(Copyable, Movable):
         if data_heap[].bitmap:
             buffers[0] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(
-                    data_heap[].bitmap.value()._buffer.view[DType.uint8]().unsafe_ptr()
+                    data_heap[].bitmap.value().view().unsafe_ptr()
                 )
             )
         else:

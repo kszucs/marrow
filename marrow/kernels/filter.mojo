@@ -150,17 +150,13 @@ def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count:
     """
     if count == 0:
         return
-    var ptr = bm._buffer.view[DType.uint8]().unsafe_ptr()
+    var bv = bm.view()
     var byte_idx = bitoffset >> 3
     var bit_off = bitoffset & 7
     var shifted = bits << UInt64(bit_off)
-    (ptr + byte_idx).bitcast[UInt64]().store[alignment=1](
-        (ptr + byte_idx).bitcast[UInt64]().load[alignment=1]() | shifted
-    )
+    bv.store[DType.uint64](byte_idx, bv.load[DType.uint64](byte_idx) | shifted)
     if bit_off > 0 and bit_off + count > 64:
-        (ptr + byte_idx + 8).store[alignment=1](
-            (ptr + byte_idx + 8).load[alignment=1]() | UInt8(bits >> UInt64(64 - bit_off))
-        )
+        bv.store[DType.uint8](byte_idx + 8, bv.load[DType.uint8](byte_idx + 8) | UInt8(bits >> UInt64(64 - bit_off)))
 
 
 def _filter_bits(

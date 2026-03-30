@@ -56,7 +56,7 @@ def _scale_by_two[
 
 
 def _bits_to_bytes(
-    bv: BitmapView[ImmutAnyOrigin],
+    bv: BitmapView[_],
     dst: UnsafePointer[UInt8, MutAnyOrigin],
     length: Int,
     ctx: DeviceContext,
@@ -179,11 +179,10 @@ def test_bitmapview_gpu_bits_to_bytes() raises:
     bm.set(4)
 
     # Upload bitmap data to GPU
-    var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
+    var dev_bm = bm^.to_immutable().to_device(ctx)
 
     # Build a BitmapView backed by device memory and run the GPU kernel
-    var bm_ptr = dev_bm.device_view[DType.uint8]().unsafe_ptr().mut_cast[False]()
-    var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=0, length=8)
+    var bv = dev_bm.view()
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
     _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 8, ctx)
@@ -213,11 +212,10 @@ def test_bitmapview_gpu_with_offset() raises:
     bm.set(8)
     bm.set(10)
 
-    var dev_bm = bm^.to_immutable()._buffer.to_device(ctx)
+    var dev_bm = bm^.to_immutable().to_device(ctx)
 
-    var bm_ptr = dev_bm.device_view[DType.uint8]().unsafe_ptr().mut_cast[False]()
     # View of 4 bits starting at bit offset 8
-    var bv = BitmapView[ImmutAnyOrigin](ptr=bm_ptr, offset=8, length=4)
+    var bv = dev_bm.view(8, 4)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 4)
     _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 4, ctx)

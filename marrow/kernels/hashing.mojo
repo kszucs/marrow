@@ -6,7 +6,7 @@ column independently and combining hashes across columns.
 
 Public API:
   - ``rapidhash``: hash any array → PrimitiveArray[uint64]
-    - PrimitiveArray[bool_]: vectorized via precomputed hash + SIMD select
+    - BoolArray: vectorized via precomputed hash + SIMD select
     - PrimitiveArray[T]: vectorized rapidhash (SIMD via elementwise)
     - StringArray: per-element AHash (variable-length fallback)
     - StructArray: per-column hash with combining (multi-key)
@@ -24,7 +24,7 @@ from std.sys import size_of, has_accelerator
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
-from ..arrays import PrimitiveArray, StringArray, StructArray, AnyArray
+from ..arrays import BoolArray, PrimitiveArray, StringArray, StructArray, AnyArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
 from ..views import BitmapView, BufferView
@@ -106,15 +106,14 @@ def _rapidhash_elementwise[
     T: DataType,
 ](
     out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
-    in_ptr: UnsafePointer[Scalar[T.native], ImmutAnyOrigin],
-    bm_ptr: UnsafePointer[UInt8, ImmutAnyOrigin],
-    bm_offset: Int,
+    in_: BufferView[T.native, _],
+    validity: BitmapView[ImmutAnyOrigin],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Elementwise rapidhash dispatch — pointers as params for GPU DevicePassable.
+    """Elementwise rapidhash dispatch — views as params for GPU DevicePassable.
 
-    Computes rapidhash for each element. If ``bm_ptr`` is non-null, null
+    Computes rapidhash for each element. If ``validity`` is non-empty, null
     elements (bitmap bit unset) are replaced with ``NULL_HASH_SENTINEL``
     using ``SIMD.select()`` for branchless evaluation on both CPU and GPU.
     """
@@ -175,7 +174,7 @@ def _rapidhash_elementwise[
         comptime mask = ~UInt64(0) if byte_width >= 8 else (
             UInt64(1) << UInt64(byte_width * 8)
         ) - 1
-        var vals = in_ptr.load[width=W](i).cast[DType.uint64]() & mask
+        var vals = in_.load[W](i).cast[DType.uint64]() & mask
         # a = value ^ secret[1]; b = value ^ seed
         var a = vals ^ RAPID_SECRET1
         var b = vals ^ seed
@@ -188,11 +187,11 @@ def _rapidhash_elementwise[
         )
 
         # Inline null handling: if bitmap present, select sentinel for null lanes.
-        if bm_ptr:
-            var abs_pos = bm_offset + i
+        if validity:
+            var abs_pos = validity.bit_offset() + i
             var byte_idx = abs_pos >> 3
             var bit_off = abs_pos & 7
-            var bits = (bm_ptr + byte_idx).bitcast[UInt32]().load[alignment=1]()
+            var bits = validity.load[DType.uint32](byte_idx)
             bits >>= UInt32(bit_off)
             var valid = (
                 (SIMD[DType.uint32, W](bits) >> iota[DType.uint32, W]()) & 1
@@ -289,7 +288,7 @@ def _rapidhash_bool_elementwise[
 
 
 def rapidhash(
-    keys: PrimitiveArray[bool_],
+    keys: BoolArray,
     ctx: Optional[DeviceContext] = None,
 ) raises -> PrimitiveArray[uint64]:
     """Vectorized rapidhash for bool arrays.
@@ -305,14 +304,7 @@ def rapidhash(
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
-    var data = BitmapView[ImmutAnyOrigin](
-        ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](
-            keys.buffer.view[DType.uint8]().unsafe_ptr()
-        ),
-        offset=keys.offset,
-        length=n,
-    )
-    _rapidhash_bool_elementwise(buf.view[DType.uint64](), data, keys.validity(), n, ctx)
+    _rapidhash_bool_elementwise(buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx)
 
     return PrimitiveArray[uint64](
         length=n,
@@ -339,30 +331,17 @@ def rapidhash[
 
     Dispatches to GPU when ``ctx`` is provided, CPU SIMD otherwise.
     """
-    comptime native = T.native
     var n = len(keys)
 
     var buf: Buffer[mut=True]
-    var in_ptr: UnsafePointer[Scalar[native], ImmutAnyOrigin]
-    var bm_ptr = UnsafePointer[UInt8, ImmutAnyOrigin]()
-    var bm_offset = 0
-
     if ctx:
         buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
-        in_ptr = keys.buffer.device_view[native](keys.offset).unsafe_ptr()
-        if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.device_view[DType.uint8]().unsafe_ptr()
-            bm_offset = keys.offset
     else:
-        buf = Buffer.alloc_uninit[uint64.native](n)
-        in_ptr = keys.buffer.view[native](keys.offset).unsafe_ptr()
-        if keys.bitmap:
-            bm_ptr = keys.bitmap.value()._buffer.view[DType.uint8]().unsafe_ptr()
-            bm_offset = keys.offset
+        buf = Buffer.alloc_uninit[DType.uint64](n)
 
     var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
 
-    _rapidhash_elementwise[T](out_ptr, in_ptr, bm_ptr, bm_offset, n, ctx)
+    _rapidhash_elementwise[T](out_ptr, keys.values(), keys.validity(), n, ctx)
 
     return PrimitiveArray[uint64](
         length=n,
@@ -394,12 +373,12 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
 
 def _combine_elementwise(
     out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
-    lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin],
-    rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin],
+    lhs: BufferView[DType.uint64, _],
+    rhs: BufferView[DType.uint64, _],
     length: Int,
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Element-wise hash combine — pointers as params for GPU DevicePassable."""
+    """Element-wise hash combine — views as params for GPU DevicePassable."""
 
     @parameter
     @always_inline
@@ -407,8 +386,8 @@ def _combine_elementwise(
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
         var i = idx[0]
-        var existing = lhs_ptr.load[width=W](i)
-        var new = rhs_ptr.load[width=W](i)
+        var existing = lhs.load[W](i)
+        var new = rhs.load[W](i)
         var mixed = existing ^ UInt64(0x9E3779B97F4A7C15)
         # GPU-compatible 128-bit multiply (no uint128).
         comptime lo32 = UInt64(0xFFFFFFFF)
@@ -468,20 +447,13 @@ def rapidhash(
             buf = Buffer.alloc_uninit[uint64.native](n)
         var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
 
-        var lhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
-        var rhs_ptr: UnsafePointer[Scalar[DType.uint64], ImmutAnyOrigin]
-        if ctx:
-            lhs_ptr = result.buffer.device_view[DType.uint64](result.offset).unsafe_ptr()
-            rhs_ptr = field_hashes.buffer.device_view[DType.uint64](
-                field_hashes.offset
-            ).unsafe_ptr()
-        else:
-            lhs_ptr = result.buffer.view[DType.uint64](result.offset).unsafe_ptr()
-            rhs_ptr = field_hashes.buffer.view[DType.uint64](
-                field_hashes.offset
-            ).unsafe_ptr()
-
-        _combine_elementwise(out_ptr, lhs_ptr, rhs_ptr, n, ctx)
+        _combine_elementwise(
+            out_ptr,
+            result.buffer.view[DType.uint64](),
+            field_hashes.buffer.view[DType.uint64](),
+            n,
+            ctx,
+        )
         result = PrimitiveArray[uint64](
             length=n,
             nulls=0,
@@ -499,7 +471,7 @@ def rapidhash(
 ) raises -> PrimitiveArray[uint64]:
     """Runtime-typed rapidhash dispatch."""
     if keys.dtype() == bool_:
-        return rapidhash(keys.as_primitive[bool_](), ctx)
+        return rapidhash(keys.as_bool(), ctx)
 
     comptime for dtype in numeric_dtypes:
         if keys.dtype() == dtype:
@@ -544,10 +516,23 @@ def hash_identity[
     return builder.finish()
 
 
+def hash_identity(keys: BoolArray) raises -> PrimitiveArray[uint64]:
+    """Identity hash for bool arrays (values 0 and 1)."""
+    var n = len(keys)
+    var builder = PrimitiveBuilder[uint64](capacity=n)
+    var has_bitmap = Bool(keys.bitmap)
+    for i in range(n):
+        if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
+            builder.unsafe_append(_h(NULL_HASH_SENTINEL))
+        else:
+            builder.unsafe_append(_h(Int(keys[i])))
+    return builder.finish()
+
+
 def hash_identity(keys: AnyArray) raises -> PrimitiveArray[uint64]:
     """Runtime-typed identity hash dispatch."""
     if keys.dtype() == bool_:
-        return hash_identity[bool_](keys.as_primitive[bool_]())
+        return hash_identity(keys.as_bool())
     if keys.dtype() == uint8:
         return hash_identity[uint8](keys.as_primitive[uint8]())
     if keys.dtype() == int8:

@@ -184,6 +184,7 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 
 - **Always use `def` for function definitions, never `fn`.** The `fn` keyword is deprecated in Mojo in favour of `def`. All functions, methods, and trait requirements must use `def`.
 - **Never call `_underscore_prefixed` methods outside of the type/struct that defines them.** They are private implementation details. Use the public factory methods and APIs instead (e.g. use `Buffer.alloc_uninit[T](n)` directly rather than computing `Buffer._aligned_size[T](n)` and passing bytes manually).
+- **Do not use `PrimitiveArray[bool_]` or `as_primitive[bool_]()`.** Boolean arrays are bit-packed and require `BoolArray` for correct values access. Use `BoolArray` and `as_bool()` directly everywhere booleans are handled.
 - Prefer explicit `if/else` over early-return `if + return` guard clauses. Keep the control flow flat and readable with `if/else` branches.
 - Prefer PyArrow's API naming everywhere — both in the Mojo core types and in the Python bindings. When in doubt, match PyArrow's method names and signatures.
 - Use **conventional commits** for all commit messages (`feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`, etc.), with an optional scope in parentheses (e.g. `feat(kernels): add concat`).

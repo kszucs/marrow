@@ -1036,8 +1036,7 @@ def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
         if scalar_array.dtype() == dt:
             var val = scalar_array.as_primitive[dt]().unsafe_get(0)
             var builder = PrimitiveBuilder[dt](length)
-            for i in range(length):
-                builder._buffer.unsafe_set[dt.native](i, val)
-            builder._length = length
+            for _ in range(length):
+                builder.unsafe_append(val)
             return builder.finish().to_any()
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype()}")

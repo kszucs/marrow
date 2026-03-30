@@ -528,11 +528,37 @@ struct BoolArray(
             return BitmapView[ImmutAnyOrigin](
                 ptr=UnsafePointer[UInt8, ImmutAnyOrigin](), offset=0, length=0
             )
-        var bv = self.bitmap.value()._buffer.view[DType.uint8]()
+        var bv = self.bitmap.value().view(self.offset, self.length)
         return BitmapView[ImmutAnyOrigin](
             ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](bv.unsafe_ptr()),
-            offset=self.offset,
+            offset=bv.bit_offset(),
+            length=len(bv),
+        )
+
+    def to_device(self, ctx: DeviceContext) raises -> BoolArray:
+        """Upload array data to the GPU."""
+        var bm: Optional[Bitmap[]] = None
+        if self.bitmap:
+            bm = self.bitmap.value().to_device(ctx)
+        return BoolArray(
             length=self.length,
+            nulls=self.nulls,
+            offset=0,
+            bitmap=bm^,
+            buffer=self.buffer.to_device(ctx),
+        )
+
+    def to_cpu(self, ctx: DeviceContext) raises -> BoolArray:
+        """Download array data from the GPU to owned CPU heap buffers."""
+        var bm: Optional[Bitmap[]] = None
+        if self.bitmap:
+            bm = self.bitmap.value().to_cpu(ctx)
+        return BoolArray(
+            length=self.length,
+            nulls=self.nulls,
+            offset=0,
+            bitmap=bm^,
+            buffer=self.buffer.to_cpu(ctx),
         )
 
     def to_any(deinit self) -> AnyArray:
@@ -569,6 +595,7 @@ struct BoolArray(
         return not Self.__eq__(self, other)
 
 
+# TODO: add conditional conformance where: T.is_primitive()
 @fieldwise_init
 struct PrimitiveArray[T: DataType](
     Array,
@@ -684,23 +711,6 @@ struct PrimitiveArray[T: DataType](
         ), "use values() for bool arrays"
         return self.buffer.view[Self.T.native](self.offset, self.length)
 
-    def device_values(
-        self,
-    ) -> BufferView[Self.T.native, ImmutAnyOrigin]:
-        """Non-owning typed view of this array's device-resident values (offset baked in).
-
-        Precondition: the buffer must have a device copy (``has_device()`` is True).
-        """
-        comptime assert (
-            Self.T.native != DType.bool
-        ), "use values() for bool arrays"
-        return BufferView[Self.T.native, ImmutAnyOrigin](
-            ptr=rebind[UnsafePointer[Scalar[Self.T.native], ImmutAnyOrigin]](
-                self.buffer.device_view[Self.T.native](self.offset).unsafe_ptr()
-            ),
-            length=self.length,
-        )
-
     def validity(self) -> BitmapView[ImmutAnyOrigin]:
         """Validity bitmap as a BitmapView, or zero-length if all-valid.
 
@@ -711,11 +721,11 @@ struct PrimitiveArray[T: DataType](
             return BitmapView[ImmutAnyOrigin](
                 ptr=UnsafePointer[UInt8, ImmutAnyOrigin](), offset=0, length=0
             )
-        var bv = self.bitmap.value()._buffer.view[DType.uint8]()
+        var bv = self.bitmap.value().view(self.offset, self.length)
         return BitmapView[ImmutAnyOrigin](
             ptr=rebind[UnsafePointer[UInt8, ImmutAnyOrigin]](bv.unsafe_ptr()),
-            offset=self.offset,
-            length=self.length,
+            offset=bv.bit_offset(),
+            length=len(bv),
         )
 
     def __getitem__(self, index: Int) raises -> PrimitiveScalar[Self.T]:

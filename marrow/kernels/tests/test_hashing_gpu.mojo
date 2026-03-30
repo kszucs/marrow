@@ -6,8 +6,8 @@ Verifies that GPU-dispatched rapidhash produces identical results to CPU SIMD.
 from std.testing import assert_equal, assert_true, TestSuite
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import PrimitiveArray
-from marrow.builders import array, arange, PrimitiveBuilder
+from marrow.arrays import BoolArray, PrimitiveArray
+from marrow.builders import array, arange, BoolBuilder, PrimitiveBuilder
 from marrow.dtypes import bool_, int32, int64, float32, uint64
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
@@ -79,13 +79,13 @@ def test_rapidhash_gpu_nulls() raises:
 def test_rapidhash_gpu_bool() raises:
     """GPU rapidhash on bool array matches CPU."""
     var ctx = DeviceContext()
-    var b = PrimitiveBuilder[bool_](capacity=6)
-    b.append(Scalar[bool_.native](True))
-    b.append(Scalar[bool_.native](False))
-    b.append(Scalar[bool_.native](True))
+    var b = BoolBuilder(capacity=6)
+    b.append(True)
+    b.append(False)
+    b.append(True)
     b.append_null()
-    b.append(Scalar[bool_.native](False))
-    b.append(Scalar[bool_.native](True))
+    b.append(False)
+    b.append(True)
     var arr = b.finish()
     var cpu_hashes = rapidhash(arr)
     var gpu_hashes = rapidhash(arr.to_device(ctx), ctx).to_cpu(ctx)

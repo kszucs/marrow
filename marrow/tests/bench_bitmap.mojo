@@ -110,11 +110,11 @@ def bench_and(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = lhs & rhs
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(lhs._length)
-    keep(rhs._length)
+    keep(len(lhs))
+    keep(len(rhs))
 
 
 @parameter
@@ -126,11 +126,11 @@ def bench_or(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = lhs | rhs
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(lhs._length)
-    keep(rhs._length)
+    keep(len(lhs))
+    keep(len(rhs))
 
 
 @parameter
@@ -141,10 +141,10 @@ def bench_invert(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = ~bitmap
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(bitmap._length)
+    keep(len(bitmap))
 
 
 @parameter
@@ -186,10 +186,10 @@ def bench_invert_cache_aligned(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = ~bitmap
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(bitmap._length)
+    keep(len(bitmap))
 
 
 @parameter
@@ -202,10 +202,10 @@ def bench_invert_cache_unaligned(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = ~bitmap
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(bitmap._length)
+    keep(len(bitmap))
 
 
 @parameter
@@ -218,11 +218,11 @@ def bench_and_cache_unaligned(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = lhs & rhs
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(lhs._length)
-    keep(rhs._length)
+    keep(len(lhs))
+    keep(len(rhs))
 
 
 # ---------------------------------------------------------------------------
@@ -245,11 +245,11 @@ def bench_and_same_offset(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = lhs & rhs
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(lhs._length)
-    keep(rhs._length)
+    keep(len(lhs))
+    keep(len(rhs))
 
 
 @parameter
@@ -263,11 +263,11 @@ def bench_and_diff_offset(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var r = lhs & rhs
-        keep(r._length)
+        keep(len(r))
 
     b.iter[call_fn]()
-    keep(lhs._length)
-    keep(rhs._length)
+    keep(len(lhs))
+    keep(len(rhs))
 
 
 # ---------------------------------------------------------------------------

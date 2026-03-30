@@ -319,6 +319,13 @@ struct BitmapView[
         """Return the bit offset into the backing buffer."""
         return self._offset
 
+    def unsafe_ptr(self) -> UnsafePointer[UInt8, Self.origin]:
+        """Raw byte pointer to the first byte of this view's backing storage.
+
+        Only for use at C FFI boundaries (c_data.mojo). Prefer load/store.
+        """
+        return self._data
+
     @always_inline
     def test(self, index: Int) -> Bool:
         """Test if the bit at ``index`` is set."""
@@ -358,24 +365,24 @@ struct BitmapView[
         return raw >> Scalar[T](bit_off)
 
     @always_inline
-    def load[T: DType](self, byte_offset: Int) -> Scalar[T]:
-        """Load a T-sized word from bitmap data at raw ``byte_offset``.
+    def load[T: DType, W: Int = 1](self, byte_offset: Int) -> SIMD[T, W]:
+        """Load W elements of type T from bitmap data at raw ``byte_offset``.
 
         No ``_offset`` adjustment — the caller is responsible for computing
         the correct byte address. Safe because Arrow buffers are 64-byte padded.
         """
-        return (self._data + byte_offset).bitcast[Scalar[T]]().load[alignment=1]()
+        return (self._data + byte_offset).bitcast[Scalar[T]]().load[width=W, alignment=1]()
 
     @always_inline
-    def store[T: DType](
-        self: BitmapView[mut=True, origin=_], byte_offset: Int, val: Scalar[T]
+    def store[T: DType, W: Int = 1](
+        self: BitmapView[mut=True, origin=_], byte_offset: Int, val: SIMD[T, W]
     ):
-        """Store a T-sized word into bitmap data at raw ``byte_offset``.
+        """Store W elements of type T into bitmap data at raw ``byte_offset``.
 
         No ``_offset`` adjustment — the caller is responsible for computing
         the correct byte address.
         """
-        (self._data + byte_offset).bitcast[Scalar[T]]().store(val)
+        (self._data + byte_offset).bitcast[Scalar[T]]().store[width=W](val)
 
     # --- Slicing ---
 
@@ -635,13 +642,13 @@ struct BitmapView[
         var bit_shift = lead_bits & 7
         var builder = Bitmap.alloc_uninit(self._length)
         var out_bytes = builder.byte_count()
-        var dst = builder._buffer.view[DType.uint8]().unsafe_ptr()
+        var bv_out = builder.view()
 
         if bit_shift == 0:
             for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    (dst + i + k).store(op((src + byte_shift + i + k).load[width=width]()))
+                    bv_out.store[DType.uint8, width](i + k, op((src + byte_shift + i + k).load[width=width]()))
         else:
             var rshift = UInt8(bit_shift)
             var lshift = UInt8(8 - bit_shift)
@@ -650,7 +657,7 @@ struct BitmapView[
                     comptime k = j * width
                     var lo = (src + byte_shift + i + k).load[width=width]()
                     var hi = (src + byte_shift + i + k + 1).load[width=width]()
-                    (dst + i + k).store(op((lo >> rshift) | (hi << lshift)))
+                    bv_out.store[DType.uint8, width](i + k, op((lo >> rshift) | (hi << lshift)))
 
         return builder^
 
@@ -674,13 +681,13 @@ struct BitmapView[
         var bit_shift_b = lead_bits_b & 7
         var builder = Bitmap.alloc_uninit(self._length)
         var out_bytes = builder.byte_count()
-        var dst = builder._buffer.view[DType.uint8]().unsafe_ptr()
+        var bv_out = builder.view()
 
         if bit_shift_a == 0 and bit_shift_b == 0:
             for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    (dst + i + k).store(op(
+                    bv_out.store[DType.uint8, width](i + k, op(
                         (src_a + byte_shift_a + i + k).load[width=width](),
                         (src_b + byte_shift_b + i + k).load[width=width](),
                     ))
@@ -696,7 +703,7 @@ struct BitmapView[
                     var hi_a = (src_a + byte_shift_a + i + k + 1).load[width=width]()
                     var lo_b = (src_b + byte_shift_b + i + k).load[width=width]()
                     var hi_b = (src_b + byte_shift_b + i + k + 1).load[width=width]()
-                    (dst + i + k).store(op(
+                    bv_out.store[DType.uint8, width](i + k, op(
                         (lo_a >> rs_a) | (hi_a << ls_a),
                         (lo_b >> rs_b) | (hi_b << ls_b),
                     ))

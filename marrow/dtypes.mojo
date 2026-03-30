@@ -421,6 +421,7 @@ struct DataType(
     def is_numeric(self) -> Bool:
         return self.is_integer() or self.is_floating_point()
 
+    # TODO: shouldn't consider bool as primitive
     @always_inline
     def is_primitive(self) -> Bool:
         return self.is_numeric() or self.is_bool()
@@ -494,4 +495,5 @@ comptime unsigned_integer_dtypes = [uint8, uint16, uint32, uint64]
 comptime integer_dtypes = signed_integer_dtypes + unsigned_integer_dtypes
 comptime float_dtypes = [float16, float32, float64]
 comptime numeric_dtypes = integer_dtypes + float_dtypes
+# TODO: bool should be removed from primitive types
 comptime primitive_dtypes = [bool_] + numeric_dtypes
