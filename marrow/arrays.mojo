@@ -460,7 +460,7 @@ struct BoolArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            buffer=Bitmap(data.buffers[0])
+            buffer=Bitmap(data.buffers[0]),
         )
 
     def __str__(self) -> String:
@@ -492,7 +492,9 @@ struct BoolArray(
                 writer.write("...")
                 break
             if self.is_valid(i):
-                writer.write("True" if self.values().test(self.offset + i) else "False")
+                writer.write(
+                    "True" if self.values().test(self.offset + i) else "False"
+                )
             else:
                 writer.write("NULL")
         writer.write("])")
@@ -579,7 +581,8 @@ struct BoolArray(
         )
 
     def __eq__(self, other: Self) -> Bool:
-        """Return True if both arrays have the same length, null pattern, and values."""
+        """Return True if both arrays have the same length, null pattern, and values.
+        """
         if self.length != other.length or self.nulls != other.nulls:
             return False
         for i in range(self.length):

@@ -25,11 +25,11 @@ def test_equal_true_and_false() raises:
     var b = array[int64]([1, 0, 3, 0, 5])
     var result = equal[int64](a, b)
 
-    assert_true(result[0])   # 1 == 1
+    assert_true(result[0])  # 1 == 1
     assert_false(result[1])  # 2 != 0
-    assert_true(result[2])   # 3 == 3
+    assert_true(result[2])  # 3 == 3
     assert_false(result[3])  # 4 != 0
-    assert_true(result[4])   # 5 == 5
+    assert_true(result[4])  # 5 == 5
 
 
 def test_not_equal() raises:
@@ -39,7 +39,7 @@ def test_not_equal() raises:
     var result = not_equal[int64](a, b)
 
     assert_false(result[0])  # 1 == 1
-    assert_true(result[1])   # 2 != 9
+    assert_true(result[1])  # 2 != 9
     assert_false(result[2])  # 3 == 3
 
 
@@ -49,10 +49,10 @@ def test_less() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less[int64](a, b)
 
-    assert_true(result[0])   # 1 < 5
+    assert_true(result[0])  # 1 < 5
     assert_false(result[1])  # 5 > 1
     assert_false(result[2])  # 3 == 3, not strictly less
-    assert_true(result[3])   # 10 < 20
+    assert_true(result[3])  # 10 < 20
 
 
 def test_less_equal() raises:
@@ -61,10 +61,10 @@ def test_less_equal() raises:
     var b = array[int64]([5, 1, 3, 20])
     var result = less_equal[int64](a, b)
 
-    assert_true(result[0])   # 1 <= 5
+    assert_true(result[0])  # 1 <= 5
     assert_false(result[1])  # 5 > 1
-    assert_true(result[2])   # 3 <= 3
-    assert_true(result[3])   # 10 <= 20
+    assert_true(result[2])  # 3 <= 3
+    assert_true(result[3])  # 10 <= 20
 
 
 def test_greater() raises:
@@ -73,10 +73,10 @@ def test_greater() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater[int64](a, b)
 
-    assert_true(result[0])   # 5 > 1
+    assert_true(result[0])  # 5 > 1
     assert_false(result[1])  # 1 < 5
     assert_false(result[2])  # 3 == 3
-    assert_true(result[3])   # 20 > 10
+    assert_true(result[3])  # 20 > 10
 
 
 def test_greater_equal() raises:
@@ -85,10 +85,10 @@ def test_greater_equal() raises:
     var b = array[int64]([1, 5, 3, 10])
     var result = greater_equal[int64](a, b)
 
-    assert_true(result[0])   # 5 >= 1
+    assert_true(result[0])  # 5 >= 1
     assert_false(result[1])  # 1 < 5
-    assert_true(result[2])   # 3 >= 3
-    assert_true(result[3])   # 20 >= 10
+    assert_true(result[2])  # 3 >= 3
+    assert_true(result[3])  # 20 >= 10
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ def test_less_float64() raises:
 
     assert_false(result[0])  # 1.0 == 1.0
     assert_false(result[1])  # 2.5 > 2.0
-    assert_true(result[2])   # 3.0 < 5.0
+    assert_true(result[2])  # 3.0 < 5.0
 
 
 # ---------------------------------------------------------------------------

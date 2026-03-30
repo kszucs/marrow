@@ -61,7 +61,6 @@ def test_bufferview_slice() raises:
     assert_equal(sub[2], 40)
 
 
-
 def test_bufferview_load() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):

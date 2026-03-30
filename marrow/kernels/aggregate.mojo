@@ -235,12 +235,18 @@ def any_(array: BoolArray) raises -> Bool:
     var validity_bv = array.validity()
     var i = 0
     while i + 64 <= n:
-        if (data_bv.load_bits[DType.uint64](i) & validity_bv.load_bits[DType.uint64](i)) != 0:
+        if (
+            data_bv.load_bits[DType.uint64](i)
+            & validity_bv.load_bits[DType.uint64](i)
+        ) != 0:
             return True
         i += 64
     if i < n:
         var mask = (UInt64(1) << UInt64(n - i)) - 1
-        if (data_bv.load_bits[DType.uint64](i) & validity_bv.load_bits[DType.uint64](i)) & mask != 0:
+        if (
+            data_bv.load_bits[DType.uint64](i)
+            & validity_bv.load_bits[DType.uint64](i)
+        ) & mask != 0:
             return True
     return False
 

@@ -37,9 +37,9 @@ def _scale_by_two[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank],
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank],) -> None:
         var i = idx[0]
         dst.store[W](i, src.load[W](i) * 2)
 
@@ -69,9 +69,9 @@ def _bits_to_bytes(
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank],
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank],) -> None:
         var i = idx[0]
         dst[i] = UInt8(1) if bv.test(i) else UInt8(0)
 
@@ -120,7 +120,9 @@ def test_bufferview_gpu_scale() raises:
 
     var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
     var dst = BufferView[DType.int32, MutAnyOrigin](
-        ptr=dev_dst.view[DType.int32]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+        ptr=dev_dst.view[DType.int32]()
+        .unsafe_ptr()
+        .unsafe_origin_cast[MutAnyOrigin](),
         length=4,
     )
     _scale_by_two[DType.int32](src, dst, 4, ctx)
@@ -152,7 +154,9 @@ def test_bufferview_gpu_scale_float32() raises:
 
     var dev_dst = Buffer.alloc_device[DType.float32](ctx, 4)
     var dst = BufferView[DType.float32, MutAnyOrigin](
-        ptr=dev_dst.view[DType.float32]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](),
+        ptr=dev_dst.view[DType.float32]()
+        .unsafe_ptr()
+        .unsafe_origin_cast[MutAnyOrigin](),
         length=4,
     )
     _scale_by_two[DType.float32](src, dst, 4, ctx)
@@ -185,7 +189,14 @@ def test_bitmapview_gpu_bits_to_bytes() raises:
     var bv = dev_bm.view()
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
-    _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 8, ctx)
+    _bits_to_bytes(
+        bv,
+        dev_dst.view[DType.uint8]()
+        .unsafe_ptr()
+        .unsafe_origin_cast[MutAnyOrigin](),
+        8,
+        ctx,
+    )
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())
@@ -218,7 +229,14 @@ def test_bitmapview_gpu_with_offset() raises:
     var bv = dev_bm.view(8, 4)
 
     var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 4)
-    _bits_to_bytes(bv, dev_dst.view[DType.uint8]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin](), 4, ctx)
+    _bits_to_bytes(
+        bv,
+        dev_dst.view[DType.uint8]()
+        .unsafe_ptr()
+        .unsafe_origin_cast[MutAnyOrigin](),
+        4,
+        ctx,
+    )
 
     var frozen_dst = dev_dst^.to_immutable()
     assert_true(dev_bm.is_device())

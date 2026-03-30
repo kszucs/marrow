@@ -24,7 +24,13 @@ from std.sys import size_of, has_accelerator
 from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 
-from ..arrays import BoolArray, PrimitiveArray, StringArray, StructArray, AnyArray
+from ..arrays import (
+    BoolArray,
+    PrimitiveArray,
+    StringArray,
+    StructArray,
+    AnyArray,
+)
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
 from ..views import BitmapView, BufferView
@@ -304,7 +310,9 @@ def rapidhash(
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
-    _rapidhash_bool_elementwise(buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx)
+    _rapidhash_bool_elementwise(
+        buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx
+    )
 
     return PrimitiveArray[uint64](
         length=n,

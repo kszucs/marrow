@@ -488,7 +488,9 @@ struct StringBuilder(Builder, Sized):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var cur_bytes = Int(self._offsets.unsafe_get[DType.uint32](self._length))
+        var cur_bytes = Int(
+            self._offsets.unsafe_get[DType.uint32](self._length)
+        )
         for i in range(n):
             var orig = Int(arr.offsets.unsafe_get[DType.uint32](arr.offset + i))
             self._offsets.unsafe_set[DType.uint32](

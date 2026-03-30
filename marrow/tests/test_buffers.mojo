@@ -391,7 +391,7 @@ def test_bitmap_slice_basic() raises:
     assert_false(s[0])  # original bit 4
     assert_false(s[1])  # original bit 5
     assert_false(s[2])  # original bit 6
-    assert_true(s[3])   # original bit 7
+    assert_true(s[3])  # original bit 7
 
 
 def test_bitmap_slice_single_bit() raises:
@@ -406,10 +406,10 @@ def test_bitmap_slice_preserves_pattern() raises:
     var bm = Bitmap(10, [2, 5, 9])
     var s = bm.slice(2, 8)
     assert_equal(len(s), 8)
-    assert_true(s[0])   # original bit 2
+    assert_true(s[0])  # original bit 2
     assert_false(s[1])  # original bit 3
     assert_false(s[2])  # original bit 4
-    assert_true(s[3])   # original bit 5
+    assert_true(s[3])  # original bit 5
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +446,8 @@ def test_bitmap_count_set_bits_small_slice_in_large_bitmap() raises:
 
 
 def test_bitmap_count_set_bits_vs_naive() raises:
-    """Exhaustive check of count_set_bits vs naive popcount across sizes/offsets/patterns."""
+    """Exhaustive check of count_set_bits vs naive popcount across sizes/offsets/patterns.
+    """
     comptime sizes = (1, 7, 13, 63, 64, 65, 127, 512, 513, 1023, 1024, 4097)
     comptime offsets = (0, 3, 7, 32 << 3, 96 << 3, 128 << 3)
 
@@ -478,7 +479,8 @@ def test_bitmap_count_set_bits_vs_naive() raises:
 
 
 def test_bitmap_count_set_bits_interior_slices() raises:
-    """count_set_bits on slices ending before buffer end (trailing bytes with real data)."""
+    """count_set_bits on slices ending before buffer end (trailing bytes with real data).
+    """
     comptime sizes = (1, 7, 13, 63, 64, 65, 127, 512, 513)
     comptime offsets = (0, 3, 7, 32 << 3, 96 << 3, 128 << 3)
     comptime extra = 512
@@ -568,7 +570,7 @@ def test_bitmapview_eq_slices() raises:
 def test_bitmapview_and() raises:
     var a = Bitmap(8, [0, 2, 4, 6])
     var b = Bitmap(8, [0, 1, 4, 5])
-    var r = (a.view() & b.view())
+    var r = a.view() & b.view()
     assert_true(r[0])
     assert_false(r[1])
     assert_false(r[2])
@@ -582,7 +584,7 @@ def test_bitmapview_and() raises:
 def test_bitmapview_or() raises:
     var a = Bitmap(8, [0, 2])
     var b = Bitmap(8, [1, 2])
-    var r = (a.view() | b.view())
+    var r = a.view() | b.view()
     assert_true(r[0])
     assert_true(r[1])
     assert_true(r[2])
@@ -592,7 +594,7 @@ def test_bitmapview_or() raises:
 def test_bitmapview_xor() raises:
     var a = Bitmap(4, [0, 2])
     var b = Bitmap(4, [0, 1])
-    var r = (a.view() ^ b.view())
+    var r = a.view() ^ b.view()
     assert_false(r[0])
     assert_true(r[1])
     assert_true(r[2])
@@ -695,8 +697,8 @@ def test_bitmapview_and_with_offset() raises:
     """AND of two sliced bitmaps sharing the same non-zero sub-byte offset."""
     var bm_a = Bitmap(16, [2, 3, 4, 6])
     var bm_b = Bitmap(16, [2, 3, 4, 6])
-    var a = bm_a.slice(2, 6)   # logical [0..6) maps to original [2..8)
-    var b = bm_b.slice(2, 6)   # same data, different allocation: a & a == a
+    var a = bm_a.slice(2, 6)  # logical [0..6) maps to original [2..8)
+    var b = bm_b.slice(2, 6)  # same data, different allocation: a & a == a
     var r = a & b
     for i in range(6):
         assert_equal(r[i], a[i])
@@ -706,12 +708,12 @@ def test_bitmapview_or_with_offset() raises:
     """OR of two sliced bitmaps with a non-zero offset."""
     var fa = Bitmap(16, [3, 5])
     var fb = Bitmap(16, [3, 4])
-    var a = fa.slice(3, 5)   # slice indices 0, 2 set
-    var b = fb.slice(3, 5)   # slice indices 0, 1 set
+    var a = fa.slice(3, 5)  # slice indices 0, 2 set
+    var b = fb.slice(3, 5)  # slice indices 0, 1 set
     var r = a | b
-    assert_true(r[0])   # in both
-    assert_true(r[1])   # only b
-    assert_true(r[2])   # only a
+    assert_true(r[0])  # in both
+    assert_true(r[1])  # only b
+    assert_true(r[2])  # only a
     assert_false(r[3])
     assert_false(r[4])
 
@@ -720,12 +722,12 @@ def test_bitmapview_xor_with_offset() raises:
     """XOR of two sliced bitmaps with the same non-zero offset."""
     var fa = Bitmap(16, [3, 5])
     var fb = Bitmap(16, [3, 4])
-    var a = fa.slice(3, 5)   # slice indices 0, 2 set
-    var b = fb.slice(3, 5)   # slice indices 0, 1 set
+    var a = fa.slice(3, 5)  # slice indices 0, 2 set
+    var b = fb.slice(3, 5)  # slice indices 0, 1 set
     var r = a ^ b
     assert_false(r[0])  # 1 ^ 1 = 0
-    assert_true(r[1])   # 0 ^ 1 = 1
-    assert_true(r[2])   # 1 ^ 0 = 1
+    assert_true(r[1])  # 0 ^ 1 = 1
+    assert_true(r[2])  # 1 ^ 0 = 1
     assert_false(r[3])
     assert_false(r[4])
 

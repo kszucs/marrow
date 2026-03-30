@@ -97,7 +97,9 @@ struct BufferView[
 
     @always_inline
     def __getitem__(self, index: Int) -> Scalar[Self.T]:
-        debug_assert(0 <= index < self._length, "BufferView index out of bounds")
+        debug_assert(
+            0 <= index < self._length, "BufferView index out of bounds"
+        )
         return self._data[index]
 
     @always_inline
@@ -121,7 +123,11 @@ struct BufferView[
         return self._data[index]
 
     @always_inline
-    def unsafe_set(self: BufferView[mut=True, T=Self.T, origin=_], index: Int, value: Scalar[Self.T]):
+    def unsafe_set(
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        index: Int,
+        value: Scalar[Self.T],
+    ):
         self._data.store(index, value)
 
     # --- SIMD ---
@@ -131,7 +137,13 @@ struct BufferView[
         return self._data.load[width=W](index)
 
     @always_inline
-    def store[W: Int](self: BufferView[mut=True, T=Self.T, origin=_], index: Int, value: SIMD[Self.T, W]):
+    def store[
+        W: Int
+    ](
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        index: Int,
+        value: SIMD[Self.T, W],
+    ):
         self._data.store(index, value)
 
     @always_inline
@@ -361,7 +373,9 @@ struct BitmapView[
         var abs_pos = self._offset + index
         var byte_idx = abs_pos >> 3
         var bit_off = abs_pos & 7
-        var raw = (self._data + byte_idx).bitcast[Scalar[T]]().load[alignment=1]()
+        var raw = (
+            (self._data + byte_idx).bitcast[Scalar[T]]().load[alignment=1]()
+        )
         return raw >> Scalar[T](bit_off)
 
     @always_inline
@@ -371,12 +385,16 @@ struct BitmapView[
         No ``_offset`` adjustment — the caller is responsible for computing
         the correct byte address. Safe because Arrow buffers are 64-byte padded.
         """
-        return (self._data + byte_offset).bitcast[Scalar[T]]().load[width=W, alignment=1]()
+        return (
+            (self._data + byte_offset)
+            .bitcast[Scalar[T]]()
+            .load[width=W, alignment=1]()
+        )
 
     @always_inline
-    def store[T: DType, W: Int = 1](
-        self: BitmapView[mut=True, origin=_], byte_offset: Int, val: SIMD[T, W]
-    ):
+    def store[
+        T: DType, W: Int = 1
+    ](self: BitmapView[mut=True, origin=_], byte_offset: Int, val: SIMD[T, W]):
         """Store W elements of type T into bitmap data at raw ``byte_offset``.
 
         No ``_offset`` adjustment — the caller is responsible for computing
@@ -559,13 +577,20 @@ struct BitmapView[
         # Word-level XOR comparison.
         var i = 0
         while i + 64 <= self._length:
-            if self.load_bits[DType.uint64](i) ^ other.load_bits[DType.uint64](i) != 0:
+            if (
+                self.load_bits[DType.uint64](i)
+                ^ other.load_bits[DType.uint64](i)
+                != 0
+            ):
                 return False
             i += 64
         if i < self._length:
             var tail = self._length - i
             var mask = (UInt64(1) << UInt64(tail)) - 1
-            if (self.load_bits[DType.uint64](i) ^ other.load_bits[DType.uint64](i)) & mask != 0:
+            if (
+                self.load_bits[DType.uint64](i)
+                ^ other.load_bits[DType.uint64](i)
+            ) & mask != 0:
                 return False
         return True
 
@@ -605,7 +630,9 @@ struct BitmapView[
         """Return the bitwise OR of self and other."""
         return self._binop[_or](other)
 
-    def symmetric_difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
+    def symmetric_difference(
+        self, other: BitmapView[_]
+    ) raises -> Bitmap[mut=True]:
         """Return the bitwise XOR of self and other."""
         return self._binop[_xor](other)
 
@@ -648,7 +675,10 @@ struct BitmapView[
             for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    bv_out.store[DType.uint8, width](i + k, op((src + byte_shift + i + k).load[width=width]()))
+                    bv_out.store[DType.uint8, width](
+                        i + k,
+                        op((src + byte_shift + i + k).load[width=width]()),
+                    )
         else:
             var rshift = UInt8(bit_shift)
             var lshift = UInt8(8 - bit_shift)
@@ -657,14 +687,16 @@ struct BitmapView[
                     comptime k = j * width
                     var lo = (src + byte_shift + i + k).load[width=width]()
                     var hi = (src + byte_shift + i + k + 1).load[width=width]()
-                    bv_out.store[DType.uint8, width](i + k, op((lo >> rshift) | (hi << lshift)))
+                    bv_out.store[DType.uint8, width](
+                        i + k, op((lo >> rshift) | (hi << lshift))
+                    )
 
         return builder^
 
     def _binop[
-        op: def[W: Int](
-            SIMD[DType.uint8, W], SIMD[DType.uint8, W]
-        ) -> SIMD[DType.uint8, W]
+        op: def[W: Int](SIMD[DType.uint8, W], SIMD[DType.uint8, W]) -> SIMD[
+            DType.uint8, W
+        ]
     ](self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Apply a byte-level SIMD binary op. Output always has offset=0."""
         if self._length != len(other):
@@ -687,10 +719,13 @@ struct BitmapView[
             for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    bv_out.store[DType.uint8, width](i + k, op(
-                        (src_a + byte_shift_a + i + k).load[width=width](),
-                        (src_b + byte_shift_b + i + k).load[width=width](),
-                    ))
+                    bv_out.store[DType.uint8, width](
+                        i + k,
+                        op(
+                            (src_a + byte_shift_a + i + k).load[width=width](),
+                            (src_b + byte_shift_b + i + k).load[width=width](),
+                        ),
+                    )
         else:
             var rs_a = UInt8(bit_shift_a)
             var ls_a = UInt8(8 - bit_shift_a)
@@ -699,21 +734,34 @@ struct BitmapView[
             for i in range(0, out_bytes, 64):
                 comptime for j in range(unroll):
                     comptime k = j * width
-                    var lo_a = (src_a + byte_shift_a + i + k).load[width=width]()
-                    var hi_a = (src_a + byte_shift_a + i + k + 1).load[width=width]()
-                    var lo_b = (src_b + byte_shift_b + i + k).load[width=width]()
-                    var hi_b = (src_b + byte_shift_b + i + k + 1).load[width=width]()
-                    bv_out.store[DType.uint8, width](i + k, op(
-                        (lo_a >> rs_a) | (hi_a << ls_a),
-                        (lo_b >> rs_b) | (hi_b << ls_b),
-                    ))
+                    var lo_a = (src_a + byte_shift_a + i + k).load[
+                        width=width
+                    ]()
+                    var hi_a = (src_a + byte_shift_a + i + k + 1).load[
+                        width=width
+                    ]()
+                    var lo_b = (src_b + byte_shift_b + i + k).load[
+                        width=width
+                    ]()
+                    var hi_b = (src_b + byte_shift_b + i + k + 1).load[
+                        width=width
+                    ]()
+                    bv_out.store[DType.uint8, width](
+                        i + k,
+                        op(
+                            (lo_a >> rs_a) | (hi_a << ls_a),
+                            (lo_b >> rs_b) | (hi_b << ls_b),
+                        ),
+                    )
 
         return builder^
 
     # --- Writable ---
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"BitmapView(offset={self._offset}, length={self._length})")
+        writer.write(
+            t"BitmapView(offset={self._offset}, length={self._length})"
+        )
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)

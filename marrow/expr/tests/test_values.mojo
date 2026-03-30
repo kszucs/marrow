@@ -26,9 +26,7 @@ def _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[int64]:
     return result.copy()
 
 
-def _exec_pred(
-    expr: AnyValue, batch: RecordBatch
-) raises -> BoolArray:
+def _exec_pred(expr: AnyValue, batch: RecordBatch) raises -> BoolArray:
     """Helper: build a value processor and evaluate predicate against the batch.
     """
     var tmp = Planner().build(expr).eval(batch)

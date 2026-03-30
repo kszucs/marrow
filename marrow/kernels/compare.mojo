@@ -28,7 +28,13 @@ from std.sys.info import simd_byte_width, simd_width_of
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
-from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
+from ..arrays import (
+    BoolArray,
+    PrimitiveArray,
+    StringArray,
+    AnyArray,
+    StructArray,
+)
 from ..buffers import Buffer
 from ..views import BitmapView, BufferView
 from ..dtypes import DataType, bool_ as bool_dt
@@ -79,7 +85,9 @@ def _elementwise_cmp_pack[
         comptime for k in range(packs):
             var off = base + k * 8
             var cmp = func[8](lhs.load[8](off), rhs.load[8](off))
-            output.store[1](off // 8, (cmp.cast[DType.uint8]() << shifts).reduce_or())
+            output.store[1](
+                off // 8, (cmp.cast[DType.uint8]() << shifts).reduce_or()
+            )
 
     if ctx:
         comptime if has_accelerator_support[T.native]():
@@ -264,9 +272,7 @@ def greater_equal[
 # ---------------------------------------------------------------------------
 
 
-def equal(
-    left: StringArray, right: StringArray
-) raises -> BoolArray:
+def equal(left: StringArray, right: StringArray) raises -> BoolArray:
     """Element-wise string equality."""
     var n = len(left)
     if len(right) != n:
@@ -300,9 +306,7 @@ def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
     return bool_array_dispatch["equal", equal[_]](left, right)
 
 
-def equal(
-    left: StructArray, right: StructArray
-) raises -> BoolArray:
+def equal(left: StructArray, right: StructArray) raises -> BoolArray:
     """Element-wise struct equality: all corresponding columns must match.
 
     Returns a boolean array where element ``i`` is True iff
@@ -311,11 +315,17 @@ def equal(
     from .boolean import and_
 
     var n_keys = len(left.children)
-    var mask = equal(left.children[0].copy(), right.children[0].copy()).as_bool().copy()
+    var mask = (
+        equal(left.children[0].copy(), right.children[0].copy())
+        .as_bool()
+        .copy()
+    )
     for k in range(1, n_keys):
         mask = and_(
             mask,
-            equal(left.children[k].copy(), right.children[k].copy()).as_bool().copy(),
+            equal(left.children[k].copy(), right.children[k].copy())
+            .as_bool()
+            .copy(),
         )
     return mask^
 

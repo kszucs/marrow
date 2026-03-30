@@ -230,9 +230,7 @@ struct SwissHashTable[
         self._mask = cap - 1
         self._count = 0
         self._max_count = cap * 7 // 8
-        self._ctrl = Buffer.alloc_filled(
-            cap + _GROUP_WIDTH, fill=_CTRL_EMPTY
-        )
+        self._ctrl = Buffer.alloc_filled(cap + _GROUP_WIDTH, fill=_CTRL_EMPTY)
         self._slots = Buffer.alloc_uninit[DType.int32](cap)
         self._bucket_hashes = Buffer.alloc_uninit[DType.uint64](
             max(capacity, 16)
@@ -260,7 +258,10 @@ struct SwissHashTable[
     @always_inline
     def _prefetch_ctrl(self, h: Self.H):
         """Prefetch the ctrl group for hash ``h`` into L1 cache."""
-        prefetch(self._ctrl.view[DType.uint8]().unsafe_ptr() + Int(h & Self.H(self._mask)))
+        prefetch(
+            self._ctrl.view[DType.uint8]().unsafe_ptr()
+            + Int(h & Self.H(self._mask))
+        )
 
     @always_inline
     def _get_offset(self, index: Int) -> Int:

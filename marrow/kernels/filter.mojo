@@ -13,7 +13,13 @@ from std.memory import memcpy
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
-from ..arrays import BoolArray, PrimitiveArray, StringArray, AnyArray, StructArray
+from ..arrays import (
+    BoolArray,
+    PrimitiveArray,
+    StringArray,
+    AnyArray,
+    StructArray,
+)
 from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder, StringBuilder
@@ -141,7 +147,9 @@ def _pext(val: UInt64, mask: UInt64) -> UInt64:
 
 
 @always_inline
-def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count: Int):
+def _deposit_bits(
+    mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count: Int
+):
     """Deposit `count` LSBs from `bits` into a zeroed bitmap at `bitoffset`.
 
     Uses OR to set bits — the bitmap must be zero-initialised (via `alloc_zeroed`).
@@ -156,7 +164,11 @@ def _deposit_bits(mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count:
     var shifted = bits << UInt64(bit_off)
     bv.store[DType.uint64](byte_idx, bv.load[DType.uint64](byte_idx) | shifted)
     if bit_off > 0 and bit_off + count > 64:
-        bv.store[DType.uint8](byte_idx + 8, bv.load[DType.uint8](byte_idx + 8) | UInt8(bits >> UInt64(64 - bit_off)))
+        bv.store[DType.uint8](
+            byte_idx + 8,
+            bv.load[DType.uint8](byte_idx + 8)
+            | UInt8(bits >> UInt64(64 - bit_off)),
+        )
 
 
 def _filter_bits(
@@ -199,7 +211,9 @@ def _filter_bits(
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES:
+            while (
+                i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES
+            ):
                 i += 64
             var j = run_start
             while j < i:
@@ -263,7 +277,11 @@ def _filter_values[
     comptime ELEM = size_of[Scalar[T]]()
     comptime ALL_ONES = ~UInt64(0)
     var buf = Buffer.alloc_uninit(out_len * ELEM)
-    var src = src_buf.view[T](src_offset).unsafe_ptr().unsafe_origin_cast[ImmutAnyOrigin]()
+    var src = (
+        src_buf.view[T](src_offset)
+        .unsafe_ptr()
+        .unsafe_origin_cast[ImmutAnyOrigin]()
+    )
     var dst = buf.view[T]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin]()
     var out_pos = 0
     var i = sel_start
@@ -278,7 +296,9 @@ def _filter_values[
         if sel_word == ALL_ONES:
             var run_start = i
             i += 64
-            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES:
+            while (
+                i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES
+            ):
                 i += 64
             # TODO: use buffer.extend()
             memcpy(
@@ -311,9 +331,7 @@ def _filter_values[
 
 def filter_[
     T: DataType
-](
-    array: PrimitiveArray[T], selection: BoolArray
-) raises -> PrimitiveArray[T]:
+](array: PrimitiveArray[T], selection: BoolArray) raises -> PrimitiveArray[T]:
     """Filter a primitive array, keeping only elements where selection is True.
 
     Args:
@@ -412,7 +430,9 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
 
     # Filter data.
     var data_bm = array.values()
-    var filtered_data, _ = _filter_bits(data_bm, sel_bm, sel_start, sel_end, out_len)
+    var filtered_data, _ = _filter_bits(
+        data_bm, sel_bm, sel_start, sel_end, out_len
+    )
     return BoolArray(
         length=out_len,
         nulls=null_count,
@@ -427,9 +447,7 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
 # ---------------------------------------------------------------------------
 
 
-def filter_(
-    array: StringArray, selection: BoolArray
-) raises -> StringArray:
+def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
     """Filter a string array, keeping only elements where selection is True.
 
     Uses run merging: consecutive selected elements are copied with a single

@@ -617,7 +617,9 @@ struct CArrowArray(Copyable, Movable):
             buffers[0] = OpaquePointer[MutAnyOrigin]()
         for i in range(len(data_heap[].buffers)):
             buffers[1 + i] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(data_heap[].buffers[i].view[DType.uint8]().unsafe_ptr())
+                unsafe_from_address=Int(
+                    data_heap[].buffers[i].view[DType.uint8]().unsafe_ptr()
+                )
             )
 
         # Recursively build children; each child is moved onto the heap so the
