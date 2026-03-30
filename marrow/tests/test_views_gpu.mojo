@@ -23,10 +23,9 @@ from marrow.views import BitmapView, BufferView
 
 def _scale_by_two[
     T: DType,
-    src_o: Origin[mut=False],
     dst_o: Origin[mut=True],
 ](
-    src: BufferView[T, src_o],
+    src: BufferView[T, _],
     dst: BufferView[T, dst_o],
     length: Int,
     ctx: DeviceContext,
