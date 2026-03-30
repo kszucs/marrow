@@ -94,13 +94,23 @@ struct BufferView[
     def __bool__(self) -> Bool:
         return self._length > 0
 
+    # --- Bounds check ---
+
+    @always_inline
+    def _check_bounds(self, index: Int):
+        debug_assert(
+            0 <= index < self._length,
+            "BufferView index ",
+            index,
+            " out of bounds for length ",
+            self._length,
+        )
+
     # --- Element access ---
 
     @always_inline
     def __getitem__(self, index: Int) -> Scalar[Self.T]:
-        debug_assert(
-            0 <= index < self._length, "BufferView index out of bounds"
-        )
+        self._check_bounds(index)
         return self._data[index]
 
     @always_inline
@@ -164,19 +174,6 @@ struct BufferView[
     @always_inline
     def unsafe_ptr(self) -> UnsafePointer[Scalar[Self.T], Self.origin]:
         return self._data
-
-    @always_inline
-    def __eq__(self, other: BufferView[Self.T, _]) -> Bool:
-        """Return True if both views point to the same memory with the same length.
-        """
-        return (
-            Int(self._data) == Int(other._data)
-            and self._length == other._length
-        )
-
-    @always_inline
-    def __ne__(self, other: BufferView[Self.T, _]) -> Bool:
-        return not (self == other)
 
     @always_inline
     def is_non_null(self) -> Bool:
@@ -366,6 +363,18 @@ struct BitmapView[
 
         return False
 
+    # --- Bounds check ---
+
+    @always_inline
+    def _check_bounds(self, index: Int):
+        debug_assert(
+            0 <= index < self._length,
+            "BitmapView index ",
+            index,
+            " out of bounds for length ",
+            self._length,
+        )
+
     # --- Element access (BitSet-style) ---
 
     @always_inline
@@ -398,6 +407,7 @@ struct BitmapView[
     @always_inline
     def test(self, index: Int) -> Bool:
         """Test if the bit at ``index`` is set."""
+        self._check_bounds(index)
         var bit_index = self._offset + index
         return Bool((self._data[bit_index >> 3] >> UInt8(bit_index & 7)) & 1)
 
@@ -656,6 +666,7 @@ struct BitmapView[
     @always_inline
     def set(self: BitmapView[mut=True, origin=_], index: Int):
         """Set the bit at ``index`` to 1."""
+        self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
@@ -664,6 +675,7 @@ struct BitmapView[
     @always_inline
     def clear(self: BitmapView[mut=True, origin=_], index: Int):
         """Set the bit at ``index`` to 0."""
+        self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
@@ -672,6 +684,7 @@ struct BitmapView[
     @always_inline
     def toggle(self: BitmapView[mut=True, origin=_], index: Int):
         """Invert the bit at ``index``."""
+        self._check_bounds(index)
         var abs_index = self._offset + index
         var byte_index = abs_index >> 3
         var bit_mask = UInt8(1 << (abs_index & 7))
@@ -829,7 +842,6 @@ struct BitmapView[
 # ---------------------------------------------------------------------------
 
 
-@always_inline
 @always_inline
 def _invert[W: Int](x: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return ~x

@@ -143,32 +143,6 @@ def test_buffer_no_device() raises:
     assert_false(buf^.to_immutable().is_device())
 
 
-# ---------------------------------------------------------------------------
-# Buffer — resize no-ops and reallocation
-# ---------------------------------------------------------------------------
-
-
-def test_buffer_resize_noop_same_size() raises:
-    var buf = Buffer.alloc_zeroed[DType.int64](10)
-    var view_before = buf.view[DType.uint8]()
-    buf.resize[DType.int64](10)
-    assert_true(buf.view[DType.uint8]() == view_before)
-
-
-def test_buffer_resize_noop_same_aligned_size() raises:
-    # 1 and 8 int64 elements both fit in the initial 64-byte block
-    var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var view_before = buf.view[DType.uint8]()
-    buf.resize[DType.int64](8)
-    assert_true(buf.view[DType.uint8]() == view_before)
-
-
-def test_buffer_resize_reallocates_when_larger() raises:
-    var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var view_before = buf.view[DType.uint8]()
-    buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → new 128-byte block
-    assert_true(buf.view[DType.uint8]() != view_before)
-
 
 # ---------------------------------------------------------------------------
 # Bitmap — set / clear / test

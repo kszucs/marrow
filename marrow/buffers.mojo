@@ -610,6 +610,16 @@ struct Buffer[*, mut: Bool = False](
         )
 
     @always_inline
+    def _check_bounds[T: DType](self, index: Int):
+        debug_assert(
+            0 <= index < self.length[T](),
+            "Buffer index ",
+            index,
+            " out of bounds for length ",
+            self.length[T](),
+        )
+
+    @always_inline
     def unsafe_set[
         T: DType = DType.uint8
     ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
@@ -764,22 +774,21 @@ struct Buffer[*, mut: Bool = False](
 
     def __getitem__[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         """Return the byte at `index`."""
-        # TODO: add boundschesk
+        self._check_bounds[T](index)
         return self.unsafe_get[T](index)
 
     def __setitem__[
         T: DType = DType.uint8
     ](self: Buffer[mut=True], index: Int, value: Scalar[T]):
         """Set the byte at `index` to `value`."""
-        # TODO: add bounds check
+        self._check_bounds[T](index)
         self.unsafe_set[T](index, value)
 
-    def __getitem__(
-        self, slice: ContiguousSlice
-    ) -> BufferView[origin_of(self)]:
+    def __getitem__[T: DType = DType.uint8](ref self, slc: ContiguousSlice) -> BufferView[T, origin_of(self)]:
         """Return a view of the buffer for the given slice."""
-        var start, end = slc.indices(self.length)
-        return self.slice(start, end - start)
+        var length = self._size // size_of[T]()
+        var start, end = slc.indices(length)
+        return self.slice[T](start, end - start)
 
 
 # ---------------------------------------------------------------------------
@@ -906,9 +915,19 @@ struct Bitmap[*, mut: Bool = False](
         """Return the size of the backing buffer in bytes."""
         return len(self._buffer)
 
+    @always_inline
+    def _check_bounds(self, index: Int):
+        debug_assert(
+            0 <= index < self._length,
+            "Bitmap index ",
+            index,
+            " out of bounds for length ",
+            self._length,
+        )
+
     def set(mut self: Bitmap[mut=True], index: Int):
         """Set the bit at `index` to 1."""
-        # TODO: add bounds check
+        self._check_bounds(index)
         self.unsafe_set(index)
 
     @always_inline
@@ -920,7 +939,7 @@ struct Bitmap[*, mut: Bool = False](
 
     def clear(mut self: Bitmap[mut=True], index: Int):
         """Clear the bit at `index` to 0."""
-        # TODO: add bounds check
+        self._check_bounds(index)
         self.unsafe_clear(index)
 
     @always_inline
@@ -935,7 +954,7 @@ struct Bitmap[*, mut: Bool = False](
     def test(self, raw_index: Int) -> Bool:
         """Return True if the bit at `raw_index` (not offset-adjusted) is set.
         """
-        # TODO: add bounds check
+        self._check_bounds(raw_index)
         return self.unsafe_test(raw_index)
 
     @always_inline
@@ -951,8 +970,8 @@ struct Bitmap[*, mut: Bool = False](
         """Return the bit at logical `index` (0-based within this bitmap's window).
         """
         var i = index if index >= 0 else index + self._length
-        debug_assert(0 <= i < self._length, "bitmap index out of bounds")
-        return self.test(i)
+        self._check_bounds(i)
+        return self.unsafe_test(i)
 
     @always_inline
     def __getitem__(
@@ -964,10 +983,12 @@ struct Bitmap[*, mut: Bool = False](
 
     def __setitem__(mut self: Bitmap[mut=True], index: Int, value: Bool):
         """Set or clear the bit at `index`."""
+        var i = index if index >= 0 else index + self._length
+        self._check_bounds(i)
         if value:
-            self.set(index)
+            self.unsafe_set(i)
         else:
-            self.clear(index)
+            self.unsafe_clear(i)
 
     def set_range(
         mut self: Bitmap[mut=True], start: Int, length: Int, value: Bool
