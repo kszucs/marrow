@@ -13,12 +13,11 @@ from std.bit import count_trailing_zeros, next_power_of_two
 from std.gpu.host import DeviceContext
 from std.memory import pack_bits
 from std.sys import size_of
-from std.sys.intrinsics import prefetch
-
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
 from ..dtypes import int32, uint64
+from ..views import BufferView
 from .compare import equal
 from .filter import take, filter_
 from .hashing import rapidhash
@@ -258,10 +257,7 @@ struct SwissHashTable[
     @always_inline
     def _prefetch_ctrl(self, h: Self.H):
         """Prefetch the ctrl group for hash ``h`` into L1 cache."""
-        prefetch(
-            self._ctrl.view[DType.uint8]().unsafe_ptr()
-            + Int(h & Self.H(self._mask))
-        )
+        self._ctrl.view[DType.uint8]().prefetch_at(Int(h & Self.H(self._mask)))
 
     @always_inline
     def _get_offset(self, index: Int) -> Int:

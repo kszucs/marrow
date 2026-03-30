@@ -262,29 +262,6 @@ def test_arange_uint64() raises:
     assert_equal(a[2], 102)
 
 
-# TODO: move this to compute kernels
-# def test_drop_null() -> None:
-#     """Test the drop null function via the compute module."""
-#     from marrow.kernels.filter import drop_nulls
-
-#     var primitive_array = array[uint8](
-#         [None, 1, None, 3, None, 5, None, 7, None, 9]
-#     )
-#     # Check the setup.
-#     assert_equal(primitive_array.null_count(), 5)
-#     assert_bitmap_set(
-#         primitive_array.bitmap.unsafe_ptr(),
-#         primitive_array.length,
-#         [1, 3, 5, 7, 9],
-#         "check setup",
-#     )
-
-#     var result = drop_nulls[uint8](primitive_array)
-#     assert_equal(result.unsafe_get(0), 1)
-#     assert_equal(result.unsafe_get(1), 3)
-#     assert_equal(result.null_count(), 0)
-
-
 def test_primitive_array_with_offset() raises:
     """Test PrimitiveArray with offset functionality."""
     var b = PrimitiveBuilder[int32](10)

@@ -2,12 +2,7 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.memory import ArcPointer
 
 from marrow.buffers import *
-
-
-def is_aligned[
-    T: AnyType
-](ptr: UnsafePointer[T, MutAnyOrigin], alignment: Int) raises -> Bool:
-    return (Int(ptr) % alignment) == 0
+from marrow.views import BufferView
 
 
 # ---------------------------------------------------------------------------
@@ -18,7 +13,7 @@ def is_aligned[
 def test_buffer_init() raises:
     var b = Buffer.alloc_zeroed(10)
     assert_equal(len(b), 64)
-    assert_true(is_aligned(b.view[DType.uint8]().unsafe_ptr(), 64))
+    assert_true(b.view[DType.uint8]().is_aligned(64))
 
 
 def test_alloc_bits() raises:
@@ -155,24 +150,24 @@ def test_buffer_no_device() raises:
 
 def test_buffer_resize_noop_same_size() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](10)
-    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
+    var view_before = buf.view[DType.uint8]()
     buf.resize[DType.int64](10)
-    assert_equal(Int(buf.view[DType.uint8]().unsafe_ptr()), addr_before)
+    assert_true(buf.view[DType.uint8]() == view_before)
 
 
 def test_buffer_resize_noop_same_aligned_size() raises:
     # 1 and 8 int64 elements both fit in the initial 64-byte block
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
+    var view_before = buf.view[DType.uint8]()
     buf.resize[DType.int64](8)
-    assert_equal(Int(buf.view[DType.uint8]().unsafe_ptr()), addr_before)
+    assert_true(buf.view[DType.uint8]() == view_before)
 
 
 def test_buffer_resize_reallocates_when_larger() raises:
     var buf = Buffer.alloc_zeroed[DType.int64](1)
-    var addr_before = Int(buf.view[DType.uint8]().unsafe_ptr())
+    var view_before = buf.view[DType.uint8]()
     buf.resize[DType.int64](9)  # 9 * 8 = 72 bytes → new 128-byte block
-    assert_true(Int(buf.view[DType.uint8]().unsafe_ptr()) != addr_before)
+    assert_true(buf.view[DType.uint8]() != view_before)
 
 
 # ---------------------------------------------------------------------------

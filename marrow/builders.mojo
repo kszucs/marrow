@@ -24,10 +24,10 @@ Example
     var list_b = ListBuilder(child^, capacity=10)
 """
 
-from std.memory import memcpy, ArcPointer
+from std.memory import ArcPointer
 from std.sys import size_of
 from .buffers import Buffer, Bitmap
-from .views import BitmapView
+from .views import BitmapView, BufferView
 from .dtypes import *
 from .arrays import (
     Array,
@@ -499,10 +499,8 @@ struct StringBuilder(Builder, Sized):
         self._offsets.unsafe_set[DType.uint32](
             self._length + n, UInt32(cur_bytes + chunk_bytes)
         )
-        memcpy(
-            dest=self._values.view[DType.uint8](cur_bytes).unsafe_ptr(),
-            src=arr.values.view[DType.uint8](chunk_start).unsafe_ptr(),
-            count=chunk_bytes,
+        self._values.view[DType.uint8](cur_bytes).copy_from(
+            arr.values.view[DType.uint8](chunk_start), chunk_bytes
         )
         self._length += n
 
@@ -529,11 +527,7 @@ struct StringBuilder(Builder, Sized):
         var next_offset = last_offset + UInt32(length)
         self._bitmap.set(index)
         self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
-        memcpy(
-            dest=self._values.view[DType.uint8](Int(last_offset)).unsafe_ptr(),
-            src=s.unsafe_ptr(),
-            count=length,
-        )
+        self._values.view[DType.uint8](Int(last_offset)).copy_from(s)
         self._length += 1
 
     @always_inline

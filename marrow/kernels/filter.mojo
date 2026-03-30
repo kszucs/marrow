@@ -9,7 +9,6 @@ All functions support arrays with non-zero offsets (sliced arrays).
 
 import std.math as math
 from std.bit import count_trailing_zeros, pop_count
-from std.memory import memcpy
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
@@ -24,7 +23,7 @@ from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
-from ..views import BitmapView
+from ..views import BitmapView, BufferView
 from .aggregate import sum_
 from .string import string_lengths
 
@@ -35,12 +34,10 @@ from .string import string_lengths
 
 
 @always_inline
-def _filter_sparse[
-    T: DType
-](
-    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
+def _filter_sparse[T: DType](
+    dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
+    src: BufferView[T, _],
     base: Int,
     sel_word: UInt64,
 ):
@@ -50,21 +47,18 @@ def _filter_sparse[
     Best when few bits are set (low popcount).
     """
     var w = sel_word
-    var out = dst + out_pos
-    var inp = src + base
+    var k = out_pos
     while w != 0:
-        out[0] = inp[Int(count_trailing_zeros(w))]
+        dst.unsafe_set(k, src.unsafe_get(base + Int(count_trailing_zeros(w))))
         w &= w - 1
-        out = out + 1
+        k += 1
 
 
 @always_inline
-def _filter_dense[
-    T: DType
-](
-    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
+def _filter_dense[T: DType](
+    dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
+    src: BufferView[T, _],
     base: Int,
     sel_word: UInt64,
 ):
@@ -76,29 +70,23 @@ def _filter_dense[
     pointer into 8 independent chains of depth 8 that the OoO engine can
     overlap (~32 cycles vs ~128 for the naive approach).
     """
-    var inp = src + base
     var offset = out_pos
 
     comptime for i in range(8):
         var byte = (sel_word >> UInt64(i * 8)) & 0xFF
-        var out = dst + offset
-        var chunk_inp = inp + i * 8
         var b = byte
         var k = 0
         comptime for bit in range(8):
-            out[k] = chunk_inp[bit]
+            dst.unsafe_set(offset + k, src.unsafe_get(base + i * 8 + bit))
             k += Int(b & 1)
             b >>= 1
         offset += Int(pop_count(byte))
 
 
-def _filter_block[
-    T: DType,
-    SPARSE_THRESHOLD: Int = 24,
-](
-    dst: UnsafePointer[Scalar[T], MutAnyOrigin],
+def _filter_block[T: DType, SPARSE_THRESHOLD: Int = 24](
+    dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
-    src: UnsafePointer[Scalar[T], ImmutAnyOrigin],
+    src: BufferView[T, _],
     base: Int,
     sel_word: UInt64,
 ) -> Int:
@@ -274,15 +262,10 @@ def _filter_values[
     Returns:
         A new Buffer containing only the selected elements.
     """
-    comptime ELEM = size_of[Scalar[T]]()
     comptime ALL_ONES = ~UInt64(0)
-    var buf = Buffer.alloc_uninit(out_len * ELEM)
-    var src = (
-        src_buf.view[T](src_offset)
-        .unsafe_ptr()
-        .unsafe_origin_cast[ImmutAnyOrigin]()
-    )
-    var dst = buf.view[T]().unsafe_ptr().unsafe_origin_cast[MutAnyOrigin]()
+    var buf = Buffer.alloc_uninit(out_len * size_of[Scalar[T]]())
+    var src = src_buf.view[T](src_offset)
+    var dst = buf.view[T]()
     var out_pos = 0
     var i = sel_start
 
@@ -300,12 +283,7 @@ def _filter_values[
                 i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES
             ):
                 i += 64
-            # TODO: use buffer.extend()
-            memcpy(
-                dest=(dst + out_pos).bitcast[UInt8](),
-                src=(src + run_start).bitcast[UInt8](),
-                count=(i - run_start) * ELEM,
-            )
+            dst.slice(out_pos).copy_from(src.slice(run_start), i - run_start)
             out_pos += i - run_start
             continue
         out_pos += _filter_block[T](dst, out_pos, src, i, sel_word)
@@ -482,23 +460,23 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
         )
 
     var off = array.offset
-    var offsets_ptr = array.offsets.view[DType.uint32]().unsafe_ptr()
-    var values_ptr = array.values.view[DType.uint8]().unsafe_ptr()
+    var offsets_view = array.offsets.view[DType.uint32]()
+    var values_view = array.values.view[DType.uint8]()
 
     # Compute total output bytes.
     var total_bytes = 0
     for i in range(n):
         if sel_bm.test(i):
-            total_bytes += Int(offsets_ptr[off + i + 1]) - Int(
-                offsets_ptr[off + i]
+            total_bytes += Int(offsets_view.unsafe_get(off + i + 1)) - Int(
+                offsets_view.unsafe_get(off + i)
             )
 
     # Allocate output buffers.
     # TODO: use alloc_uninit to spare zeroing the output buffers
     var out_offsets = Buffer.alloc_zeroed[DType.uint32](out_len + 1)
     var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
-    var out_off_ptr = out_offsets.view[DType.uint32]().unsafe_ptr()
-    var out_val_ptr = out_values.view[DType.uint8]().unsafe_ptr()
+    var out_off_view = out_offsets.view[DType.uint32]()
+    var out_val_view = out_values.view[DType.uint8]()
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
 
@@ -507,7 +485,7 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
         var src_bm = array.bitmap.value()
         var bm_builder = Bitmap.alloc_zeroed(out_len)
         var byte_pos = UInt32(0)
-        out_off_ptr[0] = 0
+        out_off_view.unsafe_set(0, UInt32(0))
         var j = 0
         var i = 0
 
@@ -518,8 +496,8 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
 
             var run_start = i
             while i < n and sel_bm.test(i):
-                var elem_start = offsets_ptr[off + i]
-                var elem_end = offsets_ptr[off + i + 1]
+                var elem_start = offsets_view.unsafe_get(off + i)
+                var elem_end = offsets_view.unsafe_get(off + i + 1)
                 byte_pos += elem_end - elem_start
                 var valid = src_bm.test(off + i)
                 if valid:
@@ -529,18 +507,15 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
                 if not valid:
                     null_count += 1
                 j += 1
-                out_off_ptr[j] = byte_pos
+                out_off_view.unsafe_set(j, byte_pos)
                 i += 1
 
-            var src_byte_start = Int(offsets_ptr[off + run_start])
-            var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
+            var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
+            var src_byte_end = Int(offsets_view.unsafe_get(off + i))
             var run_bytes = src_byte_end - src_byte_start
             if run_bytes > 0:
-                # TODO: use buffer.extend()
-                memcpy(
-                    dest=out_val_ptr + Int(byte_pos) - run_bytes,
-                    src=values_ptr + src_byte_start,
-                    count=run_bytes,
+                out_val_view.slice(Int(byte_pos) - run_bytes).copy_from(
+                    values_view.slice(src_byte_start), run_bytes
                 )
 
         bm = bm_builder.to_immutable(length=out_len)
@@ -548,7 +523,7 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
     else:
         # --- No bitmap: run-merging only ---
         var byte_pos = UInt32(0)
-        out_off_ptr[0] = 0
+        out_off_view.unsafe_set(0, UInt32(0))
         var j = 0
         var i = 0
 
@@ -559,22 +534,19 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
 
             var run_start = i
             while i < n and sel_bm.test(i):
-                var elem_start = offsets_ptr[off + i]
-                var elem_end = offsets_ptr[off + i + 1]
+                var elem_start = offsets_view.unsafe_get(off + i)
+                var elem_end = offsets_view.unsafe_get(off + i + 1)
                 byte_pos += elem_end - elem_start
                 j += 1
-                out_off_ptr[j] = byte_pos
+                out_off_view.unsafe_set(j, byte_pos)
                 i += 1
 
-            var src_byte_start = Int(offsets_ptr[off + run_start])
-            var src_byte_end = Int(offsets_ptr[off + i - 1 + 1])
+            var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
+            var src_byte_end = Int(offsets_view.unsafe_get(off + i))
             var run_bytes = src_byte_end - src_byte_start
             if run_bytes > 0:
-                # TODO: use buffer.extend()
-                memcpy(
-                    dest=out_val_ptr + Int(byte_pos) - run_bytes,
-                    src=values_ptr + src_byte_start,
-                    count=run_bytes,
+                out_val_view.slice(Int(byte_pos) - run_bytes).copy_from(
+                    values_view.slice(src_byte_start), run_bytes
                 )
 
     return StringArray(
@@ -716,7 +688,7 @@ def take[
     comptime native = T.native
     var n = len(indices)
     var src = array.buffer.view[native](array.offset)
-    var idx_ptr = indices.buffer.view[int32.native](indices.offset).unsafe_ptr()
+    var idx = indices.buffer.view[int32.native](indices.offset)
     var buf = Buffer.alloc_uninit[native](n)
     var out = buf.view[native]()
 
@@ -733,12 +705,12 @@ def take[
     if not has_null_indices and not has_src_nulls:
         # Fast path: no nulls — pure SIMD gather, no bitmap.
         while i + W <= n:
-            var offsets = idx_ptr.load[width=W](i).cast[DType.int64]()
+            var offsets = idx.load[W](i).cast[DType.int64]()
             var vals = src.gather[W](offsets)
             out.store[W](i, vals)
             i += W
         while i < n:
-            out.unsafe_set(i, src[Int(idx_ptr.load(i))])
+            out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
             i += 1
     else:
         # TODO: optimize this, the implementation below could be vectorized
@@ -746,13 +718,13 @@ def take[
         var bm_builder = Bitmap.alloc_zeroed(n)
         while i < n:
             if (has_null_indices and not indices.is_valid(i)) or (
-                has_src_nulls and not array.is_valid(Int(idx_ptr.load(i)))
+                has_src_nulls and not array.is_valid(Int(idx.unsafe_get(i)))
             ):
                 out.unsafe_set(i, Scalar[native](0))
                 bm_builder.clear(i)
                 null_count += 1
             else:
-                out.unsafe_set(i, src[Int(idx_ptr.load(i))])
+                out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
                 bm_builder.set(i)
             i += 1
         if null_count > 0:

@@ -110,9 +110,10 @@ def _rapidhash_fixed[byte_width: Int](value: UInt64) -> UInt64:
 
 def _rapidhash_elementwise[
     T: DataType,
+    out_origin: Origin[mut=True],
     v_origin: Origin[mut=False],
 ](
-    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
+    output: BufferView[DType.uint64, out_origin],
     in_: BufferView[T.native, _],
     validity: Optional[BitmapView[v_origin]],
     length: Int,
@@ -206,7 +207,7 @@ def _rapidhash_elementwise[
             ).cast[DType.bool]()
             hashes = valid.select(hashes, NULL_HASH_SENTINEL)
 
-        (out_ptr + i).store(hashes)
+        output.store[W](i, hashes)
 
     if ctx:
         comptime if has_accelerator():
@@ -351,9 +352,7 @@ def rapidhash[
     else:
         buf = Buffer.alloc_uninit[DType.uint64](n)
 
-    var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
-
-    _rapidhash_elementwise[T](out_ptr, keys.values(), keys.validity(), n, ctx)
+    _rapidhash_elementwise[T](buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx)
 
     return PrimitiveArray[uint64](
         length=n,
@@ -383,8 +382,10 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
     return builder.finish()
 
 
-def _combine_elementwise(
-    out_ptr: UnsafePointer[Scalar[DType.uint64], MutAnyOrigin],
+def _combine_elementwise[
+    out_origin: Origin[mut=True],
+](
+    output: BufferView[DType.uint64, out_origin],
     lhs: BufferView[DType.uint64, _],
     rhs: BufferView[DType.uint64, _],
     length: Int,
@@ -414,7 +415,7 @@ def _combine_elementwise(
         var mid = (t0 >> 32) + (t1 & lo32) + (t2 & lo32)
         var lo = (t0 & lo32) | (mid << 32)
         var hi = t3 + (t1 >> 32) + (t2 >> 32) + (mid >> 32)
-        (out_ptr + i).store(lo ^ hi)
+        output.store[W](i, lo ^ hi)
 
     if ctx:
         comptime if has_accelerator():
@@ -457,10 +458,8 @@ def rapidhash(
             buf = Buffer.alloc_device[DType.uint64](ctx.value(), n)
         else:
             buf = Buffer.alloc_uninit[uint64.native](n)
-        var out_ptr = buf.view[DType.uint64]().unsafe_ptr()
-
         _combine_elementwise(
-            out_ptr,
+            buf.view[DType.uint64](),
             result.buffer.view[DType.uint64](),
             field_hashes.buffer.view[DType.uint64](),
             n,

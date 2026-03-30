@@ -83,11 +83,11 @@ def test_bufferview_store() raises:
     assert_equal(view[3], 8)
 
 
-def test_bufferview_unsafe_ptr() raises:
+def test_bufferview_element_access() raises:
     var buf = Buffer.alloc_zeroed[DType.int32](4)
     buf.unsafe_set[DType.int32](0, 99)
     var view = buf.view[DType.int32]()
-    assert_equal(view.unsafe_ptr()[0], 99)
+    assert_equal(view[0], 99)
 
 
 def test_bufferview_offset_baked_in() raises:

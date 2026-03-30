@@ -71,6 +71,8 @@ Usage: `var arr: AnyArray = my_primitive_array` and `var prim: PrimitiveArray[in
 - `Buffer[mut=True]` — mutable counterpart (replaces the former `BufferBuilder`); `finish()` freezes to `Buffer[mut=False]`
 - Allocation kinds: CPU (owned heap), FOREIGN (external with release callback), HOST (pinned GPU host memory), DEVICE (GPU memory)
 - All buffers are 64-byte aligned and padded. Prefer `Buffer`/`Bitmap` for owned values and `BufferView`/`BitmapView` for computation. Avoid naked pointer arithmetic — do not use raw pointer types directly in kernel or array code.
+- **`unsafe_ptr()` is restricted to `buffers.mojo`, `views.mojo`, and `c_data.mojo` only.** All other files (kernels, arrays, tests, etc.) must not call `unsafe_ptr()` directly. Kernels and array code should operate through `BufferView`/`BitmapView` abstractions instead.
+- **Avoid `AnyOrigin` types (`MutAnyOrigin`, `ImmutAnyOrigin`) and `unsafe_origin_cast`.** Use parametric origins instead (e.g. `out_o: Origin[mut=True]` / `src_o: Origin[mut=False]`) and pass views directly without origin casts.
 
 **Bitmap** (`marrow/bitmap.mojo`):
 - Immutable, bit-packed validity buffer wrapping a `Buffer`

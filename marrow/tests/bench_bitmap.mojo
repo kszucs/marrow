@@ -155,7 +155,7 @@ def bench_set_range(mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn():
         builder.set_range(0, size, True)
-        keep(builder.unsafe_ptr())
+        keep(builder.view().load[DType.uint8](0))
 
     b.iter[call_fn]()
 

@@ -627,18 +627,7 @@ struct Buffer[*, mut: Bool = False](
         comptime output = Scalar[T]
         return self._ptr.bitcast[output]()[index]
 
-    # --- Device access (mut=False only) ---
-
-    def devicebuffer(self: Buffer[mut=False]) -> DeviceBuffer[DType.uint8]:
-        """Return the DeviceBuffer handle.
-
-        Precondition: `is_device()` must be True.  The returned DeviceBuffer is
-        an `ImplicitlyCopyable` copy that bumps the AsyncRT ref-count; it is safe
-        to hold briefly for kernel calls.
-        """
-        debug_assert(self.is_device(), "not a device buffer")
-        return self._owner[]._device.value()
-
+    # TODO: remove these methods in favor of `view()` and `BufferView` for both CPU and DEVICE buffers.  The
     @always_inline
     def device_view[
         T: DType = DType.uint8

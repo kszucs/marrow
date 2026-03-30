@@ -22,6 +22,7 @@ import std.math as math
 from std.math import iota
 from std.memory import memcpy, memset
 from std.builtin.device_passable import DevicePassable
+from std.sys.intrinsics import prefetch
 
 from .buffers import Buffer, Bitmap
 
@@ -80,6 +81,7 @@ struct BufferView[
     ):
         self._data = ptr
         self._length = length
+
 
     # --- Sized ---
 
@@ -163,6 +165,57 @@ struct BufferView[
     @always_inline
     def unsafe_ptr(self) -> UnsafePointer[Scalar[Self.T], Self.origin]:
         return self._data
+
+    @always_inline
+    def __eq__(self, other: BufferView[Self.T, _]) -> Bool:
+        """Return True if both views point to the same memory with the same length."""
+        return Int(self._data) == Int(other._data) and self._length == other._length
+
+    @always_inline
+    def __ne__(self, other: BufferView[Self.T, _]) -> Bool:
+        return not (self == other)
+
+    @always_inline
+    def is_non_null(self) -> Bool:
+        """Return True if the backing pointer is non-null."""
+        return Bool(self._data)
+
+    @always_inline
+    def is_aligned(self, alignment: Int) -> Bool:
+        """Return True if the backing pointer is aligned to `alignment` bytes."""
+        return Int(self._data) % alignment == 0
+
+    @always_inline
+    def prefetch_at(self, offset: Int):
+        """Prefetch the cache line at `offset` elements into L1 cache."""
+        prefetch(self._data + offset)
+
+    def copy_from(
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        src: BufferView[Self.T, _],
+        count: Int,
+    ):
+        """Copy `count` elements from `src` into `self`."""
+        memcpy(
+            dest=self._data.bitcast[UInt8](),
+            src=src._data.bitcast[UInt8](),
+            count=count * size_of[Scalar[Self.T]](),
+        )
+
+    def to_string_slice(self) -> StringSlice[Self.origin]:
+        """Convert this byte view to a StringSlice with origin `self_o`."""
+        return StringSlice(ptr=self._data.bitcast[Byte](), length=self._length)
+
+    def copy_from(
+        self: BufferView[mut=True, T=DType.uint8, origin=_],
+        src: StringSlice[_],
+    ):
+        """Copy bytes from a StringSlice into this view."""
+        memcpy(
+            dest=self._data.bitcast[Byte](),
+            src=src.unsafe_ptr(),
+            count=len(src),
+        )
 
     # --- Vectorized operations ---
 
