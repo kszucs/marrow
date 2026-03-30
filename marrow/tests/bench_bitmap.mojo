@@ -37,7 +37,7 @@ from marrow.buffers import Bitmap
 # ---------------------------------------------------------------------------
 
 
-def _make_alternating(size: Int) -> Bitmap:
+def _make_alternating(size: Int) -> Bitmap[mut=False]:
     """Bitmap with alternating 0/1 bits (worst-case for popcount branching)."""
     var b = Bitmap.alloc_zeroed(size)
     var i = 0
@@ -47,7 +47,7 @@ def _make_alternating(size: Int) -> Bitmap:
     return b.to_immutable()
 
 
-def _make_half_set(size: Int) -> Bitmap:
+def _make_half_set(size: Int) -> Bitmap[mut=False]:
     """Bitmap with the first half of bits set."""
     var b = Bitmap.alloc_zeroed(size)
     b.set_range(0, size // 2, True)
@@ -62,11 +62,12 @@ def _make_half_set(size: Int) -> Bitmap:
 @parameter
 def bench_count_set_bits(mut b: Bencher, size: Int) raises:
     var bm = _make_alternating(size)
+    var bm_view = bm.view()
 
     @always_inline
     @parameter
     def call_fn():
-        var n = bm.count_set_bits()
+        var n = bm_view.count_set_bits()
         keep(n)
 
     b.iter[call_fn]()
@@ -105,11 +106,13 @@ def bench_count_set_bits_unaligned(mut b: Bencher, size: Int) raises:
 def bench_and(mut b: Bencher, size: Int) raises:
     var lhs = _make_half_set(size)
     var rhs = _make_alternating(size)
+    var lhs_view = lhs.view()
+    var rhs_view = rhs.view()
 
     @always_inline
     @parameter
     def call_fn() raises:
-        var r = lhs & rhs
+        var r = lhs_view & rhs_view
         keep(len(r))
 
     b.iter[call_fn]()
@@ -121,11 +124,13 @@ def bench_and(mut b: Bencher, size: Int) raises:
 def bench_or(mut b: Bencher, size: Int) raises:
     var lhs = _make_half_set(size)
     var rhs = _make_alternating(size)
+    var lhs_view = lhs.view()
+    var rhs_view = rhs.view()
 
     @always_inline
     @parameter
     def call_fn() raises:
-        var r = lhs | rhs
+        var r = lhs_view | rhs_view
         keep(len(r))
 
     b.iter[call_fn]()
@@ -136,11 +141,12 @@ def bench_or(mut b: Bencher, size: Int) raises:
 @parameter
 def bench_invert(mut b: Bencher, size: Int) raises:
     var bitmap = _make_alternating(size)
+    var bitmap_view = bitmap.view()
 
     @always_inline
     @parameter
     def call_fn() raises:
-        var r = ~bitmap
+        var r = ~bitmap_view
         keep(len(r))
 
     b.iter[call_fn]()

@@ -16,13 +16,16 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 """
 
 from std.sys.info import simd_byte_width, simd_width_of
-from std.sys import size_of
+from std.sys import size_of, has_accelerator
 from std.bit import pop_count
 import std.math as math
 from std.math import iota
 from std.memory import memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
+from std.algorithm.functional import elementwise
+from std.utils.index import IndexList
+from std.gpu.host import DeviceContext, get_gpu_target
 
 from .buffers import Buffer, Bitmap
 
@@ -694,21 +697,29 @@ struct BitmapView[
 
     def intersection(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise AND of self and other."""
-        return self._binop[_and](other)
+        var builder = Bitmap.alloc_uninit(self._length)
+        apply[_and](self, other, builder.view())
+        return builder^
 
     def union(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return the bitwise OR of self and other."""
-        return self._binop[_or](other)
+        var builder = Bitmap.alloc_uninit(self._length)
+        apply[_or](self, other, builder.view())
+        return builder^
 
     def symmetric_difference(
         self, other: BitmapView[_]
     ) raises -> Bitmap[mut=True]:
         """Return the bitwise XOR of self and other."""
-        return self._binop[_xor](other)
+        var builder = Bitmap.alloc_uninit(self._length)
+        apply[_xor](self, other, builder.view())
+        return builder^
 
     def difference(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         """Return self AND NOT other."""
-        return self._binop[_and_not](other)
+        var builder = Bitmap.alloc_uninit(self._length)
+        apply[_and_not](self, other, builder.view())
+        return builder^
 
     def __and__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.intersection(other)
@@ -722,108 +733,10 @@ struct BitmapView[
     def __sub__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.difference(other)
 
-    def __invert__(self) -> Bitmap[mut=True]:
+    def __invert__(self) raises -> Bitmap[mut=True]:
         """Return the bitwise NOT of this view as a new Bitmap (offset=0)."""
-        return self._unop[_invert]()
-
-    def _unop[
-        op: def[W: Int](SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]
-    ](self) -> Bitmap[mut=True]:
-        """Apply a byte-level SIMD unary op. Output always has offset=0."""
-        comptime width = simd_width_of[DType.uint8]()
-        comptime assert 64 % width == 0
-        comptime unroll = 64 // width
-
-        src, _, lead_bits, _ = self._aligned_byte_range()
-        var byte_shift = lead_bits >> 3
-        var bit_shift = lead_bits & 7
         var builder = Bitmap.alloc_uninit(self._length)
-        var out_bytes = builder.byte_count()
-        var bv_out = builder.view()
-
-        if bit_shift == 0:
-            for i in range(0, out_bytes, 64):
-                comptime for j in range(unroll):
-                    comptime k = j * width
-                    bv_out.store[DType.uint8, width](
-                        i + k,
-                        op((src + byte_shift + i + k).load[width=width]()),
-                    )
-        else:
-            var rshift = UInt8(bit_shift)
-            var lshift = UInt8(8 - bit_shift)
-            for i in range(0, out_bytes, 64):
-                comptime for j in range(unroll):
-                    comptime k = j * width
-                    var lo = (src + byte_shift + i + k).load[width=width]()
-                    var hi = (src + byte_shift + i + k + 1).load[width=width]()
-                    bv_out.store[DType.uint8, width](
-                        i + k, op((lo >> rshift) | (hi << lshift))
-                    )
-
-        return builder^
-
-    def _binop[
-        op: def[W: Int](SIMD[DType.uint8, W], SIMD[DType.uint8, W]) -> SIMD[
-            DType.uint8, W
-        ]
-    ](self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
-        """Apply a byte-level SIMD binary op. Output always has offset=0."""
-        if self._length != len(other):
-            raise Error("BitmapView lengths must match")
-        comptime width = simd_width_of[DType.uint8]()
-        comptime assert 64 % width == 0
-        comptime unroll = 64 // width
-
-        src_a, _, lead_bits_a, _ = self._aligned_byte_range()
-        src_b, _, lead_bits_b, _ = other._aligned_byte_range()
-        var byte_shift_a = lead_bits_a >> 3
-        var bit_shift_a = lead_bits_a & 7
-        var byte_shift_b = lead_bits_b >> 3
-        var bit_shift_b = lead_bits_b & 7
-        var builder = Bitmap.alloc_uninit(self._length)
-        var out_bytes = builder.byte_count()
-        var bv_out = builder.view()
-
-        if bit_shift_a == 0 and bit_shift_b == 0:
-            for i in range(0, out_bytes, 64):
-                comptime for j in range(unroll):
-                    comptime k = j * width
-                    bv_out.store[DType.uint8, width](
-                        i + k,
-                        op(
-                            (src_a + byte_shift_a + i + k).load[width=width](),
-                            (src_b + byte_shift_b + i + k).load[width=width](),
-                        ),
-                    )
-        else:
-            var rs_a = UInt8(bit_shift_a)
-            var ls_a = UInt8(8 - bit_shift_a)
-            var rs_b = UInt8(bit_shift_b)
-            var ls_b = UInt8(8 - bit_shift_b)
-            for i in range(0, out_bytes, 64):
-                comptime for j in range(unroll):
-                    comptime k = j * width
-                    var lo_a = (src_a + byte_shift_a + i + k).load[
-                        width=width
-                    ]()
-                    var hi_a = (src_a + byte_shift_a + i + k + 1).load[
-                        width=width
-                    ]()
-                    var lo_b = (src_b + byte_shift_b + i + k).load[
-                        width=width
-                    ]()
-                    var hi_b = (src_b + byte_shift_b + i + k + 1).load[
-                        width=width
-                    ]()
-                    bv_out.store[DType.uint8, width](
-                        i + k,
-                        op(
-                            (lo_a >> rs_a) | (hi_a << ls_a),
-                            (lo_b >> rs_b) | (hi_b << ls_b),
-                        ),
-                    )
-
+        apply[_invert](self, builder.view())
         return builder^
 
     # --- Writable ---
@@ -873,3 +786,265 @@ def _and_not[
     W: Int
 ](a: SIMD[DType.uint8, W], b: SIMD[DType.uint8, W]) -> SIMD[DType.uint8, W]:
     return a & ~b
+
+
+# ---------------------------------------------------------------------------
+# apply — free-function overloads for BufferView and BitmapView
+# ---------------------------------------------------------------------------
+
+
+
+comptime UnaryFn[T: DType] = def[W: Int](SIMD[T, W]) -> SIMD[T, W]
+"""A parameterized unary SIMD function type: maps a vector to a vector of the same type."""
+
+comptime BinaryFn[T: DType] = def[W: Int](SIMD[T, W], SIMD[T, W]) -> SIMD[T, W]
+"""A parameterized binary SIMD function type: combines two vectors into one of the same type."""
+
+
+
+def apply[
+    T: DType,
+    op: UnaryFn[T],
+](
+    src: BufferView[T, _],
+    dst: BufferView[mut=True, T, _],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a unary SIMD op element-wise over src into dst, CPU or GPU.
+
+    Pointers are function parameters (not closure captures) so that
+    DevicePassable conversion works correctly on GPU offload.
+    """
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank]
+    ) -> None:
+        var i = idx[0]
+        dst.store[W](i, op[W](src.load[W](i)))
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[T, target = get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def apply[
+    T: DType,
+    op: BinaryFn[T],
+](
+    lhs: BufferView[T, _],
+    rhs: BufferView[T, _],
+    dst: BufferView[mut=True, T, _],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a binary SIMD op element-wise over lhs,rhs into dst, CPU or GPU.
+
+    Pointers are function parameters (not closure captures) so that
+    DevicePassable conversion works correctly on GPU offload.
+    """
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank]
+    ) -> None:
+        var i = idx[0]
+        dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[T, target = get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def apply[
+    op: UnaryFn[DType.uint8],
+](
+    src: BitmapView[_],
+    dst: BitmapView[mut=True, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a byte-level unary SIMD op from src into dst (pre-allocated, offset-0).
+
+    Reads exactly ceil(length/8) source bytes — no over-read.
+    Handles sub-byte bit-offset shifting automatically.
+    GPU support is not yet implemented; ctx is reserved for future use.
+    """
+    # TODO: GPU bitmap op
+    var byte_start = src._offset >> 3
+    var bit_shift = src._offset & 7
+    var rshift = UInt8(bit_shift)
+    var lshift = UInt8(8 - bit_shift)
+    var out_bytes = (src._length + 7) >> 3
+    var data = src._data
+    comptime cpu_width = simd_width_of[DType.uint8]()
+
+    if out_bytes == 0:
+        return
+
+    if bit_shift == 0:
+
+        @parameter
+        @always_inline
+        def process_zero[W: Int, rank: Int, alignment: Int = 1](
+            idx: IndexList[rank]
+        ) -> None:
+            var i = idx[0]
+            dst.store[DType.uint8, W](
+                i, op[W]((data + byte_start + i).load[width=W]())
+            )
+
+        elementwise[process_zero, cpu_width, target="cpu", use_blocking_impl=True](
+            out_bytes
+        )
+        return
+
+    # Non-zero bit_shift: shift-combine (lo >> rshift | hi << lshift).
+    # Bulk covers indices 0 .. out_bytes-2; hi at i+1 is always in bounds.
+    var bulk = out_bytes - 1
+    if bulk > 0:
+
+        @parameter
+        @always_inline
+        def process_shifted[W: Int, rank: Int, alignment: Int = 1](
+            idx: IndexList[rank]
+        ) -> None:
+            var i = idx[0]
+            var lo = (data + byte_start + i).load[width=W]()
+            var hi = (data + byte_start + i + 1).load[width=W]()
+            dst.store[DType.uint8, W](
+                i, op[W]((lo >> rshift) | (hi << lshift))
+            )
+
+        elementwise[
+            process_shifted, cpu_width, target="cpu", use_blocking_impl=True
+        ](bulk)
+
+    # Last output byte: read hi only when the view's bits span into the next
+    # source byte, avoiding a read past the end of source data.
+    var last_lo = (data + byte_start + bulk).load[width=1]()
+    var last_result = last_lo >> rshift
+    var remaining_bits = src._length - bulk * 8
+    if remaining_bits > 8 - bit_shift:
+        last_result = last_result | (
+            (data + byte_start + bulk + 1).load[width=1]() << lshift
+        )
+    dst.store[DType.uint8, 1](bulk, op[1](last_result))
+
+
+def apply[
+    op: BinaryFn[DType.uint8],
+](
+    lhs: BitmapView[_],
+    rhs: BitmapView[_],
+    dst: BitmapView[mut=True, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a byte-level binary SIMD op from lhs and rhs into dst (pre-allocated, offset-0).
+
+    Reads exactly ceil(length/8) source bytes per operand — no over-read.
+    Handles independent sub-byte bit-offset shifting for each operand.
+    GPU support is not yet implemented; ctx is reserved for future use.
+    """
+    if len(lhs) != len(rhs):
+        raise Error("BitmapView lengths must match")
+
+    # TODO: GPU bitmap op
+    var byte_start_a = lhs._offset >> 3
+    var bit_shift_a = lhs._offset & 7
+    var byte_start_b = rhs._offset >> 3
+    var bit_shift_b = rhs._offset & 7
+    var rs_a = UInt8(bit_shift_a)
+    var ls_a = UInt8(8 - bit_shift_a)
+    var rs_b = UInt8(bit_shift_b)
+    var ls_b = UInt8(8 - bit_shift_b)
+    var out_bytes = (lhs._length + 7) >> 3
+    var src_a = lhs._data
+    var src_b = rhs._data
+    comptime cpu_width = simd_width_of[DType.uint8]()
+
+    if out_bytes == 0:
+        return
+
+    if bit_shift_a == 0 and bit_shift_b == 0:
+
+        @parameter
+        @always_inline
+        def process_zero[W: Int, rank: Int, alignment: Int = 1](
+            idx: IndexList[rank]
+        ) -> None:
+            var i = idx[0]
+            dst.store[DType.uint8, W](
+                i,
+                op[W](
+                    (src_a + byte_start_a + i).load[width=W](),
+                    (src_b + byte_start_b + i).load[width=W](),
+                ),
+            )
+
+        elementwise[process_zero, cpu_width, target="cpu", use_blocking_impl=True](
+            out_bytes
+        )
+        return
+
+    # At least one non-zero shift: shift-combine both operands.
+    # When a shift is 0, ls = 8 so hi << 8 == 0, giving lo unchanged.
+    # Bulk covers indices 0 .. out_bytes-2; hi at i+1 is always in bounds.
+    var bulk = out_bytes - 1
+    if bulk > 0:
+
+        @parameter
+        @always_inline
+        def process_shifted[W: Int, rank: Int, alignment: Int = 1](
+            idx: IndexList[rank]
+        ) -> None:
+            var i = idx[0]
+            var lo_a = (src_a + byte_start_a + i).load[width=W]()
+            var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
+            var lo_b = (src_b + byte_start_b + i).load[width=W]()
+            var hi_b = (src_b + byte_start_b + i + 1).load[width=W]()
+            dst.store[DType.uint8, W](
+                i,
+                op[W](
+                    (lo_a >> rs_a) | (hi_a << ls_a),
+                    (lo_b >> rs_b) | (hi_b << ls_b),
+                ),
+            )
+
+        elementwise[
+            process_shifted, cpu_width, target="cpu", use_blocking_impl=True
+        ](bulk)
+
+    # Last output byte: read hi only when bits span into the next source byte.
+    var remaining_bits = lhs._length - bulk * 8
+    var last_lo_a = (src_a + byte_start_a + bulk).load[width=1]()
+    var last_lo_b = (src_b + byte_start_b + bulk).load[width=1]()
+    var result_a = last_lo_a >> rs_a
+    var result_b = last_lo_b >> rs_b
+    if remaining_bits > 8 - bit_shift_a:
+        result_a = result_a | (
+            (src_a + byte_start_a + bulk + 1).load[width=1]() << ls_a
+        )
+    if remaining_bits > 8 - bit_shift_b:
+        result_b = result_b | (
+            (src_b + byte_start_b + bulk + 1).load[width=1]() << ls_b
+        )
+    dst.store[DType.uint8, 1](bulk, op[1](result_a, result_b))

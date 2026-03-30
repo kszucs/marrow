@@ -3,23 +3,14 @@
 Each public function dispatches based on the optional `ctx` argument:
   - CPU (default): SIMD vectorization via ``elementwise[use_blocking_impl=True]``.
   - GPU (ctx provided): kernel dispatch via ``elementwise[target="gpu"]``.
-
-Pointers are passed as function parameters to ``_elementwise_binary`` /
-``_elementwise_unary`` so that DevicePassable conversion works correctly
-during GPU offload (closure captures of raw UnsafePointer don't transfer
-to device; function parameters do).
 """
 
 import std.math as math
-from std.algorithm.functional import elementwise
-from std.gpu.host import DeviceContext, get_gpu_target
-from std.sys import size_of
-from std.sys.info import simd_byte_width, simd_width_of
-from std.utils.index import IndexList
+from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
-from ..views import BitmapView, BufferView
+from ..views import apply
 from ..dtypes import DataType, numeric_dtypes, float_dtypes
 from . import (
     bitmap_and,
@@ -29,84 +20,6 @@ from . import (
     unary_float_dispatch,
 )
 from .helpers import has_accelerator_support
-
-
-# ---------------------------------------------------------------------------
-# Elementwise dispatch — pointers as params for GPU DevicePassable
-# ---------------------------------------------------------------------------
-
-
-def _elementwise_unary[
-    T: DataType,
-    func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
-    out_origin: Origin[mut=True],
-](
-    output: BufferView[T.native, out_origin],
-    input: BufferView[T.native, _],
-    length: Int,
-    ctx: Optional[DeviceContext] = None,
-) raises:
-    """Apply a unary SIMD function element-wise via ``elementwise``."""
-
-    @parameter
-    @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
-        output.store[W](i, func[W](input.load[W](i)))
-
-    if ctx:
-        comptime if has_accelerator_support[T.native]():
-            comptime gpu_width = simd_width_of[
-                T.native, target=get_gpu_target()
-            ]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
-        else:
-            raise Error("_elementwise_unary: type not supported on GPU")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-
-
-def _elementwise_binary[
-    T: DataType,
-    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
-        T.native, W
-    ],
-    out_origin: Origin[mut=True],
-](
-    output: BufferView[T.native, out_origin],
-    lhs: BufferView[T.native, _],
-    rhs: BufferView[T.native, _],
-    length: Int,
-    ctx: Optional[DeviceContext] = None,
-) raises:
-    """Apply a binary SIMD function element-wise via ``elementwise``."""
-
-    @parameter
-    @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
-        output.store[W](i, func[W](lhs.load[W](i), rhs.load[W](i)))
-
-    if ctx:
-        comptime if has_accelerator_support[T.native]():
-            comptime gpu_width = simd_width_of[
-                T.native, target=get_gpu_target()
-            ]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
-        else:
-            raise Error("_elementwise_binary: type not supported on GPU")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -124,42 +37,24 @@ def _unary[
     """Unary kernel: allocates output, resolves views, calls elementwise."""
     comptime native = T.native
     var length = len(array)
-
+    var buf: Buffer[mut=True]
     if ctx:
-        var buf = Buffer.alloc_device[native](ctx.value(), length)
-        _elementwise_unary[T, func](
-            buf.device_view[native](),
-            array.buffer.device_view[native](array.offset),
-            length,
-            ctx,
-        )
-        return PrimitiveArray[T](
-            length=length,
-            nulls=length
-            - array.bitmap.value()
-            .view()
-            .count_set_bits() if array.bitmap else 0,
-            offset=0,
-            bitmap=array.bitmap,
-            buffer=buf.to_immutable(),
-        )
+        buf = Buffer.alloc_device[native](ctx.value(), length)
     else:
-        var buf = Buffer.alloc_zeroed[native](length)
-        _elementwise_unary[T, func](
-            buf.view[native](),
-            array.buffer.view[native](array.offset),
-            length,
-        )
-        return PrimitiveArray[T](
-            length=length,
-            nulls=length
-            - array.bitmap.value()
-            .view()
-            .count_set_bits() if array.bitmap else 0,
-            offset=0,
-            bitmap=array.bitmap,
-            buffer=buf.to_immutable(),
-        )
+        buf = Buffer.alloc_zeroed[native](length)
+    apply[native, func](
+        array.buffer.view[native](array.offset), buf.view[native](), length, ctx
+    )
+    return PrimitiveArray[T](
+        length=length,
+        nulls=length
+        - array.bitmap.value()
+        .view()
+        .count_set_bits() if array.bitmap else 0,
+        offset=0,
+        bitmap=array.bitmap,
+        buffer=buf.to_immutable(),
+    )
 
 
 def _binary[
@@ -184,41 +79,25 @@ def _binary[
     var length = len(left)
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
+    var buf: Buffer[mut=True]
     if ctx:
-        # FIXME: cannot use aligned pointers since the operands
-        # may end up with different alignments; need to switch to
-        # unaligned loads/stores
-        var buf = Buffer.alloc_device[native](ctx.value(), length)
-        _elementwise_binary[T, func](
-            buf.device_view[native](),
-            left.buffer.device_view[native](left.offset),
-            right.buffer.device_view[native](right.offset),
-            length,
-            ctx,
-        )
-        return PrimitiveArray[T](
-            length=length,
-            nulls=length - bm.value().view().count_set_bits() if bm else 0,
-            offset=0,
-            bitmap=bm,
-            buffer=buf.to_immutable(),
-        )
+        buf = Buffer.alloc_device[native](ctx.value(), length)
     else:
-        # FIXME: use alloc_uninit to spare the zeroing of the output buffer
-        var buf = Buffer.alloc_zeroed[native](length)
-        _elementwise_binary[T, func](
-            buf.view[native](),
-            left.buffer.view[native](left.offset),
-            right.buffer.view[native](right.offset),
-            length,
-        )
-        return PrimitiveArray[T](
-            length=length,
-            nulls=length - bm.value().view().count_set_bits() if bm else 0,
-            offset=0,
-            bitmap=bm,
-            buffer=buf.to_immutable(),
-        )
+        buf = Buffer.alloc_zeroed[native](length)
+    apply[native, func](
+        left.buffer.view[native](left.offset),
+        right.buffer.view[native](right.offset),
+        buf.view[native](),
+        length,
+        ctx,
+    )
+    return PrimitiveArray[T](
+        length=length,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=buf.to_immutable(),
+    )
 
 
 # ---------------------------------------------------------------------------

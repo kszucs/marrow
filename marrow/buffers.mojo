@@ -102,7 +102,7 @@ from std.sys.info import simd_byte_width
 from std.sys import size_of
 import std.math as math
 from std.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
-from .views import BufferView, BitmapView
+from .views import BufferView, BitmapView, UnaryFn, BinaryFn, apply as _views_apply
 
 
 struct DeviceType:
@@ -892,9 +892,10 @@ struct Bitmap[*, mut: Bool = False](
         var ptr = rebind[UnsafePointer[UInt8, origin_of(self)]](
             self._buffer._ptr
         )
-        var byte_offset = offset // 8
-        var bit_offset = offset % 8
-        return BitmapView(ptr=ptr + byte_offset, offset=bit_offset, length=n)
+        # TODO: consider aligning _data down to a 64-byte boundary here and
+        # folding the sub-alignment into _offset (matching BitmapView.slice()),
+        # so that the SIMD bulk path in apply() always starts on a cache-line.
+        return BitmapView(ptr=ptr, offset=offset, length=n)
 
     def slice(
         ref self, offset: Int, length: Int
@@ -1192,3 +1193,74 @@ struct Bitmap[*, mut: Bool = False](
         """
         var n = length if length >= 0 else self._length
         return Bitmap[mut=False](self._buffer^.to_immutable(), length=n)
+
+
+# ---------------------------------------------------------------------------
+# apply — free-function overloads for Bitmap and Buffer owning types
+#
+# These mirror the views-level apply overloads but accept owning types and
+# automatically extract the Optional[DeviceContext] from the buffer's device
+# allocation, so callers never need to thread a DeviceContext manually.
+# ---------------------------------------------------------------------------
+
+
+def apply[
+    op: UnaryFn[DType.uint8]
+](
+    src: Bitmap[_],
+    dst: Bitmap[mut=True],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a byte-level unary op from src into dst, dispatching to GPU if device-resident."""
+    var effective_ctx = ctx
+    if not effective_ctx and src._buffer._owner[]._device:
+        effective_ctx = src._buffer._owner[]._device.value().context()
+    _views_apply[op](src.view(), dst.view(), effective_ctx)
+
+
+def apply[
+    op: BinaryFn[DType.uint8]
+](
+    lhs: Bitmap[_],
+    rhs: Bitmap[_],
+    dst: Bitmap[mut=True],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a byte-level binary op from lhs and rhs into dst, dispatching to GPU if device-resident."""
+    var effective_ctx = ctx
+    if not effective_ctx and lhs._buffer._owner[]._device:
+        effective_ctx = lhs._buffer._owner[]._device.value().context()
+    _views_apply[op](lhs.view(), rhs.view(), dst.view(), effective_ctx)
+
+
+def apply[
+    T: DType,
+    op: UnaryFn[T],
+](
+    src: Buffer[_],
+    dst: Buffer[mut=True],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a unary SIMD op element-wise over src into dst, dispatching to GPU if device-resident."""
+    var effective_ctx = ctx
+    if not effective_ctx and src._owner[]._device:
+        effective_ctx = src._owner[]._device.value().context()
+    _views_apply[T, op](src.view[T](), dst.view[T](), length, effective_ctx)
+
+
+def apply[
+    T: DType,
+    op: BinaryFn[T],
+](
+    lhs: Buffer[_],
+    rhs: Buffer[_],
+    dst: Buffer[mut=True],
+    length: Int,
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a binary SIMD op element-wise over lhs,rhs into dst, dispatching to GPU if device-resident."""
+    var effective_ctx = ctx
+    if not effective_ctx and lhs._owner[]._device:
+        effective_ctx = lhs._owner[]._device.value().context()
+    _views_apply[T, op](lhs.view[T](), rhs.view[T](), dst.view[T](), length, effective_ctx)
