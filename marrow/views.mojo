@@ -804,7 +804,7 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](SIMD[In, W], SIMD[DType.b
 
 def apply[
     In: DType,
-    Out: DType = In,
+    Out: DType,
     op: UnaryFn[In, Out],
 ](
     src: BufferView[In, _],
@@ -836,7 +836,7 @@ def apply[
 
 def apply[
     In: DType,
-    Out: DType = In,
+    Out: DType,
     op: BinaryFn[In, Out],
 ](
     lhs: BufferView[In, _],
