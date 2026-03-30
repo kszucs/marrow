@@ -65,9 +65,7 @@ def _reduce[
         ](idx: IndexList[rank]) -> SIMD[native, width]:
             var i = idx[0]
             var data = vals.load[width](i)
-            return bm.mask[width](i).select(
-                data, SIMD[native, width](identity)
-            )
+            return bm.mask[width](i).select(data, SIMD[native, width](identity))
 
         comptime if op == "sum":
             algo_sum[

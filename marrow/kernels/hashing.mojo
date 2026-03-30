@@ -107,9 +107,9 @@ def _rapidhash_fixed[byte_width: Int](value: UInt64) -> UInt64:
 @always_inline
 def _rapid_mum_wide[
     W: Int
-](
-    a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]
-) -> Tuple[SIMD[DType.uint64, W], SIMD[DType.uint64, W]]:
+](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> Tuple[
+    SIMD[DType.uint64, W], SIMD[DType.uint64, W]
+]:
     """128-bit multiply returning (lo, hi) using 32-bit sub-products.
 
     GPU-compatible: avoids uint128 which Metal does not support.
@@ -132,9 +132,7 @@ def _rapid_mum_wide[
 @always_inline
 def _rapid_mix_wide[
     W: Int
-](
-    a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]
-) -> SIMD[DType.uint64, W]:
+](a: SIMD[DType.uint64, W], b: SIMD[DType.uint64, W]) -> SIMD[DType.uint64, W]:
     """rapid_mix for SIMD lanes: 128-bit multiply then XOR halves."""
     var lo_hi = _rapid_mum_wide[W](a, b)
     return lo_hi[0] ^ lo_hi[1]
@@ -146,9 +144,7 @@ def _rapid_mix_wide[
 
 
 @always_inline
-def _rapidhash_bool[
-    W: Int
-](bits: SIMD[DType.bool, W]) -> SIMD[DType.uint64, W]:
+def _rapidhash_bool[W: Int](bits: SIMD[DType.bool, W]) -> SIMD[DType.uint64, W]:
     """Bool rapidhash: select between precomputed hash(0) and hash(1)."""
     comptime hash_false = _rapidhash_fixed[size_of[Scalar[bool_.native]]()](
         UInt64(0)
@@ -165,7 +161,9 @@ def _rapidhash_bool[
 @always_inline
 def _rapidhash_bool_masked[
     W: Int
-](bits: SIMD[DType.bool, W], valid: SIMD[DType.bool, W]) -> SIMD[DType.uint64, W]:
+](bits: SIMD[DType.bool, W], valid: SIMD[DType.bool, W]) -> SIMD[
+    DType.uint64, W
+]:
     """Bool rapidhash with null masking via validity bitmap."""
     return valid.select(
         _rapidhash_bool[W](bits), SIMD[DType.uint64, W](NULL_HASH_SENTINEL)
@@ -228,7 +226,10 @@ def rapidhash(
     var validity = keys.validity()
     if validity:
         apply[DType.uint64, _rapidhash_bool_masked](
-            keys.values(), validity.value(), dst, ctx,
+            keys.values(),
+            validity.value(),
+            dst,
+            ctx,
         )
     else:
         apply[DType.uint64, _rapidhash_bool](keys.values(), dst, ctx)
@@ -267,11 +268,16 @@ def rapidhash[
     var validity = keys.validity()
     if validity:
         apply[T.native, DType.uint64, _rapidhash_primitive_masked[T, ...]](
-            keys.values(), validity.value(), dst, ctx,
+            keys.values(),
+            validity.value(),
+            dst,
+            ctx,
         )
     else:
         apply[T.native, DType.uint64, _rapidhash_primitive[T, ...]](
-            keys.values(), dst, ctx,
+            keys.values(),
+            dst,
+            ctx,
         )
 
     return PrimitiveArray[uint64](
@@ -305,9 +311,9 @@ def rapidhash(keys: StringArray) raises -> PrimitiveArray[uint64]:
 @always_inline
 def _combine_hashes[
     W: Int
-](
-    existing: SIMD[DType.uint64, W], new: SIMD[DType.uint64, W]
-) -> SIMD[DType.uint64, W]:
+](existing: SIMD[DType.uint64, W], new: SIMD[DType.uint64, W]) -> SIMD[
+    DType.uint64, W
+]:
     """Element-wise hash combine using golden ratio constant and rapid_mum."""
     var mixed = existing ^ UInt64(0x9E3779B97F4A7C15)
     var lo_hi = _rapid_mum_wide[W](mixed, new)

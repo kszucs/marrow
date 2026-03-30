@@ -102,7 +102,13 @@ from std.sys.info import simd_byte_width
 from std.sys import size_of
 import std.math as math
 from std.gpu.host import DeviceBuffer, DeviceContext, HostBuffer
-from .views import BufferView, BitmapView, UnaryFn, BinaryFn, apply as _views_apply
+from .views import (
+    BufferView,
+    BitmapView,
+    UnaryFn,
+    BinaryFn,
+    apply as _views_apply,
+)
 
 
 struct DeviceType:
@@ -784,7 +790,9 @@ struct Buffer[*, mut: Bool = False](
         self._check_bounds[T](index)
         self.unsafe_set[T](index, value)
 
-    def __getitem__[T: DType = DType.uint8](ref self, slc: ContiguousSlice) -> BufferView[T, origin_of(self)]:
+    def __getitem__[
+        T: DType = DType.uint8
+    ](ref self, slc: ContiguousSlice) -> BufferView[T, origin_of(self)]:
         """Return a view of the buffer for the given slice."""
         var length = self._size // size_of[T]()
         var start, end = slc.indices(length)
@@ -1193,5 +1201,3 @@ struct Bitmap[*, mut: Bool = False](
         """
         var n = length if length >= 0 else self._length
         return Bitmap[mut=False](self._buffer^.to_immutable(), length=n)
-
-

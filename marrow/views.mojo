@@ -791,14 +791,19 @@ def _and_not[
 # ---------------------------------------------------------------------------
 
 
-
-comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) -> SIMD[Out, W]
+comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) -> SIMD[
+    Out, W
+]
 """A parameterized unary SIMD function type: maps a vector to a vector."""
 
-comptime BinaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W], SIMD[In, W]) -> SIMD[Out, W]
+comptime BinaryFn[In: DType, Out: DType = In] = def[W: Int](
+    SIMD[In, W], SIMD[In, W]
+) -> SIMD[Out, W]
 """A parameterized binary SIMD function type: combines two vectors into one."""
 
-comptime MaskedFn[In: DType, Out: DType] = def[W: Int](SIMD[In, W], SIMD[DType.bool, W]) -> SIMD[Out, W]
+comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
+    SIMD[In, W], SIMD[DType.bool, W]
+) -> SIMD[Out, W]
 """A parameterized SIMD function that takes a value vector and a validity mask."""
 
 
@@ -816,14 +821,14 @@ def apply[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank]
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
         dst.store[W](idx[0], op[W](src.load[W](idx[0])))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
@@ -844,20 +849,21 @@ def apply[
     dst: BufferView[mut=True, Out, _],
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Apply a type-mapping binary SIMD op element-wise over lhs,rhs into dst."""
+    """Apply a type-mapping binary SIMD op element-wise over lhs,rhs into dst.
+    """
     var length = len(dst)
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank]
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
         var i = idx[0]
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
@@ -881,14 +887,14 @@ def apply[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank]
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
         dst.store[W](idx[0], op[W](src.mask[W](idx[0])))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
@@ -914,15 +920,15 @@ def apply[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank]
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
         var i = idx[0]
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
@@ -947,15 +953,15 @@ def apply[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank]
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank]) -> None:
         var i = idx[0]
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
@@ -995,17 +1001,17 @@ def apply[
 
         @parameter
         @always_inline
-        def process_zero[W: Int, rank: Int, alignment: Int = 1](
-            idx: IndexList[rank]
-        ) -> None:
+        def process_zero[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
             var i = idx[0]
             dst.store[DType.uint8, W](
                 i, op[W]((data + byte_start + i).load[width=W]())
             )
 
-        elementwise[process_zero, cpu_width, target="cpu", use_blocking_impl=True](
-            out_bytes
-        )
+        elementwise[
+            process_zero, cpu_width, target="cpu", use_blocking_impl=True
+        ](out_bytes)
         return
 
     # Non-zero bit_shift: shift-combine (lo >> rshift | hi << lshift).
@@ -1015,15 +1021,13 @@ def apply[
 
         @parameter
         @always_inline
-        def process_shifted[W: Int, rank: Int, alignment: Int = 1](
-            idx: IndexList[rank]
-        ) -> None:
+        def process_shifted[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
             var i = idx[0]
             var lo = (data + byte_start + i).load[width=W]()
             var hi = (data + byte_start + i + 1).load[width=W]()
-            dst.store[DType.uint8, W](
-                i, op[W]((lo >> rshift) | (hi << lshift))
-            )
+            dst.store[DType.uint8, W](i, op[W]((lo >> rshift) | (hi << lshift)))
 
         elementwise[
             process_shifted, cpu_width, target="cpu", use_blocking_impl=True
@@ -1079,9 +1083,9 @@ def apply[
 
         @parameter
         @always_inline
-        def process_zero[W: Int, rank: Int, alignment: Int = 1](
-            idx: IndexList[rank]
-        ) -> None:
+        def process_zero[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
             var i = idx[0]
             dst.store[DType.uint8, W](
                 i,
@@ -1091,9 +1095,9 @@ def apply[
                 ),
             )
 
-        elementwise[process_zero, cpu_width, target="cpu", use_blocking_impl=True](
-            out_bytes
-        )
+        elementwise[
+            process_zero, cpu_width, target="cpu", use_blocking_impl=True
+        ](out_bytes)
         return
 
     # At least one non-zero shift: shift-combine both operands.
@@ -1104,9 +1108,9 @@ def apply[
 
         @parameter
         @always_inline
-        def process_shifted[W: Int, rank: Int, alignment: Int = 1](
-            idx: IndexList[rank]
-        ) -> None:
+        def process_shifted[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
             var i = idx[0]
             var lo_a = (src_a + byte_start_a + i).load[width=W]()
             var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
