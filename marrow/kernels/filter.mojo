@@ -34,7 +34,9 @@ from .string import string_lengths
 
 
 @always_inline
-def _filter_sparse[T: DType](
+def _filter_sparse[
+    T: DType
+](
     dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
     src: BufferView[T, _],
@@ -55,7 +57,9 @@ def _filter_sparse[T: DType](
 
 
 @always_inline
-def _filter_dense[T: DType](
+def _filter_dense[
+    T: DType
+](
     dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
     src: BufferView[T, _],
@@ -83,7 +87,9 @@ def _filter_dense[T: DType](
         offset += Int(pop_count(byte))
 
 
-def _filter_block[T: DType, SPARSE_THRESHOLD: Int = 24](
+def _filter_block[
+    T: DType, SPARSE_THRESHOLD: Int = 24
+](
     dst: BufferView[mut=True, T=T, origin=_],
     out_pos: Int,
     src: BufferView[T, _],

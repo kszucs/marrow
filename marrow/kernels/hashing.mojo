@@ -352,7 +352,9 @@ def rapidhash[
     else:
         buf = Buffer.alloc_uninit[DType.uint64](n)
 
-    _rapidhash_elementwise[T](buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx)
+    _rapidhash_elementwise[T](
+        buf.view[DType.uint64](), keys.values(), keys.validity(), n, ctx
+    )
 
     return PrimitiveArray[uint64](
         length=n,

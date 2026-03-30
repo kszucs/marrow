@@ -82,7 +82,6 @@ struct BufferView[
         self._data = ptr
         self._length = length
 
-
     # --- Sized ---
 
     @always_inline
@@ -168,8 +167,12 @@ struct BufferView[
 
     @always_inline
     def __eq__(self, other: BufferView[Self.T, _]) -> Bool:
-        """Return True if both views point to the same memory with the same length."""
-        return Int(self._data) == Int(other._data) and self._length == other._length
+        """Return True if both views point to the same memory with the same length.
+        """
+        return (
+            Int(self._data) == Int(other._data)
+            and self._length == other._length
+        )
 
     @always_inline
     def __ne__(self, other: BufferView[Self.T, _]) -> Bool:
@@ -182,7 +185,8 @@ struct BufferView[
 
     @always_inline
     def is_aligned(self, alignment: Int) -> Bool:
-        """Return True if the backing pointer is aligned to `alignment` bytes."""
+        """Return True if the backing pointer is aligned to `alignment` bytes.
+        """
         return Int(self._data) % alignment == 0
 
     @always_inline

@@ -904,14 +904,18 @@ struct StringArray(
             return True
         return self.bitmap.value().test(self.offset + index)
 
-    def unsafe_get(ref self, index: UInt) -> StringSlice[origin_of(self.values)]:
+    def unsafe_get(
+        ref self, index: UInt
+    ) -> StringSlice[origin_of(self.values)]:
         """Return a StringSlice for the element at the given index without bounds checking.
         """
         var offset_idx = Int(index) + self.offset
         var start_offset = self.offsets.unsafe_get[DType.uint32](offset_idx)
         var end_offset = self.offsets.unsafe_get[DType.uint32](offset_idx + 1)
         var length = end_offset - start_offset
-        return self.values.slice(Int(start_offset), Int(length)).to_string_slice()
+        return self.values.slice(
+            Int(start_offset), Int(length)
+        ).to_string_slice()
 
     def __getitem__(self, index: Int) raises -> StringScalar:
         """Return a StringScalar for the element at the given index.
