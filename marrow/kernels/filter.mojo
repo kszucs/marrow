@@ -9,6 +9,7 @@ All functions support arrays with non-zero offsets (sliced arrays).
 
 import std.math as math
 from std.bit import count_trailing_zeros, pop_count
+from std.memory import bitcast
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
@@ -156,7 +157,9 @@ def _deposit_bits(
     var byte_idx = bitoffset >> 3
     var bit_off = bitoffset & 7
     var shifted = bits << UInt64(bit_off)
-    bv.store[DType.uint64](byte_idx, bv.load[DType.uint64](byte_idx) | shifted)
+    bv.store[DType.uint8, 8](
+        byte_idx, bv.load[DType.uint8, 8](byte_idx) | bitcast[DType.uint8, 8](shifted)
+    )
     if bit_off > 0 and bit_off + count > 64:
         bv.store[DType.uint8](
             byte_idx + 8,

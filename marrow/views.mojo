@@ -415,7 +415,7 @@ struct BitmapView[
         return Bool((self._data[bit_index >> 3] >> UInt8(bit_index & 7)) & 1)
 
     @always_inline
-    def mask[dtype: DType, W: Int](self, index: Int) -> SIMD[DType.bool, W]:
+    def mask[W: Int](self, index: Int) -> SIMD[DType.bool, W]:
         """Expand W consecutive bits starting at logical ``index`` into a
         SIMD bool vector.
 
@@ -449,28 +449,26 @@ struct BitmapView[
         return raw >> Scalar[T](bit_off)
 
     @always_inline
-    def load[T: DType, W: Int = 1](self, byte_offset: Int) -> SIMD[T, W]:
-        """Load W elements of type T from bitmap data at raw ``byte_offset``.
+    def load[T: DType, W: Int = 1](self, index: Int) -> SIMD[T, W]:
+        """Load W elements of type T from bitmap data at element ``index``.
 
+        ``index`` is in units of T (e.g. index=2 with T=uint32 reads bytes 8–11).
         No ``_offset`` adjustment — the caller is responsible for computing
-        the correct byte address. Safe because Arrow buffers are 64-byte padded.
+        the correct element address. Safe because Arrow buffers are 64-byte padded.
         """
-        return (
-            (self._data + byte_offset)
-            .bitcast[Scalar[T]]()
-            .load[width=W, alignment=1]()
-        )
+        return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
 
     @always_inline
     def store[
         T: DType, W: Int = 1
-    ](self: BitmapView[mut=True, origin=_], byte_offset: Int, val: SIMD[T, W]):
-        """Store W elements of type T into bitmap data at raw ``byte_offset``.
+    ](self: BitmapView[mut=True, origin=_], index: Int, val: SIMD[T, W]):
+        """Store W elements of type T into bitmap data at element ``index``.
 
+        ``index`` is in units of T (e.g. index=2 with T=uint32 writes bytes 8–11).
         No ``_offset`` adjustment — the caller is responsible for computing
-        the correct byte address.
+        the correct element address.
         """
-        (self._data + byte_offset).bitcast[Scalar[T]]().store[width=W](val)
+        self._data.bitcast[Scalar[T]]().store[width=W](index, val)
 
     # --- Slicing ---
 
@@ -794,65 +792,60 @@ def _and_not[
 
 
 
-comptime UnaryFn[T: DType] = def[W: Int](SIMD[T, W]) -> SIMD[T, W]
-"""A parameterized unary SIMD function type: maps a vector to a vector of the same type."""
+comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) -> SIMD[Out, W]
+"""A parameterized unary SIMD function type: maps a vector to a vector."""
 
-comptime BinaryFn[T: DType] = def[W: Int](SIMD[T, W], SIMD[T, W]) -> SIMD[T, W]
-"""A parameterized binary SIMD function type: combines two vectors into one of the same type."""
+comptime BinaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W], SIMD[In, W]) -> SIMD[Out, W]
+"""A parameterized binary SIMD function type: combines two vectors into one."""
 
+comptime MaskedFn[In: DType, Out: DType] = def[W: Int](SIMD[In, W], SIMD[DType.bool, W]) -> SIMD[Out, W]
+"""A parameterized SIMD function that takes a value vector and a validity mask."""
 
 
 def apply[
-    T: DType,
-    op: UnaryFn[T],
+    In: DType,
+    Out: DType = In,
+    op: UnaryFn[In, Out],
 ](
-    src: BufferView[T, _],
-    dst: BufferView[mut=True, T, _],
-    length: Int,
+    src: BufferView[In, _],
+    dst: BufferView[mut=True, Out, _],
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Apply a unary SIMD op element-wise over src into dst, CPU or GPU.
-
-    Pointers are function parameters (not closure captures) so that
-    DevicePassable conversion works correctly on GPU offload.
-    """
+    """Apply a type-mapping unary SIMD op element-wise over src into dst."""
+    var length = len(dst)
 
     @parameter
     @always_inline
     def process[W: Int, rank: Int, alignment: Int = 1](
         idx: IndexList[rank]
     ) -> None:
-        var i = idx[0]
-        dst.store[W](i, op[W](src.load[W](i)))
+        dst.store[W](idx[0], op[W](src.load[W](idx[0])))
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[T, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
     else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
 
 
 def apply[
-    T: DType,
-    op: BinaryFn[T],
+    In: DType,
+    Out: DType = In,
+    op: BinaryFn[In, Out],
 ](
-    lhs: BufferView[T, _],
-    rhs: BufferView[T, _],
-    dst: BufferView[mut=True, T, _],
-    length: Int,
+    lhs: BufferView[In, _],
+    rhs: BufferView[In, _],
+    dst: BufferView[mut=True, Out, _],
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Apply a binary SIMD op element-wise over lhs,rhs into dst, CPU or GPU.
-
-    Pointers are function parameters (not closure captures) so that
-    DevicePassable conversion works correctly on GPU offload.
-    """
+    """Apply a type-mapping binary SIMD op element-wise over lhs,rhs into dst."""
+    var length = len(dst)
 
     @parameter
     @always_inline
@@ -864,12 +857,110 @@ def apply[
 
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[T, target = get_gpu_target()]()
+            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
     else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def apply[
+    Out: DType,
+    op: UnaryFn[DType.bool, Out],
+](
+    src: BitmapView[_],
+    dst: BufferView[mut=True, Out, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a bool-to-Out unary op from a BitmapView into a BufferView."""
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank]
+    ) -> None:
+        dst.store[W](idx[0], op[W](src.mask[W](idx[0])))
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def apply[
+    In: DType,
+    Out: DType,
+    op: MaskedFn[In, Out],
+](
+    src: BufferView[In, _],
+    validity: BitmapView[_],
+    dst: BufferView[mut=True, Out, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a masked SIMD op element-wise: op(values, validity) into dst."""
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank]
+    ) -> None:
+        var i = idx[0]
+        dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
+def apply[
+    Out: DType,
+    op: MaskedFn[DType.bool, Out],
+](
+    src: BitmapView[_],
+    validity: BitmapView[_],
+    dst: BufferView[mut=True, Out, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a masked bool-to-Out op: op(bits, validity) into dst."""
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank]
+    ) -> None:
+        var i = idx[0]
+        dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
+
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[Out, target = get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
