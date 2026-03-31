@@ -349,10 +349,9 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
                 offsets_view.unsafe_get(off + i)
             )
 
-    # Allocate output buffers.
-    # TODO: use alloc_uninit to spare zeroing the output buffers
-    var out_offsets = Buffer.alloc_zeroed[DType.uint32](out_len + 1)
-    var out_values = Buffer.alloc_zeroed[DType.uint8](total_bytes)
+    # Allocate output buffers — every byte is written by the copy loop.
+    var out_offsets = Buffer.alloc_uninit[DType.uint32](out_len + 1)
+    var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
     var out_off_view = out_offsets.view[DType.uint32]()
     var out_val_view = out_values.view[DType.uint8]()
     var bm: Optional[Bitmap[]] = None
@@ -486,17 +485,7 @@ def drop_nulls[
         A new PrimitiveArray containing only valid elements.
     """
     if not array.bitmap:
-        # All valid: wrap as identity selection
-        var all_true = Bitmap.alloc_zeroed(len(array))
-        all_true.set_range(0, len(array), True)
-        var selection = BoolArray(
-            length=len(array),
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=all_true.to_immutable(),
-        )
-        return filter_[T](array, selection)
+        return array.copy()
     var selection = BoolArray(
         length=len(array),
         nulls=0,

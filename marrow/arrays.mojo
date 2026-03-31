@@ -187,55 +187,39 @@ struct AnyArray(
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
 
-        # Try downcasting from a marrow Python object.
+        # Fast path: read .type() from a marrow Python array to pick the
+        # right downcast directly (1 method call vs 14+ try/except).
         try:
-            try:
-                self = AnyArray(py.downcast_value_ptr[BoolArray]()[].copy())
-                return
-            except:
-                pass
+            var dtype = py.type().downcast_value_ptr[DataType]()[]
             comptime for T in numeric_dtypes:
-                try:
-                    self = AnyArray(
-                        py.downcast_value_ptr[PrimitiveArray[T]]()[].copy()
-                    )
+                if dtype == T:
+                    self = py.downcast_value_ptr[PrimitiveArray[T]]()[].copy().to_any()
                     return
-                except:
-                    pass
-            self = AnyArray(py.downcast_value_ptr[StringArray]()[].copy())
-            return
+            if dtype.is_bool():
+                self = py.downcast_value_ptr[BoolArray]()[].copy().to_any()
+            elif dtype.is_string():
+                self = py.downcast_value_ptr[StringArray]()[].copy().to_any()
+            elif dtype.is_list():
+                self = py.downcast_value_ptr[ListArray]()[].copy().to_any()
+            elif dtype.is_fixed_size_list():
+                self = py.downcast_value_ptr[FixedSizeListArray]()[].copy().to_any()
+            elif dtype.is_struct():
+                self = py.downcast_value_ptr[StructArray]()[].copy().to_any()
+            else:
+                raise Error("unsupported marrow dtype: ", dtype)
         except:
-            pass
-        try:
-            self = AnyArray(py.downcast_value_ptr[ListArray]()[].copy())
-            return
-        except:
-            pass
-        try:
-            self = AnyArray(
-                py.downcast_value_ptr[FixedSizeListArray]()[].copy()
-            )
-            return
-        except:
-            pass
-        try:
-            self = AnyArray(py.downcast_value_ptr[StructArray]()[].copy())
-            return
-        except:
-            pass
-
-        # Fall back to the Arrow C Data Interface for foreign objects.
-        var caps: PythonObject
-        try:
-            caps = py.__arrow_c_array__(Python.none())
-        except:
-            raise Error(
-                "cannot convert Python object of type",
-                t" '{py.__class__.__name__}' to AnyArray",
-            )
-        var c_schema = CArrowSchema.from_pycapsule(caps[0])
-        var c_array = CArrowArray.from_pycapsule(caps[1])
-        self = c_array^.to_array(c_schema.to_dtype())
+            # Fall back to the Arrow C Data Interface for foreign objects.
+            var caps: PythonObject
+            try:
+                caps = py.__arrow_c_array__(Python.none())
+            except:
+                raise Error(
+                    "cannot convert Python object of type",
+                    t" '{py.__class__.__name__}' to AnyArray",
+                )
+            var c_schema = CArrowSchema.from_pycapsule(caps[0])
+            var c_array = CArrowArray.from_pycapsule(caps[1])
+            self = c_array^.to_array(c_schema.to_dtype())
 
     # --- vtable dispatch ---
 
