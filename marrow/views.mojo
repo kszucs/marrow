@@ -1005,6 +1005,53 @@ def apply[
 
 
 def apply[
+    In: DType,
+    op: BinaryFn[In, DType.bool],
+](
+    lhs: BufferView[In, _],
+    rhs: BufferView[In, _],
+    dst: BitmapView[mut=True, _],
+    ctx: Optional[DeviceContext] = None,
+) raises:
+    """Apply a binary comparison and pack bool results into a bitmap.
+
+    Processes 8 elements at a time, packing comparison results into single
+    bytes via SIMD shift + OR reduction.
+    """
+    var length = len(dst)
+    var n_bytes = (length + 7) >> 3
+    comptime shifts = SIMD[DType.uint8, 8](0, 1, 2, 3, 4, 5, 6, 7)
+
+    @parameter
+    @always_inline
+    def process[W: Int, rank: Int, alignment: Int = 1](
+        idx: IndexList[rank],
+    ) -> None:
+        var byte_idx = idx[0]
+        var elem_idx = byte_idx * 8
+        var cmp = op[8](lhs.load[8](elem_idx), rhs.load[8](elem_idx))
+        dst.store[DType.uint8](
+            byte_idx, (cmp.cast[DType.uint8]() << shifts).reduce_or()
+        )
+
+    # Process one byte at a time (each byte = 8 comparisons).
+    # Safe to over-read: Arrow buffers are 64-byte padded.
+    if ctx:
+        comptime if has_accelerator():
+            comptime gpu_width = simd_width_of[
+                DType.uint8, target=get_gpu_target()
+            ]()
+            elementwise[process, gpu_width, target="gpu"](n_bytes, ctx.value())
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = simd_byte_width()
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            n_bytes
+        )
+
+
+def apply[
     Out: DType,
     op: UnaryFn[DType.bool, Out],
 ](

@@ -22,11 +22,7 @@ and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
 ``binary_array_dispatch``.
 """
 
-from std.algorithm.functional import elementwise
-from std.sys import size_of
-from std.sys.info import simd_byte_width, simd_width_of
-from std.utils.index import IndexList
-from std.gpu.host import DeviceContext, get_gpu_target
+from std.gpu.host import DeviceContext
 
 from ..arrays import (
     BoolArray,
@@ -35,77 +31,14 @@ from ..arrays import (
     AnyArray,
     StructArray,
 )
-from ..buffers import Buffer
-from ..views import BitmapView, BufferView
+from ..buffers import Buffer, Bitmap
+from ..views import BitmapView, BufferView, apply
 from ..dtypes import DataType, bool_ as bool_dt
-from ..buffers import Bitmap
 from . import bitmap_and, bool_array_dispatch
 
 
 # ---------------------------------------------------------------------------
-# Elementwise compare + bit-pack — pointers as params for GPU DevicePassable
-# ---------------------------------------------------------------------------
-
-
-def _elementwise_cmp_pack[
-    T: DataType,
-    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
-        DType.bool, W
-    ],
-    out_origin: Origin[mut=True],
-](
-    output: BufferView[DType.uint8, out_origin],
-    lhs: BufferView[T.native, _],
-    rhs: BufferView[T.native, _],
-    length: Int,
-    ctx: Optional[DeviceContext] = None,
-) raises:
-    """Compare elements and bit-pack via elementwise.
-
-    Views are function parameters (not closure captures) so they transfer
-    correctly to GPU via DevicePassable.
-    Safe to load beyond length: buffers are 64-byte aligned and padded.
-    """
-
-    # TODO: use std.memory.unsafe.pack_bits instead of manual packing!
-    @parameter
-    @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
-        # Always compare 8 elements and pack one output byte.  When W >= 8
-        # we produce W // 8 bytes; for the scalar tail (W < 8) we load 8
-        # from the byte-aligned base instead (safe: 64-byte padded buffers,
-        # and 8 × sizeof(T) ≤ 64 for all primitive types).
-        comptime assert 8 * size_of[Scalar[T.native]]() <= 64
-        comptime shifts = SIMD[DType.uint8, 8](0, 1, 2, 3, 4, 5, 6, 7)
-        var base = (i // 8) * 8
-        comptime packs = (W + 7) // 8
-        comptime for k in range(packs):
-            var off = base + k * 8
-            var cmp = func[8](lhs.load[8](off), rhs.load[8](off))
-            output.store[1](
-                off // 8, (cmp.cast[DType.uint8]() << shifts).reduce_or()
-            )
-
-    if ctx:
-        comptime if has_accelerator_support[T.native]():
-            comptime gpu_width = simd_width_of[
-                T.native, target=get_gpu_target()
-            ]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
-        else:
-            raise Error("_elementwise_cmp_pack: type not supported on GPU")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[T.native]]()
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-
-
-# ---------------------------------------------------------------------------
-# Generic comparison kernel — single-pass compare + bit-pack
+# Generic comparison kernel — compare + bit-pack via apply
 # ---------------------------------------------------------------------------
 
 
@@ -120,8 +53,7 @@ def _binary_cmp[
     right: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
 ) raises -> BoolArray:
-    """Binary comparison kernel — single-pass compare + bit-pack (CPU and GPU).
-    """
+    """Binary comparison kernel — compare + bit-pack via apply."""
     if len(left) != len(right):
         raise Error(
             t"{name} arrays must have the same length, got {len(left)} and"
@@ -130,41 +62,34 @@ def _binary_cmp[
 
     comptime native = T.native
     var length = len(left)
-    var bm = bitmap_and(left.bitmap, right.bitmap)
+    var n_bytes = (length + 7) >> 3
+    var bm = bitmap_and(left.bitmap, right.bitmap) if (
+        left.bitmap or right.bitmap
+    ) else Optional[Bitmap[]]()
 
+    var buf: Buffer[mut=True]
     if ctx:
-        var out_buf = Buffer.alloc_device[DType.bool](ctx.value(), length)
-        _elementwise_cmp_pack[T, func](
-            out_buf.device_view[DType.uint8](),
-            left.buffer.device_view[native](left.offset),
-            right.buffer.device_view[native](right.offset),
-            length,
-            ctx,
-        )
-        var result_buf = out_buf.to_immutable().to_cpu(ctx.value())
-        return BoolArray(
-            length=length,
-            nulls=length - bm.value().view().count_set_bits() if bm else 0,
-            offset=0,
-            bitmap=bm,
-            buffer=Bitmap[mut=False](result_buf, length=length),
-        )
+        buf = Buffer.alloc_device[DType.uint8](ctx.value(), n_bytes)
     else:
-        var out_buf = Buffer.alloc_zeroed[DType.bool](length)
-        _elementwise_cmp_pack[T, func](
-            out_buf.view[DType.uint8](),
-            left.buffer.view[native](left.offset),
-            right.buffer.view[native](right.offset),
-            length,
-        )
-        var result_buf = out_buf.to_immutable()
-        return BoolArray(
-            length=length,
-            nulls=length - bm.value().view().count_set_bits() if bm else 0,
-            offset=0,
-            bitmap=bm,
-            buffer=Bitmap[mut=False](result_buf, length=length),
-        )
+        buf = Buffer.alloc_uninit[DType.uint8](n_bytes)
+    apply[native, func](
+        left.buffer.view[native](left.offset),
+        right.buffer.view[native](right.offset),
+        BitmapView[mut=True](
+            ptr=buf.view[DType.uint8]().unsafe_ptr(), offset=0, length=length
+        ),
+        ctx,
+    )
+    var result_buf = buf.to_immutable()
+    if ctx:
+        result_buf = result_buf.to_cpu(ctx.value())
+    return BoolArray(
+        length=length,
+        nulls=length - bm.value().view().count_set_bits() if bm else 0,
+        offset=0,
+        bitmap=bm,
+        buffer=Bitmap[mut=False](result_buf, length=length),
+    )
 
 
 # ---------------------------------------------------------------------------
