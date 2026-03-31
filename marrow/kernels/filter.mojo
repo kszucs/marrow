@@ -8,8 +8,7 @@ All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 import std.math as math
-from std.bit import count_trailing_zeros, pop_count
-from std.memory import bitcast
+from std.bit import pop_count
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
@@ -34,139 +33,9 @@ from .string import string_lengths
 # ---------------------------------------------------------------------------
 
 
-@always_inline
-def _filter_sparse[
-    T: DType
-](
-    dst: BufferView[mut=True, T=T, origin=_],
-    out_pos: Int,
-    src: BufferView[T, _],
-    base: Int,
-    sel_word: UInt64,
-):
-    """Sparse filter: CTZ scatter, O(popcount).
-
-    Touches only the set-bit positions via count-trailing-zeros loop.
-    Best when few bits are set (low popcount).
-    """
-    var w = sel_word
-    var k = out_pos
-    while w != 0:
-        dst.unsafe_set(k, src.unsafe_get(base + Int(count_trailing_zeros(w))))
-        w &= w - 1
-        k += 1
-
-
-@always_inline
-def _filter_dense[
-    T: DType
-](
-    dst: BufferView[mut=True, T=T, origin=_],
-    out_pos: Int,
-    src: BufferView[T, _],
-    base: Int,
-    sel_word: UInt64,
-):
-    """Dense filter: byte-chunked branchless scatter.
-
-    Processes the 64-bit mask one byte at a time. Precomputes per-byte
-    popcount prefix sums so each of the 8 chunks writes to an independent
-    output region. This breaks the 64-deep serial dependency on the output
-    pointer into 8 independent chains of depth 8 that the OoO engine can
-    overlap (~32 cycles vs ~128 for the naive approach).
-    """
-    var offset = out_pos
-
-    comptime for i in range(8):
-        var byte = (sel_word >> UInt64(i * 8)) & 0xFF
-        var b = byte
-        var k = 0
-        comptime for bit in range(8):
-            dst.unsafe_set(offset + k, src.unsafe_get(base + i * 8 + bit))
-            k += Int(b & 1)
-            b >>= 1
-        offset += Int(pop_count(byte))
-
-
-def _filter_block[
-    T: DType, SPARSE_THRESHOLD: Int = 24
-](
-    dst: BufferView[mut=True, T=T, origin=_],
-    out_pos: Int,
-    src: BufferView[T, _],
-    base: Int,
-    sel_word: UInt64,
-) -> Int:
-    """Filter a 64-element block using density-adaptive dispatch.
-
-    Dispatches to one of two strategies based on the selection word:
-      - Sparse (≤SPARSE_THRESHOLD bits set): CTZ scatter, O(popcount).
-      - Dense (>SPARSE_THRESHOLD bits set): byte-chunked branchless, O(64).
-
-    The caller handles the all-ones and all-zeros fast paths before calling.
-
-    Parameters:
-        T: Element dtype.
-        SPARSE_THRESHOLD: popcount cutoff; at or below → sparse, above → dense.
-
-    Returns:
-        Number of elements written (popcount of sel_word).
-    """
-    var cnt = Int(pop_count(sel_word))
-    if cnt <= SPARSE_THRESHOLD:
-        _filter_sparse[T](dst, out_pos, src, base, sel_word)
-    else:
-        _filter_dense[T](dst, out_pos, src, base, sel_word)
-    return cnt
-
-
-@always_inline
-def _pext(val: UInt64, mask: UInt64) -> UInt64:
-    """Parallel bit extract: keep bits from `val` where `mask` is set, packed
-    to LSB.  Runs in O(popcount(mask)) iterations via CTZ loop.
-    """
-    var result = UInt64(0)
-    var m = mask
-    var k = UInt64(0)
-    while m != 0:
-        var bit_pos = UInt64(count_trailing_zeros(m))
-        result |= ((val >> bit_pos) & 1) << k
-        k += 1
-        m &= m - 1  # clear lowest set bit
-    return result
-
-
 # ---------------------------------------------------------------------------
 # filter — bitmap / values helpers
 # ---------------------------------------------------------------------------
-
-
-@always_inline
-def _deposit_bits(
-    mut bm: Bitmap[mut=True], bitoffset: Int, bits: UInt64, count: Int
-):
-    """Deposit `count` LSBs from `bits` into a zeroed bitmap at `bitoffset`.
-
-    Uses OR to set bits — the bitmap must be zero-initialised (via `alloc_zeroed`).
-    Handles arbitrary bit alignment, writing up to 9 bytes when the 64-bit value
-    straddles a byte boundary.
-    """
-    if count == 0:
-        return
-    var bv = bm.view()
-    var byte_idx = bitoffset >> 3
-    var bit_off = bitoffset & 7
-    var shifted = bits << UInt64(bit_off)
-    bv.store[DType.uint8, 8](
-        byte_idx,
-        bv.load[DType.uint8, 8](byte_idx) | bitcast[DType.uint8, 8](shifted),
-    )
-    if bit_off > 0 and bit_off + count > 64:
-        bv.store[DType.uint8](
-            byte_idx + 8,
-            bv.load[DType.uint8](byte_idx + 8)
-            | UInt8(bits >> UInt64(64 - bit_off)),
-        )
 
 
 def _filter_bits(
@@ -178,8 +47,9 @@ def _filter_bits(
 ) -> Tuple[Bitmap[], Int]:
     """Filter a bitmap, keeping bits where selection is set.
 
-    Uses pext + _deposit_bits in 64-bit blocks with run-merge for all-ones
-    and all-zeros blocks.  Works for both validity bitmaps and bool data.
+    Uses ``BitmapView.pext`` + ``BitmapView.compressed_store`` in 64-bit
+    blocks with run-merge for all-ones and all-zeros blocks.  Works for
+    both validity bitmaps and bool data.
 
     Args:
         src: Source bitmap to filter.
@@ -195,6 +65,7 @@ def _filter_bits(
     """
     comptime ALL_ONES = ~UInt64(0)
     var builder = Bitmap.alloc_zeroed(out_len)
+    var out = builder.view()
     var bm_pos = 0
     var zero_count = 0
     var i = sel_start
@@ -216,31 +87,29 @@ def _filter_bits(
             var j = run_start
             while j < i:
                 var src_word = src.load_bits[DType.uint64](j)
-                _deposit_bits(builder, bm_pos, src_word, 64)
+                out.compressed_store(bm_pos, src_word, 64)
                 zero_count += 64 - Int(pop_count(src_word))
                 bm_pos += 64
                 j += 64
             continue
 
-        # Mixed block: pext + deposit.
-        var src_word = src.load_bits[DType.uint64](i)
+        # Mixed block: pext + compressed_store.
         var count = Int(pop_count(sel_word))
-        var compressed = _pext(src_word, sel_word)
-        _deposit_bits(builder, bm_pos, compressed, count)
+        var compressed = src.pext(i, sel_word)
+        out.compressed_store(bm_pos, compressed, count)
         zero_count += count - Int(pop_count(compressed))
         bm_pos += count
         i += 64
 
-    # Tail: masked pext + deposit.
+    # Tail: masked pext + compressed_store.
     if i < sel_end:
         var tail = sel_end - i
         var mask = (UInt64(1) << UInt64(tail)) - 1
         var sel_word = sel.load_bits[DType.uint64](i) & mask
         if sel_word != 0:
-            var src_word = src.load_bits[DType.uint64](i)
             var count = Int(pop_count(sel_word))
-            var compressed = _pext(src_word, sel_word)
-            _deposit_bits(builder, bm_pos, compressed, count)
+            var compressed = src.pext(i, sel_word)
+            out.compressed_store(bm_pos, compressed, count)
             zero_count += count - Int(pop_count(compressed))
 
     return builder.to_immutable(length=out_len), zero_count
@@ -296,7 +165,7 @@ def _filter_values[
             dst.slice(out_pos).copy_from(src.slice(run_start), i - run_start)
             out_pos += i - run_start
             continue
-        out_pos += _filter_block[T](dst, out_pos, src, i, sel_word)
+        out_pos += dst.slice(out_pos).compressed_store(src.slice(i), sel_word)
         i += 64
 
     # Tail: partial block — force sparse (only reads set-bit positions).
@@ -305,9 +174,8 @@ def _filter_values[
         var mask = (UInt64(1) << UInt64(tail)) - 1
         var sel_word = sel.load_bits[DType.uint64](i) & mask
         if sel_word != 0:
-            out_pos += _filter_block[T, SPARSE_THRESHOLD=64](
-                dst, out_pos, src, i, sel_word
-            )
+            dst.slice(out_pos).compressed_store_sparse(src.slice(i), sel_word)
+            out_pos += Int(pop_count(sel_word))
 
     return buf.to_immutable()
 

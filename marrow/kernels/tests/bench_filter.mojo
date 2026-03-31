@@ -1,7 +1,7 @@
 """Benchmarks for filter kernel.
 
-End-to-end benchmarks across sizes 10k–1M, plus _filter_block micro-benchmarks
-with different selectivities, distributions, and compile-time parameters.
+End-to-end benchmarks across sizes 10k–1M, plus compressed_store micro-benchmarks
+with different selectivities, distributions, and strategies.
 
 Uses manual perf_counter_ns timing rather than the Bench framework, because
 the Bench framework's tight loop rapidly allocates and frees the filter
@@ -12,14 +12,15 @@ Run with: pixi run bench_mojo -k bench_filter
 
 from std.benchmark import keep
 from std.bit import pop_count
+from std.math import iota
 from std.time import perf_counter_ns
 
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import BoolArray, PrimitiveArray
 from marrow.buffers import Buffer, Bitmap
-from marrow.builders import arange, PrimitiveBuilder
-from marrow.views import BitmapView
+from marrow.builders import arange, BoolBuilder, PrimitiveBuilder
+from marrow.views import BitmapView, BufferView
 from marrow.dtypes import int64, bool_
-from marrow.kernels.filter import filter_, _filter_block
+from marrow.kernels.filter import filter_
 
 
 # ---------------------------------------------------------------------------
@@ -27,8 +28,8 @@ from marrow.kernels.filter import filter_, _filter_block
 # ---------------------------------------------------------------------------
 
 
-def _make_mask(size: Int, selectivity_pct: Int) raises -> PrimitiveArray[bool_]:
-    var b = PrimitiveBuilder[bool_](size)
+def _make_mask(size: Int, selectivity_pct: Int) raises -> BoolArray:
+    var b = BoolBuilder(size)
     for i in range(size):
         b.append(Bool((i * 100) // size < selectivity_pct))
     return b.finish()
@@ -105,13 +106,13 @@ def _bench_filter(
 
 
 # ---------------------------------------------------------------------------
-# _filter_block micro-benchmarks — processes N_BLOCKS in a loop to simulate
-# realistic throughput (not single-block latency).
+# compressed_store micro-benchmarks — processes N_BLOCKS in a loop to
+# simulate realistic throughput (not single-block latency).
 # ---------------------------------------------------------------------------
 
 
 def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
-    """Benchmark _filter_block by processing n_blocks consecutive blocks.
+    """Benchmark BufferView.compressed_store by processing n_blocks consecutive blocks.
 
     Allocates n_blocks * 64 source elements and filters them in a loop,
     measuring the average ns per block.
@@ -127,8 +128,8 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     for _ in range(3):
         var out_pos = 0
         for blk in range(n_blocks):
-            out_pos += _filter_block[native](
-                dst, out_pos, src, blk * BLOCK, sel_word
+            out_pos += dst.slice(out_pos).compressed_store(
+                src.slice(blk * BLOCK), sel_word
             )
         keep(out_pos)
 
@@ -136,9 +137,80 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     for _ in range(iters):
         var out_pos = 0
         for blk in range(n_blocks):
-            out_pos += _filter_block[native](
-                dst, out_pos, src, blk * BLOCK, sel_word
+            out_pos += dst.slice(out_pos).compressed_store(
+                src.slice(blk * BLOCK), sel_word
             )
+        keep(out_pos)
+    var total = perf_counter_ns() - t0
+    return Float64(total) / Float64(iters) / Float64(n_blocks)
+
+
+# ---------------------------------------------------------------------------
+# Per-strategy micro-benchmarks — benchmark each compressed_store variant
+# ---------------------------------------------------------------------------
+
+
+def _bench_strategy[
+    strategy: StringLiteral
+](sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
+    """Benchmark a specific compressed_store strategy."""
+    comptime native = int64.native
+    comptime BLOCK = 64
+    var total_elems = n_blocks * BLOCK
+    var arr = arange[int64](0, total_elems)
+    var src = arr.buffer.view[native](0)
+    var out_buf = Buffer.alloc_zeroed[native](total_elems)
+    var dst = out_buf.view[native]()
+
+    for _ in range(3):
+        var out_pos = 0
+        for blk in range(n_blocks):
+            var s = src.slice(blk * BLOCK)
+            var d = dst.slice(out_pos)
+            comptime if strategy == "sparse":
+                d.compressed_store_sparse(s, sel_word)
+                out_pos += Int(pop_count(sel_word))
+            elif strategy == "dense":
+                d.compressed_store_dense(s, sel_word)
+                out_pos += Int(pop_count(sel_word))
+            elif strategy == "llvm":
+                comptime W = 8
+                for chunk in range(0, BLOCK, W):
+                    var vals = s.load[W](chunk)
+                    var mask_bits = (sel_word >> UInt64(chunk)) & UInt64(0xFF)
+                    var mask = (
+                        (SIMD[DType.uint64, W](mask_bits) >> iota[DType.uint64, W]()) & 1
+                    ).cast[DType.bool]()
+                    dst.slice(out_pos).compressed_store[W](vals, mask)
+                    out_pos += Int(pop_count(mask_bits))
+            elif strategy == "adaptive":
+                out_pos += d.compressed_store(s, sel_word)
+        keep(out_pos)
+
+    var t0 = perf_counter_ns()
+    for _ in range(iters):
+        var out_pos = 0
+        for blk in range(n_blocks):
+            var s = src.slice(blk * BLOCK)
+            var d = dst.slice(out_pos)
+            comptime if strategy == "sparse":
+                d.compressed_store_sparse(s, sel_word)
+                out_pos += Int(pop_count(sel_word))
+            elif strategy == "dense":
+                d.compressed_store_dense(s, sel_word)
+                out_pos += Int(pop_count(sel_word))
+            elif strategy == "llvm":
+                comptime W = 8
+                for chunk in range(0, BLOCK, W):
+                    var vals = s.load[W](chunk)
+                    var mask_bits = (sel_word >> UInt64(chunk)) & UInt64(0xFF)
+                    var mask = (
+                        (SIMD[DType.uint64, W](mask_bits) >> iota[DType.uint64, W]()) & 1
+                    ).cast[DType.bool]()
+                    dst.slice(out_pos).compressed_store[W](vals, mask)
+                    out_pos += Int(pop_count(mask_bits))
+            elif strategy == "adaptive":
+                out_pos += d.compressed_store(s, sel_word)
         keep(out_pos)
     var total = perf_counter_ns() - t0
     return Float64(total) / Float64(iters) / Float64(n_blocks)
@@ -172,12 +244,12 @@ def main() raises:
         var us = _bench_filter(sizes[si], 50, True, iters_[si])
         print(t"filter_50pct_nulls/{labels[si]}             {us} us")
 
-    # ── _filter_block: default params, varying density ───────────────────
+    # ── compressed_store: adaptive dispatch, varying density ──────────────
     comptime n_blocks = 1024  # 1024 blocks × 64 = 64k elements per iteration
     comptime blk_iters = 500
 
     print()
-    print("=== _filter_block[int64] — sparse/dense adaptive ===")
+    print("=== compressed_store[int64] — sparse/dense adaptive ===")
     print("pattern                    ns/block  popcount")
     print("-------                    --------  --------")
 
@@ -200,3 +272,24 @@ def main() raises:
         var ns = _bench_block(w, n_blocks, blk_iters)
         var pc = Int(pop_count(w))
         print(t"  clustered_{rpcts[pi]}pct            {ns} ns   {pc}")
+
+    # ── Per-strategy comparison ─────────────────────────────────────────
+    print()
+    print("=== BufferView.compressed_store strategies [int64] ===")
+    print(" pct  popcnt      sparse       dense        llvm    adaptive  _filter_blk")
+    print(" ---  ------      ------       -----        ----    --------  -----------")
+
+    comptime strat_pcts = (1, 5, 10, 25, 50, 75, 90, 99)
+    comptime for pi in range(8):
+        var w = _make_sel_word_random(strat_pcts[pi])
+        var pc = Int(pop_count(w))
+        var ns_sparse = _bench_strategy["sparse"](w, n_blocks, blk_iters)
+        var ns_dense = _bench_strategy["dense"](w, n_blocks, blk_iters)
+        var ns_llvm = _bench_strategy["llvm"](w, n_blocks, blk_iters)
+        var ns_adaptive = _bench_strategy["adaptive"](w, n_blocks, blk_iters)
+        var ns_block = _bench_block(w, n_blocks, blk_iters)
+        print(
+            t"  {strat_pcts[pi]}%  {pc}  {ns_sparse} ns"
+            t"  {ns_dense} ns  {ns_llvm} ns  {ns_adaptive} ns"
+            t"  {ns_block} ns"
+        )

@@ -17,10 +17,11 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 
 from std.sys.info import simd_byte_width, simd_width_of
 from std.sys import size_of, has_accelerator
-from std.bit import pop_count
+from std.bit import count_trailing_zeros, pop_count
+from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import memcpy, memset
+from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
 from std.algorithm.functional import elementwise
@@ -164,6 +165,81 @@ struct BufferView[
     def gather[W: Int](self, offsets: SIMD[DType.int64, W]) -> SIMD[Self.T, W]:
         """SIMD gather: load W elements at positions given by `offsets`."""
         return self._data.gather[width=W, alignment=1](offsets)
+
+    # --- Compressed store ---
+
+    @always_inline
+    def compressed_store[
+        W: Int
+    ](
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        value: SIMD[Self.T, W],
+        mask: SIMD[DType.bool, W],
+    ):
+        """Compress-store via LLVM intrinsic: write only mask=True lanes,
+        packed sequentially from the start of this view."""
+        _compressed_store(value, self._data, mask)
+
+    @always_inline
+    def compressed_store_sparse(
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        src: BufferView[Self.T, _],
+        sel_bits: UInt64,
+    ):
+        """CTZ scatter: write only set-bit positions. O(popcount).
+
+        Best when few bits are set (low popcount).
+        """
+        var w = sel_bits
+        var k = 0
+        while w != 0:
+            self.unsafe_set(
+                k, src.unsafe_get(Int(count_trailing_zeros(w)))
+            )
+            w &= w - 1
+            k += 1
+
+    @always_inline
+    def compressed_store_dense(
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        src: BufferView[Self.T, _],
+        sel_bits: UInt64,
+    ):
+        """Byte-chunked branchless scatter. O(64).
+
+        Processes the 64-bit mask one byte at a time, breaking the serial
+        dependency into 8 independent chains of depth 8 that the OoO engine
+        can overlap.
+        """
+        var offset = 0
+        comptime for i in range(8):
+            var byte = (sel_bits >> UInt64(i * 8)) & 0xFF
+            var b = byte
+            var k = 0
+            comptime for bit in range(8):
+                self.unsafe_set(
+                    offset + k, src.unsafe_get(i * 8 + bit)
+                )
+                k += Int(b & 1)
+                b >>= 1
+            offset += Int(pop_count(byte))
+
+    @always_inline
+    def compressed_store[
+        sparse_threshold: Int = 24
+    ](
+        self: BufferView[mut=True, T=Self.T, origin=_],
+        src: BufferView[Self.T, _],
+        sel_bits: UInt64,
+    ) -> Int:
+        """Adaptive compressed store: dispatches to sparse or dense based on
+        popcount vs threshold. Returns number of elements written."""
+        var cnt = Int(pop_count(sel_bits))
+        if cnt <= sparse_threshold:
+            self.compressed_store_sparse(src, sel_bits)
+        else:
+            self.compressed_store_dense(src, sel_bits)
+        return cnt
 
     # --- Slicing ---
 
@@ -411,6 +487,55 @@ struct BitmapView[
         Only for use at C FFI boundaries (c_data.mojo). Prefer load/store.
         """
         return self._data
+
+    # --- Compressed store / pext ---
+
+    @always_inline
+    def pext(self, index: Int, mask: UInt64) -> UInt64:
+        """Parallel bit extract: keep bits at ``index`` where ``mask``=1,
+        packed to LSB. O(popcount(mask))."""
+        var val = self.load_bits[DType.uint64](index)
+        var result = UInt64(0)
+        var m = mask
+        var k = UInt64(0)
+        while m != 0:
+            var bit_pos = UInt64(count_trailing_zeros(m))
+            result |= ((val >> bit_pos) & 1) << k
+            k += 1
+            m &= m - 1
+        return result
+
+    @always_inline
+    def compressed_store(
+        self: BitmapView[mut=True, origin=_],
+        bit_offset: Int,
+        bits: UInt64,
+        count: Int,
+    ):
+        """Deposit ``count`` LSBs from ``bits`` at ``bit_offset``.
+
+        Uses OR — bitmap must be zero-initialized. Handles arbitrary bit
+        alignment, writing up to 9 bytes when the value straddles a byte
+        boundary.
+        """
+        if count == 0:
+            return
+        var byte_idx = bit_offset >> 3
+        var bit_off = bit_offset & 7
+        var shifted = bits << UInt64(bit_off)
+        self.store[DType.uint8, 8](
+            byte_idx,
+            self.load[DType.uint8, 8](byte_idx)
+            | bitcast[DType.uint8, 8](shifted),
+        )
+        if bit_off > 0 and bit_off + count > 64:
+            self.store[DType.uint8](
+                byte_idx + 8,
+                self.load[DType.uint8](byte_idx + 8)
+                | UInt8(bits >> UInt64(64 - bit_off)),
+            )
+
+    # --- Bit access ---
 
     @always_inline
     def test(self, index: Int) -> Bool:
