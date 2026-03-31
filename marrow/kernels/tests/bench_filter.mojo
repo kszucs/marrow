@@ -179,7 +179,11 @@ def _bench_strategy[
                     var vals = s.load[W](chunk)
                     var mask_bits = (sel_word >> UInt64(chunk)) & UInt64(0xFF)
                     var mask = (
-                        (SIMD[DType.uint64, W](mask_bits) >> iota[DType.uint64, W]()) & 1
+                        (
+                            SIMD[DType.uint64, W](mask_bits)
+                            >> iota[DType.uint64, W]()
+                        )
+                        & 1
                     ).cast[DType.bool]()
                     dst.slice(out_pos).compressed_store[W](vals, mask)
                     out_pos += Int(pop_count(mask_bits))
@@ -205,7 +209,11 @@ def _bench_strategy[
                     var vals = s.load[W](chunk)
                     var mask_bits = (sel_word >> UInt64(chunk)) & UInt64(0xFF)
                     var mask = (
-                        (SIMD[DType.uint64, W](mask_bits) >> iota[DType.uint64, W]()) & 1
+                        (
+                            SIMD[DType.uint64, W](mask_bits)
+                            >> iota[DType.uint64, W]()
+                        )
+                        & 1
                     ).cast[DType.bool]()
                     dst.slice(out_pos).compressed_store[W](vals, mask)
                     out_pos += Int(pop_count(mask_bits))
@@ -276,8 +284,14 @@ def main() raises:
     # ── Per-strategy comparison ─────────────────────────────────────────
     print()
     print("=== BufferView.compressed_store strategies [int64] ===")
-    print(" pct  popcnt      sparse       dense        llvm    adaptive  _filter_blk")
-    print(" ---  ------      ------       -----        ----    --------  -----------")
+    print(
+        " pct  popcnt      sparse       dense        llvm    adaptive "
+        " _filter_blk"
+    )
+    print(
+        " ---  ------      ------       -----        ----    -------- "
+        " -----------"
+    )
 
     comptime strat_pcts = (1, 5, 10, 25, 50, 75, 90, 99)
     comptime for pi in range(8):

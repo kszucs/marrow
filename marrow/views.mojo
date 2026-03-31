@@ -193,9 +193,7 @@ struct BufferView[
         var w = sel_bits
         var k = 0
         while w != 0:
-            self.unsafe_set(
-                k, src.unsafe_get(Int(count_trailing_zeros(w)))
-            )
+            self.unsafe_set(k, src.unsafe_get(Int(count_trailing_zeros(w))))
             w &= w - 1
             k += 1
 
@@ -217,9 +215,7 @@ struct BufferView[
             var b = byte
             var k = 0
             comptime for bit in range(8):
-                self.unsafe_set(
-                    offset + k, src.unsafe_get(i * 8 + bit)
-                )
+                self.unsafe_set(offset + k, src.unsafe_get(i * 8 + bit))
                 k += Int(b & 1)
                 b >>= 1
             offset += Int(pop_count(byte))
@@ -1024,9 +1020,9 @@ def apply[
 
     @parameter
     @always_inline
-    def process[W: Int, rank: Int, alignment: Int = 1](
-        idx: IndexList[rank],
-    ) -> None:
+    def process[
+        W: Int, rank: Int, alignment: Int = 1
+    ](idx: IndexList[rank],) -> None:
         var byte_idx = idx[0]
         var elem_idx = byte_idx * 8
         var cmp = op[8](lhs.load[8](elem_idx), rhs.load[8](elem_idx))
