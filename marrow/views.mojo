@@ -174,10 +174,14 @@ struct BufferView[
 
     # --- Raw pointer access ---
 
+    # TODO: consider to remove this and let c_data to poke into _data directly
+    # but other componenst shouldn't access unsafe_ptr()
     @always_inline
     def unsafe_ptr(self) -> UnsafePointer[Scalar[Self.T], Self.origin]:
         return self._data
 
+    # TODO: remove this, on the long run we plan to use nonnullunsafepointer
+    # from mojo stdlib
     @always_inline
     def is_non_null(self) -> Bool:
         """Return True if the backing pointer is non-null."""
@@ -223,6 +227,7 @@ struct BufferView[
 
     # --- Vectorized operations ---
 
+    # TODO: remove this in favor of the free-function apply with explicit SIMD function parameters
     def apply[
         func: def[W: Int](SIMD[Self.T, W]) -> SIMD[Self.T, W]
     ](self: BufferView[mut=True, T=Self.T, origin=_]):
