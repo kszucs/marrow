@@ -28,7 +28,7 @@ def _children1(ref a: AnyArray) -> List[AnyArray]:
 
 def test_hash__int32_deterministic() raises:
     """Same values produce same hashes."""
-    var a = array[int32]([1, 2, 3, 1, 2])
+    var a = array[Int32Type]([1, 2, 3, 1, 2])
     var h = rapidhash(a)
     assert_equal(len(h), 5)
     assert_equal(h[0], h[3])  # both are value 1
@@ -37,7 +37,7 @@ def test_hash__int32_deterministic() raises:
 
 def test_hash__int32_distinct() raises:
     """Different values produce different hashes (probabilistic)."""
-    var a = array[int32]([1, 2, 3])
+    var a = array[Int32Type]([1, 2, 3])
     var h = rapidhash(a)
     assert_true(h[0] != h[1])
     assert_true(h[1] != h[2])
@@ -45,7 +45,7 @@ def test_hash__int32_distinct() raises:
 
 def test_hash__int32_nulls() raises:
     """Null elements hash to NULL_HASH_SENTINEL."""
-    var a = array[int32]([1, None, 2, None])
+    var a = array[Int32Type]([1, None, 2, None])
     var h = rapidhash(a)
     assert_equal(h[1], Scalar[uint64.native](NULL_HASH_SENTINEL))
     assert_equal(h[3], Scalar[uint64.native](NULL_HASH_SENTINEL))
@@ -53,13 +53,13 @@ def test_hash__int32_nulls() raises:
 
 
 def test_hash__empty() raises:
-    var a = array[int32]()
+    var a = array[Int32Type]()
     var h = rapidhash(a)
     assert_equal(len(h), 0)
 
 
 def test_hash__float64() raises:
-    var a = array[float64]([1.5, 2.5, 1.5])
+    var a = array[Float64Type]([1.5, 2.5, 1.5])
     var h = rapidhash(a)
     assert_equal(h[0], h[2])
 
@@ -100,7 +100,7 @@ def test_hash__string_nulls() raises:
 
 
 def test_hash__dispatch() raises:
-    var a = AnyArray(array[int32]([1, 2, 1]))
+    var a = AnyArray(array[Int32Type]([1, 2, 1]))
     var h = rapidhash(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
@@ -123,8 +123,8 @@ def test_hash__dispatch_string() raises:
 
 def test_hash_struct_two_fields() raises:
     """StructArray hashing combines per-field hashes."""
-    var a = AnyArray(array[int32]([1, 1, 2, 2]))
-    var b = AnyArray(array[int32]([10, 20, 10, 20]))
+    var a = AnyArray(array[Int32Type]([1, 1, 2, 2]))
+    var b = AnyArray(array[Int32Type]([10, 20, 10, 20]))
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
@@ -147,7 +147,7 @@ def test_hash_struct_two_fields() raises:
 
 def test_hash_struct_single_field() raises:
     """Single-field struct matches direct array hash."""
-    var a = array[int32]([1, 2, 3])
+    var a = array[Int32Type]([1, 2, 3])
     var h1 = rapidhash(a)
 
     var arr = AnyArray(a^)
@@ -167,8 +167,8 @@ def test_hash_struct_single_field() raises:
 
 def test_hash_dispatch_struct() raises:
     """Type-erased dispatch to struct hash."""
-    var a = AnyArray(array[int32]([1, 2, 1]))
-    var b = AnyArray(array[int32]([3, 3, 3]))
+    var a = AnyArray(array[Int32Type]([1, 2, 1]))
+    var b = AnyArray(array[Int32Type]([3, 3, 3]))
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())

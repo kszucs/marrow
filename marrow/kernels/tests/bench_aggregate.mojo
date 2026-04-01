@@ -137,48 +137,48 @@ def main() raises:
 
     # --- sum ---
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum[int64]](
-            BenchId("sum[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_sum[Int64Type]](
+            BenchId("sum[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum[float64]](
-            BenchId("sum[float64]", size_labels[si]),
+        m.bench_with_input[Int, bench_sum[Float64Type]](
+            BenchId("sum[Float64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum_nulls[int64]](
-            BenchId("sum_nulls[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_sum_nulls[Int64Type]](
+            BenchId("sum_nulls[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
 
     # --- product ---
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_product[int64]](
-            BenchId("product[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_product[Int64Type]](
+            BenchId("product[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
 
     # --- min / max ---
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_min[int64]](
-            BenchId("min[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_min[Int64Type]](
+            BenchId("min[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_max[int64]](
-            BenchId("max[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_max[Int64Type]](
+            BenchId("max[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_min_nulls[int64]](
-            BenchId("min_nulls[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_min_nulls[Int64Type]](
+            BenchId("min_nulls[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )

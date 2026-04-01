@@ -92,7 +92,7 @@ def binary_array_dispatch[
         )
 
     comptime for dtype in numeric_types:
-        if left.dtype() == dtype:
+        if left.dtype() == dtype():
             return func[dtype](
                 left.as_primitive[dtype](),
                 right.as_primitive[dtype](),
@@ -133,7 +133,7 @@ def binary_array_dispatch[
         )
 
     comptime for dtype in numeric_types:
-        if left.dtype() == dtype:
+        if left.dtype() == dtype():
             return func[dtype](
                 left.as_primitive[dtype](),
                 right.as_primitive[dtype](),
@@ -164,7 +164,7 @@ def bool_array_dispatch[
         )
 
     comptime for dtype in numeric_types:
-        if left.dtype() == dtype:
+        if left.dtype() == dtype():
             return func[dtype](
                 left.as_primitive[dtype](),
                 right.as_primitive[dtype](),
@@ -190,7 +190,7 @@ def unary_numeric_dispatch[
         A new AnyArray with the element-wise result.
     """
     comptime for dtype in numeric_types:
-        if array.dtype() == dtype:
+        if array.dtype() == dtype():
             return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(t"{name}: unsupported dtype {array.dtype()}")
 
@@ -208,7 +208,7 @@ def binary_float_dispatch[
         )
 
     comptime for dtype in float_types:
-        if left.dtype() == dtype:
+        if left.dtype() == dtype():
             return func[dtype](
                 left.as_primitive[dtype](),
                 right.as_primitive[dtype](),
@@ -235,7 +235,7 @@ def unary_float_dispatch[
         A new AnyArray with the element-wise result.
     """
     comptime for dtype in float_types:
-        if array.dtype() == dtype:
+        if array.dtype() == dtype():
             return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(
         t"{name}: unsupported dtype {array.dtype()}, expected float type"

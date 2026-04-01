@@ -1033,7 +1033,7 @@ def execute(
 def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
     comptime for dt in numeric_types:
-        if scalar_array.dtype() == dt:
+        if scalar_array.dtype() == dt():
             var val = scalar_array.as_primitive[dt]().unsafe_get(0)
             var builder = PrimitiveBuilder[dt](length)
             for _ in range(length):

@@ -81,7 +81,7 @@ def test_filter_schema_passthrough() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var pred = col(0) > lit[int64](0)
+    var pred = col(0) > lit[Int64Type](0)
     var filt = Filter(input=src, predicate=pred)
     var s = filt.schema()
     assert_equal(len(s), 2)
@@ -208,7 +208,7 @@ def test_filter_kind() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var filt = AnyRelation(Filter(input=src, predicate=col(0) > lit[int64](0)))
+    var filt = AnyRelation(Filter(input=src, predicate=col(0) > lit[Int64Type](0)))
     assert_equal(filt.kind(), FILTER_NODE)
 
 
@@ -235,14 +235,14 @@ def test_project_kind() raises:
 
 def test_in_memory_table_kind() raises:
     """InMemoryTable reports IN_MEMORY_TABLE_NODE kind."""
-    var a = array[int64]([1, 2, 3])
+    var a = array[Int64Type]([1, 2, 3])
     var t = in_memory_table(record_batch([a^], names=["a"]))
     assert_equal(t.kind(), IN_MEMORY_TABLE_NODE)
 
 
 def test_in_memory_table_schema() raises:
     """InMemoryTable schema matches the batch schema."""
-    var a = array[int64]([1, 2, 3])
+    var a = array[Int64Type]([1, 2, 3])
     var t = in_memory_table(record_batch([a^], names=["a"]))
     var s = t.schema()
     assert_equal(len(s), 1)
@@ -251,7 +251,7 @@ def test_in_memory_table_schema() raises:
 
 def test_in_memory_table_leaf() raises:
     """InMemoryTable is a leaf node with no inputs or expressions."""
-    var a = array[int64]([1, 2, 3])
+    var a = array[Int64Type]([1, 2, 3])
     var t = in_memory_table(record_batch([a^], names=["a"]))
     assert_equal(len(t.inputs()), 0)
     assert_equal(len(t.exprs()), 0)
@@ -259,7 +259,7 @@ def test_in_memory_table_leaf() raises:
 
 def test_in_memory_table_downcast() raises:
     """InMemoryTable can be downcast to access the batch."""
-    var a = array[int64]([1, 2, 3])
+    var a = array[Int64Type]([1, 2, 3])
     var t = in_memory_table(record_batch([a^], names=["a"]))
     var imt = t.downcast[InMemoryTable]()
     assert_equal(imt[].batch.num_rows(), 3)
@@ -275,7 +275,7 @@ def test_scan_filter_kind() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.filter(col("x") > lit[int64](0))
+    var plan = src.filter(col("x") > lit[Int64Type](0))
     assert_equal(plan.kind(), FILTER_NODE)
 
 
@@ -284,7 +284,7 @@ def test_scan_filter_schema_passthrough() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.filter(col("x") > lit[int64](0))
+    var plan = src.filter(col("x") > lit[Int64Type](0))
     var s = plan.schema()
     assert_equal(len(s), 2)
     assert_equal(s.fields[0].name, "x")
@@ -296,7 +296,7 @@ def test_scan_filter_resolves_column_name() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.filter(col("x") > lit[int64](0))
+    var plan = src.filter(col("x") > lit[Int64Type](0))
     var filt = plan.downcast[Filter]()
     var pred_inputs = filt[].predicate.inputs()
     assert_equal(pred_inputs[0].downcast[Column]()[].index, 0)
@@ -327,7 +327,7 @@ def test_scan_filter_select_kinds() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.filter(col("x") > lit[int64](0)).select("x")
+    var plan = src.filter(col("x") > lit[Int64Type](0)).select("x")
     assert_equal(plan.kind(), PROJECT_NODE)
     var proj = plan.downcast[Project]()
     assert_equal(proj[].input.kind(), FILTER_NODE)
@@ -338,7 +338,7 @@ def test_scan_filter_select_schema() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.filter(col("x") > lit[int64](0)).select("y")
+    var plan = src.filter(col("x") > lit[Int64Type](0)).select("y")
     var s = plan.schema()
     assert_equal(len(s), 1)
     assert_equal(s.fields[0].name, "y")
@@ -349,7 +349,7 @@ def test_scan_select_filter_kinds() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var plan = src.select("x").filter(col("x") > lit[int64](0))
+    var plan = src.select("x").filter(col("x") > lit[Int64Type](0))
     assert_equal(plan.kind(), FILTER_NODE)
     var filt = plan.downcast[Filter]()
     assert_equal(filt[].input.kind(), PROJECT_NODE)

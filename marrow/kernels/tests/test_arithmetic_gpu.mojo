@@ -10,9 +10,9 @@ from marrow.kernels.arithmetic import add
 def test_add_gpu() raises:
     """Element-wise add on GPU with small int32 arrays."""
     var ctx = DeviceContext()
-    var a = array[int32]([1, 2, 3, 4]).to_device(ctx)
-    var b = array[int32]([10, 20, 30, 40]).to_device(ctx)
-    var result = add[int32](a, b, ctx).to_cpu(ctx)
+    var a = array[Int32Type]([1, 2, 3, 4]).to_device(ctx)
+    var b = array[Int32Type]([10, 20, 30, 40]).to_device(ctx)
+    var result = add[Int32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_equal(result.unsafe_get(0), 11)
     assert_equal(result.unsafe_get(1), 22)
@@ -23,9 +23,9 @@ def test_add_gpu() raises:
 def test_add_gpu_large() raises:
     """Exercise GPU add with a large array (10k elements)."""
     var ctx = DeviceContext()
-    var a = arange[int32](0, 10000).to_device(ctx)
-    var b = arange[int32](0, 10000).to_device(ctx)
-    var result = add[int32](a, b, ctx).to_cpu(ctx)
+    var a = arange[Int32Type](0, 10000).to_device(ctx)
+    var b = arange[Int32Type](0, 10000).to_device(ctx)
+    var result = add[Int32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 10000)
     assert_equal(result.unsafe_get(0), 0)
     assert_equal(result.unsafe_get(4999), 9998)
@@ -35,9 +35,9 @@ def test_add_gpu_large() raises:
 def test_add_gpu_float32() raises:
     """GPU add with float32 arrays."""
     var ctx = DeviceContext()
-    var a = array[float32]([1, 2, 3, 4]).to_device(ctx)
-    var b = array[float32]([10, 20, 30, 40]).to_device(ctx)
-    var result = add[float32](a, b, ctx).to_cpu(ctx)
+    var a = array[Float32Type]([1, 2, 3, 4]).to_device(ctx)
+    var b = array[Float32Type]([10, 20, 30, 40]).to_device(ctx)
+    var result = add[Float32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_true(result.unsafe_get(0) == 11)
     assert_true(result.unsafe_get(1) == 22)
@@ -48,7 +48,7 @@ def test_add_gpu_float32() raises:
 def test_device_round_trip() raises:
     """Upload array to GPU, download back, verify values."""
     var ctx = DeviceContext()
-    var a = arange[int32](0, 1000)
+    var a = arange[Int32Type](0, 1000)
 
     var on_device = a.to_device(ctx)
     assert_true(on_device.buffer.is_device())
@@ -62,14 +62,14 @@ def test_device_round_trip() raises:
 def test_chained_gpu_add() raises:
     """Chained GPU adds: (a + b) + c with device-resident intermediates."""
     var ctx = DeviceContext()
-    var a = arange[int32](0, 1000).to_device(ctx)
-    var b = arange[int32](0, 1000).to_device(ctx)
-    var c = arange[int32](0, 1000).to_device(ctx)
+    var a = arange[Int32Type](0, 1000).to_device(ctx)
+    var b = arange[Int32Type](0, 1000).to_device(ctx)
+    var c = arange[Int32Type](0, 1000).to_device(ctx)
 
-    var ab = add[int32](a, b, ctx)
+    var ab = add[Int32Type](a, b, ctx)
     assert_true(ab.buffer.is_device())
 
-    var abc = add[int32](ab, c, ctx).to_cpu(ctx)
+    var abc = add[Int32Type](ab, c, ctx).to_cpu(ctx)
     assert_equal(len(abc), 1000)
     assert_equal(abc.unsafe_get(0), 0)
     assert_equal(abc.unsafe_get(1), 3)

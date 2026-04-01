@@ -15,9 +15,9 @@ from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 def test_rapidhash_gpu_int32() raises:
     """GPU rapidhash on small int32 array matches CPU."""
     var ctx = DeviceContext()
-    var arr = array[int32]([1, 2, 3, 4, 5])
-    var cpu_hashes = rapidhash[int32](arr)
-    var gpu_hashes = rapidhash[int32](arr.to_device(ctx), ctx).to_cpu(ctx)
+    var arr = array[Int32Type]([1, 2, 3, 4, 5])
+    var cpu_hashes = rapidhash[Int32Type](arr)
+    var gpu_hashes = rapidhash[Int32Type](arr.to_device(ctx), ctx).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
     assert_true(cpu_hashes == gpu_hashes)
 
@@ -25,9 +25,9 @@ def test_rapidhash_gpu_int32() raises:
 def test_rapidhash_gpu_int64() raises:
     """GPU rapidhash on small int64 array matches CPU."""
     var ctx = DeviceContext()
-    var arr = array[int64]([10, 20, 30, 40, 50])
-    var cpu_hashes = rapidhash[int64](arr)
-    var gpu_hashes = rapidhash[int64](arr.to_device(ctx), ctx).to_cpu(ctx)
+    var arr = array[Int64Type]([10, 20, 30, 40, 50])
+    var cpu_hashes = rapidhash[Int64Type](arr)
+    var gpu_hashes = rapidhash[Int64Type](arr.to_device(ctx), ctx).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
     assert_true(cpu_hashes == gpu_hashes)
 
@@ -35,9 +35,9 @@ def test_rapidhash_gpu_int64() raises:
 def test_rapidhash_gpu_float32() raises:
     """GPU rapidhash on float32 array matches CPU."""
     var ctx = DeviceContext()
-    var arr = array[float32]([1.0, 2.5, 3.14, 0.0, -1.0])
-    var cpu_hashes = rapidhash[float32](arr)
-    var gpu_hashes = rapidhash[float32](arr.to_device(ctx), ctx).to_cpu(ctx)
+    var arr = array[Float32Type]([1.0, 2.5, 3.14, 0.0, -1.0])
+    var cpu_hashes = rapidhash[Float32Type](arr)
+    var gpu_hashes = rapidhash[Float32Type](arr.to_device(ctx), ctx).to_cpu(ctx)
     assert_equal(len(gpu_hashes), len(cpu_hashes))
     assert_true(cpu_hashes == gpu_hashes)
 
@@ -45,9 +45,9 @@ def test_rapidhash_gpu_float32() raises:
 def test_rapidhash_gpu_large() raises:
     """GPU rapidhash on 10k int32 array, spot-check positions match CPU."""
     var ctx = DeviceContext()
-    var arr = arange[int32](0, 10000)
-    var cpu_hashes = rapidhash[int32](arr)
-    var gpu_hashes = rapidhash[int32](arr.to_device(ctx), ctx).to_cpu(ctx)
+    var arr = arange[Int32Type](0, 10000)
+    var cpu_hashes = rapidhash[Int32Type](arr)
+    var gpu_hashes = rapidhash[Int32Type](arr.to_device(ctx), ctx).to_cpu(ctx)
     assert_equal(len(gpu_hashes), 10000)
     assert_equal(gpu_hashes.unsafe_get(0), cpu_hashes.unsafe_get(0))
     assert_equal(gpu_hashes.unsafe_get(4999), cpu_hashes.unsafe_get(4999))
@@ -57,15 +57,15 @@ def test_rapidhash_gpu_large() raises:
 def test_rapidhash_gpu_nulls() raises:
     """GPU rapidhash with nulls produces sentinel values matching CPU."""
     var ctx = DeviceContext()
-    var b = PrimitiveBuilder[int32](capacity=5)
+    var b = PrimitiveBuilder[Int32Type](capacity=5)
     b.append(Scalar[int32.native](1))
     b.append_null()
     b.append(Scalar[int32.native](3))
     b.append_null()
     b.append(Scalar[int32.native](5))
     var arr = b.finish()
-    var cpu_hashes = rapidhash[int32](arr)
-    var gpu_hashes = rapidhash[int32](arr.to_device(ctx), ctx).to_cpu(ctx)
+    var cpu_hashes = rapidhash[Int32Type](arr)
+    var gpu_hashes = rapidhash[Int32Type](arr.to_device(ctx), ctx).to_cpu(ctx)
     assert_equal(len(gpu_hashes), 5)
     # Valid positions should match
     assert_equal(gpu_hashes.unsafe_get(0), cpu_hashes.unsafe_get(0))
@@ -97,8 +97,8 @@ def test_rapidhash_gpu_bool() raises:
 def test_rapidhash_gpu_device_resident() raises:
     """Verify GPU result is device-resident before to_cpu()."""
     var ctx = DeviceContext()
-    var arr = array[int32]([1, 2, 3]).to_device(ctx)
-    var result = rapidhash[int32](arr, ctx)
+    var arr = array[Int32Type]([1, 2, 3]).to_device(ctx)
+    var result = rapidhash[Int32Type](arr, ctx)
     assert_true(result.buffer.is_device())
     var on_cpu = result.to_cpu(ctx)
     assert_equal(len(on_cpu), 3)

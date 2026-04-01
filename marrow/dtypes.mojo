@@ -246,7 +246,7 @@ struct Field(
             "Field(name=", self.name, ", nullable=", self.nullable, ")"
         )
 
-    def to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) -> PythonObject:
         return PythonObject(alloc=self^)
 
 
@@ -363,7 +363,7 @@ struct AnyType(
             raise Error("cannot convert Python object to AnyType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
-    def to_python_object(var self) raises -> PythonObject:
+    def to_python_object(var self) -> PythonObject:
         return PythonObject(alloc=self^)
 
     # --- generic type dispatch ---
@@ -542,18 +542,18 @@ comptime float64 = Float64Type()
 comptime binary = BinaryType()
 comptime string = StringType()
 
-comptime signed_integer_types = (int8, int16, int32, int64)
-comptime unsigned_integer_types = (uint8, uint16, uint32, uint64)
-comptime integer_types = (int8, int16, int32, int64, uint8, uint16, uint32, uint64)
-comptime float_types = (float16, float32, float64)
+comptime signed_integer_types = (Int8Type, Int16Type, Int32Type, Int64Type)
+comptime unsigned_integer_types = (UInt8Type, UInt16Type, UInt32Type, UInt64Type)
+comptime integer_types = (Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type)
+comptime float_types = (Float16Type, Float32Type, Float64Type)
 comptime numeric_types = (
-    int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
 )
 comptime primitive_types = (
-    bool_,
-    int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    BoolType,
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
 )

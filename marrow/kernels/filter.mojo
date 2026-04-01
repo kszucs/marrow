@@ -435,7 +435,7 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
         return filter_(array.as_bool().copy(), mask).to_any()
 
     comptime for dtype in numeric_types:
-        if array.dtype() == dtype:
+        if array.dtype() == dtype():
             return filter_[dtype](array.as_primitive[dtype](), mask).to_any()
 
     if array.dtype().is_string():
@@ -501,7 +501,7 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
         return _drop_nulls_bool(array.as_bool().copy()).to_any()
 
     comptime for dtype in numeric_types:
-        if array.dtype() == dtype:
+        if array.dtype() == dtype():
             return drop_nulls[dtype](array.as_primitive[dtype]()).to_any()
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype())
@@ -515,7 +515,7 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
 def take[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], indices: PrimitiveArray[int32]
+    array: PrimitiveArray[T], indices: PrimitiveArray[Int32Type]
 ) raises -> PrimitiveArray[T]:
     """Gather elements from a primitive array at the given indices.
 
@@ -585,7 +585,7 @@ def take[
 
 
 def take(
-    array: BoolArray, indices: PrimitiveArray[int32]
+    array: BoolArray, indices: PrimitiveArray[Int32Type]
 ) raises -> BoolArray:
     """Gather elements from a bool array at the given indices.
 
@@ -615,7 +615,7 @@ def take(
 
 
 def take(
-    array: StringArray, indices: PrimitiveArray[int32]
+    array: StringArray, indices: PrimitiveArray[Int32Type]
 ) raises -> StringArray:
     """Gather elements from a string array at the given indices.
 
@@ -641,7 +641,7 @@ def take(
     return builder.finish()
 
 
-def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
+def take(array: AnyArray, indices: PrimitiveArray[Int32Type]) raises -> AnyArray:
     """Gather elements from a type-erased array at the given indices.
 
     Dispatches to the appropriate typed overload at runtime.
@@ -657,7 +657,7 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
         return take(array.as_bool().copy(), indices).to_any()
 
     comptime for dt in numeric_types:
-        if array.dtype() == dt:
+        if array.dtype() == dt():
             return take[dt](array.as_primitive[dt](), indices).to_any()
 
     if array.dtype().is_string():
@@ -667,7 +667,7 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
 
 
 def take(
-    array: StructArray, indices: PrimitiveArray[int32]
+    array: StructArray, indices: PrimitiveArray[Int32Type]
 ) raises -> StructArray:
     """Gather rows from a StructArray at the given indices.
 

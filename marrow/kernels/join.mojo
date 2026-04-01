@@ -53,7 +53,7 @@ from ..expr.relations import (
 )
 
 
-comptime IndexPairs = Tuple[PrimitiveArray[int32], PrimitiveArray[int32]]
+comptime IndexPairs = Tuple[PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]]
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 
@@ -187,8 +187,8 @@ struct HashJoin[
                 matched_probe[rid] = True
 
         if kind == JOIN_SEMI:
-            var lb = PrimitiveBuilder[int32](capacity=self._left_rows)
-            var rb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            var lb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
+            var rb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
             for i in range(self._left_rows):
                 if matched_build[i]:
                     lb.append(Scalar[int32.native](i))
@@ -196,8 +196,8 @@ struct HashJoin[
             return (lb.finish(), rb.finish())
 
         if kind == JOIN_ANTI:
-            var lb = PrimitiveBuilder[int32](capacity=self._left_rows)
-            var rb = PrimitiveBuilder[int32](capacity=self._left_rows)
+            var lb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
+            var rb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
             for i in range(self._left_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
@@ -205,8 +205,8 @@ struct HashJoin[
             return (lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
-        var lb = PrimitiveBuilder[int32](capacity=n_pairs + self._left_rows)
-        var rb = PrimitiveBuilder[int32](capacity=n_pairs + right_rows)
+        var lb = PrimitiveBuilder[Int32Type](capacity=n_pairs + self._left_rows)
+        var rb = PrimitiveBuilder[Int32Type](capacity=n_pairs + right_rows)
         for i in range(n_pairs):
             lb.append(pairs[0].unsafe_get(i))
             rb.append(pairs[1].unsafe_get(i))
@@ -304,7 +304,7 @@ struct HashJoin[
 #
 #     Does NOT use HashTable — proves the Join trait is not hash-specific.
 #     """
-#     var _sort_order: Optional[PrimitiveArray[int32]]
+#     var _sort_order: Optional[PrimitiveArray[Int32Type]]
 #     var _sorted_keys: Optional[StructArray]
 #     var _build_dtype: DataType
 #     var _left_data: Optional[StructArray]

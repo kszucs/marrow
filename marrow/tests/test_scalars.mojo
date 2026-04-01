@@ -16,46 +16,46 @@ from marrow.scalars import (
 
 
 def test_primitive_scalar_int32() raises:
-    var s = PrimitiveScalar[int32](Scalar[int32.native](42))
+    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](42))
     assert_true(s.is_valid())
     assert_false(s.is_null())
     assert_equal(s.value(), 42)
 
 
 def test_primitive_scalar_float64() raises:
-    var s = PrimitiveScalar[float64](Scalar[float64.native](3.14))
+    var s = PrimitiveScalar[Float64Type](Scalar[float64.native](3.14))
     assert_true(s.is_valid())
     assert_equal(s.value(), 3.14)
 
 
 def test_primitive_scalar_null() raises:
-    var s = PrimitiveScalar[int32].null()
+    var s = PrimitiveScalar[Int32Type].null()
     assert_false(s.is_valid())
     assert_true(s.is_null())
 
 
 def test_primitive_scalar_from_array() raises:
     """Construct via array __getitem__."""
-    var arr = array[int32]([10, 20, 30])
+    var arr = array[Int32Type]([10, 20, 30])
     var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.value(), 20)
 
 
 def test_primitive_scalar_to_array() raises:
-    var s = PrimitiveScalar[int32](Scalar[int32.native](7))
+    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](7))
     var arr = s.to_array()
     assert_equal(len(arr), 1)
     assert_equal(arr[0], 7)
 
 
 def test_primitive_scalar_write_to() raises:
-    var s = PrimitiveScalar[int32](Scalar[int32.native](42))
+    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](42))
     assert_equal(String(s), "42")
 
 
 def test_primitive_scalar_write_to_null() raises:
-    var s = PrimitiveScalar[int32].null()
+    var s = PrimitiveScalar[Int32Type].null()
     assert_equal(String(s), "null")
 
 
@@ -98,11 +98,11 @@ def test_string_scalar_write_to() raises:
 
 
 def test_scalar_from_primitive() raises:
-    var typed = PrimitiveScalar[int32](Scalar[int32.native](99))
+    var typed = PrimitiveScalar[Int32Type](Scalar[int32.native](99))
     var erased = AnyScalar(typed^)
     assert_true(erased.is_valid())
     assert_equal(erased.type(), int32)
-    ref back = erased.as_primitive[int32]()
+    ref back = erased.as_primitive[Int32Type]()
     assert_equal(back.value(), 99)
 
 
@@ -116,7 +116,7 @@ def test_scalar_from_string() raises:
 
 
 def test_scalar_null() raises:
-    var typed = PrimitiveScalar[int32].null()
+    var typed = PrimitiveScalar[Int32Type].null()
     var erased = AnyScalar(typed^)
     assert_true(erased.is_null())
 

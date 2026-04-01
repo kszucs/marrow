@@ -27,8 +27,8 @@ from marrow.expr import (
 
 
 def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
-    var a = PrimitiveBuilder[int64](capacity=len(k))
-    var b = PrimitiveBuilder[int64](capacity=len(v))
+    var a = PrimitiveBuilder[Int64Type](capacity=len(k))
+    var b = PrimitiveBuilder[Int64Type](capacity=len(v))
     for x in k:
         a.append(Scalar[int64.native](x))
     for x in v:
@@ -229,7 +229,7 @@ def test_execute_anti_join() raises:
     )
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 2)  # left columns only
-    ref k = result.columns[0].as_primitive[int64]()
+    ref k = result.columns[0].as_primitive[Int64Type]()
     assert_equal(k[0], Scalar[int64.native](1))
     assert_equal(k[1], Scalar[int64.native](3))
 
@@ -275,7 +275,7 @@ def test_join_then_filter() raises:
     # After join: columns are k(0), v(1), k_right(2), v_right(3)
     var result = execute(
         left_plan.join(right_plan, keys_left, keys_right).filter(
-            col("v") > lit[int64](10)
+            col("v") > lit[Int64Type](10)
         )
     )
     assert_equal(result.num_rows(), 2)

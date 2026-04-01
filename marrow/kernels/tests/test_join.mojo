@@ -27,8 +27,8 @@ from marrow.expr.relations import (
 
 
 def _int32_struct(col0: List[Int], col1: List[Int]) raises -> StructArray:
-    var a = PrimitiveBuilder[int32](capacity=len(col0))
-    var b = PrimitiveBuilder[int32](capacity=len(col1))
+    var a = PrimitiveBuilder[Int32Type](capacity=len(col0))
+    var b = PrimitiveBuilder[Int32Type](capacity=len(col1))
     for v in col0:
         a.append(Scalar[int32.native](v))
     for v in col1:
@@ -58,9 +58,9 @@ def _right_on() -> List[Int]:
 
 def test_take_primitive_basic() raises:
     """Gather elements from a primitive array at given indices."""
-    var a: AnyArray = array[int32]([10, 20, 30, 40])
-    var result = take(a.copy(), array[int32]([2, 0, 3]))
-    ref r = result.as_primitive[int32]()
+    var a: AnyArray = array[Int32Type]([10, 20, 30, 40])
+    var result = take(a.copy(), array[Int32Type]([2, 0, 3]))
+    ref r = result.as_primitive[Int32Type]()
     assert_equal(r[0], Scalar[int32.native](30))
     assert_equal(r[1], Scalar[int32.native](10))
     assert_equal(r[2], Scalar[int32.native](40))
@@ -68,8 +68,8 @@ def test_take_primitive_basic() raises:
 
 def test_take_null_index_produces_null() raises:
     """Null index in take produces a null output element."""
-    var a: AnyArray = array[int32]([10, 20, 30])
-    var idx = PrimitiveBuilder[int32](capacity=2)
+    var a: AnyArray = array[Int32Type]([10, 20, 30])
+    var idx = PrimitiveBuilder[Int32Type](capacity=2)
     idx.append_null()
     idx.append(Scalar[int32.native](1))
     var result = take(a.copy(), idx.finish())
@@ -323,7 +323,7 @@ def test_semi_join_basic() raises:
     var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_SEMI)
     assert_equal(len(result), 1)
     assert_equal(len(result.children), 2)  # left columns only
-    ref k = result.children[0].as_primitive[int32]()
+    ref k = result.children[0].as_primitive[Int32Type]()
     assert_equal(k[0], Scalar[int32.native](2))
 
 
@@ -356,7 +356,7 @@ def test_anti_join_basic() raises:
     var result = hash_join(left, right, _left_on(), _right_on(), kind=JOIN_ANTI)
     assert_equal(len(result), 2)
     assert_equal(len(result.children), 2)  # left columns only
-    ref k = result.children[0].as_primitive[int32]()
+    ref k = result.children[0].as_primitive[Int32Type]()
     assert_equal(k[0], Scalar[int32.native](1))
     assert_equal(k[1], Scalar[int32.native](3))
 
@@ -421,7 +421,7 @@ def test_inner_join_string_keys() raises:
     lb.append("a")
     lb.append("b")
     lb.append("c")
-    var lv_b = PrimitiveBuilder[int32](capacity=3)
+    var lv_b = PrimitiveBuilder[Int32Type](capacity=3)
     lv_b.append(Scalar[int32.native](1))
     lv_b.append(Scalar[int32.native](2))
     lv_b.append(Scalar[int32.native](3))
@@ -433,7 +433,7 @@ def test_inner_join_string_keys() raises:
     var rb = StringBuilder(2)
     rb.append("b")
     rb.append("c")
-    var rv_b = PrimitiveBuilder[int32](capacity=2)
+    var rv_b = PrimitiveBuilder[Int32Type](capacity=2)
     rv_b.append(Scalar[int32.native](20))
     rv_b.append(Scalar[int32.native](30))
     var rcols = List[AnyArray]()
@@ -455,15 +455,15 @@ def test_inner_join_multi_key() raises:
     # left: (a=1,b=10,v=100), (a=1,b=20,v=200), (a=2,b=10,v=300)
     # right: (a=1,b=10,v=1000), (a=2,b=30,v=2000)
     # expected: only (a=1,b=10) matches → 1 row
-    var la = PrimitiveBuilder[int32](capacity=3)
+    var la = PrimitiveBuilder[Int32Type](capacity=3)
     la.append(Scalar[int32.native](1))
     la.append(Scalar[int32.native](1))
     la.append(Scalar[int32.native](2))
-    var lb2 = PrimitiveBuilder[int32](capacity=3)
+    var lb2 = PrimitiveBuilder[Int32Type](capacity=3)
     lb2.append(Scalar[int32.native](10))
     lb2.append(Scalar[int32.native](20))
     lb2.append(Scalar[int32.native](10))
-    var lv2 = PrimitiveBuilder[int32](capacity=3)
+    var lv2 = PrimitiveBuilder[Int32Type](capacity=3)
     lv2.append(Scalar[int32.native](100))
     lv2.append(Scalar[int32.native](200))
     lv2.append(Scalar[int32.native](300))
@@ -473,13 +473,13 @@ def test_inner_join_multi_key() raises:
     lcols.append(lv2.finish().to_any())
     var left = record_batch(lcols^, names=["a", "b", "v"]).to_struct_array()
 
-    var ra = PrimitiveBuilder[int32](capacity=2)
+    var ra = PrimitiveBuilder[Int32Type](capacity=2)
     ra.append(Scalar[int32.native](1))
     ra.append(Scalar[int32.native](2))
-    var rb2 = PrimitiveBuilder[int32](capacity=2)
+    var rb2 = PrimitiveBuilder[Int32Type](capacity=2)
     rb2.append(Scalar[int32.native](10))
     rb2.append(Scalar[int32.native](30))
-    var rv2 = PrimitiveBuilder[int32](capacity=2)
+    var rv2 = PrimitiveBuilder[Int32Type](capacity=2)
     rv2.append(Scalar[int32.native](1000))
     rv2.append(Scalar[int32.native](2000))
     var rcols = List[AnyArray]()
@@ -534,7 +534,7 @@ def test_output_schema_column_name_collision() raises:
 def _constant_hash(
     keys: StructArray,
     ctx: Optional[DeviceContext] = None,
-) raises -> PrimitiveArray[uint64]:
+) raises -> PrimitiveArray[UInt64Type]:
     """Degenerate hash function: all keys map to the same hash.
 
     Forces every key into a single bucket — without key equality checks,
@@ -542,7 +542,7 @@ def _constant_hash(
     only actual matching keys produce output.
     """
     var n = len(keys)
-    var b = PrimitiveBuilder[uint64](capacity=n)
+    var b = PrimitiveBuilder[UInt64Type](capacity=n)
     for _ in range(n):
         b.unsafe_append(Scalar[uint64.native](42))
     return b.finish()

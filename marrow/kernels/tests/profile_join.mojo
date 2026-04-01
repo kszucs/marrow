@@ -28,8 +28,8 @@ from marrow.expr.relations import JOIN_INNER, JOIN_LEFT, JOIN_SEMI, JOIN_ALL
 
 def _make_struct(n: Int, key_offset: Int = 0) raises -> StructArray:
     """Build a StructArray with columns (k: int64, v: int64)."""
-    var kb = PrimitiveBuilder[int64](capacity=n)
-    var vb = PrimitiveBuilder[int64](capacity=n)
+    var kb = PrimitiveBuilder[Int64Type](capacity=n)
+    var vb = PrimitiveBuilder[Int64Type](capacity=n)
     for i in range(n):
         kb.append(Scalar[int64.native](i + key_offset))
         vb.append(Scalar[int64.native](i * 10))

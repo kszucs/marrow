@@ -21,9 +21,9 @@ from marrow.kernels.compare import (
 
 def test_equal_true_and_false() raises:
     """Equal: True where values match, False elsewhere."""
-    var a = array[int64]([1, 2, 3, 4, 5])
-    var b = array[int64]([1, 0, 3, 0, 5])
-    var result = equal[int64](a, b)
+    var a = array[Int64Type]([1, 2, 3, 4, 5])
+    var b = array[Int64Type]([1, 0, 3, 0, 5])
+    var result = equal[Int64Type](a, b)
 
     assert_true(result[0])  # 1 == 1
     assert_false(result[1])  # 2 != 0
@@ -34,9 +34,9 @@ def test_equal_true_and_false() raises:
 
 def test_not_equal() raises:
     """``not_equal`` is the inverse of equal."""
-    var a = array[int64]([1, 2, 3])
-    var b = array[int64]([1, 9, 3])
-    var result = not_equal[int64](a, b)
+    var a = array[Int64Type]([1, 2, 3])
+    var b = array[Int64Type]([1, 9, 3])
+    var result = not_equal[Int64Type](a, b)
 
     assert_false(result[0])  # 1 == 1
     assert_true(result[1])  # 2 != 9
@@ -45,9 +45,9 @@ def test_not_equal() raises:
 
 def test_less() raises:
     """``less``: True where a < b."""
-    var a = array[int64]([1, 5, 3, 10])
-    var b = array[int64]([5, 1, 3, 20])
-    var result = less[int64](a, b)
+    var a = array[Int64Type]([1, 5, 3, 10])
+    var b = array[Int64Type]([5, 1, 3, 20])
+    var result = less[Int64Type](a, b)
 
     assert_true(result[0])  # 1 < 5
     assert_false(result[1])  # 5 > 1
@@ -57,9 +57,9 @@ def test_less() raises:
 
 def test_less_equal() raises:
     """``less_equal``: True where a <= b."""
-    var a = array[int64]([1, 5, 3, 10])
-    var b = array[int64]([5, 1, 3, 20])
-    var result = less_equal[int64](a, b)
+    var a = array[Int64Type]([1, 5, 3, 10])
+    var b = array[Int64Type]([5, 1, 3, 20])
+    var result = less_equal[Int64Type](a, b)
 
     assert_true(result[0])  # 1 <= 5
     assert_false(result[1])  # 5 > 1
@@ -69,9 +69,9 @@ def test_less_equal() raises:
 
 def test_greater() raises:
     """``greater``: True where a > b."""
-    var a = array[int64]([5, 1, 3, 20])
-    var b = array[int64]([1, 5, 3, 10])
-    var result = greater[int64](a, b)
+    var a = array[Int64Type]([5, 1, 3, 20])
+    var b = array[Int64Type]([1, 5, 3, 10])
+    var result = greater[Int64Type](a, b)
 
     assert_true(result[0])  # 5 > 1
     assert_false(result[1])  # 1 < 5
@@ -81,9 +81,9 @@ def test_greater() raises:
 
 def test_greater_equal() raises:
     """``greater_equal``: True where a >= b."""
-    var a = array[int64]([5, 1, 3, 20])
-    var b = array[int64]([1, 5, 3, 10])
-    var result = greater_equal[int64](a, b)
+    var a = array[Int64Type]([5, 1, 3, 20])
+    var b = array[Int64Type]([1, 5, 3, 10])
+    var result = greater_equal[Int64Type](a, b)
 
     assert_true(result[0])  # 5 >= 1
     assert_false(result[1])  # 1 < 5
@@ -98,17 +98,17 @@ def test_greater_equal() raises:
 
 def test_less_float64() raises:
     """``less`` works for float64."""
-    var ab = PrimitiveBuilder[float64](3)
+    var ab = PrimitiveBuilder[Float64Type](3)
     ab.unsafe_append(1.0)
     ab.unsafe_append(2.5)
     ab.unsafe_append(3.0)
-    var bb = PrimitiveBuilder[float64](3)
+    var bb = PrimitiveBuilder[Float64Type](3)
     bb.unsafe_append(1.0)
     bb.unsafe_append(2.0)
     bb.unsafe_append(5.0)
     var a = ab.finish()
     var b = bb.finish()
-    var result = less[float64](a, b)
+    var result = less[Float64Type](a, b)
 
     assert_false(result[0])  # 1.0 == 1.0
     assert_false(result[1])  # 2.5 > 2.0
@@ -122,11 +122,11 @@ def test_less_float64() raises:
 
 def test_length_mismatch_raises() raises:
     """Comparison of arrays with different lengths raises an error."""
-    var a = array[int64]([1, 2, 3])
-    var b = array[int64]([1, 2])
+    var a = array[Int64Type]([1, 2, 3])
+    var b = array[Int64Type]([1, 2])
     var raised = False
     try:
-        _ = equal[int64](a, b)
+        _ = equal[Int64Type](a, b)
     except:
         raised = True
     assert_true(raised)
@@ -139,10 +139,10 @@ def test_length_mismatch_raises() raises:
 
 def test_single_element() raises:
     """Comparisons work on length-1 arrays."""
-    var a = array[int64]([7])
-    var b = array[int64]([7])
-    assert_true(equal[int64](a, b)[0])
-    assert_false(less[int64](a, b)[0])
+    var a = array[Int64Type]([7])
+    var b = array[Int64Type]([7])
+    assert_true(equal[Int64Type](a, b)[0])
+    assert_false(less[Int64Type](a, b)[0])
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +153,9 @@ def test_single_element() raises:
 def test_non_aligned_length() raises:
     """Comparisons work on lengths that are not multiples of SIMD width."""
     var n = 7
-    var a = array[int64]([1, 2, 3, 4, 5, 6, 7])
-    var b = array[int64]([7, 6, 5, 4, 3, 2, 1])
-    var result = less[int64](a, b)
+    var a = array[Int64Type]([1, 2, 3, 4, 5, 6, 7])
+    var b = array[Int64Type]([7, 6, 5, 4, 3, 2, 1])
+    var result = less[Int64Type](a, b)
 
     for i in range(n):
         var expected = a[i].value() < b[i].value()
@@ -169,9 +169,9 @@ def test_non_aligned_length() raises:
 
 def test_output_length() raises:
     """Output array has the same length as inputs."""
-    var a = array[int64]([10, 20, 30, 40, 50])
-    var b = array[int64]([10, 10, 40, 40, 40])
-    var result = greater_equal[int64](a, b)
+    var a = array[Int64Type]([10, 20, 30, 40, 50])
+    var b = array[Int64Type]([10, 10, 40, 40, 40])
+    var result = greater_equal[Int64Type](a, b)
     assert_equal(len(result), 5)
 
 
@@ -182,16 +182,16 @@ def test_output_length() raises:
 
 def test_equal_array_overload() raises:
     """Type-erased equal(AnyArray, AnyArray) dispatches correctly."""
-    var a = AnyArray(array[int64]([1, 2, 3]))
-    var b = AnyArray(array[int64]([1, 0, 3]))
+    var a = AnyArray(array[Int64Type]([1, 2, 3]))
+    var b = AnyArray(array[Int64Type]([1, 0, 3]))
     var result = equal(a, b)
     assert_equal(result.length(), 3)
 
 
 def test_dtype_mismatch_raises() raises:
     """Type-erased kernels raise on dtype mismatch."""
-    var a = AnyArray(array[int64]([1, 2, 3]))
-    var fb = PrimitiveBuilder[float64](3)
+    var a = AnyArray(array[Int64Type]([1, 2, 3]))
+    var fb = PrimitiveBuilder[Float64Type](3)
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
@@ -208,14 +208,14 @@ def test_equal_large_array() raises:
     """Regression: equal must write all bitmap bytes, not just the first
     of each SIMD batch (previously only byte 0 of every 16 was written)."""
     var n = 200
-    var ab = PrimitiveBuilder[int64](n)
-    var bb = PrimitiveBuilder[int64](n)
+    var ab = PrimitiveBuilder[Int64Type](n)
+    var bb = PrimitiveBuilder[Int64Type](n)
     for i in range(n):
         ab.unsafe_append(Scalar[int64.native](i))
         bb.unsafe_append(Scalar[int64.native](i))
     var a = ab.finish()
     var b = bb.finish()
-    var result = equal[int64](a, b)
+    var result = equal[Int64Type](a, b)
     assert_equal(len(result), n)
     for i in range(n):
         assert_true(result[i])

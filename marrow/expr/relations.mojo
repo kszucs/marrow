@@ -22,7 +22,7 @@ Plan-building API
 
 Example
 -------
-    var plan = in_memory_table(batch).filter(col("x") > lit[int64](0)).select("x")
+    var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
     var result = execute(plan)
 """
 

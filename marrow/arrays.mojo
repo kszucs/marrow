@@ -192,7 +192,7 @@ struct AnyArray(
         try:
             var dtype = py.type().downcast_value_ptr[AnyType]()[]
             comptime for T in numeric_types:
-                if dtype == T:
+                if dtype == T():
                     self = (
                         py.downcast_value_ptr[PrimitiveArray[T]]()[]
                         .copy()
@@ -258,7 +258,7 @@ struct AnyArray(
         if dt == bool_:
             return self.as_bool().copy().to_python_object()
         comptime for T in numeric_types:
-            if dt == T:
+            if dt == T():
                 return self.as_primitive[T]().copy().to_python_object()
         if dt.is_string():
             return self.as_string().copy().to_python_object()
@@ -280,35 +280,35 @@ struct AnyArray(
     def as_bool(ref self) -> ref[self._data[]] BoolArray:
         return rebind[ArcPointer[BoolArray]](self._data)[]
 
-    def as_int8(ref self) -> ref[self._data[]] PrimitiveArray[int8]:
-        return self.as_primitive[int8]()
+    def as_int8(ref self) -> ref[self._data[]] PrimitiveArray[Int8Type]:
+        return self.as_primitive[Int8Type]()
 
-    def as_int16(ref self) -> ref[self._data[]] PrimitiveArray[int16]:
-        return self.as_primitive[int16]()
+    def as_int16(ref self) -> ref[self._data[]] PrimitiveArray[Int16Type]:
+        return self.as_primitive[Int16Type]()
 
-    def as_int32(ref self) -> ref[self._data[]] PrimitiveArray[int32]:
-        return self.as_primitive[int32]()
+    def as_int32(ref self) -> ref[self._data[]] PrimitiveArray[Int32Type]:
+        return self.as_primitive[Int32Type]()
 
-    def as_int64(ref self) -> ref[self._data[]] PrimitiveArray[int64]:
-        return self.as_primitive[int64]()
+    def as_int64(ref self) -> ref[self._data[]] PrimitiveArray[Int64Type]:
+        return self.as_primitive[Int64Type]()
 
-    def as_uint8(ref self) -> ref[self._data[]] PrimitiveArray[uint8]:
-        return self.as_primitive[uint8]()
+    def as_uint8(ref self) -> ref[self._data[]] PrimitiveArray[UInt8Type]:
+        return self.as_primitive[UInt8Type]()
 
-    def as_uint16(ref self) -> ref[self._data[]] PrimitiveArray[uint16]:
-        return self.as_primitive[uint16]()
+    def as_uint16(ref self) -> ref[self._data[]] PrimitiveArray[UInt16Type]:
+        return self.as_primitive[UInt16Type]()
 
-    def as_uint32(ref self) -> ref[self._data[]] PrimitiveArray[uint32]:
-        return self.as_primitive[uint32]()
+    def as_uint32(ref self) -> ref[self._data[]] PrimitiveArray[UInt32Type]:
+        return self.as_primitive[UInt32Type]()
 
-    def as_uint64(ref self) -> ref[self._data[]] PrimitiveArray[uint64]:
-        return self.as_primitive[uint64]()
+    def as_uint64(ref self) -> ref[self._data[]] PrimitiveArray[UInt64Type]:
+        return self.as_primitive[UInt64Type]()
 
-    def as_float32(ref self) -> ref[self._data[]] PrimitiveArray[float32]:
-        return self.as_primitive[float32]()
+    def as_float32(ref self) -> ref[self._data[]] PrimitiveArray[Float32Type]:
+        return self.as_primitive[Float32Type]()
 
-    def as_float64(ref self) -> ref[self._data[]] PrimitiveArray[float64]:
-        return self.as_primitive[float64]()
+    def as_float64(ref self) -> ref[self._data[]] PrimitiveArray[Float64Type]:
+        return self.as_primitive[Float64Type]()
 
     def as_string(ref self) -> ref[self._data[]] StringArray:
         return rebind[ArcPointer[StringArray]](self._data)[]
@@ -342,7 +342,7 @@ struct AnyArray(
         if dt == bool_:
             return AnyArray(BoolArray(data))
         comptime for T in numeric_types:
-            if dt == T:
+            if dt == T():
                 return AnyArray(PrimitiveArray[T](data))
         if dt.is_string() or dt.is_binary():
             return AnyArray(StringArray(data))
@@ -366,7 +366,7 @@ struct AnyArray(
             self.as_bool().write_to(writer)
             return
         comptime for T in numeric_types:
-            if dt == T:
+            if dt == T():
                 self.as_primitive[T]().write_to(writer)
                 return
         if dt.is_string():
@@ -1072,14 +1072,14 @@ struct ListArray(
         """Unnest this ListArray, returning the flat child values."""
         return self.values.copy()
 
-    def value_lengths(self) -> PrimitiveArray[int32]:
+    def value_lengths(self) -> PrimitiveArray[Int32Type]:
         """Return an array of list lengths for each element."""
         var buf = Buffer.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
             var start = self.offsets.unsafe_get[DType.int32](self.offset + i)
             var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
             buf.unsafe_set[DType.int32](i, end - start)
-        return PrimitiveArray[int32](
+        return PrimitiveArray[Int32Type](
             length=self.length,
             nulls=0,
             offset=0,

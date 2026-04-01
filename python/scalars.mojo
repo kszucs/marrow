@@ -29,7 +29,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
         return PythonObject(None)
     var dtype = scalar.type()
     comptime for T in primitive_types:
-        if dtype == T:
+        if dtype == T():
             return PythonObject(scalar.as_primitive[T]().value())
     if dtype.is_string():
         return PythonObject(scalar.as_string().to_string())

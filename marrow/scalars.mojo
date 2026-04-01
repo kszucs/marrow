@@ -403,7 +403,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
             return
         var dtype = self.type()
         comptime for T in primitive_types:
-            if dtype == T:
+            if dtype == T():
                 self.as_primitive[T]().write_to(writer)
                 return
         if dtype.is_string():

@@ -35,8 +35,8 @@ def _make_mask(size: Int, selectivity_pct: Int) raises -> BoolArray:
     return b.finish()
 
 
-def _make_array_with_nulls(size: Int) raises -> PrimitiveArray[int64]:
-    var b = PrimitiveBuilder[int64](size)
+def _make_array_with_nulls(size: Int) raises -> PrimitiveArray[Int64Type]:
+    var b = PrimitiveBuilder[Int64Type](size)
     for i in range(size):
         if i % 10 == 0:
             b.append_null()
@@ -87,20 +87,20 @@ def _make_sel_word_clustered(pct: Int) -> UInt64:
 def _bench_filter(
     size: Int, selectivity_pct: Int, with_nulls: Bool, iters: Int
 ) raises -> Float64:
-    var arr: PrimitiveArray[int64]
+    var arr: PrimitiveArray[Int64Type]
     if with_nulls:
         arr = _make_array_with_nulls(size)
     else:
-        arr = arange[int64](0, size)
+        arr = arange[Int64Type](0, size)
     var mask = _make_mask(size, selectivity_pct)
 
     for _ in range(3):
-        var r = filter_[int64](arr, mask)
+        var r = filter_[Int64Type](arr, mask)
         keep(len(r))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var r = filter_[int64](arr, mask)
+        var r = filter_[Int64Type](arr, mask)
         keep(len(r))
     return Float64(perf_counter_ns() - t0) / Float64(iters) / 1000.0
 
@@ -120,7 +120,7 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     comptime native = int64.native
     comptime BLOCK = 64
     var total_elems = n_blocks * BLOCK
-    var arr = arange[int64](0, total_elems)
+    var arr = arange[Int64Type](0, total_elems)
     var src = arr.values()
     var out_buf = Buffer.alloc_zeroed[native](total_elems)
     var dst = out_buf.view[native]()
@@ -157,7 +157,7 @@ def _bench_strategy[
     comptime native = int64.native
     comptime BLOCK = 64
     var total_elems = n_blocks * BLOCK
-    var arr = arange[int64](0, total_elems)
+    var arr = arange[Int64Type](0, total_elems)
     var src = arr.values()
     var out_buf = Buffer.alloc_zeroed[native](total_elems)
     var dst = out_buf.view[native]()
@@ -235,7 +235,7 @@ def main() raises:
     comptime labels = ("10k", "100k", "1M")
     comptime iters_ = (500, 100, 20)
 
-    print("=== End-to-end filter[int64] ===")
+    print("=== End-to-end filter[Int64Type] ===")
     print("bench_id                              us/call")
     print("--------                              -------")
 
@@ -257,7 +257,7 @@ def main() raises:
     comptime blk_iters = 500
 
     print()
-    print("=== compressed_store[int64] — sparse/dense adaptive ===")
+    print("=== compressed_store[Int64Type] — sparse/dense adaptive ===")
     print("pattern                    ns/block  popcount")
     print("-------                    --------  --------")
 
@@ -283,7 +283,7 @@ def main() raises:
 
     # ── Per-strategy comparison ─────────────────────────────────────────
     print()
-    print("=== BufferView.compressed_store strategies [int64] ===")
+    print("=== BufferView.compressed_store strategies [Int64Type] ===")
     print(
         " pct  popcnt      sparse       dense        llvm    adaptive "
         " _filter_blk"

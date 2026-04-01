@@ -14,13 +14,13 @@ conform to the `Builder` trait.
 
 Example
 -------
-    var b = PrimitiveBuilder[int64](capacity=1024)
+    var b = PrimitiveBuilder[Int64Type](capacity=1024)
     b.append(42)
     b.append_null()
-    var arr = b.finish()  # PrimitiveArray[int64]
+    var arr = b.finish()  # PrimitiveArray[Int64Type]
 
     # Typed builders implicitly convert to AnyBuilder
-    var child = PrimitiveBuilder[float32](capacity=64)
+    var child = PrimitiveBuilder[Float32Type](capacity=64)
     var list_b = ListBuilder(child^, capacity=10)
 """
 
@@ -1096,16 +1096,16 @@ struct BoolBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
-comptime Int8Builder = PrimitiveBuilder[int8]
-comptime Int16Builder = PrimitiveBuilder[int16]
-comptime Int32Builder = PrimitiveBuilder[int32]
-comptime Int64Builder = PrimitiveBuilder[int64]
-comptime UInt8Builder = PrimitiveBuilder[uint8]
-comptime UInt16Builder = PrimitiveBuilder[uint16]
-comptime UInt32Builder = PrimitiveBuilder[uint32]
-comptime UInt64Builder = PrimitiveBuilder[uint64]
-comptime Float32Builder = PrimitiveBuilder[float32]
-comptime Float64Builder = PrimitiveBuilder[float64]
+comptime Int8Builder = PrimitiveBuilder[Int8Type]
+comptime Int16Builder = PrimitiveBuilder[Int16Type]
+comptime Int32Builder = PrimitiveBuilder[Int32Type]
+comptime Int64Builder = PrimitiveBuilder[Int64Type]
+comptime UInt8Builder = PrimitiveBuilder[UInt8Type]
+comptime UInt16Builder = PrimitiveBuilder[UInt16Type]
+comptime UInt32Builder = PrimitiveBuilder[UInt32Type]
+comptime UInt64Builder = PrimitiveBuilder[UInt64Type]
+comptime Float32Builder = PrimitiveBuilder[Float32Type]
+comptime Float64Builder = PrimitiveBuilder[Float64Type]
 
 
 # ---------------------------------------------------------------------------
@@ -1118,7 +1118,7 @@ def make_builder(dtype: AnyType, capacity: Int = 0) raises -> AnyBuilder:
     if dtype == bool_:
         return BoolBuilder(capacity)
     comptime for T in numeric_types:
-        if dtype == T:
+        if dtype == T():
             return PrimitiveBuilder[T](capacity)
     if dtype.is_string():
         return StringBuilder(capacity)

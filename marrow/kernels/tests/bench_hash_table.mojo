@@ -16,7 +16,7 @@ from marrow.kernels.hashing import rapidhash
 
 def _make_keys(n: Int) raises -> StructArray:
     """Generate a single-column StructArray with n distinct uint64 keys."""
-    var b = PrimitiveBuilder[uint64](capacity=n)
+    var b = PrimitiveBuilder[UInt64Type](capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i * 0x9E3779B97F4A7C15 + 1))
     var children = List[AnyArray]()

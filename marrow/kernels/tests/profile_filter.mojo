@@ -22,9 +22,9 @@ def main() raises:
     var n = 100_000_000
     var iterations = 1000
 
-    var arr = arange[int64](0, n)
+    var arr = arange[Int64Type](0, n)
     var mask = _make_mask(n, 50)
 
     for _ in range(iterations):
-        var r = filter_[int64](arr, mask)
+        var r = filter_[Int64Type](arr, mask)
         keep(len(r))

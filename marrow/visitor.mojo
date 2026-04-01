@@ -35,7 +35,7 @@ trait DataTypeVisitor:
     def visit(mut self, dtype: AnyType) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
         comptime for dt in primitive_types:
-            if dtype == dt:
+            if dtype == dt():
                 self.visit[dt]()
                 return
 
@@ -95,7 +95,7 @@ trait ArrayVisitor:
         var dt = array.dtype()
 
         comptime for dtype in primitive_types:
-            if dt == dtype:
+            if dt == dtype():
                 self.visit[dtype](array.as_primitive[dtype]())
                 return
 

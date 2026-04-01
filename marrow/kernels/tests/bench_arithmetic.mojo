@@ -140,28 +140,28 @@ def main() raises:
 
     # --- int32 ---
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_add[int32]](
-            BenchId("add[int32]", size_labels[si]),
+        m.bench_with_input[Int, bench_add[Int32Type]](
+            BenchId("add[Int32Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_add_nulls[int32]](
-            BenchId("nulls[int32]", size_labels[si]),
+        m.bench_with_input[Int, bench_add_nulls[Int32Type]](
+            BenchId("nulls[Int32Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
 
     # --- float64 ---
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_add[float64]](
-            BenchId("add[float64]", size_labels[si]),
+        m.bench_with_input[Int, bench_add[Float64Type]](
+            BenchId("add[Float64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
     comptime for si in range(4):
-        m.bench_with_input[Int, bench_add_nulls[float64]](
-            BenchId("nulls[float64]", size_labels[si]),
+        m.bench_with_input[Int, bench_add_nulls[Float64Type]](
+            BenchId("nulls[Float64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
@@ -178,9 +178,9 @@ def main() raises:
         print("--------               -------")
 
         comptime for si in range(5):
-            var us = _bench_gpu_add[int32](gpu_sizes[si], gpu_iters[si], ctx)
-            print(t"gpu[int32]/{gpu_sizes[si]}    {us} us")
+            var us = _bench_gpu_add[Int32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            print(t"gpu[Int32Type]/{gpu_sizes[si]}    {us} us")
 
         comptime for si in range(5):
-            var us = _bench_gpu_add[float32](gpu_sizes[si], gpu_iters[si], ctx)
-            print(t"gpu[float32]/{gpu_sizes[si]}    {us} us")
+            var us = _bench_gpu_add[Float32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            print(t"gpu[Float32Type]/{gpu_sizes[si]}    {us} us")

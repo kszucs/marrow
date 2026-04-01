@@ -86,7 +86,7 @@ def is_null[T: PrimitiveType](arr: PrimitiveArray[T]) -> BoolArray:
 def is_null(arr: AnyArray) raises -> AnyArray:
     """Runtime-typed is_null."""
     comptime for dtype in numeric_types:
-        if arr.dtype() == dtype:
+        if arr.dtype() == dtype():
             return is_null[dtype](arr.as_primitive[dtype]()).to_any()
     raise Error(t"is_null: unsupported dtype {arr.dtype()}")
 
@@ -122,7 +122,7 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
         )
     ref bool_mask = mask.as_bool()
     comptime for dtype in numeric_types:
-        if then_.dtype() == dtype:
+        if then_.dtype() == dtype():
             return select[dtype](
                 bool_mask,
                 then_.as_primitive[dtype](),

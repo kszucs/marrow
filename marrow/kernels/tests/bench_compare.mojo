@@ -72,8 +72,8 @@ def main() raises:
     comptime size_labels = ("10k", "100k", "1M")
 
     comptime for si in range(3):
-        m.bench_with_input[Int, bench_equal[int64]](
-            BenchId("equal[int64]", size_labels[si]),
+        m.bench_with_input[Int, bench_equal[Int64Type]](
+            BenchId("equal[Int64Type]", size_labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )
@@ -90,11 +90,11 @@ def main() raises:
         print("--------                        -------")
 
         comptime for si in range(5):
-            var us = _bench_gpu_equal[int32](gpu_sizes[si], gpu_iters[si], ctx)
-            print(t"gpu_equal[int32]/{gpu_sizes[si]}      {us} us")
+            var us = _bench_gpu_equal[Int32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            print(t"gpu_equal[Int32Type]/{gpu_sizes[si]}      {us} us")
 
         comptime for si in range(5):
-            var us = _bench_gpu_equal[float32](
+            var us = _bench_gpu_equal[Float32Type](
                 gpu_sizes[si], gpu_iters[si], ctx
             )
-            print(t"gpu_equal[float32]/{gpu_sizes[si]}    {us} us")
+            print(t"gpu_equal[Float32Type]/{gpu_sizes[si]}    {us} us")

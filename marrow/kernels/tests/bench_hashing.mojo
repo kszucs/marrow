@@ -14,15 +14,15 @@ from marrow.dtypes import PrimitiveType, bool_, int32, int64, uint64
 from marrow.kernels.hashing import rapidhash
 
 
-def _make_int64(n: Int) raises -> PrimitiveArray[int64]:
-    var b = PrimitiveBuilder[int64](capacity=n)
+def _make_int64(n: Int) raises -> PrimitiveArray[Int64Type]:
+    var b = PrimitiveBuilder[Int64Type](capacity=n)
     for i in range(n):
         b.append(Scalar[int64.native](i))
     return b.finish()
 
 
-def _make_int32(n: Int) raises -> PrimitiveArray[int32]:
-    var b = PrimitiveBuilder[int32](capacity=n)
+def _make_int32(n: Int) raises -> PrimitiveArray[Int32Type]:
+    var b = PrimitiveBuilder[Int32Type](capacity=n)
     for i in range(n):
         b.append(Scalar[int32.native](i))
     return b.finish()
@@ -118,18 +118,18 @@ def main() raises:
     print("========================================")
 
     print("\n=== int64, 10k elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int64](10_000, 5, 50)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int64Type](10_000, 5, 50)))
     print("\n=== int64, 100k elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int64](100_000, 3, 20)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int64Type](100_000, 3, 20)))
     print("\n=== int64, 1M elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int64](1_000_000, 2, 10)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int64Type](1_000_000, 2, 10)))
 
     print("\n=== int32, 10k elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int32](10_000, 5, 50)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int32Type](10_000, 5, 50)))
     print("\n=== int32, 100k elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int32](100_000, 3, 20)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int32Type](100_000, 3, 20)))
     print("\n=== int32, 1M elements ===")
-    print("  cpu:       ", _fmt(_bench_cpu[int32](1_000_000, 2, 10)))
+    print("  cpu:       ", _fmt(_bench_cpu[Int32Type](1_000_000, 2, 10)))
 
     print("\n=== bool, 10k elements ===")
     print("  cpu:       ", _fmt(_bench_cpu_bool(10_000, 5, 50)))
@@ -144,18 +144,18 @@ def main() raises:
         var ctx = DeviceContext()
 
         print("\n=== GPU int64, 10k elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int64](10_000, 5, 50, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int64Type](10_000, 5, 50, ctx)))
         print("\n=== GPU int64, 100k elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int64](100_000, 3, 20, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int64Type](100_000, 3, 20, ctx)))
         print("\n=== GPU int64, 1M elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int64](1_000_000, 2, 10, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int64Type](1_000_000, 2, 10, ctx)))
 
         print("\n=== GPU int32, 10k elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int32](10_000, 5, 50, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int32Type](10_000, 5, 50, ctx)))
         print("\n=== GPU int32, 100k elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int32](100_000, 3, 20, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int32Type](100_000, 3, 20, ctx)))
         print("\n=== GPU int32, 1M elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[int32](1_000_000, 2, 10, ctx)))
+        print("  gpu:       ", _fmt(_bench_gpu[Int32Type](1_000_000, 2, 10, ctx)))
 
         print("\n=== GPU bool, 10k elements ===")
         print("  gpu:       ", _fmt(_bench_gpu_bool(10_000, 5, 50, ctx)))

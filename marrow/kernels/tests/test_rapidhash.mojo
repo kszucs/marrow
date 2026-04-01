@@ -23,7 +23,7 @@ from marrow.kernels.hashing import (
 
 
 def _assert_hash_eq(
-    h: PrimitiveArray[uint64], idx: Int, expected: UInt64
+    h: PrimitiveArray[UInt64Type], idx: Int, expected: UInt64
 ) raises:
     var got = UInt64(h.unsafe_get(idx))
     if got != expected:
@@ -43,8 +43,8 @@ def _assert_hash_eq(
 
 
 def test_rapidhash_int32() raises:
-    """Validate vectorized rapidhash[int32] against C reference."""
-    var b = PrimitiveBuilder[int32](capacity=7)
+    """Validate vectorized rapidhash[Int32Type] against C reference."""
+    var b = PrimitiveBuilder[Int32Type](capacity=7)
     b.append(Scalar[int32.native](0))
     b.append(Scalar[int32.native](1))
     b.append(Scalar[int32.native](-1))
@@ -53,7 +53,7 @@ def test_rapidhash_int32() raises:
     b.append(Scalar[int32.native](2147483647))
     b.append(Scalar[int32.native](-2147483648))
     var arr = b.finish()
-    var h = rapidhash[int32](arr)
+    var h = rapidhash[Int32Type](arr)
 
     _assert_hash_eq(h, 0, 0xBA8945AAEC02CEE2)
     _assert_hash_eq(h, 1, 0x2B281F986C8B17D6)
@@ -70,8 +70,8 @@ def test_rapidhash_int32() raises:
 
 
 def test_rapidhash_int64() raises:
-    """Validate vectorized rapidhash[int64] against C reference."""
-    var b = PrimitiveBuilder[int64](capacity=7)
+    """Validate vectorized rapidhash[Int64Type] against C reference."""
+    var b = PrimitiveBuilder[Int64Type](capacity=7)
     b.append(Scalar[int64.native](0))
     b.append(Scalar[int64.native](1))
     b.append(Scalar[int64.native](-1))
@@ -80,7 +80,7 @@ def test_rapidhash_int64() raises:
     b.append(Scalar[int64.native](9223372036854775807))
     b.append(Scalar[int64.native](-9223372036854775808))
     var arr = b.finish()
-    var h = rapidhash[int64](arr)
+    var h = rapidhash[Int64Type](arr)
 
     _assert_hash_eq(h, 0, 0x9EFC171AEBCEA1F3)
     _assert_hash_eq(h, 1, 0xBEC178309F44AFBC)
@@ -98,14 +98,14 @@ def test_rapidhash_int64() raises:
 
 def test_scalar_matches_vectorized() raises:
     """Scalar _rapidhash_fixed produces same output as vectorized rapidhash."""
-    var b = PrimitiveBuilder[int64](capacity=5)
+    var b = PrimitiveBuilder[Int64Type](capacity=5)
     b.append(Scalar[int64.native](0))
     b.append(Scalar[int64.native](42))
     b.append(Scalar[int64.native](-1))
     b.append(Scalar[int64.native](999999))
     b.append(Scalar[int64.native](123456789))
     var arr = b.finish()
-    var h = rapidhash[int64](arr)
+    var h = rapidhash[Int64Type](arr)
 
     for i in range(5):
         var scalar_h = _rapidhash_fixed[8](UInt64(arr.unsafe_get(i)))
@@ -121,12 +121,12 @@ def test_scalar_matches_vectorized() raises:
 
 def test_null_produces_sentinel() raises:
     """Null elements hash to NULL_HASH_SENTINEL."""
-    var b = PrimitiveBuilder[int64](capacity=3)
+    var b = PrimitiveBuilder[Int64Type](capacity=3)
     b.append(Scalar[int64.native](42))
     b.append_null()
     b.append(Scalar[int64.native](7))
     var arr = b.finish()
-    var h = rapidhash[int64](arr)
+    var h = rapidhash[Int64Type](arr)
 
     assert_true(UInt64(h.unsafe_get(0)) != NULL_HASH_SENTINEL)
     assert_equal(UInt64(h.unsafe_get(1)), NULL_HASH_SENTINEL)

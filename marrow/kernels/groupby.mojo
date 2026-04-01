@@ -79,7 +79,7 @@ struct AggregateState(Movable):
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
     comptime for dt in primitive_types:
-        if col.dtype() == dt:
+        if col.dtype() == dt():
             return Float64(col.as_primitive[dt]().unsafe_get(row))
     raise Error("unsupported dtype for aggregation: ", col.dtype())
 
@@ -102,36 +102,36 @@ struct AggregateFunction(Copyable, Movable):
 
     def __init__(out self, name: String):
         self.name = name
-        self.values = PrimitiveBuilder[float64]()
-        self.counts = PrimitiveBuilder[int64]()
+        self.values = PrimitiveBuilder[Float64Type]()
+        self.counts = PrimitiveBuilder[Int64Type]()
 
     def __init__(out self, *, copy: Self):
         self.name = copy.name
-        self.values = PrimitiveBuilder[float64]()
-        self.counts = PrimitiveBuilder[int64]()
+        self.values = PrimitiveBuilder[Float64Type]()
+        self.counts = PrimitiveBuilder[Int64Type]()
 
     def num_groups(self) -> Int:
         return self.values.length()
 
     def create(mut self) raises:
         """Initialize state for a newly created group."""
-        self.values.builder.as_primitive[float64]().append(
+        self.values.builder.as_primitive[Float64Type]().append(
             Scalar[float64.native](0)
         )
-        self.counts.builder.as_primitive[int64]().append(
+        self.counts.builder.as_primitive[Int64Type]().append(
             Scalar[int64.native](0)
         )
 
     def add_batch(
         mut self,
-        group_ids: PrimitiveArray[uint32],
+        group_ids: PrimitiveArray[UInt32Type],
         input_col: AnyArray,
     ) raises:
         """Scatter-update: single O(N) pass over the batch."""
         var n = len(group_ids)
         var has_bitmap = input_col.null_count() > 0
-        ref val_ptr = self.values.builder.as_primitive[float64]()
-        ref cnt_ptr = self.counts.builder.as_primitive[int64]()
+        ref val_ptr = self.values.builder.as_primitive[Float64Type]()
+        ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
 
         for i in range(n):
             if has_bitmap and not input_col.is_valid(i):
@@ -170,9 +170,9 @@ struct AggregateFunction(Copyable, Movable):
 
         if self.name == "mean":
             # Compute value / count for each group.
-            var b = PrimitiveBuilder[float64](capacity=num_groups)
-            ref val_ptr = self.values.builder.as_primitive[float64]()
-            ref cnt_ptr = self.counts.builder.as_primitive[int64]()
+            var b = PrimitiveBuilder[Float64Type](capacity=num_groups)
+            ref val_ptr = self.values.builder.as_primitive[Float64Type]()
+            ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
             for g in range(num_groups):
                 var c = Int(cnt_ptr.unsafe_get(g))
                 if c > 0:
@@ -186,9 +186,9 @@ struct AggregateFunction(Copyable, Movable):
             )
 
         # sum, min, max — emit value if count > 0, else null.
-        var b = PrimitiveBuilder[float64](capacity=num_groups)
-        ref val_ptr = self.values.builder.as_primitive[float64]()
-        ref cnt_ptr = self.counts.builder.as_primitive[int64]()
+        var b = PrimitiveBuilder[Float64Type](capacity=num_groups)
+        ref val_ptr = self.values.builder.as_primitive[Float64Type]()
+        ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
         for g in range(num_groups):
             var c = Int(cnt_ptr.unsafe_get(g))
             if c > 0:
@@ -246,7 +246,7 @@ struct HashGrouper(Movable):
 
     def consume_keys(
         mut self, keys: StructArray
-    ) raises -> PrimitiveArray[uint32]:
+    ) raises -> PrimitiveArray[UInt32Type]:
         """Hash keys and resolve group indices. Returns group_ids array.
 
         Can be called multiple times — groups accumulate across calls.
@@ -255,7 +255,7 @@ struct HashGrouper(Movable):
         """
         var n = len(keys)
         if n == 0:
-            var empty = PrimitiveBuilder[uint32](0)
+            var empty = PrimitiveBuilder[UInt32Type](0)
             return empty.finish()
 
         var prev = self._table.num_keys()
@@ -272,7 +272,7 @@ struct HashGrouper(Movable):
                     self._register_new_group(keys, i)
 
         # Convert int32 bucket_ids → uint32 group_ids.
-        var gid_builder = PrimitiveBuilder[uint32](capacity=n)
+        var gid_builder = PrimitiveBuilder[UInt32Type](capacity=n)
         for i in range(n):
             gid_builder.unsafe_append(
                 Scalar[uint32.native](Int(bids.unsafe_get(i)))
@@ -281,7 +281,7 @@ struct HashGrouper(Movable):
 
     def consume_values(
         mut self,
-        group_ids: PrimitiveArray[uint32],
+        group_ids: PrimitiveArray[UInt32Type],
         values: List[AnyArray],
     ) raises:
         """Scatter-update aggregate state using pre-resolved group_ids.

@@ -93,11 +93,11 @@ def test_bufferview_get_type_name_gpu() raises:
     """DevicePassable.get_type_name() is accessible and correct."""
     assert_equal(
         BufferView[DType.int32, ImmutAnyOrigin].get_type_name(),
-        "BufferView[int32]",
+        "BufferView[Int32Type]",
     )
     assert_equal(
         BufferView[DType.float64, ImmutAnyOrigin].get_type_name(),
-        "BufferView[float64]",
+        "BufferView[Float64Type]",
     )
 
 
@@ -137,7 +137,7 @@ def test_bufferview_gpu_scale() raises:
 
 
 def test_bufferview_gpu_scale_float32() raises:
-    """BufferView[float32] transferred to GPU doubles each element."""
+    """BufferView[Float32Type] transferred to GPU doubles each element."""
     var ctx = DeviceContext()
 
     var cpu_buf = Buffer.alloc_zeroed[DType.float32](4)
