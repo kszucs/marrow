@@ -209,6 +209,10 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         return rebind[ArcPointer[StringBuilder]](self._data)[]
 
     @always_inline
+    def as_bool(ref self) -> ref[self._data[]] BoolBuilder:
+        return rebind[ArcPointer[BoolBuilder]](self._data)[]
+
+    @always_inline
     def as_list(ref self) -> ref[self._data[]] ListBuilder:
         return rebind[ArcPointer[ListBuilder]](self._data)[]
 

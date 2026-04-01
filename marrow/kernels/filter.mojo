@@ -21,7 +21,7 @@ from ..arrays import (
 )
 from ..buffers import Buffer
 from ..buffers import Bitmap
-from ..builders import PrimitiveBuilder, StringBuilder
+from ..builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
 from ..views import BitmapView, BufferView
 from .aggregate import sum_
@@ -532,8 +532,8 @@ def take[
     """
     comptime native = T.native
     var n = len(indices)
-    var src = array.buffer.view[native](array.offset)
-    var idx = indices.buffer.view[int32.native](indices.offset)
+    var src = array.values()
+    var idx = indices.values()
     var buf = Buffer.alloc_uninit[native](n)
     var out = buf.view[native]()
 
@@ -585,6 +585,36 @@ def take[
 
 
 def take(
+    array: BoolArray, indices: PrimitiveArray[int32]
+) raises -> BoolArray:
+    """Gather elements from a bool array at the given indices.
+
+    Null indices produce null output elements.
+
+    Args:
+        array: Source bool array.
+        indices: Row indices to gather. Null index → null output.
+
+    Returns:
+        A new BoolArray with one element per index.
+    """
+    var n = len(indices)
+    var has_null_indices = indices.null_count() > 0
+    var has_src_nulls = array.null_count() > 0
+    var builder = BoolBuilder(capacity=n)
+    for i in range(n):
+        if has_null_indices and not indices.is_valid(i):
+            builder.append_null()
+        else:
+            var src_idx = Int(indices.unsafe_get(i))
+            if has_src_nulls and not array.is_valid(src_idx):
+                builder.append_null()
+            else:
+                builder.append(array[src_idx])
+    return builder.finish()
+
+
+def take(
     array: StringArray, indices: PrimitiveArray[int32]
 ) raises -> StringArray:
     """Gather elements from a string array at the given indices.
@@ -624,7 +654,7 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
         A new AnyArray with one element per index.
     """
     if array.dtype() == bool_:
-        return take[bool_](array.as_primitive[bool_](), indices).to_any()
+        return take(array.as_bool().copy(), indices).to_any()
 
     comptime for dt in numeric_dtypes:
         if array.dtype() == dt:

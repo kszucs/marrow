@@ -571,8 +571,8 @@ def test_struct_builder_multi_type_fields() raises:
     sb.field_builder(0).as_primitive[int64]().append(2)
     sb.field_builder(1).as_string().append("alice")
     sb.field_builder(1).as_string().append("bob")
-    sb.field_builder(2).as_primitive[bool_]().append(True)
-    sb.field_builder(2).as_primitive[bool_]().append_null()
+    sb.field_builder(2).as_bool().append(True)
+    sb.field_builder(2).as_bool().append_null()
     sb.append_valid()
     sb.append_valid()
 

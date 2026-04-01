@@ -121,7 +121,7 @@ def _bench_block(sel_word: UInt64, n_blocks: Int, iters: Int) raises -> Float64:
     comptime BLOCK = 64
     var total_elems = n_blocks * BLOCK
     var arr = arange[int64](0, total_elems)
-    var src = arr.buffer.view[native](0)
+    var src = arr.values()
     var out_buf = Buffer.alloc_zeroed[native](total_elems)
     var dst = out_buf.view[native]()
 
@@ -158,7 +158,7 @@ def _bench_strategy[
     comptime BLOCK = 64
     var total_elems = n_blocks * BLOCK
     var arr = arange[int64](0, total_elems)
-    var src = arr.buffer.view[native](0)
+    var src = arr.values()
     var out_buf = Buffer.alloc_zeroed[native](total_elems)
     var dst = out_buf.view[native]()
 

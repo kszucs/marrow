@@ -8,8 +8,8 @@ from std.sys import has_accelerator
 from std.time import perf_counter_ns
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import PrimitiveArray
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import PrimitiveArray, BoolArray
+from marrow.builders import PrimitiveBuilder, BoolBuilder
 from marrow.dtypes import DataType, bool_, int32, int64, uint64
 from marrow.kernels.hashing import rapidhash
 
@@ -28,10 +28,10 @@ def _make_int32(n: Int) raises -> PrimitiveArray[int32]:
     return b.finish()
 
 
-def _make_bool(n: Int) raises -> PrimitiveArray[bool_]:
-    var b = PrimitiveBuilder[bool_](capacity=n)
+def _make_bool(n: Int) raises -> BoolArray:
+    var b = BoolBuilder(capacity=n)
     for i in range(n):
-        b.append(Scalar[bool_.native](i % 2 == 0))
+        b.append(Bool(i % 2 == 0))
     return b.finish()
 
 

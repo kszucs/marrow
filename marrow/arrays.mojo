@@ -4,7 +4,7 @@ Every typed array (`PrimitiveArray`, `StringArray`, `ListArray`, `StructArray`)
 is immutable.  To *build* an array incrementally, use the corresponding builder
 from `marrow.builders` and call `finish()`.
 
-`BoolArray` is an alias for `PrimitiveArray[bool_]`.
+`BoolArray` is a dedicated bit-packed boolean array type.
 
 Array — the trait
 -----------------
@@ -785,7 +785,7 @@ struct PrimitiveArray[T: DataType](
         )
 
 
-# comptime BoolArray = PrimitiveArray[bool_]
+# BoolArray is a distinct struct (not comptime PrimitiveArray[bool_])
 comptime Int8Array = PrimitiveArray[int8]
 comptime Int16Array = PrimitiveArray[int16]
 comptime Int32Array = PrimitiveArray[int32]

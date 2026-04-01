@@ -876,6 +876,13 @@ struct Bitmap[*, mut: Bool = False](
         var buffer = Buffer.alloc_uninit(byte_size)
         return Bitmap[mut=True](buffer^, length=capacity)
 
+    @staticmethod
+    def alloc_device(ctx: DeviceContext, capacity: Int) raises -> Bitmap[mut=True]:
+        """Allocate a device (GPU) bitmap for `capacity` bits."""
+        var byte_size = math.ceildiv(capacity, 8)
+        var buffer = Buffer.alloc_device[DType.uint8](ctx, byte_size)
+        return Bitmap[mut=True](buffer^, length=capacity)
+
     # --- Read methods (both modes) ---
 
     @always_inline

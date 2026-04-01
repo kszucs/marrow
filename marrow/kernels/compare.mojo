@@ -1,7 +1,7 @@
 """Element-wise comparison kernels.
 
 Each kernel compares two ``PrimitiveArray[T]`` values element-wise and returns
-a ``PrimitiveArray[bool_]`` following the Arrow boolean layout.
+a ``BoolArray`` following the Arrow boolean layout.
 
 Null propagation: if either input has a null at position ``i``, the output is
 null at ``i`` (validity = ``bitmap_and(left.bitmap, right.bitmap)``).  Data
@@ -31,8 +31,8 @@ from ..arrays import (
     AnyArray,
     StructArray,
 )
-from ..buffers import Buffer, Bitmap
-from ..views import BitmapView, BufferView, apply
+from ..buffers import Bitmap
+from ..views import apply
 from ..dtypes import DataType, bool_ as bool_dt
 from . import bitmap_and, bool_array_dispatch
 
@@ -62,33 +62,18 @@ def _binary_cmp[
 
     comptime native = T.native
     var length = len(left)
-    var n_bytes = (length + 7) >> 3
     var bm = bitmap_and(left.bitmap, right.bitmap) if (
         left.bitmap or right.bitmap
     ) else Optional[Bitmap[]]()
 
-    var buf: Buffer[mut=True]
-    if ctx:
-        buf = Buffer.alloc_device[DType.uint8](ctx.value(), n_bytes)
-    else:
-        buf = Buffer.alloc_uninit[DType.uint8](n_bytes)
-    apply[native, func](
-        left.buffer.view[native](left.offset),
-        right.buffer.view[native](right.offset),
-        BitmapView[mut=True](
-            ptr=buf.view[DType.uint8]().unsafe_ptr(), offset=0, length=length
-        ),
-        ctx,
-    )
-    var result_buf = buf.to_immutable()
-    if ctx:
-        result_buf = result_buf.to_cpu(ctx.value())
+    var result = Bitmap.alloc_device(ctx.value(), length) if ctx else Bitmap.alloc_uninit(length)
+    apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,
         nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,
         bitmap=bm,
-        buffer=Bitmap[mut=False](result_buf, length=length),
+        buffer=result.to_immutable(),
     )
 
 
