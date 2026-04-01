@@ -31,11 +31,17 @@ from .arrays import (
 )
 from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import (
-    AnyType,
+    ArrowType,
     PrimitiveType,
+    native_arrow_type,
     Field,
-    primitive_types,
-    numeric_types,
+    BoolType,
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
+    bool_, int8, int16, int32, int64,
+    uint8, uint16, uint32, uint64,
+    float16, float32, float64,
     list_,
     string,
 )
@@ -52,7 +58,7 @@ from std.builtin.simd import Scalar as _Scalar
 trait Scalar(Copyable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
-    def type(self) -> AnyType:
+    def type(self) -> ArrowType:
         ...
 
     def is_valid(self) -> Bool:
@@ -101,8 +107,8 @@ struct PrimitiveScalar[T: PrimitiveType](
     def null() -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> AnyType:
-        return Self.T
+    def type(self) -> ArrowType:
+        return native_arrow_type[Self.T]()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -175,7 +181,7 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def null() raises -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> AnyType:
+    def type(self) -> ArrowType:
         return string
 
     def is_valid(self) -> Bool:
@@ -232,7 +238,7 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
         self._value = value.copy()
         self._is_valid = is_valid
 
-    def type(self) -> AnyType:
+    def type(self) -> ArrowType:
         return list_(self._value.dtype())
 
     def is_valid(self) -> Bool:
@@ -266,14 +272,14 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
 struct StructScalar(Copyable, Movable, Scalar, Writable):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
-    var _dtype: AnyType
+    var _dtype: ArrowType
     var _value: List[AnyScalar]
     var _is_valid: Bool
 
     def __init__(
         out self,
         *,
-        dtype: AnyType,
+        dtype: ArrowType,
         value: List[AnyScalar],
         is_valid: Bool,
     ):
@@ -282,10 +288,10 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         self._is_valid = is_valid
 
     @staticmethod
-    def null(dtype: AnyType) -> Self:
+    def null(dtype: ArrowType) -> Self:
         return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
 
-    def type(self) -> AnyType:
+    def type(self) -> ArrowType:
         return self._dtype
 
     def is_valid(self) -> Bool:
@@ -333,14 +339,14 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_type: def(ArcPointer[NoneType]) -> AnyType
+    var _virt_type: def(ArcPointer[NoneType]) -> ArrowType
     var _virt_is_valid: def(ArcPointer[NoneType]) -> Bool
     var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> AnyType:
+    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> ArrowType:
         return rebind[ArcPointer[T]](ptr)[].type()
 
     @staticmethod
@@ -369,7 +375,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- vtable dispatch ---
 
-    def type(self) -> AnyType:
+    def type(self) -> ArrowType:
         return self._virt_type(self._data)
 
     def is_valid(self) -> Bool:
@@ -402,10 +408,42 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
             writer.write("null")
             return
         var dtype = self.type()
-        comptime for T in primitive_types:
-            if dtype == T():
-                self.as_primitive[T]().write_to(writer)
-                return
+        if dtype == bool_:
+            self.as_primitive[BoolType]().write_to(writer)
+            return
+        elif dtype == int8:
+            self.as_primitive[Int8Type]().write_to(writer)
+            return
+        elif dtype == int16:
+            self.as_primitive[Int16Type]().write_to(writer)
+            return
+        elif dtype == int32:
+            self.as_primitive[Int32Type]().write_to(writer)
+            return
+        elif dtype == int64:
+            self.as_primitive[Int64Type]().write_to(writer)
+            return
+        elif dtype == uint8:
+            self.as_primitive[UInt8Type]().write_to(writer)
+            return
+        elif dtype == uint16:
+            self.as_primitive[UInt16Type]().write_to(writer)
+            return
+        elif dtype == uint32:
+            self.as_primitive[UInt32Type]().write_to(writer)
+            return
+        elif dtype == uint64:
+            self.as_primitive[UInt64Type]().write_to(writer)
+            return
+        elif dtype == float16:
+            self.as_primitive[Float16Type]().write_to(writer)
+            return
+        elif dtype == float32:
+            self.as_primitive[Float32Type]().write_to(writer)
+            return
+        elif dtype == float64:
+            self.as_primitive[Float64Type]().write_to(writer)
+            return
         if dtype.is_string():
             self.as_string().write_to(writer)
         elif dtype.is_list() or dtype.is_fixed_size_list():

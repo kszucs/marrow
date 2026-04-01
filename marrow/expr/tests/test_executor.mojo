@@ -6,7 +6,7 @@ from std.os import remove
 
 from marrow.arrays import AnyArray, BoolArray
 from marrow.builders import array
-from marrow.dtypes import int64, float64, bool_ as bool_dt
+from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
 from marrow.tabular import record_batch
 from marrow.expr import (
     AnyValue,

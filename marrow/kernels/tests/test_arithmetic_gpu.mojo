@@ -3,7 +3,7 @@ from std.gpu.host import DeviceContext
 from std.sys.info import CompilationTarget
 
 from marrow.builders import array, arange
-from marrow.dtypes import int32, float32
+from marrow.dtypes import int32, float32, Int32Type, Float32Type
 from marrow.kernels.arithmetic import add
 
 

@@ -7,6 +7,7 @@ References:
 - https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html
 - https://arrow.apache.org/docs/python/generated/pyarrow.Table.html
 """
+from std.memory import ArcPointer
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .arrays import AnyArray, ChunkedArray, StructArray
@@ -57,7 +58,7 @@ struct RecordBatch(
                 raise Error("cannot convert Python object to RecordBatch")
         var schema = CArrowSchema.from_pycapsule(caps[0]).to_schema()
         var struct_arr = CArrowArray.from_pycapsule(caps[1]).to_array(
-            struct_(schema.fields)
+            struct_(schema.fields.copy())
         )
         var columns = List[AnyArray]()
         for child in struct_arr.as_struct().children:
@@ -153,7 +154,7 @@ struct RecordBatch(
         for i in range(len(names)):
             var f = self.schema.fields[i]
             new_fields.append(
-                Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
+                Field(name=names[i], dtype=f.dtype, nullable=f.nullable)
             )
         var cols = List[AnyArray]()
         for col in self.columns:
@@ -208,7 +209,7 @@ struct RecordBatch(
         for col in self.columns:
             cols.append(col.copy())
         return StructArray(
-            dtype=struct_(self.schema.fields),
+            dtype=struct_(self.schema.fields.copy()),
             length=self.num_rows(),
             nulls=0,
             offset=0,
@@ -250,7 +251,7 @@ def record_batch(
         )
     var fields = List[Field]()
     for i in range(len(columns)):
-        fields.append(Field(names[i], columns[i].dtype()))
+        fields.append(Field(names[i], ArcPointer(columns[i].dtype())))
     var schema = Schema(fields=fields^)
     return RecordBatch(schema=schema, columns=columns^)
 
@@ -274,7 +275,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         var cols = List[ChunkedArray]()
         for col in copy.columns:
             cols.append(
-                ChunkedArray(dtype=col.dtype.copy(), chunks=List(col.chunks))
+                ChunkedArray(dtype=col.dtype, chunks=List(col.chunks))
             )
         self.columns = cols^
 
@@ -328,7 +329,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         var cols = List[AnyArray]()
         for col in self.columns:
             var ca = ChunkedArray(
-                dtype=col.dtype.copy(), chunks=List(col.chunks)
+                dtype=col.dtype, chunks=List(col.chunks)
             )
             cols.append(ca^.combine_chunks())
         return RecordBatch(schema=self.schema, columns=cols^)
@@ -352,7 +353,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                 chunks.append(batch.columns[col_idx].copy())
             columns.append(
                 ChunkedArray(
-                    dtype=schema.fields[col_idx].dtype.copy(),
+                    dtype=schema.fields[col_idx].dtype[],
                     chunks=chunks^,
                 )
             )
@@ -395,7 +396,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                 cols.append(col.chunks[0].copy())
             else:
                 var ca = ChunkedArray(
-                    dtype=col.dtype.copy(), chunks=List(col.chunks)
+                    dtype=col.dtype, chunks=List(col.chunks)
                 )
                 cols.append(ca^.combine_chunks())
         var batches = List[RecordBatch]()

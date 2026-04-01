@@ -1,6 +1,6 @@
-"""Benchmark: runtime dispatch overhead — Variant-based AnyType.
+"""Benchmark: runtime dispatch overhead — Variant-based ArrowType.
 
-`dtypes_variant.AnyType` exposes `byte_width()` on a type-erased handle
+`dtypes_variant.ArrowType` exposes `byte_width()` on a type-erased handle
 using a linear `isa[T]()` chain over up to 13 arms (O(n) worst case).
 
 Two conditions:
@@ -20,8 +20,8 @@ import marrow.dtypes_variant as vd
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _variant_types() -> List[vd.AnyType]:
-    var l = List[vd.AnyType](capacity=13)
+def _variant_types() -> List[vd.ArrowType]:
+    var l = List[vd.ArrowType](capacity=13)
     l.append(vd.NullType())
     l.append(vd.BoolType())
     l.append(vd.Int8Type())
@@ -43,7 +43,7 @@ def _variant_types() -> List[vd.AnyType]:
 # ---------------------------------------------------------------------------
 
 @parameter
-def bench_variant_byte_width(mut b: Bencher, types: List[vd.AnyType]) raises:
+def bench_variant_byte_width(mut b: Bencher, types: List[vd.ArrowType]) raises:
     @always_inline
     @parameter
     def call_fn() raises:
@@ -60,7 +60,7 @@ def bench_variant_byte_width(mut b: Bencher, types: List[vd.AnyType]) raises:
 # ---------------------------------------------------------------------------
 
 @parameter
-def bench_variant_branch(mut b: Bencher, types: List[vd.AnyType]) raises:
+def bench_variant_branch(mut b: Bencher, types: List[vd.ArrowType]) raises:
     @always_inline
     @parameter
     def call_fn() raises:
@@ -87,11 +87,11 @@ def main() raises:
 
     var variant_all = _variant_types()
 
-    m.bench_with_input[List[vd.AnyType], bench_variant_byte_width](
+    m.bench_with_input[List[vd.ArrowType], bench_variant_byte_width](
         BenchId("variant/sum", "all-13-types"),
         variant_all,
     )
-    m.bench_with_input[List[vd.AnyType], bench_variant_branch](
+    m.bench_with_input[List[vd.ArrowType], bench_variant_branch](
         BenchId("variant/branch", "all-13-types x1000"),
         variant_all,
     )

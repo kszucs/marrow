@@ -23,21 +23,53 @@ trait DataTypeVisitor:
     def visit_binary(mut self) raises:
         raise Error("visit_binary: not implemented")
 
-    def visit_list(mut self, child: AnyType) raises:
+    def visit_list(mut self, child: ArrowType) raises:
         raise Error("visit_list: not implemented")
 
-    def visit_fixed_size_list(mut self, child: AnyType, size: Int) raises:
+    def visit_fixed_size_list(mut self, child: ArrowType, size: Int) raises:
         raise Error("visit_fixed_size_list: not implemented")
 
     def visit_struct(mut self, fields: List[Field]) raises:
         raise Error("visit_struct: not implemented")
 
-    def visit(mut self, dtype: AnyType) raises:
+    def visit(mut self, dtype: ArrowType) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
-        comptime for dt in primitive_types:
-            if dtype == dt():
-                self.visit[dt]()
-                return
+        if dtype == bool_:
+            self.visit[BoolType]()
+            return
+        elif dtype == int8:
+            self.visit[Int8Type]()
+            return
+        elif dtype == int16:
+            self.visit[Int16Type]()
+            return
+        elif dtype == int32:
+            self.visit[Int32Type]()
+            return
+        elif dtype == int64:
+            self.visit[Int64Type]()
+            return
+        elif dtype == uint8:
+            self.visit[UInt8Type]()
+            return
+        elif dtype == uint16:
+            self.visit[UInt16Type]()
+            return
+        elif dtype == uint32:
+            self.visit[UInt32Type]()
+            return
+        elif dtype == uint64:
+            self.visit[UInt64Type]()
+            return
+        elif dtype == float16:
+            self.visit[Float16Type]()
+            return
+        elif dtype == float32:
+            self.visit[Float32Type]()
+            return
+        elif dtype == float64:
+            self.visit[Float64Type]()
+            return
 
         if dtype.is_string():
             self.visit_string()
@@ -46,7 +78,7 @@ trait DataTypeVisitor:
         elif dtype.is_list():
             self.visit_list(dtype.as_list_type().item[])
         elif dtype.is_fixed_size_list():
-            ref fsl = dtype.as_fixed_size_list_type()
+            var fsl = dtype.as_fixed_size_list_type()
             self.visit_fixed_size_list(fsl.item.dtype[], fsl.size)
         elif dtype.is_struct():
             self.visit_struct(dtype.as_struct_type().fields)
@@ -94,10 +126,42 @@ trait ArrayVisitor:
         """Dispatch to the typed overload matching the runtime dtype."""
         var dt = array.dtype()
 
-        comptime for dtype in primitive_types:
-            if dt == dtype():
-                self.visit[dtype](array.as_primitive[dtype]())
-                return
+        if dt == bool_:
+            self.visit[BoolType](array.as_primitive[BoolType]())
+            return
+        elif dt == int8:
+            self.visit[Int8Type](array.as_primitive[Int8Type]())
+            return
+        elif dt == int16:
+            self.visit[Int16Type](array.as_primitive[Int16Type]())
+            return
+        elif dt == int32:
+            self.visit[Int32Type](array.as_primitive[Int32Type]())
+            return
+        elif dt == int64:
+            self.visit[Int64Type](array.as_primitive[Int64Type]())
+            return
+        elif dt == uint8:
+            self.visit[UInt8Type](array.as_primitive[UInt8Type]())
+            return
+        elif dt == uint16:
+            self.visit[UInt16Type](array.as_primitive[UInt16Type]())
+            return
+        elif dt == uint32:
+            self.visit[UInt32Type](array.as_primitive[UInt32Type]())
+            return
+        elif dt == uint64:
+            self.visit[UInt64Type](array.as_primitive[UInt64Type]())
+            return
+        elif dt == float16:
+            self.visit[Float16Type](array.as_primitive[Float16Type]())
+            return
+        elif dt == float32:
+            self.visit[Float32Type](array.as_primitive[Float32Type]())
+            return
+        elif dt == float64:
+            self.visit[Float64Type](array.as_primitive[Float64Type]())
+            return
 
         if dt.is_string():
             self.visit(array.as_string())

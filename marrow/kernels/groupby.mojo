@@ -13,6 +13,7 @@ Abstractions:
   - ``HashGrouper``: hash table + two-phase pipeline orchestration.
 """
 
+from std.memory import ArcPointer
 from ..arrays import PrimitiveArray, StructArray, AnyArray
 from ..builders import (
     PrimitiveBuilder,
@@ -21,15 +22,16 @@ from ..builders import (
 )
 from ..dtypes import (
     PrimitiveType,
-    AnyType,
+    ArrowType,
     Field,
-    int64,
-    uint32,
-    uint64,
-    float64,
+    BoolType,
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
     bool_,
-    numeric_types,
-    primitive_types,
+    int8, int16, int32, int64,
+    uint8, uint16, uint32, uint64,
+    float16, float32, float64,
     struct_,
 )
 from ..schema import Schema
@@ -64,7 +66,7 @@ struct AggregateState(Movable):
     def length(self) -> Int:
         return self.builder.length()
 
-    def dtype(self) -> AnyType:
+    def dtype(self) -> ArrowType:
         return self.builder.dtype()
 
     def finish(mut self) raises -> AnyArray:
@@ -78,9 +80,30 @@ struct AggregateState(Movable):
 
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
-    comptime for dt in primitive_types:
-        if col.dtype() == dt():
-            return Float64(col.as_primitive[dt]().unsafe_get(row))
+    if col.dtype() == bool_:
+        return Float64(col.as_primitive[BoolType]().unsafe_get(row))
+    elif col.dtype() == int8:
+        return Float64(col.as_primitive[Int8Type]().unsafe_get(row))
+    elif col.dtype() == int16:
+        return Float64(col.as_primitive[Int16Type]().unsafe_get(row))
+    elif col.dtype() == int32:
+        return Float64(col.as_primitive[Int32Type]().unsafe_get(row))
+    elif col.dtype() == int64:
+        return Float64(col.as_primitive[Int64Type]().unsafe_get(row))
+    elif col.dtype() == uint8:
+        return Float64(col.as_primitive[UInt8Type]().unsafe_get(row))
+    elif col.dtype() == uint16:
+        return Float64(col.as_primitive[UInt16Type]().unsafe_get(row))
+    elif col.dtype() == uint32:
+        return Float64(col.as_primitive[UInt32Type]().unsafe_get(row))
+    elif col.dtype() == uint64:
+        return Float64(col.as_primitive[UInt64Type]().unsafe_get(row))
+    elif col.dtype() == float16:
+        return Float64(col.as_primitive[Float16Type]().unsafe_get(row))
+    elif col.dtype() == float32:
+        return Float64(col.as_primitive[Float32Type]().unsafe_get(row))
+    elif col.dtype() == float64:
+        return Float64(col.as_primitive[Float64Type]().unsafe_get(row))
     raise Error("unsupported dtype for aggregation: ", col.dtype())
 
 
@@ -164,7 +187,7 @@ struct AggregateFunction(Copyable, Movable):
         """Finalize state into a result (field, column) pair."""
         if self.name == "count":
             return (
-                Field(col_name, int64),
+                Field(col_name, ArcPointer(ArrowType(int64))),
                 self.counts.finish(),
             )
 
@@ -181,7 +204,7 @@ struct AggregateFunction(Copyable, Movable):
                 else:
                     b.append_null()
             return (
-                Field(col_name, float64),
+                Field(col_name, ArcPointer(ArrowType(float64))),
                 b.finish().to_any(),
             )
 
@@ -196,7 +219,7 @@ struct AggregateFunction(Copyable, Movable):
             else:
                 b.append_null()
         return (
-            Field(col_name, float64),
+            Field(col_name, ArcPointer(ArrowType(float64))),
             b.finish().to_any(),
         )
 
@@ -305,10 +328,10 @@ struct HashGrouper(Movable):
         # Key columns.
         for k in range(len(key_fields)):
             result_fields.append(
-                Field(key_fields[k].name, key_fields[k].dtype.copy())
+                Field(key_fields[k].name, key_fields[k].dtype)
             )
             if num_groups == 0:
-                var empty = make_builder(key_fields[k].dtype.copy())
+                var empty = make_builder(key_fields[k].dtype[])
                 result_cols.append(empty.finish())
             else:
                 result_cols.append(self._group_keys[k].copy())
@@ -370,11 +393,12 @@ def groupby(
     grouper.consume(keys, values)
 
     var key_fields = List[Field]()
-    for k in range(len(keys.dtype.fields)):
+    var key_struct = keys.dtype.as_struct_type()
+    for k in range(len(key_struct.fields)):
         key_fields.append(
             Field(
-                keys.dtype.fields[k].name,
-                keys.dtype.fields[k].dtype.copy(),
+                key_struct.fields[k].name,
+                key_struct.fields[k].dtype,
             )
         )
 
@@ -391,7 +415,7 @@ def groupby(
     children.append(key.copy())
     var key_data = key.to_data()
     var sa = StructArray(
-        dtype=struct_(Field("key", key_data.dtype.copy())),
+        dtype=struct_(Field("key", ArcPointer(key_data.dtype))),
         length=key_data.length,
         nulls=key_data.nulls,
         offset=key_data.offset,

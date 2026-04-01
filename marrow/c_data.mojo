@@ -128,7 +128,7 @@ struct CArrowSchema(Copyable, Movable):
 
     @staticmethod
     def from_dtype(
-        dtype: AnyType,
+        dtype: ArrowType,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
 
@@ -189,7 +189,7 @@ struct CArrowSchema(Copyable, Movable):
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_list():
-            ref fsl = dtype.as_fixed_size_list_type()
+            var fsl = dtype.as_fixed_size_list_type()
             fmt = {"+w:", fsl.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
@@ -199,7 +199,7 @@ struct CArrowSchema(Copyable, Movable):
             children[0] = child0_ptr
         elif dtype.is_struct():
             fmt = "+s"
-            ref st = dtype.as_struct_type()
+            var st = dtype.as_struct_type()
             n_children = Int64(len(st.fields))
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 Int(n_children)
@@ -320,7 +320,7 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
-    def to_dtype(self) raises -> AnyType:
+    def to_dtype(self) raises -> ArrowType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
@@ -364,7 +364,7 @@ struct CArrowSchema(Copyable, Movable):
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
                 fields.append(self.children[i][].to_field())
-            return struct_(fields)
+            return struct_(fields^)
         else:
             raise Error("Unknown format: ", fmt)
 
@@ -488,7 +488,7 @@ struct CArrowArray(Copyable, Movable):
             self.release(UnsafePointer(to=self))
 
     def to_data(
-        self, dtype: AnyType, owner: ArcPointer[Allocation]
+        self, dtype: ArrowType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
         """Build an ArrayData from this CArrowArray, all buffers sharing one owner.
 
@@ -554,7 +554,7 @@ struct CArrowArray(Copyable, Movable):
                 self.children[0][].to_data(dtype.as_fixed_size_list_type().item.dtype[], owner)
             )
         elif dtype.is_struct():
-            ref st = dtype.as_struct_type()
+            var st = dtype.as_struct_type()
             for i in range(Int(self.n_children)):
                 children.append(
                     self.children[i][].to_data(st.fields[i].dtype[], owner)
@@ -573,7 +573,7 @@ struct CArrowArray(Copyable, Movable):
         )
 
     def to_array(
-        self, dtype: AnyType, owner: ArcPointer[Allocation]
+        self, dtype: ArrowType, owner: ArcPointer[Allocation]
     ) raises -> AnyArray:
         """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data.
         """
@@ -694,7 +694,7 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    def to_array(deinit self, dtype: AnyType) raises -> AnyArray:
+    def to_array(deinit self, dtype: ArrowType) raises -> AnyArray:
         """Convert to an AnyArray, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
@@ -764,7 +764,7 @@ struct CArrowDeviceArray(Movable):
     var reserved2: Int64
 
     def to_array(
-        deinit self, dtype: AnyType, ctx: DeviceContext
+        deinit self, dtype: ArrowType, ctx: DeviceContext
     ) raises -> AnyArray:
         """Import a device array into marrow, taking ownership of the C struct.
 
@@ -1008,7 +1008,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
             if UnsafePointer(to=c_array[].release).bitcast[UInt64]()[0] == 0:
                 c_array.free()
                 break
-            var struct_dtype = struct_(schema.fields)
+            var struct_dtype = struct_(schema.fields.copy())
             var arr = c_array.take_pointee().to_array(struct_dtype)
             var columns = List[AnyArray]()
             for child in arr.as_struct().children:

@@ -32,12 +32,13 @@ from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import (
     PrimitiveType,
-    uint8,
-    int8,
-    uint64,
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
     bool_,
-    numeric_types,
-    primitive_types,
+    int8, int16, int32, int64,
+    uint8, uint16, uint32, uint64,
+    float16, float32, float64,
 )
 
 comptime _h = Scalar[uint64.native]
@@ -369,9 +370,28 @@ def rapidhash(
     if keys.dtype() == bool_:
         return rapidhash(keys.as_bool(), ctx)
 
-    comptime for dtype in numeric_types:
-        if keys.dtype() == dtype():
-            return rapidhash[dtype](keys.as_primitive[dtype](), ctx)
+    if keys.dtype() == int8:
+        return rapidhash[Int8Type](keys.as_primitive[Int8Type](), ctx)
+    elif keys.dtype() == int16:
+        return rapidhash[Int16Type](keys.as_primitive[Int16Type](), ctx)
+    elif keys.dtype() == int32:
+        return rapidhash[Int32Type](keys.as_primitive[Int32Type](), ctx)
+    elif keys.dtype() == int64:
+        return rapidhash[Int64Type](keys.as_primitive[Int64Type](), ctx)
+    elif keys.dtype() == uint8:
+        return rapidhash[UInt8Type](keys.as_primitive[UInt8Type](), ctx)
+    elif keys.dtype() == uint16:
+        return rapidhash[UInt16Type](keys.as_primitive[UInt16Type](), ctx)
+    elif keys.dtype() == uint32:
+        return rapidhash[UInt32Type](keys.as_primitive[UInt32Type](), ctx)
+    elif keys.dtype() == uint64:
+        return rapidhash[UInt64Type](keys.as_primitive[UInt64Type](), ctx)
+    elif keys.dtype() == float16:
+        return rapidhash[Float16Type](keys.as_primitive[Float16Type](), ctx)
+    elif keys.dtype() == float32:
+        return rapidhash[Float32Type](keys.as_primitive[Float32Type](), ctx)
+    elif keys.dtype() == float64:
+        return rapidhash[Float64Type](keys.as_primitive[Float64Type](), ctx)
 
     if keys.dtype().is_string():
         return rapidhash(keys.as_string())

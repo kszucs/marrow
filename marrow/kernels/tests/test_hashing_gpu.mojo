@@ -8,7 +8,7 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import BoolArray, PrimitiveArray
 from marrow.builders import array, arange, BoolBuilder, PrimitiveBuilder
-from marrow.dtypes import bool_, int32, int64, float32, uint64
+from marrow.dtypes import bool_, int32, int64, float32, uint64, Int32Type, Int64Type, Float32Type, UInt64Type
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL
 
 

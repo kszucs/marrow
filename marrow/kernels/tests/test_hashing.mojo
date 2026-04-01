@@ -2,7 +2,7 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray, StringArray
 from marrow.builders import array, PrimitiveBuilder, StringBuilder
-from marrow.dtypes import int32, int64, uint8, uint64, float64, bool_
+from marrow.dtypes import int32, int64, uint8, uint64, float64, bool_, Int32Type, Int64Type, UInt8Type, UInt64Type, Float64Type
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.hashing import rapidhash, NULL_HASH_SENTINEL

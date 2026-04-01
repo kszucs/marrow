@@ -5,7 +5,7 @@
 enabling primitive-typed generics to use `T.native` as a compile-time type
 parameter (e.g. `Buffer[T.native]`, `Scalar[T.native]`).
 
-`AnyType` is the type-erased runtime container backed by a `Variant` — no
+`ArrowType` is the type-erased runtime container backed by a `Variant` — no
 heap allocation, no vtable, direct member access.
 
 Concrete zero-size type structs (one per Arrow type):
@@ -21,9 +21,6 @@ Comptime singletons (same names as before):
     uint8, uint16, uint32, uint64,
     float16, float32, float64, binary, string
 
-Comptime type tuples (replacing the old `*_dtypes` lists):
-    primitive_types, numeric_types, integer_types, float_types,
-    signed_integer_types, unsigned_integer_types
 """
 
 from std.utils import Variant
@@ -40,7 +37,7 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 trait DataType(Equatable, ImplicitlyDestructible, Movable, Writable):
     def byte_width(self) -> Int: ...
     def bit_width(self) -> UInt8: ...
-    def to_any(deinit self) -> AnyType: ...
+    def to_any(deinit self) -> ArrowType: ...
 
 
 trait PrimitiveType(DataType):
@@ -61,7 +58,7 @@ struct NullType(DataType, ImplicitlyCopyable):
     def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("null")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct BoolType(PrimitiveType, ImplicitlyCopyable):
@@ -72,7 +69,7 @@ struct BoolType(PrimitiveType, ImplicitlyCopyable):
     def bit_width(self) -> UInt8: return UInt8(1)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("bool")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Int8Type(PrimitiveType, ImplicitlyCopyable):
@@ -82,7 +79,7 @@ struct Int8Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 1
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int8")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Int16Type(PrimitiveType, ImplicitlyCopyable):
@@ -92,7 +89,7 @@ struct Int16Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int16")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Int32Type(PrimitiveType, ImplicitlyCopyable):
@@ -102,7 +99,7 @@ struct Int32Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int32")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Int64Type(PrimitiveType, ImplicitlyCopyable):
@@ -112,7 +109,7 @@ struct Int64Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int64")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct UInt8Type(PrimitiveType, ImplicitlyCopyable):
@@ -122,7 +119,7 @@ struct UInt8Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 1
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint8")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct UInt16Type(PrimitiveType, ImplicitlyCopyable):
@@ -132,7 +129,7 @@ struct UInt16Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint16")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct UInt32Type(PrimitiveType, ImplicitlyCopyable):
@@ -142,7 +139,7 @@ struct UInt32Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint32")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct UInt64Type(PrimitiveType, ImplicitlyCopyable):
@@ -152,7 +149,7 @@ struct UInt64Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint64")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Float32Type(PrimitiveType, ImplicitlyCopyable):
@@ -162,7 +159,7 @@ struct Float32Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float32")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Float64Type(PrimitiveType, ImplicitlyCopyable):
@@ -172,7 +169,7 @@ struct Float64Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float64")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct Float16Type(PrimitiveType, ImplicitlyCopyable):
@@ -182,7 +179,7 @@ struct Float16Type(PrimitiveType, ImplicitlyCopyable):
     def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float16")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct BinaryType(DataType, ImplicitlyCopyable):
@@ -191,7 +188,7 @@ struct BinaryType(DataType, ImplicitlyCopyable):
     def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("binary")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct StringType(DataType, ImplicitlyCopyable):
@@ -200,12 +197,12 @@ struct StringType(DataType, ImplicitlyCopyable):
     def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("string")
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 # ---------------------------------------------------------------------------
 # Field and nested compound types
-# (use ArcPointer[AnyType] for child dtype to break the circular layout)
+# (use ArcPointer[ArrowType] for child dtype to break the circular layout)
 # ---------------------------------------------------------------------------
 
 
@@ -218,11 +215,11 @@ struct Field(
     Writable,
 ):
     var name: String
-    var dtype: ArcPointer[AnyType]
+    var dtype: ArcPointer[ArrowType]
     var nullable: Bool
 
     def __init__(
-        out self, name: String, dtype: ArcPointer[AnyType], nullable: Bool = True
+        out self, name: String, dtype: ArcPointer[ArrowType], nullable: Bool = True
     ):
         self.name = name
         self.dtype = dtype
@@ -246,14 +243,14 @@ struct Field(
             "Field(name=", self.name, ", nullable=", self.nullable, ")"
         )
 
-    def to_python_object(var self) -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
 
 struct ListType(DataType, ImplicitlyCopyable):
-    var item: ArcPointer[AnyType]
+    var item: ArcPointer[ArrowType]
 
-    def __init__(out self, item: ArcPointer[AnyType]):
+    def __init__(out self, item: ArcPointer[ArrowType]):
         self.item = item
 
     def byte_width(self) -> Int: return 0
@@ -265,7 +262,7 @@ struct ListType(DataType, ImplicitlyCopyable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("list<", self.item[], ">")
 
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct FixedSizeListType(DataType, Copyable):
@@ -285,7 +282,7 @@ struct FixedSizeListType(DataType, Copyable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_list<", self.item, ">")
 
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct StructType(DataType, Copyable):
@@ -311,14 +308,14 @@ struct StructType(DataType, Copyable):
             writer.write(self.fields[i])
         writer.write(">")
 
-    def to_any(deinit self) -> AnyType: return AnyType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 # ---------------------------------------------------------------------------
-# AnyType — Variant-based type-erased handle
+# ArrowType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
-comptime _AnyTypeV = Variant[
+comptime _ArrowTypeV = Variant[
     NullType, BoolType,
     Int8Type, Int16Type, Int32Type, Int64Type,
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
@@ -328,7 +325,7 @@ comptime _AnyTypeV = Variant[
 ]
 
 
-struct AnyType(
+struct ArrowType(
     Copyable,
     ConvertibleFromPython,
     ConvertibleToPython,
@@ -337,14 +334,14 @@ struct AnyType(
     Movable,
     Writable,
 ):
-    var _v: _AnyTypeV
+    var _v: _ArrowTypeV
 
     @implicit
     def __init__[T: DataType](out self, var value: T):
-        self._v = _AnyTypeV(value^)
+        self._v = _ArrowTypeV(value^)
 
     def __init__(out self, *, copy: Self):
-        self._v = _AnyTypeV(copy=copy._v)
+        self._v = _ArrowTypeV(copy=copy._v)
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
@@ -360,10 +357,10 @@ struct AnyType(
         try:
             capsule = py.__arrow_c_schema__()
         except:
-            raise Error("cannot convert Python object to AnyType")
+            raise Error("cannot convert Python object to ArrowType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
-    def to_python_object(var self) -> PythonObject:
+    def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
     # --- generic type dispatch ---
@@ -479,17 +476,17 @@ struct AnyType(
 
     # --- compound type accessors ---
 
-    def as_list_type(ref self) -> ref[self] ListType:
-        """For list types, returns a reference to the inner ListType."""
+    def as_list_type(self) -> ListType:
+        """For list types, returns the inner ListType."""
         return self._v[ListType]
 
-    def as_fixed_size_list_type(ref self) -> ref[self] FixedSizeListType:
-        """For fixed-size list types, returns a reference to the inner FixedSizeListType."""
-        return self._v[FixedSizeListType]
+    def as_fixed_size_list_type(self) -> FixedSizeListType:
+        """For fixed-size list types, returns the inner FixedSizeListType."""
+        return FixedSizeListType(copy=self._v[FixedSizeListType])
 
-    def as_struct_type(ref self) -> ref[self] StructType:
-        """For struct types, returns a reference to the inner StructType."""
-        return self._v[StructType]
+    def as_struct_type(self) -> StructType:
+        """For struct types, returns the inner StructType."""
+        return StructType(copy=self._v[StructType])
 
 
 # ---------------------------------------------------------------------------
@@ -497,27 +494,43 @@ struct AnyType(
 # ---------------------------------------------------------------------------
 
 
-def field(name: String, var dtype: AnyType, nullable: Bool = True) -> Field:
+def native_arrow_type[T: PrimitiveType]() -> ArrowType:
+    """Return the ArrowType singleton for a PrimitiveType type parameter."""
+    comptime if T.native == DType.bool: return bool_
+    elif T.native == DType.int8: return int8
+    elif T.native == DType.int16: return int16
+    elif T.native == DType.int32: return int32
+    elif T.native == DType.int64: return int64
+    elif T.native == DType.uint8: return uint8
+    elif T.native == DType.uint16: return uint16
+    elif T.native == DType.uint32: return uint32
+    elif T.native == DType.uint64: return uint64
+    elif T.native == DType.float16: return float16
+    elif T.native == DType.float32: return float32
+    else: return float64
+
+
+def field(name: String, var dtype: ArrowType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
     return Field(name, ArcPointer(dtype^), nullable)
 
 
-def list_(var value_type: AnyType) -> AnyType:
+def list_(var value_type: ArrowType) -> ArrowType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
     return ListType(ArcPointer(value_type^))
 
 
-def fixed_size_list_(var value_type: AnyType, size: Int) -> AnyType:
+def fixed_size_list_(var value_type: ArrowType, size: Int) -> ArrowType:
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size."""
     return FixedSizeListType(field("item", value_type^), size)
 
 
-def struct_(var fields: List[Field]) -> AnyType:
+def struct_(var fields: List[Field]) -> ArrowType:
     """Construct a struct type from a list of fields."""
     return StructType(fields^)
 
 
-def struct_(var *fields: Field) -> AnyType:
+def struct_(var *fields: Field) -> ArrowType:
     """Construct a struct type from variadic fields."""
     return StructType(List(elements=fields^))
 
@@ -542,18 +555,3 @@ comptime float64 = Float64Type()
 comptime binary = BinaryType()
 comptime string = StringType()
 
-comptime signed_integer_types = (Int8Type, Int16Type, Int32Type, Int64Type)
-comptime unsigned_integer_types = (UInt8Type, UInt16Type, UInt32Type, UInt64Type)
-comptime integer_types = (Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type)
-comptime float_types = (Float16Type, Float32Type, Float64Type)
-comptime numeric_types = (
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-)
-comptime primitive_types = (
-    BoolType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-)

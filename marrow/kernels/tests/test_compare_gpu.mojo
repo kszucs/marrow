@@ -2,7 +2,7 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 from std.gpu.host import DeviceContext
 
 from marrow.builders import array, arange
-from marrow.dtypes import int32, float32
+from marrow.dtypes import int32, float32, Int32Type, Float32Type
 from marrow.kernels.compare import (
     equal,
     not_equal,

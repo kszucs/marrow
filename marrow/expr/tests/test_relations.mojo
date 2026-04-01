@@ -2,7 +2,7 @@ from std.testing import assert_equal, TestSuite
 
 from marrow.arrays import AnyArray
 from marrow.builders import array
-from marrow.dtypes import field, int64, float64
+from marrow.dtypes import field, int64, float64, Int64Type
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr import (

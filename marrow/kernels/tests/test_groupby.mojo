@@ -17,6 +17,12 @@ from marrow.dtypes import (
     bool_,
     Field,
     struct_,
+    Int8Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt32Type,
+    Float64Type,
 )
 from marrow.kernels.groupby import groupby
 

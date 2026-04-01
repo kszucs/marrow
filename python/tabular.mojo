@@ -15,6 +15,7 @@ from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
 from marrow.arrays import AnyArray, ChunkedArray
 from marrow.dtypes import Field
+from std.memory import ArcPointer
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from helpers import pymethod, def_display
@@ -77,7 +78,7 @@ def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     for key in data:
         var name = String(py=key)
         var arr = AnyArray(py=data[key])
-        fields.append(Field(name=name, dtype=arr.dtype().copy()))
+        fields.append(Field(name=name, dtype=ArcPointer(arr.dtype())))
         columns.append(arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
@@ -92,7 +93,7 @@ def _build_from_arrays(
     for arr_obj in data:
         var arr = AnyArray(py=arr_obj)
         var name = String(py=names_obj[i])
-        fields.append(Field(name=name, dtype=arr.dtype().copy()))
+        fields.append(Field(name=name, dtype=ArcPointer(arr.dtype())))
         columns.append(arr^)
         i += 1
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
@@ -427,7 +428,7 @@ def _record_batch_join(
 
     # Build output schema and RecordBatch from StructArray result.
     var out_fields = List[Field]()
-    for ref f in result_sa.dtype.fields:
+    for ref f in result_sa.dtype.as_struct_type().fields:
         out_fields.append(f.copy())
     return RecordBatch(
         schema=Schema(fields=out_fields^),

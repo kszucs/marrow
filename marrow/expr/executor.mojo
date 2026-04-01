@@ -28,7 +28,15 @@ import std.math as math
 
 from marrow.arrays import PrimitiveArray, AnyArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import numeric_types, bool_ as bool_dt
+from marrow.dtypes import (
+    Int8Type, Int16Type, Int32Type, Int64Type,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Float16Type, Float32Type, Float64Type,
+    int8, int16, int32, int64,
+    uint8, uint16, uint32, uint64,
+    float16, float32, float64,
+    bool_ as bool_dt,
+)
 from marrow.kernels.arithmetic import add, sub, mul, div, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -686,7 +694,7 @@ def _batch_to_struct(batch: RecordBatch) raises -> StructArray:
         fields.append(batch.schema.fields[i].copy())
         children.append(batch.columns[i].copy())
     return StructArray(
-        dtype=struct_(fields),
+        dtype=struct_(fields^),
         length=batch.num_rows(),
         nulls=0,
         offset=0,
@@ -752,7 +760,7 @@ struct AggregateProcessor(RelationProcessor):
                         key_children.append(key_arrays[i].copy())
                         key_struct_fields.append(self.key_fields[i].copy())
                     var key_struct = StructArray(
-                        dtype=struct_(key_struct_fields),
+                        dtype=struct_(key_struct_fields^),
                         length=batch.num_rows(),
                         nulls=0,
                         offset=0,
@@ -1032,11 +1040,70 @@ def execute(
 
 def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
-    comptime for dt in numeric_types:
-        if scalar_array.dtype() == dt():
-            var val = scalar_array.as_primitive[dt]().unsafe_get(0)
-            var builder = PrimitiveBuilder[dt](length)
-            for _ in range(length):
-                builder.unsafe_append(val)
-            return builder.finish().to_any()
+    if scalar_array.dtype() == int8:
+        var val = scalar_array.as_primitive[Int8Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Int8Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == int16:
+        var val = scalar_array.as_primitive[Int16Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Int16Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == int32:
+        var val = scalar_array.as_primitive[Int32Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Int32Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == int64:
+        var val = scalar_array.as_primitive[Int64Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Int64Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == uint8:
+        var val = scalar_array.as_primitive[UInt8Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[UInt8Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == uint16:
+        var val = scalar_array.as_primitive[UInt16Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[UInt16Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == uint32:
+        var val = scalar_array.as_primitive[UInt32Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[UInt32Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == uint64:
+        var val = scalar_array.as_primitive[UInt64Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[UInt64Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == float16:
+        var val = scalar_array.as_primitive[Float16Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Float16Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == float32:
+        var val = scalar_array.as_primitive[Float32Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Float32Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
+    elif scalar_array.dtype() == float64:
+        var val = scalar_array.as_primitive[Float64Type]().unsafe_get(0)
+        var builder = PrimitiveBuilder[Float64Type](length)
+        for _ in range(length):
+            builder.unsafe_append(val)
+        return builder.finish().to_any()
     raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype()}")

@@ -16,7 +16,7 @@ from std.sys import size_of
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
-from ..dtypes import int32, uint64
+from ..dtypes import int32, uint64, UInt64Type
 from ..views import BufferView
 from .compare import equal
 from .filter import take, filter_
@@ -110,7 +110,7 @@ comptime _PIPE_DEPTH: Int = 16
 
 struct SwissHashTable[
     hasher: def(StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[
-        uint64
+        UInt64Type
     ] = rapidhash
 ](Movable):
     """Swiss Table hash table with SIMD group matching.

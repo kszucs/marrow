@@ -9,7 +9,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import int32, int64, uint64
+from marrow.dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
 from marrow.kernels.hashing import (
     rapidhash,
     _rapidhash_fixed,

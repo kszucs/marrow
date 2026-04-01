@@ -393,7 +393,7 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    def _get_type(self) raises -> dt.AnyType:
+    def _get_type(self) raises -> dt.ArrowType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
                 raise Error("cannot mix bytes and non-bytes values")
@@ -412,11 +412,11 @@ struct PyInferrer(Copyable, Movable):
                 fields.append(
                     dt.Field(
                         self._field_order[i],
-                        self._field_children[i]._get_type(),
+                        ArcPointer(self._field_children[i]._get_type()),
                         nullable=True,
                     )
                 )
-            return dt.struct_(fields)
+            return dt.struct_(fields^)
         if (
             self.unicode_count > 0
             and (self.bool_count + self.int_count + self.float_count) > 0
@@ -432,7 +432,7 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    def infer(mut self, obj: PythonObject) raises -> dt.AnyType:
+    def infer(mut self, obj: PythonObject) raises -> dt.ArrowType:
         """Visit elements until type is locked, then scan remaining elements for nulls.
         """
         var list_ptr = obj._obj_ptr
@@ -742,13 +742,14 @@ struct PyStructConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder) raises:
         self._builder = builder.downcast[StructBuilder]()
         var dtype = self._builder[].dtype()
-        var n = len(dtype.fields)
+        var st = dtype.as_struct_type()
+        var n = len(st.fields)
         var children = List[PyAnyConverter](capacity=n)
         var field_keys = List[PythonObject](capacity=n)
         for i in range(n):
             var child_builder = self._builder[].field_builder(i)
             children.append(make_converter(child_builder))
-            field_keys.append(PythonObject(dtype.fields[i].name))
+            field_keys.append(PythonObject(st.fields[i].name))
         self._children = children^
         self._field_keys = field_keys^
         self.py = PyHelpers()
@@ -798,9 +799,28 @@ def make_converter(builder: AnyBuilder, has_nulls: Bool = True) raises -> PyAnyC
     dtype = builder.dtype()
     if dtype == dt.bool_:
         return PyBoolConverter(builder, has_nulls)
-    comptime for T in dt.numeric_types:
-        if dtype == T():
-            return PyPrimitiveConverter[T](builder, has_nulls)
+    elif dtype == dt.int8:
+        return PyPrimitiveConverter[dt.Int8Type](builder, has_nulls)
+    elif dtype == dt.int16:
+        return PyPrimitiveConverter[dt.Int16Type](builder, has_nulls)
+    elif dtype == dt.int32:
+        return PyPrimitiveConverter[dt.Int32Type](builder, has_nulls)
+    elif dtype == dt.int64:
+        return PyPrimitiveConverter[dt.Int64Type](builder, has_nulls)
+    elif dtype == dt.uint8:
+        return PyPrimitiveConverter[dt.UInt8Type](builder, has_nulls)
+    elif dtype == dt.uint16:
+        return PyPrimitiveConverter[dt.UInt16Type](builder, has_nulls)
+    elif dtype == dt.uint32:
+        return PyPrimitiveConverter[dt.UInt32Type](builder, has_nulls)
+    elif dtype == dt.uint64:
+        return PyPrimitiveConverter[dt.UInt64Type](builder, has_nulls)
+    elif dtype == dt.float16:
+        return PyPrimitiveConverter[dt.Float16Type](builder, has_nulls)
+    elif dtype == dt.float32:
+        return PyPrimitiveConverter[dt.Float32Type](builder, has_nulls)
+    elif dtype == dt.float64:
+        return PyPrimitiveConverter[dt.Float64Type](builder, has_nulls)
     if dtype.is_string():
         return PyStringConverter(builder, has_nulls)
     elif dtype.is_list():
@@ -828,7 +848,7 @@ def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     return Python.tuple(schema_cap, array_cap)
 
 
-def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.AnyType](
+def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.ArrowType](
     ptr: UnsafePointer[T, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
@@ -884,10 +904,10 @@ def array(
             pass
 
     # Fall back to building from a Python sequence.
-    var dtype: dt.AnyType
+    var dtype: dt.ArrowType
     var has_nulls = True
     if opt := kwargs.find("type"):
-        dtype = opt.value().downcast_value_ptr[dt.AnyType]()[]
+        dtype = opt.value().downcast_value_ptr[dt.ArrowType]()[]
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)

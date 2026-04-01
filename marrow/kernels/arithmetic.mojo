@@ -11,7 +11,7 @@ from std.gpu.host import DeviceContext
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
 from ..views import apply
-from ..dtypes import PrimitiveType, numeric_types, float_types
+from ..dtypes import PrimitiveType
 from . import (
     bitmap_and,
     binary_array_dispatch,
