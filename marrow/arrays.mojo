@@ -193,7 +193,11 @@ struct AnyArray(
             var dtype = py.type().downcast_value_ptr[DataType]()[]
             comptime for T in numeric_dtypes:
                 if dtype == T:
-                    self = py.downcast_value_ptr[PrimitiveArray[T]]()[].copy().to_any()
+                    self = (
+                        py.downcast_value_ptr[PrimitiveArray[T]]()[]
+                        .copy()
+                        .to_any()
+                    )
                     return
             if dtype.is_bool():
                 self = py.downcast_value_ptr[BoolArray]()[].copy().to_any()
@@ -202,7 +206,11 @@ struct AnyArray(
             elif dtype.is_list():
                 self = py.downcast_value_ptr[ListArray]()[].copy().to_any()
             elif dtype.is_fixed_size_list():
-                self = py.downcast_value_ptr[FixedSizeListArray]()[].copy().to_any()
+                self = (
+                    py.downcast_value_ptr[FixedSizeListArray]()[]
+                    .copy()
+                    .to_any()
+                )
             elif dtype.is_struct():
                 self = py.downcast_value_ptr[StructArray]()[].copy().to_any()
             else:

@@ -341,90 +341,68 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
     var offsets_view = array.offsets.view[DType.uint32]()
     var values_view = array.values.view[DType.uint8]()
 
-    # Compute total output bytes.
-    var total_bytes = 0
-    for i in range(n):
-        if sel_bm.test(i):
-            total_bytes += Int(offsets_view.unsafe_get(off + i + 1)) - Int(
-                offsets_view.unsafe_get(off + i)
-            )
-
-    # Allocate output buffers — every byte is written by the copy loop.
+    # Phase 1: build output offsets and compute total_bytes in a single pass.
+    # This eliminates the separate total_bytes scan over all n elements.
     var out_offsets = Buffer.alloc_uninit[DType.uint32](out_len + 1)
-    var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
     var out_off_view = out_offsets.view[DType.uint32]()
-    var out_val_view = out_values.view[DType.uint8]()
+    var byte_pos = UInt32(0)
+    out_off_view.unsafe_set(0, UInt32(0))
+
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
+    var j = 0
 
     if array.bitmap:
-        # --- With bitmap: fused run-merging + bitmap filtering ---
         var src_bm = array.bitmap.value()
         var bm_builder = Bitmap.alloc_zeroed(out_len)
-        var byte_pos = UInt32(0)
-        out_off_view.unsafe_set(0, UInt32(0))
-        var j = 0
-        var i = 0
-
-        while i < n:
-            if not sel_bm.test(i):
-                i += 1
-                continue
-
-            var run_start = i
-            while i < n and sel_bm.test(i):
-                var elem_start = offsets_view.unsafe_get(off + i)
-                var elem_end = offsets_view.unsafe_get(off + i + 1)
-                byte_pos += elem_end - elem_start
+        for i in range(n):
+            if sel_bm.test(i):
+                byte_pos += offsets_view.unsafe_get(
+                    off + i + 1
+                ) - offsets_view.unsafe_get(off + i)
                 var valid = src_bm.test(off + i)
                 if valid:
                     bm_builder.set(j)
                 else:
-                    bm_builder.clear(j)
-                if not valid:
                     null_count += 1
                 j += 1
                 out_off_view.unsafe_set(j, byte_pos)
-                i += 1
-
-            var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
-            var src_byte_end = Int(offsets_view.unsafe_get(off + i))
-            var run_bytes = src_byte_end - src_byte_start
-            if run_bytes > 0:
-                out_val_view.slice(Int(byte_pos) - run_bytes).copy_from(
-                    values_view.slice(src_byte_start), run_bytes
-                )
-
         bm = bm_builder.to_immutable(length=out_len)
-
     else:
-        # --- No bitmap: run-merging only ---
-        var byte_pos = UInt32(0)
-        out_off_view.unsafe_set(0, UInt32(0))
-        var j = 0
-        var i = 0
-
-        while i < n:
-            if not sel_bm.test(i):
-                i += 1
-                continue
-
-            var run_start = i
-            while i < n and sel_bm.test(i):
-                var elem_start = offsets_view.unsafe_get(off + i)
-                var elem_end = offsets_view.unsafe_get(off + i + 1)
-                byte_pos += elem_end - elem_start
+        for i in range(n):
+            if sel_bm.test(i):
+                byte_pos += offsets_view.unsafe_get(
+                    off + i + 1
+                ) - offsets_view.unsafe_get(off + i)
                 j += 1
                 out_off_view.unsafe_set(j, byte_pos)
-                i += 1
 
-            var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
-            var src_byte_end = Int(offsets_view.unsafe_get(off + i))
-            var run_bytes = src_byte_end - src_byte_start
-            if run_bytes > 0:
-                out_val_view.slice(Int(byte_pos) - run_bytes).copy_from(
-                    values_view.slice(src_byte_start), run_bytes
-                )
+    var total_bytes = Int(byte_pos)
+
+    # Phase 2: copy selected string values using run-merging.
+    var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
+    var out_val_view = out_values.view[DType.uint8]()
+    var dst_byte_pos = 0
+    var i = 0
+
+    while i < n:
+        if not sel_bm.test(i):
+            i += 1
+            continue
+
+        var run_start = i
+        i += 1
+        while i < n and sel_bm.test(i):
+            i += 1
+
+        var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
+        var src_byte_end = Int(offsets_view.unsafe_get(off + i))
+        var run_bytes = src_byte_end - src_byte_start
+        if run_bytes > 0:
+            out_val_view.slice(dst_byte_pos).copy_from(
+                values_view.slice(src_byte_start), run_bytes
+            )
+            dst_byte_pos += run_bytes
 
     return StringArray(
         length=out_len,
