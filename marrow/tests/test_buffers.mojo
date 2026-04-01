@@ -447,7 +447,7 @@ def test_bitmap_count_set_bits_vs_naive() raises:
 
 
 def test_bitmap_count_set_bits_interior_slices() raises:
-    """count_set_bits on slices ending before buffer end (trailing bytes with real data).
+    """`count_set_bits` on slices ending before buffer end (trailing bytes with real data).
     """
     comptime sizes = (1, 7, 13, 63, 64, 65, 127, 512, 513)
     comptime offsets = (0, 3, 7, 32 << 3, 96 << 3, 128 << 3)

@@ -543,7 +543,7 @@ def _constant_hash(
     """
     var n = len(keys)
     var b = PrimitiveBuilder[uint64](capacity=n)
-    for i in range(n):
+    for _ in range(n):
         b.unsafe_append(Scalar[uint64.native](42))
     return b.finish()
 

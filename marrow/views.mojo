@@ -21,7 +21,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, memcpy, memset
+from std.memory import bitcast, memcpy, memset, pack_bits
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
 from std.algorithm.functional import elementwise
@@ -29,6 +29,19 @@ from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
 from .buffers import Buffer, Bitmap
+
+
+def _packed_uint_dtype[W: Int]() -> DType:
+    """Map a bool SIMD width to the unsigned integer DType that fits W bits."""
+    comptime assert W >= 8 and W % 8 == 0, "W must be a multiple of 8"
+    if W == 8:
+        return DType.uint8
+    elif W == 16:
+        return DType.uint16
+    elif W == 32:
+        return DType.uint32
+    else:
+        return DType.uint64
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +597,7 @@ struct BitmapView[
         """
         return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
 
+    # TODO: probably should be removed
     @always_inline
     def store[
         T: DType, W: Int = 1
@@ -595,6 +609,35 @@ struct BitmapView[
         the correct element address.
         """
         self._data.bitcast[Scalar[T]]().store[width=W](index, val)
+
+    @always_inline
+    def store[
+        W: Int
+    ](self: BitmapView[mut=True, origin=_], bit_index: Int, val: SIMD[DType.bool, W]):
+        """Bit-pack W bools and store into the bitmap at ``bit_index``.
+
+        - W divisible by 8: unrolled pack_bits per 8-bool chunk, one byte each.
+        - W < 8: set/clear individual bits.
+        """
+        comptime assert W % 8 == 0 or W < 8, "W must be divisible by 8 or less than 8"
+
+        comptime if W % 8 == 0:
+            var dst = self._data + (bit_index >> 3)
+            comptime for i in range(W // 8):
+                var byte_val = pack_bits(
+                    val.slice[8, offset=i * 8]()
+                )
+                dst.store(i, byte_val.cast[DType.uint8]())
+        else:
+            var abs_pos = self._offset + bit_index
+            comptime for i in range(W):
+                var p = abs_pos + i
+                var byte_idx = p >> 3
+                var bit_off = UInt8(p & 7)
+                if val[i]:
+                    self._data[byte_idx] = self._data[byte_idx] | (UInt8(1) << bit_off)
+                else:
+                    self._data[byte_idx] = self._data[byte_idx] & ~(UInt8(1) << bit_off)
 
     # --- Slicing ---
 
@@ -1009,41 +1052,36 @@ def apply[
     dst: BitmapView[mut=True, _],
     ctx: Optional[DeviceContext] = None,
 ) raises:
-    """Apply a binary comparison and pack bool results into a bitmap.
+    """Apply a binary comparison and bit-pack results into a bitmap.
 
-    Processes 8 elements at a time, packing comparison results into single
-    bytes via SIMD shift + OR reduction.
+    Compares W elements per call, packs the ``SIMD[bool, W]`` result
+    into the output bitmap via ``BitmapView.store``.
+    Over-read on the tail is safe (Arrow 64-byte padding).
     """
     var length = len(dst)
-    var n_bytes = (length + 7) >> 3
-    comptime shifts = SIMD[DType.uint8, 8](0, 1, 2, 3, 4, 5, 6, 7)
 
     @parameter
     @always_inline
     def process[
         W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank],) -> None:
-        var byte_idx = idx[0]
-        var elem_idx = byte_idx * 8
-        var cmp = op[8](lhs.load[8](elem_idx), rhs.load[8](elem_idx))
-        dst.store[DType.uint8](
-            byte_idx, (cmp.cast[DType.uint8]() << shifts).reduce_or()
-        )
+    ](idx: IndexList[rank]) -> None:
+        var i = idx[0]
+        dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    # Process one byte at a time (each byte = 8 comparisons).
-    # Safe to over-read: Arrow buffers are 64-byte padded.
     if ctx:
         comptime if has_accelerator():
-            comptime gpu_width = simd_width_of[
-                DType.uint8, target=get_gpu_target()
-            ]()
-            elementwise[process, gpu_width, target="gpu"](n_bytes, ctx.value())
+            comptime gpu_width = max(
+                8, simd_width_of[In, target=get_gpu_target()]()
+            )
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
     else:
-        comptime cpu_width = simd_byte_width()
+        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            n_bytes
+            length
         )
 
 

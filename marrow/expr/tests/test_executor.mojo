@@ -4,7 +4,7 @@ from std.testing import assert_equal, assert_true, TestSuite
 from std.python import Python
 from std.os import remove
 
-from marrow.arrays import AnyArray
+from marrow.arrays import AnyArray, BoolArray
 from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt
 from marrow.tabular import record_batch
@@ -96,10 +96,10 @@ def test_predicate() raises:
     var b = arange[int64](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var tmp_pred = Planner().build(col(0) < col(1)).eval(batch)
-    ref result = tmp_pred.as_primitive[bool_dt]()
+    ref result = tmp_pred.as_bool()
     # a == b everywhere, so all False
     for i in range(n):
-        assert_equal(result[i], 0)
+        assert_equal(result[i], False)
 
 
 def test_chained_expression() raises:

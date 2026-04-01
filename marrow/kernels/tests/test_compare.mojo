@@ -204,5 +204,22 @@ def test_dtype_mismatch_raises() raises:
     assert_true(raised)
 
 
+def test_equal_large_array() raises:
+    """Regression: equal must write all bitmap bytes, not just the first
+    of each SIMD batch (previously only byte 0 of every 16 was written)."""
+    var n = 200
+    var ab = PrimitiveBuilder[int64](n)
+    var bb = PrimitiveBuilder[int64](n)
+    for i in range(n):
+        ab.unsafe_append(Scalar[int64.native](i))
+        bb.unsafe_append(Scalar[int64.native](i))
+    var a = ab.finish()
+    var b = bb.finish()
+    var result = equal[int64](a, b)
+    assert_equal(len(result), n)
+    for i in range(n):
+        assert_true(result[i])
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

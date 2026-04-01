@@ -1219,7 +1219,7 @@ def test_struct_array_flatten() raises:
 
 
 def test_struct_array_select_basic() raises:
-    """select returns a StructArray with only the requested fields."""
+    """`select` returns a StructArray with only the requested fields."""
     var sb = StructBuilder(
         [field("a", int32), field("b", int32), field("c", int32)], capacity=2
     )
@@ -1245,7 +1245,7 @@ def test_struct_array_select_basic() raises:
 
 
 def test_struct_array_select_inherits_nulls_and_bitmap() raises:
-    """select preserves nulls count, bitmap, and offset from the source."""
+    """`select` preserves nulls count, bitmap, and offset from the source."""
     var sb = StructBuilder([field("x", int32), field("y", int32)], capacity=3)
     sb.field_builder(0).as_primitive[int32]().append(1)
     sb.field_builder(0).as_primitive[int32]().append(2)
@@ -1269,7 +1269,7 @@ def test_struct_array_select_inherits_nulls_and_bitmap() raises:
 
 
 def test_struct_array_select_inherits_offset() raises:
-    """select preserves the offset of the source array."""
+    """`select` preserves the offset of the source array."""
     var sb = StructBuilder([field("a", int32), field("b", int32)], capacity=3)
     sb.field_builder(0).as_primitive[int32]().append(1)
     sb.field_builder(0).as_primitive[int32]().append(2)

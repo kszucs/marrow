@@ -187,7 +187,7 @@ def test_bitmapview_bit_offset() raises:
 
 
 def test_bitmapview_slice() raises:
-    """slice() creates a sub-view with the offset summed."""
+    """`slice()` creates a sub-view with the offset summed."""
     var bm = Bitmap.alloc_zeroed(16)
     bm.set(4)
     bm.set(5)
@@ -213,7 +213,7 @@ def test_bitmapview_getitem_slice() raises:
 
 
 def test_bitmapview_with_offset() raises:
-    """view() with a non-zero offset reads bits correctly."""
+    """`view()` with a non-zero offset reads bits correctly."""
     var bm = Bitmap.alloc_zeroed(16)
     bm.set(8)
     bm.set(9)
