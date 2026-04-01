@@ -34,7 +34,7 @@ from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
-from ..dtypes import DataType, Field, int32, uint64, bool_ as bool_dt, struct_
+from ..dtypes import AnyType, Field, int32, uint64, bool_ as bool_dt, struct_, null
 from .boolean import and_
 from .compare import equal
 from .filter import take, filter_
@@ -84,7 +84,7 @@ trait Join(Movable):
         """Probe with right (probe) side data.  Return assembled output."""
         ...
 
-    def build_dtype(self) -> DataType:
+    def build_dtype(self) -> AnyType:
         """DataType of the build side (for output schema construction)."""
         ...
 
@@ -115,14 +115,14 @@ struct HashJoin[
 
     var _table: SwissHashTable[Self.hasher]
     var _left_key_indices: List[Int]
-    var _left_dtype: DataType
+    var _left_dtype: AnyType
     var _left_data: Optional[StructArray]
     var _left_rows: Int
 
     def __init__(out self):
         self._table = SwissHashTable[Self.hasher]()
         self._left_key_indices = List[Int]()
-        self._left_dtype = DataType(code=0)
+        self._left_dtype = null
         self._left_data = None
         self._left_rows = 0
 
@@ -222,23 +222,23 @@ struct HashJoin[
                     rb.append(Scalar[int32.native](i))
         return (lb.finish(), rb.finish())
 
-    def build_dtype(self) -> DataType:
+    def build_dtype(self) -> AnyType:
         return self._left_dtype
 
     def num_left_rows(self) -> Int:
         return self._left_rows
 
-    def output_dtype(self, probe: StructArray, kind: UInt8) -> DataType:
+    def output_dtype(self, probe: StructArray, kind: UInt8) -> AnyType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
-        for ref f in self._left_dtype.fields:
+        for ref f in self._left_dtype.as_struct_type().fields:
             fields.append(f.copy())
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI:
             var left_names = List[String]()
-            for ref f in self._left_dtype.fields:
+            for ref f in self._left_dtype.as_struct_type().fields:
                 left_names.append(f.name)
-            for ref f in probe.dtype.fields:
+            for ref f in probe.dtype.as_struct_type().fields:
                 var name = f.name
                 var collides = False
                 for ref ln in left_names:
@@ -247,7 +247,7 @@ struct HashJoin[
                         break
                 if collides:
                     name = name + "_right"
-                fields.append(Field(name, f.dtype.copy()))
+                fields.append(Field(name, f.dtype))
 
         return struct_(fields^)
 

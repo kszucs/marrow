@@ -55,7 +55,7 @@ trait Builder(ImplicitlyDestructible, Movable):
     def null_count(self) -> Int:
         ...
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         ...
 
     def reserve(mut self, additional: Int) raises:
@@ -92,7 +92,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     var _data: ArcPointer[NoneType]
     var _virt_length: def(ArcPointer[NoneType]) -> Int
     var _virt_null_count: def(ArcPointer[NoneType]) -> Int
-    var _virt_dtype: def(ArcPointer[NoneType]) -> DataType
+    var _virt_dtype: def(ArcPointer[NoneType]) -> AnyType
     var _virt_reserve: def(ArcPointer[NoneType], Int) raises
     var _virt_append_null: def(ArcPointer[NoneType]) raises
     var _virt_extend: def(ArcPointer[NoneType], AnyArray) raises
@@ -111,7 +111,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         return rebind[ArcPointer[T]](ptr)[].null_count()
 
     @staticmethod
-    def _tramp_dtype[T: Builder](ptr: ArcPointer[NoneType]) -> DataType:
+    def _tramp_dtype[T: Builder](ptr: ArcPointer[NoneType]) -> AnyType:
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod
@@ -180,7 +180,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def null_count(self) -> Int:
         return self._virt_null_count(self._data)
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self._virt_dtype(self._data)
 
     def reserve(mut self, additional: Int) raises:
@@ -200,7 +200,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     @always_inline
     def as_primitive[
-        T: DataType
+        T: PrimitiveType
     ](ref self) -> ref[self._data[]] PrimitiveBuilder[T]:
         return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data)[]
 
@@ -245,7 +245,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveBuilder[T: DataType](Builder, Sized):
+struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
     """Builder for fixed-size primitive arrays (integers, floats)."""
 
     comptime ArrayType = PrimitiveArray[Self.T]
@@ -299,7 +299,7 @@ struct PrimitiveBuilder[T: DataType](Builder, Sized):
         """Commit the builder length after direct bulk population."""
         self._length = n
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return Self.T
 
     def append(mut self, value: Self.ScalarType) raises:
@@ -443,7 +443,7 @@ struct StringBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return string
 
     def append(mut self, value: String) raises:
@@ -593,7 +593,7 @@ struct ListBuilder(Builder, Sized):
 
     comptime ArrayType = ListArray
 
-    var _dtype: DataType
+    var _dtype: AnyType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -622,7 +622,7 @@ struct ListBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self._dtype
 
     def values(self) -> AnyBuilder:
@@ -744,7 +744,7 @@ struct FixedSizeListBuilder(Builder, Sized):
 
     comptime ArrayType = FixedSizeListArray
 
-    var _dtype: DataType
+    var _dtype: AnyType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -771,7 +771,7 @@ struct FixedSizeListBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self._dtype
 
     def values(self) -> AnyBuilder:
@@ -814,7 +814,7 @@ struct FixedSizeListBuilder(Builder, Sized):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var list_size = arr.dtype.size
+        var list_size = arr.dtype.as_fixed_size_list_type().size
         var child_slice = arr.values.slice(
             arr.offset * list_size, n * list_size
         )
@@ -872,7 +872,7 @@ struct StructBuilder(Builder, Sized):
 
     comptime ArrayType = StructArray
 
-    var _dtype: DataType
+    var _dtype: AnyType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -882,7 +882,7 @@ struct StructBuilder(Builder, Sized):
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
         var children = List[AnyBuilder](capacity=len(fields))
         for i in range(len(fields)):
-            children.append(make_builder(fields[i].dtype))
+            children.append(make_builder(fields[i].dtype[]))
         self._dtype = struct_(fields)
         self._length = 0
         self._capacity = capacity
@@ -899,7 +899,7 @@ struct StructBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self._dtype
 
     def field_builder(ref self, index: Int) -> ref[self._children] AnyBuilder:
@@ -1025,7 +1025,7 @@ struct BoolBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return bool_
 
     def reserve(mut self, additional: Int) raises:
@@ -1113,34 +1113,34 @@ comptime Float64Builder = PrimitiveBuilder[float64]
 # ---------------------------------------------------------------------------
 
 
-def make_builder(dtype: DataType, capacity: Int = 0) raises -> AnyBuilder:
+def make_builder(dtype: AnyType, capacity: Int = 0) raises -> AnyBuilder:
     """Create the right builder tree for any dtype."""
     if dtype == bool_:
         return BoolBuilder(capacity)
-    comptime for T in numeric_dtypes:
+    comptime for T in numeric_types:
         if dtype == T:
             return PrimitiveBuilder[T](capacity)
     if dtype.is_string():
         return StringBuilder(capacity)
     elif dtype.is_list():
-        var child = make_builder(dtype.fields[0].dtype)
+        var child = make_builder(dtype.as_list_type().item[])
         return ListBuilder(child^, capacity)
     elif dtype.is_fixed_size_list():
-        var child = make_builder(dtype.fields[0].dtype)
-        return FixedSizeListBuilder(child^, dtype.size, capacity)
+        var child = make_builder(dtype.as_fixed_size_list_type().item.dtype[])
+        return FixedSizeListBuilder(child^, dtype.as_fixed_size_list_type().size, capacity)
     elif dtype.is_struct():
-        return StructBuilder(dtype.fields.copy(), capacity)
+        return StructBuilder(dtype.as_struct_type().fields.copy(), capacity)
     else:
         raise Error("unsupported type: ", dtype)
 
 
-def array[T: DataType]() raises -> PrimitiveArray[T]:
+def array[T: PrimitiveType]() raises -> PrimitiveArray[T]:
     """Create an empty primitive array."""
     var b = PrimitiveBuilder[T](0)
     return b.finish()
 
 
-def array[T: DataType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
+def array[T: PrimitiveType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
     """Create a primitive array from optional ints (`None` → null)."""
     # comptime assert T.is_integer(), "array() with int values only supported for integer DataTypes"
     var b = PrimitiveBuilder[T](len(values))
@@ -1153,7 +1153,7 @@ def array[T: DataType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
 
 
 def array[
-    T: DataType
+    T: PrimitiveType
 ](values: List[Optional[Float64]]) raises -> PrimitiveArray[T]:
     """Create a primitive array from optional ints (`None` → null)."""
     # comptime assert T.is_integer(), "array() with int values only supported for integer DataTypes"
@@ -1186,7 +1186,7 @@ def array(values: List[String]) raises -> StringArray:
     return b.finish()
 
 
-def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
+def nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
     """Create a primitive array of `size` null values."""
     var b = PrimitiveBuilder[T](capacity=size)
     b.set_length(size)
@@ -1194,9 +1194,9 @@ def nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
     return b.finish()
 
 
-def arange[T: DataType](start: Int, end: Int) raises -> PrimitiveArray[T]:
+def arange[T: PrimitiveType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     """Create a numeric array with values [start, end)."""
-    comptime assert T.is_numeric(), "arange() only supports numeric DataTypes"
+    comptime assert T.native != DType.bool, "arange() only supports numeric types"
     var b = PrimitiveBuilder[T](end - start)
     for i in range(start, end):
         b.append(Scalar[T.native](i))

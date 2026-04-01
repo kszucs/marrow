@@ -31,13 +31,13 @@ from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import (
-    DataType,
+    PrimitiveType,
     uint8,
     int8,
     uint64,
     bool_,
-    numeric_dtypes,
-    primitive_dtypes,
+    numeric_types,
+    primitive_types,
 )
 
 comptime _h = Scalar[uint64.native]
@@ -172,7 +172,7 @@ def _rapidhash_bool_masked[
 
 @always_inline
 def _rapidhash_primitive[
-    T: DataType, W: Int
+    T: PrimitiveType, W: Int
 ](vals: SIMD[T.native, W]) -> SIMD[uint64.native, W]:
     """Rapidhash for a SIMD vector of primitive values."""
     comptime byte_width = size_of[Scalar[T.native]]()
@@ -196,7 +196,7 @@ def _rapidhash_primitive[
 
 @always_inline
 def _rapidhash_primitive_masked[
-    T: DataType, W: Int
+    T: PrimitiveType, W: Int
 ](vals: SIMD[T.native, W], valid: SIMD[DType.bool, W]) -> SIMD[uint64.native, W]:
     """Rapidhash for primitive values with null masking via validity bitmap."""
     return valid.select(
@@ -245,7 +245,7 @@ def rapidhash(
 
 # FIXME: use the seeding from the Rust implementation
 def rapidhash[
-    T: DataType
+    T: PrimitiveType
 ](
     keys: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
@@ -369,7 +369,7 @@ def rapidhash(
     if keys.dtype() == bool_:
         return rapidhash(keys.as_bool(), ctx)
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if keys.dtype() == dtype:
             return rapidhash[dtype](keys.as_primitive[dtype](), ctx)
 
@@ -388,7 +388,7 @@ def rapidhash(
 
 
 def hash_identity[
-    T: DataType
+    T: PrimitiveType
 ](keys: PrimitiveArray[T]) raises -> PrimitiveArray[uint64]:
     """Identity hash: returns values cast to uint64 with no hash overhead.
 

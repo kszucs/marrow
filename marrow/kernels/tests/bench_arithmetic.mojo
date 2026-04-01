@@ -44,7 +44,7 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import int32, float32, float64, DataType
+from marrow.dtypes import int32, float32, float64, PrimitiveType
 from marrow.kernels.arithmetic import add
 
 
@@ -53,7 +53,7 @@ from marrow.kernels.arithmetic import add
 # ---------------------------------------------------------------------------
 
 
-def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
     """Build an array with 10% nulls (every 10th element is null)."""
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
@@ -70,7 +70,7 @@ def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
 
 
 @parameter
-def bench_add[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_add[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var lhs = arange[T](0, size)
     var rhs = arange[T](0, size)
 
@@ -84,7 +84,7 @@ def bench_add[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_add_nulls[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_add_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     """Add() with 10% nulls in both inputs."""
     var lhs = _make_array_with_nulls[T](size)
     var rhs = _make_array_with_nulls[T](size)
@@ -105,7 +105,7 @@ def bench_add_nulls[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 def _bench_gpu_add[
-    T: DataType
+    T: PrimitiveType
 ](size: Int, iters: Int, ctx: DeviceContext,) raises -> Float64:
     """Returns mean microseconds per kernel dispatch with pre-loaded data."""
     var lhs = arange[T](0, size).to_device(ctx)

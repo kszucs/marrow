@@ -17,11 +17,11 @@ from std.benchmark import (
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import int64, float64, DataType
+from marrow.dtypes import int64, float64, PrimitiveType
 from marrow.kernels.aggregate import sum_, product, min_, max_
 
 
-def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
         if i % 10 == 0:
@@ -37,7 +37,7 @@ def _make_array_with_nulls[T: DataType](size: Int) raises -> PrimitiveArray[T]:
 
 
 @parameter
-def bench_sum[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_sum[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = arange[T](0, size)
 
     @always_inline
@@ -50,7 +50,7 @@ def bench_sum[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_sum_nulls[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_sum_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = _make_array_with_nulls[T](size)
 
     @always_inline
@@ -68,7 +68,7 @@ def bench_sum_nulls[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_product[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_product[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = arange[T](1, size + 1)
 
     @always_inline
@@ -86,7 +86,7 @@ def bench_product[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_min[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_min[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = arange[T](0, size)
 
     @always_inline
@@ -99,7 +99,7 @@ def bench_min[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_max[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_max[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = arange[T](0, size)
 
     @always_inline
@@ -112,7 +112,7 @@ def bench_max[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 @parameter
-def bench_min_nulls[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_min_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var arr = _make_array_with_nulls[T](size)
 
     @always_inline

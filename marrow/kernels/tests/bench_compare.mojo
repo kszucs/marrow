@@ -18,12 +18,12 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange
-from marrow.dtypes import int32, float32, int64, float64, DataType
+from marrow.dtypes import int32, float32, int64, float64, PrimitiveType
 from marrow.kernels.compare import equal, less
 
 
 @parameter
-def bench_equal[T: DataType](mut b: Bencher, size: Int) raises:
+def bench_equal[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     var lhs = arange[T](0, size)
     var rhs = arange[T](0, size)
 
@@ -43,7 +43,7 @@ def bench_equal[T: DataType](mut b: Bencher, size: Int) raises:
 
 
 def _bench_gpu_equal[
-    T: DataType
+    T: PrimitiveType
 ](size: Int, iters: Int, ctx: DeviceContext) raises -> Float64:
     """Returns mean microseconds per kernel dispatch with pre-loaded data."""
     var lhs = arange[T](0, size).to_device(ctx)

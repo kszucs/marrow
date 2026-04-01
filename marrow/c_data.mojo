@@ -128,7 +128,7 @@ struct CArrowSchema(Copyable, Movable):
 
     @staticmethod
     def from_dtype(
-        dtype: DataType,
+        dtype: AnyType,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
 
@@ -184,26 +184,28 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
-            var child0 = CArrowSchema.from_field(dtype.fields[0])
+            var child0 = CArrowSchema.from_field(field("item", dtype.as_list_type().item[]))
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_list():
-            fmt = {"+w:", dtype.size}
+            ref fsl = dtype.as_fixed_size_list_type()
+            fmt = {"+w:", fsl.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
-            var child0 = CArrowSchema.from_field(dtype.fields[0])
+            var child0 = CArrowSchema.from_field(fsl.item)
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
         elif dtype.is_struct():
             fmt = "+s"
-            n_children = Int64(len(dtype.fields))
+            ref st = dtype.as_struct_type()
+            n_children = Int64(len(st.fields))
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 Int(n_children)
             )
             for i in range(Int(n_children)):
-                var child = CArrowSchema.from_field(dtype.fields[i])
+                var child = CArrowSchema.from_field(st.fields[i])
                 var child_ptr = alloc[CArrowSchema](1)
                 child_ptr.init_pointee_move(child^)
                 children[i] = child_ptr
@@ -233,7 +235,7 @@ struct CArrowSchema(Copyable, Movable):
         Delegates to `from_dtype` and then sets the field name (heap-allocated
         as a raw C string) and nullability flag.
         """
-        var c_schema = CArrowSchema.from_dtype(field.dtype)
+        var c_schema = CArrowSchema.from_dtype(field.dtype[])
         c_schema.name = _alloc_c_string(field.name)
         c_schema.flags = Int64(
             ARROW_FLAG_NULLABLE
@@ -318,7 +320,7 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
-    def to_dtype(self) raises -> DataType:
+    def to_dtype(self) raises -> AnyType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
@@ -352,12 +354,12 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt == "u":
             return string
         elif fmt == "+l":
-            var field = self.children[0][].to_field()
-            return list_(field.dtype.copy())
+            var f = self.children[0][].to_field()
+            return list_(f.dtype[])
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
-            var field = self.children[0][].to_field()
-            return fixed_size_list_(field.dtype.copy(), size)
+            var f = self.children[0][].to_field()
+            return fixed_size_list_(f.dtype[], size)
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
@@ -370,7 +372,7 @@ struct CArrowSchema(Copyable, Movable):
         var name = StringSlice(unsafe_from_utf8_ptr=self.name)
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
-        return Field(String(name), dtype^, nullable != 0)
+        return field(String(name), dtype^, nullable != 0)
 
     def to_schema(self) raises -> Schema:
         """Build a Schema from this top-level struct CArrowSchema."""
@@ -486,7 +488,7 @@ struct CArrowArray(Copyable, Movable):
             self.release(UnsafePointer(to=self))
 
     def to_data(
-        self, dtype: DataType, owner: ArcPointer[Allocation]
+        self, dtype: AnyType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
         """Build an ArrayData from this CArrowArray, all buffers sharing one owner.
 
@@ -538,7 +540,7 @@ struct CArrowArray(Copyable, Movable):
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             buffers.append(offsets^)
             children.append(
-                self.children[0][].to_data(dtype.fields[0].dtype, owner)
+                self.children[0][].to_data(dtype.as_list_type().item[], owner)
             )
         elif dtype.is_string() or dtype.is_binary():
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -549,12 +551,13 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(values^)
         elif dtype.is_fixed_size_list():
             children.append(
-                self.children[0][].to_data(dtype.fields[0].dtype, owner)
+                self.children[0][].to_data(dtype.as_fixed_size_list_type().item.dtype[], owner)
             )
         elif dtype.is_struct():
+            ref st = dtype.as_struct_type()
             for i in range(Int(self.n_children)):
                 children.append(
-                    self.children[i][].to_data(dtype.fields[i].dtype, owner)
+                    self.children[i][].to_data(st.fields[i].dtype[], owner)
                 )
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
@@ -570,7 +573,7 @@ struct CArrowArray(Copyable, Movable):
         )
 
     def to_array(
-        self, dtype: DataType, owner: ArcPointer[Allocation]
+        self, dtype: AnyType, owner: ArcPointer[Allocation]
     ) raises -> AnyArray:
         """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data.
         """
@@ -691,7 +694,7 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    def to_array(deinit self, dtype: DataType) raises -> AnyArray:
+    def to_array(deinit self, dtype: AnyType) raises -> AnyArray:
         """Convert to an AnyArray, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
@@ -761,7 +764,7 @@ struct CArrowDeviceArray(Movable):
     var reserved2: Int64
 
     def to_array(
-        deinit self, dtype: DataType, ctx: DeviceContext
+        deinit self, dtype: AnyType, ctx: DeviceContext
     ) raises -> AnyArray:
         """Import a device array into marrow, taking ownership of the C struct.
 

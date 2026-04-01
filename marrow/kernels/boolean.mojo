@@ -4,7 +4,7 @@
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
-from ..dtypes import DataType, numeric_dtypes, bool_ as bool_dt
+from ..dtypes import PrimitiveType, numeric_types, bool_ as bool_dt
 from ..views import BitmapView
 
 
@@ -70,7 +70,7 @@ def not_(arr: AnyArray) raises -> AnyArray:
 
 
 # TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
-def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
+def is_null[T: PrimitiveType](arr: PrimitiveArray[T]) -> BoolArray:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
     var builder = Bitmap.alloc_zeroed(length)
@@ -85,14 +85,14 @@ def is_null[T: DataType](arr: PrimitiveArray[T]) -> BoolArray:
 
 def is_null(arr: AnyArray) raises -> AnyArray:
     """Runtime-typed is_null."""
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if arr.dtype() == dtype:
             return is_null[dtype](arr.as_primitive[dtype]()).to_any()
     raise Error(t"is_null: unsupported dtype {arr.dtype()}")
 
 
 def select[
-    T: DataType
+    T: PrimitiveType
 ](
     mask: BoolArray,
     then_: PrimitiveArray[T],
@@ -121,7 +121,7 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
             t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}"
         )
     ref bool_mask = mask.as_bool()
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if then_.dtype() == dtype:
             return select[dtype](
                 bool_mask,

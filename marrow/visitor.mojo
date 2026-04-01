@@ -23,18 +23,18 @@ trait DataTypeVisitor:
     def visit_binary(mut self) raises:
         raise Error("visit_binary: not implemented")
 
-    def visit_list(mut self, child: DataType) raises:
+    def visit_list(mut self, child: AnyType) raises:
         raise Error("visit_list: not implemented")
 
-    def visit_fixed_size_list(mut self, child: DataType, size: Int) raises:
+    def visit_fixed_size_list(mut self, child: AnyType, size: Int) raises:
         raise Error("visit_fixed_size_list: not implemented")
 
     def visit_struct(mut self, fields: List[Field]) raises:
         raise Error("visit_struct: not implemented")
 
-    def visit(mut self, dtype: DataType) raises:
+    def visit(mut self, dtype: AnyType) raises:
         """Dispatch to the typed overload matching the runtime dtype."""
-        comptime for dt in primitive_dtypes:
+        comptime for dt in primitive_types:
             if dtype == dt:
                 self.visit[dt]()
                 return
@@ -44,11 +44,12 @@ trait DataTypeVisitor:
         elif dtype.is_binary():
             self.visit_binary()
         elif dtype.is_list():
-            self.visit_list(dtype.fields[0].dtype)
+            self.visit_list(dtype.as_list_type().item[])
         elif dtype.is_fixed_size_list():
-            self.visit_fixed_size_list(dtype.fields[0].dtype, dtype.size)
+            ref fsl = dtype.as_fixed_size_list_type()
+            self.visit_fixed_size_list(fsl.item.dtype[], fsl.size)
         elif dtype.is_struct():
-            self.visit_struct(dtype.fields)
+            self.visit_struct(dtype.as_struct_type().fields)
         else:
             raise Error("visit: unsupported dtype: ", dtype)
 
@@ -70,7 +71,7 @@ trait ArrayVisitor:
     into nested arrays.
     """
 
-    def visit[T: DataType](mut self, array: PrimitiveArray[T]) raises:
+    def visit[T: PrimitiveType](mut self, array: PrimitiveArray[T]) raises:
         pass
 
     def visit(mut self, array: StringArray) raises:
@@ -93,7 +94,7 @@ trait ArrayVisitor:
         """Dispatch to the typed overload matching the runtime dtype."""
         var dt = array.dtype()
 
-        comptime for dtype in primitive_dtypes:
+        comptime for dtype in primitive_types:
             if dt == dtype:
                 self.visit[dtype](array.as_primitive[dtype]())
                 return

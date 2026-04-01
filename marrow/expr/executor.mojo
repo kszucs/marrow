@@ -28,7 +28,7 @@ import std.math as math
 
 from marrow.arrays import PrimitiveArray, AnyArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import numeric_dtypes, bool_ as bool_dt
+from marrow.dtypes import numeric_types, bool_ as bool_dt
 from marrow.kernels.arithmetic import add, sub, mul, div, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -1032,7 +1032,7 @@ def execute(
 
 def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
-    comptime for dt in numeric_dtypes:
+    comptime for dt in numeric_types:
         if scalar_array.dtype() == dt:
             var val = scalar_array.as_primitive[dt]().unsafe_get(0)
             var builder = PrimitiveBuilder[dt](length)

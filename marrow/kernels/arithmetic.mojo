@@ -11,7 +11,7 @@ from std.gpu.host import DeviceContext
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
 from ..views import apply
-from ..dtypes import DataType, numeric_dtypes, float_dtypes
+from ..dtypes import PrimitiveType, numeric_types, float_types
 from . import (
     bitmap_and,
     binary_array_dispatch,
@@ -28,7 +28,7 @@ from .helpers import has_accelerator_support
 
 
 def _unary[
-    T: DataType,
+    T: PrimitiveType,
     func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
 ](
     array: PrimitiveArray[T],
@@ -56,7 +56,7 @@ def _unary[
 
 
 def _binary[
-    T: DataType,
+    T: PrimitiveType,
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         T.native, W
     ],
@@ -239,7 +239,7 @@ def _pow_fn[
 
 
 def add[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -250,7 +250,7 @@ def add[
 
 
 def sub[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -261,7 +261,7 @@ def sub[
 
 
 def mul[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -272,7 +272,7 @@ def mul[
 
 
 def div[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -283,7 +283,7 @@ def div[
 
 
 def floordiv[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -296,7 +296,7 @@ def floordiv[
 
 
 def mod[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -307,7 +307,7 @@ def mod[
 
 
 def min_[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -318,7 +318,7 @@ def min_[
 
 
 def max_[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -329,7 +329,7 @@ def max_[
 
 
 def pow_[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -348,22 +348,22 @@ def pow_[
 # ---------------------------------------------------------------------------
 
 
-def neg[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def neg[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise negation."""
     return _unary[T, _neg_fn[T.native, _]](array)
 
 
-def abs_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def abs_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise absolute value."""
     return _unary[T, _abs_fn[T.native, _]](array)
 
 
-def sign[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sign[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise sign: -1, 0, or 1."""
     return _unary[T, _sign_fn[T.native, _]](array)
 
 
-def sqrt[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sqrt[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise square root."""
     comptime assert (
         T.native.is_floating_point()
@@ -371,7 +371,7 @@ def sqrt[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _sqrt_fn[T.native, _]](array)
 
 
-def exp[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def exp[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise natural exponential (e^x)."""
     comptime assert (
         T.native.is_floating_point()
@@ -379,7 +379,7 @@ def exp[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _exp_fn[T.native, _]](array)
 
 
-def exp2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def exp2[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 exponential (2^x)."""
     comptime assert (
         T.native.is_floating_point()
@@ -387,7 +387,7 @@ def exp2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _exp2_fn[T.native, _]](array)
 
 
-def log[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise natural logarithm."""
     comptime assert (
         T.native.is_floating_point()
@@ -395,7 +395,7 @@ def log[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _log_fn[T.native, _]](array)
 
 
-def log2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log2[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 logarithm."""
     comptime assert (
         T.native.is_floating_point()
@@ -403,7 +403,7 @@ def log2[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _log2_fn[T.native, _]](array)
 
 
-def log10[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log10[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-10 logarithm."""
     comptime assert (
         T.native.is_floating_point()
@@ -411,7 +411,7 @@ def log10[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _log10_fn[T.native, _]](array)
 
 
-def log1p[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log1p[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise log(1 + x)."""
     comptime assert (
         T.native.is_floating_point()
@@ -419,27 +419,27 @@ def log1p[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _log1p_fn[T.native, _]](array)
 
 
-def floor[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def floor[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise floor."""
     return _unary[T, _floor_fn[T.native, _]](array)
 
 
-def ceil[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def ceil[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise ceiling."""
     return _unary[T, _ceil_fn[T.native, _]](array)
 
 
-def trunc[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def trunc[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise truncation toward zero."""
     return _unary[T, _trunc_fn[T.native, _]](array)
 
 
-def round[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def round[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise rounding to nearest integer."""
     return _unary[T, _round_fn[T.native, _]](array)
 
 
-def sin[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sin[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise sine."""
     comptime assert (
         T.native.is_floating_point()
@@ -447,7 +447,7 @@ def sin[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _sin_fn[T.native, _]](array)
 
 
-def cos[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def cos[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise cosine."""
     comptime assert (
         T.native.is_floating_point()

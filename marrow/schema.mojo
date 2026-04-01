@@ -4,7 +4,7 @@
 """
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .dtypes import DataType, Field
+from .dtypes import Field
 
 
 struct Schema(

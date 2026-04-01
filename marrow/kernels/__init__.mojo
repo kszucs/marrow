@@ -21,10 +21,10 @@ from marrow.arrays import BoolArray, PrimitiveArray, AnyArray
 from marrow.buffers import Bitmap
 from marrow.views import BitmapView
 from marrow.dtypes import (
-    DataType,
+    PrimitiveType,
     bool_ as bool_dt,
-    numeric_dtypes,
-    float_dtypes,
+    numeric_types,
+    float_types,
 )
 
 
@@ -64,7 +64,7 @@ def bitmap_and(
 
 def binary_array_dispatch[
     name: StringLiteral,
-    func: def[T: DataType](
+    func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> PrimitiveArray[T],
 ](
@@ -91,7 +91,7 @@ def binary_array_dispatch[
             t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
         )
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if left.dtype() == dtype:
             return func[dtype](
                 left.as_primitive[dtype](),
@@ -103,8 +103,8 @@ def binary_array_dispatch[
 
 def binary_array_dispatch[
     name: StringLiteral,
-    OutT: DataType,
-    func: def[T: DataType](
+    OutT: PrimitiveType,
+    func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> PrimitiveArray[OutT],
 ](
@@ -132,7 +132,7 @@ def binary_array_dispatch[
             t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
         )
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if left.dtype() == dtype:
             return func[dtype](
                 left.as_primitive[dtype](),
@@ -144,7 +144,7 @@ def binary_array_dispatch[
 
 def bool_array_dispatch[
     name: StringLiteral,
-    func: def[T: DataType](
+    func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
     ) raises -> BoolArray,
 ](
@@ -163,7 +163,7 @@ def bool_array_dispatch[
             t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
         )
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if left.dtype() == dtype:
             return func[dtype](
                 left.as_primitive[dtype](),
@@ -175,7 +175,7 @@ def bool_array_dispatch[
 
 def unary_numeric_dispatch[
     name: StringLiteral,
-    func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
+    func: def[T: PrimitiveType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
 ](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch over all numeric dtypes.
 
@@ -189,7 +189,7 @@ def unary_numeric_dispatch[
     Returns:
         A new AnyArray with the element-wise result.
     """
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(t"{name}: unsupported dtype {array.dtype()}")
@@ -197,7 +197,7 @@ def unary_numeric_dispatch[
 
 def binary_float_dispatch[
     name: StringLiteral,
-    func: def[T: DataType](
+    func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T]
     ) raises -> PrimitiveArray[T],
 ](left: AnyArray, right: AnyArray) raises -> AnyArray:
@@ -207,7 +207,7 @@ def binary_float_dispatch[
             t"{name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
         )
 
-    comptime for dtype in float_dtypes:
+    comptime for dtype in float_types:
         if left.dtype() == dtype:
             return func[dtype](
                 left.as_primitive[dtype](),
@@ -220,7 +220,7 @@ def binary_float_dispatch[
 
 def unary_float_dispatch[
     name: StringLiteral,
-    func: def[T: DataType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
+    func: def[T: PrimitiveType](PrimitiveArray[T]) raises -> PrimitiveArray[T],
 ](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch restricted to floating-point dtypes.
 
@@ -234,7 +234,7 @@ def unary_float_dispatch[
     Returns:
         A new AnyArray with the element-wise result.
     """
-    comptime for dtype in float_dtypes:
+    comptime for dtype in float_types:
         if array.dtype() == dtype:
             return func[dtype](array.as_primitive[dtype]()).to_any()
     raise Error(

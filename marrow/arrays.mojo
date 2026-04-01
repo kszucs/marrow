@@ -57,7 +57,7 @@ trait Array(
     def __init__(out self, data: ArrayData) raises:
         ...
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         ...
 
     def null_count(self) -> Int:
@@ -97,7 +97,7 @@ struct AnyArray(
 
     var _data: ArcPointer[NoneType]
     var _virt_length: def(ArcPointer[NoneType]) -> Int
-    var _virt_dtype: def(ArcPointer[NoneType]) -> DataType
+    var _virt_dtype: def(ArcPointer[NoneType]) -> AnyType
     var _virt_null_count: def(ArcPointer[NoneType]) -> Int
     var _virt_is_valid: def(ArcPointer[NoneType], Int) -> Bool
     var _virt_to_data: def(ArcPointer[NoneType]) raises -> ArrayData
@@ -114,7 +114,7 @@ struct AnyArray(
         return len(rebind[ArcPointer[T]](ptr)[])
 
     @staticmethod
-    def _tramp_dtype[T: Array](ptr: ArcPointer[NoneType]) -> DataType:
+    def _tramp_dtype[T: Array](ptr: ArcPointer[NoneType]) -> AnyType:
         return rebind[ArcPointer[T]](ptr)[].type()
 
     @staticmethod
@@ -190,8 +190,8 @@ struct AnyArray(
         # Fast path: read .type() from a marrow Python array to pick the
         # right downcast directly (1 method call vs 14+ try/except).
         try:
-            var dtype = py.type().downcast_value_ptr[DataType]()[]
-            comptime for T in numeric_dtypes:
+            var dtype = py.type().downcast_value_ptr[AnyType]()[]
+            comptime for T in numeric_types:
                 if dtype == T:
                     self = (
                         py.downcast_value_ptr[PrimitiveArray[T]]()[]
@@ -234,7 +234,7 @@ struct AnyArray(
     def length(self) -> Int:
         return self._virt_length(self._data)
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self._virt_dtype(self._data)
 
     def null_count(self) -> Int:
@@ -257,7 +257,7 @@ struct AnyArray(
         var dt = self.dtype()
         if dt == bool_:
             return self.as_bool().copy().to_python_object()
-        comptime for T in numeric_dtypes:
+        comptime for T in numeric_types:
             if dt == T:
                 return self.as_primitive[T]().copy().to_python_object()
         if dt.is_string():
@@ -273,7 +273,7 @@ struct AnyArray(
     # --- typed downcasts ---
 
     def as_primitive[
-        T: DataType
+        T: PrimitiveType
     ](ref self) -> ref[self._data[]] PrimitiveArray[T]:
         return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[]
 
@@ -341,7 +341,7 @@ struct AnyArray(
         var dt = data.dtype
         if dt == bool_:
             return AnyArray(BoolArray(data))
-        comptime for T in numeric_dtypes:
+        comptime for T in numeric_types:
             if dt == T:
                 return AnyArray(PrimitiveArray[T](data))
         if dt.is_string() or dt.is_binary():
@@ -365,7 +365,7 @@ struct AnyArray(
         if dt == bool_:
             self.as_bool().write_to(writer)
             return
-        comptime for T in numeric_dtypes:
+        comptime for T in numeric_types:
             if dt == T:
                 self.as_primitive[T]().write_to(writer)
                 return
@@ -408,7 +408,7 @@ struct ArrayData(Copyable, Movable):
     Not stored inside AnyArray itself.
     """
 
-    var dtype: DataType
+    var dtype: AnyType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -458,7 +458,7 @@ struct BoolArray(
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return bool_
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -583,7 +583,7 @@ struct BoolArray(
 
 # TODO: add conditional conformance where: T.is_primitive()
 @fieldwise_init
-struct PrimitiveArray[T: DataType](
+struct PrimitiveArray[T: PrimitiveType](
     Array,
     ConvertibleFromPython,
     ConvertibleToPython,
@@ -636,7 +636,7 @@ struct PrimitiveArray[T: DataType](
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return Self.T
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -785,17 +785,17 @@ struct PrimitiveArray[T: DataType](
         )
 
 
-# BoolArray is a distinct struct (not comptime PrimitiveArray[bool_])
-comptime Int8Array = PrimitiveArray[int8]
-comptime Int16Array = PrimitiveArray[int16]
-comptime Int32Array = PrimitiveArray[int32]
-comptime Int64Array = PrimitiveArray[int64]
-comptime UInt8Array = PrimitiveArray[uint8]
-comptime UInt16Array = PrimitiveArray[uint16]
-comptime UInt32Array = PrimitiveArray[uint32]
-comptime UInt64Array = PrimitiveArray[uint64]
-comptime Float32Array = PrimitiveArray[float32]
-comptime Float64Array = PrimitiveArray[float64]
+# BoolArray is a distinct struct (not comptime PrimitiveArray[BoolType])
+comptime Int8Array = PrimitiveArray[Int8Type]
+comptime Int16Array = PrimitiveArray[Int16Type]
+comptime Int32Array = PrimitiveArray[Int32Type]
+comptime Int64Array = PrimitiveArray[Int64Type]
+comptime UInt8Array = PrimitiveArray[UInt8Type]
+comptime UInt16Array = PrimitiveArray[UInt16Type]
+comptime UInt32Array = PrimitiveArray[UInt32Type]
+comptime UInt64Array = PrimitiveArray[UInt64Type]
+comptime Float32Array = PrimitiveArray[Float32Type]
+comptime Float64Array = PrimitiveArray[Float64Type]
 
 
 # ---------------------------------------------------------------------------
@@ -855,7 +855,7 @@ struct StringArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return string
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -972,7 +972,7 @@ struct ListArray(
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
 
-    var dtype: DataType
+    var dtype: AnyType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -1010,7 +1010,7 @@ struct ListArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return self.dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1140,7 +1140,7 @@ struct FixedSizeListArray(
     """An immutable Arrow array of fixed-size lists (each element is a sub-array of the same length).
     """
 
-    var dtype: DataType
+    var dtype: AnyType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -1174,7 +1174,7 @@ struct FixedSizeListArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return self.dtype
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1203,7 +1203,7 @@ struct FixedSizeListArray(
         return self.bitmap.value().test(self.offset + index)
 
     def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
-        var list_size = self.dtype.size
+        var list_size = self.dtype.as_fixed_size_list_type().size
         var start = (self.offset + index) * list_size
         return self.values.slice(start, list_size)
 
@@ -1313,7 +1313,7 @@ struct StructArray(
     """An immutable Arrow array of structs (each element is a collection of named fields).
     """
 
-    var dtype: DataType
+    var dtype: AnyType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -1348,16 +1348,17 @@ struct StructArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return self.dtype
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("StructArray({")
         if len(self.children) > 0:
-            for i in range(len(self.dtype.fields)):
+            ref st = self.dtype.as_struct_type()
+            for i in range(len(st.fields)):
                 if i > 0:
                     writer.write(", ")
-                ref field = self.dtype.fields[i]
+                ref field = st.fields[i]
                 writer.write("'")
                 writer.write(field.name)
                 writer.write("': ")
@@ -1373,7 +1374,8 @@ struct StructArray(
         return self.bitmap.value().test(self.offset + index)
 
     def _index_for_field_name(self, name: StringSlice) raises -> Int:
-        for idx, ref field in enumerate(self.dtype.fields):
+        ref fields = self.dtype.as_struct_type().fields
+        for idx, ref field in enumerate(fields):
             if field.name == name:
                 return idx
 
@@ -1412,8 +1414,9 @@ struct StructArray(
         """
         var fields = List[Field]()
         var children = List[AnyArray]()
+        ref st = self.dtype.as_struct_type()
         for idx in indices:
-            fields.append(self.dtype.fields[idx].copy())
+            fields.append(st.fields[idx].copy())
             children.append(self.children[idx].copy())
         return Self(
             dtype=struct_(fields^),
@@ -1494,7 +1497,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
     [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.ChunkedArray.html#pyarrow-chunkedarray).
     """
 
-    var dtype: DataType
+    var dtype: AnyType
     var length: Int
     var chunks: List[AnyArray]
 
@@ -1505,7 +1508,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             total_length += chunk.length()
         self.length = total_length
 
-    def __init__(out self, var dtype: DataType, var chunks: List[AnyArray]):
+    def __init__(out self, var dtype: AnyType, var chunks: List[AnyArray]):
         self.dtype = dtype^
         self.chunks = chunks^
         self.length = 0

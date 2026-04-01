@@ -44,7 +44,7 @@ from marrow.builders import (
     make_builder,
 )
 from marrow.scalars import AnyScalar, ListScalar
-from marrow.dtypes import DataType
+from marrow.dtypes import PrimitiveType
 import marrow.dtypes as dt
 
 from pontoneer import SequenceProtocolBuilder
@@ -198,7 +198,7 @@ struct PyHelpers(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-def _prim_scalar_getitem[T: DataType](
+def _prim_scalar_getitem[T: PrimitiveType](
     ptr: UnsafePointer[PrimitiveArray[T], MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
@@ -393,7 +393,7 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    def _get_type(self) raises -> dt.DataType:
+    def _get_type(self) raises -> dt.AnyType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
                 raise Error("cannot mix bytes and non-bytes values")
@@ -432,7 +432,7 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    def infer(mut self, obj: PythonObject) raises -> dt.DataType:
+    def infer(mut self, obj: PythonObject) raises -> dt.AnyType:
         """Visit elements until type is locked, then scan remaining elements for nulls.
         """
         var list_ptr = obj._obj_ptr
@@ -539,7 +539,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct PyPrimitiveConverter[T: dt.DataType](PyConverter):
+struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
     var _builder: ArcPointer[PrimitiveBuilder[Self.T]]
     var _has_nulls: Bool
     var py: PyHelpers
@@ -798,7 +798,7 @@ def make_converter(builder: AnyBuilder, has_nulls: Bool = True) raises -> PyAnyC
     dtype = builder.dtype()
     if dtype == dt.bool_:
         return PyBoolConverter(builder, has_nulls)
-    comptime for T in dt.numeric_dtypes:
+    comptime for T in dt.numeric_types:
         if dtype == T:
             return PyPrimitiveConverter[T](builder, has_nulls)
     if dtype.is_string():
@@ -828,14 +828,14 @@ def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     return Python.tuple(schema_cap, array_cap)
 
 
-def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.DataType](
+def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.AnyType](
     ptr: UnsafePointer[T, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
 # TODO: maybe introduce an AnyArray trait and rename AnyArray struct to AnyArray
-def _to_array[D: dt.DataType](arr: PrimitiveArray[D]) -> AnyArray:
+def _to_array[D: dt.PrimitiveType](arr: PrimitiveArray[D]) -> AnyArray:
     return arr.copy().to_any()
 
 
@@ -884,10 +884,10 @@ def array(
             pass
 
     # Fall back to building from a Python sequence.
-    var dtype: dt.DataType
+    var dtype: dt.AnyType
     var has_nulls = True
     if opt := kwargs.find("type"):
-        dtype = opt.value().downcast_value_ptr[dt.DataType]()[]
+        dtype = opt.value().downcast_value_ptr[dt.AnyType]()[]
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)

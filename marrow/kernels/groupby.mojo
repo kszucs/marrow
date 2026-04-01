@@ -20,15 +20,16 @@ from ..builders import (
     make_builder,
 )
 from ..dtypes import (
-    DataType,
+    PrimitiveType,
+    AnyType,
     Field,
     int64,
     uint32,
     uint64,
     float64,
     bool_,
-    numeric_dtypes,
-    primitive_dtypes,
+    numeric_types,
+    primitive_types,
     struct_,
 )
 from ..schema import Schema
@@ -57,13 +58,13 @@ struct AggregateState(Movable):
     var builder: AnyBuilder
 
     @implicit
-    def __init__[T: DataType](out self, var builder: PrimitiveBuilder[T]):
+    def __init__[T: PrimitiveType](out self, var builder: PrimitiveBuilder[T]):
         self.builder = AnyBuilder(builder^)
 
     def length(self) -> Int:
         return self.builder.length()
 
-    def dtype(self) -> DataType:
+    def dtype(self) -> AnyType:
         return self.builder.dtype()
 
     def finish(mut self) raises -> AnyArray:
@@ -77,7 +78,7 @@ struct AggregateState(Movable):
 
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
-    comptime for dt in primitive_dtypes:
+    comptime for dt in primitive_types:
         if col.dtype() == dt:
             return Float64(col.as_primitive[dt]().unsafe_get(row))
     raise Error("unsupported dtype for aggregation: ", col.dtype())

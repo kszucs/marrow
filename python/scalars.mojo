@@ -13,7 +13,7 @@ from std.python.bindings import PythonModuleBuilder
 from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from marrow.scalars import AnyScalar
 from marrow.arrays import AnyArray
-from marrow.dtypes import DataType, primitive_dtypes
+from marrow.dtypes import AnyType, primitive_types
 from helpers import pymethod
 from helpers import marrow_module
 
@@ -28,7 +28,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
     if scalar.is_null():
         return PythonObject(None)
     var dtype = scalar.type()
-    comptime for T in primitive_dtypes:
+    comptime for T in primitive_types:
         if dtype == T:
             return PythonObject(scalar.as_primitive[T]().value())
     if dtype.is_string():

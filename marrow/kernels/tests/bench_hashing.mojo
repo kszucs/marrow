@@ -10,7 +10,7 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray, BoolArray
 from marrow.builders import PrimitiveBuilder, BoolBuilder
-from marrow.dtypes import DataType, bool_, int32, int64, uint64
+from marrow.dtypes import PrimitiveType, bool_, int32, int64, uint64
 from marrow.kernels.hashing import rapidhash
 
 
@@ -39,7 +39,7 @@ def _fmt(ns: UInt) -> String:
     return String(Int(ns // 1_000)) + " µs"
 
 
-def _bench_cpu[T: DataType](n: Int, warmup: Int, iters: Int) raises -> UInt:
+def _bench_cpu[T: PrimitiveType](n: Int, warmup: Int, iters: Int) raises -> UInt:
     """CPU rapidhash benchmark. Returns avg ns."""
     var arr = PrimitiveBuilder[T](capacity=n)
     for i in range(n):
@@ -71,7 +71,7 @@ def _bench_cpu_bool(n: Int, warmup: Int, iters: Int) raises -> UInt:
 
 
 def _bench_gpu[
-    T: DataType
+    T: PrimitiveType
 ](n: Int, warmup: Int, iters: Int, ctx: DeviceContext) raises -> UInt:
     """GPU rapidhash benchmark with preloaded data. Returns avg ns."""
     var arr = PrimitiveBuilder[T](capacity=n)

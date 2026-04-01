@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
-import marrow.dtypes_variant as vdt
-from marrow.dtypes_variant import (
+import marrow.dtypes as vdt
+from marrow.dtypes import (
     AnyType,
     Field,
     NullType,

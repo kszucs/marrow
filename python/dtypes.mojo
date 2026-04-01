@@ -83,14 +83,14 @@ def binary() raises -> PythonObject:
 
 def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     """Create a Field with the given name and data type."""
-    var d = dtype.downcast_value_ptr[dt.DataType]()[]
+    var d = dtype.downcast_value_ptr[dt.AnyType]()[]
     var f = dt.Field(String(py=name), d^)
     return f.to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
-    var d = value_type.downcast_value_ptr[dt.DataType]()[]
+    var d = value_type.downcast_value_ptr[dt.AnyType]()[]
     return dt.list_(d^).to_python_object()
 
 
@@ -106,7 +106,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add DataType related data to the Python API."""
 
     _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
-    _ = mb.add_type[dt.DataType]("DataType").def_method[marrow_module]("__module__")
+    _ = mb.add_type[dt.AnyType]("DataType").def_method[marrow_module]("__module__")
 
     mb.def_function[null]("null", docstring="null() -> DataType\n--\n\nCreate a null DataType.")
     mb.def_function[bool_]("bool_", docstring="bool_() -> DataType\n--\n\nCreate a boolean DataType.")

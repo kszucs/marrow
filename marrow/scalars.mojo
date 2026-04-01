@@ -31,10 +31,11 @@ from .arrays import (
 )
 from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import (
-    DataType,
+    AnyType,
+    PrimitiveType,
     Field,
-    primitive_dtypes,
-    numeric_dtypes,
+    primitive_types,
+    numeric_types,
     list_,
     string,
 )
@@ -51,7 +52,7 @@ from std.builtin.simd import Scalar as _Scalar
 trait Scalar(Copyable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         ...
 
     def is_valid(self) -> Bool:
@@ -69,7 +70,7 @@ trait Scalar(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: DataType](
+struct PrimitiveScalar[T: PrimitiveType](
     Boolable, Copyable, Equatable, Movable, Scalar, Writable
 ):
     """A single primitive value: holds a native Mojo scalar + validity flag."""
@@ -100,7 +101,7 @@ struct PrimitiveScalar[T: DataType](
     def null() -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return Self.T
 
     def is_valid(self) -> Bool:
@@ -174,7 +175,7 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def null() raises -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return string
 
     def is_valid(self) -> Bool:
@@ -231,7 +232,7 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
         self._value = value.copy()
         self._is_valid = is_valid
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return list_(self._value.dtype())
 
     def is_valid(self) -> Bool:
@@ -265,14 +266,14 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
 struct StructScalar(Copyable, Movable, Scalar, Writable):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
-    var _dtype: DataType
+    var _dtype: AnyType
     var _value: List[AnyScalar]
     var _is_valid: Bool
 
     def __init__(
         out self,
         *,
-        dtype: DataType,
+        dtype: AnyType,
         value: List[AnyScalar],
         is_valid: Bool,
     ):
@@ -281,10 +282,10 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         self._is_valid = is_valid
 
     @staticmethod
-    def null(dtype: DataType) -> Self:
+    def null(dtype: AnyType) -> Self:
         return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return self._dtype
 
     def is_valid(self) -> Bool:
@@ -332,14 +333,14 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_type: def(ArcPointer[NoneType]) -> DataType
+    var _virt_type: def(ArcPointer[NoneType]) -> AnyType
     var _virt_is_valid: def(ArcPointer[NoneType]) -> Bool
     var _virt_drop: def(var ArcPointer[NoneType])
 
     # --- trampolines ---
 
     @staticmethod
-    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> DataType:
+    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> AnyType:
         return rebind[ArcPointer[T]](ptr)[].type()
 
     @staticmethod
@@ -368,7 +369,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- vtable dispatch ---
 
-    def type(self) -> DataType:
+    def type(self) -> AnyType:
         return self._virt_type(self._data)
 
     def is_valid(self) -> Bool:
@@ -380,7 +381,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     # --- typed downcasts ---
 
     def as_primitive[
-        T: DataType
+        T: PrimitiveType
     ](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
         return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[]
 
@@ -401,7 +402,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
             writer.write("null")
             return
         var dtype = self.type()
-        comptime for T in primitive_dtypes:
+        comptime for T in primitive_types:
             if dtype == T:
                 self.as_primitive[T]().write_to(writer)
                 return

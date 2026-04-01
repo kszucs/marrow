@@ -33,7 +33,7 @@ from ..arrays import (
 )
 from ..buffers import Bitmap
 from ..views import apply
-from ..dtypes import DataType, bool_ as bool_dt
+from ..dtypes import PrimitiveType, bool_ as bool_dt
 from . import bitmap_and, bool_array_dispatch
 
 
@@ -43,7 +43,7 @@ from . import bitmap_and, bool_array_dispatch
 
 
 def _binary_cmp[
-    T: DataType,
+    T: PrimitiveType,
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
         DType.bool, W
     ],
@@ -112,7 +112,7 @@ def _ge[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
 
 
 def equal[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -123,7 +123,7 @@ def equal[
 
 
 def not_equal[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -134,7 +134,7 @@ def not_equal[
 
 
 def less[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -145,7 +145,7 @@ def less[
 
 
 def less_equal[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -156,7 +156,7 @@ def less_equal[
 
 
 def greater[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -167,7 +167,7 @@ def greater[
 
 
 def greater_equal[
-    T: DataType
+    T: PrimitiveType
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],

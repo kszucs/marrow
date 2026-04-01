@@ -19,8 +19,8 @@ from std.utils.index import Index, IndexList
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import (
-    DataType,
-    numeric_dtypes,
+    PrimitiveType,
+    numeric_types,
     float64,
     bool_ as bool_dt,
 )
@@ -33,7 +33,7 @@ from ..scalars import PrimitiveScalar, AnyScalar
 
 
 def _reduce[
-    T: DataType, op: StringLiteral
+    T: PrimitiveType, op: StringLiteral
 ](array: PrimitiveArray[T], identity: Scalar[T.native]) raises -> Scalar[
     T.native
 ]:
@@ -141,14 +141,14 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-def sum_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def sum_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
     return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)))
 
 
 def sum_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed sum."""
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return sum_[dtype](array.as_primitive[dtype]())
     raise Error("sum: unsupported dtype ", array.dtype())
@@ -159,7 +159,7 @@ def sum_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def product[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def product[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
     return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)))
@@ -167,7 +167,7 @@ def product[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
 
 def product(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed product."""
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return product[dtype](array.as_primitive[dtype]())
     raise Error("product: unsupported dtype ", array.dtype())
@@ -178,7 +178,7 @@ def product(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def min_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def min_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Minimum of all valid (non-null) elements.
 
     Returns MAX_FINITE if empty or all null.
@@ -190,7 +190,7 @@ def min_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
 
 def min_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed min."""
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return min_[dtype](array.as_primitive[dtype]())
     raise Error("min_: unsupported dtype ", array.dtype())
@@ -201,7 +201,7 @@ def min_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def max_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def max_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Maximum of all valid (non-null) elements.
 
     Returns MIN_FINITE if empty or all null.
@@ -213,7 +213,7 @@ def max_[T: DataType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
 
 def max_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed max."""
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return max_[dtype](array.as_primitive[dtype]())
     raise Error("max_: unsupported dtype ", array.dtype())

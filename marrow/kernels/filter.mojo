@@ -22,7 +22,7 @@ from ..arrays import (
 from ..buffers import Buffer
 from ..buffers import Bitmap
 from ..builders import BoolBuilder, PrimitiveBuilder, StringBuilder
-from ..dtypes import DataType, bool_, int32, uint32, string, numeric_dtypes
+from ..dtypes import PrimitiveType, bool_, int32, uint32, string, numeric_types
 from ..views import BitmapView, BufferView
 from .aggregate import sum_
 from .string import string_lengths
@@ -186,7 +186,7 @@ def _filter_values[
 
 
 def filter_[
-    T: DataType
+    T: PrimitiveType
 ](array: PrimitiveArray[T], selection: BoolArray) raises -> PrimitiveArray[T]:
     """Filter a primitive array, keeping only elements where selection is True.
 
@@ -434,7 +434,7 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     if array.dtype() == bool_:
         return filter_(array.as_bool().copy(), mask).to_any()
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return filter_[dtype](array.as_primitive[dtype](), mask).to_any()
 
@@ -450,7 +450,7 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
 
 
 def drop_nulls[
-    T: DataType
+    T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Create a new array containing only the valid (non-null) elements.
 
@@ -500,7 +500,7 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
     if array.dtype() == bool_:
         return _drop_nulls_bool(array.as_bool().copy()).to_any()
 
-    comptime for dtype in numeric_dtypes:
+    comptime for dtype in numeric_types:
         if array.dtype() == dtype:
             return drop_nulls[dtype](array.as_primitive[dtype]()).to_any()
 
@@ -513,7 +513,7 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
 
 
 def take[
-    T: DataType
+    T: PrimitiveType
 ](
     array: PrimitiveArray[T], indices: PrimitiveArray[int32]
 ) raises -> PrimitiveArray[T]:
@@ -656,7 +656,7 @@ def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -> AnyArray:
     if array.dtype() == bool_:
         return take(array.as_bool().copy(), indices).to_any()
 
-    comptime for dt in numeric_dtypes:
+    comptime for dt in numeric_types:
         if array.dtype() == dt:
             return take[dt](array.as_primitive[dt](), indices).to_any()
 

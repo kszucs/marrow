@@ -14,7 +14,7 @@ struct ElementCounter(ArrayVisitor):
     def __init__(out self):
         self.count = 0
 
-    def visit[T: DataType](mut self, array: PrimitiveArray[T]) raises:
+    def visit[T: PrimitiveType](mut self, array: PrimitiveArray[T]) raises:
         self.count += array.null_count() * -1 + array.length
 
     def visit(mut self, array: StringArray) raises:
