@@ -25,9 +25,11 @@ Comptime singletons (same names as before):
 
 from std.utils import Variant
 from std.sys import size_of, bit_width_of
+from std.os import abort
 from std.memory import ArcPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
+from std.sys.compile import codegen_unreachable
 
 # ---------------------------------------------------------------------------
 # DataType trait and PrimitiveType sub-trait
@@ -351,7 +353,7 @@ struct ArrowType(
 
     # R: Movable and should be infer only
     def _dispatch[
-        R: Copyable,
+        R: Copyable, //,
         func: def[T: DataType](T) capturing[_] -> R,
     ](self) -> R:
         if self._v.isa[NullType](): return func[NullType](self._v[NullType])
@@ -371,8 +373,34 @@ struct ArrowType(
         if self._v.isa[StringType](): return func[StringType](self._v[StringType])
         if self._v.isa[ListType](): return func[ListType](self._v[ListType])
         if self._v.isa[FixedSizeListType](): return func[FixedSizeListType](self._v[FixedSizeListType])
-        return func[StructType](self._v[StructType])
-        # TODO: raise otherwise
+        if self._v.isa[StructType](): return func[StructType](self._v[StructType])
+        abort("unreachable: invalid data type for dispatch")
+
+    def _dispatch[
+        R: Copyable, //,
+        func: def[T: PrimitiveType](T) capturing[_] -> R,
+    ](self) -> R:
+        if self._v.isa[Int8Type](): return func[Int8Type](self._v[Int8Type])
+        if self._v.isa[Int16Type](): return func[Int16Type](self._v[Int16Type])
+        if self._v.isa[Int32Type](): return func[Int32Type](self._v[Int32Type])
+        if self._v.isa[Int64Type](): return func[Int64Type](self._v[Int64Type])
+        if self._v.isa[UInt8Type](): return func[UInt8Type](self._v[UInt8Type])
+        if self._v.isa[UInt16Type](): return func[UInt16Type](self._v[UInt16Type])
+        if self._v.isa[UInt32Type](): return func[UInt32Type](self._v[UInt32Type])
+        if self._v.isa[UInt64Type](): return func[UInt64Type](self._v[UInt64Type])
+        if self._v.isa[Float16Type](): return func[Float16Type](self._v[Float16Type])
+        if self._v.isa[Float32Type](): return func[Float32Type](self._v[Float32Type])
+        if self._v.isa[Float64Type](): return func[Float64Type](self._v[Float64Type])
+        abort("unreachable: invalid primitive type for dispatch")
+
+    def byte_width(self) raises -> Int:
+        @parameter
+        def f[T: PrimitiveType](t: T) -> Int:
+            return t.byte_width()
+        if self.is_primitive():
+            return self._dispatch[f]()
+        else:
+            raise Error("byte_width is only defined for primitive types")
 
     # --- convenience predicates ---
 
@@ -432,41 +460,11 @@ struct ArrowType(
     def is_fixed_size(self) -> Bool:
         return self.is_primitive()
 
-    def bit_width(self) -> Int:
-        if self._v.isa[BoolType](): return 1
-        if self._v.isa[Int8Type](): return bit_width_of[DType.int8]()
-        if self._v.isa[Int16Type](): return bit_width_of[DType.int16]()
-        if self._v.isa[Int32Type](): return bit_width_of[DType.int32]()
-        if self._v.isa[Int64Type](): return bit_width_of[DType.int64]()
-        if self._v.isa[UInt8Type](): return bit_width_of[DType.uint8]()
-        if self._v.isa[UInt16Type](): return bit_width_of[DType.uint16]()
-        if self._v.isa[UInt32Type](): return bit_width_of[DType.uint32]()
-        if self._v.isa[UInt64Type](): return bit_width_of[DType.uint64]()
-        if self._v.isa[Float16Type](): return bit_width_of[DType.float16]()
-        if self._v.isa[Float32Type](): return bit_width_of[DType.float32]()
-        if self._v.isa[Float64Type](): return bit_width_of[DType.float64]()
-        return 0
-
-    def byte_width(self) -> Int:
-        if self._v.isa[Int8Type](): return size_of[DType.int8]()
-        if self._v.isa[Int16Type](): return size_of[DType.int16]()
-        if self._v.isa[Int32Type](): return size_of[DType.int32]()
-        if self._v.isa[Int64Type](): return size_of[DType.int64]()
-        if self._v.isa[UInt8Type](): return size_of[DType.uint8]()
-        if self._v.isa[UInt16Type](): return size_of[DType.uint16]()
-        if self._v.isa[UInt32Type](): return size_of[DType.uint32]()
-        if self._v.isa[UInt64Type](): return size_of[DType.uint64]()
-        if self._v.isa[Float16Type](): return size_of[DType.float16]()
-        if self._v.isa[Float32Type](): return size_of[DType.float32]()
-        if self._v.isa[Float64Type](): return size_of[DType.float64]()
-        return 0
-
     def write_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: DataType](t: T) -> NoneType:
+        def f[T: DataType](t: T):
             t.write_to(writer)
-            return NoneType()
-        _ = self._dispatch[NoneType, f]()
+        self._dispatch[f]()
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
