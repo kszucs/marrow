@@ -228,7 +228,7 @@ def test_fixed_size_list_type() raises:
 def test_struct_type() raises:
     var f1 = field("x", ArrowType(Int32Type()))
     var f2 = field("y", ArrowType(Float64Type()))
-    var t = struct_(f1, f2)
+    var t = struct_(f1^, f2^)
     assert_true(t.is_struct())
     assert_false(t.is_list())
     assert_false(t.is_primitive())

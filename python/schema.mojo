@@ -22,7 +22,7 @@ def schema(fields_or_schema: PythonObject) raises -> PythonObject:
     # Fall back to treating as a list of marrow Field objects.
     var fields = List[Field]()
     for f in fields_or_schema:
-        fields.append(f.downcast_value_ptr[Field]()[])
+        fields.append(f.downcast_value_ptr[Field]()[].copy())
     return Schema(fields=fields^).to_python_object()
 
 

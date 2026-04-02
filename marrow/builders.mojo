@@ -623,7 +623,7 @@ struct ListBuilder(Builder, Sized):
         return self._null_count
 
     def dtype(self) -> ArrowType:
-        return self._dtype
+        return self._dtype.copy()
 
     def values(self) -> AnyBuilder:
         return self._child
@@ -713,7 +713,7 @@ struct ListBuilder(Builder, Sized):
         var values = self._child.finish()
         # construct the immutable result array
         var result = ListArray(
-            dtype=self._dtype,
+            dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
             offset=0,
@@ -772,7 +772,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         return self._null_count
 
     def dtype(self) -> ArrowType:
-        return self._dtype
+        return self._dtype.copy()
 
     def values(self) -> AnyBuilder:
         return self._child
@@ -842,7 +842,7 @@ struct FixedSizeListBuilder(Builder, Sized):
         var values = self._child.finish()
         # construct the immutable result array
         var result = FixedSizeListArray(
-            dtype=self._dtype,
+            dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
             offset=0,
@@ -900,7 +900,7 @@ struct StructBuilder(Builder, Sized):
         return self._null_count
 
     def dtype(self) -> ArrowType:
-        return self._dtype
+        return self._dtype.copy()
 
     def field_builder(ref self, index: Int) -> ref[self._children] AnyBuilder:
         return self._children[index]

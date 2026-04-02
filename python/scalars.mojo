@@ -38,7 +38,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
         return PythonObject(None)
     var dtype = scalar.type()
     if dtype == bool_:
-        return PythonObject(scalar.as_primitive[BoolType]().value())
+        return PythonObject(scalar.as_bool().value())
     elif dtype == int8:
         return PythonObject(scalar.as_primitive[Int8Type]().value())
     elif dtype == int16:

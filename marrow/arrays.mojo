@@ -190,7 +190,7 @@ struct AnyArray(
         # Fast path: read .type() from a marrow Python array to pick the
         # right downcast directly (1 method call vs 14+ try/except).
         try:
-            var dtype = py.type().downcast_value_ptr[ArrowType]()[]
+            var dtype = py.type().downcast_value_ptr[ArrowType]()[].copy()
             if dtype == int8:
                 self = py.downcast_value_ptr[PrimitiveArray[Int8Type]]()[].copy().to_any()
                 return
@@ -382,7 +382,7 @@ struct AnyArray(
         Used by the C Data Interface and other interop paths where a flat
         7-field layout is the natural representation.
         """
-        var dt = data.dtype
+        var dt = data.dtype.copy()
         if dt == bool_:
             return AnyArray(BoolArray(data))
         elif dt == int8:
@@ -1081,7 +1081,7 @@ struct ListArray(
         if len(data.children) != 1:
             raise Error("ListArray requires exactly one child array")
         self = Self(
-            dtype=data.dtype,
+            dtype=data.dtype.copy(),
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
@@ -1103,7 +1103,7 @@ struct ListArray(
         return self.nulls
 
     def type(self) -> ArrowType:
-        return self.dtype
+        return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("ListArray([")
@@ -1151,7 +1151,7 @@ struct ListArray(
         """Zero-copy slice of this array."""
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=actual_length,
             nulls=self.nulls,
             offset=self.offset + offset,
@@ -1208,7 +1208,7 @@ struct ListArray(
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -1246,7 +1246,7 @@ struct FixedSizeListArray(
         if len(data.children) != 1:
             raise Error("FixedSizeListArray requires exactly one child array")
         self = Self(
-            dtype=data.dtype,
+            dtype=data.dtype.copy(),
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
@@ -1267,7 +1267,7 @@ struct FixedSizeListArray(
         return self.nulls
 
     def type(self) -> ArrowType:
-        return self.dtype
+        return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("FixedSizeListArray([")
@@ -1308,7 +1308,7 @@ struct FixedSizeListArray(
         """Zero-copy slice of this array."""
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=actual_length,
             nulls=self.nulls,
             offset=self.offset + offset,
@@ -1331,7 +1331,7 @@ struct FixedSizeListArray(
             child_bm = child_data.bitmap.value().to_device(ctx)
         var new_child = AnyArray.from_data(
             ArrayData(
-                dtype=child_data.dtype,
+                dtype=child_data.dtype.copy(),
                 length=child_data.length,
                 nulls=child_data.nulls,
                 offset=child_data.offset,
@@ -1344,7 +1344,7 @@ struct FixedSizeListArray(
         if self.bitmap:
             bm = self.bitmap.value().to_device(ctx)
         return FixedSizeListArray(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -1381,7 +1381,7 @@ struct FixedSizeListArray(
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -1420,7 +1420,7 @@ struct StructArray(
         for c in data.children:
             children.append(AnyArray.from_data(c))
         self = Self(
-            dtype=data.dtype,
+            dtype=data.dtype.copy(),
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
@@ -1441,7 +1441,7 @@ struct StructArray(
         return self.nulls
 
     def type(self) -> ArrowType:
-        return self.dtype
+        return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("StructArray({")
@@ -1530,7 +1530,7 @@ struct StructArray(
         """Zero-copy slice of this array."""
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=actual_length,
             nulls=self.nulls,
             offset=self.offset + offset,
@@ -1568,7 +1568,7 @@ struct StructArray(
         for c in self.children:
             children.append(c.to_data())
         return ArrayData(
-            dtype=self.dtype,
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -1600,8 +1600,8 @@ struct ChunkedArray(Copyable, Movable, Writable):
             total_length += chunk.length()
         self.length = total_length
 
-    def __init__(out self, var dtype: ArrowType, var chunks: List[AnyArray]):
-        self.dtype = dtype^
+    def __init__(out self, dtype: ArrowType, var chunks: List[AnyArray]):
+        self.dtype = dtype.copy()
         self.chunks = chunks^
         self.length = 0
         self._compute_length()
@@ -1632,7 +1632,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
         if len(self.chunks) == 0:
             return AnyArray.from_data(
                 ArrayData(
-                    dtype=self.dtype,
+                    dtype=self.dtype.copy(),
                     length=0,
                     nulls=0,
                     offset=0,

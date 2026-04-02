@@ -70,6 +70,42 @@ trait Scalar(Copyable, Movable, Writable):
         ...
 
 
+struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
+    """A single boolean value: holds a Bool + validity flag."""
+
+    var _value: Bool
+    var _is_valid: Bool
+
+    @implicit
+    def __init__(out self, value: Bool):
+        self._value = value
+        self._is_valid = True
+
+    def __init__(out self, *, is_valid: Bool):
+        self._value = False
+        self._is_valid = is_valid
+
+    @staticmethod
+    def null() -> Self:
+        return Self(is_valid=False)
+
+    def type(self) -> ArrowType:
+        return bool_
+
+    def is_valid(self) -> Bool:
+        return self._is_valid
+
+    def is_null(self) -> Bool:
+        return not self._is_valid
+
+    def value(self) -> Bool:
+        """Get the underlying boolean value. Undefined if null."""
+        return self._value
+
+    def to_any(deinit self) -> AnyScalar:
+        return self^
+
+
 # ---------------------------------------------------------------------------
 # PrimitiveScalar[T]
 # ---------------------------------------------------------------------------
@@ -282,7 +318,7 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         value: List[AnyScalar],
         is_valid: Bool,
     ):
-        self._dtype = dtype
+        self._dtype = dtype.copy()
         self._value = value.copy()
         self._is_valid = is_valid
 
@@ -291,7 +327,7 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
 
     def type(self) -> ArrowType:
-        return self._dtype
+        return self._dtype.copy()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -385,6 +421,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- typed downcasts ---
 
+    def as_bool(ref self) -> ref[self._data[]] BoolScalar:
+        return rebind[ArcPointer[BoolScalar]](self._data)[]
+
     def as_primitive[
         T: PrimitiveType
     ](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
@@ -408,7 +447,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
             return
         var dtype = self.type()
         if dtype == bool_:
-            self.as_primitive[BoolType]().write_to(writer)
+            self.as_bool().write_to(writer)
             return
         elif dtype == int8:
             self.as_primitive[Int8Type]().write_to(writer)

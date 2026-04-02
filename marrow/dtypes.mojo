@@ -36,7 +36,7 @@ from std.sys.compile import codegen_unreachable
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Equatable, ImplicitlyDestructible, Movable, Writable):
+trait DataType(Copyable, Equatable, ImplicitlyDestructible, Movable, Writable):
     def to_any(deinit self) -> ArrowType: ...
 
 
@@ -57,14 +57,14 @@ trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
 # ---------------------------------------------------------------------------
 
 
-struct NullType(DataType, ImplicitlyCopyable):
+struct NullType(DataType, Defaultable, TrivialRegisterPassable):
     def __init__(out self): pass
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("null")
     def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct BoolType(PrimitiveType):
+struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
     comptime native: DType = DType.bool
 
     def __init__(out self): pass
@@ -174,18 +174,18 @@ struct Float16Type(PrimitiveType):
     def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct BinaryType(DataType, ImplicitlyCopyable):
+struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
     def __init__(out self): pass
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("binary")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct StringType(DataType, ImplicitlyCopyable):
+struct StringType(DataType, Defaultable, TrivialRegisterPassable):
     def __init__(out self): pass
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("string")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
 # ---------------------------------------------------------------------------
@@ -195,10 +195,10 @@ struct StringType(DataType, ImplicitlyCopyable):
 
 
 struct Field(
+    Copyable,
     ConvertibleFromPython,
     ConvertibleToPython,
     Equatable,
-    ImplicitlyCopyable,
     Movable,
     Writable,
 ):
@@ -214,14 +214,19 @@ struct Field(
         self.nullable = nullable
 
     def __init__(
-        out self, name: String, dtype: ArrowType, nullable: Bool = True
+        out self, name: String, var dtype: ArrowType, nullable: Bool = True
     ):
         self.name = name
-        self.dtype = ArcPointer(dtype)
+        self.dtype = ArcPointer(dtype^)
         self.nullable = nullable
 
+    def __init__(out self, *, copy: Self):
+        self.name = copy.name
+        self.dtype = copy.dtype
+        self.nullable = copy.nullable
+
     def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Field]()[]
+        self = py.downcast_value_ptr[Field]()[].copy()
 
     def __eq__(self, other: Self) -> Bool:
         return (
@@ -242,11 +247,14 @@ struct Field(
         return PythonObject(alloc=self^)
 
 
-struct ListType(DataType, ImplicitlyCopyable):
+struct ListType(DataType):
     var item: ArcPointer[ArrowType]
 
     def __init__(out self, item: ArcPointer[ArrowType]):
         self.item = item
+
+    def __init__(out self, *, copy: Self):
+        self.item = copy.item
 
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[]
@@ -257,13 +265,17 @@ struct ListType(DataType, ImplicitlyCopyable):
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
-struct FixedSizeListType(DataType, Copyable):
+struct FixedSizeListType(DataType):
     var item: Field
     var size: Int
 
     def __init__(out self, var item: Field, size: Int):
         self.item = item^
         self.size = size
+
+    def __init__(out self, *, copy: Self):
+        self.item = Field(copy=copy.item)
+        self.size = copy.size
 
     def __eq__(self, other: Self) -> Bool:
         return self.item == other.item and self.size == other.size
@@ -274,7 +286,7 @@ struct FixedSizeListType(DataType, Copyable):
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
-struct StructType(DataType, Copyable):
+struct StructType(DataType):
     var fields: List[Field]
 
     def __init__(out self, var fields: List[Field]):
@@ -316,7 +328,6 @@ struct ArrowType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Equatable,
-    ImplicitlyCopyable,
     Movable,
     Writable,
 ):
@@ -334,7 +345,7 @@ struct ArrowType(
 
         # Try downcasting from a marrow Python object.
         try:
-            self = py.downcast_value_ptr[Self]()[]
+            self = py.downcast_value_ptr[Self]()[].copy()
             return
         except:
             pass
@@ -479,7 +490,7 @@ struct ArrowType(
 
     def as_list_type(self) -> ListType:
         """For list types, returns the inner ListType."""
-        return self._v[ListType]
+        return ListType(copy=self._v[ListType])
 
     def as_fixed_size_list_type(self) -> FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""

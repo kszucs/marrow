@@ -127,7 +127,7 @@ struct HashJoin[
         self._left_rows = 0
 
     def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
-        self._left_dtype = left.dtype
+        self._left_dtype = left.dtype.copy()
         self._left_rows = left.length
         self._left_data = left.copy()
         self._left_key_indices = left_key_indices.copy()
@@ -223,7 +223,7 @@ struct HashJoin[
         return (lb.finish(), rb.finish())
 
     def build_dtype(self) -> ArrowType:
-        return self._left_dtype
+        return self._left_dtype.copy()
 
     def num_left_rows(self) -> Int:
         return self._left_rows

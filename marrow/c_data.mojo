@@ -184,7 +184,7 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
-            var child0 = CArrowSchema.from_field(field("item", dtype.as_list_type().item[]))
+            var child0 = CArrowSchema.from_field(field("item", dtype.as_list_type().item[].copy()))
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
@@ -355,11 +355,11 @@ struct CArrowSchema(Copyable, Movable):
             return string
         elif fmt == "+l":
             var f = self.children[0][].to_field()
-            return list_(f.dtype[])
+            return list_(f.dtype[].copy())
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
             var f = self.children[0][].to_field()
-            return fixed_size_list_(f.dtype[], size)
+            return fixed_size_list_(f.dtype[].copy(), size)
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):

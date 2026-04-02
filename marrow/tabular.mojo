@@ -127,7 +127,7 @@ struct RecordBatch(
         var new_fields = List[Field]()
         for i in indices:
             new_cols.append(self.columns[i].copy())
-            new_fields.append(self.schema.fields[i])
+            new_fields.append(self.schema.fields[i].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
     def select(self, names: List[String]) raises -> RecordBatch:
@@ -139,7 +139,7 @@ struct RecordBatch(
             if idx == -1:
                 raise Error("Column '{}' not found.".format(name))
             new_cols.append(self.columns[idx].copy())
-            new_fields.append(self.schema.fields[idx])
+            new_fields.append(self.schema.fields[idx].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
     def rename_columns(self, names: List[String]) raises -> RecordBatch:
@@ -152,7 +152,7 @@ struct RecordBatch(
             )
         var new_fields = List[Field]()
         for i in range(len(names)):
-            var f = self.schema.fields[i]
+            ref f = self.schema.fields[i]
             new_fields.append(
                 Field(name=names[i], dtype=f.dtype, nullable=f.nullable)
             )
@@ -166,12 +166,12 @@ struct RecordBatch(
         var new_fields = List[Field]()
         var new_cols = List[AnyArray]()
         for j in range(i):
-            new_fields.append(self.schema.fields[j])
+            new_fields.append(self.schema.fields[j].copy())
             new_cols.append(self.columns[j].copy())
-        new_fields.append(field)
+        new_fields.append(field.copy())
         new_cols.append(column.copy())
         for j in range(i, len(self.columns)):
-            new_fields.append(self.schema.fields[j])
+            new_fields.append(self.schema.fields[j].copy())
             new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
@@ -185,7 +185,7 @@ struct RecordBatch(
         var new_cols = List[AnyArray]()
         for j in range(len(self.columns)):
             if j != i:
-                new_fields.append(self.schema.fields[j])
+                new_fields.append(self.schema.fields[j].copy())
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
@@ -195,10 +195,10 @@ struct RecordBatch(
         var new_cols = List[AnyArray]()
         for j in range(len(self.columns)):
             if j == i:
-                new_fields.append(field)
+                new_fields.append(field.copy())
                 new_cols.append(column.copy())
             else:
-                new_fields.append(self.schema.fields[j])
+                new_fields.append(self.schema.fields[j].copy())
                 new_cols.append(self.columns[j].copy())
         return RecordBatch(schema=Schema(fields=new_fields^), columns=new_cols^)
 
@@ -396,7 +396,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                 cols.append(col.chunks[0].copy())
             else:
                 var ca = ChunkedArray(
-                    dtype=col.dtype, chunks=List(col.chunks)
+                    dtype=col.dtype.copy(), chunks=List(col.chunks)
                 )
                 cols.append(ca^.combine_chunks())
         var batches = List[RecordBatch]()

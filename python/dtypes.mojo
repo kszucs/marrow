@@ -9,7 +9,7 @@ from helpers import marrow_module
 
 def null() raises -> PythonObject:
     """Create a null DataType."""
-    return dt.ArrowType(dt.null).to_python_object()
+    return dt.ArrowType(dt.NullType()).to_python_object()
 
 
 def bool_() raises -> PythonObject:
@@ -74,24 +74,24 @@ def float64() raises -> PythonObject:
 
 def string() raises -> PythonObject:
     """Create a string DataType."""
-    return dt.ArrowType(dt.string).to_python_object()
+    return dt.ArrowType(dt.StringType()).to_python_object()
 
 
 def binary() raises -> PythonObject:
     """Create a binary DataType."""
-    return dt.ArrowType(dt.binary).to_python_object()
+    return dt.ArrowType(dt.BinaryType()).to_python_object()
 
 
 def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     """Create a Field with the given name and data type."""
-    var d = dtype.downcast_value_ptr[dt.ArrowType]()[]
+    var d = dtype.downcast_value_ptr[dt.ArrowType]()[].copy()
     var f = dt.Field(String(py=name), ArcPointer(d^))
-    return f.to_python_object()
+    return f^.to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
-    var d = value_type.downcast_value_ptr[dt.ArrowType]()[]
+    var d = value_type.downcast_value_ptr[dt.ArrowType]()[].copy()
     return dt.list_(d^).to_python_object()
 
 
@@ -99,7 +99,7 @@ def struct_(fields_obj: PythonObject) raises -> PythonObject:
     """Create a struct DataType from a list of Fields."""
     var fields = List[dt.Field]()
     for f in fields_obj:
-        fields.append(f.downcast_value_ptr[dt.Field]()[])
+        fields.append(f.downcast_value_ptr[dt.Field]()[].copy())
     return dt.struct_(fields^).to_python_object()
 
 

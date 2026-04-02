@@ -907,7 +907,7 @@ def array(
     var dtype: dt.ArrowType
     var has_nulls = True
     if opt := kwargs.find("type"):
-        dtype = opt.value().downcast_value_ptr[dt.ArrowType]()[]
+        dtype = opt.value().downcast_value_ptr[dt.ArrowType]()[].copy()
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)
