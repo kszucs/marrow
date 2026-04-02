@@ -34,9 +34,9 @@ def test_schema_from_pyarrow() raises:
 
     var sf = schema.as_struct_type().fields.copy()
     assert_equal(sf[0].name, "int_field")
-    assert_equal(sf[0].dtype[], int32)
+    assert_equal(sf[0].dtype, int32)
     assert_equal(sf[1].name, "string_field")
-    assert_equal(sf[1].dtype[], string)
+    assert_equal(sf[1].dtype, string)
 
 
 def test_primitive_array_from_pyarrow() raises:
@@ -166,7 +166,7 @@ def test_schema_to_field() raises:
     var c_schema = c_schema_from_pyobj(pyfield)
     var field = c_schema.to_field()
     assert_equal(field.name, "test_field")
-    assert_equal(field.dtype[], int32)
+    assert_equal(field.dtype, int32)
     assert_equal(field.nullable, True)
 
     var pyfield_str = pa.field(
@@ -175,7 +175,7 @@ def test_schema_to_field() raises:
     var c_schema_str = c_schema_from_pyobj(pyfield_str)
     var field_str = c_schema_str.to_field()
     assert_equal(field_str.name, "string_field")
-    assert_equal(field_str.dtype[], string)
+    assert_equal(field_str.dtype, string)
     assert_equal(field_str.nullable, False)
 
 
@@ -201,9 +201,9 @@ def test_arrow_array_stream() raises:
     assert_equal(table.num_columns(), 2)
     assert_equal(table.num_rows(), 5)
     assert_equal(table.schema.fields[0].name, "col1")
-    assert_equal(table.schema.fields[0].dtype[], int64)
+    assert_equal(table.schema.fields[0].dtype, int64)
     assert_equal(table.schema.fields[1].name, "col2")
-    assert_equal(table.schema.fields[1].dtype[], string)
+    assert_equal(table.schema.fields[1].dtype, string)
 
     var batches = table.to_batches()
     assert_true(len(batches) >= 1)
@@ -232,9 +232,9 @@ def test_struct_dtype_conversion() raises:
     var df = dtype.as_struct_type().fields.copy()
     assert_equal(len(df), 2)
     assert_equal(df[0].name, "x")
-    assert_equal(df[0].dtype[], int32)
+    assert_equal(df[0].dtype, int32)
     assert_equal(df[1].name, "y")
-    assert_equal(df[1].dtype[], float64)
+    assert_equal(df[1].dtype, float64)
 
 
 def test_list_dtype_conversion() raises:
@@ -245,7 +245,7 @@ def test_list_dtype_conversion() raises:
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_list())
-    assert_equal(dtype.as_list_type().item[], int32)
+    assert_equal(dtype.as_list_type().value_type(), int32)
 
 
 def test_fixed_size_list_dtype_conversion() raises:
@@ -259,7 +259,7 @@ def test_fixed_size_list_dtype_conversion() raises:
     assert_true(dtype.is_fixed_size_list())
     var fsl = dtype.as_fixed_size_list_type()
     assert_equal(fsl.size, 3)
-    assert_equal(fsl.item.dtype[], float32)
+    assert_equal(fsl.value_type(), float32)
 
 
 def test_fixed_size_list_from_pyarrow() raises:
@@ -584,7 +584,7 @@ def test_schema_from_dtype_all_types() raises:
     var c_list = CArrowSchema.from_dtype(list_dt)
     var rt_list = c_list.to_dtype()
     assert_true(rt_list.is_list())
-    assert_equal(rt_list.as_list_type().item[], int64)
+    assert_equal(rt_list.as_list_type().value_type(), int64)
 
     var fsl_dt = fixed_size_list_(float32, 4)
     var c_fsl = CArrowSchema.from_dtype(fsl_dt)
@@ -592,7 +592,7 @@ def test_schema_from_dtype_all_types() raises:
     assert_true(rt_fsl.is_fixed_size_list())
     var rt_fsl_t = rt_fsl.as_fixed_size_list_type()
     assert_equal(rt_fsl_t.size, 4)
-    assert_equal(rt_fsl_t.item.dtype[], float32)
+    assert_equal(rt_fsl_t.value_type(), float32)
 
     var struct_fields = List[Field]()
     struct_fields.append(Field("a", int32, True))
@@ -603,7 +603,7 @@ def test_schema_from_dtype_all_types() raises:
     var rt_sf = rt_struct.as_struct_type().fields.copy()
     assert_equal(len(rt_sf), 1)
     assert_equal(rt_sf[0].name, "a")
-    assert_equal(rt_sf[0].dtype[], int32)
+    assert_equal(rt_sf[0].dtype, int32)
 
 
 def test_schema_field_nullable_flags() raises:

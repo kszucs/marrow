@@ -300,14 +300,14 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             # Key expression must resolve to a column for naming.
             var kdt = k.dtype()
             if kdt:
-                fields.append(Field("key", ArcPointer(kdt.value())))
+                fields.append(Field("key", kdt.value()))
             else:
                 fields.append(Field("key", input_schema.fields[0].dtype))
         for i in range(len(funcs)):
             if funcs[i] == "count":
-                fields.append(Field(funcs[i], ArcPointer(ArrowType(int64))))
+                fields.append(Field(funcs[i], ArrowType(int64)))
             else:
-                fields.append(Field(funcs[i], ArcPointer(ArrowType(float64))))
+                fields.append(Field(funcs[i], ArrowType(float64)))
 
         var agg = Aggregate(
             input=self,
@@ -375,7 +375,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                         break
                 if collides:
                     name = name + "_right"
-                fields.append(Field(name, f.dtype))
+                fields.append(Field(name, f.dtype.copy()))
 
         var join_node = Join(
             left=self,

@@ -187,7 +187,7 @@ struct AggregateFunction(Copyable, Movable):
         """Finalize state into a result (field, column) pair."""
         if self.name == "count":
             return (
-                Field(col_name, ArcPointer(ArrowType(int64))),
+                Field(col_name, ArrowType(int64)),
                 self.counts.finish(),
             )
 
@@ -204,7 +204,7 @@ struct AggregateFunction(Copyable, Movable):
                 else:
                     b.append_null()
             return (
-                Field(col_name, ArcPointer(ArrowType(float64))),
+                Field(col_name, ArrowType(float64)),
                 b.finish().to_any(),
             )
 
@@ -219,7 +219,7 @@ struct AggregateFunction(Copyable, Movable):
             else:
                 b.append_null()
         return (
-            Field(col_name, ArcPointer(ArrowType(float64))),
+            Field(col_name, ArrowType(float64)),
             b.finish().to_any(),
         )
 
@@ -331,7 +331,7 @@ struct HashGrouper(Movable):
                 Field(key_fields[k].name, key_fields[k].dtype)
             )
             if num_groups == 0:
-                var empty = make_builder(key_fields[k].dtype[])
+                var empty = make_builder(key_fields[k].dtype)
                 result_cols.append(empty.finish())
             else:
                 result_cols.append(self._group_keys[k].copy())
@@ -415,7 +415,7 @@ def groupby(
     children.append(key.copy())
     var key_data = key.to_data()
     var sa = StructArray(
-        dtype=struct_(Field("key", ArcPointer(key_data.dtype))),
+        dtype=struct_(Field("key", key_data.dtype.copy())),
         length=key_data.length,
         nulls=key_data.nulls,
         offset=key_data.offset,

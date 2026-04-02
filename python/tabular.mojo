@@ -78,7 +78,7 @@ def _build_from_dict(data: PythonObject) raises -> RecordBatch:
     for key in data:
         var name = String(py=key)
         var arr = AnyArray(py=data[key])
-        fields.append(Field(name=name, dtype=ArcPointer(arr.dtype())))
+        fields.append(Field(name=name, dtype=arr.dtype()))
         columns.append(arr^)
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
@@ -93,7 +93,7 @@ def _build_from_arrays(
     for arr_obj in data:
         var arr = AnyArray(py=arr_obj)
         var name = String(py=names_obj[i])
-        fields.append(Field(name=name, dtype=ArcPointer(arr.dtype())))
+        fields.append(Field(name=name, dtype=arr.dtype()))
         columns.append(arr^)
         i += 1
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)

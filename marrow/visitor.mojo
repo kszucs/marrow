@@ -76,10 +76,10 @@ trait DataTypeVisitor:
         elif dtype.is_binary():
             self.visit_binary()
         elif dtype.is_list():
-            self.visit_list(dtype.as_list_type().item[])
+            self.visit_list(dtype.as_list_type().value_type())
         elif dtype.is_fixed_size_list():
             var fsl = dtype.as_fixed_size_list_type()
-            self.visit_fixed_size_list(fsl.item.dtype[], fsl.size)
+            self.visit_fixed_size_list(fsl.value_type(), fsl.size)
         elif dtype.is_struct():
             self.visit_struct(dtype.as_struct_type().fields)
         else:

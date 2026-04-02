@@ -154,7 +154,7 @@ struct RecordBatch(
         for i in range(len(names)):
             ref f = self.schema.fields[i]
             new_fields.append(
-                Field(name=names[i], dtype=f.dtype, nullable=f.nullable)
+                Field(name=names[i], dtype=f.dtype.copy(), nullable=f.nullable)
             )
         var cols = List[AnyArray]()
         for col in self.columns:
@@ -251,7 +251,7 @@ def record_batch(
         )
     var fields = List[Field]()
     for i in range(len(columns)):
-        fields.append(Field(names[i], ArcPointer(columns[i].dtype())))
+        fields.append(Field(names[i], columns[i].dtype()))
     var schema = Schema(fields=fields^)
     return RecordBatch(schema=schema, columns=columns^)
 
@@ -353,7 +353,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
                 chunks.append(batch.columns[col_idx].copy())
             columns.append(
                 ChunkedArray(
-                    dtype=schema.fields[col_idx].dtype[],
+                    dtype=schema.fields[col_idx].dtype,
                     chunks=chunks^,
                 )
             )

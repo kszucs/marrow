@@ -882,7 +882,7 @@ struct StructBuilder(Builder, Sized):
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
         var children = List[AnyBuilder](capacity=len(fields))
         for i in range(len(fields)):
-            children.append(make_builder(fields[i].dtype[]))
+            children.append(make_builder(fields[i].dtype))
         self._dtype = struct_(fields^)
         self._length = 0
         self._capacity = capacity
@@ -1142,10 +1142,10 @@ def make_builder(dtype: ArrowType, capacity: Int = 0) raises -> AnyBuilder:
     if dtype.is_string():
         return StringBuilder(capacity)
     elif dtype.is_list():
-        var child = make_builder(dtype.as_list_type().item[])
+        var child = make_builder(dtype.as_list_type().value_type())
         return ListBuilder(child^, capacity)
     elif dtype.is_fixed_size_list():
-        var child = make_builder(dtype.as_fixed_size_list_type().item.dtype[])
+        var child = make_builder(dtype.as_fixed_size_list_type().value_type())
         return FixedSizeListBuilder(child^, dtype.as_fixed_size_list_type().size, capacity)
     elif dtype.is_struct():
         return StructBuilder(dtype.as_struct_type().fields.copy(), capacity)

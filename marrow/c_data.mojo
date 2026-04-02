@@ -184,7 +184,7 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
-            var child0 = CArrowSchema.from_field(field("item", dtype.as_list_type().item[].copy()))
+            var child0 = CArrowSchema.from_field(dtype.as_list_type().value_field().copy())
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
@@ -193,7 +193,7 @@ struct CArrowSchema(Copyable, Movable):
             fmt = {"+w:", fsl.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
-            var child0 = CArrowSchema.from_field(fsl.item)
+            var child0 = CArrowSchema.from_field(fsl.value_field().copy())
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
@@ -235,7 +235,7 @@ struct CArrowSchema(Copyable, Movable):
         Delegates to `from_dtype` and then sets the field name (heap-allocated
         as a raw C string) and nullability flag.
         """
-        var c_schema = CArrowSchema.from_dtype(field.dtype[])
+        var c_schema = CArrowSchema.from_dtype(field.dtype)
         c_schema.name = _alloc_c_string(field.name)
         c_schema.flags = Int64(
             ARROW_FLAG_NULLABLE
@@ -355,11 +355,11 @@ struct CArrowSchema(Copyable, Movable):
             return string
         elif fmt == "+l":
             var f = self.children[0][].to_field()
-            return list_(f.dtype[].copy())
+            return list_(f.dtype.copy())
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
             var f = self.children[0][].to_field()
-            return fixed_size_list_(f.dtype[].copy(), size)
+            return fixed_size_list_(f.dtype.copy(), size)
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
@@ -540,7 +540,7 @@ struct CArrowArray(Copyable, Movable):
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             buffers.append(offsets^)
             children.append(
-                self.children[0][].to_data(dtype.as_list_type().item[], owner)
+                self.children[0][].to_data(dtype.as_list_type().value_type(), owner)
             )
         elif dtype.is_string() or dtype.is_binary():
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -551,13 +551,13 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(values^)
         elif dtype.is_fixed_size_list():
             children.append(
-                self.children[0][].to_data(dtype.as_fixed_size_list_type().item.dtype[], owner)
+                self.children[0][].to_data(dtype.as_fixed_size_list_type().value_type(), owner)
             )
         elif dtype.is_struct():
             var st = dtype.as_struct_type()
             for i in range(Int(self.n_children)):
                 children.append(
-                    self.children[i][].to_data(st.fields[i].dtype[], owner)
+                    self.children[i][].to_data(st.fields[i].dtype, owner)
                 )
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
@@ -1009,7 +1009,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
                 c_array.free()
                 break
             var struct_dtype = struct_(schema.fields.copy())
-            var arr = c_array.take_pointee().to_array(struct_dtype)
+            var arr = c_array.take_pointee().to_array(struct_dtype^)
             var columns = List[AnyArray]()
             for child in arr.as_struct().children:
                 columns.append(child.copy())

@@ -85,14 +85,14 @@ def binary() raises -> PythonObject:
 def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     """Create a Field with the given name and data type."""
     var d = dtype.downcast_value_ptr[dt.ArrowType]()[].copy()
-    var f = dt.Field(String(py=name), ArcPointer(d^))
+    var f = dt.Field(String(py=name), d^)
     return f^.to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
     var d = value_type.downcast_value_ptr[dt.ArrowType]()[].copy()
-    return dt.list_(d^).to_python_object()
+    return dt.list_(d^).to_any().to_python_object()
 
 
 def struct_(fields_obj: PythonObject) raises -> PythonObject:
@@ -100,7 +100,7 @@ def struct_(fields_obj: PythonObject) raises -> PythonObject:
     var fields = List[dt.Field]()
     for f in fields_obj:
         fields.append(f.downcast_value_ptr[dt.Field]()[].copy())
-    return dt.struct_(fields^).to_python_object()
+    return dt.struct_(fields^).to_any().to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

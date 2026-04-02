@@ -247,7 +247,7 @@ struct HashJoin[
                         break
                 if collides:
                     name = name + "_right"
-                fields.append(Field(name, f.dtype))
+                fields.append(Field(name, f.dtype.copy()))
 
         return struct_(fields^)
 

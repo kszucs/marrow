@@ -26,7 +26,7 @@ Comptime singletons (same names as before):
 from std.utils import Variant
 from std.sys import size_of, bit_width_of
 from std.os import abort
-from std.memory import ArcPointer
+from std.memory import ArcPointer, OwnedPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.compile import codegen_unreachable
@@ -190,7 +190,6 @@ struct StringType(DataType, Defaultable, TrivialRegisterPassable):
 
 # ---------------------------------------------------------------------------
 # Field and nested compound types
-# (use ArcPointer[ArrowType] for child dtype to break the circular layout)
 # ---------------------------------------------------------------------------
 
 
@@ -203,26 +202,19 @@ struct Field(
     Writable,
 ):
     var name: String
-    var dtype: ArcPointer[ArrowType]
+    var dtype: ArrowType
     var nullable: Bool
-
-    def __init__(
-        out self, name: String, dtype: ArcPointer[ArrowType], nullable: Bool = True
-    ):
-        self.name = name
-        self.dtype = dtype
-        self.nullable = nullable
 
     def __init__(
         out self, name: String, var dtype: ArrowType, nullable: Bool = True
     ):
         self.name = name
-        self.dtype = ArcPointer(dtype^)
+        self.dtype = dtype^
         self.nullable = nullable
 
     def __init__(out self, *, copy: Self):
         self.name = copy.name
-        self.dtype = copy.dtype
+        self.dtype = copy.dtype.copy()
         self.nullable = copy.nullable
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -231,12 +223,12 @@ struct Field(
     def __eq__(self, other: Self) -> Bool:
         return (
             self.name == other.name
-            and self.dtype[] == other.dtype[]
+            and self.dtype == other.dtype
             and self.nullable == other.nullable
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.name, ": ", self.dtype[])
+        writer.write(self.name, ": ", self.dtype)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -248,40 +240,53 @@ struct Field(
 
 
 struct ListType(DataType):
-    var item: ArcPointer[ArrowType]
+    var item: OwnedPointer[Field]
 
-    def __init__(out self, item: ArcPointer[ArrowType]):
-        self.item = item
+    def __init__(out self, var item: Field):
+        self.item = OwnedPointer(item^)
 
     def __init__(out self, *, copy: Self):
-        self.item = copy.item
+        self.item = OwnedPointer(copy.item[].copy())
 
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[]
 
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item[]
+
+    def value_type(ref self) -> ref[self.item[].dtype] ArrowType:
+        return self.item[].dtype
+
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("list<", self.item[], ">")
+        writer.write("list<", self.item[].dtype, ">")
 
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
 
 struct FixedSizeListType(DataType):
-    var item: Field
+    var item: OwnedPointer[Field]
     var size: Int
 
     def __init__(out self, var item: Field, size: Int):
-        self.item = item^
+        self.item = OwnedPointer(item^)
         self.size = size
 
     def __init__(out self, *, copy: Self):
-        self.item = Field(copy=copy.item)
+        self.item = OwnedPointer(copy.item[].copy())
         self.size = copy.size
 
     def __eq__(self, other: Self) -> Bool:
-        return self.item == other.item and self.size == other.size
+        return self.item[] == other.item[] and self.size == other.size
+
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item[]
+
+    def value_type(self) -> ArrowType:
+        return self.item[].dtype.copy()
+
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("fixed_size_list<", self.item, ">")
+        writer.write("fixed_size_list<", self.item[], ">")
 
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
 
@@ -509,25 +514,25 @@ struct ArrowType(
 
 def field(name: String, var dtype: ArrowType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
-    return Field(name, ArcPointer(dtype^), nullable)
+    return Field(name, dtype^, nullable)
 
 
-def list_(var value_type: ArrowType) -> ArrowType:
+def list_(var value_type: ArrowType) -> ListType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
-    return ListType(ArcPointer(value_type^))
+    return ListType(field("item", value_type^))
 
 
-def fixed_size_list_(var value_type: ArrowType, size: Int) -> ArrowType:
+def fixed_size_list_(var value_type: ArrowType, size: Int) -> FixedSizeListType:
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size."""
     return FixedSizeListType(field("item", value_type^), size)
 
 
-def struct_(var fields: List[Field]) -> ArrowType:
+def struct_(var fields: List[Field]) -> StructType:
     """Construct a struct type from a list of fields."""
     return StructType(fields^)
 
 
-def struct_(var *fields: Field) -> ArrowType:
+def struct_(var *fields: Field) -> StructType:
     """Construct a struct type from variadic fields."""
     return StructType(List(elements=fields^))
 

@@ -412,7 +412,7 @@ struct PyInferrer(Copyable, Movable):
                 fields.append(
                     dt.Field(
                         self._field_order[i],
-                        ArcPointer(self._field_children[i]._get_type()),
+                        self._field_children[i]._get_type(),
                         nullable=True,
                     )
                 )
