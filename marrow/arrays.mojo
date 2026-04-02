@@ -729,7 +729,7 @@ struct PrimitiveArray[T: PrimitiveType](
         return String.write(self)
 
     def type(self) -> ArrowType:
-        return native_arrow_type[Self.T]()
+        return Self.T()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.

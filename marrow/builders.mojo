@@ -300,7 +300,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
         self._length = n
 
     def dtype(self) -> ArrowType:
-        return native_arrow_type[Self.T]()
+        return Self.T()
 
     def append(mut self, value: Self.ScalarType) raises:
         self.reserve(1)

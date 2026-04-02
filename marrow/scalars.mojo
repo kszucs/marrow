@@ -33,7 +33,6 @@ from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import (
     ArrowType,
     PrimitiveType,
-    native_arrow_type,
     Field,
     BoolType,
     Int8Type, Int16Type, Int32Type, Int64Type,
@@ -108,7 +107,7 @@ struct PrimitiveScalar[T: PrimitiveType](
         return Self(is_valid=False)
 
     def type(self) -> ArrowType:
-        return native_arrow_type[Self.T]()
+        return Self.T()
 
     def is_valid(self) -> Bool:
         return self._is_valid

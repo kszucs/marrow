@@ -24,7 +24,7 @@ Comptime singletons (same names as before):
 """
 
 from std.utils import Variant
-from std.sys import size_of
+from std.sys import size_of, bit_width_of
 from std.memory import ArcPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
@@ -35,16 +35,19 @@ from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 
 
 trait DataType(Equatable, ImplicitlyDestructible, Movable, Writable):
-    def byte_width(self) -> Int: ...
-    def bit_width(self) -> UInt8: ...
     def to_any(deinit self) -> ArrowType: ...
 
 
-trait PrimitiveType(DataType):
+trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
     comptime native: DType
 
-    def bit_width(self) -> UInt8:
-        return UInt8(size_of[Self.native]() * 8)
+    def __init__(out self): ...
+
+    def byte_width(self) -> Int:
+        return size_of[Self.native]()
+
+    def bit_width(self) -> Int:
+        return bit_width_of[Self.native]()
 
 
 # ---------------------------------------------------------------------------
@@ -54,138 +57,123 @@ trait PrimitiveType(DataType):
 
 struct NullType(DataType, ImplicitlyCopyable):
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("null")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct BoolType(PrimitiveType, ImplicitlyCopyable):
+struct BoolType(PrimitiveType):
     comptime native: DType = DType.bool
 
     def __init__(out self): pass
     def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(1)
+    def bit_width(self) -> Int: return 1
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("bool")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Int8Type(PrimitiveType, ImplicitlyCopyable):
+struct Int8Type(PrimitiveType):
     comptime native: DType = DType.int8
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 1
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int8")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Int16Type(PrimitiveType, ImplicitlyCopyable):
+struct Int16Type(PrimitiveType):
     comptime native: DType = DType.int16
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Int32Type(PrimitiveType, ImplicitlyCopyable):
+struct Int32Type(PrimitiveType):
     comptime native: DType = DType.int32
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Int64Type(PrimitiveType, ImplicitlyCopyable):
+struct Int64Type(PrimitiveType):
     comptime native: DType = DType.int64
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("int64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct UInt8Type(PrimitiveType, ImplicitlyCopyable):
+struct UInt8Type(PrimitiveType):
     comptime native: DType = DType.uint8
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 1
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint8")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct UInt16Type(PrimitiveType, ImplicitlyCopyable):
+struct UInt16Type(PrimitiveType):
     comptime native: DType = DType.uint16
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct UInt32Type(PrimitiveType, ImplicitlyCopyable):
+struct UInt32Type(PrimitiveType):
     comptime native: DType = DType.uint32
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct UInt64Type(PrimitiveType, ImplicitlyCopyable):
+struct UInt64Type(PrimitiveType):
     comptime native: DType = DType.uint64
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("uint64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Float32Type(PrimitiveType, ImplicitlyCopyable):
+struct Float32Type(PrimitiveType):
     comptime native: DType = DType.float32
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 4
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Float64Type(PrimitiveType, ImplicitlyCopyable):
+struct Float64Type(PrimitiveType):
     comptime native: DType = DType.float64
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 8
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
-struct Float16Type(PrimitiveType, ImplicitlyCopyable):
+struct Float16Type(PrimitiveType):
     comptime native: DType = DType.float16
 
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 2
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("float16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType: return ArrowType(self)
 
 
 struct BinaryType(DataType, ImplicitlyCopyable):
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("binary")
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
@@ -193,8 +181,6 @@ struct BinaryType(DataType, ImplicitlyCopyable):
 
 struct StringType(DataType, ImplicitlyCopyable):
     def __init__(out self): pass
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
     def __eq__(self, other: Self) -> Bool: return True
     def write_to[W: Writer](self, mut writer: W): writer.write("string")
     def to_any(deinit self) -> ArrowType: return ArrowType(self^)
@@ -260,9 +246,6 @@ struct ListType(DataType, ImplicitlyCopyable):
     def __init__(out self, item: ArcPointer[ArrowType]):
         self.item = item
 
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
-
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[]
 
@@ -279,9 +262,6 @@ struct FixedSizeListType(DataType, Copyable):
     def __init__(out self, var item: Field, size: Int):
         self.item = item^
         self.size = size
-
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
 
     def __eq__(self, other: Self) -> Bool:
         return self.item == other.item and self.size == other.size
@@ -300,9 +280,6 @@ struct StructType(DataType, Copyable):
 
     def __init__(out self, *, copy: Self):
         self.fields = copy.fields.copy()
-
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> UInt8: return UInt8(0)
 
     def __eq__(self, other: Self) -> Bool:
         return self.fields == other.fields
@@ -453,17 +430,36 @@ struct ArrowType(
         return self._v.isa[StructType]()
 
     def is_fixed_size(self) -> Bool:
-        return self.bit_width() > 0
+        return self.is_primitive()
 
-    def bit_width(self) -> UInt8:
-        @parameter
-        def f[T: DataType](t: T) -> UInt8: return t.bit_width()
-        return self._dispatch[UInt8, f]()
+    def bit_width(self) -> Int:
+        if self._v.isa[BoolType](): return 1
+        if self._v.isa[Int8Type](): return bit_width_of[DType.int8]()
+        if self._v.isa[Int16Type](): return bit_width_of[DType.int16]()
+        if self._v.isa[Int32Type](): return bit_width_of[DType.int32]()
+        if self._v.isa[Int64Type](): return bit_width_of[DType.int64]()
+        if self._v.isa[UInt8Type](): return bit_width_of[DType.uint8]()
+        if self._v.isa[UInt16Type](): return bit_width_of[DType.uint16]()
+        if self._v.isa[UInt32Type](): return bit_width_of[DType.uint32]()
+        if self._v.isa[UInt64Type](): return bit_width_of[DType.uint64]()
+        if self._v.isa[Float16Type](): return bit_width_of[DType.float16]()
+        if self._v.isa[Float32Type](): return bit_width_of[DType.float32]()
+        if self._v.isa[Float64Type](): return bit_width_of[DType.float64]()
+        return 0
 
     def byte_width(self) -> Int:
-        @parameter
-        def f[T: DataType](t: T) -> Int: return t.byte_width()
-        return self._dispatch[Int, f]()
+        if self._v.isa[Int8Type](): return size_of[DType.int8]()
+        if self._v.isa[Int16Type](): return size_of[DType.int16]()
+        if self._v.isa[Int32Type](): return size_of[DType.int32]()
+        if self._v.isa[Int64Type](): return size_of[DType.int64]()
+        if self._v.isa[UInt8Type](): return size_of[DType.uint8]()
+        if self._v.isa[UInt16Type](): return size_of[DType.uint16]()
+        if self._v.isa[UInt32Type](): return size_of[DType.uint32]()
+        if self._v.isa[UInt64Type](): return size_of[DType.uint64]()
+        if self._v.isa[Float16Type](): return size_of[DType.float16]()
+        if self._v.isa[Float32Type](): return size_of[DType.float32]()
+        if self._v.isa[Float64Type](): return size_of[DType.float64]()
+        return 0
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
@@ -501,21 +497,6 @@ struct ArrowType(
 # ---------------------------------------------------------------------------
 
 
-def native_arrow_type[T: PrimitiveType]() -> ArrowType:
-    """Return the ArrowType singleton for a PrimitiveType type parameter."""
-    comptime if T.native == DType.bool: return bool_
-    elif T.native == DType.int8: return int8
-    elif T.native == DType.int16: return int16
-    elif T.native == DType.int32: return int32
-    elif T.native == DType.int64: return int64
-    elif T.native == DType.uint8: return uint8
-    elif T.native == DType.uint16: return uint16
-    elif T.native == DType.uint32: return uint32
-    elif T.native == DType.uint64: return uint64
-    elif T.native == DType.float16: return float16
-    elif T.native == DType.float32: return float32
-    else: return float64
-
 
 def field(name: String, var dtype: ArrowType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
@@ -545,6 +526,7 @@ def struct_(var *fields: Field) -> ArrowType:
 # ---------------------------------------------------------------------------
 # Comptime singletons
 # ---------------------------------------------------------------------------
+
 
 comptime null = NullType()
 comptime bool_ = BoolType()
