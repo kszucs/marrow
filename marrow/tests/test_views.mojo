@@ -125,14 +125,14 @@ def test_bufferview_implicit_copy() raises:
 def test_bufferview_get_type_name() raises:
     assert_equal(
         BufferView[DType.int32, ImmutAnyOrigin].get_type_name(),
-        "BufferView[Int32Type]",
+        "BufferView[int32]",
     )
 
 
 def test_bufferview_get_type_name_float() raises:
     assert_equal(
         BufferView[DType.float64, ImmutAnyOrigin].get_type_name(),
-        "BufferView[Float64Type]",
+        "BufferView[float64]",
     )
 
 

@@ -412,7 +412,7 @@ def test_fixed_size_list_int_array() raises:
     assert_equal(len(builder), 2)
     var fsl = builder.finish()
     assert_equal(len(fsl), 2)
-    assert_equal(fsl.dtype.size, 3)
+    assert_equal(fsl.dtype.as_fixed_size_list_type().size, 3)
 
     # First list: [1, 2, 3]
     ref first = fsl[0].as_int64()
@@ -441,7 +441,7 @@ def test_fixed_size_list_roundtrip() raises:
     var fsl = builder.finish()
 
     assert_true(fsl.dtype.is_fixed_size_list())
-    assert_equal(fsl.dtype.size, 2)
+    assert_equal(fsl.dtype.as_fixed_size_list_type().size, 2)
     assert_equal(len(fsl), 2)
 
     ref first = fsl[0].as_int32()
@@ -531,10 +531,10 @@ def test_struct_array() raises:
     var data: AnyArray = struct_builder.finish()
     assert_equal(data.length(), 0)
     assert_true(data.dtype().is_struct())
-    assert_equal(len(data.dtype().fields), 3)
-    assert_equal(data.dtype().fields[0].name, "id")
-    assert_equal(data.dtype().fields[1].name, "name")
-    assert_equal(data.dtype().fields[2].name, "active")
+    assert_equal(len(data.dtype().as_struct_type().fields), 3)
+    assert_equal(data.dtype().as_struct_type().fields[0].name, "id")
+    assert_equal(data.dtype().as_struct_type().fields[1].name, "name")
+    assert_equal(data.dtype().as_struct_type().fields[2].name, "active")
 
 
 def test_struct_array_unsafe_get() raises:
@@ -1239,8 +1239,8 @@ def test_struct_array_select_basic() raises:
     var result = sa.select(indices)
 
     assert_equal(len(result.children), 2)
-    assert_equal(result.dtype.fields[0].name, "a")
-    assert_equal(result.dtype.fields[1].name, "c")
+    assert_equal(result.dtype.as_struct_type().fields[0].name, "a")
+    assert_equal(result.dtype.as_struct_type().fields[1].name, "c")
     assert_equal(len(result), 2)
 
 

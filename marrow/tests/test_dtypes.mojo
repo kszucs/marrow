@@ -1,13 +1,11 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 import marrow.dtypes as dt
-from marrow.dtypes import Field
+from marrow.dtypes import ArrowType, Field
 
 
 def test_bool_type() raises:
-    assert_true(dt.bool_ == dt.bool_)
-    assert_false(dt.bool_ == dt.int64)
-    assert_true(dt.bool_ is dt.bool_)
-    assert_false(dt.bool_ is dt.int64)
+    assert_true(ArrowType(dt.bool_) == ArrowType(dt.bool_))
+    assert_false(ArrowType(dt.bool_) == ArrowType(dt.int64))
 
 
 def test_list_type() raises:
@@ -42,74 +40,74 @@ def test_struct_type() raises:
 
 
 def test_is_integer() raises:
-    assert_true(dt.int8.is_integer())
-    assert_true(dt.int16.is_integer())
-    assert_true(dt.int32.is_integer())
-    assert_true(dt.int64.is_integer())
-    assert_true(dt.uint8.is_integer())
-    assert_true(dt.uint16.is_integer())
-    assert_true(dt.uint32.is_integer())
-    assert_true(dt.uint64.is_integer())
-    assert_false(dt.bool_.is_integer())
-    assert_false(dt.float32.is_integer())
-    assert_false(dt.float64.is_integer())
+    assert_true(ArrowType(dt.int8).is_integer())
+    assert_true(ArrowType(dt.int16).is_integer())
+    assert_true(ArrowType(dt.int32).is_integer())
+    assert_true(ArrowType(dt.int64).is_integer())
+    assert_true(ArrowType(dt.uint8).is_integer())
+    assert_true(ArrowType(dt.uint16).is_integer())
+    assert_true(ArrowType(dt.uint32).is_integer())
+    assert_true(ArrowType(dt.uint64).is_integer())
+    assert_false(ArrowType(dt.bool_).is_integer())
+    assert_false(ArrowType(dt.float32).is_integer())
+    assert_false(ArrowType(dt.float64).is_integer())
     assert_false(dt.list_(dt.int64).is_integer())
 
 
 def test_is_signed_integer() raises:
-    assert_true(dt.int8.is_signed_integer())
-    assert_true(dt.int16.is_signed_integer())
-    assert_true(dt.int32.is_signed_integer())
-    assert_true(dt.int64.is_signed_integer())
-    assert_false(dt.uint8.is_signed_integer())
-    assert_false(dt.uint16.is_signed_integer())
-    assert_false(dt.uint32.is_signed_integer())
-    assert_false(dt.uint64.is_signed_integer())
-    assert_false(dt.bool_.is_signed_integer())
-    assert_false(dt.float32.is_signed_integer())
-    assert_false(dt.float64.is_signed_integer())
+    assert_true(ArrowType(dt.int8).is_signed_integer())
+    assert_true(ArrowType(dt.int16).is_signed_integer())
+    assert_true(ArrowType(dt.int32).is_signed_integer())
+    assert_true(ArrowType(dt.int64).is_signed_integer())
+    assert_false(ArrowType(dt.uint8).is_signed_integer())
+    assert_false(ArrowType(dt.uint16).is_signed_integer())
+    assert_false(ArrowType(dt.uint32).is_signed_integer())
+    assert_false(ArrowType(dt.uint64).is_signed_integer())
+    assert_false(ArrowType(dt.bool_).is_signed_integer())
+    assert_false(ArrowType(dt.float32).is_signed_integer())
+    assert_false(ArrowType(dt.float64).is_signed_integer())
 
 
 def test_is_unsigned_integer() raises:
-    assert_false(dt.int8.is_unsigned_integer())
-    assert_false(dt.int16.is_unsigned_integer())
-    assert_false(dt.int32.is_unsigned_integer())
-    assert_false(dt.int64.is_unsigned_integer())
-    assert_true(dt.uint8.is_unsigned_integer())
-    assert_true(dt.uint16.is_unsigned_integer())
-    assert_true(dt.uint32.is_unsigned_integer())
-    assert_true(dt.uint64.is_unsigned_integer())
-    assert_false(dt.bool_.is_unsigned_integer())
-    assert_false(dt.float32.is_unsigned_integer())
-    assert_false(dt.float64.is_unsigned_integer())
+    assert_false(ArrowType(dt.int8).is_unsigned_integer())
+    assert_false(ArrowType(dt.int16).is_unsigned_integer())
+    assert_false(ArrowType(dt.int32).is_unsigned_integer())
+    assert_false(ArrowType(dt.int64).is_unsigned_integer())
+    assert_true(ArrowType(dt.uint8).is_unsigned_integer())
+    assert_true(ArrowType(dt.uint16).is_unsigned_integer())
+    assert_true(ArrowType(dt.uint32).is_unsigned_integer())
+    assert_true(ArrowType(dt.uint64).is_unsigned_integer())
+    assert_false(ArrowType(dt.bool_).is_unsigned_integer())
+    assert_false(ArrowType(dt.float32).is_unsigned_integer())
+    assert_false(ArrowType(dt.float64).is_unsigned_integer())
 
 
 def test_is_floating_point() raises:
-    assert_false(dt.int8.is_floating_point())
-    assert_false(dt.int16.is_floating_point())
-    assert_false(dt.int32.is_floating_point())
-    assert_false(dt.int64.is_floating_point())
-    assert_false(dt.uint8.is_floating_point())
-    assert_false(dt.uint16.is_floating_point())
-    assert_false(dt.uint32.is_floating_point())
-    assert_false(dt.uint64.is_floating_point())
-    assert_false(dt.bool_.is_floating_point())
-    assert_true(dt.float32.is_floating_point())
-    assert_true(dt.float64.is_floating_point())
+    assert_false(ArrowType(dt.int8).is_floating_point())
+    assert_false(ArrowType(dt.int16).is_floating_point())
+    assert_false(ArrowType(dt.int32).is_floating_point())
+    assert_false(ArrowType(dt.int64).is_floating_point())
+    assert_false(ArrowType(dt.uint8).is_floating_point())
+    assert_false(ArrowType(dt.uint16).is_floating_point())
+    assert_false(ArrowType(dt.uint32).is_floating_point())
+    assert_false(ArrowType(dt.uint64).is_floating_point())
+    assert_false(ArrowType(dt.bool_).is_floating_point())
+    assert_true(ArrowType(dt.float32).is_floating_point())
+    assert_true(ArrowType(dt.float64).is_floating_point())
 
 
 def test_bit_width() raises:
-    assert_equal(dt.int8.bit_width(), 8)
-    assert_equal(dt.int16.bit_width(), 16)
-    assert_equal(dt.int32.bit_width(), 32)
-    assert_equal(dt.int64.bit_width(), 64)
-    assert_equal(dt.uint8.bit_width(), 8)
-    assert_equal(dt.uint16.bit_width(), 16)
-    assert_equal(dt.uint32.bit_width(), 32)
-    assert_equal(dt.uint64.bit_width(), 64)
-    assert_equal(dt.bool_.bit_width(), 1)
-    assert_equal(dt.float32.bit_width(), 32)
-    assert_equal(dt.float64.bit_width(), 64)
+    assert_equal(ArrowType(dt.int8).bit_width(), 8)
+    assert_equal(ArrowType(dt.int16).bit_width(), 16)
+    assert_equal(ArrowType(dt.int32).bit_width(), 32)
+    assert_equal(ArrowType(dt.int64).bit_width(), 64)
+    assert_equal(ArrowType(dt.uint8).bit_width(), 8)
+    assert_equal(ArrowType(dt.uint16).bit_width(), 16)
+    assert_equal(ArrowType(dt.uint32).bit_width(), 32)
+    assert_equal(ArrowType(dt.uint64).bit_width(), 64)
+    assert_equal(ArrowType(dt.bool_).bit_width(), 1)
+    assert_equal(ArrowType(dt.float32).bit_width(), 32)
+    assert_equal(ArrowType(dt.float64).bit_width(), 64)
     assert_equal(dt.list_(dt.int64).bit_width(), 0)
 
 

@@ -424,7 +424,7 @@ def test_fixed_size_list_builder_zero_length() raises:
     var frozen = b.finish()
     assert_equal(frozen.length, 0)
     assert_true(frozen.dtype.is_fixed_size_list())
-    assert_equal(frozen.dtype.size, 4)
+    assert_equal(frozen.dtype.as_fixed_size_list_type().size, 4)
 
 
 def test_fixed_size_list_builder_float32() raises:
@@ -526,9 +526,9 @@ def test_struct_builder_append_valid() raises:
     assert_equal(len(sb), 3)
     var frozen = sb.finish()
     assert_equal(frozen.length, 3)
-    assert_equal(len(frozen.dtype.fields), 2)
-    assert_equal(frozen.dtype.fields[0].name, "id")
-    assert_equal(frozen.dtype.fields[1].name, "score")
+    assert_equal(len(frozen.dtype.as_struct_type().fields), 2)
+    assert_equal(frozen.dtype.as_struct_type().fields[0].name, "id")
+    assert_equal(frozen.dtype.as_struct_type().fields[1].name, "score")
     # All entries valid — bitmap is omitted when null_count == 0
     assert_equal(frozen.nulls, 0)
 
@@ -578,10 +578,10 @@ def test_struct_builder_multi_type_fields() raises:
 
     var frozen = sb.finish()
     assert_equal(frozen.length, 2)
-    assert_equal(len(frozen.dtype.fields), 3)
-    assert_equal(frozen.dtype.fields[0].name, "id")
-    assert_equal(frozen.dtype.fields[1].name, "name")
-    assert_equal(frozen.dtype.fields[2].name, "active")
+    assert_equal(len(frozen.dtype.as_struct_type().fields), 3)
+    assert_equal(frozen.dtype.as_struct_type().fields[0].name, "id")
+    assert_equal(frozen.dtype.as_struct_type().fields[1].name, "name")
+    assert_equal(frozen.dtype.as_struct_type().fields[2].name, "active")
 
 
 def test_struct_builder_field_builder() raises:
@@ -611,8 +611,8 @@ def test_struct_builder_field_names_preserved() raises:
     sb.field_builder(1).as_primitive[Int8Type]().append(2)
     sb.append_valid()
     var frozen = sb.finish()
-    assert_equal(frozen.dtype.fields[0].name, "alpha")
-    assert_equal(frozen.dtype.fields[1].name, "beta")
+    assert_equal(frozen.dtype.as_struct_type().fields[0].name, "alpha")
+    assert_equal(frozen.dtype.as_struct_type().fields[1].name, "beta")
 
 
 # ---------------------------------------------------------------------------

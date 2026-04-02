@@ -225,6 +225,13 @@ struct Field(
         self.dtype = dtype
         self.nullable = nullable
 
+    def __init__(
+        out self, name: String, dtype: ArrowType, nullable: Bool = True
+    ):
+        self.name = name
+        self.dtype = ArcPointer(dtype)
+        self.nullable = nullable
+
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Field]()[]
 

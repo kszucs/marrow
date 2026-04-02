@@ -81,14 +81,15 @@ def test_from_c_schema() raises -> None:
 
     # Test first field.
     ref field_0 = s.field(index=0)
-    assert_true(field_0.dtype.is_list())
-    assert_true(field_0.dtype.fields[0].dtype.is_integer())
+    assert_true(field_0.dtype[].is_list())
+    assert_true(field_0.dtype[].as_list_type().item[].is_integer())
 
     # Test second field.
     ref field_1 = s.field(index=1)
-    assert_true(field_1.dtype.is_struct())
-    assert_equal(field_1.dtype.fields[0].name, "field_a")
-    assert_equal(field_1.dtype.fields[1].name, "field_b")
+    assert_true(field_1.dtype[].is_struct())
+    var f1_fields = field_1.dtype[].as_struct_type().fields.copy()
+    assert_equal(f1_fields[0].name, "field_a")
+    assert_equal(f1_fields[1].name, "field_b")
 
 
 def test_schema_len() raises:
@@ -135,9 +136,9 @@ def test_schema_from_pyarrow() raises:
     ).to_schema()
     assert_equal(len(s), 2)
     assert_equal(s.field(index=0).name, "x")
-    assert_equal(s.field(index=0).dtype, int32)
+    assert_equal(s.field(index=0).dtype[], int32)
     assert_equal(s.field(index=1).name, "y")
-    assert_equal(s.field(index=1).dtype, float64)
+    assert_equal(s.field(index=1).dtype[], float64)
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +157,7 @@ def test_schema_fn_single_field() raises:
     var s = schema([field("x", int32)])
     assert_equal(len(s), 1)
     assert_equal(s.field(index=0).name, "x")
-    assert_equal(s.field(index=0).dtype, int32)
+    assert_equal(s.field(index=0).dtype[], int32)
 
 
 def test_schema_fn_multiple_fields() raises:
@@ -164,11 +165,11 @@ def test_schema_fn_multiple_fields() raises:
     var s = schema([field("a", int64), field("b", float32), field("c", string)])
     assert_equal(len(s), 3)
     assert_equal(s.field(index=0).name, "a")
-    assert_equal(s.field(index=0).dtype, int64)
+    assert_equal(s.field(index=0).dtype[], int64)
     assert_equal(s.field(index=1).name, "b")
-    assert_equal(s.field(index=1).dtype, float32)
+    assert_equal(s.field(index=1).dtype[], float32)
     assert_equal(s.field(index=2).name, "c")
-    assert_equal(s.field(index=2).dtype, string)
+    assert_equal(s.field(index=2).dtype[], string)
 
 
 def test_schema_fn_equals_struct_init() raises:
@@ -176,7 +177,7 @@ def test_schema_fn_equals_struct_init() raises:
     var s1 = schema(
         [field("x", int32, nullable=False), field("y", float64, nullable=False)]
     )
-    var s2 = Schema(fields=[Field("x", int32), Field("y", float64)])
+    var s2 = Schema(fields=[Field("x", int32, False), Field("y", float64, False)])
     assert_true(s1 == s2)
 
 
@@ -189,7 +190,7 @@ def test_field_fn_name_and_type() raises:
     """Field() sets name and dtype correctly."""
     var f = field("x", int32)
     assert_equal(f.name, "x")
-    assert_equal(f.dtype, int32)
+    assert_equal(f.dtype[], int32)
 
 
 def test_field_fn_nullable_default_true() raises:
@@ -213,12 +214,12 @@ def test_field_fn_equals_field_struct() raises:
 
 def test_field_fn_various_types() raises:
     """Field() works for all primitive types."""
-    assert_equal(field("a", int8).dtype, int8)
-    assert_equal(field("b", int64).dtype, int64)
-    assert_equal(field("c", float32).dtype, float32)
-    assert_equal(field("d", float64).dtype, float64)
-    assert_equal(field("e", string).dtype, string)
-    assert_equal(field("f", binary).dtype, binary)
+    assert_equal(field("int8", int8).dtype[], int8)
+    assert_equal(field("int64", int64).dtype[], int64)
+    assert_equal(field("float32", float32).dtype[], float32)
+    assert_equal(field("float64", float64).dtype[], float64)
+    assert_equal(field("string", string).dtype[], string)
+    assert_equal(field("binary", binary).dtype[], binary)
 
 
 def main() raises:

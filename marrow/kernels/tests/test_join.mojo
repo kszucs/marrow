@@ -520,10 +520,10 @@ def test_output_schema_column_name_collision() raises:
     var right = _int32_struct(rk, rv)
 
     var result = hash_join(left, right, _left_on(), _right_on())
-    assert_equal(result.dtype.fields[0].name, "k")
-    assert_equal(result.dtype.fields[1].name, "v")
-    assert_equal(result.dtype.fields[2].name, "k_right")
-    assert_equal(result.dtype.fields[3].name, "v_right")
+    assert_equal(result.dtype.as_struct_type().fields[0].name, "k")
+    assert_equal(result.dtype.as_struct_type().fields[1].name, "v")
+    assert_equal(result.dtype.as_struct_type().fields[2].name, "k_right")
+    assert_equal(result.dtype.as_struct_type().fields[3].name, "v_right")
 
 
 # ---------------------------------------------------------------------------
