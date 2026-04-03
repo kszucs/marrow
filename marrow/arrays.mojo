@@ -9,20 +9,27 @@ from `marrow.builders` and call `finish()`.
 Array — the trait
 -----------------
 `Array` is the trait that all typed arrays implement.  It provides the common
-read-only interface: `type()`, `null_count()`, `is_valid()`, and `as_any()`.
+read-only interface: `type()`, `null_count()`, `is_valid()`, and `to_any()`.
 
 AnyArray — the type-erased handle
 ----------------------------------
-`AnyArray` is the type-erased, immutable handle used for storage, exchange
-(C Data Interface), and visitor dispatch.  The concrete typed array lives on
-the heap behind an `ArcPointer`; copies are O(1) ref-count bumps.
+`AnyArray` is the type-erased, immutable handle backed by an inline `Variant`.
+Copies are O(1) — all typed arrays hold their data behind ref-counted `Buffer` /
+`Bitmap` handles, so copying the variant is just a few ref-count bumps.
+
+Runtime dispatch goes through `_dispatch`, which iterates the variant members at
+compile time and selects the active type via `isa[T]()`.  No unsafe `rebind`
+casts or function-pointer trampolines are used.
+
+Use `as_primitive[T]()`, `as_bool()`, `as_string()`, `as_list()`, etc.
+to obtain typed references (zero-cost borrows).  Use `to_data()` to extract
+a generic `ArrayData` layout for interop (C Data Interface, nested arrays).
 
 ArrayData — generic flat layout
 ---------------------------------
-`ArrayData` is a plain @fieldwise_init struct (same 7 fields as the old
-AnyArray) produced on demand by `as_data()`.  It is used for the C Data
-Interface, building nested arrays, and other interop where a flat layout is
-required.  It is NOT stored inside AnyArray.
+`ArrayData` is a plain @fieldwise_init struct produced on demand by `to_data()`.
+It is used for the C Data Interface, building nested arrays, and other interop
+paths.  It is NOT stored inside AnyArray.
 """
 
 from std.bit import pop_count
@@ -31,6 +38,10 @@ from std.sys import size_of
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
+from std.utils import Variant
+from std.builtin.variadics import Variadic
+from std.builtin.rebind import downcast
+from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
@@ -76,418 +87,8 @@ trait Array(
         ...
 
 
-struct AnyArray(
-    ConvertibleFromPython,
-    ConvertibleToPython,
-    Copyable,
-    Equatable,
-    Movable,
-    Writable,
-):
-    """Type-erased, immutable array handle.
-
-    Wraps any `Array`-conforming type on the heap behind an `ArcPointer`.
-    Copies are O(1) ref-count bumps + function-pointer copies.
-    Runtime dispatch goes through function-pointer trampolines (vtable).
-
-    Use `as_primitive[T]()`, `as_string()`, `as_list()`, etc. to obtain
-    typed views.  Use `as_data()` to extract a generic `ArrayData` layout
-    for interop (C Data Interface, construction of nested arrays).
-    """
-
-    var _data: ArcPointer[NoneType]
-    var _virt_length: def(ArcPointer[NoneType]) -> Int
-    var _virt_dtype: def(ArcPointer[NoneType]) -> ArrowType
-    var _virt_null_count: def(ArcPointer[NoneType]) -> Int
-    var _virt_is_valid: def(ArcPointer[NoneType], Int) -> Bool
-    var _virt_to_data: def(ArcPointer[NoneType]) raises -> ArrayData
-    var _virt_eq: def(ArcPointer[NoneType], ArcPointer[NoneType]) -> Bool
-    var _virt_drop: def(var ArcPointer[NoneType])
-    var _virt_slice: def(ArcPointer[NoneType], Int, Int) raises -> ArcPointer[
-        NoneType
-    ]
-
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_length[T: Array](ptr: ArcPointer[NoneType]) -> Int:
-        return len(rebind[ArcPointer[T]](ptr)[])
-
-    @staticmethod
-    def _tramp_dtype[T: Array](ptr: ArcPointer[NoneType]) -> ArrowType:
-        return rebind[ArcPointer[T]](ptr)[].type()
-
-    @staticmethod
-    def _tramp_null_count[T: Array](ptr: ArcPointer[NoneType]) -> Int:
-        return rebind[ArcPointer[T]](ptr)[].null_count()
-
-    @staticmethod
-    def _tramp_is_valid[T: Array](ptr: ArcPointer[NoneType], i: Int) -> Bool:
-        return rebind[ArcPointer[T]](ptr)[].is_valid(i)
-
-    @staticmethod
-    def _tramp_to_data[T: Array](ptr: ArcPointer[NoneType]) raises -> ArrayData:
-        return rebind[ArcPointer[T]](ptr)[].to_data()
-
-    @staticmethod
-    def _tramp_eq[
-        T: Array
-    ](ptr: ArcPointer[NoneType], other: ArcPointer[NoneType]) -> Bool:
-        return rebind[ArcPointer[T]](ptr)[] == rebind[ArcPointer[T]](other)[]
-
-    @staticmethod
-    def _tramp_drop[T: Array](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[T]](ptr^)
-        _ = typed^
-
-    @staticmethod
-    def _tramp_slice[
-        T: Array
-    ](ptr: ArcPointer[NoneType], offset: Int, length: Int) raises -> ArcPointer[
-        NoneType
-    ]:
-        # `slice` cannot return `AnyArray` directly because that would make
-        # `_virt_slice`'s type `def (...) -> AnyArray`, which creates a
-        # recursive struct definition (AnyArray containing a field whose type
-        # references AnyArray).  Instead, the trampoline returns a new
-        # ArcPointer[NoneType] holding the typed slice.  The caller
-        # (AnyArray.slice) then stamps a fresh AnyArray shell — copying the
-        # existing vtable (valid because slicing preserves the concrete type)
-        # and swapping in the new data pointer.  This heap-allocation may raise
-        # on OOM, hence the `raises` on both the trampoline and AnyArray.slice.
-        var result = rebind[ArcPointer[T]](ptr)[].slice(offset, length)
-        return rebind[ArcPointer[NoneType]](ArcPointer(result^))
-
-    # --- construction ---
-
-    @implicit
-    def __init__[T: Array](out self, var array: T):
-        var ptr = ArcPointer(array^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_length = Self._tramp_length[T]
-        self._virt_dtype = Self._tramp_dtype[T]
-        self._virt_null_count = Self._tramp_null_count[T]
-        self._virt_is_valid = Self._tramp_is_valid[T]
-        self._virt_to_data = Self._tramp_to_data[T]
-        self._virt_eq = Self._tramp_eq[T]
-        self._virt_drop = Self._tramp_drop[T]
-        self._virt_slice = Self._tramp_slice[T]
-
-    def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._virt_length = copy._virt_length
-        self._virt_dtype = copy._virt_dtype
-        self._virt_null_count = copy._virt_null_count
-        self._virt_is_valid = copy._virt_is_valid
-        self._virt_to_data = copy._virt_to_data
-        self._virt_eq = copy._virt_eq
-        self._virt_drop = copy._virt_drop
-        self._virt_slice = copy._virt_slice
-
-    def __init__(out self, *, py: PythonObject) raises:
-        from .c_data import CArrowSchema, CArrowArray
-
-        # Fast path: read .type() from a marrow Python array to pick the
-        # right downcast directly (1 method call vs 14+ try/except).
-        try:
-            var dtype = py.type().downcast_value_ptr[ArrowType]()[].copy()
-            if dtype == int8:
-                self = py.downcast_value_ptr[PrimitiveArray[Int8Type]]()[].copy().to_any()
-                return
-            elif dtype == int16:
-                self = py.downcast_value_ptr[PrimitiveArray[Int16Type]]()[].copy().to_any()
-                return
-            elif dtype == int32:
-                self = py.downcast_value_ptr[PrimitiveArray[Int32Type]]()[].copy().to_any()
-                return
-            elif dtype == int64:
-                self = py.downcast_value_ptr[PrimitiveArray[Int64Type]]()[].copy().to_any()
-                return
-            elif dtype == uint8:
-                self = py.downcast_value_ptr[PrimitiveArray[UInt8Type]]()[].copy().to_any()
-                return
-            elif dtype == uint16:
-                self = py.downcast_value_ptr[PrimitiveArray[UInt16Type]]()[].copy().to_any()
-                return
-            elif dtype == uint32:
-                self = py.downcast_value_ptr[PrimitiveArray[UInt32Type]]()[].copy().to_any()
-                return
-            elif dtype == uint64:
-                self = py.downcast_value_ptr[PrimitiveArray[UInt64Type]]()[].copy().to_any()
-                return
-            elif dtype == float16:
-                self = py.downcast_value_ptr[PrimitiveArray[Float16Type]]()[].copy().to_any()
-                return
-            elif dtype == float32:
-                self = py.downcast_value_ptr[PrimitiveArray[Float32Type]]()[].copy().to_any()
-                return
-            elif dtype == float64:
-                self = py.downcast_value_ptr[PrimitiveArray[Float64Type]]()[].copy().to_any()
-                return
-            if dtype.is_bool():
-                self = py.downcast_value_ptr[BoolArray]()[].copy().to_any()
-            elif dtype.is_string():
-                self = py.downcast_value_ptr[StringArray]()[].copy().to_any()
-            elif dtype.is_list():
-                self = py.downcast_value_ptr[ListArray]()[].copy().to_any()
-            elif dtype.is_fixed_size_list():
-                self = (
-                    py.downcast_value_ptr[FixedSizeListArray]()[]
-                    .copy()
-                    .to_any()
-                )
-            elif dtype.is_struct():
-                self = py.downcast_value_ptr[StructArray]()[].copy().to_any()
-            else:
-                raise Error("unsupported marrow dtype: ", dtype)
-        except:
-            # Fall back to the Arrow C Data Interface for foreign objects.
-            var caps: PythonObject
-            try:
-                caps = py.__arrow_c_array__(Python.none())
-            except:
-                raise Error(
-                    "cannot convert Python object of type",
-                    t" '{py.__class__.__name__}' to AnyArray",
-                )
-            var c_schema = CArrowSchema.from_pycapsule(caps[0])
-            var c_array = CArrowArray.from_pycapsule(caps[1])
-            self = c_array^.to_array(c_schema.to_dtype())
-
-    # --- vtable dispatch ---
-
-    def length(self) -> Int:
-        return self._virt_length(self._data)
-
-    def dtype(self) -> ArrowType:
-        return self._virt_dtype(self._data)
-
-    def null_count(self) -> Int:
-        return self._virt_null_count(self._data)
-
-    def is_valid(self, index: Int) -> Bool:
-        return self._virt_is_valid(self._data, index)
-
-    def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
-        """Returns a zero-copy slice starting at offset with the given length.
-
-        Matches PyArrow's Array.slice(offset, length) API.
-        """
-        var result = AnyArray(copy=self)
-        result._data = self._virt_slice(self._data, offset, length)
-        return result^
-
-    def to_python_object(var self) raises -> PythonObject:
-        """Convert to the corresponding Python typed-array object."""
-        var dt = self.dtype()
-        if dt == bool_:
-            return self.as_bool().copy().to_python_object()
-        if dt == int8:
-            return self.as_primitive[Int8Type]().copy().to_python_object()
-        elif dt == int16:
-            return self.as_primitive[Int16Type]().copy().to_python_object()
-        elif dt == int32:
-            return self.as_primitive[Int32Type]().copy().to_python_object()
-        elif dt == int64:
-            return self.as_primitive[Int64Type]().copy().to_python_object()
-        elif dt == uint8:
-            return self.as_primitive[UInt8Type]().copy().to_python_object()
-        elif dt == uint16:
-            return self.as_primitive[UInt16Type]().copy().to_python_object()
-        elif dt == uint32:
-            return self.as_primitive[UInt32Type]().copy().to_python_object()
-        elif dt == uint64:
-            return self.as_primitive[UInt64Type]().copy().to_python_object()
-        elif dt == float16:
-            return self.as_primitive[Float16Type]().copy().to_python_object()
-        elif dt == float32:
-            return self.as_primitive[Float32Type]().copy().to_python_object()
-        elif dt == float64:
-            return self.as_primitive[Float64Type]().copy().to_python_object()
-        if dt.is_string():
-            return self.as_string().copy().to_python_object()
-        elif dt.is_list():
-            return self.as_list().copy().to_python_object()
-        elif dt.is_fixed_size_list():
-            return self.as_fixed_size_list().copy().to_python_object()
-        elif dt.is_struct():
-            return self.as_struct().copy().to_python_object()
-        raise Error("to_python_object: unsupported dtype")
-
-    # --- typed downcasts ---
-
-    def as_primitive[
-        T: PrimitiveType
-    ](ref self) -> ref[self._data[]] PrimitiveArray[T]:
-        return rebind[ArcPointer[PrimitiveArray[T]]](self._data)[]
-
-    def as_bool(ref self) -> ref[self._data[]] BoolArray:
-        return rebind[ArcPointer[BoolArray]](self._data)[]
-
-    def as_int8(ref self) -> ref[self._data[]] PrimitiveArray[Int8Type]:
-        return self.as_primitive[Int8Type]()
-
-    def as_int16(ref self) -> ref[self._data[]] PrimitiveArray[Int16Type]:
-        return self.as_primitive[Int16Type]()
-
-    def as_int32(ref self) -> ref[self._data[]] PrimitiveArray[Int32Type]:
-        return self.as_primitive[Int32Type]()
-
-    def as_int64(ref self) -> ref[self._data[]] PrimitiveArray[Int64Type]:
-        return self.as_primitive[Int64Type]()
-
-    def as_uint8(ref self) -> ref[self._data[]] PrimitiveArray[UInt8Type]:
-        return self.as_primitive[UInt8Type]()
-
-    def as_uint16(ref self) -> ref[self._data[]] PrimitiveArray[UInt16Type]:
-        return self.as_primitive[UInt16Type]()
-
-    def as_uint32(ref self) -> ref[self._data[]] PrimitiveArray[UInt32Type]:
-        return self.as_primitive[UInt32Type]()
-
-    def as_uint64(ref self) -> ref[self._data[]] PrimitiveArray[UInt64Type]:
-        return self.as_primitive[UInt64Type]()
-
-    def as_float32(ref self) -> ref[self._data[]] PrimitiveArray[Float32Type]:
-        return self.as_primitive[Float32Type]()
-
-    def as_float64(ref self) -> ref[self._data[]] PrimitiveArray[Float64Type]:
-        return self.as_primitive[Float64Type]()
-
-    def as_string(ref self) -> ref[self._data[]] StringArray:
-        return rebind[ArcPointer[StringArray]](self._data)[]
-
-    def as_list(ref self) -> ref[self._data[]] ListArray:
-        return rebind[ArcPointer[ListArray]](self._data)[]
-
-    def as_fixed_size_list(ref self) -> ref[self._data[]] FixedSizeListArray:
-        return rebind[ArcPointer[FixedSizeListArray]](self._data)[]
-
-    def as_struct(ref self) -> ref[self._data[]] StructArray:
-        return rebind[ArcPointer[StructArray]](self._data)[]
-
-    # --- generic layout (interop) ---
-
-    def to_data(self) raises -> ArrayData:
-        """Extract a generic ArrayData layout for interop (C Data Interface, etc.).
-
-        Not intended for hot paths — prefer typed downcast methods.
-        """
-        return self._virt_to_data(self._data)
-
-    @staticmethod
-    def from_data(data: ArrayData) raises -> AnyArray:
-        """Construct an AnyArray from a generic ArrayData by dispatching on dtype.
-
-        Used by the C Data Interface and other interop paths where a flat
-        7-field layout is the natural representation.
-        """
-        var dt = data.dtype.copy()
-        if dt == bool_:
-            return AnyArray(BoolArray(data))
-        elif dt == int8:
-            return AnyArray(PrimitiveArray[Int8Type](data))
-        elif dt == int16:
-            return AnyArray(PrimitiveArray[Int16Type](data))
-        elif dt == int32:
-            return AnyArray(PrimitiveArray[Int32Type](data))
-        elif dt == int64:
-            return AnyArray(PrimitiveArray[Int64Type](data))
-        elif dt == uint8:
-            return AnyArray(PrimitiveArray[UInt8Type](data))
-        elif dt == uint16:
-            return AnyArray(PrimitiveArray[UInt16Type](data))
-        elif dt == uint32:
-            return AnyArray(PrimitiveArray[UInt32Type](data))
-        elif dt == uint64:
-            return AnyArray(PrimitiveArray[UInt64Type](data))
-        elif dt == float16:
-            return AnyArray(PrimitiveArray[Float16Type](data))
-        elif dt == float32:
-            return AnyArray(PrimitiveArray[Float32Type](data))
-        elif dt == float64:
-            return AnyArray(PrimitiveArray[Float64Type](data))
-        if dt.is_string() or dt.is_binary():
-            return AnyArray(StringArray(data))
-        elif dt.is_list():
-            return AnyArray(ListArray(data))
-        elif dt.is_fixed_size_list():
-            return AnyArray(FixedSizeListArray(data))
-        elif dt.is_struct():
-            return AnyArray(StructArray(data))
-        raise Error("from_data: unsupported dtype")
-
-    # --- common operations ---
-
-    def to_any(deinit self) -> AnyArray:
-        """Returns this array as AnyArray, transferring ownership."""
-        return self^
-
-    def write_to[W: Writer](self, mut writer: W):
-        var dt = self.dtype()
-        if dt == bool_:
-            self.as_bool().write_to(writer)
-            return
-        if dt == int8:
-            self.as_primitive[Int8Type]().write_to(writer)
-            return
-        elif dt == int16:
-            self.as_primitive[Int16Type]().write_to(writer)
-            return
-        elif dt == int32:
-            self.as_primitive[Int32Type]().write_to(writer)
-            return
-        elif dt == int64:
-            self.as_primitive[Int64Type]().write_to(writer)
-            return
-        elif dt == uint8:
-            self.as_primitive[UInt8Type]().write_to(writer)
-            return
-        elif dt == uint16:
-            self.as_primitive[UInt16Type]().write_to(writer)
-            return
-        elif dt == uint32:
-            self.as_primitive[UInt32Type]().write_to(writer)
-            return
-        elif dt == uint64:
-            self.as_primitive[UInt64Type]().write_to(writer)
-            return
-        elif dt == float16:
-            self.as_primitive[Float16Type]().write_to(writer)
-            return
-        elif dt == float32:
-            self.as_primitive[Float32Type]().write_to(writer)
-            return
-        elif dt == float64:
-            self.as_primitive[Float64Type]().write_to(writer)
-            return
-        if dt.is_string():
-            self.as_string().write_to(writer)
-        elif dt.is_list():
-            self.as_list().write_to(writer)
-        elif dt.is_fixed_size_list():
-            self.as_fixed_size_list().write_to(writer)
-        elif dt.is_struct():
-            self.as_struct().write_to(writer)
-        else:
-            writer.write("AnyArray(dtype=")
-            writer.write(dt)
-            writer.write(", length=")
-            writer.write(self.length())
-            writer.write(")")
-
-    def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
-
-    def __eq__(self, other: AnyArray) -> Bool:
-        return self._virt_eq(self._data, other._data)
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)
-
-
 # ---------------------------------------------------------------------------
-# ArrayData — generic flat layout, produced on demand by as_data()
+# ArrayData — generic flat layout, produced on demand by to_data()
 # ---------------------------------------------------------------------------
 
 
@@ -510,7 +111,7 @@ struct ArrayData(Copyable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# PrimitiveArray[T]
+# BoolArray
 # ---------------------------------------------------------------------------
 
 
@@ -546,6 +147,9 @@ struct BoolArray(
             bitmap=data.bitmap,
             buffer=Bitmap(data.buffers[0]),
         )
+
+    def __len__(self) -> Int:
+        return self.length
 
     def __str__(self) -> String:
         return String.write(self)
@@ -593,9 +197,6 @@ struct BoolArray(
         if not self.bitmap:
             return True
         return self.bitmap.value().test(self.offset + index)
-
-    def __len__(self) -> Int:
-        return self.length
 
     def __getitem__(self, index: Int) -> Bool:
         return self.values().test(self.offset + index)
@@ -671,6 +272,11 @@ struct BoolArray(
 
     def __ne__(self, other: Self) -> Bool:
         return not Self.__eq__(self, other)
+
+
+# ---------------------------------------------------------------------------
+# PrimitiveArray[T]
+# ---------------------------------------------------------------------------
 
 
 # TODO: add conditional conformance where: T.is_primitive()
@@ -878,14 +484,15 @@ struct PrimitiveArray[T: PrimitiveType](
 
 
 # BoolArray is a distinct struct (not comptime PrimitiveArray[BoolType])
-comptime Int8Array = PrimitiveArray[Int8Type]
-comptime Int16Array = PrimitiveArray[Int16Type]
-comptime Int32Array = PrimitiveArray[Int32Type]
-comptime Int64Array = PrimitiveArray[Int64Type]
-comptime UInt8Array = PrimitiveArray[UInt8Type]
-comptime UInt16Array = PrimitiveArray[UInt16Type]
-comptime UInt32Array = PrimitiveArray[UInt32Type]
-comptime UInt64Array = PrimitiveArray[UInt64Type]
+comptime Int8Array    = PrimitiveArray[Int8Type]
+comptime Int16Array   = PrimitiveArray[Int16Type]
+comptime Int32Array   = PrimitiveArray[Int32Type]
+comptime Int64Array   = PrimitiveArray[Int64Type]
+comptime UInt8Array   = PrimitiveArray[UInt8Type]
+comptime UInt16Array  = PrimitiveArray[UInt16Type]
+comptime UInt32Array  = PrimitiveArray[UInt32Type]
+comptime UInt64Array  = PrimitiveArray[UInt64Type]
+comptime Float16Array = PrimitiveArray[Float16Type]
 comptime Float32Array = PrimitiveArray[Float32Type]
 comptime Float64Array = PrimitiveArray[Float64Type]
 
@@ -1055,7 +662,6 @@ struct StringArray(
 # ---------------------------------------------------------------------------
 
 
-@fieldwise_init
 struct ListArray(
     Array,
     ConvertibleFromPython,
@@ -1070,7 +676,35 @@ struct ListArray(
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
-    var values: AnyArray
+    var _values: ArcPointer[AnyArray]
+
+    def __init__(
+        out self,
+        *,
+        dtype: ArrowType,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        bitmap: Optional[Bitmap[mut=False]],
+        offsets: Buffer[mut=False],
+        values: ArcPointer[AnyArray],
+    ):
+        self.dtype = dtype.copy()
+        self.length = length
+        self.nulls = nulls
+        self.offset = offset
+        self.bitmap = bitmap
+        self.offsets = offsets
+        self._values = values
+
+    def __init__(out self, *, copy: Self):
+        self.dtype = copy.dtype.copy()
+        self.length = copy.length
+        self.nulls = copy.nulls
+        self.offset = copy.offset
+        self.bitmap = copy.bitmap
+        self.offsets = copy.offsets
+        self._values = copy._values.copy()
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -1087,8 +721,12 @@ struct ListArray(
             offset=data.offset,
             bitmap=data.bitmap,
             offsets=data.buffers[0],
-            values=AnyArray.from_data(data.children[0]),
+            values=ArcPointer(AnyArray.from_data(data.children[0])),
         )
+
+    def values(ref self) -> ref[self._values[]] AnyArray:
+        """The child array containing the list elements."""
+        return self._values[]
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -1138,7 +776,7 @@ struct ListArray(
         var end = Int(
             self.offsets.unsafe_get[DType.int32](self.offset + index + 1)
         )
-        return self.values.slice(start, end - start)
+        return self.values().slice(start, end - start)
 
     def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
@@ -1157,12 +795,12 @@ struct ListArray(
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
-            values=self.values.copy(),
+            values=self._values.copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this ListArray, returning the flat child values."""
-        return self.values.copy()
+        return self._values[].copy()
 
     def value_lengths(self) -> PrimitiveArray[Int32Type]:
         """Return an array of list lengths for each element."""
@@ -1214,7 +852,7 @@ struct ListArray(
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[self.offsets],
-            children=[self.values.to_data()],
+            children=[self.values().to_data()],
         )
 
 
@@ -1223,7 +861,6 @@ struct ListArray(
 # ---------------------------------------------------------------------------
 
 
-@fieldwise_init
 struct FixedSizeListArray(
     Array,
     ConvertibleFromPython,
@@ -1237,7 +874,32 @@ struct FixedSizeListArray(
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var values: AnyArray
+    var _values: ArcPointer[AnyArray]
+
+    def __init__(
+        out self,
+        *,
+        dtype: ArrowType,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        bitmap: Optional[Bitmap[mut=False]],
+        values: ArcPointer[AnyArray],
+    ):
+        self.dtype = dtype.copy()
+        self.length = length
+        self.nulls = nulls
+        self.offset = offset
+        self.bitmap = bitmap
+        self._values = values
+
+    def __init__(out self, *, copy: Self):
+        self.dtype = copy.dtype.copy()
+        self.length = copy.length
+        self.nulls = copy.nulls
+        self.offset = copy.offset
+        self.bitmap = copy.bitmap
+        self._values = copy._values.copy()
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -1251,8 +913,12 @@ struct FixedSizeListArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            values=AnyArray.from_data(data.children[0]),
+            values=ArcPointer(AnyArray.from_data(data.children[0])),
         )
+
+    def values(ref self) -> ref[self._values[]] AnyArray:
+        """The child array containing all list elements (length * list_size elements)."""
+        return self._values[]
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -1297,7 +963,7 @@ struct FixedSizeListArray(
     def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
         var list_size = self.dtype.as_fixed_size_list_type().size
         var start = (self.offset + index) * list_size
-        return self.values.slice(start, list_size)
+        return self.values().slice(start, list_size)
 
     def __getitem__(self, index: Int) raises -> AnyArray:
         if index < 0 or index >= self.length:
@@ -1313,16 +979,16 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=self.values.copy(),
+            values=self._values.copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
-        return self.values.copy()
+        return self._values[].copy()
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
-        var child_data = self.values.to_data()
+        var child_data = self.values().to_data()
         var new_buffers = List[Buffer[]](capacity=len(child_data.buffers))
         for i in range(len(child_data.buffers)):
             new_buffers.append(child_data.buffers[i].to_device(ctx))
@@ -1349,7 +1015,7 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset,
             bitmap=bm^,
-            values=new_child^,
+            values=ArcPointer(new_child^),
         )
 
     def __eq__(self, other: Self) -> Bool:
@@ -1387,7 +1053,7 @@ struct FixedSizeListArray(
             offset=self.offset,
             bitmap=self.bitmap,
             buffers=[],
-            children=[self.values.to_data()],
+            children=[self.values().to_data()],
         )
 
 
@@ -1642,3 +1308,339 @@ struct ChunkedArray(Copyable, Movable, Writable):
                 )
             )
         return concat(self.chunks)
+
+
+# ---------------------------------------------------------------------------
+# AnyArray — Variant-based type-erased array handle
+# ---------------------------------------------------------------------------
+
+
+comptime _AnyArrayV = Variant[
+    BoolArray,
+    Int8Array,   Int16Array,  Int32Array,  Int64Array,
+    UInt8Array,  UInt16Array, UInt32Array, UInt64Array,
+    Float16Array, Float32Array, Float64Array,
+    StringArray,
+    ListArray,
+    FixedSizeListArray,
+    StructArray,
+]
+
+
+struct AnyArray(
+    ConvertibleFromPython,
+    ConvertibleToPython,
+    Copyable,
+    Equatable,
+    Movable,
+    Writable,
+):
+    """Type-erased, immutable array handle backed by an inline Variant.
+
+    Wraps any `Array`-conforming type.  Copies are O(1) — typed arrays
+    hold their data behind ref-counted `Buffer` / `Bitmap` handles, so
+    copying the variant bumps a few ref-counts and copies some small ints.
+
+    Runtime dispatch goes through `_dispatch`, which iterates the variant
+    members at compile time and selects the active type via `isa[T]()`.
+    No unsafe `rebind` casts or function-pointer trampolines are used.
+
+    Use `as_primitive[T]()`, `as_bool()`, `as_string()`, `as_list()`, etc.
+    to obtain typed references (zero-cost borrows from the variant storage).
+    Use `to_data()` to extract a generic `ArrayData` for interop.
+    """
+
+    var _v: _AnyArrayV
+
+    # --- construction ---
+
+    @implicit
+    def __init__[T: Array](out self, var array: T):
+        self._v = _AnyArrayV(array^)
+
+    def __init__(out self, *, copy: Self):
+        self._v = _AnyArrayV(copy=copy._v)
+
+    def __init__(out self, *, py: PythonObject) raises:
+        from .c_data import CArrowSchema, CArrowArray
+        # Fast path: read .type() from a marrow Python array to pick the
+        # right downcast directly (1 method call vs 14+ try/except).
+        try:
+            var dtype = py.type().downcast_value_ptr[ArrowType]()[].copy()
+            if dtype == int8:
+                self = py.downcast_value_ptr[Int8Array]()[].copy().to_any()
+                return
+            elif dtype == int16:
+                self = py.downcast_value_ptr[Int16Array]()[].copy().to_any()
+                return
+            elif dtype == int32:
+                self = py.downcast_value_ptr[Int32Array]()[].copy().to_any()
+                return
+            elif dtype == int64:
+                self = py.downcast_value_ptr[Int64Array]()[].copy().to_any()
+                return
+            elif dtype == uint8:
+                self = py.downcast_value_ptr[UInt8Array]()[].copy().to_any()
+                return
+            elif dtype == uint16:
+                self = py.downcast_value_ptr[UInt16Array]()[].copy().to_any()
+                return
+            elif dtype == uint32:
+                self = py.downcast_value_ptr[UInt32Array]()[].copy().to_any()
+                return
+            elif dtype == uint64:
+                self = py.downcast_value_ptr[UInt64Array]()[].copy().to_any()
+                return
+            elif dtype == float16:
+                self = py.downcast_value_ptr[Float16Array]()[].copy().to_any()
+                return
+            elif dtype == float32:
+                self = py.downcast_value_ptr[Float32Array]()[].copy().to_any()
+                return
+            elif dtype == float64:
+                self = py.downcast_value_ptr[Float64Array]()[].copy().to_any()
+                return
+            if dtype.is_bool():
+                self = py.downcast_value_ptr[BoolArray]()[].copy().to_any()
+            elif dtype.is_string():
+                self = py.downcast_value_ptr[StringArray]()[].copy().to_any()
+            elif dtype.is_list():
+                self = py.downcast_value_ptr[ListArray]()[].copy().to_any()
+            elif dtype.is_fixed_size_list():
+                self = (
+                    py.downcast_value_ptr[FixedSizeListArray]()[]
+                    .copy()
+                    .to_any()
+                )
+            elif dtype.is_struct():
+                self = py.downcast_value_ptr[StructArray]()[].copy().to_any()
+            else:
+                raise Error("unsupported marrow dtype: ", dtype)
+        except:
+            # Fall back to the Arrow C Data Interface for foreign objects.
+            var caps: PythonObject
+            try:
+                caps = py.__arrow_c_array__(Python.none())
+            except:
+                raise Error(
+                    "cannot convert Python object of type",
+                    t" '{py.__class__.__name__}' to AnyArray",
+                )
+            var c_schema = CArrowSchema.from_pycapsule(caps[0])
+            var c_array = CArrowArray.from_pycapsule(caps[1])
+            self = c_array^.to_array(c_schema.to_dtype())
+
+    # --- generic dispatch ---
+
+    def _dispatch[
+        R: Movable, //,
+        func: def[T: Array](T) capturing[_] -> R,
+    ](self) -> R:
+        comptime for i in range(Variadic.size(_AnyArrayV.Ts)):
+            comptime A = _AnyArrayV.Ts[i]
+            comptime T = downcast[A, Array]
+            if self._v.isa[T](): return func(self._v[T])
+        abort("unreachable: invalid array type for dispatch")
+
+    def _dispatch_raises[
+        R: Movable, //,
+        func: def[T: Array](T) raises capturing[_] -> R,
+    ](self) raises -> R:
+        comptime for i in range(Variadic.size(_AnyArrayV.Ts)):
+            comptime A = _AnyArrayV.Ts[i]
+            comptime T = downcast[A, Array]
+            if self._v.isa[T](): return func(self._v[T])
+        abort("unreachable: invalid array type for dispatch")
+
+    # --- dispatch-based methods ---
+
+    def length(self) -> Int:
+        @parameter
+        def f[T: Array](a: T) -> Int: return len(a)
+        return self._dispatch[f]()
+
+    def dtype(self) -> ArrowType:
+        @parameter
+        def f[T: Array](a: T) -> ArrowType: return a.type()
+        return self._dispatch[f]()
+
+    def null_count(self) -> Int:
+        @parameter
+        def f[T: Array](a: T) -> Int: return a.null_count()
+        return self._dispatch[f]()
+
+    def is_valid(self, index: Int) -> Bool:
+        @parameter
+        def f[T: Array](a: T) -> Bool: return a.is_valid(index)
+        return self._dispatch[f]()
+
+    def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
+        """Returns a zero-copy slice starting at offset with the given length.
+
+        Matches PyArrow's Array.slice(offset, length) API.
+        """
+        @parameter
+        def f[T: Array](a: T) -> AnyArray:
+            var actual_length = length if length >= 0 else len(a) - offset
+            return a.slice(offset, actual_length)
+        return self._dispatch[f]()
+
+    def to_data(self) raises -> ArrayData:
+        """Extract a generic ArrayData layout for interop (C Data Interface, etc.).
+
+        Not intended for hot paths — prefer typed downcast methods.
+        """
+        @parameter
+        def f[T: Array](a: T) raises -> ArrayData: return a.to_data()
+        return self._dispatch_raises[f]()
+
+    def to_any(deinit self) -> AnyArray:
+        """Returns this array as AnyArray, transferring ownership."""
+        return self^
+
+    def write_to[W: Writer](self, mut writer: W):
+        @parameter
+        def f[T: Array](a: T): a.write_to(writer)
+        self._dispatch[f]()
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def __eq__(self, other: AnyArray) -> Bool:
+        return self._v == other._v
+
+    def to_python_object(var self) raises -> PythonObject:
+        """Convert to the corresponding Python typed-array object."""
+        var dt = self.dtype()
+        if dt == bool_:
+            return self.as_bool().copy().to_python_object()
+        if dt == int8:
+            return self.as_primitive[Int8Type]().copy().to_python_object()
+        elif dt == int16:
+            return self.as_primitive[Int16Type]().copy().to_python_object()
+        elif dt == int32:
+            return self.as_primitive[Int32Type]().copy().to_python_object()
+        elif dt == int64:
+            return self.as_primitive[Int64Type]().copy().to_python_object()
+        elif dt == uint8:
+            return self.as_primitive[UInt8Type]().copy().to_python_object()
+        elif dt == uint16:
+            return self.as_primitive[UInt16Type]().copy().to_python_object()
+        elif dt == uint32:
+            return self.as_primitive[UInt32Type]().copy().to_python_object()
+        elif dt == uint64:
+            return self.as_primitive[UInt64Type]().copy().to_python_object()
+        elif dt == float16:
+            return self.as_primitive[Float16Type]().copy().to_python_object()
+        elif dt == float32:
+            return self.as_primitive[Float32Type]().copy().to_python_object()
+        elif dt == float64:
+            return self.as_primitive[Float64Type]().copy().to_python_object()
+        if dt.is_string():
+            return self.as_string().copy().to_python_object()
+        elif dt.is_list():
+            return self.as_list().copy().to_python_object()
+        elif dt.is_fixed_size_list():
+            return self.as_fixed_size_list().copy().to_python_object()
+        elif dt.is_struct():
+            return self.as_struct().copy().to_python_object()
+        raise Error("to_python_object: unsupported dtype")
+
+    # --- typed downcasts (zero-cost reference borrows) ---
+
+    def as_primitive[
+        T: PrimitiveType
+    ](ref self) -> ref[self._v] PrimitiveArray[T]:
+        return self._v[PrimitiveArray[T]]
+
+    def as_bool(ref self) -> ref[self._v] BoolArray:
+        return self._v[BoolArray]
+
+    def as_int8(ref self) -> ref[self._v] Int8Array:
+        return self._v[Int8Array]
+
+    def as_int16(ref self) -> ref[self._v] Int16Array:
+        return self._v[Int16Array]
+
+    def as_int32(ref self) -> ref[self._v] Int32Array:
+        return self._v[Int32Array]
+
+    def as_int64(ref self) -> ref[self._v] Int64Array:
+        return self._v[Int64Array]
+
+    def as_uint8(ref self) -> ref[self._v] UInt8Array:
+        return self._v[UInt8Array]
+
+    def as_uint16(ref self) -> ref[self._v] UInt16Array:
+        return self._v[UInt16Array]
+
+    def as_uint32(ref self) -> ref[self._v] UInt32Array:
+        return self._v[UInt32Array]
+
+    def as_uint64(ref self) -> ref[self._v] UInt64Array:
+        return self._v[UInt64Array]
+
+    def as_float16(ref self) -> ref[self._v] Float16Array:
+        return self._v[Float16Array]
+
+    def as_float32(ref self) -> ref[self._v] Float32Array:
+        return self._v[Float32Array]
+
+    def as_float64(ref self) -> ref[self._v] Float64Array:
+        return self._v[Float64Array]
+
+    def as_string(ref self) -> ref[self._v] StringArray:
+        return self._v[StringArray]
+
+    def as_list(ref self) -> ref[self._v] ListArray:
+        return self._v[ListArray]
+
+    def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
+        return self._v[FixedSizeListArray]
+
+    def as_struct(ref self) -> ref[self._v] StructArray:
+        return self._v[StructArray]
+
+    # --- factory from generic layout ---
+
+    @staticmethod
+    def from_data(data: ArrayData) raises -> AnyArray:
+        """Construct an AnyArray from a generic ArrayData by dispatching on dtype.
+
+        Used by the C Data Interface and other interop paths where a flat
+        7-field layout is the natural representation.
+        """
+        var dt = data.dtype.copy()
+        if dt == bool_:
+            return AnyArray(BoolArray(data))
+        elif dt == int8:
+            return AnyArray(Int8Array(data))
+        elif dt == int16:
+            return AnyArray(Int16Array(data))
+        elif dt == int32:
+            return AnyArray(Int32Array(data))
+        elif dt == int64:
+            return AnyArray(Int64Array(data))
+        elif dt == uint8:
+            return AnyArray(UInt8Array(data))
+        elif dt == uint16:
+            return AnyArray(UInt16Array(data))
+        elif dt == uint32:
+            return AnyArray(UInt32Array(data))
+        elif dt == uint64:
+            return AnyArray(UInt64Array(data))
+        elif dt == float16:
+            return AnyArray(Float16Array(data))
+        elif dt == float32:
+            return AnyArray(Float32Array(data))
+        elif dt == float64:
+            return AnyArray(Float64Array(data))
+        if dt.is_string() or dt.is_binary():
+            return AnyArray(StringArray(data))
+        elif dt.is_list():
+            return AnyArray(ListArray(data))
+        elif dt.is_fixed_size_list():
+            return AnyArray(FixedSizeListArray(data))
+        elif dt.is_struct():
+            return AnyArray(StructArray(data))
+        raise Error("from_data: unsupported dtype")

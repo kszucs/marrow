@@ -25,7 +25,10 @@ Example
 """
 
 from std.memory import ArcPointer
-from std.sys import size_of
+from std.utils import Variant
+from std.builtin.variadics import Variadic
+from std.builtin.rebind import downcast
+from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BitmapView, BufferView
 from .dtypes import *
@@ -84,160 +87,119 @@ trait Builder(ImplicitlyDestructible, Movable):
 struct AnyBuilder(ImplicitlyCopyable, Movable):
     """Type-erased builder container.
 
-    Wraps any `Builder`-conforming type and dispatches through function
-    pointers.  The inner value lives on the heap behind an `ArcPointer`,
-    so copies are O(1) ref-count bumps.
+    Wraps any `Builder`-conforming type in a Variant on the heap behind an
+    `ArcPointer`. Copies are O(1) ref-count bumps (shared-mutation semantics).
+    Dispatch goes through `_dispatch` / `_dispatch_mut`, which iterate the
+    Variant members at compile time and select the active type via `isa[T]()`.
+    No unsafe `rebind` casts or function-pointer trampolines are used.
     """
 
-    var _data: ArcPointer[NoneType]
-    var _virt_length: def(ArcPointer[NoneType]) -> Int
-    var _virt_null_count: def(ArcPointer[NoneType]) -> Int
-    var _virt_dtype: def(ArcPointer[NoneType]) -> ArrowType
-    var _virt_reserve: def(ArcPointer[NoneType], Int) raises
-    var _virt_append_null: def(ArcPointer[NoneType]) raises
-    var _virt_extend: def(ArcPointer[NoneType], AnyArray) raises
-    var _virt_finish: def(ArcPointer[NoneType]) raises -> AnyArray
-    var _virt_reset: def(ArcPointer[NoneType])
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _ptr: ArcPointer[_AnyBuilderV]
 
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_length[T: Builder](ptr: ArcPointer[NoneType]) -> Int:
-        return rebind[ArcPointer[T]](ptr)[].length()
-
-    @staticmethod
-    def _tramp_null_count[T: Builder](ptr: ArcPointer[NoneType]) -> Int:
-        return rebind[ArcPointer[T]](ptr)[].null_count()
-
-    @staticmethod
-    def _tramp_dtype[T: Builder](ptr: ArcPointer[NoneType]) -> ArrowType:
-        return rebind[ArcPointer[T]](ptr)[].dtype()
-
-    @staticmethod
-    def _tramp_reserve[
-        T: Builder
-    ](ptr: ArcPointer[NoneType], additional: Int) raises:
-        rebind[ArcPointer[T]](ptr)[].reserve(additional)
-
-    @staticmethod
-    def _tramp_append_null[T: Builder](ptr: ArcPointer[NoneType]) raises:
-        rebind[ArcPointer[T]](ptr)[].append_null()
-
-    @staticmethod
-    def _tramp_extend[
-        T: Builder
-    ](ptr: ArcPointer[NoneType], arr: AnyArray) raises:
-        rebind[ArcPointer[T]](ptr)[].extend(arr)
-
-    @staticmethod
-    def _tramp_finish[T: Builder](ptr: ArcPointer[NoneType]) raises -> AnyArray:
-        return rebind[ArcPointer[T]](ptr)[].finish().to_any()
-
-    @staticmethod
-    def _tramp_reset[T: Builder](ptr: ArcPointer[NoneType]):
-        rebind[ArcPointer[T]](ptr)[].reset()
-
-    @staticmethod
-    def _tramp_drop[T: Builder](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[T]](ptr^)
-        _ = typed^
-
-    # --- public API ---
+    # --- construction ---
 
     @implicit
     def __init__[T: Builder](out self, var value: T):
-        self = Self(ArcPointer(value^))
-
-    @implicit
-    def __init__[T: Builder](out self, ptr: ArcPointer[T]):
-        self._data = rebind[ArcPointer[NoneType]](ptr.copy())
-        self._virt_length = Self._tramp_length[T]
-        self._virt_null_count = Self._tramp_null_count[T]
-        self._virt_dtype = Self._tramp_dtype[T]
-        self._virt_reserve = Self._tramp_reserve[T]
-        self._virt_append_null = Self._tramp_append_null[T]
-        self._virt_extend = Self._tramp_extend[T]
-        self._virt_finish = Self._tramp_finish[T]
-        self._virt_reset = Self._tramp_reset[T]
-        self._virt_drop = Self._tramp_drop[T]
+        self._ptr = ArcPointer(_AnyBuilderV(value^))
 
     def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._virt_length = copy._virt_length
-        self._virt_null_count = copy._virt_null_count
-        self._virt_dtype = copy._virt_dtype
-        self._virt_reserve = copy._virt_reserve
-        self._virt_append_null = copy._virt_append_null
-        self._virt_extend = copy._virt_extend
-        self._virt_finish = copy._virt_finish
-        self._virt_reset = copy._virt_reset
-        self._virt_drop = copy._virt_drop
+        self._ptr = copy._ptr.copy()
+
+    # --- generic dispatch ---
+
+    def _dispatch[
+        R: Movable, //,
+        func: def[T: Builder](T) capturing[_] -> R,
+    ](self) -> R:
+        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
+            comptime A = _AnyBuilderV.Ts[i]
+            comptime T = downcast[A, Builder]
+            if self._ptr[].isa[T](): return func(self._ptr[][T])
+        abort("unreachable: invalid builder type for dispatch")
+
+    def _dispatch_mut[
+        R: Movable, //,
+        func: def[T: Builder](mut T) capturing[_] -> R,
+    ](mut self) -> R:
+        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
+            comptime A = _AnyBuilderV.Ts[i]
+            comptime T = downcast[A, Builder]
+            if self._ptr[].isa[T](): return func(self._ptr[][T])
+        abort("unreachable: invalid builder type for dispatch")
+
+    def _dispatch_mut_raises[
+        R: Movable, //,
+        func: def[T: Builder](mut T) raises capturing[_] -> R,
+    ](mut self) raises -> R:
+        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
+            comptime A = _AnyBuilderV.Ts[i]
+            comptime T = downcast[A, Builder]
+            if self._ptr[].isa[T](): return func(self._ptr[][T])
+        abort("unreachable: invalid builder type for dispatch")
+
+    # --- dispatch-based methods ---
 
     def length(self) -> Int:
-        return self._virt_length(self._data)
+        @parameter
+        def f[T: Builder](b: T) -> Int: return b.length()
+        return self._dispatch[f]()
 
     def null_count(self) -> Int:
-        return self._virt_null_count(self._data)
+        @parameter
+        def f[T: Builder](b: T) -> Int: return b.null_count()
+        return self._dispatch[f]()
 
     def dtype(self) -> ArrowType:
-        return self._virt_dtype(self._data)
+        @parameter
+        def f[T: Builder](b: T) -> ArrowType: return b.dtype()
+        return self._dispatch[f]()
 
     def reserve(mut self, additional: Int) raises:
-        self._virt_reserve(self._data, additional)
+        @parameter
+        def f[T: Builder](mut b: T) raises: b.reserve(additional)
+        self._dispatch_mut_raises[f]()
 
     def append_null(mut self) raises:
-        self._virt_append_null(self._data)
+        @parameter
+        def f[T: Builder](mut b: T) raises: b.append_null()
+        self._dispatch_mut_raises[f]()
 
     def extend(mut self, arr: AnyArray) raises:
-        self._virt_extend(self._data, arr)
+        @parameter
+        def f[T: Builder](mut b: T) raises: b.extend(arr)
+        self._dispatch_mut_raises[f]()
 
     def finish(mut self) raises -> AnyArray:
-        return self._virt_finish(self._data)
+        @parameter
+        def f[T: Builder](mut b: T) raises -> AnyArray: return b.finish().to_any()
+        return self._dispatch_mut_raises[f]()
 
     def reset(mut self):
-        self._virt_reset(self._data)
+        @parameter
+        def f[T: Builder](mut b: T): b.reset()
+        self._dispatch_mut[f]()
 
-    @always_inline
+    # --- typed downcasts (zero-cost reference borrows) ---
+
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._data[]] PrimitiveBuilder[T]:
-        return rebind[ArcPointer[PrimitiveBuilder[T]]](self._data)[]
+    ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
+        return self._ptr[][PrimitiveBuilder[T]]
 
-    @always_inline
-    def as_string(ref self) -> ref[self._data[]] StringBuilder:
-        return rebind[ArcPointer[StringBuilder]](self._data)[]
+    def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
+        return self._ptr[][BoolBuilder]
 
-    @always_inline
-    def as_bool(ref self) -> ref[self._data[]] BoolBuilder:
-        return rebind[ArcPointer[BoolBuilder]](self._data)[]
+    def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
+        return self._ptr[][StringBuilder]
 
-    @always_inline
-    def as_list(ref self) -> ref[self._data[]] ListBuilder:
-        return rebind[ArcPointer[ListBuilder]](self._data)[]
+    def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
+        return self._ptr[][ListBuilder]
 
-    @always_inline
-    def as_fixed_size_list(ref self) -> ref[self._data[]] FixedSizeListBuilder:
-        return rebind[ArcPointer[FixedSizeListBuilder]](self._data)[]
+    def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
+        return self._ptr[][FixedSizeListBuilder]
 
-    @always_inline
-    def as_struct(ref self) -> ref[self._data[]] StructBuilder:
-        return rebind[ArcPointer[StructBuilder]](self._data)[]
-
-    @always_inline
-    def downcast[T: Builder](self) -> ArcPointer[T]:
-        return rebind[ArcPointer[T]](self._data.copy())
-
-    def child(self, index: Int) -> AnyBuilder:
-        """Access child builder by index (for composite types)."""
-        var dt = self.dtype()
-        if dt.is_list() or dt.is_fixed_size_list():
-            return self.as_list().values()
-        else:
-            return self.as_struct().field_builder(index)
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)
+    def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
+        return self._ptr[][StructBuilder]
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +648,7 @@ struct ListBuilder(Builder, Sized):
             self._length + n,
             UInt32(cur_child_len + child_end - child_start),
         )
-        var child_slice = arr.values.slice(child_start, child_end - child_start)
+        var child_slice = arr.values().slice(child_start, child_end - child_start)
         self._child.extend(child_slice)
         self._length += n
 
@@ -719,7 +681,7 @@ struct ListBuilder(Builder, Sized):
             offset=0,
             bitmap=bm^,
             offsets=offsets^,
-            values=values^,
+            values=ArcPointer(values^),
         )
         # reset builder state for potential reuse
         self.reset()
@@ -815,7 +777,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var list_size = arr.dtype.as_fixed_size_list_type().size
-        var child_slice = arr.values.slice(
+        var child_slice = arr.values().slice(
             arr.offset * list_size, n * list_size
         )
         self._child.extend(child_slice)
@@ -847,7 +809,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             nulls=null_count,
             offset=0,
             bitmap=bm^,
-            values=values^,
+            values=ArcPointer(values^),
         )
         # reset builder state for potential reuse
         self.reset()
@@ -1096,16 +1058,34 @@ struct BoolBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
-comptime Int8Builder = PrimitiveBuilder[Int8Type]
-comptime Int16Builder = PrimitiveBuilder[Int16Type]
-comptime Int32Builder = PrimitiveBuilder[Int32Type]
-comptime Int64Builder = PrimitiveBuilder[Int64Type]
-comptime UInt8Builder = PrimitiveBuilder[UInt8Type]
-comptime UInt16Builder = PrimitiveBuilder[UInt16Type]
-comptime UInt32Builder = PrimitiveBuilder[UInt32Type]
-comptime UInt64Builder = PrimitiveBuilder[UInt64Type]
+comptime Int8Builder    = PrimitiveBuilder[Int8Type]
+comptime Int16Builder   = PrimitiveBuilder[Int16Type]
+comptime Int32Builder   = PrimitiveBuilder[Int32Type]
+comptime Int64Builder   = PrimitiveBuilder[Int64Type]
+comptime UInt8Builder   = PrimitiveBuilder[UInt8Type]
+comptime UInt16Builder  = PrimitiveBuilder[UInt16Type]
+comptime UInt32Builder  = PrimitiveBuilder[UInt32Type]
+comptime UInt64Builder  = PrimitiveBuilder[UInt64Type]
+comptime Float16Builder = PrimitiveBuilder[Float16Type]
 comptime Float32Builder = PrimitiveBuilder[Float32Type]
 comptime Float64Builder = PrimitiveBuilder[Float64Type]
+
+
+# ---------------------------------------------------------------------------
+# AnyBuilder Variant — defined after all typed builders so every member type
+# is fully known when the Variant is instantiated.
+# ---------------------------------------------------------------------------
+
+comptime _AnyBuilderV = Variant[
+    BoolBuilder,
+    Int8Builder,   Int16Builder,  Int32Builder,  Int64Builder,
+    UInt8Builder,  UInt16Builder, UInt32Builder, UInt64Builder,
+    Float16Builder, Float32Builder, Float64Builder,
+    StringBuilder,
+    ListBuilder,
+    FixedSizeListBuilder,
+    StructBuilder,
+]
 
 
 # ---------------------------------------------------------------------------

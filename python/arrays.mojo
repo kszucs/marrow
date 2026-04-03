@@ -540,20 +540,20 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
 
 struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
-    var _builder: ArcPointer[PrimitiveBuilder[Self.T]]
+    var _builder: AnyBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
-        self._builder = builder.downcast[PrimitiveBuilder[Self.T]]()
+        self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
     def builder(mut self) -> AnyBuilder:
-        return self._builder.copy()
+        return self._builder
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_primitive[Self.T]()
         var n = self.py.length(values)
         b.reserve(n)
         if self._has_nulls:
@@ -572,7 +572,7 @@ struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
                 )
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_primitive[Self.T]()
         if self.py.is_none(value):
             b.append_null()
         else:
@@ -585,20 +585,20 @@ struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
 
 
 struct PyBoolConverter(PyConverter):
-    var _builder: ArcPointer[BoolBuilder]
+    var _builder: AnyBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
-        self._builder = builder.downcast[BoolBuilder]()
+        self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
     def builder(mut self) -> AnyBuilder:
-        return self._builder.copy()
+        return self._builder
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_bool()
         var n = self.py.length(values)
         b.reserve(n)
         if self._has_nulls:
@@ -619,7 +619,7 @@ struct PyBoolConverter(PyConverter):
                 )
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_bool()
         if self.py.is_none(value):
             b.append_null()
         else:
@@ -632,17 +632,17 @@ struct PyBoolConverter(PyConverter):
 
 
 struct PyStringConverter(PyConverter):
-    var _builder: ArcPointer[StringBuilder]
+    var _builder: AnyBuilder
     var _has_nulls: Bool
     var py: PyHelpers
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True):
-        self._builder = builder.downcast[StringBuilder]()
+        self._builder = builder
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
     def builder(mut self) -> AnyBuilder:
-        return self._builder.copy()
+        return self._builder
 
     @always_inline
     def _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
@@ -654,7 +654,7 @@ struct PyStringConverter(PyConverter):
         return total
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_string()
         var n = self.py.length(values)
 
         b.reserve(n)
@@ -674,7 +674,7 @@ struct PyStringConverter(PyConverter):
                 )
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref b = self._builder[]
+        ref b = self._builder.as_string()
         if self.py.is_none(value):
             b.append_null()
         else:
@@ -687,23 +687,23 @@ struct PyStringConverter(PyConverter):
 
 
 struct PyListConverter(PyConverter):
-    var _builder: ArcPointer[ListBuilder]
+    var _builder: AnyBuilder
     var _child: PyAnyConverter
     var _has_nulls: Bool
     var py: PyHelpers
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
-        self._builder = builder.downcast[ListBuilder]()
-        var child_builder = self._builder[].values()
+        self._builder = builder
+        var child_builder = self._builder.as_list().values()
         self._child = make_converter(child_builder, True)
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
     def builder(mut self) -> AnyBuilder:
-        return self._builder.copy()
+        return self._builder
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref builder = self._builder[]
+        ref builder = self._builder.as_list()
         var n = self.py.length(values)
         builder.reserve(n)
         if self._has_nulls:
@@ -720,7 +720,7 @@ struct PyListConverter(PyConverter):
                 builder.unsafe_append_valid()
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref builder = self._builder[]
+        ref builder = self._builder.as_list()
         if self._has_nulls and self.py.is_none(value):
             builder.append_null()
         else:
@@ -734,20 +734,20 @@ struct PyListConverter(PyConverter):
 
 
 struct PyStructConverter(PyConverter):
-    var _builder: ArcPointer[StructBuilder]
+    var _builder: AnyBuilder
     var _children: List[PyAnyConverter]
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
     def __init__(out self, builder: AnyBuilder) raises:
-        self._builder = builder.downcast[StructBuilder]()
-        var dtype = self._builder[].dtype()
+        self._builder = builder
+        var dtype = self._builder.as_struct().dtype()
         var st = dtype.as_struct_type()
         var n = len(st.fields)
         var children = List[PyAnyConverter](capacity=n)
         var field_keys = List[PythonObject](capacity=n)
         for i in range(n):
-            var child_builder = self._builder[].field_builder(i)
+            var child_builder = self._builder.as_struct().field_builder(i)
             children.append(make_converter(child_builder))
             field_keys.append(PythonObject(st.fields[i].name))
         self._children = children^
@@ -755,11 +755,11 @@ struct PyStructConverter(PyConverter):
         self.py = PyHelpers()
 
     def builder(mut self) -> AnyBuilder:
-        return self._builder.copy()
+        return self._builder
 
     def extend(mut self, values: PyObjectPtr) raises:
         var n_fields = len(self._children)
-        ref builder = self._builder[]
+        ref builder = self._builder.as_struct()
         var n = self.py.length(values)
         builder.reserve(n)
         for row in range(n):
@@ -776,7 +776,7 @@ struct PyStructConverter(PyConverter):
                 builder.unsafe_append_valid()
 
     def append(mut self, value: PyObjectPtr) raises:
-        ref builder = self._builder[]
+        ref builder = self._builder.as_struct()
         if self.py.is_none(value):
             for i in range(len(self._children)):
                 self._children[i].append(self.py.none_ptr)
