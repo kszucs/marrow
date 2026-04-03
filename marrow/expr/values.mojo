@@ -286,13 +286,13 @@ struct Column(Value):
     ):
         self.index = index
         self.name = name^
-        self.dtype_ = dtype_
+        self.dtype_ = dtype_.copy()
 
     def kind(self) -> UInt8:
         return LOAD
 
     def dtype(self) -> Optional[ArrowType]:
-        return self.dtype_
+        return self.dtype_.copy()
 
     def inputs(self) -> List[AnyValue]:
         return List[AnyValue]()
@@ -497,13 +497,13 @@ struct Cast(Value):
 
     def __init__(out self, *, var child: AnyValue, to: ArrowType):
         self.child = child^
-        self.to = to
+        self.to = to.copy()
 
     def kind(self) -> UInt8:
         return CAST
 
     def dtype(self) -> Optional[ArrowType]:
-        return self.to
+        return self.to.copy()
 
     def inputs(self) -> List[AnyValue]:
         return [self.child]

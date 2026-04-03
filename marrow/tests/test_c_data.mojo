@@ -574,20 +574,20 @@ def test_schema_from_dtype_all_types() raises:
     types.append(string)
 
     for i in range(len(types)):
-        var t = types[i]
+        var t = types[i].copy()
         var c_schema = CArrowSchema.from_dtype(t)
         var roundtripped = c_schema.to_dtype()
         assert_equal(roundtripped, t)
 
     # Nested types
     var list_dt = list_(int64)
-    var c_list = CArrowSchema.from_dtype(list_dt)
+    var c_list = CArrowSchema.from_dtype(list_dt.copy().to_any())
     var rt_list = c_list.to_dtype()
     assert_true(rt_list.is_list())
     assert_equal(rt_list.as_list_type().value_type(), int64)
 
     var fsl_dt = fixed_size_list_(float32, 4)
-    var c_fsl = CArrowSchema.from_dtype(fsl_dt)
+    var c_fsl = CArrowSchema.from_dtype(fsl_dt.copy().to_any())
     var rt_fsl = c_fsl.to_dtype()
     assert_true(rt_fsl.is_fixed_size_list())
     var rt_fsl_t = rt_fsl.as_fixed_size_list_type()
@@ -597,7 +597,7 @@ def test_schema_from_dtype_all_types() raises:
     var struct_fields = List[Field]()
     struct_fields.append(Field("a", int32, True))
     var struct_dt = struct_(struct_fields^)
-    var c_struct = CArrowSchema.from_dtype(struct_dt)
+    var c_struct = CArrowSchema.from_dtype(struct_dt.copy().to_any())
     var rt_struct = c_struct.to_dtype()
     assert_true(rt_struct.is_struct())
     var rt_sf = rt_struct.as_struct_type().fields.copy()

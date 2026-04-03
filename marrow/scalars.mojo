@@ -17,7 +17,8 @@ Scalar trait:
   Common interface implemented by all four typed scalars.
 """
 
-from std.memory import ArcPointer
+from std.utils import Variant
+from std.os import abort
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
 
@@ -193,6 +194,23 @@ struct PrimitiveScalar[T: PrimitiveType](
 
 
 # ---------------------------------------------------------------------------
+# PrimitiveScalar aliases
+# ---------------------------------------------------------------------------
+
+comptime Int8Scalar    = PrimitiveScalar[Int8Type]
+comptime Int16Scalar   = PrimitiveScalar[Int16Type]
+comptime Int32Scalar   = PrimitiveScalar[Int32Type]
+comptime Int64Scalar   = PrimitiveScalar[Int64Type]
+comptime UInt8Scalar   = PrimitiveScalar[UInt8Type]
+comptime UInt16Scalar  = PrimitiveScalar[UInt16Type]
+comptime UInt32Scalar  = PrimitiveScalar[UInt32Type]
+comptime UInt64Scalar  = PrimitiveScalar[UInt64Type]
+comptime Float16Scalar = PrimitiveScalar[Float16Type]
+comptime Float32Scalar = PrimitiveScalar[Float32Type]
+comptime Float64Scalar = PrimitiveScalar[Float64Type]
+
+
+# ---------------------------------------------------------------------------
 # StringScalar
 # ---------------------------------------------------------------------------
 
@@ -364,137 +382,103 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
 # AnyScalar — type-erased scalar container
 # ---------------------------------------------------------------------------
 
+comptime _AnyScalarV = Variant[
+    BoolScalar,
+    Int8Scalar, Int16Scalar, Int32Scalar, Int64Scalar,
+    UInt8Scalar, UInt16Scalar, UInt32Scalar, UInt64Scalar,
+    Float16Scalar, Float32Scalar, Float64Scalar,
+    StringScalar,
+    ListScalar,
+    StructScalar,
+]
+
 
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
-    """Type-erased scalar container backed by an ArcPointer.
+    """Type-erased scalar container backed by a Variant.
 
-    Wraps any typed scalar on the heap behind an `ArcPointer`.
-    Copies are O(1) ref-count bumps + function-pointer copies.
-    Runtime dispatch goes through function-pointer trampolines (vtable).
+    Wraps any typed scalar inline in a discriminated union.
+    Runtime dispatch goes through the `_dispatch` helper.
     """
 
-    var _data: ArcPointer[NoneType]
-    var _virt_type: def(ArcPointer[NoneType]) -> ArrowType
-    var _virt_is_valid: def(ArcPointer[NoneType]) -> Bool
-    var _virt_drop: def(var ArcPointer[NoneType])
-
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_type[T: Scalar](ptr: ArcPointer[NoneType]) -> ArrowType:
-        return rebind[ArcPointer[T]](ptr)[].type()
-
-    @staticmethod
-    def _tramp_is_valid[T: Scalar](ptr: ArcPointer[NoneType]) -> Bool:
-        return rebind[ArcPointer[T]](ptr)[].is_valid()
-
-    @staticmethod
-    def _tramp_drop[T: Scalar](var ptr: ArcPointer[NoneType]):
-        _ = rebind[ArcPointer[T]](ptr^)
+    var _v: _AnyScalarV
 
     # --- construction ---
 
     @implicit
     def __init__[T: Scalar](out self, var typed: T):
-        var ptr = ArcPointer(typed^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_type = Self._tramp_type[T]
-        self._virt_is_valid = Self._tramp_is_valid[T]
-        self._virt_drop = Self._tramp_drop[T]
+        self._v = _AnyScalarV(typed^)
 
     def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._virt_type = copy._virt_type
-        self._virt_is_valid = copy._virt_is_valid
-        self._virt_drop = copy._virt_drop
+        self._v = _AnyScalarV(copy=copy._v)
 
-    # --- vtable dispatch ---
+    # --- generic dispatch ---
+
+    def _dispatch[
+        R: Copyable, //,
+        func: def[T: Scalar](T) capturing[_] -> R,
+    ](self) -> R:
+        if self._v.isa[BoolScalar]():    return func[BoolScalar](self._v[BoolScalar])
+        if self._v.isa[Int8Scalar]():    return func[Int8Scalar](self._v[Int8Scalar])
+        if self._v.isa[Int16Scalar]():   return func[Int16Scalar](self._v[Int16Scalar])
+        if self._v.isa[Int32Scalar]():   return func[Int32Scalar](self._v[Int32Scalar])
+        if self._v.isa[Int64Scalar]():   return func[Int64Scalar](self._v[Int64Scalar])
+        if self._v.isa[UInt8Scalar]():   return func[UInt8Scalar](self._v[UInt8Scalar])
+        if self._v.isa[UInt16Scalar]():  return func[UInt16Scalar](self._v[UInt16Scalar])
+        if self._v.isa[UInt32Scalar]():  return func[UInt32Scalar](self._v[UInt32Scalar])
+        if self._v.isa[UInt64Scalar]():  return func[UInt64Scalar](self._v[UInt64Scalar])
+        if self._v.isa[Float16Scalar](): return func[Float16Scalar](self._v[Float16Scalar])
+        if self._v.isa[Float32Scalar](): return func[Float32Scalar](self._v[Float32Scalar])
+        if self._v.isa[Float64Scalar](): return func[Float64Scalar](self._v[Float64Scalar])
+        if self._v.isa[StringScalar]():  return func[StringScalar](self._v[StringScalar])
+        if self._v.isa[ListScalar]():    return func[ListScalar](self._v[ListScalar])
+        if self._v.isa[StructScalar]():  return func[StructScalar](self._v[StructScalar])
+        abort("unreachable: invalid scalar type for dispatch")
+
+    # --- dispatch-based methods ---
 
     def type(self) -> ArrowType:
-        return self._virt_type(self._data)
+        @parameter
+        def f[T: Scalar](t: T) -> ArrowType: return t.type()
+        return self._dispatch[f]()
 
     def is_valid(self) -> Bool:
-        return self._virt_is_valid(self._data)
+        @parameter
+        def f[T: Scalar](t: T) -> Bool: return t.is_valid()
+        return self._dispatch[f]()
 
     def is_null(self) -> Bool:
         return not self.is_valid()
 
     # --- typed downcasts ---
 
-    def as_bool(ref self) -> ref[self._data[]] BoolScalar:
-        return rebind[ArcPointer[BoolScalar]](self._data)[]
+    def as_bool(self) -> BoolScalar:
+        return self._v[BoolScalar].copy()
 
-    def as_primitive[
-        T: PrimitiveType
-    ](ref self) -> ref[self._data[]] PrimitiveScalar[T]:
-        return rebind[ArcPointer[PrimitiveScalar[T]]](self._data)[]
+    def as_primitive[T: PrimitiveType](self) -> PrimitiveScalar[T]:
+        return self._v[PrimitiveScalar[T]].copy()
 
-    def as_string(ref self) -> ref[self._data[]] StringScalar:
-        return rebind[ArcPointer[StringScalar]](self._data)[]
+    def as_string(self) -> StringScalar:
+        return self._v[StringScalar].copy()
 
-    def as_list(ref self) -> ref[self._data[]] ListScalar:
-        return rebind[ArcPointer[ListScalar]](self._data)[]
+    def as_list(self) -> ListScalar:
+        return self._v[ListScalar].copy()
 
-    def as_fixed_size_list(ref self) -> ref[self._data[]] ListScalar:
-        return rebind[ArcPointer[ListScalar]](self._data)[]
+    def as_fixed_size_list(self) -> ListScalar:
+        return self._v[ListScalar].copy()
 
-    def as_struct(ref self) -> ref[self._data[]] StructScalar:
-        return rebind[ArcPointer[StructScalar]](self._data)[]
+    def as_struct(self) -> StructScalar:
+        return self._v[StructScalar].copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.is_null():
-            writer.write("null")
-            return
-        var dtype = self.type()
-        if dtype == bool_:
-            self.as_bool().write_to(writer)
-            return
-        elif dtype == int8:
-            self.as_primitive[Int8Type]().write_to(writer)
-            return
-        elif dtype == int16:
-            self.as_primitive[Int16Type]().write_to(writer)
-            return
-        elif dtype == int32:
-            self.as_primitive[Int32Type]().write_to(writer)
-            return
-        elif dtype == int64:
-            self.as_primitive[Int64Type]().write_to(writer)
-            return
-        elif dtype == uint8:
-            self.as_primitive[UInt8Type]().write_to(writer)
-            return
-        elif dtype == uint16:
-            self.as_primitive[UInt16Type]().write_to(writer)
-            return
-        elif dtype == uint32:
-            self.as_primitive[UInt32Type]().write_to(writer)
-            return
-        elif dtype == uint64:
-            self.as_primitive[UInt64Type]().write_to(writer)
-            return
-        elif dtype == float16:
-            self.as_primitive[Float16Type]().write_to(writer)
-            return
-        elif dtype == float32:
-            self.as_primitive[Float32Type]().write_to(writer)
-            return
-        elif dtype == float64:
-            self.as_primitive[Float64Type]().write_to(writer)
-            return
-        if dtype.is_string():
-            self.as_string().write_to(writer)
-        elif dtype.is_list() or dtype.is_fixed_size_list():
-            self.as_list().write_to(writer)
-        elif dtype.is_struct():
-            self.as_struct().write_to(writer)
+        @parameter
+        def f[T: Scalar](t: T): t.write_to(writer)
+        self._dispatch[f]()
 
     def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
+        @parameter
+        def f[T: Scalar](t: T): t.write_repr_to(writer)
+        self._dispatch[f]()
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)

@@ -81,7 +81,7 @@ struct AggregateState(Movable):
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
     if col.dtype() == bool_:
-        return Float64(col.as_primitive[BoolType]().unsafe_get(row))
+        return Float64(col.as_bool()[row])
     elif col.dtype() == int8:
         return Float64(col.as_primitive[Int8Type]().unsafe_get(row))
     elif col.dtype() == int16:
@@ -328,7 +328,7 @@ struct HashGrouper(Movable):
         # Key columns.
         for k in range(len(key_fields)):
             result_fields.append(
-                Field(key_fields[k].name, key_fields[k].dtype)
+                Field(key_fields[k].name, key_fields[k].dtype.copy())
             )
             if num_groups == 0:
                 var empty = make_builder(key_fields[k].dtype)
@@ -342,7 +342,7 @@ struct HashGrouper(Movable):
                 String("col") + String(a) + "_" + self._functions[a].name
             )
             var pair = self._functions[a].finish(col_name, num_groups)
-            result_fields.append(pair[0])
+            result_fields.append(pair[0].copy())
             result_cols.append(pair[1].copy())
 
         return RecordBatch(
@@ -398,7 +398,7 @@ def groupby(
         key_fields.append(
             Field(
                 key_struct.fields[k].name,
-                key_struct.fields[k].dtype,
+                key_struct.fields[k].dtype.copy(),
             )
         )
 

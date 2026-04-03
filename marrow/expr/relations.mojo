@@ -247,7 +247,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 raise Error("select: column '" + name + "' not found")
             col_names.append(name)
             exprs.append(col(idx))
-            fields.append(schema.fields[idx])
+            fields.append(schema.fields[idx].copy())
         var out_schema = Schema(fields=fields^)
         var proj = Project(
             input=self,
@@ -300,9 +300,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             # Key expression must resolve to a column for naming.
             var kdt = k.dtype()
             if kdt:
-                fields.append(Field("key", kdt.value()))
+                fields.append(Field("key", kdt.value().copy()))
             else:
-                fields.append(Field("key", input_schema.fields[0].dtype))
+                fields.append(Field("key", input_schema.fields[0].dtype.copy()))
         for i in range(len(funcs)):
             if funcs[i] == "count":
                 fields.append(Field(funcs[i], ArrowType(int64)))
