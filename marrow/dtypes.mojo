@@ -24,6 +24,8 @@ Comptime singletons (same names as before):
 """
 
 from std.utils import Variant
+from std.builtin.variadics import Variadic
+from std.builtin.rebind import downcast, rebind
 from std.sys import size_of, bit_width_of
 from std.os import abort
 from std.memory import ArcPointer, OwnedPointer
@@ -367,46 +369,25 @@ struct ArrowType(
 
     # --- generic type dispatch ---
 
-    # R: Movable and should be infer only
     def _dispatch[
-        R: Copyable, //,
+        R: Movable, //,
         func: def[T: DataType](T) capturing[_] -> R,
     ](self) -> R:
-        if self._v.isa[NullType](): return func[NullType](self._v[NullType])
-        if self._v.isa[BoolType](): return func[BoolType](self._v[BoolType])
-        if self._v.isa[Int8Type](): return func[Int8Type](self._v[Int8Type])
-        if self._v.isa[Int16Type](): return func[Int16Type](self._v[Int16Type])
-        if self._v.isa[Int32Type](): return func[Int32Type](self._v[Int32Type])
-        if self._v.isa[Int64Type](): return func[Int64Type](self._v[Int64Type])
-        if self._v.isa[UInt8Type](): return func[UInt8Type](self._v[UInt8Type])
-        if self._v.isa[UInt16Type](): return func[UInt16Type](self._v[UInt16Type])
-        if self._v.isa[UInt32Type](): return func[UInt32Type](self._v[UInt32Type])
-        if self._v.isa[UInt64Type](): return func[UInt64Type](self._v[UInt64Type])
-        if self._v.isa[Float16Type](): return func[Float16Type](self._v[Float16Type])
-        if self._v.isa[Float32Type](): return func[Float32Type](self._v[Float32Type])
-        if self._v.isa[Float64Type](): return func[Float64Type](self._v[Float64Type])
-        if self._v.isa[BinaryType](): return func[BinaryType](self._v[BinaryType])
-        if self._v.isa[StringType](): return func[StringType](self._v[StringType])
-        if self._v.isa[ListType](): return func[ListType](self._v[ListType])
-        if self._v.isa[FixedSizeListType](): return func[FixedSizeListType](self._v[FixedSizeListType])
-        if self._v.isa[StructType](): return func[StructType](self._v[StructType])
+        comptime for i in range(Variadic.size(_ArrowTypeV.Ts)):
+            comptime A = _ArrowTypeV.Ts[i]
+            comptime T = downcast[A, DataType]
+            if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid data type for dispatch")
 
     def _dispatch[
-        R: Copyable, //,
+        R: Movable, //,
         func: def[T: PrimitiveType](T) capturing[_] -> R,
     ](self) -> R:
-        if self._v.isa[Int8Type](): return func[Int8Type](self._v[Int8Type])
-        if self._v.isa[Int16Type](): return func[Int16Type](self._v[Int16Type])
-        if self._v.isa[Int32Type](): return func[Int32Type](self._v[Int32Type])
-        if self._v.isa[Int64Type](): return func[Int64Type](self._v[Int64Type])
-        if self._v.isa[UInt8Type](): return func[UInt8Type](self._v[UInt8Type])
-        if self._v.isa[UInt16Type](): return func[UInt16Type](self._v[UInt16Type])
-        if self._v.isa[UInt32Type](): return func[UInt32Type](self._v[UInt32Type])
-        if self._v.isa[UInt64Type](): return func[UInt64Type](self._v[UInt64Type])
-        if self._v.isa[Float16Type](): return func[Float16Type](self._v[Float16Type])
-        if self._v.isa[Float32Type](): return func[Float32Type](self._v[Float32Type])
-        if self._v.isa[Float64Type](): return func[Float64Type](self._v[Float64Type])
+        comptime for i in range(Variadic.size(_ArrowTypeV.Ts)):
+            comptime A = _ArrowTypeV.Ts[i]
+            comptime if conforms_to(A, PrimitiveType):
+                comptime T = downcast[A, PrimitiveType]
+                if self._v.isa[T](): return func(trait_downcast[PrimitiveType](self._v[T]))
         abort("unreachable: invalid primitive type for dispatch")
 
     def byte_width(self) raises -> Int:

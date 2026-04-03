@@ -18,6 +18,8 @@ Scalar trait:
 """
 
 from std.utils import Variant
+from std.builtin.variadics import Variadic
+from std.builtin.rebind import downcast
 from std.os import abort
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
@@ -414,24 +416,12 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     # --- generic dispatch ---
 
     def _dispatch[
-        R: Copyable, //,
+        R: Movable, //,
         func: def[T: Scalar](T) capturing[_] -> R,
     ](self) -> R:
-        if self._v.isa[BoolScalar]():    return func[BoolScalar](self._v[BoolScalar])
-        if self._v.isa[Int8Scalar]():    return func[Int8Scalar](self._v[Int8Scalar])
-        if self._v.isa[Int16Scalar]():   return func[Int16Scalar](self._v[Int16Scalar])
-        if self._v.isa[Int32Scalar]():   return func[Int32Scalar](self._v[Int32Scalar])
-        if self._v.isa[Int64Scalar]():   return func[Int64Scalar](self._v[Int64Scalar])
-        if self._v.isa[UInt8Scalar]():   return func[UInt8Scalar](self._v[UInt8Scalar])
-        if self._v.isa[UInt16Scalar]():  return func[UInt16Scalar](self._v[UInt16Scalar])
-        if self._v.isa[UInt32Scalar]():  return func[UInt32Scalar](self._v[UInt32Scalar])
-        if self._v.isa[UInt64Scalar]():  return func[UInt64Scalar](self._v[UInt64Scalar])
-        if self._v.isa[Float16Scalar](): return func[Float16Scalar](self._v[Float16Scalar])
-        if self._v.isa[Float32Scalar](): return func[Float32Scalar](self._v[Float32Scalar])
-        if self._v.isa[Float64Scalar](): return func[Float64Scalar](self._v[Float64Scalar])
-        if self._v.isa[StringScalar]():  return func[StringScalar](self._v[StringScalar])
-        if self._v.isa[ListScalar]():    return func[ListScalar](self._v[ListScalar])
-        if self._v.isa[StructScalar]():  return func[StructScalar](self._v[StructScalar])
+        comptime for i in range(Variadic.size(_AnyScalarV.Ts)):
+            comptime T = downcast[_AnyScalarV.Ts[i], Scalar]
+            if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid scalar type for dispatch")
 
     # --- dispatch-based methods ---

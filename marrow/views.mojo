@@ -160,10 +160,12 @@ struct BufferView[
 
     # --- SIMD ---
 
+    # TODO: could be good idea to use std.sys.intrinsics.masked_load
     @always_inline
     def load[W: Int](self, index: Int) -> SIMD[Self.T, W]:
         return self._data.load[width=W](index)
 
+    # TODO: could be good idea to use std.sys.intrinsics.masked_store
     @always_inline
     def store[
         W: Int
@@ -587,6 +589,7 @@ struct BitmapView[
         )
         return raw >> Scalar[T](bit_off)
 
+    # TODO: could be good idea to use std.sys.intrinsics.masked_load
     @always_inline
     def load[T: DType, W: Int = 1](self, index: Int) -> SIMD[T, W]:
         """Load W elements of type T from bitmap data at element ``index``.
@@ -598,6 +601,7 @@ struct BitmapView[
         return self._data.bitcast[Scalar[T]]().load[width=W, alignment=1](index)
 
     # TODO: probably should be removed
+    # TODO: could be good idea to use std.sys.intrinsics.masked_store
     @always_inline
     def store[
         T: DType, W: Int = 1
