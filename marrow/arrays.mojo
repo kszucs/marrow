@@ -1511,40 +1511,9 @@ struct AnyArray(
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to the corresponding Python typed-array object."""
-        var dt = self.dtype()
-        if dt == bool_:
-            return self.as_bool().copy().to_python_object()
-        if dt == int8:
-            return self.as_primitive[Int8Type]().copy().to_python_object()
-        elif dt == int16:
-            return self.as_primitive[Int16Type]().copy().to_python_object()
-        elif dt == int32:
-            return self.as_primitive[Int32Type]().copy().to_python_object()
-        elif dt == int64:
-            return self.as_primitive[Int64Type]().copy().to_python_object()
-        elif dt == uint8:
-            return self.as_primitive[UInt8Type]().copy().to_python_object()
-        elif dt == uint16:
-            return self.as_primitive[UInt16Type]().copy().to_python_object()
-        elif dt == uint32:
-            return self.as_primitive[UInt32Type]().copy().to_python_object()
-        elif dt == uint64:
-            return self.as_primitive[UInt64Type]().copy().to_python_object()
-        elif dt == float16:
-            return self.as_primitive[Float16Type]().copy().to_python_object()
-        elif dt == float32:
-            return self.as_primitive[Float32Type]().copy().to_python_object()
-        elif dt == float64:
-            return self.as_primitive[Float64Type]().copy().to_python_object()
-        if dt.is_string():
-            return self.as_string().copy().to_python_object()
-        elif dt.is_list():
-            return self.as_list().copy().to_python_object()
-        elif dt.is_fixed_size_list():
-            return self.as_fixed_size_list().copy().to_python_object()
-        elif dt.is_struct():
-            return self.as_struct().copy().to_python_object()
-        raise Error("to_python_object: unsupported dtype")
+        @parameter
+        def f[T: Array](a: T) raises -> PythonObject: return a.copy().to_python_object()
+        return self._dispatch_raises[f]()
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
