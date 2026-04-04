@@ -97,9 +97,9 @@ def _cosine_similarity_gpu_kernel[
     dim: Int,
 ):
     """GPU kernel: each thread computes one vector's cosine similarity."""
-    var tid = global_idx.x
-    if tid < UInt(n_vectors):
-        var offset = Int(tid) * dim
+    var tid = Int(global_idx.x)
+    if tid < n_vectors:
+        var offset = tid * dim
         var dot = Scalar[dtype](0)
         var norm_v = Scalar[dtype](0)
         var norm_q = Scalar[dtype](0)
