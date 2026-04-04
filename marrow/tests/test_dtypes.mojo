@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 import marrow.dtypes as dt
-from marrow.dtypes import ArrowType, string, Field, NullType, BoolType, StringType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float16Type, Float32Type, Float64Type, BinaryType, list_, fixed_size_list_, struct_, field, String, binary, float16, float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64, bool_, null
+from marrow.dtypes import ArrowType, string, Field, NullType, BoolType, StringType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float16Type, Float32Type, Float64Type, BinaryType, list_, fixed_size_list_, struct_, field, binary, float16, float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64, bool_, null
 
 
 
@@ -273,5 +273,7 @@ def test_is_fixed_size() raises:
 
 
 
+alias test_cases = __functions_in_module()
+
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.discover_tests[test_cases]().run()

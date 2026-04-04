@@ -417,7 +417,7 @@ def hash_identity[
 
     Only valid for bool, uint8, and int8 — produces dense values in [0, 255].
     """
-    comptime _OFFSET = 128 if T == int8 else 0
+    comptime _OFFSET = 128 if T.native == DType.int8 else 0
 
     var n = len(keys)
     var builder = PrimitiveBuilder[UInt64Type](capacity=n)
@@ -441,7 +441,7 @@ def hash_identity(keys: BoolArray) raises -> PrimitiveArray[UInt64Type]:
         if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
             builder.unsafe_append(_h(NULL_HASH_SENTINEL))
         else:
-            builder.unsafe_append(_h(Int(keys[i])))
+            builder.unsafe_append(_h(Int(keys[i].value())))
     return builder.finish()
 
 

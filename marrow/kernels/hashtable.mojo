@@ -28,7 +28,7 @@ from .hashing import rapidhash
 # ---------------------------------------------------------------------------
 
 
-struct Partition(Movable):
+struct Partition(Copyable, Movable):
     """A subset of rows with pre-computed hashes.
 
     ``row_indices = None`` means all rows in order (NoPartition fast-path,
@@ -45,6 +45,10 @@ struct Partition(Movable):
     ):
         self.hashes = hashes^
         self.row_indices = row_indices^
+
+    def __init__(out self, *, copy: Self):
+        self.hashes = copy.hashes.copy()
+        self.row_indices = copy.row_indices.copy()
 
     def num_rows(self) -> Int:
         return len(self.hashes)
@@ -63,7 +67,7 @@ trait Partitioner(Movable):
         ...
 
     def partition(
-        self, hashes: PrimitiveArray[UInt64Type]
+        self, var hashes: PrimitiveArray[UInt64Type]
     ) raises -> List[Partition]:
         ...
 
@@ -78,7 +82,7 @@ struct NoPartition(Partitioner):
         return 1
 
     def partition(
-        self, hashes: PrimitiveArray[UInt64Type]
+        self, var hashes: PrimitiveArray[UInt64Type]
     ) raises -> List[Partition]:
         var result = List[Partition]()
         result.append(Partition(hashes^))

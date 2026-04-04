@@ -95,7 +95,7 @@ struct RecordBatch(
 
     def field(self, i: Int) raises -> Field:
         """Returns the Field at the given index (delegates to schema)."""
-        return self.schema.field(index=i)
+        return self.schema.field(index=i).copy()
 
     def __eq__(self, other: RecordBatch) -> Bool:
         """Returns True if the two RecordBatches have equal schema and columns.
@@ -405,7 +405,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
 
     def field(self, i: Int) raises -> Field:
         """Returns the Field at the given index (delegates to schema)."""
-        return self.schema.field(index=i)
+        return self.schema.field(index=i).copy()
 
     def __eq__(self, other: Table) -> Bool:
         """Returns True if the two Tables have equal schema and columns."""

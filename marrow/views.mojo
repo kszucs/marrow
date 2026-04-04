@@ -316,8 +316,8 @@ struct BufferView[
             i += 1
 
     def count[
-        F: def[W: Int](SIMD[Self.T, W]) -> SIMD[DType.bool, W]
-    ](self, func: F) -> Int:
+        func: def[W: Int](SIMD[Self.T, W]) -> SIMD[DType.bool, W]
+    ](self) -> Int:
         """Count elements matching a vectorized predicate."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
         var total = 0

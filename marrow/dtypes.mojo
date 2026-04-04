@@ -320,6 +320,7 @@ struct StructType(DataType):
 # ArrowType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
+# TODO: rename it to AnyDataType or AnyType (if collision with mojo's anytype is not happening)
 struct ArrowType(
     Copyable,
     ConvertibleFromPython,

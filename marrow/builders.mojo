@@ -214,9 +214,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         def f[T: Builder](mut b: T) raises -> AnyArray: return b.finish().to_any()
         return self._dispatch_mut[f]()
 
-    def reset(mut self):
+    def reset(mut self) raises:
         @parameter
-        def f[T: Builder](mut b: T): b.reset()
+        def f[T: Builder](mut b: T) raises: b.reset()
         self._dispatch_mut[f]()
 
     # --- typed downcasts (zero-cost reference borrows) ---
