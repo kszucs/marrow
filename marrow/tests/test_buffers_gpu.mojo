@@ -41,7 +41,6 @@ def test_buffer_host_kind() raises:
     elif api == "hip":
         assert_equal(buf.device_type(), DeviceType.ROCM_HOST)
     assert_equal(buf.device_id(), Int64(0))
-    assert_true(buf.view[DType.uint8]().is_non_null())
 
 
 def test_buffer_host_builder() raises:
@@ -63,7 +62,6 @@ def test_buffer_host_builder() raises:
     assert_equal(buf.device_id(), Int64(0))
     assert_equal(buf.unsafe_get(0), UInt8(7))
     assert_equal(buf.unsafe_get(1), UInt8(13))
-    assert_true(buf.view[DType.uint8]().is_non_null())
 
 
 def test_buffer_to_cpu_round_trip() raises:

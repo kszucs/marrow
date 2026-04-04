@@ -13,7 +13,7 @@ from marrow.views import BufferView
 def test_buffer_init() raises:
     var b = Buffer.alloc_zeroed(10)
     assert_equal(len(b), 64)
-    assert_true(b.view[DType.uint8]().is_aligned(64))
+    assert_equal(Int(b._data) % alignment, 0)
 
 
 def test_alloc_bits() raises:

@@ -267,19 +267,6 @@ struct BufferView[
     def unsafe_ptr(self) -> UnsafePointer[Scalar[Self.T], Self.origin]:
         return self._data
 
-    # TODO: remove this, on the long run we plan to use nonnullunsafepointer
-    # from mojo stdlib
-    @always_inline
-    def is_non_null(self) -> Bool:
-        """Return True if the backing pointer is non-null."""
-        return Bool(self._data)
-
-    @always_inline
-    def is_aligned(self, alignment: Int) -> Bool:
-        """Return True if the backing pointer is aligned to `alignment` bytes.
-        """
-        return Int(self._data) % alignment == 0
-
     @always_inline
     def prefetch_at(self, offset: Int):
         """Prefetch the cache line at `offset` elements into L1 cache."""
