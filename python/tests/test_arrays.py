@@ -105,7 +105,7 @@ def test_infer_mixed_struct_scalar_error():
 
 def test_array_bool():
     arr = ma.array([True, None, False, None])
-    assert type(arr).__name__ == "BoolArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 4
     assert arr.null_count() == 2
     assert arr[0] == True
@@ -114,51 +114,51 @@ def test_array_bool():
 
 def test_array_int64():
     arr = ma.array([1, None, 3, None])
-    assert type(arr).__name__ == "Int64Array"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 4
     assert arr.null_count() == 2
 
 
 def test_array_float64():
     arr = ma.array([1.5, None, 2.5, None, None])
-    assert type(arr).__name__ == "Float64Array"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 5
     assert arr.null_count() == 3
 
 
 def test_array_string():
     arr = ma.array(["foo", "bar", None, "mañana"])
-    assert type(arr).__name__ == "StringArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 4
     assert arr.null_count() == 1
 
 
 def test_array_explicit_type_int32():
     arr = ma.array([1, 2, 3], type=ma.int32())
-    assert type(arr).__name__ == "Int32Array"
+    assert type(arr).__name__ == "Array"
 
 
 def test_array_explicit_type_float32():
     arr = ma.array([1.0, 2.0], type=ma.float32())
-    assert type(arr).__name__ == "Float32Array"
+    assert type(arr).__name__ == "Array"
 
 
 def test_array_explicit_type_bool():
     arr = ma.array([True, False, None], type=ma.bool_())
-    assert type(arr).__name__ == "BoolArray"
+    assert type(arr).__name__ == "Array"
     assert arr.null_count() == 1
 
 
 def test_array_mixed_int_float():
     # int coerces up to float64
     arr = ma.array([1, 2.5])
-    assert type(arr).__name__ == "Float64Array"
+    assert type(arr).__name__ == "Array"
 
 
 def test_array_bool_int_coercion():
     # bool + int infers int64
     arr = ma.array([True, 1])
-    assert type(arr).__name__ == "Int64Array"
+    assert type(arr).__name__ == "Array"
 
 
 def test_array_empty_raises():
@@ -184,35 +184,35 @@ def test_array_bytes_raises():
 
 def test_array_nested_list_int():
     arr = ma.array([[1, 2], [3, 4]])
-    assert type(arr).__name__ == "ListArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 2
     assert arr.null_count() == 0
 
 
 def test_array_nested_list_with_null_outer():
     arr = ma.array([[1, 2], None, [3]])
-    assert type(arr).__name__ == "ListArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 3
     assert arr.null_count() == 1
 
 
 def test_array_nested_list_string():
     arr = ma.array([["foo", "bar"], None, ["baz"]])
-    assert type(arr).__name__ == "ListArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 3
     assert arr.null_count() == 1
 
 
 def test_array_struct_basic():
     arr = ma.array([{"a": 5, "b": "foo", "c": True}, {"a": 6, "b": "bar", "c": False}])
-    assert type(arr).__name__ == "StructArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 2
     assert arr.null_count() == 0
 
 
 def test_array_struct_null_row():
     arr = ma.array([{"a": 1}, None, {"a": 3}])
-    assert type(arr).__name__ == "StructArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 3
     assert arr.null_count() == 1
 
@@ -220,7 +220,7 @@ def test_array_struct_null_row():
 def test_array_struct_missing_key():
     # Missing dict key → null for that field; struct row is valid
     arr = ma.array([{"a": 5, "b": "foo"}, {"a": 6}])
-    assert type(arr).__name__ == "StructArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 2
     assert arr.null_count() == 0
 
@@ -228,7 +228,7 @@ def test_array_struct_missing_key():
 def test_array_struct_explicit_type():
     ty = ma.struct([ma.field("x", ma.int32()), ma.field("y", ma.float64())])
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
-    assert type(arr).__name__ == "StructArray"
+    assert type(arr).__name__ == "Array"
     assert len(arr) == 2
 
 
@@ -296,13 +296,13 @@ def test_array_wrong_type_in_string_array():
 def test_array_float_nan():
     # NaN is a valid float value, not an error
     arr = ma.array([float("nan"), 1.0])
-    assert type(arr).__name__ == "Float64Array"
+    assert type(arr).__name__ == "Array"
     assert arr.__len__() == 2
 
 
 def test_array_float_inf():
     arr = ma.array([float("inf"), -float("inf"), 1.0])
-    assert type(arr).__name__ == "Float64Array"
+    assert type(arr).__name__ == "Array"
     assert arr.__len__() == 3
 
 
@@ -314,7 +314,7 @@ def test_array_struct_non_dict_raises():
 def test_array_nested_list_null_inner():
     # None inside inner list — inner list has a null element
     arr = ma.array([[1, None, 2], [3]])
-    assert type(arr).__name__ == "ListArray"
+    assert type(arr).__name__ == "Array"
     assert arr.__len__() == 2
 
 
@@ -423,19 +423,19 @@ def test_array_uint64_underflow():
 def test_array_bool_as_int():
     # Python bools are ints: True=1, False=0
     arr = ma.array([True, False, None], type=ma.int64())
-    assert type(arr).__name__ == "Int64Array"
+    assert type(arr).__name__ == "Array"
     assert arr.__len__() == 3
     assert arr.null_count() == 1
 
 
 def test_array_int_in_float64_explicit():
     arr = ma.array([1, 2, 3], type=ma.float64())
-    assert type(arr).__name__ == "Float64Array"
+    assert type(arr).__name__ == "Array"
 
 
 def test_array_int_in_float32_explicit():
     arr = ma.array([1, 2, 3], type=ma.float32())
-    assert type(arr).__name__ == "Float32Array"
+    assert type(arr).__name__ == "Array"
 
 
 # ── list type errors ─────────────────────────────────────────────────────────

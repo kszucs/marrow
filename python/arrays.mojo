@@ -14,26 +14,7 @@ from std.python._cpython import (
 )
 from std.memory import ArcPointer, alloc
 from marrow.c_data import CArrowSchema, CArrowArray
-from marrow.arrays import (
-    AnyArray,
-    PrimitiveArray,
-    BoolArray,
-    Int8Array,
-    Int16Array,
-    Int32Array,
-    Int64Array,
-    UInt8Array,
-    UInt16Array,
-    UInt32Array,
-    UInt64Array,
-    Float32Array,
-    Float64Array,
-    StringArray,
-    ListArray,
-    FixedSizeListArray,
-    StructArray,
-    ChunkedArray,
-)
+from marrow.arrays import AnyArray, ChunkedArray
 from marrow.builders import (
     AnyBuilder,
     BoolBuilder,
@@ -43,8 +24,7 @@ from marrow.builders import (
     StructBuilder,
     make_builder,
 )
-from marrow.scalars import AnyScalar, ListScalar
-from marrow.dtypes import PrimitiveType
+from marrow.scalars import AnyScalar
 import marrow.dtypes as dt
 
 from pontoneer import SequenceProtocolBuilder
@@ -194,62 +174,26 @@ struct PyHelpers(Copyable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# Custom wrappers for methods that need special return-type handling
+# AnyArray helpers for Python __getitem__ and Arrow C Data Interface
 # ---------------------------------------------------------------------------
 
 
-def _prim_scalar_getitem[T: PrimitiveType](
-    ptr: UnsafePointer[PrimitiveArray[T], MutAnyOrigin],
+def _any_to_array(arr: AnyArray) -> AnyArray:
+    return arr.copy()
+
+
+def _any_dtype(arr: AnyArray) -> dt.ArrowType:
+    return arr.dtype()
+
+
+def _any_array_getitem(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
     index: Int,
 ) raises -> PythonObject:
-    """Return a Python Scalar for the element at the given index."""
-    var n = len(ptr[])
+    var n = ptr[].length()
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(ptr[][index]).to_python_object()
-
-
-def _bool_array_getitem(
-    ptr: UnsafePointer[BoolArray, MutAnyOrigin],
-    index: Int,
-) raises -> PythonObject:
-    """Return a Python bool for the element at the given index."""
-    var n = len(ptr[])
-    if index < 0 or index >= n:
-        raise Error(t"index {index} out of bounds for length {n}")
-    return PythonObject(ptr[][index])
-
-
-def _str_getitem(
-    ptr: UnsafePointer[StringArray, MutAnyOrigin],
-    index: Int,
-) raises -> PythonObject:
-    var n = len(ptr[])
-    if index < 0 or index >= n:
-        raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(ptr[][index]).to_python_object()
-
-
-def _list_getitem(
-    ptr: UnsafePointer[ListArray, MutAnyOrigin],
-    index: Int,
-) raises -> PythonObject:
-    var n = len(ptr[])
-    if index < 0 or index >= n:
-        raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(ptr[][index]).to_python_object()
-
-
-def _fsl_getitem(
-    ptr: UnsafePointer[FixedSizeListArray, MutAnyOrigin],
-    index: Int,
-) raises -> PythonObject:
-    var n = len(ptr[])
-    if index < 0 or index >= n:
-        raise Error(t"index {index} out of bounds for length {n}")
-    return AnyScalar(
-        ListScalar(value=ptr[].unsafe_get(index), is_valid=ptr[].is_valid(index))
-    ).to_python_object()
+    return ptr[][index].to_python_object()
 
 
 # ---------------------------------------------------------------------------
@@ -854,31 +798,6 @@ def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.ArrowType](
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
-# TODO: maybe introduce an AnyArray trait and rename AnyArray struct to AnyArray
-def _to_array[D: dt.PrimitiveType](arr: PrimitiveArray[D]) -> AnyArray:
-    return arr.copy().to_any()
-
-
-def _bool_to_array(arr: BoolArray) -> AnyArray:
-    return arr.copy().to_any()
-
-
-def _str_to_array(arr: StringArray) -> AnyArray:
-    return arr.copy().to_any()
-
-
-def _list_to_array(arr: ListArray) -> AnyArray:
-    return arr.copy().to_any()
-
-
-def _fsl_to_array(arr: FixedSizeListArray) -> AnyArray:
-    return arr.copy().to_any()
-
-
-def _struct_to_array(arr: StructArray) -> AnyArray:
-    return arr.copy().to_any()
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -928,261 +847,19 @@ def array(
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
-    # --- BoolArray ---
-    ref bool_array_py = mb.add_type[BoolArray]("BoolArray")
+    # --- Array (type-erased AnyArray) ---
+    ref array_py = mb.add_type[AnyArray]("Array")
     _ = (
-        bool_array_py.def_method[pymethod[BoolArray.null_count]()]("null_count")
-        .def_method[pymethod[BoolArray.type]()]("type")
-        .def_method[pymethod[BoolArray.is_valid]()]("is_valid")
-        .def_method[pymethod[BoolArray.slice]()]("slice")
-        .def_method[arrow_c_array[_bool_to_array]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[BoolArray.type]]("__arrow_c_schema__")
+        array_py.def_method[pymethod[AnyArray.null_count]()]("null_count")
+        .def_method[pymethod[AnyArray.dtype]()]("type")
+        .def_method[pymethod[AnyArray.is_valid]()]("is_valid")
+        .def_method[pymethod[AnyArray.slice]()]("slice")
+        .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
+        .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )
-    _ = def_display[BoolArray](bool_array_py)
-    var bool_array_sp = SequenceProtocolBuilder[BoolArray](bool_array_py)
-    _ = bool_array_sp.def_len[BoolArray.__len__]().def_getitem[
-        _bool_array_getitem
-    ]()
-
-    # --- Numeric PrimitiveArrays ---
-    ref int8_array_py = mb.add_type[Int8Array]("Int8Array")
-    _ = (
-        int8_array_py.def_method[pymethod[Int8Array.null_count]()]("null_count")
-        .def_method[pymethod[Int8Array.type]()]("type")
-        .def_method[pymethod[Int8Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Int8Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Int8Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Int8Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Int8Array](int8_array_py)
-    var int8_array_sp = SequenceProtocolBuilder[Int8Array](int8_array_py)
-    _ = int8_array_sp.def_len[Int8Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Int8Type]
-    ]()
-
-    ref int16_array_py = mb.add_type[Int16Array]("Int16Array")
-    _ = (
-        int16_array_py.def_method[pymethod[Int16Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[Int16Array.type]()]("type")
-        .def_method[pymethod[Int16Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Int16Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Int16Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Int16Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Int16Array](int16_array_py)
-    var int16_array_sp = SequenceProtocolBuilder[Int16Array](int16_array_py)
-    _ = int16_array_sp.def_len[Int16Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Int16Type]
-    ]()
-
-    ref int32_array_py = mb.add_type[Int32Array]("Int32Array")
-    _ = (
-        int32_array_py.def_method[pymethod[Int32Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[Int32Array.type]()]("type")
-        .def_method[pymethod[Int32Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Int32Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Int32Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Int32Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Int32Array](int32_array_py)
-    var int32_array_sp = SequenceProtocolBuilder[Int32Array](int32_array_py)
-    _ = int32_array_sp.def_len[Int32Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Int32Type]
-    ]()
-
-    ref int64_array_py = mb.add_type[Int64Array]("Int64Array")
-    _ = (
-        int64_array_py.def_method[pymethod[Int64Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[Int64Array.type]()]("type")
-        .def_method[pymethod[Int64Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Int64Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Int64Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Int64Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Int64Array](int64_array_py)
-    var int64_array_sp = SequenceProtocolBuilder[Int64Array](int64_array_py)
-    _ = int64_array_sp.def_len[Int64Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Int64Type]
-    ]()
-
-    ref uint8_array_py = mb.add_type[UInt8Array]("UInt8Array")
-    _ = (
-        uint8_array_py.def_method[pymethod[UInt8Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[UInt8Array.type]()]("type")
-        .def_method[pymethod[UInt8Array.is_valid]()]("is_valid")
-        .def_method[pymethod[UInt8Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.UInt8Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[UInt8Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[UInt8Array](uint8_array_py)
-    var uint8_array_sp = SequenceProtocolBuilder[UInt8Array](uint8_array_py)
-    _ = uint8_array_sp.def_len[UInt8Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.UInt8Type]
-    ]()
-
-    ref uint16_array_py = mb.add_type[UInt16Array]("UInt16Array")
-    _ = (
-        uint16_array_py.def_method[pymethod[UInt16Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[UInt16Array.type]()]("type")
-        .def_method[pymethod[UInt16Array.is_valid]()]("is_valid")
-        .def_method[pymethod[UInt16Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.UInt16Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[UInt16Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[UInt16Array](uint16_array_py)
-    var uint16_array_sp = SequenceProtocolBuilder[UInt16Array](uint16_array_py)
-    _ = uint16_array_sp.def_len[UInt16Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.UInt16Type]
-    ]()
-
-    ref uint32_array_py = mb.add_type[UInt32Array]("UInt32Array")
-    _ = (
-        uint32_array_py.def_method[pymethod[UInt32Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[UInt32Array.type]()]("type")
-        .def_method[pymethod[UInt32Array.is_valid]()]("is_valid")
-        .def_method[pymethod[UInt32Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.UInt32Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[UInt32Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[UInt32Array](uint32_array_py)
-    var uint32_array_sp = SequenceProtocolBuilder[UInt32Array](uint32_array_py)
-    _ = uint32_array_sp.def_len[UInt32Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.UInt32Type]
-    ]()
-
-    ref uint64_array_py = mb.add_type[UInt64Array]("UInt64Array")
-    _ = (
-        uint64_array_py.def_method[pymethod[UInt64Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[UInt64Array.type]()]("type")
-        .def_method[pymethod[UInt64Array.is_valid]()]("is_valid")
-        .def_method[pymethod[UInt64Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.UInt64Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[UInt64Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[UInt64Array](uint64_array_py)
-    var uint64_array_sp = SequenceProtocolBuilder[UInt64Array](uint64_array_py)
-    _ = uint64_array_sp.def_len[UInt64Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.UInt64Type]
-    ]()
-
-    ref float32_array_py = mb.add_type[Float32Array]("Float32Array")
-    _ = (
-        float32_array_py.def_method[pymethod[Float32Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[Float32Array.type]()]("type")
-        .def_method[pymethod[Float32Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Float32Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Float32Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Float32Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Float32Array](float32_array_py)
-    var float32_array_sp = SequenceProtocolBuilder[Float32Array](
-        float32_array_py
-    )
-    _ = float32_array_sp.def_len[Float32Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Float32Type]
-    ]()
-
-    ref float64_array_py = mb.add_type[Float64Array]("Float64Array")
-    _ = (
-        float64_array_py.def_method[pymethod[Float64Array.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[Float64Array.type]()]("type")
-        .def_method[pymethod[Float64Array.is_valid]()]("is_valid")
-        .def_method[pymethod[Float64Array.slice]()]("slice")
-        .def_method[arrow_c_array[_to_array[dt.Float64Type]]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[Float64Array.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[Float64Array](float64_array_py)
-    var float64_array_sp = SequenceProtocolBuilder[Float64Array](
-        float64_array_py
-    )
-    _ = float64_array_sp.def_len[Float64Array.__len__]().def_getitem[
-        _prim_scalar_getitem[dt.Float64Type]
-    ]()
-
-    # --- StringArray ---
-    ref str_array_py = mb.add_type[StringArray]("StringArray")
-    _ = (
-        str_array_py.def_method[pymethod[StringArray.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[StringArray.type]()]("type")
-        .def_method[pymethod[StringArray.is_valid]()]("is_valid")
-        .def_method[pymethod[StringArray.slice]()]("slice")
-        .def_method[arrow_c_array[_str_to_array]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[StringArray.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[StringArray](str_array_py)
-    var str_array_sp = SequenceProtocolBuilder[StringArray](str_array_py)
-    _ = str_array_sp.def_len[StringArray.__len__]().def_getitem[_str_getitem]()
-
-    # --- ListArray ---
-    ref list_array_py = mb.add_type[ListArray]("ListArray")
-    _ = (
-        list_array_py.def_method[pymethod[ListArray.null_count]()]("null_count")
-        .def_method[pymethod[ListArray.type]()]("type")
-        .def_method[pymethod[ListArray.is_valid]()]("is_valid")
-        .def_method[pymethod[ListArray.slice]()]("slice")
-        .def_method[pymethod[ListArray.flatten]()]("flatten")
-        .def_method[pymethod[ListArray.value_lengths]()]("value_lengths")
-        .def_method[arrow_c_array[_list_to_array]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[ListArray.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[ListArray](list_array_py)
-    var list_array_sp = SequenceProtocolBuilder[ListArray](list_array_py)
-    _ = list_array_sp.def_len[ListArray.__len__]().def_getitem[_list_getitem]()
-
-    # --- FixedSizeListArray ---
-    ref fsl_array_py = mb.add_type[FixedSizeListArray]("FixedSizeListArray")
-    _ = (
-        fsl_array_py.def_method[pymethod[FixedSizeListArray.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[FixedSizeListArray.type]()]("type")
-        .def_method[pymethod[FixedSizeListArray.is_valid]()]("is_valid")
-        .def_method[pymethod[FixedSizeListArray.slice]()]("slice")
-        .def_method[pymethod[FixedSizeListArray.flatten]()]("flatten")
-        .def_method[arrow_c_array[_fsl_to_array]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[FixedSizeListArray.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[FixedSizeListArray](fsl_array_py)
-    var fsl_array_sp = SequenceProtocolBuilder[FixedSizeListArray](fsl_array_py)
-    _ = fsl_array_sp.def_len[FixedSizeListArray.__len__]().def_getitem[
-        _fsl_getitem
-    ]()
-
-    # --- StructArray ---
-    ref struct_array_py = mb.add_type[StructArray]("StructArray")
-    _ = (
-        struct_array_py.def_method[pymethod[StructArray.null_count]()](
-            "null_count"
-        )
-        .def_method[pymethod[StructArray.type]()]("type")
-        .def_method[pymethod[StructArray.is_valid]()]("is_valid")
-        .def_method[pymethod[StructArray.field]()]("field")
-        .def_method[arrow_c_array[_struct_to_array]]("__arrow_c_array__")
-        .def_method[arrow_c_schema[StructArray.type]]("__arrow_c_schema__")
-    )
-    _ = def_display[StructArray](struct_array_py)
-    var struct_array_sp = SequenceProtocolBuilder[StructArray](struct_array_py)
-    _ = struct_array_sp.def_len[StructArray.__len__]()
+    _ = def_display[AnyArray](array_py)
+    var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
+    _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 
     mb.def_function[infer_type](
         "infer_type", docstring="infer_type(obj, /) -> DataType\n--\n\nInfer the Arrow type of a Python sequence."

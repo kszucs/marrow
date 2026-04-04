@@ -304,6 +304,10 @@ def max_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
+def any_(array: AnyArray) raises -> Bool:
+    return any_(array.as_bool())
+
+
 def any_(array: BoolArray) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
@@ -327,6 +331,10 @@ def any_(array: BoolArray) raises -> Bool:
         ) & mask != 0:
             return True
     return False
+
+
+def all_(array: AnyArray) raises -> Bool:
+    return all_(array.as_bool())
 
 
 def all_(array: BoolArray) raises -> Bool:

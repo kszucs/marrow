@@ -291,13 +291,13 @@ def test_fixed_size_list_from_pyarrow() raises:
     assert_equal(len(fsl), 3)
 
     # First list: [1, 2, 3]
-    ref first = fsl[0].as_int32()
+    ref first = fsl[0].value().as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
 
     # Second list: [4, 5, 6]
-    ref second = fsl[1].as_int32()
+    ref second = fsl[1].value().as_int32()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -363,9 +363,9 @@ def test_bool_array_from_pyarrow() raises:
     assert_true(arr.is_valid(2))
     assert_false(arr.is_valid(3))
 
-    assert_true(arr[0])
-    assert_false(arr[1])
-    assert_true(arr[2])
+    assert_true(arr[0].value())
+    assert_false(arr[1].value())
+    assert_true(arr[2].value())
 
 
 def test_primitive_array_no_nulls() raises:
@@ -549,7 +549,7 @@ def test_fixed_size_list_with_nulls() raises:
     assert_true(fsl.is_valid(0))
     assert_false(fsl.is_valid(1))
 
-    ref first = fsl[0].as_int32()
+    ref first = fsl[0].value().as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)

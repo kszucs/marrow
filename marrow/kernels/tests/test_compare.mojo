@@ -25,11 +25,11 @@ def test_equal_true_and_false() raises:
     var b = array[Int64Type]([1, 0, 3, 0, 5])
     var result = equal[Int64Type](a, b)
 
-    assert_true(result[0])  # 1 == 1
-    assert_false(result[1])  # 2 != 0
-    assert_true(result[2])  # 3 == 3
-    assert_false(result[3])  # 4 != 0
-    assert_true(result[4])  # 5 == 5
+    assert_true(result[0].value())  # 1 == 1
+    assert_false(result[1].value())  # 2 != 0
+    assert_true(result[2].value())  # 3 == 3
+    assert_false(result[3].value())  # 4 != 0
+    assert_true(result[4].value())  # 5 == 5
 
 
 def test_not_equal() raises:
@@ -38,9 +38,9 @@ def test_not_equal() raises:
     var b = array[Int64Type]([1, 9, 3])
     var result = not_equal[Int64Type](a, b)
 
-    assert_false(result[0])  # 1 == 1
-    assert_true(result[1])  # 2 != 9
-    assert_false(result[2])  # 3 == 3
+    assert_false(result[0].value())  # 1 == 1
+    assert_true(result[1].value())  # 2 != 9
+    assert_false(result[2].value())  # 3 == 3
 
 
 def test_less() raises:
@@ -49,10 +49,10 @@ def test_less() raises:
     var b = array[Int64Type]([5, 1, 3, 20])
     var result = less[Int64Type](a, b)
 
-    assert_true(result[0])  # 1 < 5
-    assert_false(result[1])  # 5 > 1
-    assert_false(result[2])  # 3 == 3, not strictly less
-    assert_true(result[3])  # 10 < 20
+    assert_true(result[0].value())  # 1 < 5
+    assert_false(result[1].value())  # 5 > 1
+    assert_false(result[2].value())  # 3 == 3, not strictly less
+    assert_true(result[3].value())  # 10 < 20
 
 
 def test_less_equal() raises:
@@ -61,10 +61,10 @@ def test_less_equal() raises:
     var b = array[Int64Type]([5, 1, 3, 20])
     var result = less_equal[Int64Type](a, b)
 
-    assert_true(result[0])  # 1 <= 5
-    assert_false(result[1])  # 5 > 1
-    assert_true(result[2])  # 3 <= 3
-    assert_true(result[3])  # 10 <= 20
+    assert_true(result[0].value())  # 1 <= 5
+    assert_false(result[1].value())  # 5 > 1
+    assert_true(result[2].value())  # 3 <= 3
+    assert_true(result[3].value())  # 10 <= 20
 
 
 def test_greater() raises:
@@ -73,10 +73,10 @@ def test_greater() raises:
     var b = array[Int64Type]([1, 5, 3, 10])
     var result = greater[Int64Type](a, b)
 
-    assert_true(result[0])  # 5 > 1
-    assert_false(result[1])  # 1 < 5
-    assert_false(result[2])  # 3 == 3
-    assert_true(result[3])  # 20 > 10
+    assert_true(result[0].value())  # 5 > 1
+    assert_false(result[1].value())  # 1 < 5
+    assert_false(result[2].value())  # 3 == 3
+    assert_true(result[3].value())  # 20 > 10
 
 
 def test_greater_equal() raises:
@@ -85,10 +85,10 @@ def test_greater_equal() raises:
     var b = array[Int64Type]([1, 5, 3, 10])
     var result = greater_equal[Int64Type](a, b)
 
-    assert_true(result[0])  # 5 >= 1
-    assert_false(result[1])  # 1 < 5
-    assert_true(result[2])  # 3 >= 3
-    assert_true(result[3])  # 20 >= 10
+    assert_true(result[0].value())  # 5 >= 1
+    assert_false(result[1].value())  # 1 < 5
+    assert_true(result[2].value())  # 3 >= 3
+    assert_true(result[3].value())  # 20 >= 10
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +110,9 @@ def test_less_float64() raises:
     var b = bb.finish()
     var result = less[Float64Type](a, b)
 
-    assert_false(result[0])  # 1.0 == 1.0
-    assert_false(result[1])  # 2.5 > 2.0
-    assert_true(result[2])  # 3.0 < 5.0
+    assert_false(result[0].value())  # 1.0 == 1.0
+    assert_false(result[1].value())  # 2.5 > 2.0
+    assert_true(result[2].value())  # 3.0 < 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +141,8 @@ def test_single_element() raises:
     """Comparisons work on length-1 arrays."""
     var a = array[Int64Type]([7])
     var b = array[Int64Type]([7])
-    assert_true(equal[Int64Type](a, b)[0])
-    assert_false(less[Int64Type](a, b)[0])
+    assert_true(equal[Int64Type](a, b)[0].value())
+    assert_false(less[Int64Type](a, b)[0].value())
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ def test_equal_large_array() raises:
     var result = equal[Int64Type](a, b)
     assert_equal(len(result), n)
     for i in range(n):
-        assert_true(result[i])
+        assert_true(result[i].value())
 
 
 def main() raises:

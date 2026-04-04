@@ -164,9 +164,9 @@ def test_filter_bool_array() raises:
     var a = array([True, False, True, True, False, True])
     var result = filter_(a, array([True, True, False, True, False, False]))
     assert_equal(len(result), 3)
-    assert_equal(Bool(result[0]), True)
-    assert_equal(Bool(result[1]), False)
-    assert_equal(Bool(result[2]), True)
+    assert_equal(result[0].value(), True)
+    assert_equal(result[1].value(), False)
+    assert_equal(result[2].value(), True)
 
 
 # ---------------------------------------------------------------------------
@@ -444,8 +444,8 @@ def test_filter_sliced_bool() raises:
     var sliced = a.slice(1, 3)  # [False, True, True] with offset=1
     var result = filter_(sliced, array([True, False, True]))
     assert_equal(len(result), 2)
-    assert_equal(Bool(result[0]), False)
-    assert_equal(Bool(result[1]), True)
+    assert_equal(result[0].value(), False)
+    assert_equal(result[1].value(), True)
 
 
 def test_filter_sliced_strings() raises:

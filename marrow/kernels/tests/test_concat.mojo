@@ -135,11 +135,11 @@ def test_concat_bool() raises:
     var tmp_bool = concat(arrs)
     ref result = tmp_bool.as_bool()
     assert_equal(result.length, 5)
-    assert_true(result[0])
-    assert_false(result[1])
-    assert_true(result[2])
-    assert_false(result[3])
-    assert_true(result[4])
+    assert_true(result[0].value())
+    assert_false(result[1].value())
+    assert_true(result[2].value())
+    assert_false(result[3].value())
+    assert_true(result[4].value())
 
 
 def test_concat_bool_with_offset() raises:
@@ -150,10 +150,10 @@ def test_concat_bool_with_offset() raises:
     var tmp_bool_offset = concat(arrs)
     ref result = tmp_bool_offset.as_bool()
     assert_equal(result.length, 4)
-    assert_false(result[0])
-    assert_true(result[1])
-    assert_false(result[2])
-    assert_true(result[3])
+    assert_false(result[0].value())
+    assert_true(result[1].value())
+    assert_false(result[2].value())
+    assert_true(result[3].value())
 
 
 # ---------------------------------------------------------------------------
@@ -309,14 +309,14 @@ def test_concat_fixed_size_list() raises:
     var tmp_fsl = concat(arrs)
     ref result = tmp_fsl.as_fixed_size_list()
     assert_equal(result.length, 3)
-    var raw_fsl_elem0 = result[0]
+    var raw_fsl_elem0 = result[0].value()
     ref elem0 = raw_fsl_elem0.as_primitive[Float32Type]()
     assert_equal(elem0[0], 1.0)
     assert_equal(elem0[1], 2.0)
-    var raw_fsl_elem1 = result[1]
+    var raw_fsl_elem1 = result[1].value()
     ref elem1 = raw_fsl_elem1.as_primitive[Float32Type]()
     assert_equal(elem1[0], 3.0)
-    var raw_fsl_elem2 = result[2]
+    var raw_fsl_elem2 = result[2].value()
     ref elem2 = raw_fsl_elem2.as_primitive[Float32Type]()
     assert_equal(elem2[0], 5.0)
     assert_equal(elem2[1], 6.0)
@@ -348,14 +348,14 @@ def test_concat_fixed_size_list_with_offset() raises:
     var tmp_fsl_offset = concat(arrs)
     ref result = tmp_fsl_offset.as_fixed_size_list()
     assert_equal(result.length, 3)
-    var raw_fsl_off_elem0 = result[0]
+    var raw_fsl_off_elem0 = result[0].value()
     ref elem0 = raw_fsl_off_elem0.as_primitive[Float32Type]()
     assert_equal(elem0[0], 3.0)
     assert_equal(elem0[1], 4.0)
-    var raw_fsl_off_elem1 = result[1]
+    var raw_fsl_off_elem1 = result[1].value()
     ref elem1 = raw_fsl_off_elem1.as_primitive[Float32Type]()
     assert_equal(elem1[0], 5.0)
-    var raw_fsl_off_elem2 = result[2]
+    var raw_fsl_off_elem2 = result[2].value()
     ref elem2 = raw_fsl_off_elem2.as_primitive[Float32Type]()
     assert_equal(elem2[0], 7.0)
     assert_equal(elem2[1], 8.0)

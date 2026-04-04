@@ -657,7 +657,7 @@ def take(
             if has_src_nulls and not array.is_valid(src_idx):
                 builder.append_null()
             else:
-                builder.append(array[src_idx])
+                builder.append(array[src_idx].value())
     return builder.finish()
 
 

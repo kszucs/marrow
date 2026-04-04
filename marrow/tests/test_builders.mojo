@@ -49,8 +49,8 @@ def test_bool_builder_append_null() raises:
     assert_true(frozen.is_valid(0))
     assert_false(frozen.is_valid(1))
     assert_true(frozen.is_valid(2))
-    assert_true(frozen[0])
-    assert_false(frozen[2])
+    assert_true(frozen[0].value())
+    assert_false(frozen[2].value())
 
 
 def test_bool_builder_null_count() raises:
@@ -85,7 +85,7 @@ def test_bool_builder_all_false() raises:
     assert_equal(frozen.null_count(), 0)
     for i in range(3):
         assert_true(frozen.is_valid(i))
-        assert_false(frozen[i])
+        assert_false(frozen[i].value())
 
 
 def test_bool_builder_as_any_builder() raises:
@@ -438,9 +438,9 @@ def test_fixed_size_list_builder_float32() raises:
     b.append_valid()
     var frozen = b.finish()
     assert_equal(frozen.length, 2)
-    ref first = frozen[0].as_float32()
+    ref first = frozen[0].value().as_float32()
     assert_equal(first.length, 2)
-    ref second = frozen[1].as_float32()
+    ref second = frozen[1].value().as_float32()
     assert_equal(second.length, 2)
 
 
@@ -490,10 +490,10 @@ def test_fixed_size_list_builder_size1() raises:
     b.append_valid()
     var frozen = b.finish()
     assert_equal(frozen.length, 3)
-    ref first = frozen[0].as_int32()
+    ref first = frozen[0].value().as_int32()
     assert_equal(first.length, 1)
     assert_equal(first[0], 7)
-    ref third = frozen[2].as_int32()
+    ref third = frozen[2].value().as_int32()
     assert_equal(third[0], 9)
 
 
@@ -635,9 +635,9 @@ def test_factory_array_bool_with_nulls() raises:
     assert_true(a.is_valid(2))
     assert_false(a.is_valid(3))
     assert_true(a.is_valid(4))
-    assert_true(a[0])
-    assert_false(a[2])
-    assert_true(a[4])
+    assert_true(a[0].value())
+    assert_false(a[2].value())
+    assert_true(a[4].value())
 
 
 def test_factory_array_bool_all_nulls() raises:

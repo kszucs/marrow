@@ -46,7 +46,7 @@ from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
-from .scalars import PrimitiveScalar, StringScalar, ListScalar
+from .scalars import AnyScalar, BoolScalar, PrimitiveScalar, StringScalar, ListScalar, StructScalar, Scalar as ScalarTrait
 
 
 trait Array(
@@ -83,7 +83,12 @@ trait Array(
     def to_data(self) raises -> ArrayData:
         ...
 
+    comptime ScalarType: ScalarTrait
+
     def slice(self, offset: Int, length: Int) -> Self:
+        ...
+
+    def __getitem__(self, index: Int) raises -> Self.ScalarType:
         ...
 
 
@@ -127,6 +132,8 @@ struct BoolArray(
     by a special bit pattern in the data buffer.  This allows for efficient
     boolean operations using bitwise logic, without needing to check for nulls.
     """
+
+    comptime ScalarType = BoolScalar
 
     var length: Int
     var nulls: Int
@@ -198,8 +205,11 @@ struct BoolArray(
             return True
         return self.bitmap.value().test(self.offset + index)
 
-    def __getitem__(self, index: Int) -> Bool:
-        return self.values().test(self.offset + index)
+    def __getitem__(self, index: Int) -> BoolScalar:
+        var valid = self.is_valid(index)
+        if not valid:
+            return BoolScalar(is_valid=False)
+        return BoolScalar(self.values().test(self.offset + index))
 
     def values(self) -> BitmapView[origin_of(self.buffer)]:
         """Non-owning bit-level view of the values buffer."""
@@ -288,6 +298,8 @@ struct PrimitiveArray[T: PrimitiveType](
 ):
     """An immutable Arrow array of fixed-size primitive values (integers, floats, etc.).
     """
+
+    comptime ScalarType = PrimitiveScalar[Self.T]
 
     comptime dtype = Self.T
     comptime scalar = Scalar[Self.T.native]
@@ -510,6 +522,8 @@ struct StringArray(
 ):
     """An immutable Arrow array of variable-length UTF-8 strings."""
 
+    comptime ScalarType = StringScalar
+
     var length: Int
     var nulls: Int
     var offset: Int
@@ -670,12 +684,15 @@ struct ListArray(
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
 
+    comptime ScalarType = ListScalar
+
     var dtype: ArrowType
     var length: Int
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
+    # TODO: call it child and use OwnedPointer
     var _values: ArcPointer[AnyArray]
 
     def __init__(
@@ -869,6 +886,8 @@ struct FixedSizeListArray(
     """An immutable Arrow array of fixed-size lists (each element is a sub-array of the same length).
     """
 
+    comptime ScalarType = ListScalar
+
     var dtype: ArrowType
     var length: Int
     var nulls: Int
@@ -965,10 +984,10 @@ struct FixedSizeListArray(
         var start = (self.offset + index) * list_size
         return self.values().slice(start, list_size)
 
-    def __getitem__(self, index: Int) raises -> AnyArray:
+    def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
-        return self.unsafe_get(index)
+        return ListScalar(value=self.unsafe_get(index), is_valid=self.is_valid(index))
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
@@ -1071,6 +1090,8 @@ struct StructArray(
     """An immutable Arrow array of structs (each element is a collection of named fields).
     """
 
+    comptime ScalarType = StructScalar
+
     var dtype: ArrowType
     var length: Int
     var nulls: Int
@@ -1163,6 +1184,16 @@ struct StructArray(
         Matches PyArrow's StructArray.field(name) API.
         """
         return self.children[self._index_for_field_name(name)].copy()
+
+    def __getitem__(self, index: Int) raises -> StructScalar:
+        if index < 0 or index >= self.length:
+            raise Error(t"index {index} out of bounds for length {self.length}")
+        if not self.is_valid(index):
+            return StructScalar.null(self.dtype.copy())
+        var fields = List[AnyScalar]()
+        for ref child in self.children:
+            fields.append(child[index])
+        return StructScalar(dtype=self.dtype.copy(), value=fields^, is_valid=True)
 
     def select(self, indices: List[Int]) raises -> Self:
         """Return a new StructArray with only the fields at the given indices.
@@ -1333,6 +1364,7 @@ struct AnyArray(
     Copyable,
     Equatable,
     Movable,
+    Sized,
     Writable,
 ):
     """Type-erased, immutable array handle backed by an inline Variant.
@@ -1363,72 +1395,23 @@ struct AnyArray(
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
-        # Fast path: read .type() from a marrow Python array to pick the
-        # right downcast directly (1 method call vs 14+ try/except).
+        # Fast path: marrow arrays are now exposed as a single AnyArray Python type.
         try:
-            var dtype = py.type().downcast_value_ptr[ArrowType]()[].copy()
-            if dtype == int8:
-                self = py.downcast_value_ptr[Int8Array]()[].copy().to_any()
-                return
-            elif dtype == int16:
-                self = py.downcast_value_ptr[Int16Array]()[].copy().to_any()
-                return
-            elif dtype == int32:
-                self = py.downcast_value_ptr[Int32Array]()[].copy().to_any()
-                return
-            elif dtype == int64:
-                self = py.downcast_value_ptr[Int64Array]()[].copy().to_any()
-                return
-            elif dtype == uint8:
-                self = py.downcast_value_ptr[UInt8Array]()[].copy().to_any()
-                return
-            elif dtype == uint16:
-                self = py.downcast_value_ptr[UInt16Array]()[].copy().to_any()
-                return
-            elif dtype == uint32:
-                self = py.downcast_value_ptr[UInt32Array]()[].copy().to_any()
-                return
-            elif dtype == uint64:
-                self = py.downcast_value_ptr[UInt64Array]()[].copy().to_any()
-                return
-            elif dtype == float16:
-                self = py.downcast_value_ptr[Float16Array]()[].copy().to_any()
-                return
-            elif dtype == float32:
-                self = py.downcast_value_ptr[Float32Array]()[].copy().to_any()
-                return
-            elif dtype == float64:
-                self = py.downcast_value_ptr[Float64Array]()[].copy().to_any()
-                return
-            if dtype.is_bool():
-                self = py.downcast_value_ptr[BoolArray]()[].copy().to_any()
-            elif dtype.is_string():
-                self = py.downcast_value_ptr[StringArray]()[].copy().to_any()
-            elif dtype.is_list():
-                self = py.downcast_value_ptr[ListArray]()[].copy().to_any()
-            elif dtype.is_fixed_size_list():
-                self = (
-                    py.downcast_value_ptr[FixedSizeListArray]()[]
-                    .copy()
-                    .to_any()
-                )
-            elif dtype.is_struct():
-                self = py.downcast_value_ptr[StructArray]()[].copy().to_any()
-            else:
-                raise Error("unsupported marrow dtype: ", dtype)
+            self = py.downcast_value_ptr[AnyArray]()[].copy()
+            return
         except:
-            # Fall back to the Arrow C Data Interface for foreign objects.
-            var caps: PythonObject
-            try:
-                caps = py.__arrow_c_array__(Python.none())
-            except:
-                raise Error(
-                    "cannot convert Python object of type",
-                    t" '{py.__class__.__name__}' to AnyArray",
-                )
+            pass
+        # Fall back to the Arrow C Data Interface for foreign objects.
+        try:
+            var caps = py.__arrow_c_array__(Python.none())
             var c_schema = CArrowSchema.from_pycapsule(caps[0])
             var c_array = CArrowArray.from_pycapsule(caps[1])
             self = c_array^.to_array(c_schema.to_dtype())
+        except:
+            raise Error(
+                "cannot convert Python object of type",
+                t" '{py.__class__.__name__}' to AnyArray",
+            )
 
     # --- generic dispatch ---
 
@@ -1510,9 +1493,18 @@ struct AnyArray(
         return self._v == other._v
 
     def to_python_object(var self) raises -> PythonObject:
-        """Convert to the corresponding Python typed-array object."""
+        """Convert to a Python Array object (type-erased)."""
+        return PythonObject(alloc=self^)
+
+    def __len__(self) -> Int:
+        return self.length()
+
+    def __getitem__(self, index: Int) raises -> AnyScalar:
+        """Return the element at index as a type-erased AnyScalar."""
+        if index < 0 or index >= self.length():
+            raise Error(t"index {index} out of bounds for length {self.length()}")
         @parameter
-        def f[T: Array](a: T) raises -> PythonObject: return a.copy().to_python_object()
+        def f[T: Array](a: T) raises -> AnyScalar: return a[index].to_any()
         return self._dispatch_raises[f]()
 
     # --- typed downcasts (zero-cost reference borrows) ---

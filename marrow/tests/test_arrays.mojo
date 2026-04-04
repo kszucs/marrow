@@ -195,9 +195,9 @@ def test_array_from_ints() raises:
 
     var b = array([True, False, True])
     assert_equal(len(b), 3)
-    assert_true(b[0])
-    assert_false(b[1])
-    assert_true(b[2])
+    assert_true(b[0].value())
+    assert_false(b[1].value())
+    assert_true(b[2].value())
 
 
 def test_array_with_nulls() raises:
@@ -330,9 +330,9 @@ def test_list_bool_array() raises:
     # TODO: fix listarray.unsafe_get
     var first_value = lists[0].value()
     ref bool_array = first_value.as_bool()
-    assert_true(bool_array[0])
-    assert_false(bool_array[1])
-    assert_true(bool_array[2])
+    assert_true(bool_array[0].value())
+    assert_false(bool_array[1].value())
+    assert_true(bool_array[2].value())
 
 
 def test_list_str() raises:
@@ -415,14 +415,14 @@ def test_fixed_size_list_int_array() raises:
     assert_equal(fsl.dtype.as_fixed_size_list_type().size, 3)
 
     # First list: [1, 2, 3]
-    ref first = fsl[0].as_int64()
+    ref first = fsl[0].value().as_int64()
     assert_equal(len(first), 3)
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
 
     # Second list: [4, 5, 6]
-    ref second = fsl[1].as_int64()
+    ref second = fsl[1].value().as_int64()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -444,7 +444,7 @@ def test_fixed_size_list_roundtrip() raises:
     assert_equal(fsl.dtype.as_fixed_size_list_type().size, 2)
     assert_equal(len(fsl), 2)
 
-    ref first = fsl[0].as_int32()
+    ref first = fsl[0].value().as_int32()
     assert_equal(first[0], 10)
     assert_equal(first[1], 20)
 
@@ -472,11 +472,11 @@ def test_fixed_size_list_with_nulls() raises:
     assert_false(fsl.is_valid(2))
 
     # unsafe_get on valid entries returns correct values even when array has nulls
-    ref first = fsl[0].as_int64()
+    ref first = fsl[0].value().as_int64()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
-    ref second = fsl[1].as_int64()
+    ref second = fsl[1].value().as_int64()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -494,12 +494,12 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
     builder.append_valid()
     var fsl = builder.finish()
 
-    var slice0 = fsl[0]
+    var slice0 = fsl[0].value()
     assert_equal(slice0.dtype(), int32)
     assert_equal(slice0.length(), 2)
     assert_equal(slice0.to_data().offset, 0)
 
-    var slice1 = fsl[1]
+    var slice1 = fsl[1].value()
     assert_equal(slice1.dtype(), int32)
     assert_equal(slice1.length(), 2)
     assert_equal(slice1.to_data().offset, 2)
@@ -936,11 +936,11 @@ def test_fixed_size_list_getitem() raises:
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
-    ref first = fsl[0].as_int32()
+    ref first = fsl[0].value().as_int32()
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
     assert_equal(first[2], 3)
-    ref second = fsl[1].as_int32()
+    ref second = fsl[1].value().as_int32()
     assert_equal(second[0], 4)
     assert_equal(second[1], 5)
     assert_equal(second[2], 6)
@@ -1135,7 +1135,7 @@ def test_fixed_size_list_slice() raises:
     var fsl = builder.finish()
     var s = fsl.slice(1, 2)
     assert_equal(len(s), 2)
-    ref first = s[0].as_int32()
+    ref first = s[0].value().as_int32()
     assert_equal(first[0], 3)
     assert_equal(first[1], 4)
 

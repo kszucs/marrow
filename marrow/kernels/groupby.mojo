@@ -81,7 +81,7 @@ struct AggregateState(Movable):
 def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     """Read any numeric element as Float64."""
     if col.dtype() == bool_:
-        return Float64(col.as_bool()[row])
+        return Float64(col.as_bool()[row].value())
     elif col.dtype() == int8:
         return Float64(col.as_primitive[Int8Type]().unsafe_get(row))
     elif col.dtype() == int16:

@@ -154,11 +154,11 @@ def test_equal_pred() raises:
     var result = _exec_pred(
         col(0) == col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_true(result[0])
-    assert_false(result[1])
-    assert_true(result[2])
-    assert_false(result[3])
-    assert_true(result[4])
+    assert_true(result[0].value())
+    assert_false(result[1].value())
+    assert_true(result[2].value())
+    assert_false(result[3].value())
+    assert_true(result[4].value())
 
 
 def test_less_pred() raises:
@@ -168,10 +168,10 @@ def test_less_pred() raises:
     var result = _exec_pred(
         col(0) < col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_true(result[0])
-    assert_false(result[1])
-    assert_false(result[2])
-    assert_true(result[3])
+    assert_true(result[0].value())
+    assert_false(result[1].value())
+    assert_false(result[2].value())
+    assert_true(result[3].value())
 
 
 def test_greater_equal_pred() raises:
@@ -181,10 +181,10 @@ def test_greater_equal_pred() raises:
     var result = _exec_pred(
         col(0) >= col(1), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_true(result[0])
-    assert_false(result[1])
-    assert_true(result[2])
-    assert_true(result[3])
+    assert_true(result[0].value())
+    assert_false(result[1].value())
+    assert_true(result[2].value())
+    assert_true(result[3].value())
 
 
 # ---------------------------------------------------------------------------
@@ -200,10 +200,10 @@ def test_and_pred() raises:
     var result = _exec_pred(
         (col(0) < col(1)) & (col(0) != lit[Int64Type](3)), batch
     )
-    assert_true(result[0])
-    assert_false(result[1])
-    assert_false(result[2])
-    assert_false(result[3])
+    assert_true(result[0].value())
+    assert_false(result[1].value())
+    assert_false(result[2].value())
+    assert_false(result[3].value())
 
 
 def test_not_pred() raises:
@@ -213,11 +213,11 @@ def test_not_pred() raises:
     var result = _exec_pred(
         ~(col(0) == col(1)), record_batch([a^, b^], names=["c0", "c1"])
     )
-    assert_true(result[0])
-    assert_true(result[1])
-    assert_false(result[2])
-    assert_true(result[3])
-    assert_true(result[4])
+    assert_true(result[0].value())
+    assert_true(result[1].value())
+    assert_false(result[2].value())
+    assert_true(result[3].value())
+    assert_true(result[4].value())
 
 
 # ---------------------------------------------------------------------------

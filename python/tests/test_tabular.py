@@ -89,14 +89,14 @@ def test_str():
 def test_column_by_index():
     batch = make_batch()
     col = batch.column(0)
-    assert type(col).__name__ == "Int32Array"
+    assert type(col).__name__ == "Array"
     assert len(col) == 3
 
 
 def test_column_by_name():
     batch = make_batch()
     col = batch.column("y")
-    assert type(col).__name__ == "Float64Array"
+    assert type(col).__name__ == "Array"
 
 
 def test_column_by_name_not_found():
@@ -326,14 +326,14 @@ def test_table_str():
 def test_table_column_by_index():
     t = make_table()
     col = t.column(0)
-    assert type(col).__name__ == "Int32Array"
+    assert type(col).__name__ == "Array"
     assert len(col) == 3
 
 
 def test_table_column_by_name():
     t = make_table()
     col = t.column("y")
-    assert type(col).__name__ == "Float64Array"
+    assert type(col).__name__ == "Array"
 
 
 def test_table_column_by_name_not_found():
