@@ -384,17 +384,6 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
 # AnyScalar — type-erased scalar container
 # ---------------------------------------------------------------------------
 
-comptime _AnyScalarV = Variant[
-    BoolScalar,
-    Int8Scalar, Int16Scalar, Int32Scalar, Int64Scalar,
-    UInt8Scalar, UInt16Scalar, UInt32Scalar, UInt64Scalar,
-    Float16Scalar, Float32Scalar, Float64Scalar,
-    StringScalar,
-    ListScalar,
-    StructScalar,
-]
-
-
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """Type-erased scalar container backed by a Variant.
 
@@ -402,16 +391,26 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     Runtime dispatch goes through the `_dispatch` helper.
     """
 
-    var _v: _AnyScalarV
+    comptime VariantType = Variant[
+        BoolScalar,
+        Int8Scalar, Int16Scalar, Int32Scalar, Int64Scalar,
+        UInt8Scalar, UInt16Scalar, UInt32Scalar, UInt64Scalar,
+        Float16Scalar, Float32Scalar, Float64Scalar,
+        StringScalar,
+        ListScalar,
+        StructScalar,
+    ]
+
+    var _v: Self.VariantType
 
     # --- construction ---
 
     @implicit
     def __init__[T: Scalar](out self, var typed: T):
-        self._v = _AnyScalarV(typed^)
+        self._v = Self.VariantType(typed^)
 
     def __init__(out self, *, copy: Self):
-        self._v = _AnyScalarV(copy=copy._v)
+        self._v = Self.VariantType(copy=copy._v)
 
     # --- generic dispatch ---
 
@@ -419,8 +418,8 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         R: Movable, //,
         func: def[T: Scalar](T) capturing[_] -> R,
     ](self) -> R:
-        comptime for i in range(Variadic.size(_AnyScalarV.Ts)):
-            comptime T = downcast[_AnyScalarV.Ts[i], Scalar]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime T = downcast[Self.VariantType.Ts[i], Scalar]
             if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid scalar type for dispatch")
 

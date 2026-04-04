@@ -94,13 +94,24 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     No unsafe `rebind` casts or function-pointer trampolines are used.
     """
 
-    var _ptr: ArcPointer[_AnyBuilderV]
+    comptime VariantType = Variant[
+        BoolBuilder,
+        Int8Builder,   Int16Builder,  Int32Builder,  Int64Builder,
+        UInt8Builder,  UInt16Builder, UInt32Builder, UInt64Builder,
+        Float16Builder, Float32Builder, Float64Builder,
+        StringBuilder,
+        ListBuilder,
+        FixedSizeListBuilder,
+        StructBuilder,
+    ]
+
+    var _ptr: ArcPointer[Self.VariantType]
 
     # --- construction ---
 
     @implicit
     def __init__[T: Builder](out self, var value: T):
-        self._ptr = ArcPointer(_AnyBuilderV(value^))
+        self._ptr = ArcPointer(Self.VariantType(value^))
 
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
@@ -111,8 +122,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         R: Movable, //,
         func: def[T: Builder](T) capturing[_] -> R,
     ](self) -> R:
-        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
-            comptime A = _AnyBuilderV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Builder]
             if self._ptr[].isa[T](): return func(self._ptr[][T])
         abort("unreachable: invalid builder type for dispatch")
@@ -121,8 +132,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         R: Movable, //,
         func: def[T: Builder](mut T) capturing[_] -> R,
     ](mut self) -> R:
-        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
-            comptime A = _AnyBuilderV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Builder]
             if self._ptr[].isa[T](): return func(self._ptr[][T])
         abort("unreachable: invalid builder type for dispatch")
@@ -131,8 +142,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         R: Movable, //,
         func: def[T: Builder](mut T) raises capturing[_] -> R,
     ](mut self) raises -> R:
-        comptime for i in range(Variadic.size(_AnyBuilderV.Ts)):
-            comptime A = _AnyBuilderV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Builder]
             if self._ptr[].isa[T](): return func(self._ptr[][T])
         abort("unreachable: invalid builder type for dispatch")
@@ -1072,22 +1083,6 @@ comptime Float64Builder = PrimitiveBuilder[Float64Type]
 
 
 # ---------------------------------------------------------------------------
-# AnyBuilder Variant — defined after all typed builders so every member type
-# is fully known when the Variant is instantiated.
-# ---------------------------------------------------------------------------
-
-comptime _AnyBuilderV = Variant[
-    BoolBuilder,
-    Int8Builder,   Int16Builder,  Int32Builder,  Int64Builder,
-    UInt8Builder,  UInt16Builder, UInt32Builder, UInt64Builder,
-    Float16Builder, Float32Builder, Float64Builder,
-    StringBuilder,
-    ListBuilder,
-    FixedSizeListBuilder,
-    StructBuilder,
-]
-
-
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------

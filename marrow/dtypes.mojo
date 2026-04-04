@@ -320,16 +320,6 @@ struct StructType(DataType):
 # ArrowType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
-comptime _ArrowTypeV = Variant[
-    NullType, BoolType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    BinaryType, StringType,
-    ListType, FixedSizeListType, StructType,
-]
-
-
 struct ArrowType(
     Copyable,
     ConvertibleFromPython,
@@ -338,14 +328,23 @@ struct ArrowType(
     Movable,
     Writable,
 ):
-    var _v: _ArrowTypeV
+    comptime VariantType = Variant[
+        NullType, BoolType,
+        Int8Type, Int16Type, Int32Type, Int64Type,
+        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+        Float16Type, Float32Type, Float64Type,
+        BinaryType, StringType,
+        ListType, FixedSizeListType, StructType,
+    ]
+
+    var _v: Self.VariantType
 
     @implicit
     def __init__[T: DataType](out self, var value: T):
-        self._v = _ArrowTypeV(value^)
+        self._v = Self.VariantType(value^)
 
     def __init__(out self, *, copy: Self):
-        self._v = _ArrowTypeV(copy=copy._v)
+        self._v = Self.VariantType(copy=copy._v)
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema
@@ -373,8 +372,8 @@ struct ArrowType(
         R: Movable, //,
         func: def[T: DataType](T) capturing[_] -> R,
     ](self) -> R:
-        comptime for i in range(Variadic.size(_ArrowTypeV.Ts)):
-            comptime A = _ArrowTypeV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, DataType]
             if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid data type for dispatch")
@@ -383,8 +382,8 @@ struct ArrowType(
         R: Movable, //,
         func: def[T: PrimitiveType](T) capturing[_] -> R,
     ](self) -> R:
-        comptime for i in range(Variadic.size(_ArrowTypeV.Ts)):
-            comptime A = _ArrowTypeV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime if conforms_to(A, PrimitiveType):
                 comptime T = downcast[A, PrimitiveType]
                 if self._v.isa[T](): return func(trait_downcast[PrimitiveType](self._v[T]))

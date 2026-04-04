@@ -1346,18 +1346,6 @@ struct ChunkedArray(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-comptime _AnyArrayV = Variant[
-    BoolArray,
-    Int8Array,   Int16Array,  Int32Array,  Int64Array,
-    UInt8Array,  UInt16Array, UInt32Array, UInt64Array,
-    Float16Array, Float32Array, Float64Array,
-    StringArray,
-    ListArray,
-    FixedSizeListArray,
-    StructArray,
-]
-
-
 struct AnyArray(
     ConvertibleFromPython,
     ConvertibleToPython,
@@ -1382,16 +1370,27 @@ struct AnyArray(
     Use `to_data()` to extract a generic `ArrayData` for interop.
     """
 
-    var _v: _AnyArrayV
+    comptime VariantType = Variant[
+        BoolArray,
+        Int8Array,   Int16Array,  Int32Array,  Int64Array,
+        UInt8Array,  UInt16Array, UInt32Array, UInt64Array,
+        Float16Array, Float32Array, Float64Array,
+        StringArray,
+        ListArray,
+        FixedSizeListArray,
+        StructArray,
+    ]
+
+    var _v: Self.VariantType
 
     # --- construction ---
 
     @implicit
     def __init__[T: Array](out self, var array: T):
-        self._v = _AnyArrayV(array^)
+        self._v = Self.VariantType(array^)
 
     def __init__(out self, *, copy: Self):
-        self._v = _AnyArrayV(copy=copy._v)
+        self._v = Self.VariantType(copy=copy._v)
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
@@ -1419,8 +1418,8 @@ struct AnyArray(
         R: Movable, //,
         func: def[T: Array](T) capturing[_] -> R,
     ](self) -> R:
-        comptime for i in range(Variadic.size(_AnyArrayV.Ts)):
-            comptime A = _AnyArrayV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Array]
             if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid array type for dispatch")
@@ -1429,8 +1428,8 @@ struct AnyArray(
         R: Movable, //,
         func: def[T: Array](T) raises capturing[_] -> R,
     ](self) raises -> R:
-        comptime for i in range(Variadic.size(_AnyArrayV.Ts)):
-            comptime A = _AnyArrayV.Ts[i]
+        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
+            comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Array]
             if self._v.isa[T](): return func(self._v[T])
         abort("unreachable: invalid array type for dispatch")
