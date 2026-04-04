@@ -18,7 +18,6 @@ from ..arrays import PrimitiveArray, StructArray, AnyArray
 from ..builders import (
     PrimitiveBuilder,
     AnyBuilder,
-    make_builder,
 )
 from ..dtypes import (
     PrimitiveType,
@@ -231,7 +230,7 @@ struct AggregateFunction(Copyable, Movable):
 
 def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
     """Append a length-1 array slice to an existing array."""
-    var ab = make_builder(existing.dtype(), existing.length() + 1)
+    var ab = AnyBuilder(existing.dtype(), existing.length() + 1)
     ab.extend(existing)
     ab.extend(single)
     return ab.finish()
@@ -331,7 +330,7 @@ struct HashGrouper(Movable):
                 Field(key_fields[k].name, key_fields[k].dtype.copy())
             )
             if num_groups == 0:
-                var empty = make_builder(key_fields[k].dtype)
+                var empty = AnyBuilder(key_fields[k].dtype)
                 result_cols.append(empty.finish())
             else:
                 result_cols.append(self._group_keys[k].copy())

@@ -10,7 +10,7 @@ for all supported array types.
 """
 
 from ..arrays import AnyArray
-from ..builders import make_builder
+from ..builders import AnyBuilder
 
 
 def concat(arrays: List[AnyArray]) raises -> AnyArray:
@@ -31,7 +31,7 @@ def concat(arrays: List[AnyArray]) raises -> AnyArray:
     var total_length = 0
     for arr in arrays:
         total_length += arr.length()
-    var builder = make_builder(arrays[0].dtype(), total_length)
+    var builder = AnyBuilder(arrays[0].dtype(), total_length)
     for arr in arrays:
         builder.extend(arr)
     return builder.finish()

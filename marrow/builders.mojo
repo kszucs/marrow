@@ -116,6 +116,45 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
 
+    def __init__(out self, dtype: ArrowType, capacity: Int = 0) raises:
+        if dtype == bool_:
+            self = BoolBuilder(capacity)
+        elif dtype == int8:
+            self = PrimitiveBuilder[Int8Type](capacity)
+        elif dtype == int16:
+            self = PrimitiveBuilder[Int16Type](capacity)
+        elif dtype == int32:
+            self = PrimitiveBuilder[Int32Type](capacity)
+        elif dtype == int64:
+            self = PrimitiveBuilder[Int64Type](capacity)
+        elif dtype == uint8:
+            self = PrimitiveBuilder[UInt8Type](capacity)
+        elif dtype == uint16:
+            self = PrimitiveBuilder[UInt16Type](capacity)
+        elif dtype == uint32:
+            self = PrimitiveBuilder[UInt32Type](capacity)
+        elif dtype == uint64:
+            self = PrimitiveBuilder[UInt64Type](capacity)
+        elif dtype == float16:
+            self = PrimitiveBuilder[Float16Type](capacity)
+        elif dtype == float32:
+            self = PrimitiveBuilder[Float32Type](capacity)
+        elif dtype == float64:
+            self = PrimitiveBuilder[Float64Type](capacity)
+        elif dtype.is_string():
+            self = StringBuilder(capacity)
+        elif dtype.is_list():
+            var child = AnyBuilder(dtype.as_list_type().value_type())
+            self = ListBuilder(child^, capacity)
+        elif dtype.is_fixed_size_list():
+            var fsl = dtype.as_fixed_size_list_type()
+            var child = AnyBuilder(fsl.value_type())
+            self = FixedSizeListBuilder(child^, fsl.size, capacity)
+        elif dtype.is_struct():
+            self = StructBuilder(dtype.as_struct_type().fields.copy(), capacity)
+        else:
+            raise Error("unsupported type: ", dtype)
+
     # --- generic dispatch ---
 
     def _dispatch[
@@ -129,16 +168,6 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         abort("unreachable: invalid builder type for dispatch")
 
     def _dispatch_mut[
-        R: Movable, //,
-        func: def[T: Builder](mut T) capturing[_] -> R,
-    ](mut self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, Builder]
-            if self._ptr[].isa[T](): return func(self._ptr[][T])
-        abort("unreachable: invalid builder type for dispatch")
-
-    def _dispatch_mut_raises[
         R: Movable, //,
         func: def[T: Builder](mut T) raises capturing[_] -> R,
     ](mut self) raises -> R:
@@ -168,22 +197,22 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def reserve(mut self, additional: Int) raises:
         @parameter
         def f[T: Builder](mut b: T) raises: b.reserve(additional)
-        self._dispatch_mut_raises[f]()
+        self._dispatch_mut[f]()
 
     def append_null(mut self) raises:
         @parameter
         def f[T: Builder](mut b: T) raises: b.append_null()
-        self._dispatch_mut_raises[f]()
+        self._dispatch_mut[f]()
 
     def extend(mut self, arr: AnyArray) raises:
         @parameter
         def f[T: Builder](mut b: T) raises: b.extend(arr)
-        self._dispatch_mut_raises[f]()
+        self._dispatch_mut[f]()
 
     def finish(mut self) raises -> AnyArray:
         @parameter
         def f[T: Builder](mut b: T) raises -> AnyArray: return b.finish().to_any()
-        return self._dispatch_mut_raises[f]()
+        return self._dispatch_mut[f]()
 
     def reset(mut self):
         @parameter
@@ -855,7 +884,7 @@ struct StructBuilder(Builder, Sized):
     def __init__(out self, var fields: List[Field], capacity: Int = 0) raises:
         var children = List[AnyBuilder](capacity=len(fields))
         for i in range(len(fields)):
-            children.append(make_builder(fields[i].dtype))
+            children.append(AnyBuilder(fields[i].dtype))
         self._dtype = struct_(fields^)
         self._length = 0
         self._capacity = capacity
@@ -1086,46 +1115,6 @@ comptime Float64Builder = PrimitiveBuilder[Float64Type]
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
-
-
-def make_builder(dtype: ArrowType, capacity: Int = 0) raises -> AnyBuilder:
-    """Create the right builder tree for any dtype."""
-    if dtype == bool_:
-        return BoolBuilder(capacity)
-    elif dtype == int8:
-        return PrimitiveBuilder[Int8Type](capacity)
-    elif dtype == int16:
-        return PrimitiveBuilder[Int16Type](capacity)
-    elif dtype == int32:
-        return PrimitiveBuilder[Int32Type](capacity)
-    elif dtype == int64:
-        return PrimitiveBuilder[Int64Type](capacity)
-    elif dtype == uint8:
-        return PrimitiveBuilder[UInt8Type](capacity)
-    elif dtype == uint16:
-        return PrimitiveBuilder[UInt16Type](capacity)
-    elif dtype == uint32:
-        return PrimitiveBuilder[UInt32Type](capacity)
-    elif dtype == uint64:
-        return PrimitiveBuilder[UInt64Type](capacity)
-    elif dtype == float16:
-        return PrimitiveBuilder[Float16Type](capacity)
-    elif dtype == float32:
-        return PrimitiveBuilder[Float32Type](capacity)
-    elif dtype == float64:
-        return PrimitiveBuilder[Float64Type](capacity)
-    if dtype.is_string():
-        return StringBuilder(capacity)
-    elif dtype.is_list():
-        var child = make_builder(dtype.as_list_type().value_type())
-        return ListBuilder(child^, capacity)
-    elif dtype.is_fixed_size_list():
-        var child = make_builder(dtype.as_fixed_size_list_type().value_type())
-        return FixedSizeListBuilder(child^, dtype.as_fixed_size_list_type().size, capacity)
-    elif dtype.is_struct():
-        return StructBuilder(dtype.as_struct_type().fields.copy(), capacity)
-    else:
-        raise Error("unsupported type: ", dtype)
 
 
 def array[T: PrimitiveType]() raises -> PrimitiveArray[T]:
