@@ -55,12 +55,6 @@ docs_preview = { cmd = "quarto preview docs/", depends-on = [
   "build_python",
 ], env = { PYTHONPATH = "python" } }
 
-[feature.package.dependencies]
-rattler-build = ">=0.35,<1"
-
-[feature.package.tasks]
-package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir output -c https://conda.modular.com/max-nightly/ -c conda-forge"
-
 # Examples feature — optional dependencies and tasks for runnable examples.
 # Run with: pixi run -e examples datafusion_udf
 [feature.examples.pypi-dependencies]
@@ -72,7 +66,6 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["bu
 lancedb = { cmd = "python examples/lancedb/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
 [environments]
-package = { features = ["package"], no-default-feature = true }
 examples = { features = ["examples"] }
 
 [dependencies]
