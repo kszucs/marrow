@@ -15,6 +15,7 @@ from marrow.scalars import AnyScalar
 from marrow.arrays import AnyArray
 from marrow.dtypes import DataType, primitive_dtypes
 from helpers import pymethod
+from helpers import marrow_module
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_scalar_str]("__str__")
         .def_method[_scalar_repr]("__repr__")
         .def_method[_scalar_bool]("__bool__")
+        .def_method[marrow_module]("__module__")
     )
     var scalar_tp = TypeProtocolBuilder[AnyScalar](scalar_py)
     _ = scalar_tp.def_richcompare[_scalar_rich_compare]()

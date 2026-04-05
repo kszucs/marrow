@@ -467,7 +467,10 @@ def struct_(fields: List[Field]) -> DataType:
 
 
 def struct_(var *fields: Field) -> DataType:
-    return DataType(code=STRUCT, fields=List(elements=fields^))
+    var lst = List[Field](capacity=len(fields))
+    for field in fields^:
+        lst.append(field)
+    return DataType(code=STRUCT, fields=lst^)
 
 
 comptime null = DataType(code=NA)
