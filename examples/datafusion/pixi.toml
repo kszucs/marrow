@@ -1,0 +1,22 @@
+[workspace]
+authors = ["Mikhail Tavarez <miktavarez@gmail.com>"]
+channels = ["https://prefix.dev/pontoneer", "conda-forge", "https://conda.modular.com/max-nightly", "https://prefix.dev/pixi-build-backends"]
+description = "Add a short description here"
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[package]
+name = "printer"
+version = "0.1.0"
+
+[tasks]
+build_python = { cmd = "mojo build -I ../.. ../../python/lib.mojo --emit shared-lib -o ../../python/marrow.so" }
+datafusion_udf = { cmd = "python main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+
+[package.build]
+backend = { name = "pixi-build-mojo", version = "*" }
+
+[dependencies]
+mojo = ">=0.26.2.0.dev2026032905,<0.26.3"
+# marrow = { git = "https://github.com/thatstoasty/marrow.git", branch = "pixi-build" }
+marrow = { path = "../.." }
