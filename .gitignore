@@ -180,6 +180,7 @@ docs/_freeze/
 # Mojo build files
 kgen.trace.*
 package/
+.test_runners/
 
 # vscode
 .vscode/

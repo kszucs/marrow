@@ -272,8 +272,5 @@ def test_is_fixed_size() raises:
     assert_false(ArrowType(list_(ArrowType(Int32Type()))).is_fixed_size())
 
 
-
-alias test_cases = __functions_in_module()
-
 def main() raises:
-    TestSuite.discover_tests[test_cases]().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()

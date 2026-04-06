@@ -274,7 +274,5 @@ def test_bitmapview_get_type_name() raises:
     assert_equal(BitmapView[ImmutAnyOrigin].get_type_name(), "BitmapView")
 
 
-alias test_cases = __functions_in_module()
-
 def main() raises:
-    TestSuite.discover_tests[test_cases]().run()
+    TestSuite.discover_tests[__functions_in_module()]().run()
