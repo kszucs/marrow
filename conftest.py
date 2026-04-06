@@ -1,48 +1,9 @@
 import os
 import re
 import subprocess
-import threading
-import time
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-
-
-@contextmanager
-def _spinning(message, done=None):
-    """Show an ASCII spinner with *message* until the block exits.
-
-    *done*: optional callable(elapsed_seconds) -> str, or plain str.
-    If provided, its result is printed after the spinner stops (line kept).
-    If None, the spinner line is erased.
-    """
-    frames = r"|/-\\"
-    stop = threading.Event()
-    width = len(message) + 5  # "  X " prefix + message
-    start = time.monotonic()
-
-    def _spin():
-        i = 0
-        print()  # newline so the spinner gets its own line
-        while not stop.is_set():
-            print(f"\r  {frames[i % 4]} {message}", end="", flush=True)
-            i += 1
-            stop.wait(0.08)
-        if done is not None:
-            elapsed = time.monotonic() - start
-            msg = done(elapsed) if callable(done) else done
-            print(f"\r  {msg}" + " " * max(0, width - len(msg) - 2), flush=True)
-        else:
-            print("\r" + " " * width + "\r", end="", flush=True)
-
-    t = threading.Thread(target=_spin, daemon=True)
-    t.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        t.join()
 
 
 collect_ignore = ["marrow/tests/bench_popcount_py.py"]
@@ -86,29 +47,6 @@ def _find_asan_lib():
     return None
 
 
-def _parse_mojo_output(stdout):
-    """Parse TestSuite output into {test_name: (status, error_text)}."""
-    lines = _ANSI_RE.sub("", stdout).splitlines()
-    results = {}
-    current_name = None
-    current_status = None
-    error_lines = []
-
-    for line in lines:
-        m = _RESULT_RE.match(line)
-        if m:
-            if current_name is not None:
-                results[current_name] = (current_status, "\n".join(error_lines))
-            current_status, current_name = m.group(1), m.group(2)
-            error_lines = []
-        elif current_status == "FAIL" and current_name is not None:
-            error_lines.append(line)
-
-    if current_name is not None:
-        results[current_name] = (current_status, "\n".join(error_lines))
-    return results
-
-
 def _mojo_run_cmd(config, fspath, test_names=None):
     """Return the command to run a Mojo source file with optional test filtering.
 
@@ -135,6 +73,35 @@ def _mojo_run_cmd(config, fspath, test_names=None):
         cmd += ["--only"] + list(test_names)
 
     return cmd
+
+
+def _run_mojo_file(config, fspath, test_names):
+    """Run a Mojo test file and return {test_name: (status, error_text)}."""
+    cmd = _mojo_run_cmd(config, fspath, test_names)
+    result = subprocess.run(
+        cmd, cwd=config.rootpath,
+        capture_output=True, text=True,
+    )
+    parsed = {}
+    current_name = None
+    current_status = None
+    error_lines = []
+    for line in _ANSI_RE.sub("", result.stdout).splitlines():
+        m = _RESULT_RE.match(line)
+        if m:
+            if current_name is not None:
+                parsed[current_name] = (current_status, "\n".join(error_lines))
+            current_status, current_name = m.group(1), m.group(2)
+            error_lines = []
+        elif current_status == "FAIL" and current_name is not None:
+            error_lines.append(line)
+    if current_name is not None:
+        parsed[current_name] = (current_status, "\n".join(error_lines))
+    if result.returncode != 0:
+        for name in test_names:
+            if name not in parsed:
+                parsed[name] = ("FAIL", result.stderr)
+    return parsed
 
 
 def pytest_addoption(parser):
@@ -195,50 +162,16 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_collection_finish(session):
-    """Compile and run Mojo test files after collection, before any test output."""
-    mojo_items = [
-        i for i in session.items
-        if isinstance(i, MojoTestItem)
-        and not any(m.name == "skip" for m in i.iter_markers())
-    ]
-    if not mojo_items:
-        return
-
-    results = {}
-    session.config._mojo_results = results
-
-    # Group items by source file.
+    """Pre-compute per-file test groups for use in runtest()."""
     file_groups = {}
-    for item in mojo_items:
-        key = str(item.fspath)
-        if key not in file_groups:
-            file_groups[key] = []
-        file_groups[key].append(item)
-
-    files = list(file_groups.keys())
-    label = Path(files[0]).name if len(files) == 1 else f"{len(files)} files"
-
-    try:
-        with _spinning(
-            f"mojo: running {label}",
-            done=lambda s: f"mojo: ran {label} in {s:.1f}s",
-        ):
-            for fspath, items in file_groups.items():
-                cmd = _mojo_run_cmd(
-                    session.config, fspath, [i.name for i in items]
-                )
-                result = subprocess.run(
-                    cmd, cwd=session.config.rootpath,
-                    capture_output=True, text=True,
-                )
-                parsed = _parse_mojo_output(result.stdout) if result.stdout else {}
-                if result.returncode != 0:
-                    for item in items:
-                        if item.name not in parsed:
-                            parsed[item.name] = ("FAIL", result.stderr)
-                results.update(parsed)
-    except MojoTestFailure as e:
-        session.config._mojo_results = {item.name: ("FAIL", str(e)) for item in mojo_items}
+    for item in session.items:
+        if isinstance(item, MojoTestItem) and not any(m.name == "skip" for m in item.iter_markers()):
+            key = str(item.fspath)
+            if key not in file_groups:
+                file_groups[key] = []
+            file_groups[key].append(item.name)
+    session.config._mojo_file_groups = file_groups
+    session.config._mojo_results = {}
 
 
 def pytest_collect_file(parent, file_path):
@@ -273,10 +206,15 @@ class MojoTestItem(pytest.Item):
             self.add_marker(pytest.mark.gpu)
 
     def runtest(self):
-        results = getattr(self.config, "_mojo_results", {})
-        if self.name not in results:
+        results = self.config._mojo_results
+        fspath = str(self.fspath)
+        if fspath not in results:
+            names = self.config._mojo_file_groups.get(fspath, [self.name])
+            results[fspath] = _run_mojo_file(self.config, fspath, names)
+        file_results = results[fspath]
+        if self.name not in file_results:
             raise MojoTestFailure(f"{self.name} did not appear in test runner output")
-        status, error = results[self.name]
+        status, error = file_results[self.name]
         if status == "FAIL":
             raise MojoTestFailure(error)
 
