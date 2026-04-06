@@ -25,13 +25,33 @@ pixi run package
 
 ### Running Individual Tests
 
-To run tests for a specific module:
+Always use `pytest` to run tests — never `mojo test` or `mojo run` directly.
+The pytest harness handles build caching, test selection, output parsing, and
+ASAN integration.
+
 ```bash
-mojo test marrow/tests/test_dtypes.mojo -I .
-mojo test marrow/arrays/tests/test_primitive.mojo -I .
+# single file
+pixi run pytest marrow/tests/test_dtypes.mojo
+
+# single test case
+pixi run pytest marrow/tests/test_arrays.mojo::test_primitive_slice
+
+# verbose (shows PASS/FAIL per test)
+pixi run pytest -v marrow/kernels/tests/test_join.mojo
 ```
 
-The `-I .` flag is important as it adds the current directory to the import path.
+Useful options:
+
+```bash
+--benchmark   # include bench_*.mojo files; also enables -O3
+--asan        # AddressSanitizer (requires libcompiler-rt from conda-forge)
+--gpu         # include GPU tests (requires Metal/CUDA device)
+--no-python   # skip Python binding tests
+```
+
+The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
+hashed, stable across runs).  Re-running the same test selection skips
+recompilation (~1 s vs ~5 s cold).
 
 ## Core Architecture
 

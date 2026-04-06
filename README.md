@@ -350,6 +350,41 @@ pixi run bench_similarity  # cosine similarity: CPU vs GPU vs GPU preloaded
 pixi run fmt               # format all code (Mojo + Python)
 ```
 
+### Running individual tests
+
+Use `pytest` directly to run a single test file or a specific test case:
+
+```bash
+# entire file
+pixi run pytest marrow/kernels/tests/test_join.mojo
+
+# single test
+pixi run pytest marrow/kernels/tests/test_join.mojo::test_collision_left_join
+
+# verbose output
+pixi run pytest -v marrow/tests/test_arrays.mojo
+```
+
+### Pytest options
+
+| Option | Effect |
+|---|---|
+| `--mojo` / `--no-mojo` | Select or exclude Mojo tests |
+| `--python` / `--no-python` | Select or exclude Python tests |
+| `--gpu` / `--no-gpu` | Select or exclude GPU tests |
+| `--benchmark` | Include benchmark files (`bench_*.mojo`); also switches to `-O3` |
+| `--asan` | Enable AddressSanitizer (requires `libcompiler-rt` from conda-forge) |
+
+### Build caching
+
+The test harness compiles each Mojo test runner to a binary in
+`.test_runners/` using `mojo build`.  Runner files are named by a content
+hash of the selected tests, so the binary path is stable across runs with
+the same test selection.  On the second run `mojo build` detects the
+existing binary and skips recompilation, reducing cold-start time from ~5 s
+to ~1 s.  Up to 10 runner/binary pairs are kept; older ones are pruned
+automatically.
+
 If the project matures, the goal is to contribute it upstream to the Apache Arrow project.
 
 ## References
