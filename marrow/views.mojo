@@ -375,10 +375,10 @@ struct BitmapView[
 
     # --- DevicePassable ---
 
-    comptime device_type: AnyType = Self
+    comptime device_type: AnyType = BitmapView[MutAnyOrigin]
 
     def _to_device_type(self, target: MutOpaquePointer[_]):
-        target.bitcast[Self.device_type]()[] = self
+        target.bitcast[Self.device_type]()[] = rebind[BitmapView[MutAnyOrigin]](self)
 
     @staticmethod
     def get_type_name() -> String:
