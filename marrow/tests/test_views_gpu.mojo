@@ -93,11 +93,11 @@ def test_bufferview_get_type_name_gpu() raises:
     """DevicePassable.get_type_name() is accessible and correct."""
     assert_equal(
         BufferView[DType.int32, ImmutAnyOrigin].get_type_name(),
-        "BufferView[Int32Type]",
+        "BufferView[int32]",
     )
     assert_equal(
         BufferView[DType.float64, ImmutAnyOrigin].get_type_name(),
-        "BufferView[Float64Type]",
+        "BufferView[float64]",
     )
 
 
