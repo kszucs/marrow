@@ -2,9 +2,48 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+
+
+@contextmanager
+def _spinning(message, done=None):
+    """Show an ASCII spinner with *message* until the block exits.
+
+    *done*: optional callable(elapsed_seconds) -> str, or plain str.
+    If provided, its result is printed after the spinner stops (line kept).
+    If None, the spinner line is erased.
+    """
+    frames = r"|/-\\"
+    stop = threading.Event()
+    width = len(message) + 5  # "  X " prefix + message
+    start = time.monotonic()
+
+    def _spin():
+        i = 0
+        print()  # newline so the spinner gets its own line
+        while not stop.is_set():
+            print(f"\r  {frames[i % 4]} {message}", end="", flush=True)
+            i += 1
+            stop.wait(0.08)
+        if done is not None:
+            elapsed = time.monotonic() - start
+            msg = done(elapsed) if callable(done) else done
+            print(f"\r  {msg}" + " " * max(0, width - len(msg) - 2), flush=True)
+        else:
+            print("\r" + " " * width + "\r", end="", flush=True)
+
+    t = threading.Thread(target=_spin, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join()
 
 collect_ignore = ["marrow/tests/bench_popcount_py.py"]
 
@@ -209,6 +248,50 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.skip(reason="Python tests excluded; pass --python to include"))
 
 
+def pytest_collection_finish(session):
+    """Compile and run the Mojo test runner after collection, before any test output."""
+    mojo_items = [
+        i for i in session.items
+        if isinstance(i, MojoTestItem)
+        and i._mojo_module is not None
+        and not any(m.name == "skip" for m in i.iter_markers())
+    ]
+    if not mojo_items:
+        return
+
+    if not hasattr(session.config, "_mojo_results"):
+        session.config._mojo_results = {}
+    cache = session.config._mojo_results
+
+    files = sorted({item.fspath.basename for item in mojo_items})
+    label = files[0] if len(files) == 1 else f"{len(files)} files"
+
+    runner_path = _generate_test_runner(mojo_items, session.config.rootpath)
+    tmp = None
+    try:
+        with _spinning(
+            f"mojo: compiling {label}",
+            done=lambda s: f"mojo: compiled {label} in {s:.1f}s",
+        ):
+            cmd, tmp = _build_mojo_cmd(session.config, runner_path)
+        with _spinning("mojo: running"):
+            result = subprocess.run(
+                cmd, cwd=session.config.rootpath,
+                capture_output=True, text=True,
+            )
+        parsed = _parse_mojo_output(result.stdout) if result.stdout else {}
+        if result.returncode != 0:
+            for item in mojo_items:
+                if item.name not in parsed:
+                    parsed[item.name] = ("FAIL", result.stderr)
+        cache["centralized"] = parsed
+    except MojoTestFailure as e:
+        cache["centralized"] = {item.name: ("FAIL", str(e)) for item in mojo_items}
+    finally:
+        if tmp:
+            Path(tmp).unlink(missing_ok=True)
+
+
 def pytest_collect_file(parent, file_path):
     if file_path.suffix == ".mojo" and file_path.name.startswith("test_"):
         return MojoTestFile.from_parent(parent, path=file_path)
@@ -302,33 +385,7 @@ class MojoTestItem(pytest.Item):
         cache = self._get_session_cache()
 
         if "centralized" not in cache:
-            selected = [
-                item for item in self.session.items
-                if isinstance(item, MojoTestItem)
-                and item._mojo_module is not None
-                and not any(m.name == "skip" for m in item.iter_markers())
-            ]
-            if not selected:
-                cache["centralized"] = {}
-            else:
-                runner_path = _generate_test_runner(selected, self.config.rootpath)
-                cmd, tmp = _build_mojo_cmd(self.config, runner_path)
-                try:
-                    capman = self.config.pluginmanager.getplugin("capturemanager")
-                    with capman.global_and_fixture_disabled():
-                        result = subprocess.run(
-                            cmd, cwd=self.config.rootpath,
-                            capture_output=True, text=True,
-                        )
-                    parsed = _parse_mojo_output(result.stdout) if result.stdout else {}
-                    if result.returncode != 0:
-                        for item in selected:
-                            if item.name not in parsed:
-                                parsed[item.name] = ("FAIL", result.stderr)
-                    cache["centralized"] = parsed
-                finally:
-                    if tmp:
-                        Path(tmp).unlink(missing_ok=True)
+            cache["centralized"] = {}
 
         results = cache["centralized"]
         if self.name not in results:
