@@ -9,11 +9,47 @@ from std.algorithm.functional import elementwise
 from std.gpu.host import DeviceContext, get_gpu_target
 from std.sys import has_accelerator
 from std.sys.info import simd_width_of
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true, TestSuite
 from std.utils.index import IndexList
 
 from marrow.buffers import Bitmap, Buffer
-from marrow.views import BitmapView, BufferView
+from marrow.views import apply, BitmapView, BufferView
+
+
+# ---------------------------------------------------------------------------
+# Ops for apply() tests
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _double_i32[W: Int](v: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+    return v * 2
+
+
+@always_inline
+def _add_i32[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+    return a + b
+
+
+@always_inline
+def _bool_to_u8[W: Int](v: SIMD[DType.bool, W]) -> SIMD[DType.uint8, W]:
+    return v.cast[DType.uint8]()
+
+
+@always_inline
+def _zero_if_invalid_i32[
+    W: Int
+](v: SIMD[DType.int32, W], mask: SIMD[DType.bool, W]) -> SIMD[DType.int32, W]:
+    return v * mask.cast[DType.int32]()
+
+
+@always_inline
+def _bool_and_valid_u8[
+    W: Int
+](v: SIMD[DType.bool, W], mask: SIMD[DType.bool, W]) -> SIMD[DType.uint8, W]:
+    return (v & mask).cast[DType.uint8]()
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +261,190 @@ def test_bitmapview_gpu_with_offset() raises:
     assert_equal(result.unsafe_get(1), UInt8(0))
     assert_equal(result.unsafe_get(2), UInt8(1))
     assert_equal(result.unsafe_get(3), UInt8(0))
+
+
+# ---------------------------------------------------------------------------
+# apply() — unary BufferView → BufferView (GPU)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_unary_bufferview_gpu() raises:
+    """apply[UnaryFn] doubles each int32 element via GPU dispatch."""
+    var ctx = DeviceContext()
+
+    var cpu_src = Buffer.alloc_zeroed[DType.int32](4)
+    cpu_src.unsafe_set[DType.int32](0, Int32(1))
+    cpu_src.unsafe_set[DType.int32](1, Int32(2))
+    cpu_src.unsafe_set[DType.int32](2, Int32(3))
+    cpu_src.unsafe_set[DType.int32](3, Int32(4))
+    var dev_src = cpu_src^.to_immutable().to_device(ctx)
+
+    var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
+    apply[DType.int32, DType.int32, _double_i32](
+        dev_src.device_view[DType.int32](),
+        dev_dst.view[DType.int32](),
+        ctx,
+    )
+
+    var result = dev_dst^.to_immutable().to_cpu(ctx)
+    assert_equal(result.unsafe_get[DType.int32](0), Int32(2))
+    assert_equal(result.unsafe_get[DType.int32](1), Int32(4))
+    assert_equal(result.unsafe_get[DType.int32](2), Int32(6))
+    assert_equal(result.unsafe_get[DType.int32](3), Int32(8))
+
+
+# ---------------------------------------------------------------------------
+# apply() — binary BufferView, BufferView → BufferView (GPU)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_binary_bufferview_gpu() raises:
+    """apply[BinaryFn] adds two int32 BufferViews element-wise via GPU."""
+    var ctx = DeviceContext()
+
+    var cpu_lhs = Buffer.alloc_zeroed[DType.int32](4)
+    cpu_lhs.unsafe_set[DType.int32](0, Int32(1))
+    cpu_lhs.unsafe_set[DType.int32](1, Int32(2))
+    cpu_lhs.unsafe_set[DType.int32](2, Int32(3))
+    cpu_lhs.unsafe_set[DType.int32](3, Int32(4))
+    var dev_lhs = cpu_lhs^.to_immutable().to_device(ctx)
+
+    var cpu_rhs = Buffer.alloc_zeroed[DType.int32](4)
+    cpu_rhs.unsafe_set[DType.int32](0, Int32(10))
+    cpu_rhs.unsafe_set[DType.int32](1, Int32(20))
+    cpu_rhs.unsafe_set[DType.int32](2, Int32(30))
+    cpu_rhs.unsafe_set[DType.int32](3, Int32(40))
+    var dev_rhs = cpu_rhs^.to_immutable().to_device(ctx)
+
+    var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
+    apply[DType.int32, DType.int32, _add_i32](
+        dev_lhs.device_view[DType.int32](),
+        dev_rhs.device_view[DType.int32](),
+        dev_dst.view[DType.int32](),
+        ctx,
+    )
+
+    var result = dev_dst^.to_immutable().to_cpu(ctx)
+    assert_equal(result.unsafe_get[DType.int32](0), Int32(11))
+    assert_equal(result.unsafe_get[DType.int32](1), Int32(22))
+    assert_equal(result.unsafe_get[DType.int32](2), Int32(33))
+    assert_equal(result.unsafe_get[DType.int32](3), Int32(44))
+
+
+# ---------------------------------------------------------------------------
+# apply() — unary BitmapView → BufferView (GPU)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_bitmap_to_buffer_gpu() raises:
+    """apply[UnaryFn[bool, Out]] expands bitmap bits to uint8 values via GPU."""
+    var ctx = DeviceContext()
+
+    # Bits 0,2,4,5 set → expected uint8 output: [1,0,1,0,1,1,0,0]
+    var bm = Bitmap.alloc_zeroed(8)
+    bm.set(0)
+    bm.set(2)
+    bm.set(4)
+    bm.set(5)
+    var dev_bm = bm^.to_immutable().to_device(ctx)
+
+    var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
+    apply[DType.uint8, _bool_to_u8](
+        dev_bm.view(),
+        dev_dst.view[DType.uint8](),
+        ctx,
+    )
+
+    var result = dev_dst^.to_immutable().to_cpu(ctx)
+    assert_equal(result.unsafe_get[DType.uint8](0), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](1), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](2), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](3), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](4), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](5), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](6), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](7), UInt8(0))
+
+
+# ---------------------------------------------------------------------------
+# apply() — masked BufferView, BitmapView → BufferView (GPU)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_masked_bufferview_gpu() raises:
+    """apply[MaskedFn] zeroes invalid elements in a BufferView via GPU."""
+    var ctx = DeviceContext()
+
+    # src=[10,20,30,40], validity bits 0,2 set → [10,0,30,0]
+    var cpu_src = Buffer.alloc_zeroed[DType.int32](4)
+    cpu_src.unsafe_set[DType.int32](0, Int32(10))
+    cpu_src.unsafe_set[DType.int32](1, Int32(20))
+    cpu_src.unsafe_set[DType.int32](2, Int32(30))
+    cpu_src.unsafe_set[DType.int32](3, Int32(40))
+    var dev_src = cpu_src^.to_immutable().to_device(ctx)
+
+    var bm = Bitmap.alloc_zeroed(4)
+    bm.set(0)
+    bm.set(2)
+    var dev_validity = bm^.to_immutable().to_device(ctx)
+
+    var dev_dst = Buffer.alloc_device[DType.int32](ctx, 4)
+    apply[DType.int32, DType.int32, _zero_if_invalid_i32](
+        dev_src.device_view[DType.int32](),
+        dev_validity.view(),
+        dev_dst.view[DType.int32](),
+        ctx,
+    )
+
+    var result = dev_dst^.to_immutable().to_cpu(ctx)
+    assert_equal(result.unsafe_get[DType.int32](0), Int32(10))
+    assert_equal(result.unsafe_get[DType.int32](1), Int32(0))
+    assert_equal(result.unsafe_get[DType.int32](2), Int32(30))
+    assert_equal(result.unsafe_get[DType.int32](3), Int32(0))
+
+
+# ---------------------------------------------------------------------------
+# apply() — masked BitmapView, BitmapView → BufferView (GPU)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_masked_bitmapview_gpu() raises:
+    """apply[MaskedFn[bool, Out]] ANDs src bits with validity mask into uint8 via GPU."""
+    var ctx = DeviceContext()
+
+    # src bits: [T,T,F,F,T,T,F,F], validity: [T,F,T,F,T,F,T,F]
+    # bit AND → [T,F,F,F,T,F,F,F] → uint8: [1,0,0,0,1,0,0,0]
+    var src_bm = Bitmap.alloc_zeroed(8)
+    src_bm.set(0)
+    src_bm.set(1)
+    src_bm.set(4)
+    src_bm.set(5)
+    var dev_src_bm = src_bm^.to_immutable().to_device(ctx)
+
+    var val_bm = Bitmap.alloc_zeroed(8)
+    val_bm.set(0)
+    val_bm.set(2)
+    val_bm.set(4)
+    val_bm.set(6)
+    var dev_val_bm = val_bm^.to_immutable().to_device(ctx)
+
+    var dev_dst = Buffer.alloc_device[DType.uint8](ctx, 8)
+    apply[DType.uint8, _bool_and_valid_u8](
+        dev_src_bm.view(),
+        dev_val_bm.view(),
+        dev_dst.view[DType.uint8](),
+        ctx,
+    )
+
+    var result = dev_dst^.to_immutable().to_cpu(ctx)
+    assert_equal(result.unsafe_get[DType.uint8](0), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](1), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](2), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](3), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](4), UInt8(1))
+    assert_equal(result.unsafe_get[DType.uint8](5), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](6), UInt8(0))
+    assert_equal(result.unsafe_get[DType.uint8](7), UInt8(0))
 
 
 def main() raises:
