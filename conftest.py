@@ -1,4 +1,3 @@
-import hashlib
 import os
 import re
 import subprocess
@@ -45,19 +44,12 @@ def _spinning(message, done=None):
         stop.set()
         t.join()
 
+
 collect_ignore = ["marrow/tests/bench_popcount_py.py"]
 
 _TEST_FN_RE = re.compile(r"^def\s+(test_\w+)\s*\(", re.MULTILINE)
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _RESULT_RE = re.compile(r"^\s+(PASS|FAIL|SKIP)\s+\[\s+[\d.]+\s+\]\s+(\S+)")
-
-# Directories containing test modules, mapped to their Mojo import prefix.
-_TEST_DIRS = {
-    "marrow/tests": "marrow.tests",
-    "marrow/kernels/tests": "marrow.kernels.tests",
-    "marrow/expr/tests": "marrow.expr.tests",
-}
-
 
 
 def _find_asan_lib():
@@ -94,15 +86,6 @@ def _find_asan_lib():
     return None
 
 
-def _module_for_path(file_path, rootpath):
-    """Map a test file path to its Mojo import module name, or None."""
-    rel = file_path.relative_to(rootpath)
-    for dir_rel, prefix in _TEST_DIRS.items():
-        if str(rel).startswith(dir_rel + "/"):
-            return f"{prefix}.{file_path.stem}"
-    return None
-
-
 def _parse_mojo_output(stdout):
     """Parse TestSuite output into {test_name: (status, error_text)}."""
     lines = _ANSI_RE.sub("", stdout).splitlines()
@@ -126,69 +109,32 @@ def _parse_mojo_output(stdout):
     return results
 
 
-_RUNNER_DIR = Path(".test_runners")
-_MAX_RUNNERS = 10
+def _mojo_run_cmd(config, fspath, test_names=None):
+    """Return the command to run a Mojo source file with optional test filtering.
 
-
-def _generate_test_runner(items, rootpath):
-    """Generate a Mojo test runner source file for the given test items.
-
-    The runner imports each selected test module and registers exactly the
-    requested test functions with TestSuite.  It is written to
-    .test_runners/test_runner_<hash>.mojo where <hash> is an MD5 digest of
-    the file content — so the same test selection always produces the same
-    file, and a different selection produces a different file.
-
-    This stable naming is load-bearing for build caching: _build_mojo_cmd
-    compiles each runner to a binary at .test_runners/test_runner_<hash>
-    (no extension).  On subsequent runs with the same selection, mojo build
-    detects the existing binary and skips recompilation, cutting cold-start
-    time from ~5 s to ~1 s.
-
-    Up to _MAX_RUNNERS runner files (and their compiled binaries) are kept
-    on disk for inspection; older ones are pruned automatically.
+    Uses `mojo run` directly so the Mojo compiler handles build caching.
+    When *test_names* is provided, appends `--only name1 name2 ...` so that
+    TestSuite skips unselected tests.
     """
-    # Group items by module.
-    modules = {}  # {module_name: (alias, [fn_name, ...])}
-    for item in items:
-        module = item._mojo_module
-        if module not in modules:
-            alias = "_" + module.replace(".", "_")
-            modules[module] = (alias, [])
-        modules[module][1].append(item.name)
+    opt = "-O3" if config.getoption("--benchmark") else "-O1"
+    cmd = ["mojo", "run", opt, "-I", ".", str(fspath)]
 
-    lines = [
-        "# AUTO-GENERATED — do not edit.",
-        "from std.testing import TestSuite",
-        "",
-    ]
-    for module, (alias, _) in modules.items():
-        lines.append(f"import {module} as {alias}")
+    if config.getoption("--asan"):
+        asan_lib = _find_asan_lib()
+        if asan_lib is None:
+            pytest.exit(
+                "ASAN requested but no compatible libclang_rt.asan_osx_dynamic.dylib found. "
+                "Install libcompiler-rt via conda-forge.",
+                returncode=1,
+            )
+        cmd += ["--sanitize", "address", "--shared-libasan"]
+        if asan_lib.endswith(".dylib"):
+            cmd += ["-Xlinker", asan_lib]
 
-    lines.append("")
-    lines.append("")
-    lines.append("def main() raises:")
-    lines.append("    var suite = TestSuite()")
-    for module, (alias, fns) in modules.items():
-        for fn in fns:
-            lines.append(f"    suite.test[{alias}.{fn}]()")
-    lines.append("    suite^.run()")
-    lines.append("")
+    if test_names:
+        cmd += ["--only"] + list(test_names)
 
-    runner_dir = rootpath / _RUNNER_DIR
-    runner_dir.mkdir(parents=True, exist_ok=True)
-
-    # Prune old runners (and their compiled binaries), keeping only the last (_MAX_RUNNERS - 1).
-    existing = sorted(runner_dir.glob("test_runner_*.mojo"), key=lambda p: p.stat().st_mtime)
-    for old in existing[:max(0, len(existing) - _MAX_RUNNERS + 1)]:
-        old.unlink()
-        old.with_suffix("").unlink(missing_ok=True)  # remove compiled binary if present
-
-    content = "\n".join(lines)
-    content_hash = hashlib.md5(content.encode()).hexdigest()[:12]
-    path = runner_dir / f"test_runner_{content_hash}.mojo"
-    path.write_text(content)
-    return str(path)
+    return cmd
 
 
 def pytest_addoption(parser):
@@ -249,47 +195,50 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_collection_finish(session):
-    """Compile and run the Mojo test runner after collection, before any test output."""
+    """Compile and run Mojo test files after collection, before any test output."""
     mojo_items = [
         i for i in session.items
         if isinstance(i, MojoTestItem)
-        and i._mojo_module is not None
         and not any(m.name == "skip" for m in i.iter_markers())
     ]
     if not mojo_items:
         return
 
-    if not hasattr(session.config, "_mojo_results"):
-        session.config._mojo_results = {}
-    cache = session.config._mojo_results
+    results = {}
+    session.config._mojo_results = results
 
-    files = sorted({item.fspath.basename for item in mojo_items})
-    label = files[0] if len(files) == 1 else f"{len(files)} files"
+    # Group items by source file.
+    file_groups = {}
+    for item in mojo_items:
+        key = str(item.fspath)
+        if key not in file_groups:
+            file_groups[key] = []
+        file_groups[key].append(item)
 
-    runner_path = _generate_test_runner(mojo_items, session.config.rootpath)
-    tmp = None
+    files = list(file_groups.keys())
+    label = Path(files[0]).name if len(files) == 1 else f"{len(files)} files"
+
     try:
         with _spinning(
-            f"mojo: compiling {label}",
-            done=lambda s: f"mojo: compiled {label} in {s:.1f}s",
+            f"mojo: running {label}",
+            done=lambda s: f"mojo: ran {label} in {s:.1f}s",
         ):
-            cmd, tmp = _build_mojo_cmd(session.config, runner_path)
-        with _spinning("mojo: running"):
-            result = subprocess.run(
-                cmd, cwd=session.config.rootpath,
-                capture_output=True, text=True,
-            )
-        parsed = _parse_mojo_output(result.stdout) if result.stdout else {}
-        if result.returncode != 0:
-            for item in mojo_items:
-                if item.name not in parsed:
-                    parsed[item.name] = ("FAIL", result.stderr)
-        cache["centralized"] = parsed
+            for fspath, items in file_groups.items():
+                cmd = _mojo_run_cmd(
+                    session.config, fspath, [i.name for i in items]
+                )
+                result = subprocess.run(
+                    cmd, cwd=session.config.rootpath,
+                    capture_output=True, text=True,
+                )
+                parsed = _parse_mojo_output(result.stdout) if result.stdout else {}
+                if result.returncode != 0:
+                    for item in items:
+                        if item.name not in parsed:
+                            parsed[item.name] = ("FAIL", result.stderr)
+                results.update(parsed)
     except MojoTestFailure as e:
-        cache["centralized"] = {item.name: ("FAIL", str(e)) for item in mojo_items}
-    finally:
-        if tmp:
-            Path(tmp).unlink(missing_ok=True)
+        session.config._mojo_results = {item.name: ("FAIL", str(e)) for item in mojo_items}
 
 
 def pytest_collect_file(parent, file_path):
@@ -306,91 +255,27 @@ def pytest_itemcollected(item):
             item.add_marker(pytest.mark.benchmark)
 
 
-def _build_mojo_cmd(config, fspath):
-    """Compile a Mojo source file and return the command to run the resulting binary.
-
-    Always uses `mojo build` (never `mojo run`) so that the compiled binary is
-    written to .test_runners/<stem> alongside its source.  Because
-    _generate_test_runner names runners by content hash, the binary path is
-    stable across runs with the same test selection: mojo build detects the
-    existing binary and skips recompilation, cutting ~5 s → ~1 s.
-
-    Optimization level:
-      -O1  normal test runs  (fast compile, catches correctness issues)
-      -O3  --benchmark runs  (full optimization, representative perf numbers)
-
-    ASAN (--asan):
-      Appends --sanitize address --shared-libasan to the build command.
-      On macOS the ASAN dylib must also be linked explicitly via -Xlinker
-      because mojo build's JIT ignores -Xlinker flags otherwise.
-
-    Returns (cmd, None).  None signals that the binary should NOT be deleted
-    after the run — it is kept for the caching benefit described above.
-    Cleanup is handled by _generate_test_runner's pruning logic.
-    """
-    opt = "-O3" if config.getoption("--benchmark") else "-O1"
-    runner_dir = config.rootpath / _RUNNER_DIR
-    runner_dir.mkdir(parents=True, exist_ok=True)
-    binary = str(runner_dir / Path(fspath).stem)  # always in .test_runners/<stem>
-    build_cmd = ["mojo", "build", opt, "-I", ".", str(fspath), "-o", binary]
-
-    if config.getoption("--asan"):
-        asan_lib = _find_asan_lib()
-        if asan_lib is None:
-            pytest.exit(
-                "ASAN requested but no compatible libclang_rt.asan_osx_dynamic.dylib found. "
-                "Install libcompiler-rt via conda-forge.",
-                returncode=1,
-            )
-        build_cmd += ["--sanitize", "address", "--shared-libasan"]
-        if asan_lib.endswith(".dylib"):
-            build_cmd += ["-Xlinker", asan_lib]
-
-    result = subprocess.run(build_cmd, cwd=config.rootpath)
-    if result.returncode != 0:
-        raise MojoTestFailure(f"mojo build failed with exit code {result.returncode}")
-    return [binary], None
-
-
 class MojoTestFile(pytest.File):
     def collect(self):
         is_gpu = self.path.stem.endswith("_gpu")
         source = self.path.read_text()
         test_names = _TEST_FN_RE.findall(source)
-        module = _module_for_path(self.path, self.config.rootpath)
         for name in test_names:
-            yield MojoTestItem.from_parent(
-                self, name=name, is_gpu=is_gpu, mojo_module=module,
-            )
+            yield MojoTestItem.from_parent(self, name=name, is_gpu=is_gpu)
 
 
 class MojoTestItem(pytest.Item):
-    def __init__(self, name, parent, is_gpu=False, mojo_module=None):
+    def __init__(self, name, parent, is_gpu=False):
         super().__init__(name, parent)
         self.is_gpu = is_gpu
-        self._mojo_module = mojo_module
         self.add_marker(pytest.mark.mojo)
         if is_gpu:
             self.add_marker(pytest.mark.gpu)
 
-    def _get_session_cache(self):
-        if not hasattr(self.config, "_mojo_results"):
-            self.config._mojo_results = {}
-        return self.config._mojo_results
-
     def runtest(self):
-        self._run_via_centralized()
-
-    def _run_via_centralized(self):
-        cache = self._get_session_cache()
-
-        if "centralized" not in cache:
-            cache["centralized"] = {}
-
-        results = cache["centralized"]
+        results = getattr(self.config, "_mojo_results", {})
         if self.name not in results:
             raise MojoTestFailure(f"{self.name} did not appear in test runner output")
-
         status, error = results[self.name]
         if status == "FAIL":
             raise MojoTestFailure(error)
@@ -414,14 +299,10 @@ class MojoBenchItem(pytest.Item):
         self.add_marker(pytest.mark.benchmark)
 
     def runtest(self):
-        cmd, tmp = _build_mojo_cmd(self.config, self.fspath)
+        cmd = _mojo_run_cmd(self.config, self.fspath)
         capman = self.config.pluginmanager.getplugin("capturemanager")
-        try:
-            with capman.global_and_fixture_disabled():
-                result = subprocess.run(cmd, cwd=self.config.rootpath)
-        finally:
-            if tmp:
-                Path(tmp).unlink(missing_ok=True)
+        with capman.global_and_fixture_disabled():
+            result = subprocess.run(cmd, cwd=self.config.rootpath)
         if result.returncode != 0:
             raise MojoTestFailure(f"exit code {result.returncode}")
 
@@ -430,17 +311,6 @@ class MojoBenchItem(pytest.Item):
 
     def reportinfo(self):
         return self.fspath, 0, f"mojo::bench::{self.name}"
-
-
-def pytest_terminal_summary(terminalreporter):
-    cache = getattr(terminalreporter.config, "_mojo_results", {})
-    runner_path = cache.get("runner_path")
-    runner_cmd = cache.get("runner_cmd")
-    if runner_path:
-        terminalreporter.section("mojo test runner")
-        terminalreporter.write_line(f"generated: {runner_path}")
-        if runner_cmd:
-            terminalreporter.write_line(f"command:   {' '.join(str(c) for c in runner_cmd)}")
 
 
 class MojoTestFailure(Exception):
