@@ -201,7 +201,7 @@ def pytest_collection_modifyitems(config, items):
 
         if is_benchmark and not run_benchmark:
             item.add_marker(pytest.mark.skip(reason="benchmarks excluded; pass --benchmark to include"))
-        elif (no_gpu and is_gpu) or (selective and is_gpu and not sel_gpu):
+        elif is_gpu and (no_gpu or not sel_gpu):
             item.add_marker(pytest.mark.skip(reason="GPU tests excluded; pass --gpu to include"))
         elif (no_mojo and is_mojo) or (selective and is_mojo and not sel_mojo):
             item.add_marker(pytest.mark.skip(reason="Mojo tests excluded; pass --mojo to include"))
