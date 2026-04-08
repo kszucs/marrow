@@ -208,7 +208,9 @@ def test_filter_kind() raises:
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
-    var filt = AnyRelation(Filter(input=src, predicate=col(0) > lit[Int64Type](0)))
+    var filt = AnyRelation(
+        Filter(input=src, predicate=col(0) > lit[Int64Type](0))
+    )
     assert_equal(filt.kind(), FILTER_NODE)
 
 

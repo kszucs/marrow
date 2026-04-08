@@ -177,7 +177,9 @@ def test_schema_fn_equals_struct_init() raises:
     var s1 = schema(
         [field("x", int32, nullable=False), field("y", float64, nullable=False)]
     )
-    var s2 = Schema(fields=[Field("x", int32, False), Field("y", float64, False)])
+    var s2 = Schema(
+        fields=[Field("x", int32, False), Field("y", float64, False)]
+    )
     assert_true(s1 == s2)
 
 

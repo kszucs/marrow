@@ -19,7 +19,9 @@ from marrow.expr import (
 )
 
 
-def _exec(expr: AnyValue, batch: RecordBatch) raises -> PrimitiveArray[Int64Type]:
+def _exec(
+    expr: AnyValue, batch: RecordBatch
+) raises -> PrimitiveArray[Int64Type]:
     """Helper: build a value processor and evaluate against the batch."""
     var tmp = Planner().build(expr).eval(batch)
     ref result = tmp.as_primitive[Int64Type]()
@@ -138,7 +140,9 @@ def test_literal_int64() raises:
 def test_add_literal() raises:
     """Adds a + literal(7) == [8, 9, 10, 11, 12]."""
     var a = array[Int64Type]([1, 2, 3, 4, 5])
-    var result = _exec(col(0) + lit[Int64Type](7), record_batch([a^], names=["c0"]))
+    var result = _exec(
+        col(0) + lit[Int64Type](7), record_batch([a^], names=["c0"])
+    )
     assert_true(result == array[Int64Type]([8, 9, 10, 11, 12]))
 
 

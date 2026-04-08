@@ -1,6 +1,13 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray, FixedSizeListArray, StructArray
+from marrow.arrays import (
+    AnyArray,
+    BoolArray,
+    PrimitiveArray,
+    StringArray,
+    FixedSizeListArray,
+    StructArray,
+)
 from marrow.builders import (
     array,
     AnyBuilder,
@@ -10,7 +17,17 @@ from marrow.builders import (
     FixedSizeListBuilder,
     StructBuilder,
 )
-from marrow.dtypes import int32, int64, float64, string, bool_, field, Int32Type, Int64Type, Float64Type
+from marrow.dtypes import (
+    int32,
+    int64,
+    float64,
+    string,
+    bool_,
+    field,
+    Int32Type,
+    Int64Type,
+    Float64Type,
+)
 from marrow.scalars import (
     AnyScalar,
     BoolScalar,

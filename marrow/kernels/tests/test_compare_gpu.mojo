@@ -102,6 +102,5 @@ def test_less_gpu_float32() raises:
     assert_false(result[3].value())
 
 
-
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -53,7 +53,9 @@ from marrow.kernels.arithmetic import add
 # ---------------------------------------------------------------------------
 
 
-def _make_array_with_nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[
+    T: PrimitiveType
+](size: Int) raises -> PrimitiveArray[T]:
     """Build an array with 10% nulls (every 10th element is null)."""
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
@@ -178,9 +180,13 @@ def main() raises:
         print("--------               -------")
 
         comptime for si in range(5):
-            var us = _bench_gpu_add[Int32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            var us = _bench_gpu_add[Int32Type](
+                gpu_sizes[si], gpu_iters[si], ctx
+            )
             print(t"gpu[Int32Type]/{gpu_sizes[si]}    {us} us")
 
         comptime for si in range(5):
-            var us = _bench_gpu_add[Float32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            var us = _bench_gpu_add[Float32Type](
+                gpu_sizes[si], gpu_iters[si], ctx
+            )
             print(t"gpu[Float32Type]/{gpu_sizes[si]}    {us} us")

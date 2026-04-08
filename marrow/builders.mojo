@@ -96,9 +96,17 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     comptime VariantType = Variant[
         BoolBuilder,
-        Int8Builder,   Int16Builder,  Int32Builder,  Int64Builder,
-        UInt8Builder,  UInt16Builder, UInt32Builder, UInt64Builder,
-        Float16Builder, Float32Builder, Float64Builder,
+        Int8Builder,
+        Int16Builder,
+        Int32Builder,
+        Int64Builder,
+        UInt8Builder,
+        UInt16Builder,
+        UInt32Builder,
+        UInt64Builder,
+        Float16Builder,
+        Float32Builder,
+        Float64Builder,
         StringBuilder,
         ListBuilder,
         FixedSizeListBuilder,
@@ -158,65 +166,85 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     # --- generic dispatch ---
 
     def _dispatch[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: Builder](T) capturing[_] -> R,
     ](self) -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Builder]
-            if self._ptr[].isa[T](): return func(self._ptr[][T])
+            if self._ptr[].isa[T]():
+                return func(self._ptr[][T])
         abort("unreachable: invalid builder type for dispatch")
 
     def _dispatch_mut[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: Builder](mut T) raises capturing[_] -> R,
     ](mut self) raises -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Builder]
-            if self._ptr[].isa[T](): return func(self._ptr[][T])
+            if self._ptr[].isa[T]():
+                return func(self._ptr[][T])
         abort("unreachable: invalid builder type for dispatch")
 
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
         @parameter
-        def f[T: Builder](b: T) -> Int: return b.length()
+        def f[T: Builder](b: T) -> Int:
+            return b.length()
+
         return self._dispatch[f]()
 
     def null_count(self) -> Int:
         @parameter
-        def f[T: Builder](b: T) -> Int: return b.null_count()
+        def f[T: Builder](b: T) -> Int:
+            return b.null_count()
+
         return self._dispatch[f]()
 
     def dtype(self) -> ArrowType:
         @parameter
-        def f[T: Builder](b: T) -> ArrowType: return b.dtype()
+        def f[T: Builder](b: T) -> ArrowType:
+            return b.dtype()
+
         return self._dispatch[f]()
 
     def reserve(mut self, additional: Int) raises:
         @parameter
-        def f[T: Builder](mut b: T) raises: b.reserve(additional)
+        def f[T: Builder](mut b: T) raises:
+            b.reserve(additional)
+
         self._dispatch_mut[f]()
 
     def append_null(mut self) raises:
         @parameter
-        def f[T: Builder](mut b: T) raises: b.append_null()
+        def f[T: Builder](mut b: T) raises:
+            b.append_null()
+
         self._dispatch_mut[f]()
 
     def extend(mut self, arr: AnyArray) raises:
         @parameter
-        def f[T: Builder](mut b: T) raises: b.extend(arr)
+        def f[T: Builder](mut b: T) raises:
+            b.extend(arr)
+
         self._dispatch_mut[f]()
 
     def finish(mut self) raises -> AnyArray:
         @parameter
-        def f[T: Builder](mut b: T) raises -> AnyArray: return b.finish().to_any()
+        def f[T: Builder](mut b: T) raises -> AnyArray:
+            return b.finish().to_any()
+
         return self._dispatch_mut[f]()
 
     def reset(mut self) raises:
         @parameter
-        def f[T: Builder](mut b: T) raises: b.reset()
+        def f[T: Builder](mut b: T) raises:
+            b.reset()
+
         self._dispatch_mut[f]()
 
     # --- typed downcasts (zero-cost reference borrows) ---
@@ -688,7 +716,9 @@ struct ListBuilder(Builder, Sized):
             self._length + n,
             UInt32(cur_child_len + child_end - child_start),
         )
-        var child_slice = arr.values().slice(child_start, child_end - child_start)
+        var child_slice = arr.values().slice(
+            child_start, child_end - child_start
+        )
         self._child.extend(child_slice)
         self._length += n
 
@@ -1098,14 +1128,14 @@ struct BoolBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 # Type aliases
 # ---------------------------------------------------------------------------
-comptime Int8Builder    = PrimitiveBuilder[Int8Type]
-comptime Int16Builder   = PrimitiveBuilder[Int16Type]
-comptime Int32Builder   = PrimitiveBuilder[Int32Type]
-comptime Int64Builder   = PrimitiveBuilder[Int64Type]
-comptime UInt8Builder   = PrimitiveBuilder[UInt8Type]
-comptime UInt16Builder  = PrimitiveBuilder[UInt16Type]
-comptime UInt32Builder  = PrimitiveBuilder[UInt32Type]
-comptime UInt64Builder  = PrimitiveBuilder[UInt64Type]
+comptime Int8Builder = PrimitiveBuilder[Int8Type]
+comptime Int16Builder = PrimitiveBuilder[Int16Type]
+comptime Int32Builder = PrimitiveBuilder[Int32Type]
+comptime Int64Builder = PrimitiveBuilder[Int64Type]
+comptime UInt8Builder = PrimitiveBuilder[UInt8Type]
+comptime UInt16Builder = PrimitiveBuilder[UInt16Type]
+comptime UInt32Builder = PrimitiveBuilder[UInt32Type]
+comptime UInt64Builder = PrimitiveBuilder[UInt64Type]
 comptime Float16Builder = PrimitiveBuilder[Float16Type]
 comptime Float32Builder = PrimitiveBuilder[Float32Type]
 comptime Float64Builder = PrimitiveBuilder[Float64Type]
@@ -1123,7 +1153,9 @@ def array[T: PrimitiveType]() raises -> PrimitiveArray[T]:
     return b.finish()
 
 
-def array[T: PrimitiveType](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
+def array[
+    T: PrimitiveType
+](values: List[Optional[Int]]) raises -> PrimitiveArray[T]:
     """Create a primitive array from optional ints (`None` → null)."""
     # comptime assert T.is_integer(), "array() with int values only supported for integer DataTypes"
     var b = PrimitiveBuilder[T](len(values))
@@ -1179,7 +1211,9 @@ def nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
 
 def arange[T: PrimitiveType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     """Create a numeric array with values [start, end)."""
-    comptime assert T.native != DType.bool, "arange() only supports numeric types"
+    comptime assert (
+        T.native != DType.bool
+    ), "arange() only supports numeric types"
     var b = PrimitiveBuilder[T](end - start)
     for i in range(start, end):
         b.append(Scalar[T.native](i))

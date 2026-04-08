@@ -39,13 +39,15 @@ from std.sys.compile import codegen_unreachable
 
 
 trait DataType(Copyable, Equatable, ImplicitlyDestructible, Movable, Writable):
-    def to_any(deinit self) -> ArrowType: ...
+    def to_any(deinit self) -> ArrowType:
+        ...
 
 
 trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
     comptime native: DType
 
-    def __init__(out self): ...
+    def __init__(out self):
+        ...
 
     def byte_width(self) -> Int:
         return size_of[Self.native]()
@@ -60,134 +62,243 @@ trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
 
 
 struct NullType(DataType, Defaultable, TrivialRegisterPassable):
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("null")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("null")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
     comptime native: DType = DType.bool
 
-    def __init__(out self): pass
-    def byte_width(self) -> Int: return 0
-    def bit_width(self) -> Int: return 1
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("bool")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def byte_width(self) -> Int:
+        return 0
+
+    def bit_width(self) -> Int:
+        return 1
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("bool")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Int8Type(PrimitiveType):
     comptime native: DType = DType.int8
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("int8")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("int8")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Int16Type(PrimitiveType):
     comptime native: DType = DType.int16
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("int16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("int16")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Int32Type(PrimitiveType):
     comptime native: DType = DType.int32
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("int32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("int32")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Int64Type(PrimitiveType):
     comptime native: DType = DType.int64
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("int64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("int64")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct UInt8Type(PrimitiveType):
     comptime native: DType = DType.uint8
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("uint8")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("uint8")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct UInt16Type(PrimitiveType):
     comptime native: DType = DType.uint16
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("uint16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("uint16")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct UInt32Type(PrimitiveType):
     comptime native: DType = DType.uint32
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("uint32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("uint32")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct UInt64Type(PrimitiveType):
     comptime native: DType = DType.uint64
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("uint64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("uint64")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Float32Type(PrimitiveType):
     comptime native: DType = DType.float32
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("float32")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("float32")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Float64Type(PrimitiveType):
     comptime native: DType = DType.float64
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("float64")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("float64")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct Float16Type(PrimitiveType):
     comptime native: DType = DType.float16
 
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("float16")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("float16")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("binary")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("binary")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 struct StringType(DataType, Defaultable, TrivialRegisterPassable):
-    def __init__(out self): pass
-    def __eq__(self, other: Self) -> Bool: return True
-    def write_to[W: Writer](self, mut writer: W): writer.write("string")
-    def to_any(deinit self) -> ArrowType: return ArrowType(self)
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("string")
+
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self)
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +307,9 @@ struct StringType(DataType, Defaultable, TrivialRegisterPassable):
 
 
 struct Field(
-    Copyable,
     ConvertibleFromPython,
     ConvertibleToPython,
+    Copyable,
     Equatable,
     Movable,
     Writable,
@@ -262,7 +373,8 @@ struct ListType(DataType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("list<", self.item[].dtype, ">")
 
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self^)
 
 
 struct FixedSizeListType(DataType):
@@ -286,11 +398,11 @@ struct FixedSizeListType(DataType):
     def value_type(self) -> ArrowType:
         return self.item[].dtype.copy()
 
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_list<", self.item[], ">")
 
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self^)
 
 
 struct StructType(DataType):
@@ -313,29 +425,43 @@ struct StructType(DataType):
             writer.write(self.fields[i])
         writer.write(">")
 
-    def to_any(deinit self) -> ArrowType: return ArrowType(self^)
+    def to_any(deinit self) -> ArrowType:
+        return ArrowType(self^)
 
 
 # ---------------------------------------------------------------------------
 # ArrowType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
+
 # TODO: rename it to AnyDataType or AnyType (if collision with mojo's anytype is not happening)
 struct ArrowType(
-    Copyable,
     ConvertibleFromPython,
     ConvertibleToPython,
+    Copyable,
     Equatable,
     Movable,
     Writable,
 ):
     comptime VariantType = Variant[
-        NullType, BoolType,
-        Int8Type, Int16Type, Int32Type, Int64Type,
-        UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-        Float16Type, Float32Type, Float64Type,
-        BinaryType, StringType,
-        ListType, FixedSizeListType, StructType,
+        NullType,
+        BoolType,
+        Int8Type,
+        Int16Type,
+        Int32Type,
+        Int64Type,
+        UInt8Type,
+        UInt16Type,
+        UInt32Type,
+        UInt64Type,
+        Float16Type,
+        Float32Type,
+        Float64Type,
+        BinaryType,
+        StringType,
+        ListType,
+        FixedSizeListType,
+        StructType,
     ]
 
     var _v: Self.VariantType
@@ -370,30 +496,35 @@ struct ArrowType(
     # --- generic type dispatch ---
 
     def _dispatch[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: DataType](T) capturing[_] -> R,
     ](self) -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, DataType]
-            if self._v.isa[T](): return func(self._v[T])
+            if self._v.isa[T]():
+                return func(self._v[T])
         abort("unreachable: invalid data type for dispatch")
 
     def _dispatch[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: PrimitiveType](T) capturing[_] -> R,
     ](self) -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime if conforms_to(A, PrimitiveType):
                 comptime T = downcast[A, PrimitiveType]
-                if self._v.isa[T](): return func(trait_downcast[PrimitiveType](self._v[T]))
+                if self._v.isa[T]():
+                    return func(trait_downcast[PrimitiveType](self._v[T]))
         abort("unreachable: invalid primitive type for dispatch")
 
     def byte_width(self) raises -> Int:
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:
             return t.byte_width()
+
         if self.is_primitive():
             return self._dispatch[f]()
         else:
@@ -461,6 +592,7 @@ struct ArrowType(
         @parameter
         def f[T: DataType](t: T):
             t.write_to(writer)
+
         self._dispatch[f]()
 
     def write_repr_to[W: Writer](self, mut writer: W):
@@ -492,7 +624,6 @@ struct ArrowType(
 # ---------------------------------------------------------------------------
 
 
-
 def field(name: String, var dtype: ArrowType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
     return Field(name, dtype^, nullable)
@@ -504,7 +635,8 @@ def list_(var value_type: ArrowType) -> ListType:
 
 
 def fixed_size_list_(var value_type: ArrowType, size: Int) -> FixedSizeListType:
-    """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size."""
+    """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size.
+    """
     return FixedSizeListType(field("item", value_type^), size)
 
 
@@ -538,4 +670,3 @@ comptime float32 = Float32Type()
 comptime float64 = Float64Type()
 comptime binary = BinaryType()
 comptime string = StringType()
-

@@ -20,6 +20,7 @@ import marrow.dtypes_variant as vd
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _variant_types() -> List[vd.ArrowType]:
     var l = List[vd.ArrowType](capacity=13)
     l.append(vd.NullType())
@@ -42,6 +43,7 @@ def _variant_types() -> List[vd.ArrowType]:
 # Benchmark functions — plain sum (dispatch cost only)
 # ---------------------------------------------------------------------------
 
+
 @parameter
 def bench_variant_byte_width(mut b: Bencher, types: List[vd.ArrowType]) raises:
     @always_inline
@@ -58,6 +60,7 @@ def bench_variant_byte_width(mut b: Bencher, types: List[vd.ArrowType]) raises:
 # ---------------------------------------------------------------------------
 # Benchmark functions — branch on byte_width result (1000 loops per iter)
 # ---------------------------------------------------------------------------
+
 
 @parameter
 def bench_variant_branch(mut b: Bencher, types: List[vd.ArrowType]) raises:
@@ -81,6 +84,7 @@ def bench_variant_branch(mut b: Bencher, types: List[vd.ArrowType]) raises:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() raises:
     var m = Bench(BenchConfig(num_repetitions=2000))

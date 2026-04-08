@@ -46,7 +46,15 @@ from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
 from .builders import PrimitiveBuilder, StringBuilder
-from .scalars import AnyScalar, BoolScalar, PrimitiveScalar, StringScalar, ListScalar, StructScalar, Scalar as ScalarTrait
+from .scalars import (
+    AnyScalar,
+    BoolScalar,
+    PrimitiveScalar,
+    StringScalar,
+    ListScalar,
+    StructScalar,
+    Scalar as ScalarTrait,
+)
 
 
 trait Array(
@@ -496,14 +504,14 @@ struct PrimitiveArray[T: PrimitiveType](
 
 
 # BoolArray is a distinct struct (not comptime PrimitiveArray[BoolType])
-comptime Int8Array    = PrimitiveArray[Int8Type]
-comptime Int16Array   = PrimitiveArray[Int16Type]
-comptime Int32Array   = PrimitiveArray[Int32Type]
-comptime Int64Array   = PrimitiveArray[Int64Type]
-comptime UInt8Array   = PrimitiveArray[UInt8Type]
-comptime UInt16Array  = PrimitiveArray[UInt16Type]
-comptime UInt32Array  = PrimitiveArray[UInt32Type]
-comptime UInt64Array  = PrimitiveArray[UInt64Type]
+comptime Int8Array = PrimitiveArray[Int8Type]
+comptime Int16Array = PrimitiveArray[Int16Type]
+comptime Int32Array = PrimitiveArray[Int32Type]
+comptime Int64Array = PrimitiveArray[Int64Type]
+comptime UInt8Array = PrimitiveArray[UInt8Type]
+comptime UInt16Array = PrimitiveArray[UInt16Type]
+comptime UInt32Array = PrimitiveArray[UInt32Type]
+comptime UInt64Array = PrimitiveArray[UInt64Type]
 comptime Float16Array = PrimitiveArray[Float16Type]
 comptime Float32Array = PrimitiveArray[Float32Type]
 comptime Float64Array = PrimitiveArray[Float64Type]
@@ -936,7 +944,8 @@ struct FixedSizeListArray(
         )
 
     def values(ref self) -> ref[self._values[]] AnyArray:
-        """The child array containing all list elements (length * list_size elements)."""
+        """The child array containing all list elements (length * list_size elements).
+        """
         return self._values[]
 
     def to_python_object(var self) raises -> PythonObject:
@@ -987,7 +996,9 @@ struct FixedSizeListArray(
     def __getitem__(self, index: Int) raises -> ListScalar:
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
-        return ListScalar(value=self.unsafe_get(index), is_valid=self.is_valid(index))
+        return ListScalar(
+            value=self.unsafe_get(index), is_valid=self.is_valid(index)
+        )
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array."""
@@ -1193,7 +1204,9 @@ struct StructArray(
         var fields = List[AnyScalar]()
         for ref child in self.children:
             fields.append(child[index])
-        return StructScalar(dtype=self.dtype.copy(), value=fields^, is_valid=True)
+        return StructScalar(
+            dtype=self.dtype.copy(), value=fields^, is_valid=True
+        )
 
     def select(self, indices: List[Int]) raises -> Self:
         """Return a new StructArray with only the fields at the given indices.
@@ -1372,9 +1385,17 @@ struct AnyArray(
 
     comptime VariantType = Variant[
         BoolArray,
-        Int8Array,   Int16Array,  Int32Array,  Int64Array,
-        UInt8Array,  UInt16Array, UInt32Array, UInt64Array,
-        Float16Array, Float32Array, Float64Array,
+        Int8Array,
+        Int16Array,
+        Int32Array,
+        Int64Array,
+        UInt8Array,
+        UInt16Array,
+        UInt32Array,
+        UInt64Array,
+        Float16Array,
+        Float32Array,
+        Float64Array,
         StringArray,
         ListArray,
         FixedSizeListArray,
@@ -1394,6 +1415,7 @@ struct AnyArray(
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray
+
         # Fast path: marrow arrays are now exposed as a single AnyArray Python type.
         try:
             self = py.downcast_value_ptr[AnyArray]()[].copy()
@@ -1415,45 +1437,57 @@ struct AnyArray(
     # --- generic dispatch ---
 
     def _dispatch[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: Array](T) capturing[_] -> R,
     ](self) -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Array]
-            if self._v.isa[T](): return func(self._v[T])
+            if self._v.isa[T]():
+                return func(self._v[T])
         abort("unreachable: invalid array type for dispatch")
 
     def _dispatch_raises[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: Array](T) raises capturing[_] -> R,
     ](self) raises -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime A = Self.VariantType.Ts[i]
             comptime T = downcast[A, Array]
-            if self._v.isa[T](): return func(self._v[T])
+            if self._v.isa[T]():
+                return func(self._v[T])
         abort("unreachable: invalid array type for dispatch")
 
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
         @parameter
-        def f[T: Array](a: T) -> Int: return len(a)
+        def f[T: Array](a: T) -> Int:
+            return len(a)
+
         return self._dispatch[f]()
 
     def dtype(self) -> ArrowType:
         @parameter
-        def f[T: Array](a: T) -> ArrowType: return a.type()
+        def f[T: Array](a: T) -> ArrowType:
+            return a.type()
+
         return self._dispatch[f]()
 
     def null_count(self) -> Int:
         @parameter
-        def f[T: Array](a: T) -> Int: return a.null_count()
+        def f[T: Array](a: T) -> Int:
+            return a.null_count()
+
         return self._dispatch[f]()
 
     def is_valid(self, index: Int) -> Bool:
         @parameter
-        def f[T: Array](a: T) -> Bool: return a.is_valid(index)
+        def f[T: Array](a: T) -> Bool:
+            return a.is_valid(index)
+
         return self._dispatch[f]()
 
     def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
@@ -1461,10 +1495,12 @@ struct AnyArray(
 
         Matches PyArrow's Array.slice(offset, length) API.
         """
+
         @parameter
         def f[T: Array](a: T) -> AnyArray:
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
+
         return self._dispatch[f]()
 
     def to_data(self) raises -> ArrayData:
@@ -1472,8 +1508,11 @@ struct AnyArray(
 
         Not intended for hot paths — prefer typed downcast methods.
         """
+
         @parameter
-        def f[T: Array](a: T) raises -> ArrayData: return a.to_data()
+        def f[T: Array](a: T) raises -> ArrayData:
+            return a.to_data()
+
         return self._dispatch_raises[f]()
 
     def to_any(deinit self) -> AnyArray:
@@ -1482,7 +1521,9 @@ struct AnyArray(
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: Array](a: T): a.write_to(writer)
+        def f[T: Array](a: T):
+            a.write_to(writer)
+
         self._dispatch[f]()
 
     def write_repr_to[W: Writer](self, mut writer: W):
@@ -1501,9 +1542,14 @@ struct AnyArray(
     def __getitem__(self, index: Int) raises -> AnyScalar:
         """Return the element at index as a type-erased AnyScalar."""
         if index < 0 or index >= self.length():
-            raise Error(t"index {index} out of bounds for length {self.length()}")
+            raise Error(
+                t"index {index} out of bounds for length {self.length()}"
+            )
+
         @parameter
-        def f[T: Array](a: T) raises -> AnyScalar: return a[index].to_any()
+        def f[T: Array](a: T) raises -> AnyScalar:
+            return a[index].to_any()
+
         return self._dispatch_raises[f]()
 
     # --- typed downcasts (zero-cost reference borrows) ---

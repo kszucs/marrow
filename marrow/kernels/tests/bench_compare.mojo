@@ -19,8 +19,14 @@ from std.gpu.host import DeviceContext
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange
 from marrow.dtypes import (
-    int32, float32, int64, float64, PrimitiveType,
-    Int32Type, Int64Type, Float32Type,
+    int32,
+    float32,
+    int64,
+    float64,
+    PrimitiveType,
+    Int32Type,
+    Int64Type,
+    Float32Type,
 )
 from marrow.kernels.compare import equal, less
 
@@ -100,7 +106,9 @@ def main() raises:
         print("--------                        -------")
 
         comptime for si in range(5):
-            var us = _bench_gpu_equal[Int32Type](gpu_sizes[si], gpu_iters[si], ctx)
+            var us = _bench_gpu_equal[Int32Type](
+                gpu_sizes[si], gpu_iters[si], ctx
+            )
             print(t"gpu_equal[Int32Type]/{gpu_sizes[si]}      {us} us")
 
         comptime for si in range(5):

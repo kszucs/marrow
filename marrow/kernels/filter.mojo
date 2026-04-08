@@ -24,12 +24,29 @@ from ..buffers import Bitmap
 from ..builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from ..dtypes import (
     PrimitiveType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    bool_, int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
     string,
 )
 from ..views import BitmapView, BufferView
@@ -446,25 +463,45 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     if array.dtype() == int8:
         return filter_[Int8Type](array.as_primitive[Int8Type](), mask).to_any()
     elif array.dtype() == int16:
-        return filter_[Int16Type](array.as_primitive[Int16Type](), mask).to_any()
+        return filter_[Int16Type](
+            array.as_primitive[Int16Type](), mask
+        ).to_any()
     elif array.dtype() == int32:
-        return filter_[Int32Type](array.as_primitive[Int32Type](), mask).to_any()
+        return filter_[Int32Type](
+            array.as_primitive[Int32Type](), mask
+        ).to_any()
     elif array.dtype() == int64:
-        return filter_[Int64Type](array.as_primitive[Int64Type](), mask).to_any()
+        return filter_[Int64Type](
+            array.as_primitive[Int64Type](), mask
+        ).to_any()
     elif array.dtype() == uint8:
-        return filter_[UInt8Type](array.as_primitive[UInt8Type](), mask).to_any()
+        return filter_[UInt8Type](
+            array.as_primitive[UInt8Type](), mask
+        ).to_any()
     elif array.dtype() == uint16:
-        return filter_[UInt16Type](array.as_primitive[UInt16Type](), mask).to_any()
+        return filter_[UInt16Type](
+            array.as_primitive[UInt16Type](), mask
+        ).to_any()
     elif array.dtype() == uint32:
-        return filter_[UInt32Type](array.as_primitive[UInt32Type](), mask).to_any()
+        return filter_[UInt32Type](
+            array.as_primitive[UInt32Type](), mask
+        ).to_any()
     elif array.dtype() == uint64:
-        return filter_[UInt64Type](array.as_primitive[UInt64Type](), mask).to_any()
+        return filter_[UInt64Type](
+            array.as_primitive[UInt64Type](), mask
+        ).to_any()
     elif array.dtype() == float16:
-        return filter_[Float16Type](array.as_primitive[Float16Type](), mask).to_any()
+        return filter_[Float16Type](
+            array.as_primitive[Float16Type](), mask
+        ).to_any()
     elif array.dtype() == float32:
-        return filter_[Float32Type](array.as_primitive[Float32Type](), mask).to_any()
+        return filter_[Float32Type](
+            array.as_primitive[Float32Type](), mask
+        ).to_any()
     elif array.dtype() == float64:
-        return filter_[Float64Type](array.as_primitive[Float64Type](), mask).to_any()
+        return filter_[Float64Type](
+            array.as_primitive[Float64Type](), mask
+        ).to_any()
 
     if array.dtype().is_string():
         return filter_(array.as_string(), mask).to_any()
@@ -545,11 +582,17 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
     elif array.dtype() == uint64:
         return drop_nulls[UInt64Type](array.as_primitive[UInt64Type]()).to_any()
     elif array.dtype() == float16:
-        return drop_nulls[Float16Type](array.as_primitive[Float16Type]()).to_any()
+        return drop_nulls[Float16Type](
+            array.as_primitive[Float16Type]()
+        ).to_any()
     elif array.dtype() == float32:
-        return drop_nulls[Float32Type](array.as_primitive[Float32Type]()).to_any()
+        return drop_nulls[Float32Type](
+            array.as_primitive[Float32Type]()
+        ).to_any()
     elif array.dtype() == float64:
-        return drop_nulls[Float64Type](array.as_primitive[Float64Type]()).to_any()
+        return drop_nulls[Float64Type](
+            array.as_primitive[Float64Type]()
+        ).to_any()
 
     raise Error("drop_nulls: unsupported dtype ", array.dtype())
 
@@ -688,7 +731,9 @@ def take(
     return builder.finish()
 
 
-def take(array: AnyArray, indices: PrimitiveArray[Int32Type]) raises -> AnyArray:
+def take(
+    array: AnyArray, indices: PrimitiveArray[Int32Type]
+) raises -> AnyArray:
     """Gather elements from a type-erased array at the given indices.
 
     Dispatches to the appropriate typed overload at runtime.
@@ -706,25 +751,45 @@ def take(array: AnyArray, indices: PrimitiveArray[Int32Type]) raises -> AnyArray
     if array.dtype() == int8:
         return take[Int8Type](array.as_primitive[Int8Type](), indices).to_any()
     elif array.dtype() == int16:
-        return take[Int16Type](array.as_primitive[Int16Type](), indices).to_any()
+        return take[Int16Type](
+            array.as_primitive[Int16Type](), indices
+        ).to_any()
     elif array.dtype() == int32:
-        return take[Int32Type](array.as_primitive[Int32Type](), indices).to_any()
+        return take[Int32Type](
+            array.as_primitive[Int32Type](), indices
+        ).to_any()
     elif array.dtype() == int64:
-        return take[Int64Type](array.as_primitive[Int64Type](), indices).to_any()
+        return take[Int64Type](
+            array.as_primitive[Int64Type](), indices
+        ).to_any()
     elif array.dtype() == uint8:
-        return take[UInt8Type](array.as_primitive[UInt8Type](), indices).to_any()
+        return take[UInt8Type](
+            array.as_primitive[UInt8Type](), indices
+        ).to_any()
     elif array.dtype() == uint16:
-        return take[UInt16Type](array.as_primitive[UInt16Type](), indices).to_any()
+        return take[UInt16Type](
+            array.as_primitive[UInt16Type](), indices
+        ).to_any()
     elif array.dtype() == uint32:
-        return take[UInt32Type](array.as_primitive[UInt32Type](), indices).to_any()
+        return take[UInt32Type](
+            array.as_primitive[UInt32Type](), indices
+        ).to_any()
     elif array.dtype() == uint64:
-        return take[UInt64Type](array.as_primitive[UInt64Type](), indices).to_any()
+        return take[UInt64Type](
+            array.as_primitive[UInt64Type](), indices
+        ).to_any()
     elif array.dtype() == float16:
-        return take[Float16Type](array.as_primitive[Float16Type](), indices).to_any()
+        return take[Float16Type](
+            array.as_primitive[Float16Type](), indices
+        ).to_any()
     elif array.dtype() == float32:
-        return take[Float32Type](array.as_primitive[Float32Type](), indices).to_any()
+        return take[Float32Type](
+            array.as_primitive[Float32Type](), indices
+        ).to_any()
     elif array.dtype() == float64:
-        return take[Float64Type](array.as_primitive[Float64Type](), indices).to_any()
+        return take[Float64Type](
+            array.as_primitive[Float64Type](), indices
+        ).to_any()
 
     if array.dtype().is_string():
         return take(array.as_string(), indices).to_any()

@@ -36,7 +36,10 @@ from marrow.kernels.concat import concat
 
 
 def test_concat_primitive() raises:
-    var arrs: List[AnyArray] = [array[Int32Type]([1, 2]), array[Int32Type]([3, 4, 5])]
+    var arrs: List[AnyArray] = [
+        array[Int32Type]([1, 2]),
+        array[Int32Type]([3, 4, 5]),
+    ]
     var tmp = concat(arrs)
     ref result = tmp.as_primitive[Int32Type]()
     assert_equal(result.length, 5)
@@ -110,7 +113,10 @@ def test_concat_with_offset_and_nulls() raises:
     b.append_null()
     b.append(3)
     var sliced = b.finish().slice(1, 2)  # [null, 3], offset=1
-    var arrs: List[AnyArray] = [(sliced^).to_any(), AnyArray(array[Int32Type]([4]))]
+    var arrs: List[AnyArray] = [
+        (sliced^).to_any(),
+        AnyArray(array[Int32Type]([4])),
+    ]
     var tmp_offset_nulls = concat(arrs)
     ref result = tmp_offset_nulls.as_primitive[Int32Type]()
     assert_equal(result.length, 3)

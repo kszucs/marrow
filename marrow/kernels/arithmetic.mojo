@@ -42,9 +42,7 @@ def _unary[
         buf = Buffer.alloc_device[native](ctx.value(), length)
     else:
         buf = Buffer.alloc_zeroed[native](length)
-    apply[native, native, func](
-        array.values(), buf.view[native](), ctx
-    )
+    apply[native, native, func](array.values(), buf.view[native](), ctx)
     return PrimitiveArray[T](
         length=length,
         nulls=length
@@ -353,17 +351,23 @@ def neg[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _neg_fn[T.native, _]](array)
 
 
-def abs_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def abs_[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise absolute value."""
     return _unary[T, _abs_fn[T.native, _]](array)
 
 
-def sign[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sign[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise sign: -1, 0, or 1."""
     return _unary[T, _sign_fn[T.native, _]](array)
 
 
-def sqrt[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sqrt[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise square root."""
     comptime assert (
         T.native.is_floating_point()
@@ -379,7 +383,9 @@ def exp[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _exp_fn[T.native, _]](array)
 
 
-def exp2[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def exp2[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 exponential (2^x)."""
     comptime assert (
         T.native.is_floating_point()
@@ -395,7 +401,9 @@ def log[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     return _unary[T, _log_fn[T.native, _]](array)
 
 
-def log2[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log2[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-2 logarithm."""
     comptime assert (
         T.native.is_floating_point()
@@ -403,7 +411,9 @@ def log2[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]
     return _unary[T, _log2_fn[T.native, _]](array)
 
 
-def log10[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log10[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise base-10 logarithm."""
     comptime assert (
         T.native.is_floating_point()
@@ -411,7 +421,9 @@ def log10[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T
     return _unary[T, _log10_fn[T.native, _]](array)
 
 
-def log1p[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log1p[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise log(1 + x)."""
     comptime assert (
         T.native.is_floating_point()
@@ -419,22 +431,30 @@ def log1p[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T
     return _unary[T, _log1p_fn[T.native, _]](array)
 
 
-def floor[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def floor[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise floor."""
     return _unary[T, _floor_fn[T.native, _]](array)
 
 
-def ceil[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def ceil[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise ceiling."""
     return _unary[T, _ceil_fn[T.native, _]](array)
 
 
-def trunc[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def trunc[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise truncation toward zero."""
     return _unary[T, _trunc_fn[T.native, _]](array)
 
 
-def round[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def round[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
     """Element-wise rounding to nearest integer."""
     return _unary[T, _round_fn[T.native, _]](array)
 

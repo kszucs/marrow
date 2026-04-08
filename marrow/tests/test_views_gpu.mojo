@@ -409,7 +409,8 @@ def test_apply_masked_bufferview_gpu() raises:
 
 
 def test_apply_masked_bitmapview_gpu() raises:
-    """apply[MaskedFn[bool, Out]] ANDs src bits with validity mask into uint8 via GPU."""
+    """apply[MaskedFn[bool, Out]] ANDs src bits with validity mask into uint8 via GPU.
+    """
     var ctx = DeviceContext()
 
     # src bits: [T,T,F,F,T,T,F,F], validity: [T,F,T,F,T,F,T,F]

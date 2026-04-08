@@ -20,12 +20,28 @@ from std.utils.index import Index, IndexList
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import (
     PrimitiveType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
     bool_ as bool_dt,
 )
 from ..scalars import PrimitiveScalar, AnyScalar
@@ -145,7 +161,9 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-def sum_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def sum_[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
     return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)))
 
@@ -182,7 +200,9 @@ def sum_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def product[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def product[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
     return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)))
@@ -220,7 +240,9 @@ def product(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def min_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def min_[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Minimum of all valid (non-null) elements.
 
     Returns MAX_FINITE if empty or all null.
@@ -262,7 +284,9 @@ def min_(array: AnyArray) raises -> AnyScalar:
 # ---------------------------------------------------------------------------
 
 
-def max_[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
+def max_[
+    T: PrimitiveType
+](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Maximum of all valid (non-null) elements.
 
     Returns MIN_FINITE if empty or all null.

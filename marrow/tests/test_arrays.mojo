@@ -563,7 +563,10 @@ def test_struct_array_unsafe_get() raises:
 
 
 def test_chunked_array() raises:
-    var arrays: List[AnyArray] = [array[UInt8Type]([0]), array[UInt8Type]([0, 1])]
+    var arrays: List[AnyArray] = [
+        array[UInt8Type]([0]),
+        array[UInt8Type]([0, 1]),
+    ]
 
     var chunked_array = ChunkedArray(int8, arrays^)
     assert_equal(chunked_array.length, 3)
@@ -577,7 +580,10 @@ def test_chunked_array() raises:
 
 
 def test_combine_chunked_array() raises:
-    var arrays: List[AnyArray] = [array[UInt8Type]([0]), array[UInt8Type]([0, 1])]
+    var arrays: List[AnyArray] = [
+        array[UInt8Type]([0]),
+        array[UInt8Type]([0, 1]),
+    ]
 
     var chunked_array = ChunkedArray(uint8, arrays^)
     assert_equal(chunked_array.length, 3)

@@ -3,7 +3,15 @@ from std.testing import assert_equal, assert_true, TestSuite
 from marrow.tabular import RecordBatch, Table
 from marrow.arrays import AnyArray
 from marrow.schema import Schema
-from marrow.dtypes import int32, int64, float64, Field, Int32Type, Int64Type, Float64Type
+from marrow.dtypes import (
+    int32,
+    int64,
+    float64,
+    Field,
+    Int32Type,
+    Int64Type,
+    Float64Type,
+)
 from marrow.builders import array, PrimitiveBuilder
 
 
@@ -112,11 +120,17 @@ def test_record_batch_eq() raises:
     var schema = Schema(fields=[Field("x", int32), Field("y", int32)])
     var a = RecordBatch(
         schema,
-        [array[Int32Type]([1, 2, 3]).to_any(), array[Int32Type]([4, 5, 6]).to_any()],
+        [
+            array[Int32Type]([1, 2, 3]).to_any(),
+            array[Int32Type]([4, 5, 6]).to_any(),
+        ],
     )
     var b = RecordBatch(
         schema,
-        [array[Int32Type]([1, 2, 3]).to_any(), array[Int32Type]([4, 5, 6]).to_any()],
+        [
+            array[Int32Type]([1, 2, 3]).to_any(),
+            array[Int32Type]([4, 5, 6]).to_any(),
+        ],
     )
     assert_true(a == b)
 

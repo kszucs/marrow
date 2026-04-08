@@ -34,7 +34,16 @@ from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
-from ..dtypes import ArrowType, Field, int32, uint64, UInt64Type, bool_ as bool_dt, struct_, null
+from ..dtypes import (
+    ArrowType,
+    Field,
+    int32,
+    uint64,
+    UInt64Type,
+    bool_ as bool_dt,
+    struct_,
+    null,
+)
 from .boolean import and_
 from .compare import equal
 from .filter import take, filter_
@@ -53,7 +62,9 @@ from ..expr.relations import (
 )
 
 
-comptime IndexPairs = Tuple[PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]]
+comptime IndexPairs = Tuple[
+    PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]
+]
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 

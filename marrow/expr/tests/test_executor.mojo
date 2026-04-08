@@ -64,7 +64,9 @@ def test_chunk_boundary_values() raises:
     """Values at boundaries are correct."""
     var a = arange[Int64Type](0, 128)
     var batch = record_batch([a^], names=["c0"])
-    var tmp_chunk_boundary = Planner().build(col(0) + lit[Int64Type](1)).eval(batch)
+    var tmp_chunk_boundary = (
+        Planner().build(col(0) + lit[Int64Type](1)).eval(batch)
+    )
     ref result = tmp_chunk_boundary.as_primitive[Int64Type]()
     for i in range(128):
         assert_equal(result[i], Scalar[int64.native](i + 1))
@@ -397,7 +399,9 @@ def test_parquet_scan_filter() raises:
     """Filter over a ParquetScan keeps only matching rows."""
     var path = "/tmp/marrow_test_parquet_scan_filter.parquet"
     _write_test_parquet(path)
-    var result = execute(parquet_scan(path).filter(col("id") > lit[Int64Type](3)))
+    var result = execute(
+        parquet_scan(path).filter(col("id") > lit[Int64Type](3))
+    )
     assert_equal(result.num_rows(), 2)
     ref ids = result.columns[0].as_int64()
     assert_equal(ids[0], 4)

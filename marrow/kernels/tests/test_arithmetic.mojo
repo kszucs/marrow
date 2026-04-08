@@ -8,7 +8,16 @@ from std.testing import (
 
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import array, arange, PrimitiveBuilder
-from marrow.dtypes import int32, int64, float32, float64, Int32Type, Int64Type, Float32Type, Float64Type
+from marrow.dtypes import (
+    int32,
+    int64,
+    float32,
+    float64,
+    Int32Type,
+    Int64Type,
+    Float32Type,
+    Float64Type,
+)
 from marrow.kernels.arithmetic import (
     add,
     sub,

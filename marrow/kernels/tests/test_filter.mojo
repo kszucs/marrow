@@ -18,7 +18,17 @@ from marrow.builders import (
     PrimitiveBuilder,
     StringBuilder,
 )
-from marrow.dtypes import int32, int64, uint8, float32, bool_, Int32Type, Int64Type, UInt8Type, Float32Type
+from marrow.dtypes import (
+    int32,
+    int64,
+    uint8,
+    float32,
+    bool_,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    Float32Type,
+)
 from marrow.kernels.filter import filter_, drop_nulls
 
 

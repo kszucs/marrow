@@ -45,7 +45,9 @@ def _packed_uint_dtype[W: Int]() -> DType:
 
 
 @always_inline
-def _pack_bools[W: Int](mask: SIMD[DType.bool, W]) -> SIMD[_packed_uint_dtype[W](), W]:
+def _pack_bools[
+    W: Int
+](mask: SIMD[DType.bool, W]) -> SIMD[_packed_uint_dtype[W](), W]:
     """Portable bit-pack: pack W bools into W-bit lanes.
 
     Each lane ``i`` becomes ``mask[i].cast[UintW]() << i``.  The caller
@@ -622,13 +624,19 @@ struct BitmapView[
     @always_inline
     def store[
         W: Int
-    ](self: BitmapView[mut=True, origin=_], bit_index: Int, val: SIMD[DType.bool, W]):
+    ](
+        self: BitmapView[mut=True, origin=_],
+        bit_index: Int,
+        val: SIMD[DType.bool, W],
+    ):
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
         - W divisible by 8: single _pack_bools + bitcast store.
         - W < 8: set/clear individual bits.
         """
-        comptime assert W % 8 == 0 or W < 8, "W must be divisible by 8 or less than 8"
+        comptime assert (
+            W % 8 == 0 or W < 8
+        ), "W must be divisible by 8 or less than 8"
 
         comptime if W % 8 == 0:
             var packed = _pack_bools(val).reduce_or()
@@ -641,9 +649,13 @@ struct BitmapView[
                 var byte_idx = p >> 3
                 var bit_off = UInt8(p & 7)
                 if val[i]:
-                    self._data[byte_idx] = self._data[byte_idx] | (UInt8(1) << bit_off)
+                    self._data[byte_idx] = self._data[byte_idx] | (
+                        UInt8(1) << bit_off
+                    )
                 else:
-                    self._data[byte_idx] = self._data[byte_idx] & ~(UInt8(1) << bit_off)
+                    self._data[byte_idx] = self._data[byte_idx] & ~(
+                        UInt8(1) << bit_off
+                    )
 
     # --- Slicing ---
 
@@ -1088,9 +1100,7 @@ def apply[
                 math.align_up(length, gpu_width),
                 length + max_pad,
             )
-            elementwise[process, gpu_width, target="gpu"](
-                padded, ctx.value()
-            )
+            elementwise[process, gpu_width, target="gpu"](padded, ctx.value())
         else:
             raise Error("apply: no GPU accelerator available")
     else:

@@ -5,7 +5,18 @@ from std.testing import assert_equal, assert_true, assert_false, TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray, StringArray, StructArray
 from marrow.builders import array, PrimitiveBuilder, StringBuilder
-from marrow.dtypes import int32, int64, uint64, float64, string, Field, Int32Type, Int64Type, UInt64Type, Float64Type
+from marrow.dtypes import (
+    int32,
+    int64,
+    uint64,
+    float64,
+    string,
+    Field,
+    Int32Type,
+    Int64Type,
+    UInt64Type,
+    Float64Type,
+)
 from marrow.tabular import record_batch
 from marrow.kernels.filter import take
 from marrow.kernels.join import hash_join

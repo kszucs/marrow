@@ -1,7 +1,43 @@
 from std.testing import assert_equal, assert_true, assert_false, TestSuite
 import marrow.dtypes as dt
-from marrow.dtypes import ArrowType, string, Field, NullType, BoolType, StringType, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type, UInt32Type, UInt64Type, Float16Type, Float32Type, Float64Type, BinaryType, list_, fixed_size_list_, struct_, field, binary, float16, float32, float64, int8, int16, int32, int64, uint8, uint16, uint32, uint64, bool_, null
-
+from marrow.dtypes import (
+    ArrowType,
+    string,
+    Field,
+    NullType,
+    BoolType,
+    StringType,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    BinaryType,
+    list_,
+    fixed_size_list_,
+    struct_,
+    field,
+    binary,
+    float16,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    bool_,
+    null,
+)
 
 
 def test_bool_type() raises:
@@ -17,7 +53,6 @@ def test_bool_type() raises:
     assert_true(t.is_primitive())
     assert_false(t.is_string())
     assert_equal(String(t), "bool")
-
 
 
 def test_is_integer() raises:
@@ -91,7 +126,6 @@ def test_bit_width() raises:
     assert_equal(dt.float64.bit_width(), 64)
 
 
-
 def test_null_type() raises:
     var t = ArrowType(NullType())
     assert_true(t.is_null())
@@ -128,8 +162,6 @@ def test_byte_width() raises:
     assert_equal(ArrowType(Float16Type()).byte_width(), 2)
     assert_equal(ArrowType(Float32Type()).byte_width(), 4)
     assert_equal(ArrowType(Float64Type()).byte_width(), 8)
-
-
 
 
 def test_eq() raises:
@@ -240,10 +272,16 @@ def test_struct_type() raises:
     assert_false(at.is_primitive())
     assert_equal(String(t), "struct<x: int32, y: float64>")
 
-    var t2 = struct_(field("x", ArrowType(Int32Type())), field("y", ArrowType(Float64Type())))
+    var t2 = struct_(
+        field("x", ArrowType(Int32Type())), field("y", ArrowType(Float64Type()))
+    )
     assert_true(t == t2)
 
-    var t3 = struct_(field("x", ArrowType(Int32Type())), field("y", ArrowType(Float64Type())), field("z", ArrowType(Int8Type())))
+    var t3 = struct_(
+        field("x", ArrowType(Int32Type())),
+        field("y", ArrowType(Float64Type())),
+        field("z", ArrowType(Int8Type())),
+    )
     assert_false(t == t3)
 
 

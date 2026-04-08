@@ -138,7 +138,9 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
-    def _tramp_dtype[T: Value](ptr: ArcPointer[NoneType]) -> Optional[ArrowType]:
+    def _tramp_dtype[
+        T: Value
+    ](ptr: ArcPointer[NoneType]) -> Optional[ArrowType]:
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod

@@ -274,9 +274,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         self.schema = Schema(copy=copy.schema)
         var cols = List[ChunkedArray]()
         for col in copy.columns:
-            cols.append(
-                ChunkedArray(dtype=col.dtype, chunks=List(col.chunks))
-            )
+            cols.append(ChunkedArray(dtype=col.dtype, chunks=List(col.chunks)))
         self.columns = cols^
 
     def __init__(out self, *, py: PythonObject) raises:
@@ -328,9 +326,7 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         """Combine all chunks in each column into a single RecordBatch."""
         var cols = List[AnyArray]()
         for col in self.columns:
-            var ca = ChunkedArray(
-                dtype=col.dtype, chunks=List(col.chunks)
-            )
+            var ca = ChunkedArray(dtype=col.dtype, chunks=List(col.chunks))
             cols.append(ca^.combine_chunks())
         return RecordBatch(schema=self.schema, columns=cols^)
 

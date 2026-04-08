@@ -329,7 +329,6 @@ def test_numeric_dtypes() raises:
     arrow_types.append(float32)
     arrow_types.append(float64)
 
-
     for i in range(len(pa_types)):
         var c_schema = c_schema_from_pyobj(pa_types[i])
         var dtype = c_schema.to_dtype()

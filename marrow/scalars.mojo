@@ -38,12 +38,29 @@ from .dtypes import (
     PrimitiveType,
     Field,
     BoolType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    bool_, int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
     list_,
     string,
 )
@@ -199,14 +216,14 @@ struct PrimitiveScalar[T: PrimitiveType](
 # PrimitiveScalar aliases
 # ---------------------------------------------------------------------------
 
-comptime Int8Scalar    = PrimitiveScalar[Int8Type]
-comptime Int16Scalar   = PrimitiveScalar[Int16Type]
-comptime Int32Scalar   = PrimitiveScalar[Int32Type]
-comptime Int64Scalar   = PrimitiveScalar[Int64Type]
-comptime UInt8Scalar   = PrimitiveScalar[UInt8Type]
-comptime UInt16Scalar  = PrimitiveScalar[UInt16Type]
-comptime UInt32Scalar  = PrimitiveScalar[UInt32Type]
-comptime UInt64Scalar  = PrimitiveScalar[UInt64Type]
+comptime Int8Scalar = PrimitiveScalar[Int8Type]
+comptime Int16Scalar = PrimitiveScalar[Int16Type]
+comptime Int32Scalar = PrimitiveScalar[Int32Type]
+comptime Int64Scalar = PrimitiveScalar[Int64Type]
+comptime UInt8Scalar = PrimitiveScalar[UInt8Type]
+comptime UInt16Scalar = PrimitiveScalar[UInt16Type]
+comptime UInt32Scalar = PrimitiveScalar[UInt32Type]
+comptime UInt64Scalar = PrimitiveScalar[UInt64Type]
 comptime Float16Scalar = PrimitiveScalar[Float16Type]
 comptime Float32Scalar = PrimitiveScalar[Float32Type]
 comptime Float64Scalar = PrimitiveScalar[Float64Type]
@@ -384,6 +401,7 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
 # AnyScalar — type-erased scalar container
 # ---------------------------------------------------------------------------
 
+
 struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """Type-erased scalar container backed by a Variant.
 
@@ -393,9 +411,17 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     comptime VariantType = Variant[
         BoolScalar,
-        Int8Scalar, Int16Scalar, Int32Scalar, Int64Scalar,
-        UInt8Scalar, UInt16Scalar, UInt32Scalar, UInt64Scalar,
-        Float16Scalar, Float32Scalar, Float64Scalar,
+        Int8Scalar,
+        Int16Scalar,
+        Int32Scalar,
+        Int64Scalar,
+        UInt8Scalar,
+        UInt16Scalar,
+        UInt32Scalar,
+        UInt64Scalar,
+        Float16Scalar,
+        Float32Scalar,
+        Float64Scalar,
         StringScalar,
         ListScalar,
         StructScalar,
@@ -415,24 +441,30 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     # --- generic dispatch ---
 
     def _dispatch[
-        R: Movable, //,
+        R: Movable,
+        //,
         func: def[T: Scalar](T) capturing[_] -> R,
     ](self) -> R:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime T = downcast[Self.VariantType.Ts[i], Scalar]
-            if self._v.isa[T](): return func(self._v[T])
+            if self._v.isa[T]():
+                return func(self._v[T])
         abort("unreachable: invalid scalar type for dispatch")
 
     # --- dispatch-based methods ---
 
     def type(self) -> ArrowType:
         @parameter
-        def f[T: Scalar](t: T) -> ArrowType: return t.type()
+        def f[T: Scalar](t: T) -> ArrowType:
+            return t.type()
+
         return self._dispatch[f]()
 
     def is_valid(self) -> Bool:
         @parameter
-        def f[T: Scalar](t: T) -> Bool: return t.is_valid()
+        def f[T: Scalar](t: T) -> Bool:
+            return t.is_valid()
+
         return self._dispatch[f]()
 
     def is_null(self) -> Bool:
@@ -460,12 +492,16 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: Scalar](t: T): t.write_to(writer)
+        def f[T: Scalar](t: T):
+            t.write_to(writer)
+
         self._dispatch[f]()
 
     def write_repr_to[W: Writer](self, mut writer: W):
         @parameter
-        def f[T: Scalar](t: T): t.write_repr_to(writer)
+        def f[T: Scalar](t: T):
+            t.write_repr_to(writer)
+
         self._dispatch[f]()
 
     def to_python_object(var self) raises -> PythonObject:

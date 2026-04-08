@@ -39,7 +39,9 @@ def _fmt(ns: UInt) -> String:
     return String(Int(ns // 1_000)) + " µs"
 
 
-def _bench_cpu[T: PrimitiveType](n: Int, warmup: Int, iters: Int) raises -> UInt:
+def _bench_cpu[
+    T: PrimitiveType
+](n: Int, warmup: Int, iters: Int) raises -> UInt:
     """CPU rapidhash benchmark. Returns avg ns."""
     var arr = PrimitiveBuilder[T](capacity=n)
     for i in range(n):
@@ -148,14 +150,18 @@ def main() raises:
         print("\n=== GPU int64, 100k elements ===")
         print("  gpu:       ", _fmt(_bench_gpu[Int64Type](100_000, 3, 20, ctx)))
         print("\n=== GPU int64, 1M elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[Int64Type](1_000_000, 2, 10, ctx)))
+        print(
+            "  gpu:       ", _fmt(_bench_gpu[Int64Type](1_000_000, 2, 10, ctx))
+        )
 
         print("\n=== GPU int32, 10k elements ===")
         print("  gpu:       ", _fmt(_bench_gpu[Int32Type](10_000, 5, 50, ctx)))
         print("\n=== GPU int32, 100k elements ===")
         print("  gpu:       ", _fmt(_bench_gpu[Int32Type](100_000, 3, 20, ctx)))
         print("\n=== GPU int32, 1M elements ===")
-        print("  gpu:       ", _fmt(_bench_gpu[Int32Type](1_000_000, 2, 10, ctx)))
+        print(
+            "  gpu:       ", _fmt(_bench_gpu[Int32Type](1_000_000, 2, 10, ctx))
+        )
 
         print("\n=== GPU bool, 10k elements ===")
         print("  gpu:       ", _fmt(_bench_gpu_bool(10_000, 5, 50, ctx)))

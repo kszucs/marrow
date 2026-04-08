@@ -6,12 +6,28 @@ from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
     PrimitiveType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
     bool_ as bool_dt,
 )
 from ..views import BitmapView
@@ -150,25 +166,69 @@ def select(mask: AnyArray, then_: AnyArray, else_: AnyArray) raises -> AnyArray:
         )
     ref bool_mask = mask.as_bool()
     if then_.dtype() == int8:
-        return select[Int8Type](bool_mask, then_.as_primitive[Int8Type](), else_.as_primitive[Int8Type]()).to_any()
+        return select[Int8Type](
+            bool_mask,
+            then_.as_primitive[Int8Type](),
+            else_.as_primitive[Int8Type](),
+        ).to_any()
     elif then_.dtype() == int16:
-        return select[Int16Type](bool_mask, then_.as_primitive[Int16Type](), else_.as_primitive[Int16Type]()).to_any()
+        return select[Int16Type](
+            bool_mask,
+            then_.as_primitive[Int16Type](),
+            else_.as_primitive[Int16Type](),
+        ).to_any()
     elif then_.dtype() == int32:
-        return select[Int32Type](bool_mask, then_.as_primitive[Int32Type](), else_.as_primitive[Int32Type]()).to_any()
+        return select[Int32Type](
+            bool_mask,
+            then_.as_primitive[Int32Type](),
+            else_.as_primitive[Int32Type](),
+        ).to_any()
     elif then_.dtype() == int64:
-        return select[Int64Type](bool_mask, then_.as_primitive[Int64Type](), else_.as_primitive[Int64Type]()).to_any()
+        return select[Int64Type](
+            bool_mask,
+            then_.as_primitive[Int64Type](),
+            else_.as_primitive[Int64Type](),
+        ).to_any()
     elif then_.dtype() == uint8:
-        return select[UInt8Type](bool_mask, then_.as_primitive[UInt8Type](), else_.as_primitive[UInt8Type]()).to_any()
+        return select[UInt8Type](
+            bool_mask,
+            then_.as_primitive[UInt8Type](),
+            else_.as_primitive[UInt8Type](),
+        ).to_any()
     elif then_.dtype() == uint16:
-        return select[UInt16Type](bool_mask, then_.as_primitive[UInt16Type](), else_.as_primitive[UInt16Type]()).to_any()
+        return select[UInt16Type](
+            bool_mask,
+            then_.as_primitive[UInt16Type](),
+            else_.as_primitive[UInt16Type](),
+        ).to_any()
     elif then_.dtype() == uint32:
-        return select[UInt32Type](bool_mask, then_.as_primitive[UInt32Type](), else_.as_primitive[UInt32Type]()).to_any()
+        return select[UInt32Type](
+            bool_mask,
+            then_.as_primitive[UInt32Type](),
+            else_.as_primitive[UInt32Type](),
+        ).to_any()
     elif then_.dtype() == uint64:
-        return select[UInt64Type](bool_mask, then_.as_primitive[UInt64Type](), else_.as_primitive[UInt64Type]()).to_any()
+        return select[UInt64Type](
+            bool_mask,
+            then_.as_primitive[UInt64Type](),
+            else_.as_primitive[UInt64Type](),
+        ).to_any()
     elif then_.dtype() == float16:
-        return select[Float16Type](bool_mask, then_.as_primitive[Float16Type](), else_.as_primitive[Float16Type]()).to_any()
+        return select[Float16Type](
+            bool_mask,
+            then_.as_primitive[Float16Type](),
+            else_.as_primitive[Float16Type](),
+        ).to_any()
     elif then_.dtype() == float32:
-        return select[Float32Type](bool_mask, then_.as_primitive[Float32Type](), else_.as_primitive[Float32Type]()).to_any()
+        return select[Float32Type](
+            bool_mask,
+            then_.as_primitive[Float32Type](),
+            else_.as_primitive[Float32Type](),
+        ).to_any()
     elif then_.dtype() == float64:
-        return select[Float64Type](bool_mask, then_.as_primitive[Float64Type](), else_.as_primitive[Float64Type]()).to_any()
+        return select[Float64Type](
+            bool_mask,
+            then_.as_primitive[Float64Type](),
+            else_.as_primitive[Float64Type](),
+        ).to_any()
     raise Error(t"select: unsupported dtype {then_.dtype()}")

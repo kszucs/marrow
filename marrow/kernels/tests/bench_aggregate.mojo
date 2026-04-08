@@ -21,7 +21,9 @@ from marrow.dtypes import int64, float64, PrimitiveType
 from marrow.kernels.aggregate import sum_, product, min_, max_
 
 
-def _make_array_with_nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[
+    T: PrimitiveType
+](size: Int) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
         if i % 10 == 0:

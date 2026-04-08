@@ -66,7 +66,9 @@ def _binary_cmp[
         left.bitmap or right.bitmap
     ) else Optional[Bitmap[]]()
 
-    var result = Bitmap.alloc_device(ctx.value(), length) if ctx else Bitmap.alloc_uninit(length)
+    var result = Bitmap.alloc_device(
+        ctx.value(), length
+    ) if ctx else Bitmap.alloc_uninit(length)
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,

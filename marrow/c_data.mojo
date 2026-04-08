@@ -184,7 +184,9 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
-            var child0 = CArrowSchema.from_field(dtype.as_list_type().value_field().copy())
+            var child0 = CArrowSchema.from_field(
+                dtype.as_list_type().value_field().copy()
+            )
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
@@ -540,7 +542,9 @@ struct CArrowArray(Copyable, Movable):
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             buffers.append(offsets^)
             children.append(
-                self.children[0][].to_data(dtype.as_list_type().value_type(), owner)
+                self.children[0][].to_data(
+                    dtype.as_list_type().value_type(), owner
+                )
             )
         elif dtype.is_string() or dtype.is_binary():
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -551,7 +555,9 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(values^)
         elif dtype.is_fixed_size_list():
             children.append(
-                self.children[0][].to_data(dtype.as_fixed_size_list_type().value_type(), owner)
+                self.children[0][].to_data(
+                    dtype.as_fixed_size_list_type().value_type(), owner
+                )
             )
         elif dtype.is_struct():
             var st = dtype.as_struct_type()
