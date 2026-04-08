@@ -277,6 +277,83 @@ def bench_and_diff_offset(mut b: Bencher, size: Int) raises:
 
 
 # ---------------------------------------------------------------------------
+# pack_bools — BitmapView.store (exercises _pack_bools)
+# ---------------------------------------------------------------------------
+#
+# Directly measures the throughput of packing SIMD[bool, 8] into a bitmap
+# via BitmapView.store.  This is the hot path in compare, filter-mask, and
+# any kernel that produces boolean output.
+
+
+@parameter
+def bench_pack_bools_w8(mut b: Bencher, size: Int) raises:
+    """Pack bools via BitmapView.store[8] (one byte per call)."""
+    alias W = 8
+    var bm = Bitmap.alloc_zeroed(size)
+    var bv = bm.view()
+    var pattern = SIMD[DType.bool, W](True, False, True, False, True, False, True, False)
+
+    @always_inline
+    @parameter
+    def call_fn():
+        for i in range(0, size - W + 1, W):
+            bv.store[W](i, pattern)
+        keep(bv.load[DType.uint8](0))
+
+    b.iter[call_fn]()
+
+
+@parameter
+def bench_pack_bools_w32(mut b: Bencher, size: Int) raises:
+    """Pack bools via BitmapView.store[32] (four bytes per call)."""
+    alias W = 32
+    var bm = Bitmap.alloc_zeroed(size)
+    var bv = bm.view()
+    var pattern = SIMD[DType.bool, W](
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+    )
+
+    @always_inline
+    @parameter
+    def call_fn():
+        for i in range(0, size - W + 1, W):
+            bv.store[W](i, pattern)
+        keep(bv.load[DType.uint8](0))
+
+    b.iter[call_fn]()
+
+
+@parameter
+def bench_pack_bools_w64(mut b: Bencher, size: Int) raises:
+    """Pack bools via BitmapView.store[64] (eight bytes per call)."""
+    alias W = 64
+    var bm = Bitmap.alloc_zeroed(size)
+    var bv = bm.view()
+    var pattern = SIMD[DType.bool, W](
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+        True, False, True, False, True, False, True, False,
+    )
+
+    @always_inline
+    @parameter
+    def call_fn():
+        for i in range(0, size - W + 1, W):
+            bv.store[W](i, pattern)
+        keep(bv.load[DType.uint8](0))
+
+    b.iter[call_fn]()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -374,6 +451,27 @@ def main() raises:
     comptime for si in range(6):
         m.bench_with_input[Int, bench_and_cache_unaligned](
             BenchId("and_cache_unaligned", labels[si]),
+            sizes[si],
+            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
+        )
+
+    comptime for si in range(6):
+        m.bench_with_input[Int, bench_pack_bools_w8](
+            BenchId("pack_bools_w8", labels[si]),
+            sizes[si],
+            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
+        )
+
+    comptime for si in range(6):
+        m.bench_with_input[Int, bench_pack_bools_w32](
+            BenchId("pack_bools_w32", labels[si]),
+            sizes[si],
+            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
+        )
+
+    comptime for si in range(6):
+        m.bench_with_input[Int, bench_pack_bools_w64](
+            BenchId("pack_bools_w64", labels[si]),
             sizes[si],
             [ThroughputMeasure(BenchMetric.elements, sizes[si])],
         )

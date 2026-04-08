@@ -18,7 +18,10 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange
-from marrow.dtypes import int32, float32, int64, float64, PrimitiveType
+from marrow.dtypes import (
+    int32, float32, int64, float64, PrimitiveType,
+    Int32Type, Int64Type, Float32Type,
+)
 from marrow.kernels.compare import equal, less
 
 
@@ -31,7 +34,7 @@ def bench_equal[T: PrimitiveType](mut b: Bencher, size: Int) raises:
     @parameter
     def call_fn() raises:
         var result = equal[T](lhs, rhs)
-        keep(result.unsafe_get(0))
+        keep(len(result))
 
     b.iter[call_fn]()
 
@@ -70,6 +73,13 @@ def main() raises:
 
     comptime sizes = (10_000, 100_000, 1_000_000)
     comptime size_labels = ("10k", "100k", "1M")
+
+    comptime for si in range(3):
+        m.bench_with_input[Int, bench_equal[Int32Type]](
+            BenchId("equal[Int32Type]", size_labels[si]),
+            sizes[si],
+            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
+        )
 
     comptime for si in range(3):
         m.bench_with_input[Int, bench_equal[Int64Type]](

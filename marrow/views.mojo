@@ -45,15 +45,21 @@ def _packed_uint_dtype[W: Int]() -> DType:
 
 
 @always_inline
-def _pack_bools[size: Int](mask: SIMD[DType.bool, size]) -> Scalar[DType.uint8]:
-    """Portable pack_bits: pack 8 bools into a single byte.
+def _pack_bools[W: Int](mask: SIMD[DType.bool, W]) -> SIMD[_packed_uint_dtype[W](), W]:
+    """Portable bit-pack: pack W bools into W-bit lanes.
 
-    Uses iota + shift + OR-reduce which compiles to standard LLVM ops
-    on all backends including Metal/AIR (no x86-specific pmovmskb).
+    Each lane ``i`` becomes ``mask[i].cast[UintW]() << i``.  The caller
+    uses ``.reduce_or()`` (for a single scalar result) or stores the
+    per-lane shifted values directly.
+
+    Uses iota + shift which compiles to standard LLVM ops on all
+    backends including Metal/AIR (no x86-specific pmovmskb).
+
+    W must be 8, 16, 32, or 64.
     """
-    comptime assert size == 8, "_pack_bools only supports size=8"
-    var bits = mask.cast[DType.uint8]()
-    return (bits << iota[DType.uint8, size]()).reduce_or()
+    comptime T = _packed_uint_dtype[W]()
+    var bits = mask.cast[T]()
+    return bits << iota[T, W]()
 
 
 # ---------------------------------------------------------------------------
@@ -619,15 +625,15 @@ struct BitmapView[
     ](self: BitmapView[mut=True, origin=_], bit_index: Int, val: SIMD[DType.bool, W]):
         """Bit-pack W bools and store into the bitmap at ``bit_index``.
 
-        - W divisible by 8: unrolled pack_bits per 8-bool chunk, one byte each.
+        - W divisible by 8: single _pack_bools + bitcast store.
         - W < 8: set/clear individual bits.
         """
         comptime assert W % 8 == 0 or W < 8, "W must be divisible by 8 or less than 8"
 
         comptime if W % 8 == 0:
+            var packed = _pack_bools(val).reduce_or()
             var dst = self._data + (bit_index >> 3)
-            comptime for i in range(W // 8):
-                dst.store(i, _pack_bools(val.slice[8, offset=i * 8]()))
+            dst.store(bitcast[DType.uint8, W // 8](packed))
         else:
             var abs_pos = self._offset + bit_index
             comptime for i in range(W):

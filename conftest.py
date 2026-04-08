@@ -109,6 +109,7 @@ def pytest_addoption(parser):
     parser.addoption("--no-mojo", action="store_true", default=False, help="Exclude Mojo tests")
     parser.addoption("--python", action="store_true", default=False, help="Select Python tests")
     parser.addoption("--no-python", action="store_true", default=False, help="Exclude Python tests")
+    parser.addoption("--cpu", action="store_true", default=False, help="Select CPU tests (non-GPU Mojo + Python)")
     parser.addoption("--gpu", action="store_true", default=False, help="Select GPU tests")
     parser.addoption("--no-gpu", action="store_true", default=False, help="Exclude GPU tests")
     parser.addoption(
@@ -136,6 +137,7 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
+    sel_cpu = config.getoption("--cpu")
     sel_mojo = config.getoption("--mojo")
     sel_python = config.getoption("--python")
     sel_gpu = config.getoption("--gpu")
@@ -143,6 +145,12 @@ def pytest_collection_modifyitems(config, items):
     no_python = config.getoption("--no-python")
     no_gpu = config.getoption("--no-gpu")
     run_benchmark = config.getoption("--benchmark")
+
+    # --cpu implies both --mojo and --python (all non-GPU tests)
+    if sel_cpu:
+        sel_mojo = True
+        sel_python = True
+
     selective = sel_mojo or sel_python or sel_gpu
 
     for item in items:
