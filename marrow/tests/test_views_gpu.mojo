@@ -447,5 +447,64 @@ def test_apply_masked_bitmapview_gpu() raises:
     assert_equal(result.unsafe_get[DType.uint8](7), UInt8(0))
 
 
+# ---------------------------------------------------------------------------
+# Comparison helpers for pack_bools GPU test
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _eq_i32[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.bool, W]:
+    return a.eq(b)
+
+
+# ---------------------------------------------------------------------------
+# apply() — binary comparison → BitmapView (GPU, exercises _pack_bools)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_comparison_to_bitmap_gpu() raises:
+    """apply[BinaryFn → bool] bit-packs comparison results into a bitmap via GPU.
+
+    This exercises BitmapView.store with SIMD[bool, W] on Metal, which
+    requires the portable _pack_bools (iota + shift + OR-reduce) instead
+    of std.memory.pack_bits (x86 pmovmskb).
+    """
+    var ctx = DeviceContext()
+    alias N = 16  # two full 8-bool groups to exercise the unrolled loop
+
+    # lhs = [0,1,2,3,4,5,6,7, 8,9,10,11,12,13,14,15]
+    var cpu_lhs = Buffer.alloc_zeroed[DType.int32](N)
+    for i in range(N):
+        cpu_lhs.unsafe_set[DType.int32](i, Int32(i))
+    var dev_lhs = cpu_lhs^.to_immutable().to_device(ctx)
+
+    # rhs = [0,0,2,0,4,0,6,0, 8,0,10,0,12,0,14,0]  (match at even indices)
+    var cpu_rhs = Buffer.alloc_zeroed[DType.int32](N)
+    for i in range(N):
+        cpu_rhs.unsafe_set[DType.int32](i, Int32(i if i % 2 == 0 else 0))
+    var dev_rhs = cpu_rhs^.to_immutable().to_device(ctx)
+
+    # Output bitmap — _pack_bools is called inside BitmapView.store on GPU
+    var dev_bm = Bitmap.alloc_device(ctx, N)
+    apply[DType.int32, _eq_i32](
+        dev_lhs.device_view[DType.int32](),
+        dev_rhs.device_view[DType.int32](),
+        dev_bm.view(),
+        ctx,
+    )
+
+    var result_bm = dev_bm^.to_immutable().to_cpu(ctx)
+    var bv = result_bm.view()
+
+    # Even indices match → bit set; odd indices differ → bit clear
+    for i in range(N):
+        if i % 2 == 0:
+            assert_true(bv.test(i), String("expected bit {} set").format(i))
+        else:
+            assert_false(bv.test(i), String("expected bit {} clear").format(i))
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()

@@ -21,7 +21,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, memcpy, memset, pack_bits
+from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
 from std.algorithm.functional import elementwise
@@ -42,6 +42,18 @@ def _packed_uint_dtype[W: Int]() -> DType:
         return DType.uint32
     else:
         return DType.uint64
+
+
+@always_inline
+def _pack_bools[size: Int](mask: SIMD[DType.bool, size]) -> Scalar[DType.uint8]:
+    """Portable pack_bits: pack 8 bools into a single byte.
+
+    Uses iota + shift + OR-reduce which compiles to standard LLVM ops
+    on all backends including Metal/AIR (no x86-specific pmovmskb).
+    """
+    comptime assert size == 8, "_pack_bools only supports size=8"
+    var bits = mask.cast[DType.uint8]()
+    return (bits << iota[DType.uint8, size]()).reduce_or()
 
 
 # ---------------------------------------------------------------------------
@@ -615,10 +627,7 @@ struct BitmapView[
         comptime if W % 8 == 0:
             var dst = self._data + (bit_index >> 3)
             comptime for i in range(W // 8):
-                var byte_val = pack_bits(
-                    val.slice[8, offset=i * 8]()
-                )
-                dst.store(i, byte_val.cast[DType.uint8]())
+                dst.store(i, _pack_bools(val.slice[8, offset=i * 8]()))
         else:
             var abs_pos = self._offset + bit_index
             comptime for i in range(W):
@@ -1064,8 +1073,17 @@ def apply[
             comptime gpu_width = max(
                 8, simd_width_of[In, target=get_gpu_target()]()
             )
+            # Round up to a full gpu_width chunk so every store is a
+            # complete byte (no scalar read-modify-write race on GPU).
+            # Over-read/write is safe thanks to Arrow's 64-byte padding;
+            # clamp so we never exceed it.
+            alias max_pad = 64 // size_of[Scalar[In]]()
+            var padded = min(
+                math.align_up(length, gpu_width),
+                length + max_pad,
+            )
             elementwise[process, gpu_width, target="gpu"](
-                length, ctx.value()
+                padded, ctx.value()
             )
         else:
             raise Error("apply: no GPU accelerator available")
