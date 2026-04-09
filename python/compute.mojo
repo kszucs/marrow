@@ -9,9 +9,17 @@ from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import AnyArray
 from marrow.kernels.aggregate import sum_, product, min_, max_
 from marrow.kernels.arithmetic import add, sub, mul, div
-from marrow.kernels.compare import equal, not_equal, less, less_equal, greater, greater_equal
+from marrow.kernels.compare import (
+    equal,
+    not_equal,
+    less,
+    less_equal,
+    greater,
+    greater_equal,
+)
 from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls
 from helpers import pyfunction
+
 
 # TODO: use explicit AnyArray types in the helper functions below
 # otherwise for filter_ at least mojo is unable to resolve the
@@ -19,13 +27,18 @@ from helpers import pyfunction
 def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     return _filter_overloaded(array, selection)
 
+
 def any_(array: AnyArray) raises -> Bool:
     from marrow.kernels.aggregate import any_ as _any
+
     return _any(array)
+
 
 def all_(array: AnyArray) raises -> Bool:
     from marrow.kernels.aggregate import all_ as _all
+
     return _all(array)
+
 
 def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
     return equal(left, right)
@@ -33,56 +46,128 @@ def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pyfunction[add]()](
-        "add", docstring="add(left: Array, right: Array, /) -> Array\n--\n\nAdd two arrays element-wise, propagating nulls."
+        "add",
+        docstring=(
+            "add(left: Array, right: Array, /) -> Array\n--\n\nAdd two arrays"
+            " element-wise, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[sum_]()](
-        "sum_", docstring="sum_(array: Array, /) -> float\n--\n\nSum all valid elements, skipping nulls."
+        "sum_",
+        docstring=(
+            "sum_(array: Array, /) -> float\n--\n\nSum all valid elements,"
+            " skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[product]()](
-        "product", docstring="product(array: Array, /) -> float\n--\n\nProduct of all valid elements, skipping nulls."
+        "product",
+        docstring=(
+            "product(array: Array, /) -> float\n--\n\nProduct of all valid"
+            " elements, skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[min_]()](
-        "min_", docstring="min_(array: Array, /) -> float\n--\n\nMinimum of all valid elements, skipping nulls."
+        "min_",
+        docstring=(
+            "min_(array: Array, /) -> float\n--\n\nMinimum of all valid"
+            " elements, skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[max_]()](
-        "max_", docstring="max_(array: Array, /) -> float\n--\n\nMaximum of all valid elements, skipping nulls."
+        "max_",
+        docstring=(
+            "max_(array: Array, /) -> float\n--\n\nMaximum of all valid"
+            " elements, skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[any_]()](
-        "any_", docstring="any_(array: Array, /) -> bool\n--\n\nTrue if any valid element is true, skipping nulls."
+        "any_",
+        docstring=(
+            "any_(array: Array, /) -> bool\n--\n\nTrue if any valid element is"
+            " true, skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[all_]()](
-        "all_", docstring="all_(array: Array, /) -> bool\n--\n\nTrue if all valid elements are true, skipping nulls."
+        "all_",
+        docstring=(
+            "all_(array: Array, /) -> bool\n--\n\nTrue if all valid elements"
+            " are true, skipping nulls."
+        ),
     )
     mb.def_function[pyfunction[sub]()](
-        "sub", docstring="sub(left: Array, right: Array, /) -> Array\n--\n\nSubtract two arrays element-wise, propagating nulls."
+        "sub",
+        docstring=(
+            "sub(left: Array, right: Array, /) -> Array\n--\n\nSubtract two"
+            " arrays element-wise, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[mul]()](
-        "mul", docstring="mul(left: Array, right: Array, /) -> Array\n--\n\nMultiply two arrays element-wise, propagating nulls."
+        "mul",
+        docstring=(
+            "mul(left: Array, right: Array, /) -> Array\n--\n\nMultiply two"
+            " arrays element-wise, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[div]()](
-        "div", docstring="div(left: Array, right: Array, /) -> Array\n--\n\nDivide two arrays element-wise, propagating nulls."
+        "div",
+        docstring=(
+            "div(left: Array, right: Array, /) -> Array\n--\n\nDivide two"
+            " arrays element-wise, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[filter_]()](
-        "filter_", docstring="filter_(array: Array, selection: Array, /) -> Array\n--\n\nFilter an array with a boolean mask."
+        "filter_",
+        docstring=(
+            "filter_(array: Array, selection: Array, /) -> Array\n--\n\nFilter"
+            " an array with a boolean mask."
+        ),
     )
     mb.def_function[pyfunction[drop_nulls]()](
-        "drop_nulls", docstring="drop_nulls(array: Array, /) -> Array\n--\n\nDrop null values from an array."
+        "drop_nulls",
+        docstring=(
+            "drop_nulls(array: Array, /) -> Array\n--\n\nDrop null values from"
+            " an array."
+        ),
     )
     mb.def_function[pyfunction[equal_]()](
-        "equal", docstring="equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise equality, propagating nulls."
+        "equal",
+        docstring=(
+            "equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise"
+            " equality, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[not_equal]()](
-        "not_equal", docstring="not_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise inequality, propagating nulls."
+        "not_equal",
+        docstring=(
+            "not_equal(left: Array, right: Array, /) ->"
+            " Array\n--\n\nElement-wise inequality, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[less]()](
-        "less", docstring="less(left: Array, right: Array, /) -> Array\n--\n\nElement-wise less-than, propagating nulls."
+        "less",
+        docstring=(
+            "less(left: Array, right: Array, /) -> Array\n--\n\nElement-wise"
+            " less-than, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[less_equal]()](
-        "less_equal", docstring="less_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise less-or-equal, propagating nulls."
+        "less_equal",
+        docstring=(
+            "less_equal(left: Array, right: Array, /) ->"
+            " Array\n--\n\nElement-wise less-or-equal, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[greater]()](
-        "greater", docstring="greater(left: Array, right: Array, /) -> Array\n--\n\nElement-wise greater-than, propagating nulls."
+        "greater",
+        docstring=(
+            "greater(left: Array, right: Array, /) -> Array\n--\n\nElement-wise"
+            " greater-than, propagating nulls."
+        ),
     )
     mb.def_function[pyfunction[greater_equal]()](
-        "greater_equal", docstring="greater_equal(left: Array, right: Array, /) -> Array\n--\n\nElement-wise greater-or-equal, propagating nulls."
+        "greater_equal",
+        docstring=(
+            "greater_equal(left: Array, right: Array, /) ->"
+            " Array\n--\n\nElement-wise greater-or-equal, propagating nulls."
+        ),
     )

@@ -16,12 +16,29 @@ from marrow.arrays import AnyArray
 from marrow.dtypes import (
     AnyDataType,
     BoolType,
-    Int8Type, Int16Type, Int32Type, Int64Type,
-    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
-    Float16Type, Float32Type, Float64Type,
-    bool_, int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
 )
 from helpers import pymethod
 from helpers import marrow_module
@@ -33,7 +50,8 @@ from helpers import marrow_module
 
 
 def _as_py(scalar: AnyScalar) raises -> PythonObject:
-    """Convert a Mojo AnyScalar to a native Python value (int, float, bool, str, None)."""
+    """Convert a Mojo AnyScalar to a native Python value (int, float, bool, str, None).
+    """
     if scalar.is_null():
         return PythonObject(None)
     var dtype = scalar.type()
@@ -105,7 +123,8 @@ def _scalar_repr(
 def _scalar_bool(
     ptr: UnsafePointer[AnyScalar, MutAnyOrigin],
 ) raises -> PythonObject:
-    """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``."""
+    """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``.
+    """
     var py_val = _as_py(ptr[])
     return PythonObject(Bool(py=py_val))
 
@@ -116,7 +135,9 @@ def _scalar_bool(
 
 
 def _scalar_rich_compare(
-    first: AnyScalar, second: PythonObject, op: Int,
+    first: AnyScalar,
+    second: PythonObject,
+    op: Int,
 ) raises -> Bool:
     var py_val = _as_py(first)
     var oper = Python.import_module("operator")

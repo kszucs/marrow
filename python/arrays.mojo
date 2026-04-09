@@ -428,10 +428,14 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
     comptime VariantType = Variant[
         PyBoolConverter,
-        PyPrimitiveConverter[dt.Int8Type],   PyPrimitiveConverter[dt.Int16Type],
-        PyPrimitiveConverter[dt.Int32Type],  PyPrimitiveConverter[dt.Int64Type],
-        PyPrimitiveConverter[dt.UInt8Type],  PyPrimitiveConverter[dt.UInt16Type],
-        PyPrimitiveConverter[dt.UInt32Type], PyPrimitiveConverter[dt.UInt64Type],
+        PyPrimitiveConverter[dt.Int8Type],
+        PyPrimitiveConverter[dt.Int16Type],
+        PyPrimitiveConverter[dt.Int32Type],
+        PyPrimitiveConverter[dt.Int64Type],
+        PyPrimitiveConverter[dt.UInt8Type],
+        PyPrimitiveConverter[dt.UInt16Type],
+        PyPrimitiveConverter[dt.UInt32Type],
+        PyPrimitiveConverter[dt.UInt64Type],
         PyPrimitiveConverter[dt.Float16Type],
         PyPrimitiveConverter[dt.Float32Type],
         PyPrimitiveConverter[dt.Float64Type],
@@ -470,11 +474,17 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         elif dtype == dt.uint64:
             self = Self(PyPrimitiveConverter[dt.UInt64Type](builder, has_nulls))
         elif dtype == dt.float16:
-            self = Self(PyPrimitiveConverter[dt.Float16Type](builder, has_nulls))
+            self = Self(
+                PyPrimitiveConverter[dt.Float16Type](builder, has_nulls)
+            )
         elif dtype == dt.float32:
-            self = Self(PyPrimitiveConverter[dt.Float32Type](builder, has_nulls))
+            self = Self(
+                PyPrimitiveConverter[dt.Float32Type](builder, has_nulls)
+            )
         elif dtype == dt.float64:
-            self = Self(PyPrimitiveConverter[dt.Float64Type](builder, has_nulls))
+            self = Self(
+                PyPrimitiveConverter[dt.Float64Type](builder, has_nulls)
+            )
         elif dtype.is_string():
             self = Self(PyStringConverter(builder, has_nulls))
         elif dtype.is_list():
@@ -489,19 +499,24 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     ](mut self) raises:
         comptime for i in range(Variadic.size(Self.VariantType.Ts)):
             comptime T = downcast[Self.VariantType.Ts[i], PyConverter]
-            if self._v[].isa[T](): func(self._v[][T]); return
+            if self._v[].isa[T]():
+                func(self._v[][T])
+                return
         abort("unreachable: PyAnyConverter._dispatch")
 
     def append(mut self, value: PyObjectPtr) raises:
         @parameter
-        def f[T: PyConverter](mut t: T) raises: t.append(value)
+        def f[T: PyConverter](mut t: T) raises:
+            t.append(value)
+
         self._dispatch[f]()
 
     def extend(mut self, values: PyObjectPtr) raises:
         @parameter
-        def f[T: PyConverter](mut t: T) raises: t.extend(values)
-        self._dispatch[f]()
+        def f[T: PyConverter](mut t: T) raises:
+            t.extend(values)
 
+        self._dispatch[f]()
 
 
 # ---------------------------------------------------------------------------
@@ -767,7 +782,9 @@ struct PyStructConverter(PyConverter):
 # ---------------------------------------------------------------------------
 
 
-def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
+def arrow_c_array[
+    T: AnyType, //, to_array_fn: def(T) -> AnyArray
+](
     ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
     var arr = to_array_fn(ptr[])
@@ -776,18 +793,15 @@ def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     return Python.tuple(schema_cap, array_cap)
 
 
-def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.AnyDataType](
-    ptr: UnsafePointer[T, MutAnyOrigin]
-) raises -> PythonObject:
+def arrow_c_schema[
+    T: AnyType, //, type_fn: def(T) -> dt.AnyDataType
+](ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
-
-
 
 
 # ---------------------------------------------------------------------------
 # Public Python functions
 # ---------------------------------------------------------------------------
-
 
 
 def infer_type(obj: PythonObject) raises -> PythonObject:
@@ -846,8 +860,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 
     mb.def_function[infer_type](
-        "infer_type", docstring="infer_type(obj, /) -> DataType\n--\n\nInfer the Arrow type of a Python sequence."
+        "infer_type",
+        docstring=(
+            "infer_type(obj, /) -> DataType\n--\n\nInfer the Arrow type of a"
+            " Python sequence."
+        ),
     )
     mb.def_function[array](
-        "array", docstring="array(obj, /, *, type=None) -> Array\n--\n\nCreate a marrow array from a Python sequence."
+        "array",
+        docstring=(
+            "array(obj, /, *, type=None) -> Array\n--\n\nCreate a marrow array"
+            " from a Python sequence."
+        ),
     )

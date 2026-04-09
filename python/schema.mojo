@@ -13,7 +13,8 @@ def _schema_arrow_c_schema(
 
 
 def schema(fields_or_schema: PythonObject) raises -> PythonObject:
-    """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object."""
+    """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object.
+    """
     # Try converting directly (handles marrow Schema and __arrow_c_schema__).
     try:
         return Schema(py=fields_or_schema).to_python_object()
@@ -29,7 +30,14 @@ def schema(fields_or_schema: PythonObject) raises -> PythonObject:
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add Schema type and constructor to the Python module."""
     ref schema_py = mb.add_type[Schema]("Schema")
-    _ = schema_py.def_method[_schema_arrow_c_schema]("__arrow_c_schema__")
-        .def_method[marrow_module]("__module__")
+    _ = schema_py.def_method[_schema_arrow_c_schema](
+        "__arrow_c_schema__"
+    ).def_method[marrow_module]("__module__")
 
-    mb.def_function[schema]("schema", docstring="schema(fields_or_schema, /) -> Schema\n--\n\nCreate an Arrow schema from a list of fields or any Arrow-compatible object.")
+    mb.def_function[schema](
+        "schema",
+        docstring=(
+            "schema(fields_or_schema, /) -> Schema\n--\n\nCreate an Arrow"
+            " schema from a list of fields or any Arrow-compatible object."
+        ),
+    )

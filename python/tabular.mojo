@@ -27,7 +27,8 @@ from helpers import pymethod, def_display
 
 
 def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
-    """Convert schema + columns to a Python dict mapping names to value lists."""
+    """Convert schema + columns to a Python dict mapping names to value lists.
+    """
     var builtins = Python.import_module("builtins")
     var result = builtins.dict()
     for i in range(len(columns)):
@@ -58,7 +59,9 @@ def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     return result
 
 
-def _export_c_array(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
+def _export_c_array(
+    schema: Schema, columns: List[AnyArray]
+) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
     var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
     var cols = List[AnyArray]()
