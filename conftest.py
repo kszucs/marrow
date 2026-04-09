@@ -290,6 +290,37 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_sessionstart(session):
+    """Rebuild python/marrow.so before the session when Python tests will run."""
+    config = session.config
+    no_python = config.getoption("--no-python")
+    sel_python = config.getoption("--python")
+    sel_mojo = config.getoption("--mojo")
+    sel_gpu = config.getoption("--gpu")
+    sel_cpu = config.getoption("--cpu")
+
+    # Skip build when Python tests are excluded or only Mojo/GPU tests selected.
+    if no_python or ((sel_mojo or sel_gpu) and not (sel_python or sel_cpu)):
+        return
+
+    print("building python/marrow.so ...", flush=True)
+    result = subprocess.run(
+        [
+            "mojo", "build", "-I", ".",
+            "python/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow.so",
+        ],
+        cwd=config.rootpath,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.exit(
+            f"Failed to build python/marrow.so:\n{result.stderr}",
+            returncode=1,
+        )
+    print("python/marrow.so built successfully", flush=True)
+
+
 def pytest_collection_modifyitems(config, items):
     sel_cpu = config.getoption("--cpu")
     sel_mojo = config.getoption("--mojo")
