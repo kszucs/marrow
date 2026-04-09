@@ -1095,7 +1095,7 @@ def apply[
             # complete byte (no scalar read-modify-write race on GPU).
             # Over-read/write is safe thanks to Arrow's 64-byte padding;
             # clamp so we never exceed it.
-            alias max_pad = 64 // size_of[Scalar[In]]()
+            comptime max_pad = 64 // size_of[Scalar[In]]()
             var padded = min(
                 math.align_up(length, gpu_width),
                 length + max_pad,

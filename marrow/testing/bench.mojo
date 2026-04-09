@@ -324,6 +324,14 @@ struct BenchSuite(Movable):
             _print_json_array(names)
             return
 
+        # Strip --list and --json so _parse_filter_lists only sees
+        # --only / --skip / name arguments.
+        var stripped = List[StaticString]()
+        for arg in flags.args:
+            if arg != "--list" and arg != "--json":
+                stripped.append(arg)
+        self.cli_args = stripped^
+
         self._validate_skip_list()
         self._parse_filter_lists()
 
