@@ -59,6 +59,23 @@ class MojoRunner:
         return None
 
     @staticmethod
+    def asan_flags(config):
+        """Return ASAN-related compiler flags, or an empty list if not requested."""
+        if not config.getoption("--asan"):
+            return []
+        asan_lib = MojoRunner.find_asan_lib()
+        if asan_lib is None:
+            pytest.exit(
+                "ASAN requested but no compatible libclang_rt.asan_osx_dynamic.dylib found. "
+                "Install libcompiler-rt via conda-forge.",
+                returncode=1,
+            )
+        flags = ["--sanitize", "address", "--shared-libasan"]
+        if asan_lib.endswith(".dylib"):
+            flags += ["-Xlinker", asan_lib]
+        return flags
+
+    @staticmethod
     def build_cmd(config, fspath, test_names=None):
         """Return the command to run a Mojo source file with optional test filtering.
 
@@ -67,19 +84,7 @@ class MojoRunner:
         TestSuite skips unselected tests.
         """
         opt = "-O3" if config.getoption("--benchmark") else "-O1"
-        cmd = ["mojo", "run", opt, "-I", ".", str(fspath)]
-
-        if config.getoption("--asan"):
-            asan_lib = MojoRunner.find_asan_lib()
-            if asan_lib is None:
-                pytest.exit(
-                    "ASAN requested but no compatible libclang_rt.asan_osx_dynamic.dylib found. "
-                    "Install libcompiler-rt via conda-forge.",
-                    returncode=1,
-                )
-            cmd += ["--sanitize", "address", "--shared-libasan"]
-            if asan_lib.endswith(".dylib"):
-                cmd += ["-Xlinker", asan_lib]
+        cmd = ["mojo", "run", opt, "-I", "."] + MojoRunner.asan_flags(config) + [str(fspath)]
 
         if test_names:
             cmd += ["--only"] + list(test_names)
@@ -309,15 +314,13 @@ def pytest_sessionstart(session):
         return
 
     print("building python/marrow.so ...", flush=True)
-    result = subprocess.run(
-        [
-            "mojo", "build", "-I", ".",
-            "python/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow.so",
-        ],
-        cwd=config.rootpath,
-        capture_output=True,
-        text=True,
+    opt = "-O3" if config.getoption("--benchmark") else "-O1"
+    cmd = (
+        ["mojo", "build", opt, "-I", "."]
+        + MojoRunner.asan_flags(config)
+        + ["python/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow.so"]
     )
+    result = subprocess.run(cmd, cwd=config.rootpath, capture_output=True, text=True)
     if result.returncode != 0:
         pytest.exit(
             f"Failed to build python/marrow.so:\n{result.stderr}",
