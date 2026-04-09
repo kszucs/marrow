@@ -35,14 +35,14 @@ pyarrow = ">=23.0.0,<24"
 
 [tasks]
 build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
-test_mojo = { cmd = "pytest --mojo -v" }
-test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
-test_python = { cmd = "pytest --python -v" }
-test_gpu = { cmd = "pytest --gpu -v" }
-test = { cmd = "pytest -v" }
-bench_mojo = { cmd = "pytest --benchmark --mojo -v -n0" }
-bench_python = { cmd = "pytest --benchmark --python -v -n0" }
-bench = { cmd = "pytest --benchmark -v -n0" }
+test_mojo = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
+test_mojo_asan = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
+test_python = { cmd = "pytest --python -v -n auto --dist=loadfile" }
+test_gpu = { cmd = "pytest --gpu -v -n auto --dist=loadfile" }
+test = { cmd = "pytest -v -n auto --dist=loadfile" }
+bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
+bench_python = { cmd = "pytest --benchmark --python -v" }
+bench = { cmd = "pytest --benchmark -v" }
 profile = "python scripts/profile.py"
 fmt_mojo = { cmd = "mojo format marrow" }
 fmt_python = { cmd = "ruff format python" }
