@@ -6,8 +6,10 @@ All benchmarks run single-threaded for fair comparison with marrow.
 import os
 
 import pytest
+
 try:
     import duckdb
+
     _HAS_DUCKDB = True
 except ImportError:
     _HAS_DUCKDB = False
@@ -108,19 +110,25 @@ def duck_con_half(tables_half):
 # ---------------------------------------------------------------------------
 
 _JOIN_TYPES = [
-    ("inner", "inner",      "inner"),
-    ("left",  "left outer", "left"),
-    ("semi",  "left semi",  "semi"),
+    ("inner", "inner", "inner"),
+    ("left", "left outer", "left"),
+    ("semi", "left semi", "semi"),
 ]
 _join_ids = [j[0] for j in _JOIN_TYPES]
-_join_params_pa = pytest.mark.parametrize("pa_type", [j[1] for j in _JOIN_TYPES], ids=_join_ids)
-_join_params_pl = pytest.mark.parametrize("pl_type", [j[2] for j in _JOIN_TYPES], ids=_join_ids)
-_join_params_ma = pytest.mark.parametrize("join_type", [j[0] for j in _JOIN_TYPES], ids=_join_ids)
+_join_params_pa = pytest.mark.parametrize(
+    "pa_type", [j[1] for j in _JOIN_TYPES], ids=_join_ids
+)
+_join_params_pl = pytest.mark.parametrize(
+    "pl_type", [j[2] for j in _JOIN_TYPES], ids=_join_ids
+)
+_join_params_ma = pytest.mark.parametrize(
+    "join_type", [j[0] for j in _JOIN_TYPES], ids=_join_ids
+)
 
 _DUCK_SQL = {
     "inner": "SELECT * FROM l JOIN r ON l.k = r.k",
-    "left":  "SELECT * FROM l LEFT JOIN r ON l.k = r.k",
-    "semi":  "SELECT l.* FROM l SEMI JOIN r ON l.k = r.k",
+    "left": "SELECT * FROM l LEFT JOIN r ON l.k = r.k",
+    "semi": "SELECT l.* FROM l SEMI JOIN r ON l.k = r.k",
 }
 _skip_no_duckdb = pytest.mark.skipif(not _HAS_DUCKDB, reason="duckdb not installed")
 

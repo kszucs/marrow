@@ -147,7 +147,7 @@ def pl_arrays(n):
 
 # Binary: int64 and float64 (a + b arrays)
 _BINARY_NUM_CASES = [
-    ("int64",   "int64_a",   "int64_b"),
+    ("int64", "int64_a", "int64_b"),
     ("float64", "float64_a", "float64_b"),
 ]
 _binary_num_params = pytest.mark.parametrize(
@@ -156,8 +156,8 @@ _binary_num_params = pytest.mark.parametrize(
 
 # Binary arithmetic: int64, float64, and int64 with nulls
 _ARITH_CASES = [
-    ("int64",       "int64_a",    "int64_b"),
-    ("float64",     "float64_a",  "float64_b"),
+    ("int64", "int64_a", "int64_b"),
+    ("float64", "float64_a", "float64_b"),
     ("int64_nulls", "int64_nulls", "int64_a"),
 ]
 _arith_params = pytest.mark.parametrize(
@@ -166,8 +166,8 @@ _arith_params = pytest.mark.parametrize(
 
 # Unary sum/aggregate: int64, float64, and int64 with nulls
 _SUM_CASES = [
-    ("int64",       "int64_a"),
-    ("float64",     "float64_a"),
+    ("int64", "int64_a"),
+    ("float64", "float64_a"),
     ("int64_nulls", "int64_nulls"),
 ]
 _sum_params = pytest.mark.parametrize(
@@ -176,7 +176,7 @@ _sum_params = pytest.mark.parametrize(
 
 # Unary numeric: int64 and float64
 _UNARY_NUM_CASES = [
-    ("int64",   "int64_a"),
+    ("int64", "int64_a"),
     ("float64", "float64_a"),
 ]
 _unary_num_params = pytest.mark.parametrize(
@@ -185,7 +185,7 @@ _unary_num_params = pytest.mark.parametrize(
 
 # Nullable: int64_nulls and float64_nulls
 _NULL_CASES = [
-    ("int64",   "int64_nulls"),
+    ("int64", "int64_nulls"),
     ("float64", "float64_nulls"),
 ]
 _null_params = pytest.mark.parametrize(
@@ -194,19 +194,19 @@ _null_params = pytest.mark.parametrize(
 
 # Filter cases: (id, dtype_key, mask_key, selectivity, distribution)
 _FILTER_CASES = [
-    ("int64_50pct",       "int64_a",   "mask_50",          50, "uniform"),
-    ("int64_90pct",       "int64_a",   "mask_90",          90, "uniform"),
-    ("int64_10pct",       "int64_a",   "mask_10",          10, "uniform"),
-    ("int64_1pct",        "int64_a",   "mask_1",            1, "uniform"),
-    ("int64_0pct",        "int64_a",   "mask_0",            0, "uniform"),
-    ("float64_50pct",     "float64_a", "mask_50",          50, "uniform"),
-    ("string_50pct",      "string",    "mask_50",          50, "uniform"),
-    ("string_10pct",      "string",    "mask_10",          10, "uniform"),
-    ("int64_rand50",      "int64_a",   "mask_rand50",      50, "random"),
-    ("int64_rand10",      "int64_a",   "mask_rand10",      10, "random"),
-    ("int64_rand90",      "int64_a",   "mask_rand90",      90, "random"),
-    ("int64_clustered50", "int64_a",   "mask_clustered50", 50, "clustered"),
-    ("int64_head50",      "int64_a",   "mask_head50",      50, "head"),
+    ("int64_50pct", "int64_a", "mask_50", 50, "uniform"),
+    ("int64_90pct", "int64_a", "mask_90", 90, "uniform"),
+    ("int64_10pct", "int64_a", "mask_10", 10, "uniform"),
+    ("int64_1pct", "int64_a", "mask_1", 1, "uniform"),
+    ("int64_0pct", "int64_a", "mask_0", 0, "uniform"),
+    ("float64_50pct", "float64_a", "mask_50", 50, "uniform"),
+    ("string_50pct", "string", "mask_50", 50, "uniform"),
+    ("string_10pct", "string", "mask_10", 10, "uniform"),
+    ("int64_rand50", "int64_a", "mask_rand50", 50, "random"),
+    ("int64_rand10", "int64_a", "mask_rand10", 10, "random"),
+    ("int64_rand90", "int64_a", "mask_rand90", 90, "random"),
+    ("int64_clustered50", "int64_a", "mask_clustered50", 50, "clustered"),
+    ("int64_head50", "int64_a", "mask_head50", 50, "head"),
 ]
 _filter_params = pytest.mark.parametrize(
     "dtype_key,mask_key,selectivity,distribution",
@@ -352,25 +352,49 @@ def test_pyarrow_all(benchmark, pa_arrays, n):
 
 @pytest.mark.benchmark(group="filter")
 @_filter_params
-def test_marrow_filter(benchmark, ma_arrays, n, dtype_key, mask_key, selectivity, distribution):
+def test_marrow_filter(
+    benchmark, ma_arrays, n, dtype_key, mask_key, selectivity, distribution
+):
     dtype = dtype_key.split("_")[0]
-    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark.extra_info.update(
+        lib="marrow",
+        n=n,
+        dtype=dtype,
+        selectivity=selectivity,
+        distribution=distribution,
+    )
     benchmark(ma.filter_, ma_arrays[dtype_key], ma_arrays[mask_key])
 
 
 @pytest.mark.benchmark(group="filter")
 @_filter_params
-def test_pyarrow_filter(benchmark, pa_arrays, n, dtype_key, mask_key, selectivity, distribution):
+def test_pyarrow_filter(
+    benchmark, pa_arrays, n, dtype_key, mask_key, selectivity, distribution
+):
     dtype = dtype_key.split("_")[0]
-    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark.extra_info.update(
+        lib="pyarrow",
+        n=n,
+        dtype=dtype,
+        selectivity=selectivity,
+        distribution=distribution,
+    )
     benchmark(pc.filter, pa_arrays[dtype_key], pa_arrays[mask_key])
 
 
 @pytest.mark.benchmark(group="filter")
 @_filter_params
-def test_polars_filter(benchmark, pl_arrays, n, dtype_key, mask_key, selectivity, distribution):
+def test_polars_filter(
+    benchmark, pl_arrays, n, dtype_key, mask_key, selectivity, distribution
+):
     dtype = dtype_key.split("_")[0]
-    benchmark.extra_info.update(lib="polars", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark.extra_info.update(
+        lib="polars",
+        n=n,
+        dtype=dtype,
+        selectivity=selectivity,
+        distribution=distribution,
+    )
     benchmark(pl_arrays[dtype_key].filter, pl_arrays[mask_key])
 
 
