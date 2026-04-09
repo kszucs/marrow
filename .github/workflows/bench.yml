@@ -23,14 +23,16 @@ jobs:
           cache: true
           cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
           frozen: true
-      - name: Run Mojo benchmarks
-        run: pixi run pytest --benchmark --mojo -v --benchmark-json .benchmarks/mojo_results.json
+      - name: Run benchmarks
+        run: |
+          mkdir -p .benchmarks
+          pixi run pytest --benchmark -v --benchmark-json .benchmarks/results.json
       - name: Store benchmark results
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: Mojo Kernel Benchmarks
           tool: pytest
-          output-file-path: .benchmarks/mojo_results.json
+          output-file-path: .benchmarks/results.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           comment-on-alert: true
