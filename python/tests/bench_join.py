@@ -194,7 +194,7 @@ def test_marrow_join_half(benchmark, tables_half, n, join_type):
 def test_duckdb_join(benchmark, duck_con, n, join_type):
     benchmark.extra_info.update(lib="duckdb", n=n)
     q = _DUCK_SQL[join_type]
-    benchmark(lambda: duck_con.execute(q).fetchall())
+    benchmark(lambda: duck_con.execute(q).arrow())
 
 
 @_skip_no_duckdb
@@ -203,4 +203,4 @@ def test_duckdb_join(benchmark, duck_con, n, join_type):
 def test_duckdb_join_half(benchmark, duck_con_half, n, join_type):
     benchmark.extra_info.update(lib="duckdb", n=n)
     q = _DUCK_SQL[join_type]
-    benchmark(lambda: duck_con_half.execute(q).fetchall())
+    benchmark(lambda: duck_con_half.execute(q).arrow())

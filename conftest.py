@@ -263,9 +263,13 @@ class CompetitionReport:
         table = Table(title="Competition", box=box.SIMPLE_HEAD, show_footer=True)
         table.add_column("Operation", no_wrap=True)
         table.add_column("n", justify="right")
-        for lib in libs:
+        table.add_column("", no_wrap=True)  # before first lib
+        for i, lib in enumerate(libs):
+            if i > 0:
+                table.add_column("", no_wrap=True)
             footer = f"[bold green]{wins[lib]} wins[/]" if wins[lib] else ""
-            table.add_column(lib.capitalize(), justify="right", footer=footer)
+            table.add_column(lib.capitalize(), justify="right", footer=footer, no_wrap=True)
+        table.add_column("", no_wrap=True)  # after last lib
         table.add_column("Fastest", justify="right", footer=f"[dim]{ties} ties[/]")
         for k in meta_keys:
             table.add_column(k.capitalize(), justify="right", no_wrap=True)
@@ -293,15 +297,22 @@ class CompetitionReport:
             else:
                 fastest_markup = f"[bold green]{best_lib} {ratio:.1f}x[/bold green]"
 
-            row = [op.replace("[", "\\["), f"{n:,}"]
-            for lib in libs:
+            sep = "[dim]│[/]"
+            row = [op.replace("[", "\\["), f"{n:,}", sep]
+            for i, lib in enumerate(libs):
+                if i > 0:
+                    row.append(sep)
                 t = present.get(lib)
                 if t is None:
                     row.append("—")
-                elif t == fastest_t and not is_tie:
-                    row.append(f"[bold green]{cls._fmt(t)}[/bold green]")
-                else:
+                elif is_tie:
                     row.append(cls._fmt(t))
+                elif t == fastest_t:
+                    row.append(f"[bold green]{cls._fmt(t)} 1.0x[/bold green]")
+                else:
+                    rel = t / fastest_t
+                    row.append(f"{cls._fmt(t)} {rel:.1f}x")
+            row.append(sep)
             row.append(fastest_markup)
             row_meta = meta.get((op, n), {})
             for k in meta_keys:
