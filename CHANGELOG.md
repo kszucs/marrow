@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased] — 2026-04-09
+
+### Features
+
+- **Variant-based dispatch for `DataType`, `AnyArray`, and `Builder`** (`marrow/dtypes.mojo`, `marrow/arrays.mojo`, `marrow/builders.mojo`): Replaced integer-code dispatch with `Variant`-backed types using `comptime for` loops throughout. Arrays and builders use variant dispatch for safer downcasting and better branch prediction. Eliminates runtime `if`/`elif` chains across kernels, Python bindings, and the expression system.
+
+- **`BoolArray` dedicated type** (`marrow/arrays.mojo`): Bit-packed boolean arrays are now handled by a dedicated `BoolArray` backed by a `Bitmap`, with `.values() -> BitmapView`, GPU transfer (`.to_device()` / `.to_host()`), and a matching `BoolBuilder`. Removes the incorrect `PrimitiveArray[bool_]` usage throughout.
+
+- **`BufferView` / `BitmapView` abstractions** (`marrow/views.mojo`): Type-safe, non-owning views over `Buffer` and `Bitmap` with `apply` dispatch, `compressed_store`, `pext`, and GPU-aware access. All kernel and array code now operates through views instead of raw pointers.
+
+- **`SwissHashTable`** (`marrow/kernels/`): Open-addressing hash table with 7-bit control stamps, CSR chain storage, vectorized SIMD group matching, and a batch-build API. Supports generic hash functions and string equality.
+
+- **Hash join** (`marrow/kernels/`): `hash_join` kernel using `SwissHashTable` with join relations and executor integration. Build and probe phases are separate for reuse across multi-join plans.
+
+- **`TestSuite` and `BenchSuite` framework** (`marrow/testing`): Auto-discovery of `test_*` / `bench_*` functions via `__functions_in_module()`. `BenchSuite` integrates with the pytest harness for CI benchmark capture, competition tables, and per-element throughput metrics.
+
+- **AddressSanitizer support**: `pixi run pytest --asan` compiles test runners with ASAN instrumentation via `libcompiler-rt`. Catches buffer overflows and use-after-free in Mojo kernel code.
+
+- **GPU `BitmapView` and GPU rapidhash** (`marrow/kernels/`): `BitmapView` now supports device-resident bitmaps. `rapidhash` ported to Metal/CUDA with a 128-bit multiply emulation for compatibility with Metal's lack of 128-bit integer support.
+
+- **Bounds checking** (`marrow/buffers.mojo`): `Buffer`, `Bitmap`, and `BufferView` accessors now assert bounds in debug builds.
+
+- **Implicit builder conversions** (`marrow/builders.mojo`): Typed builders (`PrimitiveBuilder[T]`, `StringBuilder`, etc.) convert implicitly to `Builder` via `ArcPointer` clone, so the original typed builder remains usable after passing to a composite builder.
+
+### Fixes
+
+- **`PyUnicode_AsUTF8AndSize` return type** (`python/arrays.mojo`): `PyUnicode_AsUTF8AndSize` now returns `StringSlice[ImmutAnyOrigin]` directly; removed the stale `.value()` unwrap that caused a compile error against newer Mojo stdlib.
+
 ## [Unreleased] — 2026-03-18
 
 ### Features
