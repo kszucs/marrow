@@ -751,7 +751,7 @@ struct ListBuilder(Builder, Sized):
             offset=0,
             bitmap=bm^,
             offsets=offsets^,
-            values=ArcPointer(values^),
+            values=values^,
         )
         # reset builder state for potential reuse
         self.reset()
@@ -879,7 +879,7 @@ struct FixedSizeListBuilder(Builder, Sized):
             nulls=null_count,
             offset=0,
             bitmap=bm^,
-            values=ArcPointer(values^),
+            values=values^,
         )
         # reset builder state for potential reuse
         self.reset()

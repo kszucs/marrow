@@ -33,7 +33,7 @@ paths.  It is NOT stored inside AnyArray.
 """
 
 from std.bit import pop_count
-from std.memory import memcpy, ArcPointer
+from std.memory import memcpy, ArcPointer, OwnedPointer
 from std.sys import size_of
 from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
@@ -700,8 +700,7 @@ struct ListArray(
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
-    # TODO: call it child and use OwnedPointer
-    var _values: ArcPointer[AnyArray]
+    var child: OwnedPointer[AnyArray]
 
     def __init__(
         out self,
@@ -712,7 +711,7 @@ struct ListArray(
         offset: Int,
         bitmap: Optional[Bitmap[mut=False]],
         offsets: Buffer[mut=False],
-        values: ArcPointer[AnyArray],
+        var values: AnyArray,
     ):
         self.dtype = dtype.copy()
         self.length = length
@@ -720,7 +719,7 @@ struct ListArray(
         self.offset = offset
         self.bitmap = bitmap
         self.offsets = offsets
-        self._values = values
+        self.child = OwnedPointer(values^)
 
     def __init__(out self, *, copy: Self):
         self.dtype = copy.dtype.copy()
@@ -729,7 +728,7 @@ struct ListArray(
         self.offset = copy.offset
         self.bitmap = copy.bitmap
         self.offsets = copy.offsets
-        self._values = copy._values.copy()
+        self.child = OwnedPointer(copy.child[].copy())
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -746,12 +745,12 @@ struct ListArray(
             offset=data.offset,
             bitmap=data.bitmap,
             offsets=data.buffers[0],
-            values=ArcPointer(AnyArray.from_data(data.children[0])),
+            values=AnyArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self._values[]] AnyArray:
+    def values(ref self) -> ref[self.child[]] AnyArray:
         """The child array containing the list elements."""
-        return self._values[]
+        return self.child[]
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -820,12 +819,12 @@ struct ListArray(
             offset=self.offset + offset,
             bitmap=self.bitmap,
             offsets=self.offsets,
-            values=self._values.copy(),
+            values=self.child[].copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this ListArray, returning the flat child values."""
-        return self._values[].copy()
+        return self.child[].copy()
 
     def value_lengths(self) -> PrimitiveArray[Int32Type]:
         """Return an array of list lengths for each element."""
@@ -901,7 +900,7 @@ struct FixedSizeListArray(
     var nulls: Int
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
-    var _values: ArcPointer[AnyArray]
+    var child: OwnedPointer[AnyArray]
 
     def __init__(
         out self,
@@ -911,14 +910,14 @@ struct FixedSizeListArray(
         nulls: Int,
         offset: Int,
         bitmap: Optional[Bitmap[mut=False]],
-        values: ArcPointer[AnyArray],
+        var values: AnyArray,
     ):
         self.dtype = dtype.copy()
         self.length = length
         self.nulls = nulls
         self.offset = offset
         self.bitmap = bitmap
-        self._values = values
+        self.child = OwnedPointer(values^)
 
     def __init__(out self, *, copy: Self):
         self.dtype = copy.dtype.copy()
@@ -926,7 +925,7 @@ struct FixedSizeListArray(
         self.nulls = copy.nulls
         self.offset = copy.offset
         self.bitmap = copy.bitmap
-        self._values = copy._values.copy()
+        self.child = OwnedPointer(copy.child[].copy())
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
@@ -940,13 +939,13 @@ struct FixedSizeListArray(
             nulls=data.nulls,
             offset=data.offset,
             bitmap=data.bitmap,
-            values=ArcPointer(AnyArray.from_data(data.children[0])),
+            values=AnyArray.from_data(data.children[0]),
         )
 
-    def values(ref self) -> ref[self._values[]] AnyArray:
+    def values(ref self) -> ref[self.child[]] AnyArray:
         """The child array containing all list elements (length * list_size elements).
         """
-        return self._values[]
+        return self.child[]
 
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
@@ -1009,12 +1008,12 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset + offset,
             bitmap=self.bitmap,
-            values=self._values.copy(),
+            values=self.child[].copy(),
         )
 
     def flatten(self) -> AnyArray:
         """Unnest this FixedSizeListArray, returning the flat child values."""
-        return self._values[].copy()
+        return self.child[].copy()
 
     def to_device(self, ctx: DeviceContext) raises -> FixedSizeListArray:
         """Upload child values to the GPU."""
@@ -1045,7 +1044,7 @@ struct FixedSizeListArray(
             nulls=self.nulls,
             offset=self.offset,
             bitmap=bm^,
-            values=ArcPointer(new_child^),
+            values=new_child^,
         )
 
     def __eq__(self, other: Self) -> Bool:
