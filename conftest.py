@@ -361,6 +361,31 @@ def pytest_addoption(parser):
     )
 
 
+def _python_excluded(config) -> bool:
+    """Return True if Python tests/files should be excluded from this session."""
+    if config.getoption("--no-python"):
+        return True
+    sel_mojo = config.getoption("--mojo")
+    sel_gpu = config.getoption("--gpu")
+    sel_python = config.getoption("--python")
+    sel_cpu = config.getoption("--cpu")
+    if (sel_mojo or sel_gpu) and not (sel_python or sel_cpu):
+        return True
+    # Specific paths given with no Python files → no Python collection needed.
+    if config.args and all(str(a).endswith(".mojo") for a in config.args):
+        return True
+    return False
+
+
+def pytest_ignore_collect(collection_path, config):
+    """Skip collecting Python test/bench files when Python tests are not needed."""
+    if collection_path.suffix == ".py" and collection_path.name.startswith(
+        ("test_", "bench_")
+    ):
+        if _python_excluded(config):
+            return True
+
+
 def pytest_sessionstart(session):
     """Rebuild python/marrow.so before the session when Python tests will run."""
     config = session.config
@@ -369,14 +394,8 @@ def pytest_sessionstart(session):
     if hasattr(config, "workerinput"):
         return
 
-    no_python = config.getoption("--no-python")
-    sel_python = config.getoption("--python")
-    sel_mojo = config.getoption("--mojo")
-    sel_gpu = config.getoption("--gpu")
-    sel_cpu = config.getoption("--cpu")
-
-    # Skip build when Python tests are excluded or only Mojo/GPU tests selected.
-    if no_python or ((sel_mojo or sel_gpu) and not (sel_python or sel_cpu)):
+    # Skip build when Python tests are excluded.
+    if _python_excluded(config):
         return
 
     print("building python/marrow.so ...", flush=True)
