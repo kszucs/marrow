@@ -116,16 +116,23 @@ struct TestSuite:
                 var error_str = String("")
                 if r.error:
                     var raw = String(r.error.value())
-                    error_str = raw.replace("\\", "\\\\").replace(
-                        '"', '\\"'
-                    ).replace("\n", "\\n")
+                    error_str = (
+                        raw.replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                        .replace("\n", "\\n")
+                    )
                 var comma = "," if i < len(report.reports) - 1 else ""
                 print(
-                    '  {"name": "' + r.name
-                    + '", "status": "' + status
-                    + '", "duration_ns": ' + String(r.duration_ns)
-                    + ', "error": "' + error_str
-                    + '"}' + comma
+                    '  {"name": "'
+                    + r.name
+                    + '", "status": "'
+                    + status
+                    + '", "duration_ns": '
+                    + String(r.duration_ns)
+                    + ', "error": "'
+                    + error_str
+                    + '"}'
+                    + comma
                 )
             print("]")
 

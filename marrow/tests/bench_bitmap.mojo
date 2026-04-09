@@ -58,12 +58,28 @@ def _bench_count_set_bits(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_count_set_bits_1k(mut b: Benchmark) raises: _bench_count_set_bits(b, 1_000)
-def bench_count_set_bits_10k(mut b: Benchmark) raises: _bench_count_set_bits(b, 10_000)
-def bench_count_set_bits_100k(mut b: Benchmark) raises: _bench_count_set_bits(b, 100_000)
-def bench_count_set_bits_1m(mut b: Benchmark) raises: _bench_count_set_bits(b, 1_000_000)
-def bench_count_set_bits_10m(mut b: Benchmark) raises: _bench_count_set_bits(b, 10_000_000)
-def bench_count_set_bits_100m(mut b: Benchmark) raises: _bench_count_set_bits(b, 100_000_000)
+def bench_count_set_bits_1k(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 1_000)
+
+
+def bench_count_set_bits_10k(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 10_000)
+
+
+def bench_count_set_bits_100k(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 100_000)
+
+
+def bench_count_set_bits_1m(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 1_000_000)
+
+
+def bench_count_set_bits_10m(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 10_000_000)
+
+
+def bench_count_set_bits_100m(mut b: Benchmark) raises:
+    _bench_count_set_bits(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +99,28 @@ def _bench_count_set_bits_aligned(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_count_set_bits_aligned_1k(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 1_000)
-def bench_count_set_bits_aligned_10k(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 10_000)
-def bench_count_set_bits_aligned_100k(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 100_000)
-def bench_count_set_bits_aligned_1m(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 1_000_000)
-def bench_count_set_bits_aligned_10m(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 10_000_000)
-def bench_count_set_bits_aligned_100m(mut b: Benchmark) raises: _bench_count_set_bits_aligned(b, 100_000_000)
+def bench_count_set_bits_aligned_1k(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 1_000)
+
+
+def bench_count_set_bits_aligned_10k(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 10_000)
+
+
+def bench_count_set_bits_aligned_100k(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 100_000)
+
+
+def bench_count_set_bits_aligned_1m(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 1_000_000)
+
+
+def bench_count_set_bits_aligned_10m(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 10_000_000)
+
+
+def bench_count_set_bits_aligned_100m(mut b: Benchmark) raises:
+    _bench_count_set_bits_aligned(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +140,28 @@ def _bench_count_set_bits_unaligned(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_count_set_bits_unaligned_1k(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 1_000)
-def bench_count_set_bits_unaligned_10k(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 10_000)
-def bench_count_set_bits_unaligned_100k(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 100_000)
-def bench_count_set_bits_unaligned_1m(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 1_000_000)
-def bench_count_set_bits_unaligned_10m(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 10_000_000)
-def bench_count_set_bits_unaligned_100m(mut b: Benchmark) raises: _bench_count_set_bits_unaligned(b, 100_000_000)
+def bench_count_set_bits_unaligned_1k(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 1_000)
+
+
+def bench_count_set_bits_unaligned_10k(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 10_000)
+
+
+def bench_count_set_bits_unaligned_100k(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 100_000)
+
+
+def bench_count_set_bits_unaligned_1m(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 1_000_000)
+
+
+def bench_count_set_bits_unaligned_10m(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 10_000_000)
+
+
+def bench_count_set_bits_unaligned_100m(mut b: Benchmark) raises:
+    _bench_count_set_bits_unaligned(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -138,12 +186,28 @@ def _bench_and(mut b: Benchmark, size: Int) raises:
     keep(len(rhs))
 
 
-def bench_and_1k(mut b: Benchmark) raises: _bench_and(b, 1_000)
-def bench_and_10k(mut b: Benchmark) raises: _bench_and(b, 10_000)
-def bench_and_100k(mut b: Benchmark) raises: _bench_and(b, 100_000)
-def bench_and_1m(mut b: Benchmark) raises: _bench_and(b, 1_000_000)
-def bench_and_10m(mut b: Benchmark) raises: _bench_and(b, 10_000_000)
-def bench_and_100m(mut b: Benchmark) raises: _bench_and(b, 100_000_000)
+def bench_and_1k(mut b: Benchmark) raises:
+    _bench_and(b, 1_000)
+
+
+def bench_and_10k(mut b: Benchmark) raises:
+    _bench_and(b, 10_000)
+
+
+def bench_and_100k(mut b: Benchmark) raises:
+    _bench_and(b, 100_000)
+
+
+def bench_and_1m(mut b: Benchmark) raises:
+    _bench_and(b, 1_000_000)
+
+
+def bench_and_10m(mut b: Benchmark) raises:
+    _bench_and(b, 10_000_000)
+
+
+def bench_and_100m(mut b: Benchmark) raises:
+    _bench_and(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -168,12 +232,28 @@ def _bench_or(mut b: Benchmark, size: Int) raises:
     keep(len(rhs))
 
 
-def bench_or_1k(mut b: Benchmark) raises: _bench_or(b, 1_000)
-def bench_or_10k(mut b: Benchmark) raises: _bench_or(b, 10_000)
-def bench_or_100k(mut b: Benchmark) raises: _bench_or(b, 100_000)
-def bench_or_1m(mut b: Benchmark) raises: _bench_or(b, 1_000_000)
-def bench_or_10m(mut b: Benchmark) raises: _bench_or(b, 10_000_000)
-def bench_or_100m(mut b: Benchmark) raises: _bench_or(b, 100_000_000)
+def bench_or_1k(mut b: Benchmark) raises:
+    _bench_or(b, 1_000)
+
+
+def bench_or_10k(mut b: Benchmark) raises:
+    _bench_or(b, 10_000)
+
+
+def bench_or_100k(mut b: Benchmark) raises:
+    _bench_or(b, 100_000)
+
+
+def bench_or_1m(mut b: Benchmark) raises:
+    _bench_or(b, 1_000_000)
+
+
+def bench_or_10m(mut b: Benchmark) raises:
+    _bench_or(b, 10_000_000)
+
+
+def bench_or_100m(mut b: Benchmark) raises:
+    _bench_or(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +275,28 @@ def _bench_invert(mut b: Benchmark, size: Int) raises:
     keep(len(bitmap))
 
 
-def bench_invert_1k(mut b: Benchmark) raises: _bench_invert(b, 1_000)
-def bench_invert_10k(mut b: Benchmark) raises: _bench_invert(b, 10_000)
-def bench_invert_100k(mut b: Benchmark) raises: _bench_invert(b, 100_000)
-def bench_invert_1m(mut b: Benchmark) raises: _bench_invert(b, 1_000_000)
-def bench_invert_10m(mut b: Benchmark) raises: _bench_invert(b, 10_000_000)
-def bench_invert_100m(mut b: Benchmark) raises: _bench_invert(b, 100_000_000)
+def bench_invert_1k(mut b: Benchmark) raises:
+    _bench_invert(b, 1_000)
+
+
+def bench_invert_10k(mut b: Benchmark) raises:
+    _bench_invert(b, 10_000)
+
+
+def bench_invert_100k(mut b: Benchmark) raises:
+    _bench_invert(b, 100_000)
+
+
+def bench_invert_1m(mut b: Benchmark) raises:
+    _bench_invert(b, 1_000_000)
+
+
+def bench_invert_10m(mut b: Benchmark) raises:
+    _bench_invert(b, 10_000_000)
+
+
+def bench_invert_100m(mut b: Benchmark) raises:
+    _bench_invert(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -221,12 +317,28 @@ def _bench_set_range(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_set_range_1k(mut b: Benchmark) raises: _bench_set_range(b, 1_000)
-def bench_set_range_10k(mut b: Benchmark) raises: _bench_set_range(b, 10_000)
-def bench_set_range_100k(mut b: Benchmark) raises: _bench_set_range(b, 100_000)
-def bench_set_range_1m(mut b: Benchmark) raises: _bench_set_range(b, 1_000_000)
-def bench_set_range_10m(mut b: Benchmark) raises: _bench_set_range(b, 10_000_000)
-def bench_set_range_100m(mut b: Benchmark) raises: _bench_set_range(b, 100_000_000)
+def bench_set_range_1k(mut b: Benchmark) raises:
+    _bench_set_range(b, 1_000)
+
+
+def bench_set_range_10k(mut b: Benchmark) raises:
+    _bench_set_range(b, 10_000)
+
+
+def bench_set_range_100k(mut b: Benchmark) raises:
+    _bench_set_range(b, 100_000)
+
+
+def bench_set_range_1m(mut b: Benchmark) raises:
+    _bench_set_range(b, 1_000_000)
+
+
+def bench_set_range_10m(mut b: Benchmark) raises:
+    _bench_set_range(b, 10_000_000)
+
+
+def bench_set_range_100m(mut b: Benchmark) raises:
+    _bench_set_range(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -247,12 +359,28 @@ def _bench_invert_cache_aligned(mut b: Benchmark, size: Int) raises:
     keep(len(bitmap))
 
 
-def bench_invert_cache_aligned_1k(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 1_000)
-def bench_invert_cache_aligned_10k(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 10_000)
-def bench_invert_cache_aligned_100k(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 100_000)
-def bench_invert_cache_aligned_1m(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 1_000_000)
-def bench_invert_cache_aligned_10m(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 10_000_000)
-def bench_invert_cache_aligned_100m(mut b: Benchmark) raises: _bench_invert_cache_aligned(b, 100_000_000)
+def bench_invert_cache_aligned_1k(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 1_000)
+
+
+def bench_invert_cache_aligned_10k(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 10_000)
+
+
+def bench_invert_cache_aligned_100k(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 100_000)
+
+
+def bench_invert_cache_aligned_1m(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 1_000_000)
+
+
+def bench_invert_cache_aligned_10m(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 10_000_000)
+
+
+def bench_invert_cache_aligned_100m(mut b: Benchmark) raises:
+    _bench_invert_cache_aligned(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +401,28 @@ def _bench_invert_cache_unaligned(mut b: Benchmark, size: Int) raises:
     keep(len(bitmap))
 
 
-def bench_invert_cache_unaligned_1k(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 1_000)
-def bench_invert_cache_unaligned_10k(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 10_000)
-def bench_invert_cache_unaligned_100k(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 100_000)
-def bench_invert_cache_unaligned_1m(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 1_000_000)
-def bench_invert_cache_unaligned_10m(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 10_000_000)
-def bench_invert_cache_unaligned_100m(mut b: Benchmark) raises: _bench_invert_cache_unaligned(b, 100_000_000)
+def bench_invert_cache_unaligned_1k(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 1_000)
+
+
+def bench_invert_cache_unaligned_10k(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 10_000)
+
+
+def bench_invert_cache_unaligned_100k(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 100_000)
+
+
+def bench_invert_cache_unaligned_1m(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 1_000_000)
+
+
+def bench_invert_cache_unaligned_10m(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 10_000_000)
+
+
+def bench_invert_cache_unaligned_100m(mut b: Benchmark) raises:
+    _bench_invert_cache_unaligned(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -301,12 +445,28 @@ def _bench_and_cache_unaligned(mut b: Benchmark, size: Int) raises:
     keep(len(rhs))
 
 
-def bench_and_cache_unaligned_1k(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 1_000)
-def bench_and_cache_unaligned_10k(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 10_000)
-def bench_and_cache_unaligned_100k(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 100_000)
-def bench_and_cache_unaligned_1m(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 1_000_000)
-def bench_and_cache_unaligned_10m(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 10_000_000)
-def bench_and_cache_unaligned_100m(mut b: Benchmark) raises: _bench_and_cache_unaligned(b, 100_000_000)
+def bench_and_cache_unaligned_1k(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 1_000)
+
+
+def bench_and_cache_unaligned_10k(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 10_000)
+
+
+def bench_and_cache_unaligned_100k(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 100_000)
+
+
+def bench_and_cache_unaligned_1m(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 1_000_000)
+
+
+def bench_and_cache_unaligned_10m(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 10_000_000)
+
+
+def bench_and_cache_unaligned_100m(mut b: Benchmark) raises:
+    _bench_and_cache_unaligned(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -329,12 +489,28 @@ def _bench_and_same_offset(mut b: Benchmark, size: Int) raises:
     keep(len(rhs))
 
 
-def bench_and_same_offset_1k(mut b: Benchmark) raises: _bench_and_same_offset(b, 1_000)
-def bench_and_same_offset_10k(mut b: Benchmark) raises: _bench_and_same_offset(b, 10_000)
-def bench_and_same_offset_100k(mut b: Benchmark) raises: _bench_and_same_offset(b, 100_000)
-def bench_and_same_offset_1m(mut b: Benchmark) raises: _bench_and_same_offset(b, 1_000_000)
-def bench_and_same_offset_10m(mut b: Benchmark) raises: _bench_and_same_offset(b, 10_000_000)
-def bench_and_same_offset_100m(mut b: Benchmark) raises: _bench_and_same_offset(b, 100_000_000)
+def bench_and_same_offset_1k(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 1_000)
+
+
+def bench_and_same_offset_10k(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 10_000)
+
+
+def bench_and_same_offset_100k(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 100_000)
+
+
+def bench_and_same_offset_1m(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 1_000_000)
+
+
+def bench_and_same_offset_10m(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 10_000_000)
+
+
+def bench_and_same_offset_100m(mut b: Benchmark) raises:
+    _bench_and_same_offset(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -357,12 +533,28 @@ def _bench_and_diff_offset(mut b: Benchmark, size: Int) raises:
     keep(len(rhs))
 
 
-def bench_and_diff_offset_1k(mut b: Benchmark) raises: _bench_and_diff_offset(b, 1_000)
-def bench_and_diff_offset_10k(mut b: Benchmark) raises: _bench_and_diff_offset(b, 10_000)
-def bench_and_diff_offset_100k(mut b: Benchmark) raises: _bench_and_diff_offset(b, 100_000)
-def bench_and_diff_offset_1m(mut b: Benchmark) raises: _bench_and_diff_offset(b, 1_000_000)
-def bench_and_diff_offset_10m(mut b: Benchmark) raises: _bench_and_diff_offset(b, 10_000_000)
-def bench_and_diff_offset_100m(mut b: Benchmark) raises: _bench_and_diff_offset(b, 100_000_000)
+def bench_and_diff_offset_1k(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 1_000)
+
+
+def bench_and_diff_offset_10k(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 10_000)
+
+
+def bench_and_diff_offset_100k(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 100_000)
+
+
+def bench_and_diff_offset_1m(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 1_000_000)
+
+
+def bench_and_diff_offset_10m(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 10_000_000)
+
+
+def bench_and_diff_offset_100m(mut b: Benchmark) raises:
+    _bench_and_diff_offset(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +566,9 @@ def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
     alias W = 8
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
-    var pattern = SIMD[DType.bool, W](True, False, True, False, True, False, True, False)
+    var pattern = SIMD[DType.bool, W](
+        True, False, True, False, True, False, True, False
+    )
     b.throughput(BenchMetric.elements, size)
 
     @always_inline
@@ -387,12 +581,28 @@ def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_pack_bools_w8_1k(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 1_000)
-def bench_pack_bools_w8_10k(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 10_000)
-def bench_pack_bools_w8_100k(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 100_000)
-def bench_pack_bools_w8_1m(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 1_000_000)
-def bench_pack_bools_w8_10m(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 10_000_000)
-def bench_pack_bools_w8_100m(mut b: Benchmark) raises: _bench_pack_bools_w8(b, 100_000_000)
+def bench_pack_bools_w8_1k(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 1_000)
+
+
+def bench_pack_bools_w8_10k(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 10_000)
+
+
+def bench_pack_bools_w8_100k(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 100_000)
+
+
+def bench_pack_bools_w8_1m(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 1_000_000)
+
+
+def bench_pack_bools_w8_10m(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 10_000_000)
+
+
+def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
+    _bench_pack_bools_w8(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -405,10 +615,38 @@ def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
     var pattern = SIMD[DType.bool, W](
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
     )
     b.throughput(BenchMetric.elements, size)
 
@@ -422,12 +660,28 @@ def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_pack_bools_w32_1k(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 1_000)
-def bench_pack_bools_w32_10k(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 10_000)
-def bench_pack_bools_w32_100k(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 100_000)
-def bench_pack_bools_w32_1m(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 1_000_000)
-def bench_pack_bools_w32_10m(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 10_000_000)
-def bench_pack_bools_w32_100m(mut b: Benchmark) raises: _bench_pack_bools_w32(b, 100_000_000)
+def bench_pack_bools_w32_1k(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 1_000)
+
+
+def bench_pack_bools_w32_10k(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 10_000)
+
+
+def bench_pack_bools_w32_100k(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 100_000)
+
+
+def bench_pack_bools_w32_1m(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 1_000_000)
+
+
+def bench_pack_bools_w32_10m(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 10_000_000)
+
+
+def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
+    _bench_pack_bools_w32(b, 100_000_000)
 
 
 # ---------------------------------------------------------------------------
@@ -440,14 +694,70 @@ def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
     var pattern = SIMD[DType.bool, W](
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
-        True, False, True, False, True, False, True, False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
     )
     b.throughput(BenchMetric.elements, size)
 
@@ -461,12 +771,28 @@ def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
     b.iter[call]()
 
 
-def bench_pack_bools_w64_1k(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 1_000)
-def bench_pack_bools_w64_10k(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 10_000)
-def bench_pack_bools_w64_100k(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 100_000)
-def bench_pack_bools_w64_1m(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 1_000_000)
-def bench_pack_bools_w64_10m(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 10_000_000)
-def bench_pack_bools_w64_100m(mut b: Benchmark) raises: _bench_pack_bools_w64(b, 100_000_000)
+def bench_pack_bools_w64_1k(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 1_000)
+
+
+def bench_pack_bools_w64_10k(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 10_000)
+
+
+def bench_pack_bools_w64_100k(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 100_000)
+
+
+def bench_pack_bools_w64_1m(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 1_000_000)
+
+
+def bench_pack_bools_w64_10m(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 10_000_000)
+
+
+def bench_pack_bools_w64_100m(mut b: Benchmark) raises:
+    _bench_pack_bools_w64(b, 100_000_000)
 
 
 def main() raises:

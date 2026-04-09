@@ -336,10 +336,14 @@ struct BenchSuite(Movable):
                 continue
             var result = self._run_one(b)
             if not flags.json_output:
-                var line = "  " + String(b.name) + "  " + _format_ns(result.mean_ns())
+                var line = (
+                    "  " + String(b.name) + "  " + _format_ns(result.mean_ns())
+                )
                 if result.throughput:
                     var tp = result.throughput.value().copy()
-                    var rate = Float64(tp.count) * 1e-9 / (result.mean_ns() * 1e-9)
+                    var rate = (
+                        Float64(tp.count) * 1e-9 / (result.mean_ns() * 1e-9)
+                    )
                     line += "  (" + String(rate) + " " + tp.metric_unit + ")"
                 print(line)
             results.append(result^)
@@ -364,17 +368,23 @@ struct BenchSuite(Movable):
             if r.throughput:
                 var tp = r.throughput.value().copy()
                 tp_str = (
-                    ', "throughput_metric": "' + tp.metric_name
-                    + '", "throughput_unit": "' + tp.metric_unit
-                    + '", "throughput_count": ' + String(tp.count)
+                    ', "throughput_metric": "'
+                    + tp.metric_name
+                    + '", "throughput_unit": "'
+                    + tp.metric_unit
+                    + '", "throughput_count": '
+                    + String(tp.count)
                 )
             print(
-                '  {"name": "' + r.name
+                '  {"name": "'
+                + r.name
                 + '", "unit": "ns", "iters": '
                 + String(r.iters)
-                + ', "runs": ' + runs_str
+                + ', "runs": '
+                + runs_str
                 + tp_str
-                + '}' + comma
+                + "}"
+                + comma
             )
         print("]")
 

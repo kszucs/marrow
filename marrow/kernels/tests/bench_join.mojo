@@ -19,7 +19,8 @@ from marrow.testing import BenchSuite, Benchmark
 
 
 def _make_struct(n: Int) raises -> StructArray:
-    """Build a StructArray with columns (k: int64, v: int64), unique keys 0..n."""
+    """Build a StructArray with columns (k: int64, v: int64), unique keys 0..n.
+    """
     var kb = PrimitiveBuilder[Int64Type](capacity=n)
     var vb = PrimitiveBuilder[Int64Type](capacity=n)
     for i in range(n):
