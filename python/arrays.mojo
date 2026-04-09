@@ -144,7 +144,7 @@ struct PyHelpers(Copyable, Movable):
         """
         var s = self.cpy().PyUnicode_AsUTF8AndSize(ptr)
         self.raise_on_error()
-        return s.value()
+        return s
 
     @always_inline
     def length(mut self, ptr: PyObjectPtr) -> Int:
