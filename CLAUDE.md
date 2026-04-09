@@ -43,10 +43,11 @@ pixi run pytest -v marrow/kernels/tests/test_join.mojo
 Useful options:
 
 ```bash
---benchmark   # include bench_*.mojo files; also enables -O3
---asan        # AddressSanitizer (requires libcompiler-rt from conda-forge)
---gpu         # include GPU tests (requires Metal/CUDA device)
---no-python   # skip Python binding tests
+--benchmark              # include bench_*.mojo files; also enables -O3
+--asan                   # AddressSanitizer (requires libcompiler-rt from conda-forge)
+--gpu                    # include GPU tests (requires Metal/CUDA device)
+--no-python              # skip Python binding tests
+--competition                        # print a side-by-side comparison table after benchmarks
 ```
 
 The harness compiles runners to `.test_runners/test_runner_<hash>` (content-

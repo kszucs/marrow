@@ -293,6 +293,10 @@ Run the benchmarks yourself:
 pixi run bench_python       # Python array construction vs PyArrow
 pixi run bench              # CPU SIMD arithmetic benchmarks
 pixi run bench_similarity   # cosine similarity: CPU vs GPU
+
+# Side-by-side comparison table: marrow vs polars vs pyarrow vs duckdb
+pixi run pytest --benchmark --no-mojo python/tests/bench_compute.py --competition
+pixi run pytest --benchmark --no-mojo python/tests/bench_join.py --competition
 ```
 
 ## GPU Acceleration
@@ -380,6 +384,7 @@ the same `.mojo` file on the same worker so the compiled binary is reused.
 | `--gpu` / `--no-gpu` | Select or exclude GPU tests |
 | `--benchmark` | Include benchmark files (`bench_*.mojo`); also switches to `-O3` |
 | `--asan` | Enable AddressSanitizer (requires `libcompiler-rt` from conda-forge) |
+| `--competition` | After benchmarks, print a side-by-side comparison table across all measured libraries |
 
 ### Writing Mojo tests
 

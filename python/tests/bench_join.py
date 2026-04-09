@@ -6,6 +6,11 @@ All benchmarks run single-threaded for fair comparison with marrow.
 import os
 
 import pytest
+try:
+    import duckdb
+    _HAS_DUCKDB = True
+except ImportError:
+    _HAS_DUCKDB = False
 import pyarrow as pa
 import polars as pl
 import marrow as ma
@@ -78,81 +83,124 @@ def tables_half(n):
     return _make_tables(n, selectivity=0.5)
 
 
+@pytest.fixture(scope="session")
+def duck_con(tables):
+    if not _HAS_DUCKDB:
+        return None
+    con = duckdb.connect(config={"threads": 1})
+    con.register("l", tables["pa_left"])
+    con.register("r", tables["pa_right"])
+    return con
+
+
+@pytest.fixture(scope="session")
+def duck_con_half(tables_half):
+    if not _HAS_DUCKDB:
+        return None
+    con = duckdb.connect(config={"threads": 1})
+    con.register("l", tables_half["pa_left"])
+    con.register("r", tables_half["pa_right"])
+    return con
+
+
 # ---------------------------------------------------------------------------
-# Inner join — all keys match (1:1 dense join)
+# Shared parametrize mark
+# ---------------------------------------------------------------------------
+
+_JOIN_TYPES = [
+    ("inner", "inner",      "inner"),
+    ("left",  "left outer", "left"),
+    ("semi",  "left semi",  "semi"),
+]
+_join_ids = [j[0] for j in _JOIN_TYPES]
+_join_params_pa = pytest.mark.parametrize("pa_type", [j[1] for j in _JOIN_TYPES], ids=_join_ids)
+_join_params_pl = pytest.mark.parametrize("pl_type", [j[2] for j in _JOIN_TYPES], ids=_join_ids)
+_join_params_ma = pytest.mark.parametrize("join_type", [j[0] for j in _JOIN_TYPES], ids=_join_ids)
+
+_DUCK_SQL = {
+    "inner": "SELECT * FROM l JOIN r ON l.k = r.k",
+    "left":  "SELECT * FROM l LEFT JOIN r ON l.k = r.k",
+    "semi":  "SELECT l.* FROM l SEMI JOIN r ON l.k = r.k",
+}
+_skip_no_duckdb = pytest.mark.skipif(not _HAS_DUCKDB, reason="duckdb not installed")
+
+
+# ---------------------------------------------------------------------------
+# Full selectivity (all keys match)
 # ---------------------------------------------------------------------------
 
 
-def test_pyarrow_inner_join(benchmark, tables):
+@pytest.mark.benchmark(group="join")
+@_join_params_pa
+def test_pyarrow_join(benchmark, tables, n, pa_type):
+    benchmark.extra_info.update(lib="pyarrow", n=n)
     left, right = tables["pa_left"], tables["pa_right"]
-    benchmark(left.join, right, keys="k", join_type="inner")
+    benchmark(left.join, right, keys="k", join_type=pa_type)
 
 
-def test_polars_inner_join(benchmark, tables):
+@pytest.mark.benchmark(group="join")
+@_join_params_pl
+def test_polars_join(benchmark, tables, n, pl_type):
+    benchmark.extra_info.update(lib="polars", n=n)
     left, right = tables["pl_left"], tables["pl_right"]
-    benchmark(left.join, right, on="k", how="inner")
+    benchmark(left.join, right, on="k", how=pl_type)
 
 
-def test_marrow_inner_join(benchmark, tables):
+@pytest.mark.benchmark(group="join")
+@_join_params_ma
+def test_marrow_join(benchmark, tables, n, join_type):
+    benchmark.extra_info.update(lib="marrow", n=n)
     left, right = tables["ma_left"], tables["ma_right"]
-    benchmark(left.join, right, ["k"], None, "inner")
+    benchmark(left.join, right, ["k"], None, join_type)
 
 
 # ---------------------------------------------------------------------------
-# Inner join — 50% selectivity (half of right keys match)
+# 50% selectivity (half of right keys match)
 # ---------------------------------------------------------------------------
 
 
-def test_pyarrow_inner_join_half(benchmark, tables_half):
+@pytest.mark.benchmark(group="join")
+@_join_params_pa
+def test_pyarrow_join_half(benchmark, tables_half, n, pa_type):
+    benchmark.extra_info.update(lib="pyarrow", n=n)
     left, right = tables_half["pa_left"], tables_half["pa_right"]
-    benchmark(left.join, right, keys="k", join_type="inner")
+    benchmark(left.join, right, keys="k", join_type=pa_type)
 
 
-def test_polars_inner_join_half(benchmark, tables_half):
+@pytest.mark.benchmark(group="join")
+@_join_params_pl
+def test_polars_join_half(benchmark, tables_half, n, pl_type):
+    benchmark.extra_info.update(lib="polars", n=n)
     left, right = tables_half["pl_left"], tables_half["pl_right"]
-    benchmark(left.join, right, on="k", how="inner")
+    benchmark(left.join, right, on="k", how=pl_type)
 
 
-def test_marrow_inner_join_half(benchmark, tables_half):
+@pytest.mark.benchmark(group="join")
+@_join_params_ma
+def test_marrow_join_half(benchmark, tables_half, n, join_type):
+    benchmark.extra_info.update(lib="marrow", n=n)
     left, right = tables_half["ma_left"], tables_half["ma_right"]
-    benchmark(left.join, right, ["k"], None, "inner")
+    benchmark(left.join, right, ["k"], None, join_type)
 
 
 # ---------------------------------------------------------------------------
-# Left join
+# DuckDB (skipped when duckdb is not installed)
 # ---------------------------------------------------------------------------
 
 
-def test_pyarrow_left_join(benchmark, tables):
-    left, right = tables["pa_left"], tables["pa_right"]
-    benchmark(left.join, right, keys="k", join_type="left outer")
+@_skip_no_duckdb
+@pytest.mark.benchmark(group="join")
+@_join_params_ma
+def test_duckdb_join(benchmark, duck_con, n, join_type):
+    benchmark.extra_info.update(lib="duckdb", n=n)
+    q = _DUCK_SQL[join_type]
+    benchmark(lambda: duck_con.execute(q).fetchall())
 
 
-def test_polars_left_join(benchmark, tables):
-    left, right = tables["pl_left"], tables["pl_right"]
-    benchmark(left.join, right, on="k", how="left")
-
-
-def test_marrow_left_join(benchmark, tables):
-    left, right = tables["ma_left"], tables["ma_right"]
-    benchmark(left.join, right, ["k"], None, "left")
-
-
-# ---------------------------------------------------------------------------
-# Semi join
-# ---------------------------------------------------------------------------
-
-
-def test_pyarrow_semi_join(benchmark, tables):
-    left, right = tables["pa_left"], tables["pa_right"]
-    benchmark(left.join, right, keys="k", join_type="left semi")
-
-
-def test_polars_semi_join(benchmark, tables):
-    left, right = tables["pl_left"], tables["pl_right"]
-    benchmark(left.join, right, on="k", how="semi")
-
-
-def test_marrow_semi_join(benchmark, tables):
-    left, right = tables["ma_left"], tables["ma_right"]
-    benchmark(left.join, right, ["k"], None, "semi")
+@_skip_no_duckdb
+@pytest.mark.benchmark(group="join")
+@_join_params_ma
+def test_duckdb_join_half(benchmark, duck_con_half, n, join_type):
+    benchmark.extra_info.update(lib="duckdb", n=n)
+    q = _DUCK_SQL[join_type]
+    benchmark(lambda: duck_con_half.execute(q).fetchall())

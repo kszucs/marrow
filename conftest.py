@@ -1,5 +1,4 @@
 import json
-import operator
 import os
 import re
 import subprocess
@@ -8,7 +7,6 @@ import types
 from pathlib import Path
 
 import pytest
-import pytest_benchmark.session as _bm_session
 import pytest_benchmark.utils as _bm_utils
 from pytest_benchmark.fixture import BenchmarkFixture
 from pytest_benchmark.utils import NameWrapper
@@ -150,123 +148,174 @@ class MojoRunner:
         return {e["name"]: e for e in entries}
 
 
-class BenchmarkTable:
-    """Formats and renders a benchmark results table."""
+def _to_seconds(value, unit):
+    """Convert a benchmark timing value to seconds."""
+    if unit == "ns":
+        return value / 1e9
+    if unit == "us":
+        return value / 1e6
+    if unit == "ms":
+        return value / 1e3
+    return value
+
+
+# Strips the leading "[n=NNN]" or "[n=NNN-" prefix from a parametrized pytest
+# test ID.  The n fixture always comes first: "[n=10000]" or "[n=10000-case]".
+_N_PREFIX_RE = re.compile(r'\[n=\d+(-|\])')
+
+
+class CompetitionReport:
+    """Side-by-side benchmark comparison table for all measured libraries."""
 
     @staticmethod
-    def to_seconds(value, unit):
-        """Convert a benchmark timing value to seconds."""
-        if unit == "ns":
-            return value / 1e9
-        if unit == "us":
-            return value / 1e6
-        if unit == "ms":
-            return value / 1e3
-        return value
+    def _parse(bench):
+        """Return ``(lib, operation, n)`` using ``extra_info``."""
+        ei = bench.get("extra_info", {})
+        lib = ei.get("lib")
+        n_val = ei.get("n")
+        if not (lib and n_val is not None):
+            return None, None, None
+        name = bench["name"]
+        prefix = f"test_{lib}_"
+        op = name[len(prefix):] if name.startswith(prefix) else name
+        # "[n=10000]"       → ""            (fixture-only, no mark suffix)
+        # "[n=10000-inner]" → "[inner]"     (fixture + mark suffix)
+        op = _N_PREFIX_RE.sub(lambda m: "[" if m.group(1) == "-" else "", op)
+        return lib, op, n_val
 
     @staticmethod
-    def format_time(seconds):
-        """Format seconds as a compact human-readable string with unit."""
+    def _fmt(seconds):
         ns = seconds * 1e9
         if ns < 1_000:
-            return f"{ns:.1f}", "ns"
+            return f"{ns:.1f} ns"
         if ns < 1_000_000:
-            return f"{ns / 1_000:.2f}", "us"
+            return f"{ns / 1_000:.2f} µs"
         if ns < 1_000_000_000:
-            return f"{ns / 1_000_000:.2f}", "ms"
-        return f"{ns / 1_000_000_000:.2f}", "s"
+            return f"{ns / 1_000_000:.2f} ms"
+        return f"{ns / 1_000_000_000:.2f} s"
 
-    @staticmethod
-    def throughput_str(bench):
-        """Extract throughput string from benchmark extra_info."""
-        ei = bench.get("extra_info", {})
-        for key, value in ei.items():
-            if "(" in key:
-                unit = key.split("(")[-1].rstrip(")")
-                return f"{value:.2f} {unit}"
-            return f"{value:.2f}"
-        return ""
+    @classmethod
+    def display(cls, tr, benchmarks):
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
 
-    @staticmethod
-    def display(tr, benchmarks):
-        """Render a benchmark results table with optional throughput column."""
-        benchmarks = sorted(benchmarks, key=operator.itemgetter("mean"))
+        # Keys from extra_info that are not shown as columns (internal bookkeeping).
+        _hidden = frozenset({"lib", "n", _THROUGHPUT_KEY})
 
-        # Determine the time unit from the fastest benchmark.
-        _, time_unit = BenchmarkTable.format_time(benchmarks[0]["mean"])
+        # Collect (op, n) → {lib: mean_seconds} and metadata per (op, n).
+        data: dict[tuple, dict[str, float]] = {}
+        meta: dict[tuple, dict] = {}
+        for b in benchmarks:
+            lib, op, n = cls._parse(b)
+            if lib is None:
+                continue
+            data.setdefault((op, n), {})[lib] = b["mean"]
+            ei = b.get("extra_info", {})
+            row_meta = {k: v for k, v in ei.items() if k not in _hidden}
+            if row_meta:
+                meta.setdefault((op, n), {}).update(row_meta)
 
-        # Pre-format all values.
+        # Discover all libs and metadata keys in stable insertion order.
+        libs: list[str] = []
+        meta_keys: list[str] = []
+        for lib_data in data.values():
+            for lib in lib_data:
+                if lib not in libs:
+                    libs.append(lib)
+        for row_meta in meta.values():
+            for k in row_meta:
+                if k not in meta_keys:
+                    meta_keys.append(k)
+
+        if not libs:
+            tr.write_line("No benchmarks with lib metadata found.")
+            return
+
+        # Build rows: only include (op, n) pairs that have at least two libs.
         rows = []
-        has_throughput = False
-        for bench in benchmarks:
-            name = bench["name"]
-            # Use consistent unit for all rows.
-            if time_unit == "ns":
-                mean_v = bench["mean"] * 1e9
-                std_v = bench["stddev"] * 1e9
-            elif time_unit == "us":
-                mean_v = bench["mean"] * 1e6
-                std_v = bench["stddev"] * 1e6
-            elif time_unit == "ms":
-                mean_v = bench["mean"] * 1e3
-                std_v = bench["stddev"] * 1e3
+        for (op, n), lib_data in sorted(data.items()):
+            if len(lib_data) < 2:
+                continue
+            best_t = min(lib_data.values())
+            best_lib = min(lib_data, key=lib_data.get)
+            rows.append((op, n, lib_data, best_lib, best_t))
+
+        if not rows:
+            tr.write_line("No operations with multiple libs measured.")
+            return
+
+        # Win counters per lib.
+        wins = {lib: 0 for lib in libs}
+        ties = 0
+        for op, n, lib_data, best_lib, best_t in rows:
+            present = [l for l in libs if l in lib_data]
+            if len(present) < 2:
+                continue
+            times = [lib_data[l] for l in present]
+            fastest_t = min(times)
+            ratio = max(times) / fastest_t if fastest_t > 0 else 1.0
+            if ratio < 1.05:
+                ties += 1
             else:
-                mean_v = bench["mean"]
-                std_v = bench["stddev"]
+                wins[best_lib] += 1
 
-            mean_s = f"{mean_v:,.4f}"
-            std_s = f"{std_v:,.4f}"
-            rounds_s = str(bench["rounds"])
-            tp_s = BenchmarkTable.throughput_str(bench)
-            if tp_s:
-                has_throughput = True
-            rows.append((name, mean_s, std_s, rounds_s, tp_s))
+        table = Table(title="Competition", box=box.SIMPLE_HEAD, show_footer=True)
+        table.add_column("Operation", no_wrap=True)
+        table.add_column("n", justify="right")
+        for lib in libs:
+            footer = f"[bold green]{wins[lib]} wins[/]" if wins[lib] else ""
+            table.add_column(lib.capitalize(), justify="right", footer=footer)
+        table.add_column("Fastest", justify="right", footer=f"[dim]{ties} ties[/]")
+        for k in meta_keys:
+            table.add_column(k.capitalize(), justify="right", no_wrap=True)
 
-        # Column widths.
-        hdr_name = f"Name (time in {time_unit})"
-        w_name = max(len(hdr_name), max(len(r[0]) for r in rows)) + 3
-        w_mean = max(4, max(len(r[1]) for r in rows)) + 2
-        w_std = max(6, max(len(r[2]) for r in rows)) + 2
-        w_rounds = max(6, max(len(r[3]) for r in rows)) + 2
-        w_tp = 0
-        if has_throughput:
-            w_tp = max(10, max(len(r[4]) for r in rows)) + 2
+        current_group = None
+        for op, n, lib_data, best_lib, best_t in rows:
+            grp = op.split("[")[0]
+            if grp != current_group:
+                if current_group is not None:
+                    table.add_section()
+                current_group = grp
 
-        # Build header.
-        hdr = (
-            f"{hdr_name:<{w_name}}"
-            f"{'Mean':>{w_mean}}"
-            f"{'StdDev':>{w_std}}"
-            f"{'Rounds':>{w_rounds}}"
-        )
-        if has_throughput:
-            hdr += f"{'Throughput':>{w_tp}}"
+            present = {lib: t for lib in libs if (t := lib_data.get(lib)) is not None}
+            fastest_t = min(present.values()) if present else None
+            if len(present) >= 2 and fastest_t and fastest_t > 0:
+                worst_t = max(present.values())
+                ratio = worst_t / fastest_t
+                is_tie = ratio < 1.05
+            else:
+                ratio = 1.0
+                is_tie = True
 
-        total_w = len(hdr)
-        sep = "-" * total_w
+            if is_tie:
+                fastest_markup = "[dim]~tie[/dim]"
+            else:
+                fastest_markup = f"[bold green]{best_lib} {ratio:.1f}x[/bold green]"
 
+            row = [op.replace("[", "\\["), f"{n:,}"]
+            for lib in libs:
+                t = present.get(lib)
+                if t is None:
+                    row.append("—")
+                elif t == fastest_t and not is_tie:
+                    row.append(f"[bold green]{cls._fmt(t)}[/bold green]")
+                else:
+                    row.append(cls._fmt(t))
+            row.append(fastest_markup)
+            row_meta = meta.get((op, n), {})
+            for k in meta_keys:
+                v = row_meta.get(k)
+                row.append(str(v) if v is not None else "")
+            table.add_row(*row)
+
+        console = Console(highlight=False, width=220)
         tr.ensure_newline()
         tr.write_line("")
-        tr.write_line(
-            f" benchmark: {len(benchmarks)} tests ".center(total_w, "-"),
-            yellow=True,
-        )
-        tr.write_line(hdr)
-        tr.write_line(sep, yellow=True)
-
-        for name, mean_s, std_s, rounds_s, tp_s in rows:
-            line = (
-                f"{name:<{w_name}}"
-                f"{mean_s:>{w_mean}}"
-                f"{std_s:>{w_std}}"
-                f"{rounds_s:>{w_rounds}}"
-            )
-            if has_throughput:
-                line += f"{tp_s:>{w_tp}}"
+        with console.capture() as cap:
+            console.print(table)
+        for line in cap.get().splitlines():
             tr.write_line(line)
-
-        tr.write_line(sep, yellow=True)
-        tr.write_line("")
 
 
 class MojoTestFailure(Exception):
@@ -292,6 +341,12 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run Mojo tests under AddressSanitizer (ASAN)",
+    )
+    parser.addoption(
+        "--competition",
+        action="store_true",
+        default=False,
+        help="After benchmarks, print a side-by-side comparison table for all measured libs.",
     )
 
 
@@ -414,18 +469,6 @@ def pytest_configure(config):
         "benchmark: performance benchmarks (skipped by default, run with --benchmark)",
     )
 
-    # Replace the benchmark table display with our own that supports throughput.
-    bs = getattr(config, "_benchmarksession", None)
-    if bs is not None:
-        bs.columns = ["mean", "stddev", "rounds", "throughput"]
-
-    def _display_benchmarks(self, tr):
-        if not self.groups:
-            return
-        for _, benchmarks in self.groups:
-            BenchmarkTable.display(tr, benchmarks)
-
-    _bm_session.BenchmarkSession.display = _display_benchmarks
 
 
 class MojoTestFile(pytest.File):
@@ -535,10 +578,10 @@ class MojoBenchItem(pytest.Item):
 
         if runs:
             # Multiple per-iteration measurements — inject each as a round.
-            durations_s = [BenchmarkTable.to_seconds(v, unit) for v in runs]
+            durations_s = [_to_seconds(v, unit) for v in runs]
         else:
             # Legacy single-value format.
-            durations_s = [BenchmarkTable.to_seconds(entry["value"], unit)]
+            durations_s = [_to_seconds(entry["value"], unit)]
 
         # Build a fake timer that yields (0, d1, 0, d2, ...) for each round.
         # pedantic() calls timer() twice per round: start then end.
@@ -596,3 +639,51 @@ class MojoBenchItem(pytest.Item):
 
     def reportinfo(self):
         return self.fspath, 0, f"mojo::bench::{self.name}"
+
+
+_THROUGHPUT_KEY = "throughput (GElems/s)"
+
+
+def pytest_benchmark_group_stats(config, benchmarks, group_by):  # config: required by pytest hook signature
+    """Group benchmarks by the native benchmark group marker for display.
+    Within each group, benchmarks are sorted by ``(n, name, mean)`` so rows
+    are ordered by size then by operation name.  Throughput is computed and
+    injected into ``extra_info`` for each benchmark that has an ``n`` value.
+
+    Only activates for the default ``group_by="group"``; custom
+    ``--benchmark-group-by`` values are passed through unchanged.
+    """
+    if group_by != "group":
+        return None  # honour explicit --benchmark-group-by choices
+
+    groups: dict[str, list] = {}
+    for bench in benchmarks:
+        key = bench.get("group") or bench["name"].split("[")[0]
+        groups.setdefault(key, []).append(bench)
+
+    for group_benchmarks in groups.values():
+        group_benchmarks.sort(key=lambda b: (
+            b.get("extra_info", {}).get("n", 0),
+            b["name"],
+            b["mean"],
+        ))
+        for bench in group_benchmarks:
+            ei = bench.get("extra_info", {})
+            n_val = ei.get("n")
+            mean_s = bench.get("mean", 0)
+            if n_val and mean_s > 0 and _THROUGHPUT_KEY not in ei:
+                ei[_THROUGHPUT_KEY] = round(n_val / mean_s / 1e9, 4)
+
+    return sorted(groups.items(), key=lambda pair: pair[0] or "")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # exitstatus: required by pytest hook signature
+    if not config.getoption("--competition", default=False):
+        return
+    bs = getattr(config, "_benchmarksession", None)
+    if bs is None or not bs.benchmarks:
+        return
+    CompetitionReport.display(terminalreporter, bs.benchmarks)
+
+

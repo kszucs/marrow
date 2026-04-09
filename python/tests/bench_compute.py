@@ -37,13 +37,13 @@ def _make_string(n):
 
 
 def _make_mask_random(n, pct):
-    """Random 50% selection — unpredictable for branch predictor."""
+    """Random selection — unpredictable for branch predictor."""
     rng = random.Random(42)
     return [rng.random() < pct / 100 for _ in range(n)]
 
 
 def _make_mask_clustered(n, pct, run_len=1024):
-    """Clustered runs: blocks of run_len True then blocks of False.
+    """Clustered runs: blocks of True then blocks of False.
 
     Good for testing run-skipping optimisations (zero-word fast path).
     """
@@ -80,7 +80,7 @@ def _build_arrays(n, lib, types):
         "mask_10": array_fn([i % 10 == 0 for i in range(n)], type=types["bool_"]),
         "mask_1": array_fn([i % 100 == 0 for i in range(n)], type=types["bool_"]),
         "mask_0": array_fn([False for _ in range(n)], type=types["bool_"]),
-        # distribution variants (all ~50% selectivity)
+        # distribution variants (~50% selectivity)
         "mask_rand50": array_fn(_make_mask_random(n, 50), type=types["bool_"]),
         "mask_clustered50": array_fn(_make_mask_clustered(n, 50), type=types["bool_"]),
         "mask_head50": array_fn(_make_mask_head(n, 50), type=types["bool_"]),
@@ -135,445 +135,295 @@ def pl_arrays(n):
         "mask_10": pl.Series([i % 10 == 0 for i in range(n)], dtype=pl.Boolean),
         "mask_1": pl.Series([i % 100 == 0 for i in range(n)], dtype=pl.Boolean),
         "mask_0": pl.Series([False for _ in range(n)], dtype=pl.Boolean),
-        # distribution variants (all ~50% selectivity)
         "mask_rand50": pl.Series(_make_mask_random(n, 50), dtype=pl.Boolean),
         "mask_clustered50": pl.Series(_make_mask_clustered(n, 50), dtype=pl.Boolean),
         "mask_head50": pl.Series(_make_mask_head(n, 50), dtype=pl.Boolean),
-        # random at different selectivities
         "mask_rand10": pl.Series(_make_mask_random(n, 10), dtype=pl.Boolean),
         "mask_rand90": pl.Series(_make_mask_random(n, 90), dtype=pl.Boolean),
     }
 
 
-# ── add ───────────────────────────────────────────────────────────────────────
+# ── Shared parametrize marks ─────────────────────────────────────────────────
+
+# Binary: int64 and float64 (a + b arrays)
+_BINARY_NUM_CASES = [
+    ("int64",   "int64_a",   "int64_b"),
+    ("float64", "float64_a", "float64_b"),
+]
+_binary_num_params = pytest.mark.parametrize(
+    "dtype,a,b", _BINARY_NUM_CASES, ids=[c[0] for c in _BINARY_NUM_CASES]
+)
+
+# Binary arithmetic: int64, float64, and int64 with nulls
+_ARITH_CASES = [
+    ("int64",       "int64_a",    "int64_b"),
+    ("float64",     "float64_a",  "float64_b"),
+    ("int64_nulls", "int64_nulls", "int64_a"),
+]
+_arith_params = pytest.mark.parametrize(
+    "dtype,a,b", _ARITH_CASES, ids=[c[0] for c in _ARITH_CASES]
+)
+
+# Unary sum/aggregate: int64, float64, and int64 with nulls
+_SUM_CASES = [
+    ("int64",       "int64_a"),
+    ("float64",     "float64_a"),
+    ("int64_nulls", "int64_nulls"),
+]
+_sum_params = pytest.mark.parametrize(
+    "dtype,key", _SUM_CASES, ids=[c[0] for c in _SUM_CASES]
+)
+
+# Unary numeric: int64 and float64
+_UNARY_NUM_CASES = [
+    ("int64",   "int64_a"),
+    ("float64", "float64_a"),
+]
+_unary_num_params = pytest.mark.parametrize(
+    "dtype,key", _UNARY_NUM_CASES, ids=[c[0] for c in _UNARY_NUM_CASES]
+)
+
+# Nullable: int64_nulls and float64_nulls
+_NULL_CASES = [
+    ("int64",   "int64_nulls"),
+    ("float64", "float64_nulls"),
+]
+_null_params = pytest.mark.parametrize(
+    "dtype,key", _NULL_CASES, ids=[c[0] for c in _NULL_CASES]
+)
+
+# Filter cases: (id, dtype_key, mask_key, selectivity, distribution)
+_FILTER_CASES = [
+    ("int64_50pct",       "int64_a",   "mask_50",          50, "uniform"),
+    ("int64_90pct",       "int64_a",   "mask_90",          90, "uniform"),
+    ("int64_10pct",       "int64_a",   "mask_10",          10, "uniform"),
+    ("int64_1pct",        "int64_a",   "mask_1",            1, "uniform"),
+    ("int64_0pct",        "int64_a",   "mask_0",            0, "uniform"),
+    ("float64_50pct",     "float64_a", "mask_50",          50, "uniform"),
+    ("string_50pct",      "string",    "mask_50",          50, "uniform"),
+    ("string_10pct",      "string",    "mask_10",          10, "uniform"),
+    ("int64_rand50",      "int64_a",   "mask_rand50",      50, "random"),
+    ("int64_rand10",      "int64_a",   "mask_rand10",      10, "random"),
+    ("int64_rand90",      "int64_a",   "mask_rand90",      90, "random"),
+    ("int64_clustered50", "int64_a",   "mask_clustered50", 50, "clustered"),
+    ("int64_head50",      "int64_a",   "mask_head50",      50, "head"),
+]
+_filter_params = pytest.mark.parametrize(
+    "dtype_key,mask_key,selectivity,distribution",
+    [c[1:] for c in _FILTER_CASES],
+    ids=[c[0] for c in _FILTER_CASES],
+)
 
 
-def test_marrow_add_int64(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
-    benchmark(ma.add, a, b)
+# ── Arithmetic ────────────────────────────────────────────────────────────────
 
 
-def test_pyarrow_add_int64(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
-    benchmark(pc.add, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+@_arith_params
+def test_marrow_add(benchmark, ma_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.add, ma_arrays[a], ma_arrays[b])
 
 
-def test_marrow_add_float64(benchmark, ma_arrays):
-    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
-    benchmark(ma.add, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+@_arith_params
+def test_pyarrow_add(benchmark, pa_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.add, pa_arrays[a], pa_arrays[b])
 
 
-def test_pyarrow_add_float64(benchmark, pa_arrays):
-    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
-    benchmark(pc.add, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+def test_marrow_sub(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
+    benchmark(ma.sub, ma_arrays["int64_a"], ma_arrays["int64_b"])
 
 
-# ── sub ───────────────────────────────────────────────────────────────────────
+@pytest.mark.benchmark(group="arithmetic")
+def test_pyarrow_sub(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
+    benchmark(pc.subtract, pa_arrays["int64_a"], pa_arrays["int64_b"])
 
 
-def test_marrow_sub_int64(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
-    benchmark(ma.sub, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+def test_marrow_mul(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
+    benchmark(ma.mul, ma_arrays["int64_a"], ma_arrays["int64_b"])
 
 
-def test_pyarrow_sub_int64(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
-    benchmark(pc.subtract, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+def test_pyarrow_mul(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
+    benchmark(pc.multiply, pa_arrays["int64_a"], pa_arrays["int64_b"])
 
 
-# ── mul ───────────────────────────────────────────────────────────────────────
+@pytest.mark.benchmark(group="arithmetic")
+def test_marrow_div(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype="float64")
+    benchmark(ma.div, ma_arrays["float64_a"], ma_arrays["float64_b"])
 
 
-def test_marrow_mul_int64(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
-    benchmark(ma.mul, a, b)
+@pytest.mark.benchmark(group="arithmetic")
+def test_pyarrow_div(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="float64")
+    benchmark(pc.divide, pa_arrays["float64_a"], pa_arrays["float64_b"])
 
 
-def test_pyarrow_mul_int64(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
-    benchmark(pc.multiply, a, b)
+# ── Aggregate ─────────────────────────────────────────────────────────────────
 
 
-# ── div ───────────────────────────────────────────────────────────────────────
+@pytest.mark.benchmark(group="aggregate")
+@_sum_params
+def test_marrow_sum(benchmark, ma_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.sum_, ma_arrays[key])
 
 
-def test_marrow_div_float64(benchmark, ma_arrays):
-    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
-    benchmark(ma.div, a, b)
+@pytest.mark.benchmark(group="aggregate")
+@_sum_params
+def test_pyarrow_sum(benchmark, pa_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.sum, pa_arrays[key])
 
 
-def test_pyarrow_div_float64(benchmark, pa_arrays):
-    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
-    benchmark(pc.divide, a, b)
-
-
-# ── arithmetic with nulls ────────────────────────────────────────────────────
-
-
-def test_marrow_add_int64_nulls(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_nulls"], ma_arrays["int64_a"]
-    benchmark(ma.add, a, b)
-
-
-def test_pyarrow_add_int64_nulls(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_nulls"], pa_arrays["int64_a"]
-    benchmark(pc.add, a, b)
-
-
-# ── sum ───────────────────────────────────────────────────────────────────────
-
-
-def test_marrow_sum_int64(benchmark, ma_arrays):
-    benchmark(ma.sum_, ma_arrays["int64_a"])
-
-
-def test_pyarrow_sum_int64(benchmark, pa_arrays):
-    benchmark(pc.sum, pa_arrays["int64_a"])
-
-
-def test_marrow_sum_float64(benchmark, ma_arrays):
-    benchmark(ma.sum_, ma_arrays["float64_a"])
-
-
-def test_pyarrow_sum_float64(benchmark, pa_arrays):
-    benchmark(pc.sum, pa_arrays["float64_a"])
-
-
-def test_marrow_sum_int64_nulls(benchmark, ma_arrays):
-    benchmark(ma.sum_, ma_arrays["int64_nulls"])
-
-
-def test_pyarrow_sum_int64_nulls(benchmark, pa_arrays):
-    benchmark(pc.sum, pa_arrays["int64_nulls"])
-
-
-# ── product ───────────────────────────────────────────────────────────────────
-
-
-def test_marrow_product_int64(benchmark, ma_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_marrow_product(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
     benchmark(ma.product, ma_arrays["int64_a"])
 
 
-def test_pyarrow_product_int64(benchmark, pa_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_pyarrow_product(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
     benchmark(pc.product, pa_arrays["int64_a"])
 
 
-# ── min / max ─────────────────────────────────────────────────────────────────
+@pytest.mark.benchmark(group="aggregate")
+@_unary_num_params
+def test_marrow_min(benchmark, ma_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.min_, ma_arrays[key])
 
 
-def test_marrow_min_int64(benchmark, ma_arrays):
-    benchmark(ma.min_, ma_arrays["int64_a"])
+@pytest.mark.benchmark(group="aggregate")
+@_unary_num_params
+def test_pyarrow_min(benchmark, pa_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.min, pa_arrays[key])
 
 
-def test_pyarrow_min_int64(benchmark, pa_arrays):
-    benchmark(pc.min, pa_arrays["int64_a"])
-
-
-def test_marrow_max_int64(benchmark, ma_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_marrow_max(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
     benchmark(ma.max_, ma_arrays["int64_a"])
 
 
-def test_pyarrow_max_int64(benchmark, pa_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_pyarrow_max(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype="int64")
     benchmark(pc.max, pa_arrays["int64_a"])
 
 
-def test_marrow_min_float64(benchmark, ma_arrays):
-    benchmark(ma.min_, ma_arrays["float64_a"])
-
-
-def test_pyarrow_min_float64(benchmark, pa_arrays):
-    benchmark(pc.min, pa_arrays["float64_a"])
-
-
-# ── any / all ─────────────────────────────────────────────────────────────────
-
-
-def test_marrow_any(benchmark, ma_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_marrow_any(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n)
     benchmark(ma.any_, ma_arrays["bool"])
 
 
-def test_pyarrow_any(benchmark, pa_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_pyarrow_any(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n)
     benchmark(pc.any, pa_arrays["bool"])
 
 
-def test_marrow_all(benchmark, ma_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_marrow_all(benchmark, ma_arrays, n):
+    benchmark.extra_info.update(lib="marrow", n=n)
     benchmark(ma.all_, ma_arrays["bool"])
 
 
-def test_pyarrow_all(benchmark, pa_arrays):
+@pytest.mark.benchmark(group="aggregate")
+def test_pyarrow_all(benchmark, pa_arrays, n):
+    benchmark.extra_info.update(lib="pyarrow", n=n)
     benchmark(pc.all, pa_arrays["bool"])
 
 
-# ── filter (50% selectivity) ─────────────────────────────────────────────────
+# ── Filter ────────────────────────────────────────────────────────────────────
 
 
-def test_marrow_filter_int64_50pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_50"])
+@pytest.mark.benchmark(group="filter")
+@_filter_params
+def test_marrow_filter(benchmark, ma_arrays, n, dtype_key, mask_key, selectivity, distribution):
+    dtype = dtype_key.split("_")[0]
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark(ma.filter_, ma_arrays[dtype_key], ma_arrays[mask_key])
 
 
-def test_pyarrow_filter_int64_50pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_50"])
+@pytest.mark.benchmark(group="filter")
+@_filter_params
+def test_pyarrow_filter(benchmark, pa_arrays, n, dtype_key, mask_key, selectivity, distribution):
+    dtype = dtype_key.split("_")[0]
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark(pc.filter, pa_arrays[dtype_key], pa_arrays[mask_key])
 
 
-def test_polars_filter_int64_50pct(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_50"]
-    benchmark(a.filter, m)
+@pytest.mark.benchmark(group="filter")
+@_filter_params
+def test_polars_filter(benchmark, pl_arrays, n, dtype_key, mask_key, selectivity, distribution):
+    dtype = dtype_key.split("_")[0]
+    benchmark.extra_info.update(lib="polars", n=n, dtype=dtype, selectivity=selectivity, distribution=distribution)
+    benchmark(pl_arrays[dtype_key].filter, pl_arrays[mask_key])
 
 
-def test_marrow_filter_float64_50pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["float64_a"], ma_arrays["mask_50"])
+# ── Drop nulls ────────────────────────────────────────────────────────────────
 
 
-def test_pyarrow_filter_float64_50pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["float64_a"], pa_arrays["mask_50"])
+@pytest.mark.benchmark(group="drop_nulls")
+@_null_params
+def test_marrow_drop_nulls(benchmark, ma_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.drop_nulls, ma_arrays[key])
 
 
-def test_polars_filter_float64_50pct(benchmark, pl_arrays):
-    a, m = pl_arrays["float64_a"], pl_arrays["mask_50"]
-    benchmark(a.filter, m)
+@pytest.mark.benchmark(group="drop_nulls")
+@_null_params
+def test_pyarrow_drop_nulls(benchmark, pa_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.drop_null, pa_arrays[key])
 
 
-# ── filter (90% selectivity) ─────────────────────────────────────────────────
+@pytest.mark.benchmark(group="drop_nulls")
+@_null_params
+def test_polars_drop_nulls(benchmark, pl_arrays, n, dtype, key):
+    benchmark.extra_info.update(lib="polars", n=n, dtype=dtype)
+    benchmark(pl_arrays[key].drop_nulls)
 
 
-def test_marrow_filter_int64_90pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_90"])
+# ── Comparison ────────────────────────────────────────────────────────────────
 
 
-def test_pyarrow_filter_int64_90pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_90"])
+@pytest.mark.benchmark(group="comparison")
+@_binary_num_params
+def test_marrow_equal(benchmark, ma_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.equal, ma_arrays[a], ma_arrays[b])
 
 
-def test_polars_filter_int64_90pct(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_90"]
-    benchmark(a.filter, m)
+@pytest.mark.benchmark(group="comparison")
+@_binary_num_params
+def test_pyarrow_equal(benchmark, pa_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.equal, pa_arrays[a], pa_arrays[b])
 
 
-# ── filter (10% selectivity) ─────────────────────────────────────────────────
+@pytest.mark.benchmark(group="comparison")
+@_binary_num_params
+def test_marrow_less(benchmark, ma_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="marrow", n=n, dtype=dtype)
+    benchmark(ma.less, ma_arrays[a], ma_arrays[b])
 
 
-def test_marrow_filter_int64_10pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_10"])
-
-
-def test_pyarrow_filter_int64_10pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_10"])
-
-
-def test_polars_filter_int64_10pct(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_10"]
-    benchmark(a.filter, m)
-
-
-# ── filter (1% selectivity) ──────────────────────────────────────────────────
-
-
-def test_marrow_filter_int64_1pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_1"])
-
-
-def test_pyarrow_filter_int64_1pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_1"])
-
-
-def test_polars_filter_int64_1pct(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_1"]
-    benchmark(a.filter, m)
-
-
-# ── filter (0% selectivity — none selected) ──────────────────────────────────
-
-
-def test_marrow_filter_int64_0pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_0"])
-
-
-def test_pyarrow_filter_int64_0pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_0"])
-
-
-def test_polars_filter_int64_0pct(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_0"]
-    benchmark(a.filter, m)
-
-
-# ── filter string ─────────────────────────────────────────────────────────────
-
-
-def test_marrow_filter_string_50pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["string"], ma_arrays["mask_50"])
-
-
-def test_pyarrow_filter_string_50pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["string"], pa_arrays["mask_50"])
-
-
-def test_polars_filter_string_50pct(benchmark, pl_arrays):
-    a, m = pl_arrays["string"], pl_arrays["mask_50"]
-    benchmark(a.filter, m)
-
-
-def test_marrow_filter_string_10pct(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["string"], ma_arrays["mask_10"])
-
-
-def test_pyarrow_filter_string_10pct(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["string"], pa_arrays["mask_10"])
-
-
-def test_polars_filter_string_10pct(benchmark, pl_arrays):
-    a, m = pl_arrays["string"], pl_arrays["mask_10"]
-    benchmark(a.filter, m)
-
-
-# ── filter distributions: random 50% (unpredictable mask) ────────────────────
-
-
-def test_marrow_filter_int64_rand50(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_rand50"])
-
-
-def test_pyarrow_filter_int64_rand50(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_rand50"])
-
-
-def test_polars_filter_int64_rand50(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_rand50"]
-    benchmark(a.filter, m)
-
-
-# ── filter distributions: random 10% ────────────────────────────────────────
-
-
-def test_marrow_filter_int64_rand10(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_rand10"])
-
-
-def test_pyarrow_filter_int64_rand10(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_rand10"])
-
-
-def test_polars_filter_int64_rand10(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_rand10"]
-    benchmark(a.filter, m)
-
-
-# ── filter distributions: random 90% ────────────────────────────────────────
-
-
-def test_marrow_filter_int64_rand90(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_rand90"])
-
-
-def test_pyarrow_filter_int64_rand90(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_rand90"])
-
-
-def test_polars_filter_int64_rand90(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_rand90"]
-    benchmark(a.filter, m)
-
-
-# ── filter distributions: clustered runs (~50%) ─────────────────────────────
-
-
-def test_marrow_filter_int64_clustered50(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_clustered50"])
-
-
-def test_pyarrow_filter_int64_clustered50(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_clustered50"])
-
-
-def test_polars_filter_int64_clustered50(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_clustered50"]
-    benchmark(a.filter, m)
-
-
-# ── filter distributions: head-heavy (~50%) ─────────────────────────────────
-
-
-def test_marrow_filter_int64_head50(benchmark, ma_arrays):
-    benchmark(ma.filter_, ma_arrays["int64_a"], ma_arrays["mask_head50"])
-
-
-def test_pyarrow_filter_int64_head50(benchmark, pa_arrays):
-    benchmark(pc.filter, pa_arrays["int64_a"], pa_arrays["mask_head50"])
-
-
-def test_polars_filter_int64_head50(benchmark, pl_arrays):
-    a, m = pl_arrays["int64_a"], pl_arrays["mask_head50"]
-    benchmark(a.filter, m)
-
-
-# ── drop_nulls ────────────────────────────────────────────────────────────────
-
-
-def test_marrow_drop_nulls_int64(benchmark, ma_arrays):
-    benchmark(ma.drop_nulls, ma_arrays["int64_nulls"])
-
-
-def test_pyarrow_drop_nulls_int64(benchmark, pa_arrays):
-    benchmark(pc.drop_null, pa_arrays["int64_nulls"])
-
-
-def test_polars_drop_nulls_int64(benchmark, pl_arrays):
-    benchmark(pl_arrays["int64_nulls"].drop_nulls)
-
-
-def test_marrow_drop_nulls_float64(benchmark, ma_arrays):
-    benchmark(ma.drop_nulls, ma_arrays["float64_nulls"])
-
-
-def test_pyarrow_drop_nulls_float64(benchmark, pa_arrays):
-    benchmark(pc.drop_null, pa_arrays["float64_nulls"])
-
-
-def test_polars_drop_nulls_float64(benchmark, pl_arrays):
-    benchmark(pl_arrays["float64_nulls"].drop_nulls)
-
-
-# ── equal ────────────────────────────────────────────────────────────────────
-
-
-def test_marrow_equal_int64(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
-    benchmark(ma.equal, a, b)
-
-
-def test_pyarrow_equal_int64(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
-    benchmark(pc.equal, a, b)
-
-
-def test_marrow_equal_float64(benchmark, ma_arrays):
-    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
-    benchmark(ma.equal, a, b)
-
-
-def test_pyarrow_equal_float64(benchmark, pa_arrays):
-    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
-    benchmark(pc.equal, a, b)
-
-
-# ── less ─────────────────────────────────────────────────────────────────────
-
-
-def test_marrow_less_int64(benchmark, ma_arrays):
-    a, b = ma_arrays["int64_a"], ma_arrays["int64_b"]
-    benchmark(ma.less, a, b)
-
-
-def test_pyarrow_less_int64(benchmark, pa_arrays):
-    a, b = pa_arrays["int64_a"], pa_arrays["int64_b"]
-    benchmark(pc.less, a, b)
-
-
-def test_marrow_less_float64(benchmark, ma_arrays):
-    a, b = ma_arrays["float64_a"], ma_arrays["float64_b"]
-    benchmark(ma.less, a, b)
-
-
-def test_pyarrow_less_float64(benchmark, pa_arrays):
-    a, b = pa_arrays["float64_a"], pa_arrays["float64_b"]
-    benchmark(pc.less, a, b)
+@pytest.mark.benchmark(group="comparison")
+@_binary_num_params
+def test_pyarrow_less(benchmark, pa_arrays, n, dtype, a, b):
+    benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
+    benchmark(pc.less, pa_arrays[a], pa_arrays[b])
