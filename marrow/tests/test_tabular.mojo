@@ -1,5 +1,6 @@
 """Tests for RecordBatch and Table abstractions."""
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 from marrow.tabular import RecordBatch, Table
 from marrow.arrays import AnyArray
 from marrow.schema import Schema
@@ -161,4 +162,4 @@ def test_record_batch_eq_sliced() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

@@ -1,24 +1,17 @@
 """Benchmarks for aggregate kernels (sum, product, min, max).
 
-Covers no-null and 10%-null arrays across sizes 1k–1M, dtypes int64 and float64.
-
-Run with: pixi run bench_mojo
+Run with:
+    pixi run bench_mojo -k bench_aggregate
+    pixi run pytest marrow/kernels/tests/bench_aggregate.mojo --benchmark
 """
 
-from std.benchmark import (
-    Bench,
-    BenchConfig,
-    Bencher,
-    BenchId,
-    BenchMetric,
-    ThroughputMeasure,
-    keep,
-)
+from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import int64, float64, PrimitiveType
+from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType
 from marrow.kernels.aggregate import sum_, product, min_, max_
+from marrow.testing import BenchSuite, Benchmark
 
 
 def _make_array_with_nulls[
@@ -34,34 +27,114 @@ def _make_array_with_nulls[
 
 
 # ---------------------------------------------------------------------------
-# sum
+# sum — int64
 # ---------------------------------------------------------------------------
 
 
-@parameter
-def bench_sum[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = arange[T](0, size)
+def bench_sum_int64_1k(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 1_000)
+    b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = sum_[T](arr)
-        keep(result)
+    def call() raises:
+        keep(sum_[Int64Type](arr))
 
-    b.iter[call_fn]()
+    b.iter[call]()
 
 
-@parameter
-def bench_sum_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = _make_array_with_nulls[T](size)
+def bench_sum_int64_100k(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = sum_[T](arr)
-        keep(result)
+    def call() raises:
+        keep(sum_[Int64Type](arr))
 
-    b.iter[call_fn]()
+    b.iter[call]()
+
+
+def bench_sum_int64_1m(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Int64Type](arr))
+
+    b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
+# sum — float64
+# ---------------------------------------------------------------------------
+
+
+def bench_sum_float64_1k(mut b: Benchmark) raises:
+    var arr = arange[Float64Type](0, 1_000)
+    b.throughput(BenchMetric.elements, 1_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Float64Type](arr))
+
+    b.iter[call]()
+
+
+def bench_sum_float64_100k(mut b: Benchmark) raises:
+    var arr = arange[Float64Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Float64Type](arr))
+
+    b.iter[call]()
+
+
+def bench_sum_float64_1m(mut b: Benchmark) raises:
+    var arr = arange[Float64Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Float64Type](arr))
+
+    b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
+# sum — with nulls
+# ---------------------------------------------------------------------------
+
+
+def bench_sum_nulls_int64_100k(mut b: Benchmark) raises:
+    var arr = _make_array_with_nulls[Int64Type](100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Int64Type](arr))
+
+    b.iter[call]()
+
+
+def bench_sum_nulls_int64_1m(mut b: Benchmark) raises:
+    var arr = _make_array_with_nulls[Int64Type](1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(sum_[Int64Type](arr))
+
+    b.iter[call]()
 
 
 # ---------------------------------------------------------------------------
@@ -69,17 +142,28 @@ def bench_sum_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
 # ---------------------------------------------------------------------------
 
 
-@parameter
-def bench_product[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = arange[T](1, size + 1)
+def bench_product_int64_100k(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](1, 100_001)
+    b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = product[T](arr)
-        keep(result)
+    def call() raises:
+        keep(product[Int64Type](arr))
 
-    b.iter[call_fn]()
+    b.iter[call]()
+
+
+def bench_product_int64_1m(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](1, 1_000_001)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(product[Int64Type](arr))
+
+    b.iter[call]()
 
 
 # ---------------------------------------------------------------------------
@@ -87,43 +171,64 @@ def bench_product[T: PrimitiveType](mut b: Bencher, size: Int) raises:
 # ---------------------------------------------------------------------------
 
 
-@parameter
-def bench_min[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = arange[T](0, size)
+def bench_min_int64_100k(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = min_[T](arr)
-        keep(result)
+    def call() raises:
+        keep(min_[Int64Type](arr))
 
-    b.iter[call_fn]()
-
-
-@parameter
-def bench_max[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = arange[T](0, size)
-
-    @always_inline
-    @parameter
-    def call_fn() raises:
-        var result = max_[T](arr)
-        keep(result)
-
-    b.iter[call_fn]()
+    b.iter[call]()
 
 
-@parameter
-def bench_min_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var arr = _make_array_with_nulls[T](size)
+def bench_min_int64_1m(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = min_[T](arr)
-        keep(result)
+    def call() raises:
+        keep(min_[Int64Type](arr))
 
-    b.iter[call_fn]()
+    b.iter[call]()
+
+
+def bench_max_int64_100k(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(max_[Int64Type](arr))
+
+    b.iter[call]()
+
+
+def bench_max_int64_1m(mut b: Benchmark) raises:
+    var arr = arange[Int64Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(max_[Int64Type](arr))
+
+    b.iter[call]()
+
+
+def bench_min_nulls_int64_1m(mut b: Benchmark) raises:
+    var arr = _make_array_with_nulls[Int64Type](1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(min_[Int64Type](arr))
+
+    b.iter[call]()
 
 
 # ---------------------------------------------------------------------------
@@ -132,57 +237,4 @@ def bench_min_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
 
 
 def main() raises:
-    var m = Bench(BenchConfig(num_repetitions=3))
-
-    comptime sizes = (1_000, 10_000, 100_000, 1_000_000)
-    comptime size_labels = ("1k", "10k", "100k", "1M")
-
-    # --- sum ---
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum[Int64Type]](
-            BenchId("sum[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum[Float64Type]](
-            BenchId("sum[Float64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_sum_nulls[Int64Type]](
-            BenchId("sum_nulls[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-
-    # --- product ---
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_product[Int64Type]](
-            BenchId("product[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-
-    # --- min / max ---
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_min[Int64Type]](
-            BenchId("min[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_max[Int64Type]](
-            BenchId("max[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_min_nulls[Int64Type]](
-            BenchId("min_nulls[Int64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-
-    m.dump_report()
+    BenchSuite.run[__functions_in_module()]()

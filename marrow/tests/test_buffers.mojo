@@ -1,4 +1,5 @@
-from std.testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false
+from marrow.testing import TestSuite
 from std.memory import ArcPointer
 
 from marrow.buffers import *
@@ -750,4 +751,4 @@ def test_bitmapview_difference_length_mismatch_raises() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

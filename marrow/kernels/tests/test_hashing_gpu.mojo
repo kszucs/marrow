@@ -3,7 +3,8 @@
 Verifies that GPU-dispatched rapidhash produces identical results to CPU SIMD.
 """
 
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 
 from marrow.arrays import BoolArray, PrimitiveArray
@@ -115,4 +116,4 @@ def test_rapidhash_gpu_device_resident() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

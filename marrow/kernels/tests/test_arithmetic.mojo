@@ -3,8 +3,8 @@ from std.testing import (
     assert_true,
     assert_false,
     assert_raises,
-    TestSuite,
 )
+from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import array, arange, PrimitiveBuilder
@@ -609,4 +609,4 @@ def test_pow_runtime_typed() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

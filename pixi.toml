@@ -42,6 +42,7 @@ test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v", depends-on = ["build_python"] }
 bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
 bench_python = { cmd = "pytest --benchmark --python -v", depends-on = ["build_python"] }
+bench_python_codspeed = { cmd = "pytest --benchmark --python -v --codspeed", depends-on = ["build_python"] }
 bench = { cmd = "pytest --benchmark -v", depends-on = ["build_python"] }
 profile = "python scripts/profile.py"
 fmt_mojo = { cmd = "mojo format marrow" }
@@ -85,3 +86,4 @@ libcompiler-rt = ">=17,<23"
 
 [pypi-dependencies]
 pyarrow = ">=23.0.0, <24"
+pytest-codspeed = ">=3.2, <4"

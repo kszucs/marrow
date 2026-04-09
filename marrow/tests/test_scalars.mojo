@@ -1,4 +1,5 @@
-from std.testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false
+from marrow.testing import TestSuite
 
 from marrow.arrays import (
     AnyArray,
@@ -305,4 +306,4 @@ def test_any_array_getitem_out_of_bounds() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

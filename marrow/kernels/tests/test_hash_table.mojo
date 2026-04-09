@@ -1,6 +1,7 @@
 """Tests for SwissHashTable: insert, build, probe, num_keys."""
 
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 
 from marrow.arrays import PrimitiveArray, AnyArray, StructArray
 from marrow.buffers import Bitmap
@@ -267,4 +268,4 @@ def test_num_keys_after_insert() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

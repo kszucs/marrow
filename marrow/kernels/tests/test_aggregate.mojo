@@ -1,4 +1,5 @@
-from std.testing import assert_equal, TestSuite
+from std.testing import assert_equal
+from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import array, nulls, PrimitiveBuilder
@@ -41,4 +42,4 @@ def test_sum_untyped() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

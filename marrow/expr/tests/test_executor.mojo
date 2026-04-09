@@ -1,6 +1,7 @@
 """Tests for expression execution and streaming query execution."""
 
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 from std.python import Python
 from std.os import remove
 
@@ -503,4 +504,4 @@ def test_aggregate_small_morsel() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

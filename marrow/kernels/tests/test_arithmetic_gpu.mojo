@@ -1,4 +1,5 @@
-from std.testing import assert_equal, assert_false, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true
+from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 from std.sys.info import CompilationTarget
 
@@ -77,4 +78,4 @@ def test_chained_gpu_add() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

@@ -9,7 +9,8 @@ from std.algorithm.functional import elementwise
 from std.gpu.host import DeviceContext, get_gpu_target
 from std.sys import has_accelerator
 from std.sys.info import simd_width_of
-from std.testing import assert_equal, assert_false, assert_true, TestSuite
+from std.testing import assert_equal, assert_false, assert_true
+from marrow.testing import TestSuite
 from std.utils.index import IndexList
 
 from marrow.buffers import Bitmap, Buffer
@@ -508,4 +509,4 @@ def test_apply_comparison_to_bitmap_gpu() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

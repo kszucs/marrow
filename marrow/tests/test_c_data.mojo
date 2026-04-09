@@ -1,4 +1,5 @@
-from std.testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false
+from marrow.testing import TestSuite
 from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
@@ -707,4 +708,4 @@ def test_all_numeric_array_imports() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

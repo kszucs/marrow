@@ -1,4 +1,5 @@
-from std.testing import assert_false, assert_true, TestSuite
+from std.testing import assert_false, assert_true
+from marrow.testing import TestSuite
 from marrow.kernels.helpers import has_accelerator_support
 from std.sys import CompilationTarget
 
@@ -12,4 +13,4 @@ def test_has_accelerator_support() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

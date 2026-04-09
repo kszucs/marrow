@@ -1,4 +1,5 @@
-from std.testing import assert_equal, assert_true, assert_false, TestSuite
+from std.testing import assert_equal, assert_true, assert_false
+from marrow.testing import TestSuite
 import marrow.dtypes as dt
 from marrow.dtypes import (
     ArrowType,
@@ -311,4 +312,4 @@ def test_is_fixed_size() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

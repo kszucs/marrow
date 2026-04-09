@@ -1,6 +1,7 @@
 """Executor-level tests for join plan nodes."""
 
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray
 from marrow.builders import array, PrimitiveBuilder
@@ -282,4 +283,4 @@ def test_join_then_filter() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()

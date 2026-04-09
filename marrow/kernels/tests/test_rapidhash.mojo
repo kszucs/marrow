@@ -5,7 +5,8 @@ with default seed=0 and default secrets. See:
   https://github.com/Nicoshev/rapidhash
 """
 
-from std.testing import assert_equal, assert_true, TestSuite
+from std.testing import assert_equal, assert_true
+from marrow.testing import TestSuite
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import PrimitiveBuilder
@@ -134,4 +135,4 @@ def test_null_produces_sentinel() raises:
 
 
 def main() raises:
-    TestSuite.discover_tests[__functions_in_module()]().run()
+    TestSuite.run[__functions_in_module()]()
