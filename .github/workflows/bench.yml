@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   bench-mojo:
+    if: false  # Temporarily disabled: hashtable benchmarks crash at -O3 (Mojo compiler bug)
     runs-on: ubuntu-latest
     env:
       MODULAR_HOME: "/home/runner/.modular"
