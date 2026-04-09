@@ -284,7 +284,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         Returns:
             Plan node whose schema has key columns + agg result columns.
         """
-        from marrow.dtypes import float64, int64, ArrowType
+        from marrow.dtypes import float64, int64, AnyDataType
 
         var input_schema = self.schema()
         var resolved_keys = List[AnyValue]()
@@ -305,9 +305,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 fields.append(Field("key", input_schema.fields[0].dtype.copy()))
         for i in range(len(funcs)):
             if funcs[i] == "count":
-                fields.append(Field(funcs[i], ArrowType(int64)))
+                fields.append(Field(funcs[i], AnyDataType(int64)))
             else:
-                fields.append(Field(funcs[i], ArrowType(float64)))
+                fields.append(Field(funcs[i], AnyDataType(float64)))
 
         var agg = Aggregate(
             input=self,

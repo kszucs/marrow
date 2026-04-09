@@ -34,7 +34,7 @@ from .arrays import (
 )
 from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import (
-    ArrowType,
+    AnyDataType,
     PrimitiveType,
     Field,
     BoolType,
@@ -77,7 +77,7 @@ from std.builtin.simd import Scalar as _Scalar
 trait Scalar(Copyable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         ...
 
     def is_valid(self) -> Bool:
@@ -109,7 +109,7 @@ struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def null() -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return bool_
 
     def is_valid(self) -> Bool:
@@ -162,7 +162,7 @@ struct PrimitiveScalar[T: PrimitiveType](
     def null() -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return Self.T()
 
     def is_valid(self) -> Bool:
@@ -253,7 +253,7 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def null() raises -> Self:
         return Self(is_valid=False)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return string
 
     def is_valid(self) -> Bool:
@@ -310,7 +310,7 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
         self._value = value.copy()
         self._is_valid = is_valid
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return list_(self._value.dtype())
 
     def is_valid(self) -> Bool:
@@ -344,14 +344,14 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
 struct StructScalar(Copyable, Movable, Scalar, Writable):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
-    var _dtype: ArrowType
+    var _dtype: AnyDataType
     var _value: List[AnyScalar]
     var _is_valid: Bool
 
     def __init__(
         out self,
         *,
-        dtype: ArrowType,
+        dtype: AnyDataType,
         value: List[AnyScalar],
         is_valid: Bool,
     ):
@@ -360,10 +360,10 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
         self._is_valid = is_valid
 
     @staticmethod
-    def null(dtype: ArrowType) -> Self:
+    def null(dtype: AnyDataType) -> Self:
         return Self(dtype=dtype, value=List[AnyScalar](), is_valid=False)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return self._dtype.copy()
 
     def is_valid(self) -> Bool:
@@ -453,9 +453,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- dispatch-based methods ---
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         @parameter
-        def f[T: Scalar](t: T) -> ArrowType:
+        def f[T: Scalar](t: T) -> AnyDataType:
             return t.type()
 
         return self._dispatch[f]()

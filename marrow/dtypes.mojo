@@ -5,7 +5,7 @@
 enabling primitive-typed generics to use `T.native` as a compile-time type
 parameter (e.g. `Buffer[T.native]`, `Scalar[T.native]`).
 
-`ArrowType` is the type-erased runtime container backed by a `Variant` — no
+`AnyDataType` is the type-erased runtime container backed by a `Variant` — no
 heap allocation, no vtable, direct member access.
 
 Concrete zero-size type structs (one per Arrow type):
@@ -39,7 +39,7 @@ from std.sys.compile import codegen_unreachable
 
 
 trait DataType(Copyable, Equatable, ImplicitlyDestructible, Movable, Writable):
-    def to_any(deinit self) -> ArrowType:
+    def to_any(deinit self) -> AnyDataType:
         ...
 
 
@@ -71,8 +71,8 @@ struct NullType(DataType, Defaultable, TrivialRegisterPassable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("null")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
@@ -93,8 +93,8 @@ struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("bool")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Int8Type(PrimitiveType):
@@ -109,8 +109,8 @@ struct Int8Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("int8")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Int16Type(PrimitiveType):
@@ -125,8 +125,8 @@ struct Int16Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("int16")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Int32Type(PrimitiveType):
@@ -141,8 +141,8 @@ struct Int32Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("int32")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Int64Type(PrimitiveType):
@@ -157,8 +157,8 @@ struct Int64Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("int64")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct UInt8Type(PrimitiveType):
@@ -173,8 +173,8 @@ struct UInt8Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("uint8")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct UInt16Type(PrimitiveType):
@@ -189,8 +189,8 @@ struct UInt16Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("uint16")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct UInt32Type(PrimitiveType):
@@ -205,8 +205,8 @@ struct UInt32Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("uint32")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct UInt64Type(PrimitiveType):
@@ -221,8 +221,8 @@ struct UInt64Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("uint64")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Float32Type(PrimitiveType):
@@ -237,8 +237,8 @@ struct Float32Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("float32")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Float64Type(PrimitiveType):
@@ -253,8 +253,8 @@ struct Float64Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("float64")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct Float16Type(PrimitiveType):
@@ -269,8 +269,8 @@ struct Float16Type(PrimitiveType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("float16")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
@@ -283,8 +283,8 @@ struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("binary")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 struct StringType(DataType, Defaultable, TrivialRegisterPassable):
@@ -297,8 +297,8 @@ struct StringType(DataType, Defaultable, TrivialRegisterPassable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("string")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
 
 
 # ---------------------------------------------------------------------------
@@ -315,11 +315,11 @@ struct Field(
     Writable,
 ):
     var name: String
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var nullable: Bool
 
     def __init__(
-        out self, name: String, var dtype: ArrowType, nullable: Bool = True
+        out self, name: String, var dtype: AnyDataType, nullable: Bool = True
     ):
         self.name = name
         self.dtype = dtype^
@@ -367,14 +367,14 @@ struct ListType(DataType):
     def value_field(ref self) -> ref[self.item] Field:
         return self.item[]
 
-    def value_type(ref self) -> ref[self.item[].dtype] ArrowType:
+    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
         return self.item[].dtype
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("list<", self.item[].dtype, ">")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self^)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self^)
 
 
 struct FixedSizeListType(DataType):
@@ -395,14 +395,14 @@ struct FixedSizeListType(DataType):
     def value_field(ref self) -> ref[self.item] Field:
         return self.item[]
 
-    def value_type(self) -> ArrowType:
+    def value_type(self) -> AnyDataType:
         return self.item[].dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_list<", self.item[], ">")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self^)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self^)
 
 
 struct StructType(DataType):
@@ -425,17 +425,16 @@ struct StructType(DataType):
             writer.write(self.fields[i])
         writer.write(">")
 
-    def to_any(deinit self) -> ArrowType:
-        return ArrowType(self^)
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self^)
 
 
 # ---------------------------------------------------------------------------
-# ArrowType — Variant-based type-erased handle
+# AnyDataType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
 
 
-# TODO: rename it to AnyDataType or AnyType (if collision with mojo's anytype is not happening)
-struct ArrowType(
+struct AnyDataType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
@@ -487,7 +486,7 @@ struct ArrowType(
         try:
             capsule = py.__arrow_c_schema__()
         except:
-            raise Error("cannot convert Python object to ArrowType")
+            raise Error("cannot convert Python object to AnyDataType")
         self = CArrowSchema.from_pycapsule(capsule).to_dtype()
 
     def to_python_object(var self) raises -> PythonObject:
@@ -624,17 +623,19 @@ struct ArrowType(
 # ---------------------------------------------------------------------------
 
 
-def field(name: String, var dtype: ArrowType, nullable: Bool = True) -> Field:
+def field(name: String, var dtype: AnyDataType, nullable: Bool = True) -> Field:
     """Construct a Field. Equivalent to PyArrow's ``pa.field()``."""
     return Field(name, dtype^, nullable)
 
 
-def list_(var value_type: ArrowType) -> ListType:
+def list_(var value_type: AnyDataType) -> ListType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
     return ListType(field("item", value_type^))
 
 
-def fixed_size_list_(var value_type: ArrowType, size: Int) -> FixedSizeListType:
+def fixed_size_list_(
+    var value_type: AnyDataType, size: Int
+) -> FixedSizeListType:
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size.
     """
     return FixedSizeListType(field("item", value_type^), size)

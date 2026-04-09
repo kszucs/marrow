@@ -128,7 +128,7 @@ struct CArrowSchema(Copyable, Movable):
 
     @staticmethod
     def from_dtype(
-        dtype: ArrowType,
+        dtype: AnyDataType,
     ) raises -> CArrowSchema:
         """Build a CArrowSchema value for a DataType.
 
@@ -322,7 +322,7 @@ struct CArrowSchema(Copyable, Movable):
             )
         )
 
-    def to_dtype(self) raises -> ArrowType:
+    def to_dtype(self) raises -> AnyDataType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
@@ -490,7 +490,7 @@ struct CArrowArray(Copyable, Movable):
             self.release(UnsafePointer(to=self))
 
     def to_data(
-        self, dtype: ArrowType, owner: ArcPointer[Allocation]
+        self, dtype: AnyDataType, owner: ArcPointer[Allocation]
     ) raises -> ArrayData:
         """Build an ArrayData from this CArrowArray, all buffers sharing one owner.
 
@@ -579,7 +579,7 @@ struct CArrowArray(Copyable, Movable):
         )
 
     def to_array(
-        self, dtype: ArrowType, owner: ArcPointer[Allocation]
+        self, dtype: AnyDataType, owner: ArcPointer[Allocation]
     ) raises -> AnyArray:
         """Build an AnyArray from this CArrowArray.  Thin wrapper over to_data.
         """
@@ -700,7 +700,7 @@ struct CArrowArray(Copyable, Movable):
             )
         )
 
-    def to_array(deinit self, dtype: ArrowType) raises -> AnyArray:
+    def to_array(deinit self, dtype: AnyDataType) raises -> AnyArray:
         """Convert to an AnyArray, taking ownership of the C struct.
 
         The CArrowArray is moved onto the heap and wrapped in a
@@ -770,7 +770,7 @@ struct CArrowDeviceArray(Movable):
     var reserved2: Int64
 
     def to_array(
-        deinit self, dtype: ArrowType, ctx: DeviceContext
+        deinit self, dtype: AnyDataType, ctx: DeviceContext
     ) raises -> AnyArray:
         """Import a device array into marrow, taking ownership of the C struct.
 

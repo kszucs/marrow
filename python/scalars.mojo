@@ -14,7 +14,7 @@ from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from marrow.scalars import AnyScalar
 from marrow.arrays import AnyArray
 from marrow.dtypes import (
-    ArrowType,
+    AnyDataType,
     BoolType,
     Int8Type, Int16Type, Int32Type, Int64Type,
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,

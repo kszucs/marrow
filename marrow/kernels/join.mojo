@@ -35,7 +35,7 @@ from std.gpu.host import DeviceContext
 from ..arrays import PrimitiveArray, AnyArray, StructArray
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
-    ArrowType,
+    AnyDataType,
     Field,
     int32,
     uint64,
@@ -95,7 +95,7 @@ trait Join(Movable):
         """Probe with right (probe) side data.  Return assembled output."""
         ...
 
-    def build_dtype(self) -> ArrowType:
+    def build_dtype(self) -> AnyDataType:
         """DataType of the build side (for output schema construction)."""
         ...
 
@@ -126,7 +126,7 @@ struct HashJoin[
 
     var _table: SwissHashTable[Self.hasher]
     var _left_key_indices: List[Int]
-    var _left_dtype: ArrowType
+    var _left_dtype: AnyDataType
     var _left_data: Optional[StructArray]
     var _left_rows: Int
 
@@ -233,13 +233,13 @@ struct HashJoin[
                     rb.append(Scalar[int32.native](i))
         return (lb.finish(), rb.finish())
 
-    def build_dtype(self) -> ArrowType:
+    def build_dtype(self) -> AnyDataType:
         return self._left_dtype.copy()
 
     def num_left_rows(self) -> Int:
         return self._left_rows
 
-    def output_dtype(self, probe: StructArray, kind: UInt8) -> ArrowType:
+    def output_dtype(self, probe: StructArray, kind: UInt8) -> AnyDataType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
         for ref f in self._left_dtype.as_struct_type().fields:

@@ -26,7 +26,7 @@ unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
 from std.memory import ArcPointer
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import ArrowType, PrimitiveType
+from marrow.dtypes import AnyDataType, PrimitiveType
 from marrow.schema import Schema
 
 
@@ -95,7 +95,7 @@ trait Value(ImplicitlyDestructible, Movable):
         """Return the node-kind constant (LOAD, ADD, NEG, …)."""
         ...
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type, or None if not yet inferred."""
         ...
 
@@ -124,7 +124,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
 
     var _data: ArcPointer[NoneType]
     var _virt_kind: def(ArcPointer[NoneType]) -> UInt8
-    var _virt_dtype: def(ArcPointer[NoneType]) -> Optional[ArrowType]
+    var _virt_dtype: def(ArcPointer[NoneType]) -> Optional[AnyDataType]
     var _virt_inputs: def(ArcPointer[NoneType]) -> List[AnyValue]
     var _virt_write_to_string: def(ArcPointer[NoneType]) -> String
     var _virt_drop: def(var ArcPointer[NoneType])
@@ -140,7 +140,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_dtype[
         T: Value
-    ](ptr: ArcPointer[NoneType]) -> Optional[ArrowType]:
+    ](ptr: ArcPointer[NoneType]) -> Optional[AnyDataType]:
         return rebind[ArcPointer[T]](ptr)[].dtype()
 
     @staticmethod
@@ -185,7 +185,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
     def kind(self) -> UInt8:
         return self._virt_kind(self._data)
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return self._virt_dtype(self._data)
 
     def inputs(self) -> List[AnyValue]:
@@ -258,7 +258,7 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
         """Element-wise absolute value."""
         return Unary(op=ABS, child=self)
 
-    def cast(self, to: ArrowType) -> AnyValue:
+    def cast(self, to: AnyDataType) -> AnyValue:
         """Explicit type cast."""
         return Cast(child=self, to=to)
 
@@ -281,10 +281,10 @@ struct Column(Value):
 
     var index: Int
     var name: String
-    var dtype_: Optional[ArrowType]
+    var dtype_: Optional[AnyDataType]
 
     def __init__(
-        out self, *, index: Int, var name: String, dtype_: Optional[ArrowType]
+        out self, *, index: Int, var name: String, dtype_: Optional[AnyDataType]
     ):
         self.index = index
         self.name = name^
@@ -293,7 +293,7 @@ struct Column(Value):
     def kind(self) -> UInt8:
         return LOAD
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return self.dtype_.copy()
 
     def inputs(self) -> List[AnyValue]:
@@ -318,7 +318,7 @@ struct Literal(Value):
     def kind(self) -> UInt8:
         return LITERAL
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return self.value.dtype()
 
     def inputs(self) -> List[AnyValue]:
@@ -353,7 +353,7 @@ struct Binary(Value):
     def kind(self) -> UInt8:
         return self.op
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return None  # filled in by type inference
 
     def inputs(self) -> List[AnyValue]:
@@ -411,7 +411,7 @@ struct Unary(Value):
     def kind(self) -> UInt8:
         return self.op
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return None  # filled in by type inference
 
     def inputs(self) -> List[AnyValue]:
@@ -441,7 +441,7 @@ struct IsNull(Value):
     def kind(self) -> UInt8:
         return IS_NULL
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return None  # bool_ after type inference
 
     def inputs(self) -> List[AnyValue]:
@@ -475,7 +475,7 @@ struct IfElse(Value):
     def kind(self) -> UInt8:
         return IF_ELSE
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return None  # filled in by type inference
 
     def inputs(self) -> List[AnyValue]:
@@ -495,16 +495,16 @@ struct Cast(Value):
     """Explicit type cast."""
 
     var child: AnyValue
-    var to: ArrowType
+    var to: AnyDataType
 
-    def __init__(out self, *, var child: AnyValue, to: ArrowType):
+    def __init__(out self, *, var child: AnyValue, to: AnyDataType):
         self.child = child^
         self.to = to.copy()
 
     def kind(self) -> UInt8:
         return CAST
 
-    def dtype(self) -> Optional[ArrowType]:
+    def dtype(self) -> Optional[AnyDataType]:
         return self.to.copy()
 
     def inputs(self) -> List[AnyValue]:

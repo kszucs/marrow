@@ -318,7 +318,7 @@ def test_numeric_dtypes() raises:
     pa_types.append(pa.uint64())
     pa_types.append(pa.float32())
     pa_types.append(pa.float64())
-    var arrow_types = List[ArrowType]()
+    var arrow_types = List[AnyDataType]()
     arrow_types.append(int8)
     arrow_types.append(uint8)
     arrow_types.append(int16)
@@ -557,7 +557,7 @@ def test_fixed_size_list_with_nulls() raises:
 
 def test_schema_from_dtype_all_types() raises:
     """All supported dtypes survive a from_dtype → to_dtype roundtrip."""
-    var types = List[ArrowType]()
+    var types = List[AnyDataType]()
     types.append(int8)
     types.append(uint8)
     types.append(int16)

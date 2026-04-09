@@ -9,89 +9,89 @@ from helpers import marrow_module
 
 def null() raises -> PythonObject:
     """Create a null DataType."""
-    return dt.ArrowType(dt.NullType()).to_python_object()
+    return dt.AnyDataType(dt.NullType()).to_python_object()
 
 
 def bool_() raises -> PythonObject:
     """Create a boolean DataType."""
-    return dt.ArrowType(dt.bool_).to_python_object()
+    return dt.AnyDataType(dt.bool_).to_python_object()
 
 
 def int8() raises -> PythonObject:
     """Create an int8 DataType."""
-    return dt.ArrowType(dt.int8).to_python_object()
+    return dt.AnyDataType(dt.int8).to_python_object()
 
 
 def int16() raises -> PythonObject:
     """Create an int16 DataType."""
-    return dt.ArrowType(dt.int16).to_python_object()
+    return dt.AnyDataType(dt.int16).to_python_object()
 
 
 def int32() raises -> PythonObject:
     """Create an int32 DataType."""
-    return dt.ArrowType(dt.int32).to_python_object()
+    return dt.AnyDataType(dt.int32).to_python_object()
 
 
 def int64() raises -> PythonObject:
     """Create an int64 DataType."""
-    return dt.ArrowType(dt.int64).to_python_object()
+    return dt.AnyDataType(dt.int64).to_python_object()
 
 
 def uint8() raises -> PythonObject:
     """Create a uint8 DataType."""
-    return dt.ArrowType(dt.uint8).to_python_object()
+    return dt.AnyDataType(dt.uint8).to_python_object()
 
 
 def uint16() raises -> PythonObject:
     """Create a uint16 DataType."""
-    return dt.ArrowType(dt.uint16).to_python_object()
+    return dt.AnyDataType(dt.uint16).to_python_object()
 
 
 def uint32() raises -> PythonObject:
     """Create a uint32 DataType."""
-    return dt.ArrowType(dt.uint32).to_python_object()
+    return dt.AnyDataType(dt.uint32).to_python_object()
 
 
 def uint64() raises -> PythonObject:
     """Create a uint64 DataType."""
-    return dt.ArrowType(dt.uint64).to_python_object()
+    return dt.AnyDataType(dt.uint64).to_python_object()
 
 
 def float16() raises -> PythonObject:
     """Create a float16 DataType."""
-    return dt.ArrowType(dt.float16).to_python_object()
+    return dt.AnyDataType(dt.float16).to_python_object()
 
 
 def float32() raises -> PythonObject:
     """Create a float32 DataType."""
-    return dt.ArrowType(dt.float32).to_python_object()
+    return dt.AnyDataType(dt.float32).to_python_object()
 
 
 def float64() raises -> PythonObject:
     """Create a float64 DataType."""
-    return dt.ArrowType(dt.float64).to_python_object()
+    return dt.AnyDataType(dt.float64).to_python_object()
 
 
 def string() raises -> PythonObject:
     """Create a string DataType."""
-    return dt.ArrowType(dt.StringType()).to_python_object()
+    return dt.AnyDataType(dt.StringType()).to_python_object()
 
 
 def binary() raises -> PythonObject:
     """Create a binary DataType."""
-    return dt.ArrowType(dt.BinaryType()).to_python_object()
+    return dt.AnyDataType(dt.BinaryType()).to_python_object()
 
 
 def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
     """Create a Field with the given name and data type."""
-    var d = dtype.downcast_value_ptr[dt.ArrowType]()[].copy()
+    var d = dtype.downcast_value_ptr[dt.AnyDataType]()[].copy()
     var f = dt.Field(String(py=name), d^)
     return f^.to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
-    var d = value_type.downcast_value_ptr[dt.ArrowType]()[].copy()
+    var d = value_type.downcast_value_ptr[dt.AnyDataType]()[].copy()
     return dt.list_(d^).to_any().to_python_object()
 
 
@@ -107,7 +107,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add DataType related data to the Python API."""
 
     _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
-    _ = mb.add_type[dt.ArrowType]("DataType").def_method[marrow_module]("__module__")
+    _ = mb.add_type[dt.AnyDataType]("DataType").def_method[marrow_module]("__module__")
 
     mb.def_function[null]("null", docstring="null() -> DataType\n--\n\nCreate a null DataType.")
     mb.def_function[bool_]("bool_", docstring="bool_() -> DataType\n--\n\nCreate a boolean DataType.")

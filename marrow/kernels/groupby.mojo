@@ -21,7 +21,7 @@ from ..builders import (
 )
 from ..dtypes import (
     PrimitiveType,
-    ArrowType,
+    AnyDataType,
     Field,
     BoolType,
     Int8Type,
@@ -81,7 +81,7 @@ struct AggregateState(Movable):
     def length(self) -> Int:
         return self.builder.length()
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return self.builder.dtype()
 
     def finish(mut self) raises -> AnyArray:
@@ -202,7 +202,7 @@ struct AggregateFunction(Copyable, Movable):
         """Finalize state into a result (field, column) pair."""
         if self.name == "count":
             return (
-                Field(col_name, ArrowType(int64)),
+                Field(col_name, AnyDataType(int64)),
                 self.counts.finish(),
             )
 
@@ -219,7 +219,7 @@ struct AggregateFunction(Copyable, Movable):
                 else:
                     b.append_null()
             return (
-                Field(col_name, ArrowType(float64)),
+                Field(col_name, AnyDataType(float64)),
                 b.finish().to_any(),
             )
 
@@ -234,7 +234,7 @@ struct AggregateFunction(Copyable, Movable):
             else:
                 b.append_null()
         return (
-            Field(col_name, ArrowType(float64)),
+            Field(col_name, AnyDataType(float64)),
             b.finish().to_any(),
         )
 

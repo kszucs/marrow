@@ -185,7 +185,7 @@ def _any_to_array(arr: AnyArray) -> AnyArray:
     return arr.copy()
 
 
-def _any_dtype(arr: AnyArray) -> dt.ArrowType:
+def _any_dtype(arr: AnyArray) -> dt.AnyDataType:
     return arr.dtype()
 
 
@@ -340,7 +340,7 @@ struct PyInferrer(Copyable, Movable):
             + self.struct_count
         )
 
-    def _get_type(self) raises -> dt.ArrowType:
+    def _get_type(self) raises -> dt.AnyDataType:
         if self.bytes_count > 0:
             if self.bytes_count + self.none_count != self._total_count():
                 raise Error("cannot mix bytes and non-bytes values")
@@ -379,7 +379,7 @@ struct PyInferrer(Copyable, Movable):
             return dt.string
         return dt.null  # empty sequence or all-None
 
-    def infer(mut self, obj: PythonObject) raises -> dt.ArrowType:
+    def infer(mut self, obj: PythonObject) raises -> dt.AnyDataType:
         """Visit elements until type is locked, then scan remaining elements for nulls.
         """
         var list_ptr = obj._obj_ptr
@@ -776,7 +776,7 @@ def arrow_c_array[T: AnyType, //, to_array_fn: def(T) -> AnyArray](
     return Python.tuple(schema_cap, array_cap)
 
 
-def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.ArrowType](
+def arrow_c_schema[T: AnyType, //, type_fn: def(T) -> dt.AnyDataType](
     ptr: UnsafePointer[T, MutAnyOrigin]
 ) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
@@ -807,10 +807,10 @@ def array(
             pass
 
     # Fall back to building from a Python sequence.
-    var dtype: dt.ArrowType
+    var dtype: dt.AnyDataType
     var has_nulls = True
     if opt := kwargs.find("type"):
-        dtype = opt.value().downcast_value_ptr[dt.ArrowType]()[].copy()
+        dtype = opt.value().downcast_value_ptr[dt.AnyDataType]()[].copy()
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)

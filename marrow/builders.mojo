@@ -58,7 +58,7 @@ trait Builder(ImplicitlyDestructible, Movable):
     def null_count(self) -> Int:
         ...
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         ...
 
     def reserve(mut self, additional: Int) raises:
@@ -124,7 +124,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
 
-    def __init__(out self, dtype: ArrowType, capacity: Int = 0) raises:
+    def __init__(out self, dtype: AnyDataType, capacity: Int = 0) raises:
         if dtype == bool_:
             self = BoolBuilder(capacity)
         elif dtype == int8:
@@ -205,9 +205,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
         return self._dispatch[f]()
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         @parameter
-        def f[T: Builder](b: T) -> ArrowType:
+        def f[T: Builder](b: T) -> AnyDataType:
             return b.dtype()
 
         return self._dispatch[f]()
@@ -329,7 +329,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
         """Commit the builder length after direct bulk population."""
         self._length = n
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return Self.T()
 
     def append(mut self, value: Self.ScalarType) raises:
@@ -473,7 +473,7 @@ struct StringBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return string
 
     def append(mut self, value: String) raises:
@@ -623,7 +623,7 @@ struct ListBuilder(Builder, Sized):
 
     comptime ArrayType = ListArray
 
-    var _dtype: ArrowType
+    var _dtype: AnyDataType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -652,7 +652,7 @@ struct ListBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return self._dtype.copy()
 
     def values(self) -> AnyBuilder:
@@ -776,7 +776,7 @@ struct FixedSizeListBuilder(Builder, Sized):
 
     comptime ArrayType = FixedSizeListArray
 
-    var _dtype: ArrowType
+    var _dtype: AnyDataType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -803,7 +803,7 @@ struct FixedSizeListBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return self._dtype.copy()
 
     def values(self) -> AnyBuilder:
@@ -904,7 +904,7 @@ struct StructBuilder(Builder, Sized):
 
     comptime ArrayType = StructArray
 
-    var _dtype: ArrowType
+    var _dtype: AnyDataType
     var _length: Int
     var _capacity: Int
     var _null_count: Int
@@ -931,7 +931,7 @@ struct StructBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return self._dtype.copy()
 
     def field_builder(ref self, index: Int) -> ref[self._children] AnyBuilder:
@@ -1057,7 +1057,7 @@ struct BoolBuilder(Builder, Sized):
     def null_count(self) -> Int:
         return self._null_count
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         return bool_
 
     def reserve(mut self, additional: Int) raises:

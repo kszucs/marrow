@@ -76,7 +76,7 @@ trait Array(
     def __init__(out self, data: ArrayData) raises:
         ...
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         ...
 
     def null_count(self) -> Int:
@@ -114,7 +114,7 @@ struct ArrayData(Copyable, Movable):
     Not stored inside AnyArray itself.
     """
 
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -169,7 +169,7 @@ struct BoolArray(
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return bool_
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -354,7 +354,7 @@ struct PrimitiveArray[T: PrimitiveType](
     def __str__(self) -> String:
         return String.write(self)
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return Self.T()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -576,7 +576,7 @@ struct StringArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return string
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
@@ -694,7 +694,7 @@ struct ListArray(
 
     comptime ScalarType = ListScalar
 
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -706,7 +706,7 @@ struct ListArray(
     def __init__(
         out self,
         *,
-        dtype: ArrowType,
+        dtype: AnyDataType,
         length: Int,
         nulls: Int,
         offset: Int,
@@ -765,7 +765,7 @@ struct ListArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -896,7 +896,7 @@ struct FixedSizeListArray(
 
     comptime ScalarType = ListScalar
 
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -906,7 +906,7 @@ struct FixedSizeListArray(
     def __init__(
         out self,
         *,
-        dtype: ArrowType,
+        dtype: AnyDataType,
         length: Int,
         nulls: Int,
         offset: Int,
@@ -960,7 +960,7 @@ struct FixedSizeListArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1103,7 +1103,7 @@ struct StructArray(
 
     comptime ScalarType = StructScalar
 
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var length: Int
     var nulls: Int
     var offset: Int
@@ -1138,7 +1138,7 @@ struct StructArray(
     def null_count(self) -> Int:
         return self.nulls
 
-    def type(self) -> ArrowType:
+    def type(self) -> AnyDataType:
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1299,7 +1299,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
     [Reference](https://arrow.apache.org/docs/python/generated/pyarrow.ChunkedArray.html#pyarrow-chunkedarray).
     """
 
-    var dtype: ArrowType
+    var dtype: AnyDataType
     var length: Int
     var chunks: List[AnyArray]
 
@@ -1310,7 +1310,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             total_length += chunk.length()
         self.length = total_length
 
-    def __init__(out self, dtype: ArrowType, var chunks: List[AnyArray]):
+    def __init__(out self, dtype: AnyDataType, var chunks: List[AnyArray]):
         self.dtype = dtype.copy()
         self.chunks = chunks^
         self.length = 0
@@ -1469,9 +1469,9 @@ struct AnyArray(
 
         return self._dispatch[f]()
 
-    def dtype(self) -> ArrowType:
+    def dtype(self) -> AnyDataType:
         @parameter
-        def f[T: Array](a: T) -> ArrowType:
+        def f[T: Array](a: T) -> AnyDataType:
             return a.type()
 
         return self._dispatch[f]()
