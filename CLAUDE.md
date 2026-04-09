@@ -53,6 +53,62 @@ The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
 hashed, stable across runs).  Re-running the same test selection skips
 recompilation (~1 s vs ~5 s cold).
 
+Tests run in parallel by default (`--dist=loadfile` in `pytest.ini`), grouping
+all tests from the same `.mojo` file on the same worker so the compiled binary
+is reused.  Benchmark tasks always pass `-n0` to disable parallelism for
+accurate timing.
+
+The Python shared library (`python/marrow.so`) is rebuilt automatically by
+`conftest.py` before each test session — no manual `build_python` step needed.
+
+### Writing Mojo Tests
+
+Test files (`test_*.mojo`) use `TestSuite` from `marrow.testing`:
+
+```mojo
+from marrow.testing import TestSuite
+
+def test_something() raises:
+    assert_true(1 + 1 == 2)
+
+def main():
+    TestSuite.run[__functions_in_module()]()
+```
+
+`TestSuite.run` auto-discovers every `test_*` function in the module.
+
+### Writing Mojo Benchmarks
+
+Benchmark files (`bench_*.mojo`) use `BenchSuite` and `Benchmark` from
+`marrow.testing`:
+
+```mojo
+from marrow.testing import BenchSuite, Benchmark, BenchMetric
+
+def bench_my_kernel(mut b: Benchmark) raises:
+    var data = _prepare_data(N)
+    b.throughput(BenchMetric.elements, N)
+    @always_inline
+    @parameter
+    def call():
+        keep(my_kernel(data))
+    b.iter[call]()
+
+def main():
+    BenchSuite.run[__functions_in_module()]()
+```
+
+For multiple sizes, define a shared helper and one thin wrapper per size:
+
+```mojo
+def _bench_kernel(mut b: Benchmark, n: Int) raises:
+    ...
+
+def bench_kernel_10k(mut b: Benchmark) raises: _bench_kernel(b, 10_000)
+def bench_kernel_100k(mut b: Benchmark) raises: _bench_kernel(b, 100_000)
+def bench_kernel_1m(mut b: Benchmark) raises: _bench_kernel(b, 1_000_000)
+```
+
 ## Core Architecture
 
 ### Type-Erased Containers
@@ -205,6 +261,7 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 ## Coding Guidelines
 
 - **Always use `def` for function definitions, never `fn`.** The `fn` keyword is deprecated in Mojo in favour of `def`. All functions, methods, and trait requirements must use `def`.
+- **Never use `alias` — always use `comptime` instead.** `alias` is deprecated in Mojo. Use `comptime var` or `comptime` parameters everywhere a compile-time value is needed.
 - **Never call `_underscore_prefixed` methods outside of the type/struct that defines them.** They are private implementation details. Use the public factory methods and APIs instead (e.g. use `Buffer.alloc_uninit[T](n)` directly rather than computing `Buffer._aligned_size[T](n)` and passing bytes manually).
 - **Do not use `PrimitiveArray[bool_]` or `as_primitive[bool_]()`.**  Boolean arrays are bit-packed and require `BoolArray` for correct values access. Use `BoolArray` and `as_bool()` directly everywhere booleans are handled. Likewise, use `BoolBuilder` instead of `PrimitiveBuilder[bool_]`.
 - **Prefer `.values()` over `.buffer.view[native](array.offset)`.**  `PrimitiveArray[T].values()` and `BoolArray.values()` return a properly offset `BufferView` / `BitmapView` in one call. Call `.buffer.view[native]()` only inside `buffers.mojo` or when constructing a view with explicit parameters not covered by `.values()`.

@@ -293,6 +293,11 @@ def pytest_addoption(parser):
 def pytest_sessionstart(session):
     """Rebuild python/marrow.so before the session when Python tests will run."""
     config = session.config
+
+    # xdist workers inherit the already-built library from the controller.
+    if hasattr(config, "workerinput"):
+        return
+
     no_python = config.getoption("--no-python")
     sel_python = config.getoption("--python")
     sel_mojo = config.getoption("--mojo")

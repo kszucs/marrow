@@ -341,14 +341,17 @@ var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
 Install [pixi](https://pixi.sh/latest/installation/), then:
 
 ```bash
-pixi run test              # run all tests (Mojo + Python)
+pixi run test              # run all tests (Mojo + Python), parallel
 pixi run test_mojo         # Mojo unit tests only
 pixi run test_python       # Python binding tests only
-pixi run bench             # CPU/GPU arithmetic benchmarks
-pixi run bench_python      # Python vs PyArrow array construction benchmarks
-pixi run bench_similarity  # cosine similarity: CPU vs GPU vs GPU preloaded
+pixi run bench             # all benchmarks
+pixi run bench_mojo        # Mojo benchmarks only
+pixi run bench_python      # Python vs PyArrow benchmarks only
 pixi run fmt               # format all code (Mojo + Python)
 ```
+
+The Python shared library (`python/marrow.so`) is built automatically before
+each test run — no manual `build_python` step required.
 
 ### Running individual tests
 
@@ -365,6 +368,9 @@ pixi run pytest marrow/kernels/tests/test_join.mojo::test_collision_left_join
 pixi run pytest -v marrow/tests/test_arrays.mojo
 ```
 
+Tests run in parallel by default (`--dist=loadfile`), grouping all tests from
+the same `.mojo` file on the same worker so the compiled binary is reused.
+
 ### Pytest options
 
 | Option | Effect |
@@ -374,6 +380,56 @@ pixi run pytest -v marrow/tests/test_arrays.mojo
 | `--gpu` / `--no-gpu` | Select or exclude GPU tests |
 | `--benchmark` | Include benchmark files (`bench_*.mojo`); also switches to `-O3` |
 | `--asan` | Enable AddressSanitizer (requires `libcompiler-rt` from conda-forge) |
+
+### Writing Mojo tests
+
+Test files (`test_*.mojo`) use `TestSuite` from `marrow.testing`:
+
+```mojo
+from marrow.testing import TestSuite
+
+def test_something() raises:
+    assert_true(1 + 1 == 2)
+
+def main():
+    TestSuite.run[__functions_in_module()]()
+```
+
+`TestSuite.run` auto-discovers every `test_*` function in the module. No
+registration needed — just name the function with the `test_` prefix.
+
+### Writing Mojo benchmarks
+
+Benchmark files (`bench_*.mojo`) use `BenchSuite` and `Benchmark` from
+`marrow.testing`:
+
+```mojo
+from marrow.testing import BenchSuite, Benchmark, BenchMetric
+
+def bench_my_kernel(mut b: Benchmark) raises:
+    var data = _prepare_data(N)
+    b.throughput(BenchMetric.elements, N)
+    @always_inline
+    @parameter
+    def call():
+        keep(my_kernel(data))
+    b.iter[call]()
+
+def main():
+    BenchSuite.run[__functions_in_module()]()
+```
+
+`BenchSuite.run` auto-discovers every `bench_*` function. For multiple sizes,
+define a shared helper and one thin wrapper per size:
+
+```mojo
+def _bench_kernel(mut b: Benchmark, n: Int) raises:
+    ...
+
+def bench_kernel_10k(mut b: Benchmark) raises: _bench_kernel(b, 10_000)
+def bench_kernel_100k(mut b: Benchmark) raises: _bench_kernel(b, 100_000)
+def bench_kernel_1m(mut b: Benchmark) raises: _bench_kernel(b, 1_000_000)
+```
 
 ### Build caching
 

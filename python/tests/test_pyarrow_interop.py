@@ -104,8 +104,8 @@ def test_schema_to_pyarrow_nested():
     assert str(pa_schema.field("lst").type) == "list<item: int32>"
     assert pa_schema.field("st").type == pa.struct(
         [
-            pa.field("a", pa.int32(), nullable=False),
-            pa.field("b", pa.float64(), nullable=False),
+            pa.field("a", pa.int32()),
+            pa.field("b", pa.float64()),
         ]
     )
 
