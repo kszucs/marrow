@@ -129,6 +129,39 @@ def bench_hash_table_probe_1m(mut b: Benchmark) raises:
 
 
 # ---------------------------------------------------------------------------
+# probe — semi-join (single_match=True)
+# ---------------------------------------------------------------------------
+
+
+def bench_hash_table_probe_semi_100k(mut b: Benchmark) raises:
+    var keys = _make_keys(100_000)
+    var table = SwissHashTable[rapidhash]()
+    table.build(keys)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        var pairs = table.probe(keys, keys, 100_000, single_match=True)
+        keep(len(pairs[0]))
+
+    b.iter[call]()
+
+
+def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
+    var keys = _make_keys(1_000_000)
+    var table = SwissHashTable[rapidhash]()
+    table.build(keys)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        var pairs = table.probe(keys, keys, 1_000_000, single_match=True)
+        keep(len(pairs[0]))
+
+    b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 

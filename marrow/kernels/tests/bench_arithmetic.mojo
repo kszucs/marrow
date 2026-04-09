@@ -1,61 +1,21 @@
 """Benchmarks for arithmetic kernel variants.
 
-CPU section (Bench framework):
-  - add:   add() with no nulls (CPU SIMD path)
-  - nulls: add() where inputs have 10% nulls
-  Across sizes 1k–1M, dtypes int32 and float64.
+CPU: add() with no nulls and with 10% nulls, across sizes 1k–1M for int32
+and float64.
 
-GPU section (manual timing, skipped when no GPU present):
-  - gpu: GPU add with data pre-loaded on device (mean us/call)
-  Across sizes 1k–10M, dtypes int32 and float32.
-  Uses manual perf_counter_ns timing (like bench_similarity) rather than the
-  Bench framework, because the Bench framework's tight loop rapidly allocates
-  and frees the GPU result buffer each iteration, crashing libKGENCompilerRTShared.
-
-Run with: pixi run bench
-
-NOTE: bench_with_input is used instead of bench_function to avoid a Mojo
-codegen bug (~25.7) where registering multiple size-parameterized instantiations
-of the same function crashes at runtime inside bitmap_and():
-
-    # This crashes:
-    m.bench_function[bench_add[1_000]](...)
-    m.bench_function[bench_add[10_000]](...)  # panic in bitmap_and
-
-bench_with_input[Int, bench_add[T]] passes size as a runtime Int, so only
-ONE template instantiation of bench_add[T] is created per dtype. The same
-function pointer is called multiple times with different runtime inputs,
-which does not trigger the crash.
+Run with: pixi run pytest marrow/kernels/tests/bench_arithmetic.mojo --benchmark
 """
 
-from std.benchmark import (
-    Bench,
-    BenchConfig,
-    Bencher,
-    BenchId,
-    BenchMetric,
-    ThroughputMeasure,
-    keep,
-)
-
-from std.sys import has_accelerator
-from std.time import perf_counter_ns
-from std.gpu.host import DeviceContext
+from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import int32, float32, float64, PrimitiveType
+from marrow.dtypes import Int32Type, Float64Type, PrimitiveType
 from marrow.kernels.arithmetic import add
+from marrow.testing import BenchSuite, Benchmark
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-def _make_array_with_nulls[
-    T: PrimitiveType
-](size: Int) raises -> PrimitiveArray[T]:
+def _make_array_with_nulls[T: PrimitiveType](size: Int) raises -> PrimitiveArray[T]:
     """Build an array with 10% nulls (every 10th element is null)."""
     var b = PrimitiveBuilder[T](size)
     for i in range(size):
@@ -67,126 +27,232 @@ def _make_array_with_nulls[
 
 
 # ---------------------------------------------------------------------------
-# Benchmark functions — parameterized by dtype, size passed at runtime
+# add — int32
 # ---------------------------------------------------------------------------
 
 
-@parameter
-def bench_add[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    var lhs = arange[T](0, size)
-    var rhs = arange[T](0, size)
+def bench_add_int32_1k(mut b: Benchmark) raises:
+    var lhs = arange[Int32Type](0, 1_000)
+    var rhs = arange[Int32Type](0, 1_000)
+    b.throughput(BenchMetric.elements, 1_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = add[T](lhs, rhs)
-        keep(result.unsafe_get(0))
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call_fn]()
+    b.iter[call]()
 
 
-@parameter
-def bench_add_nulls[T: PrimitiveType](mut b: Bencher, size: Int) raises:
-    """Add() with 10% nulls in both inputs."""
-    var lhs = _make_array_with_nulls[T](size)
-    var rhs = _make_array_with_nulls[T](size)
+def bench_add_int32_10k(mut b: Benchmark) raises:
+    var lhs = arange[Int32Type](0, 10_000)
+    var rhs = arange[Int32Type](0, 10_000)
+    b.throughput(BenchMetric.elements, 10_000)
 
     @always_inline
     @parameter
-    def call_fn() raises:
-        var result = add[T](lhs, rhs)
-        keep(result.unsafe_get(1))
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
 
-    b.iter[call_fn]()
-
-
-# ---------------------------------------------------------------------------
-# GPU helper — manual timing (cannot use Bench framework: result buffer
-# allocation/free in tight loop crashes libKGENCompilerRTShared)
-# ---------------------------------------------------------------------------
+    b.iter[call]()
 
 
-def _bench_gpu_add[
-    T: PrimitiveType
-](size: Int, iters: Int, ctx: DeviceContext,) raises -> Float64:
-    """Returns mean microseconds per kernel dispatch with pre-loaded data."""
-    var lhs = arange[T](0, size).to_device(ctx)
-    var rhs = arange[T](0, size).to_device(ctx)
-    ctx.synchronize()
+def bench_add_int32_100k(mut b: Benchmark) raises:
+    var lhs = arange[Int32Type](0, 100_000)
+    var rhs = arange[Int32Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
 
-    # Warmup
-    for _ in range(3):
-        var r = add[T](lhs, rhs, ctx)
-        keep(len(r))
-    ctx.synchronize()
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
 
-    # Timed runs
-    var t0 = perf_counter_ns()
-    for _ in range(iters):
-        var r = add[T](lhs, rhs, ctx)
-        keep(len(r))
-    ctx.synchronize()
-    return Float64(perf_counter_ns() - t0) / Float64(iters) / 1000.0
+    b.iter[call]()
+
+
+def bench_add_int32_1m(mut b: Benchmark) raises:
+    var lhs = arange[Int32Type](0, 1_000_000)
+    var rhs = arange[Int32Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
+
+    b.iter[call]()
 
 
 # ---------------------------------------------------------------------------
-# Main
+# add with nulls — int32
 # ---------------------------------------------------------------------------
+
+
+def bench_add_nulls_int32_1k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Int32Type](1_000)
+    var rhs = _make_array_with_nulls[Int32Type](1_000)
+    b.throughput(BenchMetric.elements, 1_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_int32_10k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Int32Type](10_000)
+    var rhs = _make_array_with_nulls[Int32Type](10_000)
+    b.throughput(BenchMetric.elements, 10_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_int32_100k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Int32Type](100_000)
+    var rhs = _make_array_with_nulls[Int32Type](100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_int32_1m(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Int32Type](1_000_000)
+    var rhs = _make_array_with_nulls[Int32Type](1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
+# add — float64
+# ---------------------------------------------------------------------------
+
+
+def bench_add_float64_1k(mut b: Benchmark) raises:
+    var lhs = arange[Float64Type](0, 1_000)
+    var rhs = arange[Float64Type](0, 1_000)
+    b.throughput(BenchMetric.elements, 1_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+
+    b.iter[call]()
+
+
+def bench_add_float64_10k(mut b: Benchmark) raises:
+    var lhs = arange[Float64Type](0, 10_000)
+    var rhs = arange[Float64Type](0, 10_000)
+    b.throughput(BenchMetric.elements, 10_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+
+    b.iter[call]()
+
+
+def bench_add_float64_100k(mut b: Benchmark) raises:
+    var lhs = arange[Float64Type](0, 100_000)
+    var rhs = arange[Float64Type](0, 100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+
+    b.iter[call]()
+
+
+def bench_add_float64_1m(mut b: Benchmark) raises:
+    var lhs = arange[Float64Type](0, 1_000_000)
+    var rhs = arange[Float64Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+
+    b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
+# add with nulls — float64
+# ---------------------------------------------------------------------------
+
+
+def bench_add_nulls_float64_1k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Float64Type](1_000)
+    var rhs = _make_array_with_nulls[Float64Type](1_000)
+    b.throughput(BenchMetric.elements, 1_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_float64_10k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Float64Type](10_000)
+    var rhs = _make_array_with_nulls[Float64Type](10_000)
+    b.throughput(BenchMetric.elements, 10_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_float64_100k(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Float64Type](100_000)
+    var rhs = _make_array_with_nulls[Float64Type](100_000)
+    b.throughput(BenchMetric.elements, 100_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
+
+
+def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
+    var lhs = _make_array_with_nulls[Float64Type](1_000_000)
+    var rhs = _make_array_with_nulls[Float64Type](1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+
+    b.iter[call]()
 
 
 def main() raises:
-    var m = Bench(BenchConfig(num_repetitions=3))
-
-    comptime sizes = (1_000, 10_000, 100_000, 1_000_000)
-    comptime size_labels = ("1k", "10k", "100k", "1M")
-
-    # --- int32 ---
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_add[Int32Type]](
-            BenchId("add[Int32Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_add_nulls[Int32Type]](
-            BenchId("nulls[Int32Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-
-    # --- float64 ---
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_add[Float64Type]](
-            BenchId("add[Float64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-    comptime for si in range(4):
-        m.bench_with_input[Int, bench_add_nulls[Float64Type]](
-            BenchId("nulls[Float64Type]", size_labels[si]),
-            sizes[si],
-            [ThroughputMeasure(BenchMetric.elements, sizes[si])],
-        )
-
-    m.dump_report()
-
-    if has_accelerator():
-        var ctx = DeviceContext()
-        comptime gpu_sizes = (1_000, 10_000, 100_000, 1_000_000, 10_000_000)
-        comptime gpu_iters = (500, 100, 20, 5, 2)
-
-        print("\n=== GPU add benchmarks (data pre-loaded on device) ===")
-        print("bench_id               us/call")
-        print("--------               -------")
-
-        comptime for si in range(5):
-            var us = _bench_gpu_add[Int32Type](
-                gpu_sizes[si], gpu_iters[si], ctx
-            )
-            print(t"gpu[Int32Type]/{gpu_sizes[si]}    {us} us")
-
-        comptime for si in range(5):
-            var us = _bench_gpu_add[Float32Type](
-                gpu_sizes[si], gpu_iters[si], ctx
-            )
-            print(t"gpu[Float32Type]/{gpu_sizes[si]}    {us} us")
+    BenchSuite.run[__functions_in_module()]()
