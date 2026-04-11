@@ -1,6 +1,6 @@
 from std.testing import assert_false, assert_true
 from marrow.testing import TestSuite
-from marrow.kernels.helpers import has_accelerator_support
+from marrow.utils import has_accelerator_support
 from std.sys import CompilationTarget
 
 

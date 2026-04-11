@@ -371,8 +371,19 @@ def _python_excluded(config) -> bool:
     sel_cpu = config.getoption("--cpu")
     if (sel_mojo or sel_gpu) and not (sel_python or sel_cpu):
         return True
-    # Specific paths given with no Python files → no Python collection needed.
-    if config.args and all(str(a).endswith(".mojo") for a in config.args):
+    # Specific paths given → check whether any lead to Python test files.
+    if config.args:
+        for arg in config.args:
+            path_str = str(arg).split("::")[0]
+            p = Path(path_str)
+            if not p.is_absolute():
+                p = config.rootpath / p
+            if p.is_file():
+                if p.suffix == ".py":
+                    return False
+            elif p.is_dir():
+                if any(p.rglob("test_*.py")) or any(p.rglob("bench_*.py")):
+                    return False
         return True
     return False
 

@@ -20,6 +20,19 @@ from std.utils import Variant
 from std.builtin.variadics import Variadic, TypeList, _TypePredicateGenerator
 from std.builtin.rebind import trait_downcast
 from std.os import abort
+from std.sys import has_accelerator, CompilationTarget
+
+
+def has_accelerator_support[dtype: DType]() -> Bool:
+    """Check if there is accelerator support for the given dtype.
+
+    For example Metal doesn't support float64 as of April 2026.
+    """
+    if not has_accelerator():
+        return False
+    if not CompilationTarget.is_apple_silicon():
+        return True
+    return dtype != DType.float64
 
 
 comptime _always_true[T: Movable & ImplicitlyDestructible] = True

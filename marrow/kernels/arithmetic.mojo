@@ -19,7 +19,6 @@ from . import (
     unary_numeric_dispatch,
     unary_float_dispatch,
 )
-from .helpers import has_accelerator_support
 
 
 # ---------------------------------------------------------------------------
