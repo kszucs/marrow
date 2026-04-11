@@ -39,10 +39,13 @@ comptime _always_true[T: Movable & ImplicitlyDestructible] = True
 
 
 def variant_dispatch[
-    R: AnyType, //,
+    R: AnyType,
+    //,
     Trait: type_of(AnyType),
     *Ts: Movable & ImplicitlyDestructible,
-    predicate: _TypePredicateGenerator[Movable & ImplicitlyDestructible] = _always_true,
+    predicate: _TypePredicateGenerator[
+        Movable & ImplicitlyDestructible
+    ] = _always_true,
     func: def[T: Trait](T) capturing[_] -> R,
 ](ref v: Variant[*Ts]) -> R:
     """Dispatch *func* to the active type in *v*, reinterpreted as *Trait*.
@@ -59,10 +62,13 @@ def variant_dispatch[
 
 
 def variant_dispatch_raises[
-    R: AnyType, //,
+    R: AnyType,
+    //,
     Trait: type_of(AnyType),
     *Ts: Movable & ImplicitlyDestructible,
-    predicate: _TypePredicateGenerator[Movable & ImplicitlyDestructible] = _always_true,
+    predicate: _TypePredicateGenerator[
+        Movable & ImplicitlyDestructible
+    ] = _always_true,
     func: def[T: Trait](T) raises capturing[_] -> R,
 ](v: Variant[*Ts]) raises -> R:
     """Like *variant_dispatch* but *func* may raise."""
@@ -76,10 +82,13 @@ def variant_dispatch_raises[
 
 # TODO: using `ref v` should support both `read` and `mut` args but the compiler crashes
 def variant_dispatch_raises[
-    R: AnyType, //,
+    R: AnyType,
+    //,
     Trait: type_of(AnyType),
     *Ts: Movable & ImplicitlyDestructible,
-    predicate: _TypePredicateGenerator[Movable & ImplicitlyDestructible] = _always_true,
+    predicate: _TypePredicateGenerator[
+        Movable & ImplicitlyDestructible
+    ] = _always_true,
     func: def[T: Trait](mut T) raises capturing[_] -> R,
 ](mut v: Variant[*Ts]) raises -> R:
     """Like *variant_dispatch_raises* but *func* takes a mutable reference."""

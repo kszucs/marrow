@@ -342,7 +342,9 @@ def bool_array_dispatch[
 
 def unary_numeric_dispatch[
     name: StringLiteral,
-    func: def[T: PrimitiveType](PrimitiveArray[T]) thin raises -> PrimitiveArray[T],
+    func: def[T: PrimitiveType](
+        PrimitiveArray[T]
+    ) thin raises -> PrimitiveArray[T],
 ](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch over all numeric dtypes.
 
@@ -412,7 +414,9 @@ def binary_float_dispatch[
 
 def unary_float_dispatch[
     name: StringLiteral,
-    func: def[T: PrimitiveType](PrimitiveArray[T]) thin raises -> PrimitiveArray[T],
+    func: def[T: PrimitiveType](
+        PrimitiveArray[T]
+    ) thin raises -> PrimitiveArray[T],
 ](array: AnyArray) raises -> AnyArray:
     """Runtime-typed unary dispatch restricted to floating-point dtypes.
 

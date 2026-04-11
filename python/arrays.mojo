@@ -58,10 +58,18 @@ struct PyHelpers(Copyable, Movable):
         self.py = Python()
         ref cpy = self.py.cpython()
         self.none_ptr = cpy.Py_None()
-        self._unicode_type = cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type").value()
-        self._bytes_type = cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type").value()
-        self._list_type = cpy.lib.get_symbol[PyTypeObject]("PyList_Type").value()
-        self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type").value()
+        self._unicode_type = cpy.lib.get_symbol[PyTypeObject](
+            "PyUnicode_Type"
+        ).value()
+        self._bytes_type = cpy.lib.get_symbol[PyTypeObject](
+            "PyBytes_Type"
+        ).value()
+        self._list_type = cpy.lib.get_symbol[PyTypeObject](
+            "PyList_Type"
+        ).value()
+        self._tuple_type = cpy.lib.get_symbol[PyTypeObject](
+            "PyTuple_Type"
+        ).value()
         self._dict_type = cpy.PyDict_Type()
 
     def __init__(out self, var other: Self):

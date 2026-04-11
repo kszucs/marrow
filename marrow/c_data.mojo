@@ -932,7 +932,9 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     var get_last_error: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin]
     ) thin -> UnsafePointer[UInt8, MutAnyOrigin]
-    var release: def(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) thin -> None
+    var release: def(
+        UnsafePointer[CArrowArrayStream, MutAnyOrigin]
+    ) thin -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
     @staticmethod

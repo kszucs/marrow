@@ -978,9 +978,9 @@ def _and_not[
 # ---------------------------------------------------------------------------
 
 
-comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) thin -> SIMD[
-    Out, W
-]
+comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](
+    SIMD[In, W]
+) thin -> SIMD[Out, W]
 """A parameterized unary SIMD function type: maps a vector to a vector."""
 
 comptime BinaryFn[In: DType, Out: DType = In] = def[W: Int](

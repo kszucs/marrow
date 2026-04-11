@@ -110,9 +110,9 @@ trait Join(Movable):
 
 
 struct HashJoin[
-    hasher: def(StructArray, Optional[DeviceContext]) thin raises -> PrimitiveArray[
-        UInt64Type
-    ] = rapidhash
+    hasher: def(
+        StructArray, Optional[DeviceContext]
+    ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 

@@ -113,9 +113,9 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def(StructArray, Optional[DeviceContext]) thin raises -> PrimitiveArray[
-        UInt64Type
-    ] = rapidhash
+    hasher: def(
+        StructArray, Optional[DeviceContext]
+    ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
 ](Movable):
     """Swiss Table hash table with SIMD group matching.
 

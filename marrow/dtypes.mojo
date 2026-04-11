@@ -498,13 +498,17 @@ struct AnyDataType(
         if not self.is_primitive():
             raise Error("byte_width is only defined for primitive types")
 
-        comptime IsPrimitive[T: Movable & ImplicitlyDestructible] = conforms_to(T, PrimitiveType)
+        comptime IsPrimitive[T: Movable & ImplicitlyDestructible] = conforms_to(
+            T, PrimitiveType
+        )
 
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:
             return t.byte_width()
 
-        return variant_dispatch[PrimitiveType, predicate=IsPrimitive, func=f](self._v)
+        return variant_dispatch[PrimitiveType, predicate=IsPrimitive, func=f](
+            self._v
+        )
 
     # --- convenience predicates ---
 

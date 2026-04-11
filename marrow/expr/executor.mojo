@@ -224,7 +224,9 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) thin raises -> AnyArray
+    var _virt_eval: def(
+        ArcPointer[NoneType], RecordBatch
+    ) thin raises -> AnyArray
     var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---
