@@ -45,7 +45,7 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 dev = { features = ["dev"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 format = { features = ["format"], solve-group = "default" }
-docs = { features = ["docs"], no-default-feature = true }
+docs = { features = ["docs"], solve-group = "default" }
 
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
