@@ -13,6 +13,14 @@ preview = ["pixi-build"]
 name = "marrow"
 version = "0.1.0"
 
+[dependencies]
+mojo = "==0.26.3.0.dev2026032105"
+pontoneer = "==0.6.2-dev2026032105"
+python = ">=3.14.2,<3.15"
+
+[pypi-dependencies]
+pyarrow = ">=23.0.0, <24"
+
 [package.build]
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
@@ -23,18 +31,36 @@ mojo-compiler = "==0.26.3.0.dev2026041105"
 mojo = "==0.26.3.0.dev2026041105"
 
 [package.run-dependencies]
-ipython = ">=9.11.0,<10"
-jupyter = ">=1.1,<2"
-jupyter-cache = ">=1.0,<2"
-mojo = "==0.26.3.0.dev2026041105"
-pontoneer = "==0.6.6.dev2026041105"
+mojo = "==0.26.3.0.dev2026032105"
+pontoneer = "==0.6.2-dev2026032105"
 python = ">=3.14.2,<3.15"
-quarto = ">=1.6,<2"
-polars = ">=1.39.2,<2"
-pyarrow = ">=23.0.0,<24"
 
 [tasks]
 build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
+profile = "python scripts/profile.py"
+package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
+publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
+
+[environments]
+dev = { features = ["dev"], solve-group = "default" }
+examples = { features = ["examples"], solve-group = "default" }
+format = { features = ["format"], solve-group = "default" }
+docs = { features = ["docs"], no-default-feature = true }
+
+# Dev — dependencies and tasks for development and testing.
+[feature.dev.dependencies]
+pytest = ">=9.0.2,<10"
+pytest-benchmark = ">=5.2.3,<6"
+pytest-xdist = ">=3,<4"
+polars = ">=1.39.2,<2"
+rich = ">=13,<15"
+libcompiler-rt = ">=17,<23"
+duckdb = ">=1.5.1,<2"
+ipython = ">=9.11.0,<10"
+jupyter = ">=1.1,<2"
+jupyter-cache = ">=1.0,<2"
+
+[feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
 test_mojo_asan = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v -n auto --dist=loadfile" }
@@ -43,46 +69,29 @@ test = { cmd = "pytest -v -n auto --dist=loadfile" }
 bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
 bench_python = { cmd = "pytest --benchmark --python -v" }
 bench = { cmd = "pytest --benchmark -v" }
-profile = "python scripts/profile.py"
-fmt_mojo = { cmd = "mojo format marrow python" }
-fmt_python = { cmd = "ruff format python" }
-fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
-fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
-package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
-docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
-docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
-
-publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
 
 # Examples feature — optional dependencies and tasks for runnable examples.
-# Run with: pixi run -e examples datafusion_udf
+# Run with: pixi run datafusion_udf
 [feature.examples.pypi-dependencies]
 datafusion = ">=44.0.0"
 
 [feature.examples.tasks]
 datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
-[environments]
-examples = { features = ["examples"] }
-
-[dependencies]
-# FIXME: most of these are development dependencies and should be moved to a
-# [dev-dependencies] section or similar
-ipython = ">=9.11.0,<10"
-jupyter = ">=1.1,<2"
-jupyter-cache = ">=1.0,<2"
-mojo = "==0.26.3.0.dev2026041105"
-pontoneer = "==0.6.6.dev2026041105"
-pytest = ">=9.0.2,<10"
-pytest-benchmark = ">=5.2.3,<6"
-pytest-xdist = ">=3,<4"
-python = ">=3.14.2,<3.15"
-quarto = ">=1.6,<2"
+# Format — Code formatting and linting tools and tasks.
+[feature.format.dependencies]
 ruff = ">=0.14.14,<0.15"
-polars = ">=1.39.2,<2"
-rich = ">=13,<15"
-libcompiler-rt = ">=17,<23"
-duckdb = ">=1.5.1,<2"
 
-[pypi-dependencies]
-pyarrow = ">=23.0.0, <24"
+[feature.format.tasks]
+fmt_mojo = { cmd = "mojo format marrow python" }
+fmt_python = { cmd = "ruff format python" }
+fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
+fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
+
+# Docs — Documentation generation tooling and tasks.
+[feature.docs.dependencies]
+quarto = ">=1.6,<2"
+
+[feature.docs.tasks]
+docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
