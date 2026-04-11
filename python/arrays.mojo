@@ -780,7 +780,7 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: AnyType, //, to_array_fn: def(T) -> AnyArray
+    T: AnyType, //, to_array_fn: def(T) thin -> AnyArray
 ](
     ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
 ) raises -> PythonObject:
@@ -791,7 +791,7 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: AnyType, //, type_fn: def(T) -> dt.AnyDataType
+    T: AnyType, //, type_fn: def(T) thin -> dt.AnyDataType
 ](ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
