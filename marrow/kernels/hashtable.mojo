@@ -113,7 +113,7 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def(StructArray, Optional[DeviceContext]) raises -> PrimitiveArray[
+    hasher: def(StructArray, Optional[DeviceContext]) thin raises -> PrimitiveArray[
         UInt64Type
     ] = rapidhash
 ](Movable):

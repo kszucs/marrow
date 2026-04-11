@@ -29,7 +29,7 @@ from .helpers import has_accelerator_support
 
 def _unary[
     T: PrimitiveType,
-    func: def[W: Int](SIMD[T.native, W]) -> SIMD[T.native, W],
+    func: def[W: Int](SIMD[T.native, W]) thin -> SIMD[T.native, W],
 ](
     array: PrimitiveArray[T],
     ctx: Optional[DeviceContext] = None,
@@ -55,7 +55,7 @@ def _unary[
 
 def _binary[
     T: PrimitiveType,
-    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         T.native, W
     ],
     name: StringLiteral = "",

@@ -15,7 +15,6 @@ from std.python._cpython import (
 from std.memory import ArcPointer, alloc
 from std.utils import Variant
 from std.builtin.variadics import Variadic
-from std.builtin.rebind import downcast
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.arrays import AnyArray, ChunkedArray
@@ -59,10 +58,10 @@ struct PyHelpers(Copyable, Movable):
         self.py = Python()
         ref cpy = self.py.cpython()
         self.none_ptr = cpy.Py_None()
-        self._unicode_type = cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type")
-        self._bytes_type = cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type")
-        self._list_type = cpy.lib.get_symbol[PyTypeObject]("PyList_Type")
-        self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type")
+        self._unicode_type = cpy.lib.get_symbol[PyTypeObject]("PyUnicode_Type").value()
+        self._bytes_type = cpy.lib.get_symbol[PyTypeObject]("PyBytes_Type").value()
+        self._list_type = cpy.lib.get_symbol[PyTypeObject]("PyList_Type").value()
+        self._tuple_type = cpy.lib.get_symbol[PyTypeObject]("PyTuple_Type").value()
         self._dict_type = cpy.PyDict_Type()
 
     def __init__(out self, var other: Self):
@@ -144,7 +143,7 @@ struct PyHelpers(Copyable, Movable):
         """
         var s = self.cpy().PyUnicode_AsUTF8AndSize(ptr)
         self.raise_on_error()
-        return s
+        return s.value()
 
     @always_inline
     def length(mut self, ptr: PyObjectPtr) -> Int:
@@ -494,29 +493,19 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         else:
             raise Error("unsupported type: ", dtype)
 
-    def _dispatch[
-        func: def[T: PyConverter](mut T) raises capturing[_] -> None,
-    ](mut self) raises:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime T = downcast[Self.VariantType.Ts[i], PyConverter]
-            if self._v[].isa[T]():
-                func(self._v[][T])
-                return
-        abort("unreachable: PyAnyConverter._dispatch")
-
     def append(mut self, value: PyObjectPtr) raises:
         @parameter
         def f[T: PyConverter](mut t: T) raises:
             t.append(value)
 
-        self._dispatch[f]()
+        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
 
     def extend(mut self, values: PyObjectPtr) raises:
         @parameter
         def f[T: PyConverter](mut t: T) raises:
             t.extend(values)
 
-        self._dispatch[f]()
+        dt.variant_dispatch_raises[PyConverter, func=f](self._v[])
 
 
 # ---------------------------------------------------------------------------
@@ -635,7 +624,7 @@ struct PyStringConverter(PyConverter):
         for i in range(n):
             var item = self.py.list_getitem(values, i)
             if not self.py.is_none(item):
-                total += len(self.py.to_string_slice(item))
+                total += self.py.to_string_slice(item).byte_length()
         return total
 
     def extend(mut self, values: PyObjectPtr) raises:

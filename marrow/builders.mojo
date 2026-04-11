@@ -26,8 +26,6 @@ Example
 
 from std.memory import ArcPointer
 from std.utils import Variant
-from std.builtin.variadics import Variadic
-from std.builtin.rebind import downcast
 from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BitmapView, BufferView
@@ -163,89 +161,61 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         else:
             raise Error("unsupported type: ", dtype)
 
-    # --- generic dispatch ---
-
-    def _dispatch[
-        R: Movable,
-        //,
-        func: def[T: Builder](T) capturing[_] -> R,
-    ](self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, Builder]
-            if self._ptr[].isa[T]():
-                return func(self._ptr[][T])
-        abort("unreachable: invalid builder type for dispatch")
-
-    def _dispatch_mut[
-        R: Movable,
-        //,
-        func: def[T: Builder](mut T) raises capturing[_] -> R,
-    ](mut self) raises -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, Builder]
-            if self._ptr[].isa[T]():
-                return func(self._ptr[][T])
-        abort("unreachable: invalid builder type for dispatch")
-
-    # --- dispatch-based methods ---
-
     def length(self) -> Int:
         @parameter
         def f[T: Builder](b: T) -> Int:
             return b.length()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Builder, func=f](self._ptr[])
 
     def null_count(self) -> Int:
         @parameter
         def f[T: Builder](b: T) -> Int:
             return b.null_count()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Builder, func=f](self._ptr[])
 
     def dtype(self) -> AnyDataType:
         @parameter
         def f[T: Builder](b: T) -> AnyDataType:
             return b.dtype()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Builder, func=f](self._ptr[])
 
     def reserve(mut self, additional: Int) raises:
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.reserve(additional)
 
-        self._dispatch_mut[f]()
+        variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def append_null(mut self) raises:
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.append_null()
 
-        self._dispatch_mut[f]()
+        variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def extend(mut self, arr: AnyArray) raises:
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.extend(arr)
 
-        self._dispatch_mut[f]()
+        variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def finish(mut self) raises -> AnyArray:
         @parameter
         def f[T: Builder](mut b: T) raises -> AnyArray:
             return b.finish().to_any()
 
-        return self._dispatch_mut[f]()
+        return variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     def reset(mut self) raises:
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.reset()
 
-        self._dispatch_mut[f]()
+        variant_dispatch_raises[Builder, func=f](self._ptr[])
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
@@ -481,7 +451,7 @@ struct StringBuilder(Builder, Sized):
 
     def append[origin: Origin](mut self, s: StringSlice[origin]) raises:
         self.reserve(1)
-        self.reserve_bytes(len(s))
+        self.reserve_bytes(s.byte_length())
         self.unsafe_append(s)
 
     def append_null(mut self) raises:
@@ -558,7 +528,7 @@ struct StringBuilder(Builder, Sized):
     def unsafe_append[origin: Origin](mut self, s: StringSlice[origin]):
         """Append string bytes without capacity checks. Caller must ensure capacity.
         """
-        var length = len(s)
+        var length = s.byte_length()
         var index = self._length
         var last_offset = self._offsets.unsafe_get[DType.uint32](index)
         var next_offset = last_offset + UInt32(length)

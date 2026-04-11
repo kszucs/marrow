@@ -153,12 +153,12 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: def(ArcPointer[NoneType]) -> UInt8
-    var _virt_schema: def(ArcPointer[NoneType]) -> Schema
-    var _virt_inputs: def(ArcPointer[NoneType]) -> List[AnyRelation]
-    var _virt_exprs: def(ArcPointer[NoneType]) -> List[AnyValue]
-    var _virt_write_to_string: def(ArcPointer[NoneType]) -> String
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
+    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_inputs: def(ArcPointer[NoneType]) thin -> List[AnyRelation]
+    var _virt_exprs: def(ArcPointer[NoneType]) thin -> List[AnyValue]
+    var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---
 

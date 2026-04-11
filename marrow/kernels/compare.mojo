@@ -44,7 +44,7 @@ from . import bitmap_and, bool_array_dispatch
 
 def _binary_cmp[
     T: PrimitiveType,
-    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) -> SIMD[
+    func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         DType.bool, W
     ],
     name: StringLiteral = "",

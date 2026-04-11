@@ -30,7 +30,7 @@ def _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
     storage leaves bytes past len(s) uninitialized).
     TODO: replace with unsafe_cstr_ptr() once available in this Mojo build.
     """
-    var n = len(s)
+    var n = s.byte_length()
     var buf = alloc[c_char](n + 1)
     memcpy(dest=buf.bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
     buf.bitcast[UInt8]()[n] = 0
@@ -117,7 +117,7 @@ struct CArrowSchema(Copyable, Movable):
         UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
     ]
     var dictionary: UnsafePointer[CArrowSchema, MutAnyOrigin]
-    var release: def(UnsafePointer[CArrowSchema, MutAnyOrigin]) -> None
+    var release: def(UnsafePointer[CArrowSchema, MutAnyOrigin]) thin -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
     def __del__(deinit self):
@@ -481,7 +481,7 @@ struct CArrowArray(Copyable, Movable):
         UnsafePointer[CArrowArray, MutAnyOrigin], MutAnyOrigin
     ]
     var dictionary: UnsafePointer[CArrowArray, MutAnyOrigin]
-    var release: def(UnsafePointer[CArrowArray, MutAnyOrigin]) -> None
+    var release: def(UnsafePointer[CArrowArray, MutAnyOrigin]) thin -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
     def __del__(deinit self):
@@ -924,15 +924,15 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
     var get_schema: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowSchema, MutAnyOrigin],
-    ) -> Int32
+    ) thin -> Int32
     var get_next: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin],
         UnsafePointer[CArrowArray, MutAnyOrigin],
-    ) -> Int32
+    ) thin -> Int32
     var get_last_error: def(
         UnsafePointer[CArrowArrayStream, MutAnyOrigin]
-    ) -> UnsafePointer[UInt8, MutAnyOrigin]
-    var release: def(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) -> None
+    ) thin -> UnsafePointer[UInt8, MutAnyOrigin]
+    var release: def(UnsafePointer[CArrowArrayStream, MutAnyOrigin]) thin -> None
     var private_data: OpaquePointer[MutAnyOrigin]
 
     @staticmethod

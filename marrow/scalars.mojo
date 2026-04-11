@@ -18,8 +18,6 @@ Scalar trait:
 """
 
 from std.utils import Variant
-from std.builtin.variadics import Variadic
-from std.builtin.rebind import downcast
 from std.os import abort
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
@@ -37,6 +35,7 @@ from .dtypes import (
     AnyDataType,
     PrimitiveType,
     Field,
+    variant_dispatch,
     BoolType,
     Int8Type,
     Int16Type,
@@ -438,19 +437,6 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
-    # --- generic dispatch ---
-
-    def _dispatch[
-        R: Movable,
-        //,
-        func: def[T: Scalar](T) capturing[_] -> R,
-    ](self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime T = downcast[Self.VariantType.Ts[i], Scalar]
-            if self._v.isa[T]():
-                return func(self._v[T])
-        abort("unreachable: invalid scalar type for dispatch")
-
     # --- dispatch-based methods ---
 
     def type(self) -> AnyDataType:
@@ -458,14 +444,14 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         def f[T: Scalar](t: T) -> AnyDataType:
             return t.type()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Scalar, func=f](self._v)
 
     def is_valid(self) -> Bool:
         @parameter
         def f[T: Scalar](t: T) -> Bool:
             return t.is_valid()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Scalar, func=f](self._v)
 
     def is_null(self) -> Bool:
         return not self.is_valid()
@@ -495,14 +481,14 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         def f[T: Scalar](t: T):
             t.write_to(writer)
 
-        self._dispatch[f]()
+        variant_dispatch[Scalar, func=f](self._v)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         @parameter
         def f[T: Scalar](t: T):
             t.write_repr_to(writer)
 
-        self._dispatch[f]()
+        variant_dispatch[Scalar, func=f](self._v)
 
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""

@@ -123,11 +123,11 @@ struct AnyValue(ImplicitlyCopyable, Movable, Writable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: def(ArcPointer[NoneType]) -> UInt8
-    var _virt_dtype: def(ArcPointer[NoneType]) -> Optional[AnyDataType]
-    var _virt_inputs: def(ArcPointer[NoneType]) -> List[AnyValue]
-    var _virt_write_to_string: def(ArcPointer[NoneType]) -> String
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
+    var _virt_dtype: def(ArcPointer[NoneType]) thin -> Optional[AnyDataType]
+    var _virt_inputs: def(ArcPointer[NoneType]) thin -> List[AnyValue]
+    var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
     var dispatch: UInt8
     """Dispatch hint for the executor (DISPATCH_AUTO / CPU / GPU)."""
 

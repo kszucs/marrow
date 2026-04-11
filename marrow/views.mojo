@@ -316,7 +316,7 @@ struct BufferView[
         memcpy(
             dest=self._data.bitcast[Byte](),
             src=src.unsafe_ptr(),
-            count=len(src),
+            count=src.byte_length(),
         )
 
     # --- Vectorized operations ---
@@ -978,19 +978,19 @@ def _and_not[
 # ---------------------------------------------------------------------------
 
 
-comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) -> SIMD[
+comptime UnaryFn[In: DType, Out: DType = In] = def[W: Int](SIMD[In, W]) thin -> SIMD[
     Out, W
 ]
 """A parameterized unary SIMD function type: maps a vector to a vector."""
 
 comptime BinaryFn[In: DType, Out: DType = In] = def[W: Int](
     SIMD[In, W], SIMD[In, W]
-) -> SIMD[Out, W]
+) thin -> SIMD[Out, W]
 """A parameterized binary SIMD function type: combines two vectors into one."""
 
 comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
     SIMD[In, W], SIMD[DType.bool, W]
-) -> SIMD[Out, W]
+) thin -> SIMD[Out, W]
 """A parameterized SIMD function that takes a value vector and a validity mask."""
 
 

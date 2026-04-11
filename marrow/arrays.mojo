@@ -40,7 +40,6 @@ from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
 from std.builtin.variadics import Variadic
-from std.builtin.rebind import downcast
 from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
@@ -1433,32 +1432,6 @@ struct AnyArray(
                 t" '{py.__class__.__name__}' to AnyArray",
             )
 
-    # --- generic dispatch ---
-
-    def _dispatch[
-        R: Movable,
-        //,
-        func: def[T: Array](T) capturing[_] -> R,
-    ](self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, Array]
-            if self._v.isa[T]():
-                return func(self._v[T])
-        abort("unreachable: invalid array type for dispatch")
-
-    def _dispatch_raises[
-        R: Movable,
-        //,
-        func: def[T: Array](T) raises capturing[_] -> R,
-    ](self) raises -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, Array]
-            if self._v.isa[T]():
-                return func(self._v[T])
-        abort("unreachable: invalid array type for dispatch")
-
     # --- dispatch-based methods ---
 
     def length(self) -> Int:
@@ -1466,28 +1439,28 @@ struct AnyArray(
         def f[T: Array](a: T) -> Int:
             return len(a)
 
-        return self._dispatch[f]()
+        return variant_dispatch[Array, func=f](self._v)
 
     def dtype(self) -> AnyDataType:
         @parameter
         def f[T: Array](a: T) -> AnyDataType:
             return a.type()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Array, func=f](self._v)
 
     def null_count(self) -> Int:
         @parameter
         def f[T: Array](a: T) -> Int:
             return a.null_count()
 
-        return self._dispatch[f]()
+        return variant_dispatch[Array, func=f](self._v)
 
     def is_valid(self, index: Int) -> Bool:
         @parameter
         def f[T: Array](a: T) -> Bool:
             return a.is_valid(index)
 
-        return self._dispatch[f]()
+        return variant_dispatch[Array, func=f](self._v)
 
     def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
         """Returns a zero-copy slice starting at offset with the given length.
@@ -1500,7 +1473,7 @@ struct AnyArray(
             var actual_length = length if length >= 0 else len(a) - offset
             return a.slice(offset, actual_length)
 
-        return self._dispatch[f]()
+        return variant_dispatch[Array, func=f](self._v)
 
     def to_data(self) raises -> ArrayData:
         """Extract a generic ArrayData layout for interop (C Data Interface, etc.).
@@ -1512,7 +1485,7 @@ struct AnyArray(
         def f[T: Array](a: T) raises -> ArrayData:
             return a.to_data()
 
-        return self._dispatch_raises[f]()
+        return variant_dispatch_raises[Array, func=f](self._v)
 
     def to_any(deinit self) -> AnyArray:
         """Returns this array as AnyArray, transferring ownership."""
@@ -1523,7 +1496,7 @@ struct AnyArray(
         def f[T: Array](a: T):
             a.write_to(writer)
 
-        self._dispatch[f]()
+        variant_dispatch[Array, func=f](self._v)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -1549,7 +1522,7 @@ struct AnyArray(
         def f[T: Array](a: T) raises -> AnyScalar:
             return a[index].to_any()
 
-        return self._dispatch_raises[f]()
+        return variant_dispatch_raises[Array, func=f](self._v)
 
     # --- typed downcasts (zero-cost reference borrows) ---
 

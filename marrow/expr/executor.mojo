@@ -224,8 +224,8 @@ struct AnyValueProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) raises -> AnyArray
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_eval: def(ArcPointer[NoneType], RecordBatch) thin raises -> AnyArray
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---
 
@@ -444,9 +444,9 @@ struct AnyRelationProcessor(ImplicitlyCopyable, Movable):
     """
 
     var _data: ArcPointer[NoneType]
-    var _virt_pull: def(ArcPointer[NoneType]) raises -> RecordBatch
-    var _virt_schema: def(ArcPointer[NoneType]) -> Schema
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_pull: def(ArcPointer[NoneType]) thin raises -> RecordBatch
+    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---
 

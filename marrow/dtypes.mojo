@@ -24,14 +24,16 @@ Comptime singletons (same names as before):
 """
 
 from std.utils import Variant
-from std.builtin.variadics import Variadic
-from std.builtin.rebind import downcast, rebind
+from std.builtin.rebind import downcast, trait_downcast
 from std.sys import size_of, bit_width_of
 from std.os import abort
 from std.memory import ArcPointer, OwnedPointer
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.compile import codegen_unreachable
+
+from .utils import _always_true, variant_dispatch, variant_dispatch_raises
+
 
 # ---------------------------------------------------------------------------
 # DataType trait and PrimitiveType sub-trait
@@ -492,42 +494,17 @@ struct AnyDataType(
     def to_python_object(var self) raises -> PythonObject:
         return PythonObject(alloc=self^)
 
-    # --- generic type dispatch ---
-
-    def _dispatch[
-        R: Movable,
-        //,
-        func: def[T: DataType](T) capturing[_] -> R,
-    ](self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime T = downcast[A, DataType]
-            if self._v.isa[T]():
-                return func(self._v[T])
-        abort("unreachable: invalid data type for dispatch")
-
-    def _dispatch[
-        R: Movable,
-        //,
-        func: def[T: PrimitiveType](T) capturing[_] -> R,
-    ](self) -> R:
-        comptime for i in range(Variadic.size(Self.VariantType.Ts)):
-            comptime A = Self.VariantType.Ts[i]
-            comptime if conforms_to(A, PrimitiveType):
-                comptime T = downcast[A, PrimitiveType]
-                if self._v.isa[T]():
-                    return func(trait_downcast[PrimitiveType](self._v[T]))
-        abort("unreachable: invalid primitive type for dispatch")
-
     def byte_width(self) raises -> Int:
+        if not self.is_primitive():
+            raise Error("byte_width is only defined for primitive types")
+
+        comptime IsPrimitive[T: Movable & ImplicitlyDestructible] = conforms_to(T, PrimitiveType)
+
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:
             return t.byte_width()
 
-        if self.is_primitive():
-            return self._dispatch[f]()
-        else:
-            raise Error("byte_width is only defined for primitive types")
+        return variant_dispatch[PrimitiveType, predicate=IsPrimitive, func=f](self._v)
 
     # --- convenience predicates ---
 
@@ -592,7 +569,7 @@ struct AnyDataType(
         def f[T: DataType](t: T):
             t.write_to(writer)
 
-        self._dispatch[f]()
+        variant_dispatch[DataType, func=f](self._v)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -648,7 +625,10 @@ def struct_(var fields: List[Field]) -> StructType:
 
 def struct_(var *fields: Field) -> StructType:
     """Construct a struct type from variadic fields."""
-    return StructType(List(elements=fields^))
+    var list = List[Field]()
+    for field in fields:
+        list.append(field.copy())
+    return StructType(list^)
 
 
 # ---------------------------------------------------------------------------

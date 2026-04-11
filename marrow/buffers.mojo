@@ -186,7 +186,7 @@ struct Allocation(Movable):
     var ptr: UnsafePointer[UInt8, MutAnyOrigin]
     """Raw CPU pointer.  Non-null for CPU and FOREIGN; null (default) for HOST/DEVICE."""
 
-    var release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) -> None]
+    var release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
     None for HOST and DEVICE (their Optional field destructors handle release)."""
 
@@ -199,7 +199,7 @@ struct Allocation(Movable):
     def __init__(
         out self,
         ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) -> None],
+        release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
     ):
@@ -216,7 +216,7 @@ struct Allocation(Movable):
     @staticmethod
     def foreign(
         ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        release: def(UnsafePointer[UInt8, MutAnyOrigin]) -> None,
+        release: def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None,
     ) -> Allocation:
         """Create a foreign CPU allocation with a custom release callback."""
         return Allocation(ptr, release, None, None)
