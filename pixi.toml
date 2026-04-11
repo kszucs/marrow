@@ -52,7 +52,7 @@ package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
-publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/pontoneer" }
+publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
 
 # Examples feature — optional dependencies and tasks for runnable examples.
 # Run with: pixi run -e examples datafusion_udf
