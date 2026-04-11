@@ -17,17 +17,17 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = ">=0.26.2.0.dev2026032905,<0.26.3"
+mojo-compiler = "==0.26.3.0.dev2026032105"
 
 [package.host-dependencies]
-mojo = ">=0.26.2.0.dev2026032905,<0.26.3"
+mojo = "==0.26.3.0.dev2026032105"
 
 [package.run-dependencies]
 ipython = ">=9.11.0,<10"
 jupyter = ">=1.1,<2"
 jupyter-cache = ">=1.0,<2"
-mojo = ">=0.26.2.0.dev2026032905,<0.26.3"
-pontoneer = "==0.6.4-dev2026040405"
+mojo = "==0.26.3.0.dev2026032105"
+pontoneer = "==0.6.2-dev2026032105"
 python = ">=3.14.2,<3.15"
 quarto = ">=1.6,<2"
 polars = ">=1.39.2,<2"
@@ -51,6 +51,8 @@ fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+
+publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/pontoneer" }
 
 # Examples feature — optional dependencies and tasks for runnable examples.
 # Run with: pixi run -e examples datafusion_udf
