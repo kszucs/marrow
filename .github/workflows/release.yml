@@ -51,9 +51,14 @@ jobs:
         MOJO_VERSION="${{ steps.mojo_version.outputs.mojo_version }}"
         sed -i "/^context:/,/^[^ ]/{s/^  version: .*/  version: \"${VERSION}\"/}" recipe/recipe.yaml
         sed -i "/^context:/,/^[^ ]/{s/^  mojo_version: .*/  mojo_version: \"==${MOJO_VERSION}\"/}" recipe/recipe.yaml
-        pixi run -e package package-conda
+        # Build the Conda package using pixi-build-mojo
+        pixi build
+        # Build marrow.mojopkg
+        pixi run package
     - name: Upload to prefix.dev
-      run: pixi run -e package rattler-build upload prefix -c marrow output/*/marrow-*.conda
+      run: |
+        pixi auth login prefix.dev --token "$PREFIX_API_KEY"
+        pixi run publish
       env:
         PREFIX_API_KEY: ${{ secrets.PREFIX_API_TOKEN }}
     - name: Create GitHub release
@@ -62,5 +67,5 @@ jobs:
       with:
         files: |
           package/marrow.mojopkg
-          output/*/marrow-*.conda
+          marrow-*.conda
         generate_release_notes: true

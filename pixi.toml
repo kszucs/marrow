@@ -3,11 +3,35 @@ authors = ["Krisztian Szucs <szucs.krisztian@gmail.com>"]
 channels = [
   "https://prefix.dev/pontoneer",
   "https://conda.modular.com/max-nightly/",
-  "conda-forge"
+  "conda-forge",
+  "https://prefix.dev/pixi-build-backends"
 ]
-name = "marrow"
 platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[package]
+name = "marrow"
 version = "0.1.0"
+
+[package.build]
+backend = { name = "pixi-build-mojo", version = "0.1.*" }
+
+[package.build-dependencies]
+mojo-compiler = "==0.26.3.0.dev2026032105"
+
+[package.host-dependencies]
+mojo = "==0.26.3.0.dev2026032105"
+
+[package.run-dependencies]
+ipython = ">=9.11.0,<10"
+jupyter = ">=1.1,<2"
+jupyter-cache = ">=1.0,<2"
+mojo = "==0.26.3.0.dev2026032105"
+pontoneer = "==0.6.2-dev2026032105"
+python = ">=3.14.2,<3.15"
+quarto = ">=1.6,<2"
+polars = ">=1.39.2,<2"
+pyarrow = ">=23.0.0,<24"
 
 [tasks]
 build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
@@ -28,11 +52,7 @@ package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
-[feature.package.dependencies]
-rattler-build = ">=0.35,<1"
-
-[feature.package.tasks]
-package-conda = "rattler-build build --recipe recipe/recipe.yaml --output-dir output -c https://conda.modular.com/max-nightly/ -c conda-forge"
+publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/pontoneer" }
 
 # Examples feature — optional dependencies and tasks for runnable examples.
 # Run with: pixi run -e examples datafusion_udf
@@ -43,7 +63,6 @@ datafusion = ">=44.0.0"
 datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
 [environments]
-package = { features = ["package"], no-default-feature = true }
 examples = { features = ["examples"] }
 
 [dependencies]
