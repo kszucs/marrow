@@ -26,3 +26,20 @@ jobs:
       run: |
         pixi run test --no-gpu
         pixi run package
+
+  asan:
+    runs-on: ubuntu-latest
+    env:
+      MODULAR_HOME: "/home/runner/.modular"
+      FORCE_COLOR: "1"
+      PYTEST_ADDOPTS: "--color=yes"
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+    - name: asan tests
+      run: pixi run test_mojo_asan --no-gpu --no-python

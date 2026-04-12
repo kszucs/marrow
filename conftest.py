@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -24,18 +25,27 @@ class MojoRunner:
 
     @staticmethod
     def find_asan_lib():
-        """Locate the upstream LLVM ASAN runtime (libclang_rt.asan_osx_dynamic.dylib).
+        """Locate the upstream LLVM ASAN runtime shared library.
 
         Searches in order:
         1. $CONDA_PREFIX/lib  (pixi/conda environment)
         2. clang resource dirs reported by any clang on PATH
-        3. Known Xcode/CommandLineTools paths (Apple's clang — only if version matches)
+
+        Returns the path as a string, or None if not found.
         """
+        is_macos = sys.platform == "darwin"
+        lib_names = (
+            ["libclang_rt.asan_osx_dynamic.dylib"]
+            if is_macos
+            else ["libclang_rt.asan-x86_64.so", "libclang_rt.asan.so"]
+        )
+
         candidates = []
 
         conda_prefix = os.environ.get("CONDA_PREFIX")
         if conda_prefix:
-            candidates.append(Path(conda_prefix) / "lib" / "libclang_rt.asan_osx_dynamic.dylib")
+            for name in lib_names:
+                candidates.append(Path(conda_prefix) / "lib" / name)
 
         for clang in ["clang", "clang-18", "clang-17", "clang-16"]:
             try:
@@ -44,9 +54,8 @@ class MojoRunner:
                     capture_output=True, text=True, timeout=5,
                 )
                 if result.returncode == 0:
-                    candidates.append(
-                        Path(result.stdout.strip()) / "libclang_rt.asan_osx_dynamic.dylib"
-                    )
+                    for name in lib_names:
+                        candidates.append(Path(result.stdout.strip()) / name)
             except (FileNotFoundError, subprocess.TimeoutExpired):
                 pass
 
@@ -64,25 +73,44 @@ class MojoRunner:
         asan_lib = MojoRunner.find_asan_lib()
         if asan_lib is None:
             pytest.exit(
-                "ASAN requested but no compatible libclang_rt.asan_osx_dynamic.dylib found. "
+                "ASAN requested but no compatible ASAN runtime found. "
                 "Install libcompiler-rt via conda-forge.",
                 returncode=1,
             )
-        flags = ["--sanitize", "address", "--shared-libasan"]
-        if asan_lib.endswith(".dylib"):
-            flags += ["-Xlinker", asan_lib]
-        return flags
+        return ["--sanitize", "address", "--shared-libasan", "-Xlinker", asan_lib]
 
     @staticmethod
     def build_cmd(config, fspath, test_names=None):
         """Return the command to run a Mojo source file with optional test filtering.
 
-        Uses `mojo run` directly so the Mojo compiler handles build caching.
+        Normally uses `mojo run` so the Mojo compiler handles build caching.
+        Under ASAN, `mojo run` cannot resolve sanitizer symbols, so we compile to a
+        binary first with `mojo build` and return the path to that binary.
         When *test_names* is provided, appends `--only name1 name2 ...` so that
         TestSuite skips unselected tests.
         """
         opt = "-O3" if config.getoption("--benchmark") else "-O1"
-        cmd = ["mojo", "run", opt, "-I", "."] + MojoRunner.asan_flags(config) + [str(fspath)]
+        asan = MojoRunner.asan_flags(config)
+
+        if asan:
+            # mojo run cannot link ASAN symbols — build a real binary first.
+            src = Path(fspath)
+            content_hash = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
+            runners_dir = Path(config.rootpath) / ".test_runners"
+            runners_dir.mkdir(exist_ok=True)
+            binary = runners_dir / f"test_runner_{content_hash}"
+            if not binary.exists():
+                build_cmd = (
+                    ["mojo", "build", opt, "-I", "."] + asan + [str(src), "-o", str(binary)]
+                )
+                result = subprocess.run(build_cmd, cwd=config.rootpath, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"mojo build failed for {src}:\n{result.stderr}"
+                    )
+            cmd = [str(binary)]
+        else:
+            cmd = ["mojo", "run", opt, "-I", "."] + [str(fspath)]
 
         if test_names:
             cmd += ["--only"] + list(test_names)
