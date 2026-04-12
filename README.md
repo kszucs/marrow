@@ -78,7 +78,7 @@ preview = ["pixi-build"]
 
 ### Building it from source
 
-There's two ways to build `marrow` from source: directly from the Git repository or by cloning the repository locally.
+There are two ways to build `marrow` from source: directly from the Git repository or by cloning the repository locally.
 
 #### Building from source: Git
 
