@@ -23,7 +23,7 @@ jobs:
         shell: bash
 
     env:
-      MODULAR_HOME: "/home/runner/.modular"
+      MODULAR_HOME: "$HOME/.modular"
       FORCE_COLOR: "1"
       PYTEST_ADDOPTS: "--color=yes"
     steps:
