@@ -56,9 +56,6 @@ polars = ">=1.39.2,<2"
 rich = ">=13,<15"
 libcompiler-rt = ">=17,<23"
 duckdb = ">=1.5.1,<2"
-ipython = ">=9.11.0,<10"
-jupyter = ">=1.1,<2"
-jupyter-cache = ">=1.0,<2"
 
 [feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
@@ -90,6 +87,9 @@ fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
 
 # Docs — Documentation generation tooling and tasks.
 [feature.docs.dependencies]
+ipython = ">=9.11.0,<10"
+jupyter = ">=1.1,<2"
+jupyter-cache = ">=1.0,<2"
 quarto = ">=1.6,<2"
 
 [feature.docs.tasks]

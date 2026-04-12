@@ -67,6 +67,36 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Arrow C Data Interface — zero-copy exchange with PyArrow
 - GPU acceleration via Mojo's `DeviceContext` (Metal on Apple Silicon, CUDA on NVIDIA)
 
+## Adding the `marrow` package to your project
+
+First, you'll need to enable the `pixi-build` preview by adding this to the `workspace` section of your `pixi.toml` file.
+
+```bash
+preview = ["pixi-build"]
+```
+
+### Building it from source
+
+There's two ways to build `marrow` from source: directly from the Git repository or by cloning the repository locally.
+
+#### Building from source: Git
+
+Run the following commands in your terminal:
+
+```bash
+pixi add -g "https://github.com/kszucs/marrow.git" && pixi install
+```
+
+#### Building from source: Local
+
+```bash
+# Clone the repository to your local machine
+git clone https://github.com/kszucs/marrow.git
+
+# Add the package to your project from the local path
+pixi add -s ./path/to/marrow && pixi install
+```
+
 ## Python Quick Start
 
 ```bash
