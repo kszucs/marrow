@@ -71,7 +71,8 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 
 First, you'll need to enable the `pixi-build` preview by adding this to the `workspace` section of your `pixi.toml` file.
 
-```bash
+```toml
+[workspace]
 preview = ["pixi-build"]
 ```
 
