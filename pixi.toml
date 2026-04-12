@@ -35,8 +35,10 @@ pyarrow = ">=23.0.0,<24"
 
 [tasks]
 build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
-test_mojo = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
-test_mojo_asan = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
+test_mojo = { cmd = "pytest --mojo -v" }
+test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
+test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
+test_mojo_asan_parallel = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v -n auto --dist=loadfile" }
 test_gpu = { cmd = "pytest --gpu -v -n auto --dist=loadfile" }
 test = { cmd = "pytest -v -n auto --dist=loadfile" }
