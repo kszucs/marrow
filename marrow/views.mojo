@@ -17,6 +17,7 @@ Method names follow Mojo's ``std.collections.bitset.BitSet`` conventions.
 
 from std.sys.info import simd_byte_width, simd_width_of
 from std.sys import size_of, has_accelerator
+from marrow.utils import has_accelerator_support
 from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
@@ -1014,7 +1015,7 @@ def apply[
         dst.store[W](idx[0], op[W](src.load[W](idx[0])))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
@@ -1049,7 +1050,7 @@ def apply[
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
@@ -1087,7 +1088,7 @@ def apply[
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[In]():
             comptime gpu_width = max(
                 8, simd_width_of[In, target=get_gpu_target()]()
             )
@@ -1129,7 +1130,7 @@ def apply[
         dst.store[W](idx[0], op[W](src.mask[W](idx[0])))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
@@ -1163,7 +1164,7 @@ def apply[
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:
@@ -1196,7 +1197,7 @@ def apply[
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
     if ctx:
-        comptime if has_accelerator():
+        comptime if has_accelerator_support[Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](length, ctx.value())
         else:

@@ -23,8 +23,8 @@ from std.os import abort
 from std.sys import has_accelerator, CompilationTarget
 
 
-def has_accelerator_support[dtype: DType]() -> Bool:
-    """Check if there is accelerator support for the given dtype.
+def has_accelerator_support[*dtypes: DType]() -> Bool:
+    """Check if there is accelerator support for all given dtypes.
 
     For example Metal doesn't support float64 as of April 2026.
     """
@@ -32,7 +32,10 @@ def has_accelerator_support[dtype: DType]() -> Bool:
         return False
     if not CompilationTarget.is_apple_silicon():
         return True
-    return dtype != DType.float64
+    comptime for dtype in dtypes:
+        if dtype == DType.float64:
+            return False
+    return True
 
 
 comptime _always_true[T: Movable & ImplicitlyDestructible] = True
