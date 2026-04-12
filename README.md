@@ -448,6 +448,14 @@ automatically.
 
 If the project matures, the goal is to contribute it upstream to the Apache Arrow project.
 
+### Common problems
+
+If compilation fails on MacOS make sure you have the metal toolchain:
+
+```
+xcodebuild -downloadComponent MetalToolchain
+```
+
 ## References
 
 - [Arrow columnar format specification](https://arrow.apache.org/docs/format/Columnar.html)
