@@ -122,6 +122,76 @@ def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     raise Error("unsupported dtype for aggregation: ", col.dtype())
 
 
+def _add_batch_typed[
+    T: PrimitiveType
+](
+    name: String,
+    mut val_ptr: PrimitiveBuilder[Float64Type],
+    mut cnt_ptr: PrimitiveBuilder[Int64Type],
+    group_ids: PrimitiveArray[UInt32Type],
+    input_col: AnyArray,
+    has_bitmap: Bool,
+) raises:
+    """Type-specialized inner loop for add_batch.
+
+    Resolves the typed array once, then iterates without per-row dtype
+    dispatch.
+    """
+    var n = len(group_ids)
+    ref arr = input_col.as_primitive[T]()
+    for i in range(n):
+        if has_bitmap and not input_col.is_valid(i):
+            continue
+        var g = Int(group_ids.unsafe_get(i))
+        var cnt = Int(cnt_ptr.unsafe_get(g))
+        if name == "count":
+            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
+            continue
+        var val = Float64(arr.unsafe_get(i))
+        var cur = Float64(val_ptr.unsafe_get(g))
+        if name == "sum" or name == "mean":
+            val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
+        elif name == "min":
+            if cnt == 0 or val < cur:
+                val_ptr.unsafe_set(g, Scalar[float64.native](val))
+        elif name == "max":
+            if cnt == 0 or val > cur:
+                val_ptr.unsafe_set(g, Scalar[float64.native](val))
+        cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
+
+
+def _add_batch_bool(
+    name: String,
+    mut val_ptr: PrimitiveBuilder[Float64Type],
+    mut cnt_ptr: PrimitiveBuilder[Int64Type],
+    group_ids: PrimitiveArray[UInt32Type],
+    input_col: AnyArray,
+    has_bitmap: Bool,
+) raises:
+    """Bool-specialized inner loop for add_batch."""
+    var n = len(group_ids)
+    ref arr = input_col.as_bool()
+    for i in range(n):
+        if has_bitmap and not input_col.is_valid(i):
+            continue
+        var g = Int(group_ids.unsafe_get(i))
+        var cnt = Int(cnt_ptr.unsafe_get(g))
+        if name == "count":
+            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
+            continue
+        var val = Float64(arr[i].value())
+        var cur = Float64(val_ptr.unsafe_get(g))
+        if name == "sum" or name == "mean":
+            val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
+        elif name == "min":
+            if cnt == 0 or val < cur:
+                val_ptr.unsafe_set(g, Scalar[float64.native](val))
+        elif name == "max":
+            if cnt == 0 or val > cur:
+                val_ptr.unsafe_set(g, Scalar[float64.native](val))
+        cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
+
+
 struct AggregateFunction(Copyable, Movable):
     """Logic for one aggregation, operating on ``AggregateState``.
 
@@ -165,36 +235,43 @@ struct AggregateFunction(Copyable, Movable):
         group_ids: PrimitiveArray[UInt32Type],
         input_col: AnyArray,
     ) raises:
-        """Scatter-update: single O(N) pass over the batch."""
-        var n = len(group_ids)
+        """Scatter-update: single O(N) pass over the batch.
+
+        Dtype is resolved once before the loop and dispatched to a
+        type-specialized helper, avoiding per-row Variant construction
+        and comparison overhead.
+        """
         var has_bitmap = input_col.null_count() > 0
         ref val_ptr = self.values.builder.as_primitive[Float64Type]()
         ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
+        var dt = input_col.dtype()
 
-        for i in range(n):
-            if has_bitmap and not input_col.is_valid(i):
-                continue
-
-            var g = Int(group_ids.unsafe_get(i))
-            var cnt = Int(cnt_ptr.unsafe_get(g))
-
-            if self.name == "count":
-                cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-                continue
-
-            var val = _read_as_float64(input_col, i)
-            var cur = Float64(val_ptr.unsafe_get(g))
-
-            if self.name == "sum" or self.name == "mean":
-                val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
-            elif self.name == "min":
-                if cnt == 0 or val < cur:
-                    val_ptr.unsafe_set(g, Scalar[float64.native](val))
-            elif self.name == "max":
-                if cnt == 0 or val > cur:
-                    val_ptr.unsafe_set(g, Scalar[float64.native](val))
-
-            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
+        if dt == bool_:
+            _add_batch_bool(self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == int8:
+            _add_batch_typed[Int8Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == int16:
+            _add_batch_typed[Int16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == int32:
+            _add_batch_typed[Int32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == int64:
+            _add_batch_typed[Int64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == uint8:
+            _add_batch_typed[UInt8Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == uint16:
+            _add_batch_typed[UInt16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == uint32:
+            _add_batch_typed[UInt32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == uint64:
+            _add_batch_typed[UInt64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == float16:
+            _add_batch_typed[Float16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == float32:
+            _add_batch_typed[Float32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        elif dt == float64:
+            _add_batch_typed[Float64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+        else:
+            raise Error("unsupported dtype for aggregation: ", dt)
 
     def finish(
         mut self, col_name: String, num_groups: Int
