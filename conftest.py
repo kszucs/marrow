@@ -77,7 +77,13 @@ class MojoRunner:
                 "Install libcompiler-rt via conda-forge.",
                 returncode=1,
             )
-        return ["--sanitize", "address", "--shared-libasan", "-Xlinker", asan_lib]
+        # --shared-libasan is a Clang-only flag; on Linux the system `cc` is
+        # GCC and rejects it.  The explicit -Xlinker path is sufficient there.
+        flags = ["--sanitize", "address"]
+        if sys.platform == "darwin":
+            flags += ["--shared-libasan"]
+        flags += ["-Xlinker", asan_lib]
+        return flags
 
     @staticmethod
     def build_cmd(config, fspath, test_names=None):
