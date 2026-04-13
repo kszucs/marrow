@@ -330,7 +330,7 @@ def test_bufferview_gather() raises:
 
 
 def test_bufferview_compressed_store_llvm() raises:
-    """compressed_store[W](value, mask) writes only masked lanes."""
+    """Writes only masked lanes via compressed_store[W](value, mask)."""
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     var view = buf.view[DType.int32](0)
     var values = SIMD[DType.int32, 4](10, 20, 30, 40)
@@ -341,7 +341,7 @@ def test_bufferview_compressed_store_llvm() raises:
 
 
 def test_bufferview_compressed_store_adaptive() raises:
-    """compressed_store(src, sel_bits) adaptive dispatch returns popcount."""
+    """Adaptive compressed_store(src, sel_bits) dispatch returns popcount."""
     var src_buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         src_buf.unsafe_set[DType.int32](i, Int32(i + 1))
@@ -372,7 +372,7 @@ def test_bufferview_copy_from() raises:
 
 
 def test_bufferview_slice_default_length() raises:
-    """slice(offset) with no length argument extends to end."""
+    """Slice with no length argument extends to the end of the view."""
     var buf = Buffer.alloc_zeroed[DType.int32](6)
     for i in range(6):
         buf.unsafe_set[DType.int32](i, Int32(i))
@@ -385,7 +385,7 @@ def test_bufferview_slice_default_length() raises:
 
 
 def test_bufferview_apply() raises:
-    """apply[func] modifies all elements in-place via SIMD."""
+    """Modifies all elements in-place via apply[func] using SIMD."""
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         buf.unsafe_set[DType.int32](i, Int32(i + 1))
@@ -396,7 +396,7 @@ def test_bufferview_apply() raises:
 
 
 def test_bufferview_count() raises:
-    """count[pred] returns number of matching elements."""
+    """Returns number of elements matching count[pred]."""
     var buf = Buffer.alloc_zeroed[DType.int32](8)
     for i in range(8):
         buf.unsafe_set[DType.int32](i, Int32(i))  # 0..7
@@ -456,7 +456,7 @@ def test_bitmapview_toggle_via_view() raises:
 
 
 def test_bitmapview_mask() raises:
-    """mask[W] expands W consecutive bits into a SIMD[bool, W]."""
+    """Expands W consecutive bits into a SIMD[bool, W] via mask[W]."""
     var bm = Bitmap.alloc_zeroed(16)
     bm.set(0)
     bm.set(2)
@@ -471,7 +471,7 @@ def test_bitmapview_mask() raises:
 
 
 def test_bitmapview_load_bits() raises:
-    """load_bits reads raw bits at a given logical position."""
+    """Reads raw bits at a given logical position via load_bits."""
     var bm = Bitmap.alloc_zeroed(16)
     bm.set(0)
     bm.set(1)
@@ -481,7 +481,7 @@ def test_bitmapview_load_bits() raises:
 
 
 def test_bitmapview_pext() raises:
-    """pext extracts and packs bits at mask=1 positions."""
+    """Extracts and packs bits at mask=1 positions via pext."""
     var bm = Bitmap.alloc_zeroed(64)
     bm.set(0)
     bm.set(2)

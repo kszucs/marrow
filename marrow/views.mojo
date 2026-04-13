@@ -324,7 +324,7 @@ struct BufferView[
 
     # TODO: remove this in favor of the free-function apply with explicit SIMD function parameters
     def apply[
-        func: def[W: Int](SIMD[Self.T, W]) -> SIMD[Self.T, W]
+        func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[Self.T, W]
     ](self: BufferView[mut=True, T=Self.T, origin=_]):
         """Apply a SIMD function in-place over all elements."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
@@ -337,7 +337,7 @@ struct BufferView[
             i += 1
 
     def count[
-        func: def[W: Int](SIMD[Self.T, W]) -> SIMD[DType.bool, W]
+        func: def[W: Int](SIMD[Self.T, W]) thin -> SIMD[DType.bool, W]
     ](self) -> Int:
         """Count elements matching a vectorized predicate."""
         comptime width = simd_byte_width() // size_of[Scalar[Self.T]]()
