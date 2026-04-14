@@ -387,7 +387,7 @@ def binary_float_dispatch[
     name: StringLiteral,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T]
-    ) raises -> PrimitiveArray[T],
+    ) thin raises -> PrimitiveArray[T],
 ](left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed binary dispatch restricted to floating-point dtypes."""
     if left.dtype() != right.dtype():

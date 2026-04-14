@@ -800,7 +800,7 @@ struct CArrowDeviceArray(Movable):
         )
 
         var device_type = heap_c[].device_type
-        var device_id = heap_c[].device_id
+        var _ = heap_c[].device_id
 
         # For CPU device type, delegate to the existing CArrowArray import path.
         if device_type == DeviceType.CPU:

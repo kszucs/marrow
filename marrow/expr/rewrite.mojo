@@ -74,9 +74,9 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
     """Type-erased rewrite rule container."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_name: def(ArcPointer[NoneType]) -> String
-    var _virt_apply: def(ArcPointer[NoneType], AnyValue) -> Optional[AnyValue]
-    var _virt_drop: def(var ArcPointer[NoneType])
+    var _virt_name: def(ArcPointer[NoneType]) thin -> String
+    var _virt_apply: def(ArcPointer[NoneType], AnyValue) thin -> Optional[AnyValue]
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---
 
@@ -144,10 +144,27 @@ struct Rewriter:
     def __init__(out self, var rules: List[AnyRewrite]):
         self.rules = rules^
 
+    def _apply_rules(self, expr: AnyValue) raises -> AnyValue:
+        """Apply all rules to ``expr`` until no rule fires (fixed point)."""
+        var current = expr
+        var changed = True
+        while changed:
+            changed = False
+            for ref rule in self.rules:
+                var result = rule.apply(current)
+                if result:
+                    current = result.value()
+                    changed = True
+                    break  # restart rule sweep after any match
+        return current
+
     def rewrite(self, expr: AnyValue) raises -> AnyValue:
         """Rewrite ``expr`` bottom-up to a fixed point."""
-        # Rewrite children first (bottom-up)
         var children = expr.inputs()
+        if len(children) == 0:
+            return self._apply_rules(expr)
+
+        # Rewrite children first (bottom-up)
         var children_changed = False
         for i in range(len(children)):
             var rewritten = self.rewrite(children[i])
@@ -160,14 +177,4 @@ struct Rewriter:
         if children_changed:
             current = rebuild(expr, children)
 
-        # Apply rules to this node until fixed point
-        var changed = True
-        while changed:
-            changed = False
-            for ref rule in self.rules:
-                var result = rule.apply(current)
-                if result:
-                    current = result.value()
-                    changed = True
-                    break  # restart rule sweep after any match
-        return current
+        return self._apply_rules(current)

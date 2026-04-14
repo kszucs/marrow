@@ -1,4 +1,4 @@
-"""marrow.expr — expression and logical plan system.
+"""Expression and logical plan system for Marrow.
 
 Scalar expressions
 ------------------

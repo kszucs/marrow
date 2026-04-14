@@ -116,7 +116,7 @@ struct Benchmark:
 struct _Bench(Copyable):
     """A single benchmark to run."""
 
-    comptime fn_type = def(mut Benchmark) raises
+    comptime fn_type = def(mut Benchmark) capturing raises
 
     var bench_fn: Self.fn_type
     var name: StaticString
