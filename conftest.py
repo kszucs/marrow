@@ -82,6 +82,11 @@ class MojoRunner:
         flags = ["--sanitize", "address"]
         if sys.platform == "darwin":
             flags += ["--shared-libasan"]
+            # Ensure the conda env's lib dir appears first in the binary's
+            # rpath so dyld resolves libclang_rt.asan_osx_dynamic.dylib from
+            # the pixi env rather than the incompatible Xcode toolchain copy.
+            lib_dir = str(Path(asan_lib).parent)
+            flags += ["-Xlinker", "-rpath", "-Xlinker", lib_dir]
         flags += ["-Xlinker", asan_lib]
         return flags
 
@@ -100,20 +105,22 @@ class MojoRunner:
 
         if asan:
             # mojo run cannot link ASAN symbols — build a real binary first.
+            # Use a stable name derived from the source path so each test file
+            # gets its own binary; mojo's own build cache decides whether to
+            # recompile.
             src = Path(fspath)
-            content_hash = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
             runners_dir = Path(config.rootpath) / ".test_runners"
             runners_dir.mkdir(exist_ok=True)
-            binary = runners_dir / f"test_runner_{content_hash}"
-            if not binary.exists():
-                build_cmd = (
-                    ["mojo", "build", opt, "-I", "."] + asan + [str(src), "-o", str(binary)]
+            src_hash = hashlib.sha256(str(src).encode()).hexdigest()[:16]
+            binary = runners_dir / f"test_runner_{src_hash}"
+            build_cmd = (
+                ["mojo", "build", opt, "-I", "."] + asan + [str(src), "-o", str(binary)]
+            )
+            result = subprocess.run(build_cmd, cwd=config.rootpath, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"mojo build failed for {src}:\n{result.stderr}"
                 )
-                result = subprocess.run(build_cmd, cwd=config.rootpath, capture_output=True, text=True)
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"mojo build failed for {src}:\n{result.stderr}"
-                    )
             cmd = [str(binary)]
         else:
             cmd = ["mojo", "run", opt, "-I", "."] + [str(fspath)]
