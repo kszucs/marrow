@@ -38,9 +38,7 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 pytest = ">=9.0.2,<10"
 pytest-benchmark = ">=5.2.3,<6"
 pytest-xdist = ">=3,<4"
-
-[feature.dev.pypi-dependencies]
-pyarrow = ">=23.0.0, <24"
+pyarrow = ">=23.0.0,<24"
 
 [feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v" }
@@ -98,6 +96,7 @@ datafusion = ">=44.0.0"
 datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
 [environments]
+default = { features = ["dev", "format"], solve-group = "default" }
 dev = { features = ["dev", "format"], solve-group = "default" }
 asan = { features = ["dev", "asan"], solve-group = "default" }
 bench = { features = ["dev", "bench"], solve-group = "default" }

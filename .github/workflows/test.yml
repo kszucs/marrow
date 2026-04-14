@@ -1,4 +1,4 @@
-name: Marrow Test
+name: CI
 
 on:
   - push
@@ -6,7 +6,8 @@ on:
   - workflow_call
 
 jobs:
-  test:
+  test-linux-x86_64:
+    name: test (linux, x86_64)
     runs-on: ubuntu-latest
     env:
       MODULAR_HOME: "/home/runner/.modular"
@@ -21,14 +22,13 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
-    - name: checks
-      run: pixi run -e dev fmt_check
     - name: tests
       run: |
         pixi run -e dev test --no-gpu
         pixi run package
 
-  test-macos:
+  test-macos-arm64:
+    name: test (macos, arm64)
     runs-on: macos-latest
     env:
       MODULAR_HOME: "/Users/runner/.modular"
@@ -43,14 +43,32 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
-    - name: checks
-      run: pixi run -e dev fmt_check
     - name: tests
       run: |
         pixi run -e dev test --no-gpu
         pixi run package
 
-  asan:
+  bench-linux-x86_64:
+    name: bench (linux, x86_64)
+    runs-on: ubuntu-latest
+    env:
+      MODULAR_HOME: "/home/runner/.modular"
+      FORCE_COLOR: "1"
+      PYTEST_ADDOPTS: "--color=yes"
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+        environments: bench
+    - name: benchmarks
+      run: pixi run -e bench bench --no-gpu
+
+  asan-linux-x86_64:
+    name: asan (linux, x86_64)
     runs-on: ubuntu-latest
     env:
       MODULAR_HOME: "/home/runner/.modular"

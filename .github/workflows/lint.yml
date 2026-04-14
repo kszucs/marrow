@@ -1,0 +1,25 @@
+name: Lint
+
+on:
+  - push
+  - pull_request
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+        environments: format
+    - name: format check
+      run: pixi run -e format fmt_check
+    - name: conventional commits
+      uses: wagoid/commitlint-github-action@v6
