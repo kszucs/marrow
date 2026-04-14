@@ -1,9 +1,11 @@
 name: CI
 
 on:
-  - push
-  - pull_request
-  - workflow_call
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_call:
 
 jobs:
   test-linux-x86_64:
