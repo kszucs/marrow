@@ -300,14 +300,14 @@ def test_concat_fixed_size_list() raises:
     child1.append(3.0)
     child1.append(4.0)
     var fsl1 = FixedSizeListBuilder(child1^, list_size=2)
-    fsl1.unsafe_append_valid()
-    fsl1.unsafe_append_valid()
+    fsl1.append_valid()
+    fsl1.append_valid()
     # Chunk 2: [[5.0, 6.0]]
     var child2 = PrimitiveBuilder[Float32Type]()
     child2.append(5.0)
     child2.append(6.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
-    fsl2.unsafe_append_valid()
+    fsl2.append_valid()
     var arrs: List[AnyArray] = [
         fsl1.finish().to_any(),
         fsl2.finish().to_any(),
@@ -338,15 +338,15 @@ def test_concat_fixed_size_list_with_offset() raises:
     child.append(5.0)
     child.append(6.0)
     var fsl = FixedSizeListBuilder(child^, list_size=2)
-    fsl.unsafe_append_valid()
-    fsl.unsafe_append_valid()
-    fsl.unsafe_append_valid()
+    fsl.append_valid()
+    fsl.append_valid()
+    fsl.append_valid()
     var sliced = fsl.finish().slice(1, 2)  # [[3.0, 4.0], [5.0, 6.0]]
     var child2 = PrimitiveBuilder[Float32Type]()
     child2.append(7.0)
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
-    fsl2.unsafe_append_valid()
+    fsl2.append_valid()
     var arrs: List[AnyArray] = [
         (sliced^).to_any(),
         fsl2.finish().to_any(),

@@ -249,7 +249,7 @@ def rapidhash(
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
-    var dst = buf.view[uint64.native]()
+    var dst = buf.view[uint64.native](0, n)
     var validity = keys.validity()
     if validity:
         apply[uint64.native, _rapidhash_bool_masked](
@@ -291,7 +291,7 @@ def rapidhash[
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
-    var dst = buf.view[uint64.native]()
+    var dst = buf.view[uint64.native](0, n)
     var validity = keys.validity()
     if validity:
         apply[T.native, uint64.native, _rapidhash_primitive_masked[T, ...]](
@@ -374,7 +374,7 @@ def rapidhash(
         apply[uint64.native, uint64.native, _combine_hashes](
             result.values(),
             field_hashes.values(),
-            buf.view[uint64.native](),
+            buf.view[uint64.native](0, n),
             ctx,
         )
         result = PrimitiveArray[UInt64Type](

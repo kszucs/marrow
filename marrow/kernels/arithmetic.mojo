@@ -41,7 +41,9 @@ def _unary[
         buf = Buffer.alloc_device[native](ctx.value(), length)
     else:
         buf = Buffer.alloc_zeroed[native](length)
-    apply[native, native, func](array.values(), buf.view[native](), ctx)
+    apply[native, native, func](
+        array.values(), buf.view[native](0, length), ctx
+    )
     return PrimitiveArray[T](
         length=length,
         nulls=length
@@ -82,7 +84,7 @@ def _binary[
     apply[native, native, func](
         left.values(),
         right.values(),
-        buf.view[native](),
+        buf.view[native](0, length),
         ctx,
     )
     return PrimitiveArray[T](

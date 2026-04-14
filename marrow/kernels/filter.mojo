@@ -170,7 +170,7 @@ def _filter_values[
     comptime ALL_ONES = ~UInt64(0)
     var buf = Buffer.alloc_uninit(out_len * size_of[Scalar[T]]())
     var src = src_buf.view[T](src_offset)
-    var dst = buf.view[T]()
+    var dst = buf.view[T](0, out_len)
     var out_pos = 0
     var i = sel_start
 
@@ -625,7 +625,7 @@ def take[
     var src = array.values()
     var idx = indices.values()
     var buf = Buffer.alloc_uninit[native](n)
-    var out = buf.view[native]()
+    var out = buf.view[native](0, n)
 
     var has_null_indices = indices.null_count() > 0
     var has_src_nulls = array.null_count() > 0
