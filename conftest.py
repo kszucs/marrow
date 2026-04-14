@@ -429,6 +429,10 @@ def pytest_ignore_collect(collection_path, config):
     ):
         if _python_excluded(config):
             return True
+        # Python bench files are only collected when --benchmark is active,
+        # mirroring the behaviour of Mojo bench_*.mojo files.
+        if collection_path.name.startswith("bench_") and not config.getoption("--benchmark"):
+            return True
 
 
 def pytest_sessionstart(session):

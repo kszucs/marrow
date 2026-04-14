@@ -20,11 +20,12 @@ jobs:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
+        environments: dev
     - name: checks
-      run: pixi run fmt_check
+      run: pixi run -e dev fmt_check
     - name: tests
       run: |
-        pixi run test --no-gpu
+        pixi run -e dev test --no-gpu
         pixi run package
 
   test-macos:
@@ -41,11 +42,12 @@ jobs:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
+        environments: dev
     - name: checks
-      run: pixi run fmt_check
+      run: pixi run -e dev fmt_check
     - name: tests
       run: |
-        pixi run test --no-gpu
+        pixi run -e dev test --no-gpu
         pixi run package
 
   asan:
@@ -62,5 +64,6 @@ jobs:
         cache: true
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
+        environments: asan
     - name: asan tests
-      run: pixi run test_mojo_asan --no-gpu --no-python
+      run: pixi run -e asan test_mojo_asan --no-gpu --no-python

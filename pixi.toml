@@ -23,40 +23,73 @@ mojo-compiler = "==0.26.3.0.dev2026041105"
 mojo = "==0.26.3.0.dev2026041105"
 
 [package.run-dependencies]
-ipython = ">=9.11.0,<10"
-jupyter = ">=1.1,<2"
-jupyter-cache = ">=1.0,<2"
 mojo = "==0.26.3.0.dev2026041105"
 pontoneer = "==0.6.6.dev2026041105"
 python = ">=3.14.2,<3.15"
-quarto = ">=1.6,<2"
-polars = ">=1.39.2,<2"
-pyarrow = ">=23.0.0,<24"
 
 [tasks]
 build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
+profile = "python scripts/profile.py"
+package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
+publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
+
+# Dev — dependencies and tasks for development and testing.
+[feature.dev.dependencies]
+pytest = ">=9.0.2,<10"
+pytest-benchmark = ">=5.2.3,<6"
+pytest-xdist = ">=3,<4"
+
+[feature.dev.pypi-dependencies]
+pyarrow = ">=23.0.0, <24"
+
+[feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v" }
 test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
-test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
-test_mojo_asan_parallel = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v" }
+
+# Asan — ASAN runtime needed for --asan test runs.
+[feature.asan.dependencies]
+libcompiler-rt = ">=17,<23"
+
+[feature.asan.tasks]
+test_mojo_asan = { cmd = "pytest --mojo --asan -v" }
+test_mojo_asan_parallel = { cmd = "pytest --mojo --asan -v -n auto --dist=loadfile" }
+
+# Bench — benchmark dependencies and tasks (polars/duckdb for comparison benches).
+[feature.bench.dependencies]
+polars = ">=1.39.2,<2"
+rich = ">=13,<15"
+duckdb = ">=1.5.1,<2"
+
+[feature.bench.tasks]
 bench_mojo = { cmd = "pytest --benchmark --mojo -v" }
 bench_python = { cmd = "pytest --benchmark --python -v" }
 bench = { cmd = "pytest --benchmark -v" }
-profile = "python scripts/profile.py"
+
+# Format — code formatting and linting.
+[feature.format.dependencies]
+ruff = ">=0.14.14,<0.15"
+
+[feature.format.tasks]
 fmt_mojo = { cmd = "mojo format marrow python" }
 fmt_python = { cmd = "ruff format python" }
 fmt = { depends-on = ["fmt_mojo", "fmt_python"] }
 fmt_check = { cmd = "git diff --exit-code", depends-on = ["fmt"] }
-package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
+
+# Docs — documentation generation.
+[feature.docs.dependencies]
+ipython = ">=9.11.0,<10"
+jupyter = ">=1.1,<2"
+jupyter-cache = ">=1.0,<2"
+quarto = ">=1.6,<2"
+
+[feature.docs.tasks]
 docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
-publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
-
-# Examples feature — optional dependencies and tasks for runnable examples.
+# Examples — optional runnable examples.
 # Run with: pixi run -e examples datafusion_udf
 [feature.examples.pypi-dependencies]
 datafusion = ">=44.0.0"
@@ -65,26 +98,15 @@ datafusion = ">=44.0.0"
 datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
 
 [environments]
-examples = { features = ["examples"] }
+dev = { features = ["dev", "format"], solve-group = "default" }
+asan = { features = ["dev", "asan"], solve-group = "default" }
+bench = { features = ["dev", "bench"], solve-group = "default" }
+format = { features = ["format"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
+examples = { features = ["examples"], solve-group = "default" }
 
 [dependencies]
-# FIXME: most of these are development dependencies and should be moved to a
-# [dev-dependencies] section or similar
-ipython = ">=9.11.0,<10"
-jupyter = ">=1.1,<2"
-jupyter-cache = ">=1.0,<2"
-mojo = "==0.26.3.0.dev2026041105"
+mojo = ">=0.26.3.0.dev2026041105,<0.27"
 pontoneer = ">=0.6.6.dev2026041105,<0.7"
-pytest = ">=9.0.2,<10"
-pytest-benchmark = ">=5.2.3,<6"
-pytest-xdist = ">=3,<4"
 python = ">=3.14.2,<3.15"
-quarto = ">=1.6,<2"
-ruff = ">=0.14.14,<0.15"
-polars = ">=1.39.2,<2"
-rich = ">=13,<15"
-libcompiler-rt = ">=17,<23"
-duckdb = ">=1.5.1,<2"
 
-[pypi-dependencies]
-pyarrow = ">=23.0.0, <24"

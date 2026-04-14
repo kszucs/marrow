@@ -70,7 +70,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 ## Python Quick Start
 
 ```bash
-pixi run build_python   # compile marrow.so
+pixi run -e dev build_python   # compile marrow.so
 ```
 
 ```python
@@ -290,13 +290,13 @@ When the array type is provided explicitly, marrow's builder path is faster than
 Run the benchmarks yourself:
 
 ```bash
-pixi run bench_python       # Python array construction vs PyArrow
-pixi run bench              # CPU SIMD arithmetic benchmarks
-pixi run bench_similarity   # cosine similarity: CPU vs GPU
+pixi run -e bench bench_python       # Python array construction vs PyArrow
+pixi run -e bench bench              # CPU SIMD arithmetic benchmarks
+pixi run -e bench bench_similarity   # cosine similarity: CPU vs GPU
 
 # Side-by-side comparison table: marrow vs polars vs pyarrow vs duckdb
-pixi run pytest --benchmark --no-mojo python/tests/bench_compute.py --competition
-pixi run pytest --benchmark --no-mojo python/tests/bench_join.py --competition
+pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_compute.py --competition
+pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_join.py --competition
 ```
 
 ## GPU Acceleration
@@ -342,16 +342,33 @@ var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
 
 ## Development
 
-Install [pixi](https://pixi.sh/latest/installation/), then:
+Install [pixi](https://pixi.sh/latest/installation/). The project uses pixi
+environments to keep optional dependencies out of the default install:
+
+| Environment | Activate with | What it includes |
+|---|---|---|
+| `dev` | `-e dev` | pyarrow, pytest, ruff — daily dev and testing |
+| `asan` | `-e asan` | dev + `libcompiler-rt` for AddressSanitizer runs |
+| `bench` | `-e bench` | dev + polars, duckdb, rich for comparison benchmarks |
+| `format` | `-e format` | ruff only |
+| `docs` | `-e docs` | jupyter, quarto |
 
 ```bash
-pixi run test              # run all tests (Mojo + Python), parallel
-pixi run test_mojo         # Mojo unit tests only
-pixi run test_python       # Python binding tests only
-pixi run bench             # all benchmarks
-pixi run bench_mojo        # Mojo benchmarks only
-pixi run bench_python      # Python vs PyArrow benchmarks only
-pixi run fmt               # format all code (Mojo + Python)
+# testing
+pixi run -e dev test              # all tests (Mojo + Python)
+pixi run -e dev test_mojo         # Mojo unit tests only
+pixi run -e dev test_python       # Python binding tests only
+
+# benchmarks
+pixi run -e bench bench           # all benchmarks
+pixi run -e bench bench_mojo      # Mojo benchmarks only
+pixi run -e bench bench_python    # Python vs PyArrow benchmarks only
+
+# formatting
+pixi run -e dev fmt               # format all code (Mojo + Python)
+
+# AddressSanitizer
+pixi run -e asan test_mojo_asan   # Mojo tests under ASAN
 ```
 
 The Python shared library (`python/marrow.so`) is built automatically before
@@ -363,17 +380,14 @@ Use `pytest` directly to run a single test file or a specific test case:
 
 ```bash
 # entire file
-pixi run pytest marrow/kernels/tests/test_join.mojo
+pixi run -e dev pytest marrow/kernels/tests/test_join.mojo
 
 # single test
-pixi run pytest marrow/kernels/tests/test_join.mojo::test_collision_left_join
+pixi run -e dev pytest marrow/kernels/tests/test_join.mojo::test_collision_left_join
 
 # verbose output
-pixi run pytest -v marrow/tests/test_arrays.mojo
+pixi run -e dev pytest -v marrow/tests/test_arrays.mojo
 ```
-
-Tests run in parallel by default (`--dist=loadfile`), grouping all tests from
-the same `.mojo` file on the same worker so the compiled binary is reused.
 
 ### Pytest options
 
@@ -382,8 +396,8 @@ the same `.mojo` file on the same worker so the compiled binary is reused.
 | `--mojo` / `--no-mojo` | Select or exclude Mojo tests |
 | `--python` / `--no-python` | Select or exclude Python tests |
 | `--gpu` / `--no-gpu` | Select or exclude GPU tests |
-| `--benchmark` | Include benchmark files (`bench_*.mojo`); also switches to `-O3` |
-| `--asan` | Enable AddressSanitizer (requires `libcompiler-rt` from conda-forge) |
+| `--benchmark` | Include benchmark files (`bench_*.mojo` / `bench_*.py`); also switches to `-O3` |
+| `--asan` | Enable AddressSanitizer (use `-e asan` environment) |
 | `--competition` | After benchmarks, print a side-by-side comparison table across all measured libraries |
 
 ### Writing Mojo tests

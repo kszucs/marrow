@@ -1,0 +1,27 @@
+# Reproduces the GitHub Actions ubuntu-latest CI environment.
+# Build: docker build -f Dockerfile.ci -t marrow-ci .
+# Run:   docker run --rm -it marrow-ci
+
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MODULAR_HOME=/root/.modular
+ENV FORCE_COLOR=1
+ENV PYTEST_ADDOPTS=--color=yes
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pixi (same mechanism as prefix-dev/setup-pixi@v0.9.4)
+RUN curl -fsSL https://pixi.sh/install.sh | bash
+ENV PATH="/root/.pixi/bin:$PATH"
+
+WORKDIR /marrow
+COPY . .
+
+# Install all dependencies exactly as locked (mirrors --frozen in CI)
+RUN pixi install --frozen
+
+# Default: run the same command that fails in CI
+CMD ["pixi", "run", "test", "--no-gpu"]

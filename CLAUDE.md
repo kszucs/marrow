@@ -10,14 +10,23 @@ For information about the Mojo programming language and the standard library see
 
 ## Build System & Commands
 
-This project uses **pixi** as the package manager. All commands are run through pixi:
+This project uses **pixi** as the package manager. Commands are scoped to environments:
+
+| Environment | Purpose | Key command |
+|-------------|---------|-------------|
+| `dev`       | Tests + formatting (default for development) | `pixi run -e dev test` |
+| `asan`      | AddressSanitizer test runs | `pixi run -e asan test_mojo_asan` |
+| `bench`     | Benchmarks (polars, duckdb for comparison) | `pixi run -e bench bench` |
+| `format`    | Formatting only (no test deps) | `pixi run -e format fmt` |
+| `docs`      | Documentation generation | `pixi run -e docs docs` |
+| `examples`  | Runnable examples | `pixi run -e examples datafusion_udf` |
 
 ```bash
 # Run all tests
-pixi run test
+pixi run -e dev test
 
 # Format code
-pixi run fmt
+pixi run -e dev fmt
 
 # Build package
 pixi run package
@@ -31,30 +40,31 @@ ASAN integration.
 
 ```bash
 # single file
-pixi run pytest marrow/tests/test_dtypes.mojo
+pixi run -e dev pytest marrow/tests/test_dtypes.mojo
 
 # single test case
-pixi run pytest marrow/tests/test_arrays.mojo::test_primitive_slice
+pixi run -e dev pytest marrow/tests/test_arrays.mojo::test_primitive_slice
 
 # verbose (shows PASS/FAIL per test)
-pixi run pytest -v marrow/kernels/tests/test_join.mojo
+pixi run -e dev pytest -v marrow/kernels/tests/test_join.mojo
 ```
 
 Useful options:
 
 ```bash
 --benchmark              # include bench_*.mojo files; also enables -O3
---asan                   # AddressSanitizer (requires libcompiler-rt from conda-forge)
+--asan                   # AddressSanitizer (requires asan environment)
 --gpu                    # include GPU tests (requires Metal/CUDA device)
 --no-python              # skip Python binding tests
---competition                        # print a side-by-side comparison table after benchmarks
+--competition            # print a side-by-side comparison table after benchmarks
 ```
 
 The harness compiles runners to `.test_runners/test_runner_<hash>` (content-
 hashed, stable across runs).  Re-running the same test selection skips
 recompilation (~1 s vs ~5 s cold).
 
-Tests run in parallel by default (`--dist=loadfile` in `pytest.ini`), grouping
+Tests run sequentially by default. Use `*_parallel` task variants (e.g.
+`test_mojo_parallel`) to enable `--dist=loadfile` parallelism, which groups
 all tests from the same `.mojo` file on the same worker so the compiled binary
 is reused.  Benchmark tasks always pass `-n0` to disable parallelism for
 accurate timing.
