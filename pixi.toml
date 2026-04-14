@@ -40,12 +40,14 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 pytest = ">=9.0.2,<10"
 pytest-benchmark = ">=5.2.3,<6"
 pytest-xdist = ">=3,<4"
-pyarrow = ">=21.0.0,<23"
 
-[feature.dev.activation]
-# conda-forge libarrow bundles libopentelemetry-cpp; its singleton initializer
-# crashes inside the Mojo JIT runtime on macOS.  Disabling the SDK avoids it.
-env = { OTEL_SDK_DISABLED = "true" }
+[feature.dev.pypi-dependencies]
+# PyPI wheel is used instead of conda-forge: the conda-forge libarrow bundles
+# libopentelemetry-cpp whose RuntimeContextStorage singleton destructor crashes
+# at process exit on macOS, corrupting stdout and causing all tests in the
+# same binary to be reported as failed.  The PyPI wheel ships a
+# self-contained libarrow built without the OpenTelemetry SDK.
+pyarrow = ">=23.0.1,<24"
 
 [feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v" }
