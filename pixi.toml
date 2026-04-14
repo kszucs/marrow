@@ -42,6 +42,11 @@ pytest-benchmark = ">=5.2.3,<6"
 pytest-xdist = ">=3,<4"
 pyarrow = ">=21.0.0,<23"
 
+[feature.dev.activation]
+# conda-forge libarrow bundles libopentelemetry-cpp; its singleton initializer
+# crashes inside the Mojo JIT runtime on macOS.  Disabling the SDK avoids it.
+env = { OTEL_SDK_DISABLED = "true" }
+
 [feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v" }
 test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
