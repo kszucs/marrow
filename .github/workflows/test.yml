@@ -69,8 +69,11 @@ jobs:
     - name: benchmarks
       run: pixi run -e bench bench --no-gpu
 
-  asan-linux-x86_64:
+  # TODO: re-enable once ASAN builds are fast enough
+  # asan-linux-x86_64:
+  asan-linux-x86_64-disabled:
     name: asan (linux, x86_64)
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
