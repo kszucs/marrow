@@ -247,29 +247,53 @@ struct AggregateFunction(Copyable, Movable):
         var dt = input_col.dtype()
 
         if dt == bool_:
-            _add_batch_bool(self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_bool(
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == int8:
-            _add_batch_typed[Int8Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Int8Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == int16:
-            _add_batch_typed[Int16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Int16Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == int32:
-            _add_batch_typed[Int32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Int32Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == int64:
-            _add_batch_typed[Int64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Int64Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == uint8:
-            _add_batch_typed[UInt8Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[UInt8Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == uint16:
-            _add_batch_typed[UInt16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[UInt16Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == uint32:
-            _add_batch_typed[UInt32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[UInt32Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == uint64:
-            _add_batch_typed[UInt64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[UInt64Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == float16:
-            _add_batch_typed[Float16Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Float16Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == float32:
-            _add_batch_typed[Float32Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Float32Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         elif dt == float64:
-            _add_batch_typed[Float64Type](self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap)
+            _add_batch_typed[Float64Type](
+                self.name, val_ptr, cnt_ptr, group_ids, input_col, has_bitmap
+            )
         else:
             raise Error("unsupported dtype for aggregation: ", dt)
 
