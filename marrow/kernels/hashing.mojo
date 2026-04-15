@@ -395,37 +395,34 @@ def rapidhash(
     """Runtime-typed rapidhash dispatch."""
     if keys.dtype() == bool_:
         return rapidhash(keys.as_bool(), ctx)
-
-    if keys.dtype() == int8:
-        return rapidhash[Int8Type](keys.as_primitive[Int8Type](), ctx)
+    elif keys.dtype() == int8:
+        return rapidhash(keys.as_int8(), ctx)
     elif keys.dtype() == int16:
-        return rapidhash[Int16Type](keys.as_primitive[Int16Type](), ctx)
+        return rapidhash(keys.as_int16(), ctx)
     elif keys.dtype() == int32:
-        return rapidhash[Int32Type](keys.as_primitive[Int32Type](), ctx)
+        return rapidhash(keys.as_int32(), ctx)
     elif keys.dtype() == int64:
-        return rapidhash[Int64Type](keys.as_primitive[Int64Type](), ctx)
+        return rapidhash(keys.as_int64(), ctx)
     elif keys.dtype() == uint8:
-        return rapidhash[UInt8Type](keys.as_primitive[UInt8Type](), ctx)
+        return rapidhash(keys.as_uint8(), ctx)
     elif keys.dtype() == uint16:
-        return rapidhash[UInt16Type](keys.as_primitive[UInt16Type](), ctx)
+        return rapidhash(keys.as_uint16(), ctx)
     elif keys.dtype() == uint32:
-        return rapidhash[UInt32Type](keys.as_primitive[UInt32Type](), ctx)
+        return rapidhash(keys.as_uint32(), ctx)
     elif keys.dtype() == uint64:
-        return rapidhash[UInt64Type](keys.as_primitive[UInt64Type](), ctx)
+        return rapidhash(keys.as_uint64(), ctx)
     elif keys.dtype() == float16:
-        return rapidhash[Float16Type](keys.as_primitive[Float16Type](), ctx)
+        return rapidhash(keys.as_float16(), ctx)
     elif keys.dtype() == float32:
-        return rapidhash[Float32Type](keys.as_primitive[Float32Type](), ctx)
+        return rapidhash(keys.as_float32(), ctx)
     elif keys.dtype() == float64:
-        return rapidhash[Float64Type](keys.as_primitive[Float64Type](), ctx)
-
-    if keys.dtype().is_string():
+        return rapidhash(keys.as_float64(), ctx)
+    elif keys.dtype().is_string():
         return rapidhash(keys.as_string())
-
-    if keys.dtype().is_struct():
+    elif keys.dtype().is_struct():
         return rapidhash(keys.as_struct(), ctx)
-
-    raise Error("rapidhash: unsupported dtype ", keys.dtype())
+    else:
+        raise Error("rapidhash: unsupported dtype ", keys.dtype())
 
 
 # ---------------------------------------------------------------------------
