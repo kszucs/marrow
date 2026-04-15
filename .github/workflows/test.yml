@@ -69,13 +69,10 @@ jobs:
     - name: benchmarks
       run: pixi run -e bench bench --no-gpu
 
-  # TODO: re-enable once ASAN builds are fast enough
-  # asan-linux-x86_64:
-  asan-linux-x86_64-disabled:
+  asan-linux-x86_64:
     name: asan (linux, x86_64)
-    if: false
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       MODULAR_HOME: "/home/runner/.modular"
       FORCE_COLOR: "1"
@@ -90,4 +87,24 @@ jobs:
         frozen: true
         environments: asan
     - name: asan tests
-      run: pixi run -e asan test_mojo_asan --no-gpu --no-python
+      run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
+
+  asan-macos-arm64:
+    name: asan (macos, arm64)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      MODULAR_HOME: "/Users/runner/.modular"
+      FORCE_COLOR: "1"
+      PYTEST_ADDOPTS: "--color=yes"
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v2
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+        environments: asan
+    - name: asan tests
+      run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
