@@ -112,61 +112,27 @@ def binary_array_dispatch[
         )
 
     if left.dtype() == int8:
-        return func[Int8Type](
-            left.as_primitive[Int8Type](), right.as_primitive[Int8Type](), ctx
-        ).to_any()
+        return func(left.as_int8(), right.as_int8(), ctx).to_any()
     elif left.dtype() == int16:
-        return func[Int16Type](
-            left.as_primitive[Int16Type](), right.as_primitive[Int16Type](), ctx
-        ).to_any()
+        return func(left.as_int16(), right.as_int16(), ctx).to_any()
     elif left.dtype() == int32:
-        return func[Int32Type](
-            left.as_primitive[Int32Type](), right.as_primitive[Int32Type](), ctx
-        ).to_any()
+        return func(left.as_int32(), right.as_int32(), ctx).to_any()
     elif left.dtype() == int64:
-        return func[Int64Type](
-            left.as_primitive[Int64Type](), right.as_primitive[Int64Type](), ctx
-        ).to_any()
+        return func(left.as_int64(), right.as_int64(), ctx).to_any()
     elif left.dtype() == uint8:
-        return func[UInt8Type](
-            left.as_primitive[UInt8Type](), right.as_primitive[UInt8Type](), ctx
-        ).to_any()
+        return func(left.as_uint8(), right.as_uint8(), ctx).to_any()
     elif left.dtype() == uint16:
-        return func[UInt16Type](
-            left.as_primitive[UInt16Type](),
-            right.as_primitive[UInt16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint16(), right.as_uint16(), ctx).to_any()
     elif left.dtype() == uint32:
-        return func[UInt32Type](
-            left.as_primitive[UInt32Type](),
-            right.as_primitive[UInt32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint32(), right.as_uint32(), ctx).to_any()
     elif left.dtype() == uint64:
-        return func[UInt64Type](
-            left.as_primitive[UInt64Type](),
-            right.as_primitive[UInt64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint64(), right.as_uint64(), ctx).to_any()
     elif left.dtype() == float16:
-        return func[Float16Type](
-            left.as_primitive[Float16Type](),
-            right.as_primitive[Float16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float16(), right.as_float16(), ctx).to_any()
     elif left.dtype() == float32:
-        return func[Float32Type](
-            left.as_primitive[Float32Type](),
-            right.as_primitive[Float32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float32(), right.as_float32(), ctx).to_any()
     elif left.dtype() == float64:
-        return func[Float64Type](
-            left.as_primitive[Float64Type](),
-            right.as_primitive[Float64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float64(), right.as_float64(), ctx).to_any()
     raise Error(t"{name}: unsupported dtype {left.dtype()}")
 
 
@@ -202,61 +168,27 @@ def binary_array_dispatch[
         )
 
     if left.dtype() == int8:
-        return func[Int8Type](
-            left.as_primitive[Int8Type](), right.as_primitive[Int8Type](), ctx
-        ).to_any()
+        return func(left.as_int8(), right.as_int8(), ctx).to_any()
     elif left.dtype() == int16:
-        return func[Int16Type](
-            left.as_primitive[Int16Type](), right.as_primitive[Int16Type](), ctx
-        ).to_any()
+        return func(left.as_int16(), right.as_int16(), ctx).to_any()
     elif left.dtype() == int32:
-        return func[Int32Type](
-            left.as_primitive[Int32Type](), right.as_primitive[Int32Type](), ctx
-        ).to_any()
+        return func(left.as_int32(), right.as_int32(), ctx).to_any()
     elif left.dtype() == int64:
-        return func[Int64Type](
-            left.as_primitive[Int64Type](), right.as_primitive[Int64Type](), ctx
-        ).to_any()
+        return func(left.as_int64(), right.as_int64(), ctx).to_any()
     elif left.dtype() == uint8:
-        return func[UInt8Type](
-            left.as_primitive[UInt8Type](), right.as_primitive[UInt8Type](), ctx
-        ).to_any()
+        return func(left.as_uint8(), right.as_uint8(), ctx).to_any()
     elif left.dtype() == uint16:
-        return func[UInt16Type](
-            left.as_primitive[UInt16Type](),
-            right.as_primitive[UInt16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint16(), right.as_uint16(), ctx).to_any()
     elif left.dtype() == uint32:
-        return func[UInt32Type](
-            left.as_primitive[UInt32Type](),
-            right.as_primitive[UInt32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint32(), right.as_uint32(), ctx).to_any()
     elif left.dtype() == uint64:
-        return func[UInt64Type](
-            left.as_primitive[UInt64Type](),
-            right.as_primitive[UInt64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint64(), right.as_uint64(), ctx).to_any()
     elif left.dtype() == float16:
-        return func[Float16Type](
-            left.as_primitive[Float16Type](),
-            right.as_primitive[Float16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float16(), right.as_float16(), ctx).to_any()
     elif left.dtype() == float32:
-        return func[Float32Type](
-            left.as_primitive[Float32Type](),
-            right.as_primitive[Float32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float32(), right.as_float32(), ctx).to_any()
     elif left.dtype() == float64:
-        return func[Float64Type](
-            left.as_primitive[Float64Type](),
-            right.as_primitive[Float64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float64(), right.as_float64(), ctx).to_any()
     raise Error(t"{name}: unsupported dtype {left.dtype()}")
 
 
@@ -282,61 +214,27 @@ def bool_array_dispatch[
         )
 
     if left.dtype() == int8:
-        return func[Int8Type](
-            left.as_primitive[Int8Type](), right.as_primitive[Int8Type](), ctx
-        ).to_any()
+        return func(left.as_int8(), right.as_int8(), ctx).to_any()
     elif left.dtype() == int16:
-        return func[Int16Type](
-            left.as_primitive[Int16Type](), right.as_primitive[Int16Type](), ctx
-        ).to_any()
+        return func(left.as_int16(), right.as_int16(), ctx).to_any()
     elif left.dtype() == int32:
-        return func[Int32Type](
-            left.as_primitive[Int32Type](), right.as_primitive[Int32Type](), ctx
-        ).to_any()
+        return func(left.as_int32(), right.as_int32(), ctx).to_any()
     elif left.dtype() == int64:
-        return func[Int64Type](
-            left.as_primitive[Int64Type](), right.as_primitive[Int64Type](), ctx
-        ).to_any()
+        return func(left.as_int64(), right.as_int64(), ctx).to_any()
     elif left.dtype() == uint8:
-        return func[UInt8Type](
-            left.as_primitive[UInt8Type](), right.as_primitive[UInt8Type](), ctx
-        ).to_any()
+        return func(left.as_uint8(), right.as_uint8(), ctx).to_any()
     elif left.dtype() == uint16:
-        return func[UInt16Type](
-            left.as_primitive[UInt16Type](),
-            right.as_primitive[UInt16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint16(), right.as_uint16(), ctx).to_any()
     elif left.dtype() == uint32:
-        return func[UInt32Type](
-            left.as_primitive[UInt32Type](),
-            right.as_primitive[UInt32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint32(), right.as_uint32(), ctx).to_any()
     elif left.dtype() == uint64:
-        return func[UInt64Type](
-            left.as_primitive[UInt64Type](),
-            right.as_primitive[UInt64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_uint64(), right.as_uint64(), ctx).to_any()
     elif left.dtype() == float16:
-        return func[Float16Type](
-            left.as_primitive[Float16Type](),
-            right.as_primitive[Float16Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float16(), right.as_float16(), ctx).to_any()
     elif left.dtype() == float32:
-        return func[Float32Type](
-            left.as_primitive[Float32Type](),
-            right.as_primitive[Float32Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float32(), right.as_float32(), ctx).to_any()
     elif left.dtype() == float64:
-        return func[Float64Type](
-            left.as_primitive[Float64Type](),
-            right.as_primitive[Float64Type](),
-            ctx,
-        ).to_any()
+        return func(left.as_float64(), right.as_float64(), ctx).to_any()
     raise Error(t"{name}: unsupported dtype {left.dtype()}")
 
 
@@ -359,27 +257,27 @@ def unary_numeric_dispatch[
         A new AnyArray with the element-wise result.
     """
     if array.dtype() == int8:
-        return func[Int8Type](array.as_primitive[Int8Type]()).to_any()
+        return func(array.as_int8()).to_any()
     elif array.dtype() == int16:
-        return func[Int16Type](array.as_primitive[Int16Type]()).to_any()
+        return func(array.as_int16()).to_any()
     elif array.dtype() == int32:
-        return func[Int32Type](array.as_primitive[Int32Type]()).to_any()
+        return func(array.as_int32()).to_any()
     elif array.dtype() == int64:
-        return func[Int64Type](array.as_primitive[Int64Type]()).to_any()
+        return func(array.as_int64()).to_any()
     elif array.dtype() == uint8:
-        return func[UInt8Type](array.as_primitive[UInt8Type]()).to_any()
+        return func(array.as_uint8()).to_any()
     elif array.dtype() == uint16:
-        return func[UInt16Type](array.as_primitive[UInt16Type]()).to_any()
+        return func(array.as_uint16()).to_any()
     elif array.dtype() == uint32:
-        return func[UInt32Type](array.as_primitive[UInt32Type]()).to_any()
+        return func(array.as_uint32()).to_any()
     elif array.dtype() == uint64:
-        return func[UInt64Type](array.as_primitive[UInt64Type]()).to_any()
+        return func(array.as_uint64()).to_any()
     elif array.dtype() == float16:
-        return func[Float16Type](array.as_primitive[Float16Type]()).to_any()
+        return func(array.as_float16()).to_any()
     elif array.dtype() == float32:
-        return func[Float32Type](array.as_primitive[Float32Type]()).to_any()
+        return func(array.as_float32()).to_any()
     elif array.dtype() == float64:
-        return func[Float64Type](array.as_primitive[Float64Type]()).to_any()
+        return func(array.as_float64()).to_any()
     raise Error(t"{name}: unsupported dtype {array.dtype()}")
 
 
@@ -396,17 +294,11 @@ def binary_float_dispatch[
         )
 
     if left.dtype() == float16:
-        return func[Float16Type](
-            left.as_primitive[Float16Type](), right.as_primitive[Float16Type]()
-        ).to_any()
+        return func(left.as_float16(), right.as_float16()).to_any()
     elif left.dtype() == float32:
-        return func[Float32Type](
-            left.as_primitive[Float32Type](), right.as_primitive[Float32Type]()
-        ).to_any()
+        return func(left.as_float32(), right.as_float32()).to_any()
     elif left.dtype() == float64:
-        return func[Float64Type](
-            left.as_primitive[Float64Type](), right.as_primitive[Float64Type]()
-        ).to_any()
+        return func(left.as_float64(), right.as_float64()).to_any()
     raise Error(
         t"{name}: unsupported dtype {left.dtype()}, expected float type"
     )
@@ -431,11 +323,11 @@ def unary_float_dispatch[
         A new AnyArray with the element-wise result.
     """
     if array.dtype() == float16:
-        return func[Float16Type](array.as_primitive[Float16Type]()).to_any()
+        return func(array.as_float16()).to_any()
     elif array.dtype() == float32:
-        return func[Float32Type](array.as_primitive[Float32Type]()).to_any()
+        return func(array.as_float32()).to_any()
     elif array.dtype() == float64:
-        return func[Float64Type](array.as_primitive[Float64Type]()).to_any()
+        return func(array.as_float64()).to_any()
     raise Error(
         t"{name}: unsupported dtype {array.dtype()}, expected float type"
     )
