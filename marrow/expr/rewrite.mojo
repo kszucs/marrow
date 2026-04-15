@@ -75,7 +75,9 @@ struct AnyRewrite(ImplicitlyCopyable, Movable):
 
     var _data: ArcPointer[NoneType]
     var _virt_name: def(ArcPointer[NoneType]) thin -> String
-    var _virt_apply: def(ArcPointer[NoneType], AnyValue) thin -> Optional[AnyValue]
+    var _virt_apply: def(ArcPointer[NoneType], AnyValue) thin -> Optional[
+        AnyValue
+    ]
     var _virt_drop: def(var ArcPointer[NoneType]) thin
 
     # --- trampolines ---

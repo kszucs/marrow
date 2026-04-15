@@ -49,6 +49,7 @@ def bench_rapidhash_int64_10k(mut b: Benchmark) raises:
         keep(len(rapidhash[Int64Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_int64_100k(mut b: Benchmark) raises:
@@ -60,6 +61,7 @@ def bench_rapidhash_int64_100k(mut b: Benchmark) raises:
         keep(len(rapidhash[Int64Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_int64_1m(mut b: Benchmark) raises:
@@ -71,6 +73,7 @@ def bench_rapidhash_int64_1m(mut b: Benchmark) raises:
         keep(len(rapidhash[Int64Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,7 @@ def bench_rapidhash_int32_10k(mut b: Benchmark) raises:
         keep(len(rapidhash[Int32Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_int32_100k(mut b: Benchmark) raises:
@@ -98,6 +102,7 @@ def bench_rapidhash_int32_100k(mut b: Benchmark) raises:
         keep(len(rapidhash[Int32Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_int32_1m(mut b: Benchmark) raises:
@@ -109,6 +114,7 @@ def bench_rapidhash_int32_1m(mut b: Benchmark) raises:
         keep(len(rapidhash[Int32Type](keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +131,7 @@ def bench_rapidhash_bool_10k(mut b: Benchmark) raises:
         keep(len(rapidhash(keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_bool_100k(mut b: Benchmark) raises:
@@ -136,6 +143,7 @@ def bench_rapidhash_bool_100k(mut b: Benchmark) raises:
         keep(len(rapidhash(keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
@@ -147,6 +155,7 @@ def bench_rapidhash_bool_1m(mut b: Benchmark) raises:
         keep(len(rapidhash(keys)))
 
     b.iter[call]()
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------

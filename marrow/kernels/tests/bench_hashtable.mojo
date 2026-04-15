@@ -49,6 +49,7 @@ def bench_hash_table_build_100k(mut b: Benchmark) raises:
         keep(t.num_keys())
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_hash_table_build_1m(mut b: Benchmark) raises:
@@ -62,6 +63,7 @@ def bench_hash_table_build_1m(mut b: Benchmark) raises:
         keep(t.num_keys())
 
     b.iter[call]()
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +82,7 @@ def bench_hash_table_insert_100k(mut b: Benchmark) raises:
         keep(t.num_keys())
 
     b.iter[call]()
+    keep(keys)
 
 
 def bench_hash_table_insert_1m(mut b: Benchmark) raises:
@@ -93,6 +96,7 @@ def bench_hash_table_insert_1m(mut b: Benchmark) raises:
         keep(t.num_keys())
 
     b.iter[call]()
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +116,8 @@ def bench_hash_table_probe_100k(mut b: Benchmark) raises:
         keep(len(pairs[0]))
 
     b.iter[call]()
+    keep(keys)
+    keep(table)
 
 
 def bench_hash_table_probe_1m(mut b: Benchmark) raises:
@@ -126,6 +132,8 @@ def bench_hash_table_probe_1m(mut b: Benchmark) raises:
         keep(len(pairs[0]))
 
     b.iter[call]()
+    keep(keys)
+    keep(table)
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +153,8 @@ def bench_hash_table_probe_semi_100k(mut b: Benchmark) raises:
         keep(len(pairs[0]))
 
     b.iter[call]()
+    keep(keys)
+    keep(table)
 
 
 def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
@@ -159,6 +169,8 @@ def bench_hash_table_probe_semi_1m(mut b: Benchmark) raises:
         keep(len(pairs[0]))
 
     b.iter[call]()
+    keep(keys)
+    keep(table)
 
 
 # ---------------------------------------------------------------------------

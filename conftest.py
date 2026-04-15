@@ -175,11 +175,14 @@ class MojoRunner:
             cmd, cwd=config.rootpath,
             capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            detail = "\n".join(
+                part for part in (result.stderr, result.stdout) if part.strip()
+            ) or f"exit code {result.returncode}"
+            return {"_error": detail}
+
         if result.stderr:
             sys.stderr.write(result.stderr)
-
-        if result.returncode != 0:
-            return {"_error": result.stderr or f"exit code {result.returncode}"}
 
         try:
             entries = json.loads(result.stdout)

@@ -104,10 +104,13 @@ def bench_my_kernel(mut b: Benchmark) raises:
     def call():
         keep(my_kernel(data))
     b.iter[call]()
+    keep(data)  # prevent ASAP destruction (see note below)
 
 def main():
     BenchSuite.run[__functions_in_module()]()
 ```
+
+**Important — `keep(data)` after `b.iter[call]()`**: Mojo's ASAP (As-Soon-As-Possible) destruction frees values as early as the compiler believes their last use has passed. When a `@parameter` closure captures a variable (e.g. `data`) and is passed to `b.iter[call]()`, ASAP may determine that `data` is no longer needed *after* the closure is registered but *before* it actually runs, causing a heap-use-after-free inside the iteration loop. Adding `keep(data)` after `b.iter[call]()` forces `data` to remain live through the entire benchmark. This applies to all non-trivial captured values: `StructArray`, `PrimitiveArray[T]`, `SwissHashTable`, `HashJoin`, etc.
 
 For multiple sizes, define a shared helper and one thin wrapper per size:
 

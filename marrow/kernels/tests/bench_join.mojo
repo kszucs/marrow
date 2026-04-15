@@ -12,7 +12,7 @@ from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray, AnyArray, StructArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import int64, struct_, Field
+from marrow.dtypes import int64, Int64Type, struct_, Field
 from marrow.expr.relations import JOIN_INNER, JOIN_ALL
 from marrow.kernels.join import HashJoin, hash_join
 from marrow.testing import BenchSuite, Benchmark
@@ -46,7 +46,8 @@ def _make_struct(n: Int) raises -> StructArray:
 
 def bench_join_build_10k(mut b: Benchmark) raises:
     var left = _make_struct(10_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -56,11 +57,14 @@ def bench_join_build_10k(mut b: Benchmark) raises:
         keep(j.num_left_rows())
 
     b.iter[call]()
+    keep(left)
+    keep(keys)
 
 
 def bench_join_build_100k(mut b: Benchmark) raises:
     var left = _make_struct(100_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -70,11 +74,14 @@ def bench_join_build_100k(mut b: Benchmark) raises:
         keep(j.num_left_rows())
 
     b.iter[call]()
+    keep(left)
+    keep(keys)
 
 
 def bench_join_build_1m(mut b: Benchmark) raises:
     var left = _make_struct(1_000_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -84,6 +91,8 @@ def bench_join_build_1m(mut b: Benchmark) raises:
         keep(j.num_left_rows())
 
     b.iter[call]()
+    keep(left)
+    keep(keys)
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +103,8 @@ def bench_join_build_1m(mut b: Benchmark) raises:
 def bench_join_probe_10k(mut b: Benchmark) raises:
     var left = _make_struct(10_000)
     var right = _make_struct(10_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
     var j = HashJoin()
     j.build(left, keys)
 
@@ -105,12 +115,17 @@ def bench_join_probe_10k(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
+    keep(j)
 
 
 def bench_join_probe_100k(mut b: Benchmark) raises:
     var left = _make_struct(100_000)
     var right = _make_struct(100_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
     var j = HashJoin()
     j.build(left, keys)
 
@@ -121,12 +136,17 @@ def bench_join_probe_100k(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
+    keep(j)
 
 
 def bench_join_probe_1m(mut b: Benchmark) raises:
     var left = _make_struct(1_000_000)
     var right = _make_struct(1_000_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
     var j = HashJoin()
     j.build(left, keys)
 
@@ -137,6 +157,10 @@ def bench_join_probe_1m(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
+    keep(j)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +171,8 @@ def bench_join_probe_1m(mut b: Benchmark) raises:
 def bench_join_full_10k(mut b: Benchmark) raises:
     var left = _make_struct(10_000)
     var right = _make_struct(10_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -156,12 +181,16 @@ def bench_join_full_10k(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
 
 
 def bench_join_full_100k(mut b: Benchmark) raises:
     var left = _make_struct(100_000)
     var right = _make_struct(100_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -170,12 +199,16 @@ def bench_join_full_100k(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
 
 
 def bench_join_full_1m(mut b: Benchmark) raises:
     var left = _make_struct(1_000_000)
     var right = _make_struct(1_000_000)
-    var keys = List[Int](0)
+    var keys = List[Int]()
+    keys.append(0)
 
     @always_inline
     @parameter
@@ -184,6 +217,9 @@ def bench_join_full_1m(mut b: Benchmark) raises:
         keep(len(r))
 
     b.iter[call]()
+    keep(left)
+    keep(right)
+    keep(keys)
 
 
 def main() raises:

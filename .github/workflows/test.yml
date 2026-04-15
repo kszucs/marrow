@@ -26,7 +26,7 @@ jobs:
         environments: dev
     - name: tests
       run: |
-        pixi run -e dev test --no-gpu
+        pixi run -e dev test_parallel --no-gpu
         pixi run package
 
   test-macos-arm64:
@@ -47,7 +47,7 @@ jobs:
         environments: dev
     - name: tests
       run: |
-        pixi run -e dev test --no-gpu
+        pixi run -e dev test_parallel --no-gpu
         pixi run package
 
   bench-linux-x86_64:
