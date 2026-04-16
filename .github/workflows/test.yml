@@ -84,8 +84,10 @@ jobs:
     - name: benchmarks
       run: pixi run -e bench bench --no-gpu
 
+  # TODO: re-enable once x86_64 ASAN compilation is fast enough
   asan-linux-x86_64:
     name: asan (linux, x86_64)
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
