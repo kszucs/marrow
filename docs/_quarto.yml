@@ -28,6 +28,8 @@ website:
           - text: "DataFusion UDFs"
             href: examples/datafusion.qmd
     right:
+      - text: "Benchmarks"
+        href: /benchmarks/
       - icon: github
         href: https://github.com/kszucs/marrow
 

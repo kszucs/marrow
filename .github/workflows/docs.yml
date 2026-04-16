@@ -1,0 +1,40 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    name: docs (gh-pages)
+    runs-on: ubuntu-latest
+    env:
+      MODULAR_HOME: "/home/runner/.modular"
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        frozen: true
+        cache: true
+        cache-write: true
+        environments: docs
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/docs/**/.mojo_cache
+        key: mojo-cache-docs-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-docs-${{ runner.os }}-
+
+    - name: Build docs
+      run: pixi run -e docs docs
+
+    - uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs/_site
+        keep_files: true
