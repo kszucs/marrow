@@ -51,6 +51,8 @@ def _bench_groupby_sum(mut b: Benchmark, n: Int) raises:
         keep(groupby(keys, vals, _aggs("sum")))
 
     b.iter[call]()
+    keep(keys)
+    keep(vals)
 
 
 def bench_groupby_sum_10k(mut b: Benchmark) raises:
@@ -81,6 +83,8 @@ def _bench_groupby_agg(mut b: Benchmark, agg: String, n: Int) raises:
         keep(groupby(keys, vals, _aggs(agg)))
 
     b.iter[call]()
+    keep(keys)
+    keep(vals)
 
 
 def bench_groupby_min_100k(mut b: Benchmark) raises:

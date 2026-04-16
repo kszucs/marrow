@@ -28,6 +28,8 @@
 
 - **`PyUnicode_AsUTF8AndSize` return type** (`python/arrays.mojo`): `PyUnicode_AsUTF8AndSize` now returns `StringSlice[ImmutAnyOrigin]` directly; removed the stale `.value()` unwrap that caused a compile error against newer Mojo stdlib.
 
+- **ASAP destruction UAF in `bench_groupby`** (`marrow/kernels/tests/bench_groupby.mojo`): Added `keep(keys)` / `keep(vals)` after `b.iter[call]()` so the `@parameter` closure's captured arrays stay live for the duration of the benchmark loop. Without them, Mojo's ASAP destruction freed `keys`/`vals` before the iteration completed, corrupting the heap and crashing the subsequent `SwissHashTable` allocation. Re-enables the `bench-mojo` CI job.
+
 ## [Unreleased] — 2026-03-18
 
 ### Features
