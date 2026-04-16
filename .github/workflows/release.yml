@@ -26,6 +26,11 @@ jobs:
       with:
         cache: true
         frozen: true
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/default/**/.mojo_cache
+        key: mojo-cache-default-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-default-${{ runner.os }}-
     - name: Build mojopkg
       run: pixi run package
     - name: Build conda package

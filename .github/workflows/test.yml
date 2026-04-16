@@ -76,6 +76,11 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: bench
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/bench/**/.mojo_cache
+        key: mojo-cache-bench-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-bench-${{ runner.os }}-
     - name: benchmarks
       run: pixi run -e bench bench --no-gpu
 
