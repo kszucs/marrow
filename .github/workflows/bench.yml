@@ -5,42 +5,27 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: write
-  pull-requests: write
-
 jobs:
-  bench-mojo:
-    if: false  # Temporarily disabled: hashtable benchmarks crash at -O3 (Mojo compiler bug)
+  bench-linux-x86_64:
+    name: bench (linux, x86_64)
     runs-on: ubuntu-latest
     env:
       MODULAR_HOME: "/home/runner/.modular"
       FORCE_COLOR: "1"
       PYTEST_ADDOPTS: "--color=yes"
     steps:
-      - uses: actions/checkout@v4
-      - uses: prefix-dev/setup-pixi@v0.9.4
-        with:
-          cache: true
-          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
-          frozen: true
-          environments: bench
-      - uses: actions/cache@v4
-        with:
-          path: .pixi/envs/bench/**/.mojo_cache
-          key: mojo-cache-bench-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
-          restore-keys: mojo-cache-bench-${{ runner.os }}-
-      - name: Run benchmarks
-        run: pixi run -e bench bench --no-gpu
-      - name: Store benchmark results
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: Mojo Kernel Benchmarks
-          tool: pytest
-          output-file-path: .benchmarks/results.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-          comment-on-alert: true
-          alert-threshold: "130%"
-          fail-on-alert: false
-          benchmark-data-dir-path: dev/bench
+    - name: Checkout repo
+      uses: actions/checkout@v4
+    - uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        cache: true
+        cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+        frozen: true
+        environments: bench
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/bench/**/.mojo_cache
+        key: mojo-cache-bench-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-bench-${{ runner.os }}-
+    - name: benchmarks
+      run: pixi run -e bench bench --no-gpu
