@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>marrow kernel performance</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2"></script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-alt: #f6f8fa;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --text-muted: #656d76;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0d1117;
+        --bg-alt: #161b22;
+        --border: #30363d;
+        --text: #e6edf3;
+        --text-muted: #8b949e;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 2rem 1.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+
+    #subtitle {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-bottom: 2rem;
+    }
+
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    section { margin-bottom: 2.5rem; }
+
+    /* Summary table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.875rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid var(--border);
+    }
+
+    th {
+      background: var(--bg-alt);
+      font-weight: 600;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tr:nth-child(even) td { background: var(--bg-alt); }
+
+    .trend-up   { color: #1a7f37; font-weight: 600; }
+    .trend-down { color: #cf222e; font-weight: 600; }
+    .trend-flat { color: var(--text-muted); }
+
+    @media (prefers-color-scheme: dark) {
+      .trend-up   { color: #3fb950; }
+      .trend-down { color: #f85149; }
+    }
+
+    /* Controls bar */
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    #range-selector {
+      display: flex;
+      gap: 0.25rem;
+    }
+
+    .range-btn, #reset-zoom {
+      padding: 0.35rem 0.75rem;
+      border: 1px solid var(--border);
+      background: var(--bg-alt);
+      color: var(--text);
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .range-btn:hover, #reset-zoom:hover {
+      border-color: var(--text-muted);
+    }
+
+    .range-btn.active {
+      background: var(--text);
+      color: var(--bg);
+      border-color: var(--text);
+    }
+
+    #reset-zoom { margin-left: auto; }
+
+    #range-info {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    /* Chart grid */
+    #chart-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    @media (max-width: 800px) {
+      #chart-grid { grid-template-columns: 1fr; }
+    }
+
+    .category-card {
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem 0.9rem 0.9rem;
+    }
+
+    .category-card h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin-bottom: 0.4rem;
+      color: var(--text);
+    }
+
+    .canvas-wrap {
+      position: relative;
+      height: 260px;
+    }
+
+    #no-data {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      padding: 2rem 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>marrow kernel performance</h1>
+  <p id="subtitle">Loading...</p>
+
+  <div id="no-data" style="display:none">
+    No benchmark data found. Run <code>pixi run bench &amp;&amp; pixi run gen-report</code> to generate data.
+  </div>
+
+  <div id="content" style="display:none">
+    <section>
+      <h2>Latest run</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Benchmark</th>
+            <th>Mean time</th>
+            <th>Throughput (GElems/s)</th>
+            <th>Trend</th>
+          </tr>
+        </thead>
+        <tbody id="summary-body"></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Throughput over time (GElems/s)</h2>
+
+      <div id="controls">
+        <div id="range-selector" role="group" aria-label="Commit range">
+          <button class="range-btn" data-range="20" type="button">Last 20</button>
+          <button class="range-btn" data-range="50" type="button">Last 50</button>
+          <button class="range-btn" data-range="100" type="button">Last 100</button>
+          <button class="range-btn" data-range="all" type="button">All</button>
+        </div>
+        <span id="range-info"></span>
+        <button id="reset-zoom" type="button">Reset zoom</button>
+      </div>
+
+      <div id="chart-grid"></div>
+    </section>
+  </div>
+
+  <script>
+    // ---------------------------------------------------------------------------
+    // Register the zoom plugin once Chart.js is on the page.
+    // ---------------------------------------------------------------------------
+    if (typeof Chart !== "undefined") {
+      const zoomPlugin = window["chartjs-plugin-zoom"] || window.ChartZoom;
+      if (zoomPlugin) Chart.register(zoomPlugin);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Colour palette — 10 distinct colours readable on both light and dark
+    // ---------------------------------------------------------------------------
+    const PALETTE = [
+      "#2563eb", "#16a34a", "#dc2626", "#d97706", "#7c3aed",
+      "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4f46e5",
+    ];
+
+    // ---------------------------------------------------------------------------
+    // Benchmark categories — prefix-matched against benchmark names.
+    // Unknown operations fall into a catch-all "Other" card.
+    // ---------------------------------------------------------------------------
+    const CATEGORIES = [
+      { key: "arithmetic", label: "Arithmetic",
+        prefixes: ["bench_add_", "bench_sub_", "bench_mul_", "bench_div_"] },
+      { key: "aggregate", label: "Aggregate",
+        prefixes: ["bench_sum_", "bench_product_", "bench_min_", "bench_max_", "bench_mean_"] },
+      { key: "filter", label: "Filter",
+        prefixes: ["bench_filter_"] },
+      { key: "join", label: "Join",
+        prefixes: ["bench_join_"] },
+      { key: "compare", label: "Compare",
+        prefixes: ["bench_equal_", "bench_compare_"] },
+      { key: "hashing", label: "Hashing",
+        prefixes: ["bench_rapidhash_"] },
+      { key: "bitmap", label: "Bitmap",
+        prefixes: ["bench_and_", "bench_or_", "bench_invert_",
+                   "bench_count_set_bits_", "bench_set_range_", "bench_pack_bools_"] },
+    ];
+
+    // Categorise a benchmark name by checking prefixes.
+    function categoryFor(name) {
+      for (const cat of CATEGORIES) {
+        if (cat.prefixes.some(p => name.startsWith(p))) return cat.key;
+      }
+      return "other";
+    }
+
+    const GITHUB_COMMIT_URL = (sha) =>
+      `https://github.com/kszucs/marrow/commit/${sha}`;
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    // Format nanoseconds as a human-readable string.
+    function fmtNs(ns) {
+      if (ns == null) return "—";
+      if (ns < 1_000) return `${ns.toFixed(1)} ns`;
+      if (ns < 1_000_000) return `${(ns / 1_000).toFixed(2)} µs`;
+      if (ns < 1_000_000_000) return `${(ns / 1_000_000).toFixed(2)} ms`;
+      return `${(ns / 1_000_000_000).toFixed(2)} s`;
+    }
+
+    function fmtThroughput(v) {
+      return v == null ? "—" : v.toFixed(3);
+    }
+
+    // Trend based on throughput: higher is better (faster).
+    function trendArrow(latestTp, oldTp) {
+      if (latestTp == null || oldTp == null) return { text: "—", cls: "trend-flat" };
+      // Treat a >5% change as meaningful.
+      const pct = (latestTp - oldTp) / Math.abs(oldTp);
+      if (pct >  0.05) return { text: "↑", cls: "trend-up" };   // throughput increased = faster
+      if (pct < -0.05) return { text: "↓", cls: "trend-down" }; // throughput decreased = slower
+      return { text: "→", cls: "trend-flat" };
+    }
+
+    // Stable per-op colour indexed by position in data.operations.
+    function colorFor(op, allOps) {
+      const i = allOps.indexOf(op);
+      return PALETTE[((i < 0 ? 0 : i) % PALETTE.length)];
+    }
+
+    // Build the categories that will actually render for this dataset, adding a
+    // catch-all "Other" card for any op not matched by a category prefix.
+    function resolveCategories(allOps) {
+      const catMap = {};
+      for (const cat of CATEGORIES) catMap[cat.key] = [];
+      const other = [];
+
+      for (const op of allOps) {
+        const key = categoryFor(op);
+        if (key === "other") {
+          other.push(op);
+        } else {
+          catMap[key].push(op);
+        }
+      }
+
+      const result = CATEGORIES
+        .map(c => ({ key: c.key, label: c.label, ops: catMap[c.key] }))
+        .filter(c => c.ops.length > 0);
+      if (other.length) {
+        result.push({ key: "other", label: "Other", ops: other });
+      }
+      return result;
+    }
+
+    // ---------------------------------------------------------------------------
+    // Dashboard state
+    // ---------------------------------------------------------------------------
+    const STATE = {
+      allRuns: [],    // chronological (oldest first)
+      allOps: [],
+      categories: [],
+      range: 50,      // "all" or a positive integer
+      charts: {},     // { [category.key]: Chart instance }
+    };
+
+    // ---------------------------------------------------------------------------
+    // Main
+    // ---------------------------------------------------------------------------
+    fetch("data.json")
+      .then(r => r.json())
+      .then(data => render(data))
+      .catch(() => {
+        document.getElementById("subtitle").textContent = "Could not load data.json.";
+        document.getElementById("no-data").style.display = "";
+      });
+
+    function render(data) {
+      const runs = data.runs || [];
+      const ops  = data.operations || [];
+
+      if (runs.length === 0) {
+        document.getElementById("subtitle").textContent = "No runs recorded yet.";
+        document.getElementById("no-data").style.display = "";
+        return;
+      }
+
+      document.getElementById("content").style.display = "";
+
+      // Runs are stored newest-first; latest is index 0.
+      const latest = runs[0];
+      const ts = latest.timestamp
+        ? new Date(latest.timestamp).toUTCString()
+        : "unknown";
+      document.getElementById("subtitle").textContent =
+        `Last updated: ${ts} — commit ${latest.short_commit} (${latest.ref}) — ${runs.length} run(s) in history`;
+
+      // ------------------------------------------------------------------
+      // Summary table — compare latest against ~10 commits back for trend.
+      // ------------------------------------------------------------------
+      const oldRun = runs.length > 10 ? runs[10] : runs[runs.length - 1];
+
+      const tbody = document.getElementById("summary-body");
+      tbody.innerHTML = "";
+      for (const op of ops) {
+        const res    = latest.results ? latest.results[op] : null;
+        const oldRes = oldRun.results ? oldRun.results[op] : null;
+        const tr = document.createElement("tr");
+
+        if (!res || res.mean_ns == null) {
+          tr.innerHTML = `
+            <td>${op}</td>
+            <td class="skipped" colspan="3" style="color:var(--text-muted);font-style:italic">—</td>`;
+        } else {
+          const { text: arrow, cls: arrowCls } = trendArrow(
+            res.throughput_gelems_s,
+            oldRes ? oldRes.throughput_gelems_s : null
+          );
+          tr.innerHTML = `
+            <td>${op}</td>
+            <td>${fmtNs(res.mean_ns)}</td>
+            <td>${fmtThroughput(res.throughput_gelems_s)}</td>
+            <td class="${arrowCls}">${arrow}</td>`;
+        }
+        tbody.appendChild(tr);
+      }
+
+      // ------------------------------------------------------------------
+      // Category charts
+      // ------------------------------------------------------------------
+      STATE.allRuns    = [...runs].reverse();  // oldest → newest
+      STATE.allOps     = ops;
+      STATE.categories = resolveCategories(ops);
+
+      // Default to "all" when fewer than 50 runs exist.
+      if (STATE.allRuns.length <= 50) STATE.range = "all";
+
+      buildChartGrid();
+      wireControls();
+      renderCharts();
+    }
+
+    function buildChartGrid() {
+      const grid = document.getElementById("chart-grid");
+      grid.innerHTML = "";
+      for (const cat of STATE.categories) {
+        const card = document.createElement("div");
+        card.className = "category-card";
+        card.innerHTML = `
+          <h3>${cat.label}</h3>
+          <div class="canvas-wrap"><canvas id="chart-${cat.key}"></canvas></div>`;
+        grid.appendChild(card);
+      }
+    }
+
+    function wireControls() {
+      const buttons = document.querySelectorAll(".range-btn");
+      buttons.forEach(btn => {
+        const r = btn.dataset.range;
+        const isActive =
+          (r === "all" && STATE.range === "all") ||
+          (r !== "all" && STATE.range === parseInt(r, 10));
+        btn.classList.toggle("active", isActive);
+
+        btn.addEventListener("click", () => {
+          STATE.range = r === "all" ? "all" : parseInt(r, 10);
+          buttons.forEach(b => b.classList.toggle("active", b === btn));
+          renderCharts();
+        });
+      });
+
+      document.getElementById("reset-zoom").addEventListener("click", () => {
+        Object.values(STATE.charts).forEach(c => {
+          if (typeof c.resetZoom === "function") c.resetZoom();
+        });
+      });
+    }
+
+    function visibleRuns() {
+      if (STATE.range === "all") return STATE.allRuns;
+      return STATE.allRuns.slice(-STATE.range);
+    }
+
+    function renderCharts() {
+      const runs   = visibleRuns();
+      const labels = runs.map(r => r.short_commit);
+
+      const info = document.getElementById("range-info");
+      if (runs.length > 0) {
+        const first = runs[0].timestamp ? runs[0].timestamp.slice(0, 10) : "?";
+        const last  = runs[runs.length - 1].timestamp
+          ? runs[runs.length - 1].timestamp.slice(0, 10)
+          : "?";
+        info.textContent =
+          `showing ${runs.length} of ${STATE.allRuns.length} (${first} → ${last})`;
+      } else {
+        info.textContent = "";
+      }
+
+      for (const cat of STATE.categories) {
+        const datasets = cat.ops.map(op => ({
+          label: op,
+          data: runs.map(r => {
+            const res = r.results ? r.results[op] : null;
+            return (res && res.throughput_gelems_s != null) ? res.throughput_gelems_s : null;
+          }),
+          borderColor: colorFor(op, STATE.allOps),
+          backgroundColor: colorFor(op, STATE.allOps) + "33",
+          borderWidth: 2,
+          pointRadius: runs.length > 40 ? 1.5 : 3,
+          pointHoverRadius: 5,
+          tension: 0.2,
+          spanGaps: true,
+        }));
+
+        // Destroy + rebuild on every render (cheap) to avoid stale zoom state.
+        if (STATE.charts[cat.key]) STATE.charts[cat.key].destroy();
+        STATE.charts[cat.key] = buildCategoryChart(cat, labels, datasets, runs);
+      }
+    }
+
+    function buildCategoryChart(cat, labels, datasets, runs) {
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const gridColor  = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+      const labelColor = isDark ? "#8b949e" : "#656d76";
+
+      return new Chart(document.getElementById(`chart-${cat.key}`), {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          onClick: (evt, elements, chart) => {
+            let idx = null;
+            if (elements && elements.length) {
+              idx = elements[0].index;
+            } else {
+              const near = chart.getElementsAtEventForMode(
+                evt, "nearest", { intersect: false }, true
+              );
+              if (near.length) idx = near[0].index;
+            }
+            if (idx == null) return;
+            const run = runs[idx];
+            if (run && run.commit) {
+              window.open(GITHUB_COMMIT_URL(run.commit), "_blank", "noopener");
+            }
+          },
+          plugins: {
+            legend: {
+              display: true,
+              position: "top",
+              labels: {
+                color: labelColor,
+                boxWidth: 10,
+                font: { size: 11 },
+                padding: 8,
+              },
+            },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const r = runs[items[0].dataIndex];
+                  const ts = r.timestamp
+                    ? new Date(r.timestamp).toISOString().replace("T", " ").slice(0, 19) + " UTC"
+                    : "";
+                  return `${r.short_commit} (${r.ref || "?"})\n${ts}`;
+                },
+                label: (item) => {
+                  const v = item.raw;
+                  if (v == null) return `${item.dataset.label}: —`;
+                  return `${item.dataset.label}: ${v.toFixed(3)} GElems/s`;
+                },
+                footer: () => "Click point to open commit on GitHub",
+              },
+            },
+            zoom: {
+              pan:  { enabled: true, mode: "x", modifierKey: "shift" },
+              zoom: {
+                wheel: { enabled: true },
+                pinch: { enabled: true },
+                drag:  { enabled: true, backgroundColor: "rgba(100,100,100,0.15)" },
+                mode: "x",
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: { color: labelColor, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
+              grid:  { color: gridColor },
+            },
+            y: {
+              title: { display: true, text: "GElems/s", color: labelColor },
+              ticks: { color: labelColor },
+              grid:  { color: gridColor },
+              min: 0,
+            },
+          },
+        },
+      });
+    }
+  </script>
+</body>
+</html>
