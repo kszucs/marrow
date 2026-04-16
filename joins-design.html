@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>joins-design – Marrow</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-8b4baf804e461d9b72633f0de59a0cac.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-7aa4c7b3796345b174ec3606a54e4e58.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="./index.html" class="navbar-brand navbar-brand-logo">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo dark-content">
+    </a>
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Marrow</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Quickstart</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-guides" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Guides</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
+        <li>
+    <a class="dropdown-item" href="./guide/arrays.html">
+ <span class="dropdown-text">Arrays</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/compute.html">
+ <span class="dropdown-text">Compute</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/expressions.html">
+ <span class="dropdown-text">Expressions</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/types.html">
+ <span class="dropdown-text">Type System</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/interop.html">
+ <span class="dropdown-text">PyArrow Interop</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-examples" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Examples</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
+        <li>
+    <a class="dropdown-item" href="./examples/datafusion.html">
+ <span class="dropdown-text">DataFusion UDFs</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./benchmarks/"> 
+<span class="menu-text">Benchmarks</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#join-support-design-for-marrow" id="toc-join-support-design-for-marrow" class="nav-link active" data-scroll-target="#join-support-design-for-marrow">Join Support Design for Marrow</a>
+  <ul class="collapse">
+  <li><a href="#context" id="toc-context" class="nav-link" data-scroll-target="#context">Context</a></li>
+  <li><a href="#prior-art" id="toc-prior-art" class="nav-link" data-scroll-target="#prior-art">Prior Art</a>
+  <ul class="collapse">
+  <li><a href="#clickhouse-orthogonal-kind-strictness-model" id="toc-clickhouse-orthogonal-kind-strictness-model" class="nav-link" data-scroll-target="#clickhouse-orthogonal-kind-strictness-model">ClickHouse — Orthogonal Kind × Strictness Model</a></li>
+  <li><a href="#duckdb-internal-joins-for-subquery-unnesting" id="toc-duckdb-internal-joins-for-subquery-unnesting" class="nav-link" data-scroll-target="#duckdb-internal-joins-for-subquery-unnesting">DuckDB — Internal Joins for Subquery Unnesting</a></li>
+  <li><a href="#datafusion-algorithm-selection-logic" id="toc-datafusion-algorithm-selection-logic" class="nav-link" data-scroll-target="#datafusion-algorithm-selection-logic">DataFusion — Algorithm Selection Logic</a></li>
+  <li><a href="#polars-adaptive-buildprobe-simd" id="toc-polars-adaptive-buildprobe-simd" class="nav-link" data-scroll-target="#polars-adaptive-buildprobe-simd">Polars — Adaptive Build/Probe + SIMD</a></li>
+  </ul></li>
+  <li><a href="#algorithm-landscape" id="toc-algorithm-landscape" class="nav-link" data-scroll-target="#algorithm-landscape">Algorithm Landscape</a>
+  <ul class="collapse">
+  <li><a href="#when-each-algorithm-wins" id="toc-when-each-algorithm-wins" class="nav-link" data-scroll-target="#when-each-algorithm-wins">When Each Algorithm Wins</a></li>
+  <li><a href="#algorithm-selection-logic" id="toc-algorithm-selection-logic" class="nav-link" data-scroll-target="#algorithm-selection-logic">Algorithm Selection Logic</a></li>
+  </ul></li>
+  <li><a href="#marrow-design" id="toc-marrow-design" class="nav-link" data-scroll-target="#marrow-design">Marrow Design</a>
+  <ul class="collapse">
+  <li><a href="#join-type-representation" id="toc-join-type-representation" class="nav-link" data-scroll-target="#join-type-representation">Join Type Representation</a></li>
+  <li><a href="#output-schema-rules" id="toc-output-schema-rules" class="nav-link" data-scroll-target="#output-schema-rules">Output Schema Rules</a></li>
+  </ul></li>
+  <li><a href="#phase-1-hash-join" id="toc-phase-1-hash-join" class="nav-link" data-scroll-target="#phase-1-hash-join">Phase 1 — Hash Join</a>
+  <ul class="collapse">
+  <li><a href="#join-relation-node-marrowexprrelations.mojo" id="toc-join-relation-node-marrowexprrelations.mojo" class="nav-link" data-scroll-target="#join-relation-node-marrowexprrelations.mojo"><code>Join</code> Relation Node (<code>marrow/expr/relations.mojo</code>)</a></li>
+  <li><a href="#gather-kernel-marrowkernelsjoin.mojo" id="toc-gather-kernel-marrowkernelsjoin.mojo" class="nav-link" data-scroll-target="#gather-kernel-marrowkernelsjoin.mojo"><code>_gather()</code> Kernel (<code>marrow/kernels/join.mojo</code>)</a></li>
+  <li><a href="#joinhashtable-open-addressing-with-intrusive-chaining" id="toc-joinhashtable-open-addressing-with-intrusive-chaining" class="nav-link" data-scroll-target="#joinhashtable-open-addressing-with-intrusive-chaining"><code>JoinHashTable</code> (open-addressing with intrusive chaining)</a></li>
+  <li><a href="#indexpairs" id="toc-indexpairs" class="nav-link" data-scroll-target="#indexpairs"><code>IndexPairs</code></a></li>
+  <li><a href="#top-level-hash_join-api" id="toc-top-level-hash_join-api" class="nav-link" data-scroll-target="#top-level-hash_join-api">Top-level <code>hash_join()</code> API</a></li>
+  <li><a href="#joinprocessor-in-executor" id="toc-joinprocessor-in-executor" class="nav-link" data-scroll-target="#joinprocessor-in-executor"><code>JoinProcessor</code> in Executor</a></li>
+  </ul></li>
+  <li><a href="#phase-2-sorting-kernel-marrowkernelssort.mojo" id="toc-phase-2-sorting-kernel-marrowkernelssort.mojo" class="nav-link" data-scroll-target="#phase-2-sorting-kernel-marrowkernelssort.mojo">Phase 2 — Sorting Kernel (<code>marrow/kernels/sort.mojo</code>)</a></li>
+  <li><a href="#phase-3-sort-merge-join" id="toc-phase-3-sort-merge-join" class="nav-link" data-scroll-target="#phase-3-sort-merge-join">Phase 3 — Sort-Merge Join</a></li>
+  <li><a href="#future-work" id="toc-future-work" class="nav-link" data-scroll-target="#future-work">Future Work</a></li>
+  <li><a href="#gpu-design" id="toc-gpu-design" class="nav-link" data-scroll-target="#gpu-design">GPU Design</a></li>
+  <li><a href="#file-map" id="toc-file-map" class="nav-link" data-scroll-target="#file-map">File Map</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+
+
+
+
+<section id="join-support-design-for-marrow" class="level1">
+<h1>Join Support Design for Marrow</h1>
+<section id="context" class="level2">
+<h2 class="anchored" data-anchor-id="context">Context</h2>
+<p>Marrow needs a join system — the core relational primitive for combining two tables on shared keys. The goal is correctness first, with a multi-algorithm design that matches the approach taken by DuckDB, ClickHouse, DataFusion, and Polars: start with a general hash join, add a sorting kernel as infrastructure, then layer in sort-merge and inequality joins.</p>
+<p><strong>Key findings from prior art research:</strong> - Marrow has zero sorting infrastructure — no <code>argsort</code>, no ORDER BY; Mojo stdlib also has no sort primitive. A sort kernel is a prerequisite for sort-based joins. - No GPU join implementations exist in any reference system — Marrow can lead here. - Algorithm choice is driven by: input sortedness, join condition type (equi vs.&nbsp;inequality), and build-side size.</p>
+<hr>
+</section>
+<section id="prior-art" class="level2">
+<h2 class="anchored" data-anchor-id="prior-art">Prior Art</h2>
+<section id="clickhouse-orthogonal-kind-strictness-model" class="level3">
+<h3 class="anchored" data-anchor-id="clickhouse-orthogonal-kind-strictness-model">ClickHouse — Orthogonal Kind × Strictness Model</h3>
+<p>ClickHouse’s biggest architectural contribution: separating <em>which rows appear</em> (JoinKind) from <em>how many matches are used</em> (JoinStrictness). These are independent axes that combine to cover all analytical join patterns.</p>
+<p><strong>JoinKind</strong> (direction / output rows): <code>INNER</code>, <code>LEFT</code>, <code>RIGHT</code>, <code>FULL</code>, <code>CROSS</code></p>
+<p><strong>JoinStrictness</strong> (matching semantics):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Strictness</th>
+<th>Semantics</th>
+<th>Rows per left key</th>
+<th>Internal structure</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>ALL</code> (default)</td>
+<td>Standard SQL — cartesian product for multi-match</td>
+<td>N × M</td>
+<td><code>RowRefList</code> (linked list)</td>
+</tr>
+<tr class="even">
+<td><code>ANY</code></td>
+<td>First match only — no row duplication</td>
+<td>≤ 1 per left row</td>
+<td><code>RowRef</code> (single pointer)</td>
+</tr>
+<tr class="odd">
+<td><code>SEMI</code></td>
+<td>Existence filter — left columns only</td>
+<td>≤ 1</td>
+<td><code>RowRef</code></td>
+</tr>
+<tr class="even">
+<td><code>ANTI</code></td>
+<td>Non-existence filter — left columns only</td>
+<td>≤ 1</td>
+<td><code>RowRef</code></td>
+</tr>
+<tr class="odd">
+<td><code>ASOF</code></td>
+<td>Nearest match on last key (inequality)</td>
+<td>≤ 1</td>
+<td><code>AsofRowRefs</code> (sorted)</td>
+</tr>
+</tbody>
+</table>
+<p>Valid combinations:</p>
+<pre><code>ALL   × INNER / LEFT / RIGHT / FULL   ← standard SQL joins
+ANY   × INNER / LEFT                  ← first-match (no cartesian product)
+SEMI  × LEFT / RIGHT                  ← existence filter
+ANTI  × LEFT / RIGHT                  ← non-existence filter
+ASOF  × INNER / LEFT                  ← time-series nearest-match</code></pre>
+<p>Key insight: <code>LEFT SEMI</code> ≈ <code>LEFT ANY</code> semantically — both filter left by existence in right, one row per key. The difference: SEMI returns only left columns; ANY returns both sides’ columns.</p>
+<p><strong>6 join algorithms</strong> with explicit user selection: - Hash Join (generic, all join types) - Parallel Hash Join (multi-threaded build, INNER/LEFT only) - Grace Hash Join (disk-spilling: partition → hash each partition) - Full Sorting Merge Join (both sides pre-sorted, simple) - Partial Merge Join (bounded memory via disk spillover, LRU block cache) - Direct Join (dictionary/KV lookup optimization)</p>
+</section>
+<section id="duckdb-internal-joins-for-subquery-unnesting" class="level3">
+<h3 class="anchored" data-anchor-id="duckdb-internal-joins-for-subquery-unnesting">DuckDB — Internal Joins for Subquery Unnesting</h3>
+<p>DuckDB exposes additional internal join types generated by the query planner when decorrelating SQL subqueries. These are never written by users — the planner emits them:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Type</th>
+<th>Generated from</th>
+<th>Semantics</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>MARK</code></td>
+<td><code>EXISTS (SELECT ...)</code>, <code>x IN (SELECT ...)</code></td>
+<td>Adds boolean <code>?col</code>: <code>true</code>=matched, <code>false</code>=no match, <code>NULL</code>=nulls present</td>
+</tr>
+<tr class="even">
+<td><code>SINGLE</code></td>
+<td><code>(SELECT scalar FROM ...)</code></td>
+<td>LEFT OUTER but at most 1 right row per left row (runtime error if &gt;1)</td>
+</tr>
+<tr class="odd">
+<td><code>RIGHT_SEMI</code></td>
+<td>Optimizer rewrite of SEMI</td>
+<td>Build/probe side flip for cardinality-based assignment</td>
+</tr>
+<tr class="even">
+<td><code>RIGHT_ANTI</code></td>
+<td>Optimizer rewrite of ANTI</td>
+<td>Build/probe side flip</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>MARK → SEMI/ANTI optimization</strong>: after generating a MARK join from <code>EXISTS</code>, the optimizer checks how the boolean marker is tested: - marker <code>= true</code> → rewrite to SEMI (cheaper, no marker column) - marker <code>= false</code> → rewrite to ANTI</p>
+<p>DataFusion has equivalent <code>LEFT_MARK</code> / <code>RIGHT_MARK</code> types for the same purpose.</p>
+</section>
+<section id="datafusion-algorithm-selection-logic" class="level3">
+<h3 class="anchored" data-anchor-id="datafusion-algorithm-selection-logic">DataFusion — Algorithm Selection Logic</h3>
+<p>DataFusion’s join selection pipeline (<code>join_selection.rs</code>):</p>
+<ol type="1">
+<li>If both inputs unbounded → symmetric hash join (streaming)</li>
+<li>Statistical optimization: compare <code>total_byte_size</code>; swap sides if right smaller</li>
+<li>Hash join partition mode:
+<ul>
+<li>Right side ≤ threshold → <code>CollectLeft</code> (buffer build side, stream probe)</li>
+<li>Else → <code>Partitioned</code> (repartition both sides by key hash)</li>
+</ul></li>
+<li>Sort-merge join: implemented but <strong>not yet used in optimizer</strong> (still experimental)</li>
+</ol>
+</section>
+<section id="polars-adaptive-buildprobe-simd" class="level3">
+<h3 class="anchored" data-anchor-id="polars-adaptive-buildprobe-simd">Polars — Adaptive Build/Probe + SIMD</h3>
+<ul>
+<li>Shortest side automatically becomes the build side (<code>det_hash_prone_order!</code> macro)</li>
+<li>Sorted state tracked per-column; sort-merge used automatically for pre-sorted data</li>
+<li>SIMD-accelerated sorted merge for contiguous numeric types</li>
+<li>Explicit cardinality validation: <code>OneToOne</code>, <code>OneToMany</code>, <code>ManyToOne</code>, <code>ManyToMany</code></li>
+<li><code>JoinCoalesce</code>: option to merge matching key columns into one (reduces duplicate output columns)</li>
+</ul>
+<hr>
+</section>
+</section>
+<section id="algorithm-landscape" class="level2">
+<h2 class="anchored" data-anchor-id="algorithm-landscape">Algorithm Landscape</h2>
+<section id="when-each-algorithm-wins" class="level3">
+<h3 class="anchored" data-anchor-id="when-each-algorithm-wins">When Each Algorithm Wins</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Algorithm</th>
+<th>Best For</th>
+<th>Input Requirement</th>
+<th>Memory Complexity</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Hash Join</td>
+<td>Arbitrary equijoins, random distribution</td>
+<td>None</td>
+<td>O(build side)</td>
+</tr>
+<tr class="even">
+<td>Sort-Merge Join</td>
+<td>Pre-sorted data, large equijoins, unbounded streams</td>
+<td>Both sides sorted on key</td>
+<td>O(max same-key group)</td>
+</tr>
+<tr class="odd">
+<td>Piecewise Merge</td>
+<td>Inequality / range joins (<code>a.x &lt; b.y</code>)</td>
+<td>Sorted (opposite orders for <code>&lt;</code> vs <code>&gt;</code>)</td>
+<td>O(matching rows per batch)</td>
+</tr>
+<tr class="even">
+<td>Grace Hash Join</td>
+<td>Build side &gt; available RAM</td>
+<td>None</td>
+<td>Adaptive via bucket count</td>
+</tr>
+<tr class="odd">
+<td>Nested Loop</td>
+<td>Non-equi predicates, tiny tables</td>
+<td>None</td>
+<td>O(1)</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="algorithm-selection-logic" class="level3">
+<h3 class="anchored" data-anchor-id="algorithm-selection-logic">Algorithm Selection Logic</h3>
+<pre><code>IF join has non-equi/inequality condition:
+    → Piecewise Merge Join (Phase 4, needs sorting)
+ELSE IF both inputs known-sorted on key:
+    → Sort-Merge Join (Phase 3, zero sort cost)
+ELSE IF build side fits in memory:
+    → Hash Join  ← Phase 1 (implement first)
+ELSE:
+    → Grace Hash Join (future: needs disk I/O)</code></pre>
+<hr>
+</section>
+</section>
+<section id="marrow-design" class="level2">
+<h2 class="anchored" data-anchor-id="marrow-design">Marrow Design</h2>
+<section id="join-type-representation" class="level3">
+<h3 class="anchored" data-anchor-id="join-type-representation">Join Type Representation</h3>
+<p>The design uses ClickHouse’s orthogonal <code>kind × strictness</code> model, represented as UInt8 constants (extensible, matches existing pattern in <code>relations.mojo</code>).</p>
+<p><strong>JoinKind</strong> (direction / output rows):</p>
+<pre class="mojo"><code>comptime JOIN_INNER:  UInt8 = 0   # matching rows only
+comptime JOIN_LEFT:   UInt8 = 1   # all left + matched right (NULLs for non-match)
+comptime JOIN_RIGHT:  UInt8 = 2   # all right + matched left (NULLs for non-match)
+comptime JOIN_FULL:   UInt8 = 3   # all rows from both (NULLs for non-match)
+comptime JOIN_SEMI:   UInt8 = 4   # filter: left columns only, existence in right
+comptime JOIN_ANTI:   UInt8 = 5   # filter: left columns only, non-existence in right
+comptime JOIN_CROSS:  UInt8 = 6   # cartesian product; no key columns
+# Internal — generated by planner for subquery decorrelation (future):
+comptime JOIN_MARK:   UInt8 = 10  # boolean marker for EXISTS/IN rewriting
+comptime JOIN_SINGLE: UInt8 = 11  # scalar subquery: at-most-1 match per left row</code></pre>
+<p><strong>JoinStrictness</strong> (matching behavior):</p>
+<pre class="mojo"><code>comptime JOIN_ALL:    UInt8 = 0   # default: cartesian product for multi-match
+comptime JOIN_ANY:    UInt8 = 1   # first match only; no row duplication
+comptime JOIN_ASOF:   UInt8 = 2   # nearest-match on last key (future, needs sorting)</code></pre>
+<p><strong>JoinAlgorithm</strong> (hint for execution planner):</p>
+<pre class="mojo"><code>comptime JOIN_ALGO_AUTO:       UInt8 = 0  # planner picks based on inputs
+comptime JOIN_ALGO_HASH:       UInt8 = 1  # force hash join
+comptime JOIN_ALGO_SORT_MERGE: UInt8 = 2  # force sort-merge (needs sorted inputs)
+comptime JOIN_ALGO_PIECEWISE:  UInt8 = 3  # inequality/range join (future)
+comptime JOIN_ALGO_GRACE_HASH: UInt8 = 4  # out-of-memory hash join (future)</code></pre>
+</section>
+<section id="output-schema-rules" class="level3">
+<h3 class="anchored" data-anchor-id="output-schema-rules">Output Schema Rules</h3>
+<ul>
+<li><code>INNER / LEFT / RIGHT / FULL</code>: left fields + right fields. Duplicate column names resolved with <code>_right</code> suffix.</li>
+<li><code>SEMI / ANTI</code>: left fields only (right side never materialized into output).</li>
+<li><code>CROSS</code>: left fields + right fields (no key columns).</li>
+</ul>
+<hr>
+</section>
+</section>
+<section id="phase-1-hash-join" class="level2">
+<h2 class="anchored" data-anchor-id="phase-1-hash-join">Phase 1 — Hash Join</h2>
+<section id="join-relation-node-marrowexprrelations.mojo" class="level3">
+<h3 class="anchored" data-anchor-id="join-relation-node-marrowexprrelations.mojo"><code>Join</code> Relation Node (<code>marrow/expr/relations.mojo</code>)</h3>
+<pre class="mojo"><code>comptime JOIN_NODE: UInt8 = 6
+
+struct Join(Relation):
+    var left: AnyRelation
+    var right: AnyRelation
+    var left_keys: List[AnyValue]   # Column exprs resolved to left schema
+    var right_keys: List[AnyValue]  # Column exprs resolved to right schema
+    var kind: UInt8
+    var strictness: UInt8
+    var algorithm: UInt8
+    var schema_: Schema             # pre-computed output schema</code></pre>
+<p><code>AnyRelation.join(right, left_on, right_on, how, strictness)</code> is the plan-building API.</p>
+</section>
+<section id="gather-kernel-marrowkernelsjoin.mojo" class="level3">
+<h3 class="anchored" data-anchor-id="gather-kernel-marrowkernelsjoin.mojo"><code>_gather()</code> Kernel (<code>marrow/kernels/join.mojo</code>)</h3>
+<p>The fundamental primitive: collect elements at arbitrary indices, with <code>-1</code> producing null.</p>
+<pre class="mojo"><code>def _gather(array: AnyArray, indices: List[Int32]) raises -&gt; AnyArray</code></pre>
+<p>Typed overloads for <code>PrimitiveArray[T]</code>, <code>StringArray</code>; then <code>AnyArray</code> dispatch. Pattern follows <code>filter_()</code> in <code>filter.mojo</code>. This is also Arrow’s <code>take</code> operation — independently useful.</p>
+</section>
+<section id="joinhashtable-open-addressing-with-intrusive-chaining" class="level3">
+<h3 class="anchored" data-anchor-id="joinhashtable-open-addressing-with-intrusive-chaining"><code>JoinHashTable</code> (open-addressing with intrusive chaining)</h3>
+<pre class="mojo"><code>struct JoinHashTable(Movable):
+    var _table: List[Int32]          # slot → build row index (-1 = empty)
+    var _table_hashes: List[UInt64]  # parallel hash array for fast comparison
+    var _chain_next: List[Int32]     # intrusive linked list for collisions
+    var _capacity: Int
+    var _mask: Int
+    var _build_keys: List[AnyArray]  # stored for equality re-check
+    var _num_rows: Int</code></pre>
+<p><strong>Key difference from <code>HashGrouper</code></strong>: <code>_chain_next</code> is an intrusive linked list enabling access to ALL build rows with the same key (needed for ALL-strictness cartesian output). <code>HashGrouper</code> stores only one group-ID per key.</p>
+<p><strong>Build phase</strong>: hash all build-side keys via <code>hash_()</code> from <code>hashing.mojo</code>; insert each row into the hash table with linear probing; chain collisions via <code>_chain_next</code>. Null keys are inserted but the probe phase rejects them (SQL null ≠ null semantics).</p>
+<p><strong>Probe phase</strong>: for each probe row, look up hash, walk the collision chain, equality-check each candidate via <code>_keys_match()</code>. Collect <code>IndexPairs</code>.</p>
+<p><strong>Null semantics</strong> (<code>_keys_match</code>): mirrors <code>_cols_equal_at</code> from <code>groupby.mojo</code> but returns <code>False</code> when any key is null on either side (SQL join semantics — inverted from groupby which treats nulls as equal).</p>
+</section>
+<section id="indexpairs" class="level3">
+<h3 class="anchored" data-anchor-id="indexpairs"><code>IndexPairs</code></h3>
+<pre class="mojo"><code>struct IndexPairs(Movable):
+    var left_indices:  List[Int32]   # -1 = unmatched RIGHT/FULL build row
+    var right_indices: List[Int32]   # -1 = unmatched LEFT/FULL probe row</code></pre>
+<p><strong>Per-kind output logic</strong>:</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Kind</th>
+<th>Unmatched left (probe) rows</th>
+<th>Unmatched right (build) rows</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>INNER</td>
+<td>drop</td>
+<td>drop</td>
+</tr>
+<tr class="even">
+<td>LEFT</td>
+<td>emit <code>(left, -1)</code></td>
+<td>drop</td>
+</tr>
+<tr class="odd">
+<td>RIGHT</td>
+<td>drop</td>
+<td>emit <code>(-1, right)</code></td>
+</tr>
+<tr class="even">
+<td>FULL</td>
+<td>emit <code>(left, -1)</code></td>
+<td>emit <code>(-1, right)</code></td>
+</tr>
+<tr class="odd">
+<td>SEMI</td>
+<td>drop unmatched; deduplicate to 1 per left key</td>
+<td>drop</td>
+</tr>
+<tr class="even">
+<td>ANTI</td>
+<td>emit unmatched left</td>
+<td>drop</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Per-strictness logic in the match loop</strong>: - <code>JOIN_ALL</code>: append one <code>(left, right)</code> pair per match → natural cartesian product - <code>JOIN_ANY</code>: if <code>matched[left_row]</code> already set, skip → at most 1 output row per left key</p>
+</section>
+<section id="top-level-hash_join-api" class="level3">
+<h3 class="anchored" data-anchor-id="top-level-hash_join-api">Top-level <code>hash_join()</code> API</h3>
+<pre class="mojo"><code>def hash_join(
+    left: RecordBatch,
+    right: RecordBatch,
+    left_on: List[Int],
+    right_on: List[Int],
+    kind: UInt8 = JOIN_INNER,
+    strictness: UInt8 = JOIN_ALL,
+    ctx: Optional[DeviceContext] = None,  # GPU readiness hook
+) raises -&gt; RecordBatch</code></pre>
+</section>
+<section id="joinprocessor-in-executor" class="level3">
+<h3 class="anchored" data-anchor-id="joinprocessor-in-executor"><code>JoinProcessor</code> in Executor</h3>
+<p>Blocking build (CollectLeft) + streaming probe:</p>
+<pre class="mojo"><code>struct JoinProcessor(RelationProcessor):
+    var left_proc: AnyRelationProcessor   # build side
+    var right_proc: AnyRelationProcessor  # probe side
+    var left_key_indices: List[Int]
+    var right_key_indices: List[Int]
+    var kind: UInt8
+    var strictness: UInt8
+    var schema_: Schema
+    var ctx: ExecutionContext
+    var _left_batch: Optional[RecordBatch]  # materialized build side
+    var _exhausted: Bool</code></pre>
+<p><code>pull()</code>: on first call, consume entire <code>left_proc</code> into one <code>RecordBatch</code> (blocking build phase), then for each subsequent call pull one morsel from <code>right_proc</code>, probe, gather, emit output batch.</p>
+<hr>
+</section>
+</section>
+<section id="phase-2-sorting-kernel-marrowkernelssort.mojo" class="level2">
+<h2 class="anchored" data-anchor-id="phase-2-sorting-kernel-marrowkernelssort.mojo">Phase 2 — Sorting Kernel (<code>marrow/kernels/sort.mojo</code>)</h2>
+<p>Prerequisite for Sort-Merge Join, ASOF Join, IEJoin, and ORDER BY in query plans. Mojo stdlib has no sort primitive — must be built from scratch.</p>
+<pre class="mojo"><code># Single-column sort: returns permutation indices.
+# Equivalent to numpy.argsort or Arrow's sort_indices.
+def argsort(array: AnyArray, ascending: Bool = True, nulls_first: Bool = True) raises -&gt; PrimitiveArray[int32]
+
+# Multi-column sort: sort by (arrays[0], arrays[1], ...) with per-column direction.
+# Equivalent to Arrow's sort_record_batch.
+def argsort_multi(
+    arrays: List[AnyArray],
+    ascending: List[Bool],
+    nulls_first: Bool = True,
+) raises -&gt; PrimitiveArray[int32]
+
+# Apply a permutation to produce a sorted array. Reuses _gather().
+def take(array: AnyArray, indices: PrimitiveArray[int32]) raises -&gt; AnyArray</code></pre>
+<p><strong>Sort algorithm</strong>: radix sort for fixed-width primitive types (O(N), SIMD-amenable, cache-friendly); comparison-based introsort for strings and multi-column with complex comparators.</p>
+<p><strong>Relation node</strong>:</p>
+<pre class="mojo"><code>comptime SORT_NODE: UInt8 = 7
+
+struct Sort(Relation):
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var ascending: List[Bool]
+    var schema_: Schema   # same schema as input</code></pre>
+<p><code>SortProcessor</code>: collect all input batches → concat → <code>argsort_multi</code> → gather.</p>
+<hr>
+</section>
+<section id="phase-3-sort-merge-join" class="level2">
+<h2 class="anchored" data-anchor-id="phase-3-sort-merge-join">Phase 3 — Sort-Merge Join</h2>
+<p>Requires Phase 2. Provides better performance than hash join when inputs are pre-sorted (e.g., time-series data, range-partitioned tables).</p>
+<p><strong>Two-pointer algorithm</strong>: 1. Both pointers start at row 0 2. <code>left[li] &lt; right[ri]</code> → advance <code>li</code> (or emit unmatched left for LEFT/FULL) 3. <code>left[li] &gt; right[ri]</code> → advance <code>ri</code> (or emit unmatched right for RIGHT/FULL) 4. <code>left[li] == right[ri]</code> → collect equal range on both sides; emit ALL-strictness cartesian product or ANY-strictness first match; advance past equal range</p>
+<p>Memory: O(max same-key group) — much smaller than hash join O(build side).</p>
+<pre class="mojo"><code>def sort_merge_join(
+    left: RecordBatch,  # pre-sorted on left_on keys
+    right: RecordBatch, # pre-sorted on right_on keys
+    left_on: List[Int],
+    right_on: List[Int],
+    kind: UInt8 = JOIN_INNER,
+    strictness: UInt8 = JOIN_ALL,
+) raises -&gt; RecordBatch</code></pre>
+<p><code>SortMergeJoinProcessor</code> checks metadata sortedness → uses sort-merge if both inputs sorted, else falls back to hash join. This is the <code>JOIN_ALGO_AUTO</code> implementation.</p>
+<hr>
+</section>
+<section id="future-work" class="level2">
+<h2 class="anchored" data-anchor-id="future-work">Future Work</h2>
+<ul>
+<li><strong>ASOF join</strong>: Nearest-match on last key, exact match on other keys; needs sorted inputs + sorted row refs; Polars is best reference.</li>
+<li><strong>IEJoin / Piecewise Merge</strong>: Inequality conditions (<code>a.x &lt; b.y</code>). Sort order selection: <code>&lt;</code>/<code>&lt;=</code> → ascending, <code>&gt;</code>/<code>&gt;=</code> → descending. DuckDB/DataFusion patterns.</li>
+<li><strong>CROSS join</strong>: Trivial cartesian product, no hash table.</li>
+<li><strong>Grace Hash Join</strong>: Partition-based spill-to-disk for out-of-memory joins; needs disk I/O infrastructure.</li>
+<li><strong>Parallel Hash Join</strong>: Multi-threaded build phase (ClickHouse pattern).</li>
+<li><strong>MARK join</strong>: Boolean marker for <code>EXISTS</code>/<code>IN</code> subquery decorrelation.</li>
+<li><strong>SINGLE join</strong>: At-most-1 match for scalar subqueries.</li>
+<li><strong>Join reordering</strong>: Adaptive build-side selection (always build on shorter side, like Polars).</li>
+</ul>
+<hr>
+</section>
+<section id="gpu-design" class="level2">
+<h2 class="anchored" data-anchor-id="gpu-design">GPU Design</h2>
+<p>All kernel functions accept <code>Optional[DeviceContext] = None</code> trailing parameter (zero cost when <code>None</code>). GPU-parallelizable hot paths marked with <code># TODO(gpu)</code>:</p>
+<ul>
+<li><strong>Hash build</strong>: <code>hash_()</code> → <code>elementwise[target="gpu"]</code></li>
+<li><strong>Hash probe</strong>: Each probe row independent → warp-level parallel lookup</li>
+<li><strong><code>_gather()</code></strong>: Trivially parallel random gather</li>
+<li><strong>Radix sort</strong>: Well-studied GPU radix sort — very fast on GPU (CUB/thrust-style)</li>
+</ul>
+<p><strong>GPU strategy</strong> (mirrors <code>similarity.mojo</code> preloaded pattern): build hash table CPU-side, transfer to device, run probe on device. At scale (&gt;100K rows) probe phase dominates and GPU wins.</p>
+<hr>
+</section>
+<section id="file-map" class="level2">
+<h2 class="anchored" data-anchor-id="file-map">File Map</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>marrow/expr/relations.mojo</code></td>
+<td><code>JOIN_NODE</code>, kind/strictness/algorithm constants, <code>Join</code> struct, <code>AnyRelation.join()</code>. Later: <code>SORT_NODE</code>, <code>Sort</code></td>
+</tr>
+<tr class="even">
+<td><code>marrow/expr/executor.mojo</code></td>
+<td><code>JoinProcessor</code>, <code>SortProcessor</code> (Phase 2), <code>SortMergeJoinProcessor</code> (Phase 3)</td>
+</tr>
+<tr class="odd">
+<td><code>marrow/kernels/join.mojo</code></td>
+<td><code>_gather()</code>, <code>JoinHashTable</code>, <code>IndexPairs</code>, <code>hash_join()</code>, <code>sort_merge_join()</code> (Phase 3)</td>
+</tr>
+<tr class="even">
+<td><code>marrow/kernels/sort.mojo</code></td>
+<td><code>argsort()</code>, <code>argsort_multi()</code>, <code>take()</code> (Phase 2)</td>
+</tr>
+<tr class="odd">
+<td><code>marrow/kernels/groupby.mojo</code></td>
+<td>Pattern reference: hash table structure, <code>_cols_equal_at</code>, two-phase build/emit</td>
+</tr>
+<tr class="even">
+<td><code>marrow/kernels/hashing.mojo</code></td>
+<td>Directly reused: <code>hash_()</code> multi-key combining, <code>NULL_HASH_SENTINEL</code></td>
+</tr>
+<tr class="odd">
+<td><code>marrow/kernels/filter.mojo</code></td>
+<td>Pattern reference: typed dispatch, bitmap construction for null output</td>
+</tr>
+<tr class="even">
+<td><code>marrow/kernels/tests/test_join.mojo</code></td>
+<td>Kernel-level join tests</td>
+</tr>
+<tr class="odd">
+<td><code>marrow/kernels/tests/test_sort.mojo</code></td>
+<td>Sort kernel tests (Phase 2)</td>
+</tr>
+<tr class="even">
+<td><code>marrow/expr/tests/test_join.mojo</code></td>
+<td>Executor-level end-to-end join tests</td>
+</tr>
+</tbody>
+</table>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

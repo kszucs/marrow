@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Marrow</title>
+<title>dynamic-dispatch-design – Marrow</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -19,41 +19,6 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
-}
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -129,7 +94,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
-    <a class="nav-link active" href="./index.html" aria-current="page"> 
+    <a class="nav-link" href="./index.html"> 
 <span class="menu-text">Quickstart</span></a>
   </li>  
   <li class="nav-item dropdown ">
@@ -197,176 +162,349 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#build" id="toc-build" class="nav-link active" data-scroll-target="#build">Build</a></li>
-  <li><a href="#minute-example" id="toc-minute-example" class="nav-link" data-scroll-target="#minute-example">5-minute example</a>
+  <li><a href="#dynamic-dispatch-design-for-marrow" id="toc-dynamic-dispatch-design-for-marrow" class="nav-link active" data-scroll-target="#dynamic-dispatch-design-for-marrow">Dynamic Dispatch Design for Marrow</a>
   <ul class="collapse">
-  <li><a href="#create-arrays" id="toc-create-arrays" class="nav-link" data-scroll-target="#create-arrays">Create arrays</a></li>
-  <li><a href="#arithmetic" id="toc-arithmetic" class="nav-link" data-scroll-target="#arithmetic">Arithmetic</a></li>
-  <li><a href="#aggregates" id="toc-aggregates" class="nav-link" data-scroll-target="#aggregates">Aggregates</a></li>
-  <li><a href="#filter-and-drop-nulls" id="toc-filter-and-drop-nulls" class="nav-link" data-scroll-target="#filter-and-drop-nulls">Filter and drop nulls</a></li>
-  <li><a href="#inspect-arrays" id="toc-inspect-arrays" class="nav-link" data-scroll-target="#inspect-arrays">Inspect arrays</a></li>
+  <li><a href="#problem" id="toc-problem" class="nav-link" data-scroll-target="#problem">Problem</a></li>
+  <li><a href="#mechanism-function-pointer-trampolines" id="toc-mechanism-function-pointer-trampolines" class="nav-link" data-scroll-target="#mechanism-function-pointer-trampolines">Mechanism: Function-Pointer Trampolines</a>
+  <ul class="collapse">
+  <li><a href="#copying" id="toc-copying" class="nav-link" data-scroll-target="#copying">Copying</a></li>
+  <li><a href="#destruction" id="toc-destruction" class="nav-link" data-scroll-target="#destruction">Destruction</a></li>
+  <li><a href="#downcasting" id="toc-downcasting" class="nav-link" data-scroll-target="#downcasting">Downcasting</a></li>
   </ul></li>
-  <li><a href="#whats-next" id="toc-whats-next" class="nav-link" data-scroll-target="#whats-next">What’s next</a></li>
+  <li><a href="#virtual-method-surfaces" id="toc-virtual-method-surfaces" class="nav-link" data-scroll-target="#virtual-method-surfaces">Virtual Method Surfaces</a>
+  <ul class="collapse">
+  <li><a href="#anyarray" id="toc-anyarray" class="nav-link" data-scroll-target="#anyarray">AnyArray</a></li>
+  <li><a href="#anybuilder" id="toc-anybuilder" class="nav-link" data-scroll-target="#anybuilder">AnyBuilder</a></li>
+  <li><a href="#anyconverter-python-arrow" id="toc-anyconverter-python-arrow" class="nav-link" data-scroll-target="#anyconverter-python-arrow">AnyConverter (Python → Arrow)</a></li>
+  </ul></li>
+  <li><a href="#type-relationships" id="toc-type-relationships" class="nav-link" data-scroll-target="#type-relationships">Type Relationships</a></li>
+  <li><a href="#design-decisions" id="toc-design-decisions" class="nav-link" data-scroll-target="#design-decisions">Design Decisions</a></li>
+  <li><a href="#prototype-status" id="toc-prototype-status" class="nav-link" data-scroll-target="#prototype-status">Prototype Status</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
-<main class="content" id="quarto-document-content">
-
-<header id="title-block-header" class="quarto-title-block default">
-<div class="quarto-title">
-<h1 class="title">Marrow</h1>
-<p class="subtitle lead">Apache Arrow in Mojo</p>
-</div>
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
 
 
 
-<div class="quarto-title-meta">
 
-    
-  
-    
-  </div>
-  
-
-
-</header>
-
-
-<p>Marrow is an implementation of <a href="https://arrow.apache.org">Apache Arrow</a> written in <a href="https://www.modular.com/mojo">Mojo</a>. It provides a columnar in-memory array format with null handling, SIMD-accelerated compute kernels, GPU support, and a Python binding layer that outperforms PyArrow on numeric array construction.</p>
-<section id="build" class="level2">
-<h2 class="anchored" data-anchor-id="build">Build</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/kszucs/marrow</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> marrow</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run build_python    <span class="co"># compiles python/marrow.so</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Then in Python:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="dynamic-dispatch-design-for-marrow" class="level1">
+<h1>Dynamic Dispatch Design for Marrow</h1>
+<section id="problem" class="level2">
+<h2 class="anchored" data-anchor-id="problem">Problem</h2>
+<p>Mojo lacks runtime polymorphism (no virtual methods, no trait objects). Marrow needs type-erased containers (<code>AnyArray</code>, <code>AnyBuilder</code>, <code>AnyConverter</code>) that dispatch to concrete typed implementations at runtime — e.g.&nbsp;holding <code>PrimitiveArray[int32]</code>, <code>ListArray</code>, and <code>StructArray</code> in a single <code>List[AnyArray]</code>.</p>
 </section>
-<section id="minute-example" class="level2">
-<h2 class="anchored" data-anchor-id="minute-example">5-minute example</h2>
-<div id="218d26a1" class="cell" data-execution_count="1">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../python"</span>)</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
-<section id="create-arrays" class="level3">
-<h3 class="anchored" data-anchor-id="create-arrays">Create arrays</h3>
-<div id="02aeb291" class="cell" data-execution_count="2">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Primitive arrays — type is inferred from the Python data</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(a)</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([1, 2, 3, NULL, 5])
-PrimitiveArray[int64]([10, 20, 30, 40, 50])</code></pre>
-</div>
-</div>
-<div id="cf76c176" class="cell" data-execution_count="3">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Strings and nested structures work too</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="va">None</span>, <span class="st">"Dana"</span>])</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>scores <span class="op">=</span> ma.array([<span class="fl">9.5</span>, <span class="fl">8.2</span>, <span class="fl">7.8</span>, <span class="va">None</span>])</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(names)</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(scores)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>StringArray([Alice, Bob, NULL, Dana])
-PrimitiveArray[float64]([9.5, 8.2, 7.8, NULL])</code></pre>
-</div>
-</div>
+<section id="mechanism-function-pointer-trampolines" class="level2">
+<h2 class="anchored" data-anchor-id="mechanism-function-pointer-trampolines">Mechanism: Function-Pointer Trampolines</h2>
+<p>Each type-erased container (<code>Any*</code>) stores:</p>
+<ol type="1">
+<li><strong><code>ArcPointer[NoneType]</code></strong> — the typed value on the heap, erased to <code>NoneType</code></li>
+<li><strong>Function pointers</strong> — one per virtual method slot, capturing the concrete type</li>
+<li><strong>A drop trampoline</strong> — for correct typed destruction</li>
+</ol>
+<pre><code>┌─────────────────────────────────────┐
+│ AnyArray                            │
+│                                     │
+│  _data: ArcPointer[NoneType] ──────────► heap: ArcInner&lt;PrimitiveArray[int64]&gt;
+│  _virt_length:    fn(ptr) -&gt; Int    │         { refcount, value }
+│  _virt_null_count: fn(ptr) -&gt; Int   │
+│  _virt_is_valid:  fn(ptr,Int)-&gt;Bool │
+│  _virt_drop:      fn(var ptr)       │
+└─────────────────────────────────────┘</code></pre>
+<p><strong>Trampolines</strong> are <code>@staticmethod</code> functions parameterized on <code>T: Array</code> that <code>rebind</code> the erased pointer back to the concrete type and forward the call:</p>
+<pre class="mojo"><code>@staticmethod
+fn _tramp_length[T: Array](ptr: ArcPointer[NoneType]) -&gt; Int:
+    return rebind[ArcPointer[T]](ptr)[].length()</code></pre>
+<p>At construction time, the concrete type <code>T</code> is captured into the function pointers:</p>
+<pre class="mojo"><code>@implicit
+fn __init__[T: Array](out self, var value: T):
+    var ptr = ArcPointer(value^)
+    self._data = rebind[ArcPointer[NoneType]](ptr^)
+    self._virt_length = Self._tramp_length[T]
+    # ...</code></pre>
+<section id="copying" class="level3">
+<h3 class="anchored" data-anchor-id="copying">Copying</h3>
+<p>Copies are O(1) ref-count bumps via <code>ArcPointer.copy()</code>. The function pointers are copied verbatim — they encode the concrete type, not the instance.</p>
 </section>
-<section id="arithmetic" class="level3">
-<h3 class="anchored" data-anchor-id="arithmetic">Arithmetic</h3>
-<p>Null values propagate through element-wise operations — if either input is null, the output is null.</p>
-<div id="1223c9d3" class="cell" data-execution_count="4">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.add(a, b)</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result)   <span class="co"># index 3 is null because a[3] is null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([11, 22, 33, NULL, 55])</code></pre>
-</div>
-</div>
-<div id="cd01d9c8" class="cell" data-execution_count="5">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.mul(a, b))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([10, 40, 90, NULL, 250])</code></pre>
-</div>
-</div>
+<section id="destruction" class="level3">
+<h3 class="anchored" data-anchor-id="destruction">Destruction</h3>
+<p>A dedicated <code>_virt_drop</code> trampoline rebinds and drops as the correct type:</p>
+<pre class="mojo"><code>@staticmethod
+fn _tramp_drop[T: Array](var ptr: ArcPointer[NoneType]):
+    var typed = rebind[ArcPointer[T]](ptr^)
+    _ = typed^  # drop with correct destructor</code></pre>
+<p><code>__del__</code> uses <code>deinit self</code> (not <code>var self</code>) to move <code>_data</code> out for the drop trampoline.</p>
 </section>
-<section id="aggregates" class="level3">
-<h3 class="anchored" data-anchor-id="aggregates">Aggregates</h3>
-<p>Aggregates skip null values.</p>
-<div id="eee804a2" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum:    "</span>, ma.sum_(a))    <span class="co"># 1+2+3+5 = 11, null skipped</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"min:    "</span>, ma.min_(a))</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"max:    "</span>, ma.max_(a))</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"product:"</span>, ma.product(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>sum:     11
-min:     1
-max:     5
-product: 30</code></pre>
-</div>
-</div>
-</section>
-<section id="filter-and-drop-nulls" class="level3">
-<h3 class="anchored" data-anchor-id="filter-and-drop-nulls">Filter and drop nulls</h3>
-<div id="585e2414" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"filter:"</span>, ma.filter_(a, mask))</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"drop nulls:"</span>, ma.drop_nulls(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>filter: PrimitiveArray[int64]([1, 3, 5])
-drop nulls: PrimitiveArray[int64]([1, 2, 3, 5])</code></pre>
-</div>
-</div>
-</section>
-<section id="inspect-arrays" class="level3">
-<h3 class="anchored" data-anchor-id="inspect-arrays">Inspect arrays</h3>
-<div id="565217fb" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, a.<span class="fu">__len__</span>())</span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, a.null_count())</span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:      "</span>, a.<span class="bu">type</span>())</span>
-<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, a.is_valid(<span class="dv">3</span>))   <span class="co"># False — index 3 is null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>length:     5
-null count: 1
-type:       int64
-is_valid(3): False</code></pre>
-</div>
-</div>
-<hr>
+<section id="downcasting" class="level3">
+<h3 class="anchored" data-anchor-id="downcasting">Downcasting</h3>
+<p><code>downcast[T]()</code> returns <code>ArcPointer[T]</code> with a bumped refcount. The caller must ensure the type matches (no runtime check). The returned handle keeps data alive independently of the <code>AnyArray</code>:</p>
+<pre class="mojo"><code>fn downcast[T: Array](self) -&gt; ArcPointer[T]:
+    return rebind[ArcPointer[T]](self._data.copy())</code></pre>
 </section>
 </section>
-<section id="whats-next" class="level2">
-<h2 class="anchored" data-anchor-id="whats-next">What’s next</h2>
+<section id="virtual-method-surfaces" class="level2">
+<h2 class="anchored" data-anchor-id="virtual-method-surfaces">Virtual Method Surfaces</h2>
+<p>Based on analysis of the Arrow C++ codebase (<code>libarrow</code>), these are the dynamic methods each type-erased container needs.</p>
+<section id="anyarray" class="level3">
+<h3 class="anchored" data-anchor-id="anyarray">AnyArray</h3>
+<p>Arrow’s C++ <code>Array</code> has only a virtual destructor. All other methods operate on the flat <code>ArrayData</code> struct and dispatch via the Visitor pattern externally. We adopt a similar minimal surface:</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
-<th>Page</th>
-<th>What you’ll learn</th>
+<th>Method</th>
+<th>Signature</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><a href="./guide/arrays.html">Arrays</a></td>
-<td>All array types, nulls, slicing, nested structures</td>
+<td><code>length</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Array length</td>
 </tr>
 <tr class="even">
-<td><a href="./guide/compute.html">Compute</a></td>
-<td>Arithmetic, aggregates, filter, drop_nulls</td>
+<td><code>null_count</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Cached null count</td>
 </tr>
 <tr class="odd">
-<td><a href="./guide/types.html">Type System</a></td>
-<td>Type inference, explicit schemas, struct types</td>
+<td><code>is_valid</code></td>
+<td><code>(self, Int) -&gt; Bool</code></td>
+<td>Validity bitmap check</td>
 </tr>
 <tr class="even">
-<td><a href="./guide/interop.html">PyArrow Interop</a></td>
-<td>Benchmarks vs PyArrow, zero-copy C Data Interface</td>
+<td><code>type</code></td>
+<td><code>(self) -&gt; DataType</code></td>
+<td>Runtime type introspection</td>
+</tr>
+<tr class="odd">
+<td><code>n_children</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Number of child arrays</td>
+</tr>
+<tr class="even">
+<td><code>child</code></td>
+<td><code>(self, Int) -&gt; AnyArray</code></td>
+<td>Access child by index</td>
+</tr>
+<tr class="odd">
+<td><code>n_buffers</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Number of buffers</td>
+</tr>
+<tr class="even">
+<td><code>slice</code></td>
+<td><code>(self, Int, Int) -&gt; AnyArray</code></td>
+<td>Zero-copy slice</td>
 </tr>
 </tbody>
 </table>
+<p>The trait that typed arrays implement:</p>
+<pre class="mojo"><code>trait Array(Movable, ImplicitlyDestructible):
+    fn length(self) -&gt; Int: ...
+    fn null_count(self) -&gt; Int: ...
+    fn is_valid(self, index: Int) -&gt; Bool: ...
+    fn type(self) -&gt; DataType: ...
+    fn n_children(self) -&gt; Int: ...
+    fn child(self, index: Int) -&gt; AnyArray: ...
+    fn n_buffers(self) -&gt; Int: ...
+    fn slice(self, offset: Int, length: Int) -&gt; AnyArray: ...</code></pre>
+<p>Typed arrays: <code>PrimitiveArray[T: DataType]</code>, <code>ListArray</code>, <code>StructArray</code>, <code>StringArray</code>, <code>FixedSizeListArray</code>.</p>
+</section>
+<section id="anybuilder" class="level3">
+<h3 class="anchored" data-anchor-id="anybuilder">AnyBuilder</h3>
+<p>Arrow’s <code>ArrayBuilder</code> has 6 pure virtual methods — the richest virtual surface of the three hierarchies. Builders are inherently polymorphic because composite builders (struct, list) hold child builders whose types are determined at runtime.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 30%">
+<col style="width: 42%">
+<col style="width: 26%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Signature</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>append_null</code></td>
+<td><code>(mut self)</code></td>
+<td>Append a null</td>
+</tr>
+<tr class="even">
+<td><code>append_nulls</code></td>
+<td><code>(mut self, Int)</code></td>
+<td>Append n nulls</td>
+</tr>
+<tr class="odd">
+<td><code>append_empty_value</code></td>
+<td><code>(mut self)</code></td>
+<td>Append zero-initialized non-null</td>
+</tr>
+<tr class="even">
+<td><code>append_empty_values</code></td>
+<td><code>(mut self, Int)</code></td>
+<td>Append n empty values</td>
+</tr>
+<tr class="odd">
+<td><code>finish</code></td>
+<td><code>(mut self) -&gt; AnyArray</code></td>
+<td>Produce the array</td>
+</tr>
+<tr class="even">
+<td><code>type</code></td>
+<td><code>(self) -&gt; DataType</code></td>
+<td>Builder’s target type</td>
+</tr>
+<tr class="odd">
+<td><code>length</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Current length</td>
+</tr>
+<tr class="even">
+<td><code>null_count</code></td>
+<td><code>(self) -&gt; Int</code></td>
+<td>Current null count</td>
+</tr>
+<tr class="odd">
+<td><code>resize</code></td>
+<td><code>(mut self, Int)</code></td>
+<td>Resize capacity</td>
+</tr>
+<tr class="even">
+<td><code>reset</code></td>
+<td><code>(mut self)</code></td>
+<td>Reset to empty</td>
+</tr>
+<tr class="odd">
+<td><code>append_scalar</code></td>
+<td><code>(mut self, Scalar)</code></td>
+<td>Type-erased value append</td>
+</tr>
+<tr class="even">
+<td><code>append_array_slice</code></td>
+<td><code>(mut self, AnyArray, Int, Int)</code></td>
+<td>Append from existing array</td>
+</tr>
+</tbody>
+</table>
+<p>The trait:</p>
+<pre class="mojo"><code>trait Builder(Movable, ImplicitlyDestructible):
+    fn append_null(mut self) raises: ...
+    fn append_nulls(mut self, n: Int) raises: ...
+    fn append_empty_value(mut self) raises: ...
+    fn append_empty_values(mut self, n: Int) raises: ...
+    fn finish(mut self) raises -&gt; AnyArray: ...
+    fn type(self) -&gt; DataType: ...
+    fn length(self) -&gt; Int: ...
+    fn null_count(self) -&gt; Int: ...
+    fn resize(mut self, capacity: Int) raises: ...
+    fn reset(mut self): ...</code></pre>
+<p>Typed builders: <code>PrimitiveBuilder[T: DataType]</code>, <code>ListBuilder</code>, <code>StructBuilder</code>, <code>StringBuilder</code>, <code>FixedSizeListBuilder</code>.</p>
+</section>
+<section id="anyconverter-python-arrow" class="level3">
+<h3 class="anchored" data-anchor-id="anyconverter-python-arrow">AnyConverter (Python → Arrow)</h3>
+<p>Arrow’s <code>Converter</code> base class handles Python object → Arrow array conversion. The virtual surface is small because most type-specific logic lives in the <code>Append</code> override:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 30%">
+<col style="width: 42%">
+<col style="width: 26%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Signature</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>append</code></td>
+<td><code>(mut self, PythonObject) raises</code></td>
+<td>Convert + append one value</td>
+</tr>
+<tr class="even">
+<td><code>extend</code></td>
+<td><code>(mut self, PythonObject, Int) raises</code></td>
+<td>Convert a sequence</td>
+</tr>
+<tr class="odd">
+<td><code>finish</code></td>
+<td><code>(mut self) raises -&gt; AnyArray</code></td>
+<td>Produce the array</td>
+</tr>
+<tr class="even">
+<td><code>type</code></td>
+<td><code>(self) -&gt; DataType</code></td>
+<td>Target type</td>
+</tr>
+<tr class="odd">
+<td><code>reserve</code></td>
+<td><code>(mut self, Int) raises</code></td>
+<td>Pre-allocate</td>
+</tr>
+<tr class="even">
+<td><code>reset</code></td>
+<td><code>(mut self)</code></td>
+<td>Reset to empty</td>
+</tr>
+</tbody>
+</table>
+<p>The trait:</p>
+<pre class="mojo"><code>trait Converter(Movable, ImplicitlyDestructible):
+    fn append(mut self, value: PythonObject) raises: ...
+    fn extend(mut self, values: PythonObject, size: Int) raises: ...
+    fn finish(mut self) raises -&gt; AnyArray: ...
+    fn type(self) -&gt; DataType: ...
+    fn reserve(mut self, capacity: Int) raises: ...
+    fn reset(mut self): ...</code></pre>
+<p>Typed converters: <code>PrimitiveConverter[T: DataType]</code>, <code>ListConverter</code>, <code>StructConverter</code>, <code>StringConverter</code>.</p>
+<p>Arrow uses <code>MakeConverter(DataType) -&gt; Converter</code> as a factory that switches on the type code. We would use the same pattern via <code>DataTypeVisitor</code>.</p>
+</section>
+</section>
+<section id="type-relationships" class="level2">
+<h2 class="anchored" data-anchor-id="type-relationships">Type Relationships</h2>
+<pre><code>trait Array ──────────────► AnyArray (type-erased, fn-ptr vtable)
+  │  PrimitiveArray[T]         │  .downcast[T]() -&gt; ArcPointer[T]
+  │  ListArray                 │  .length(), .null_count(), .is_valid()
+  │  StructArray               │  .type(), .child(), .slice()
+  │  StringArray               │
+  │  FixedSizeListArray        │
+
+trait Builder ────────────► AnyBuilder (type-erased, fn-ptr vtable)
+  │  PrimitiveBuilder[T]       │  .downcast[T]() -&gt; ArcPointer[T]
+  │  ListBuilder               │  .append_null(), .finish(), .type()
+  │  StructBuilder             │  .append_scalar(), .append_array_slice()
+  │  StringBuilder             │
+  │  FixedSizeListBuilder      │
+
+trait Converter ──────────► AnyConverter (type-erased, fn-ptr vtable)
+  │  PrimitiveConverter[T]     │  .downcast[T]() -&gt; ArcPointer[T]
+  │  ListConverter             │  .append(), .extend(), .finish()
+  │  StructConverter           │
+  │  StringConverter           │</code></pre>
+<p>All three <code>Any*</code> types follow the same structural pattern: - <code>ArcPointer[NoneType]</code> for heap storage - Function pointers for each virtual method - <code>@implicit __init__[T: Trait]</code> for type erasure - <code>__copyinit__</code> with <code>.copy()</code> for O(1) ref-count bumps - <code>__del__(deinit self)</code> with typed drop trampoline - <code>downcast[T]() -&gt; ArcPointer[T]</code> for recovery</p>
+</section>
+<section id="design-decisions" class="level2">
+<h2 class="anchored" data-anchor-id="design-decisions">Design Decisions</h2>
+<p><strong>Why function pointers over Variant?</strong> Variant requires enumerating all types upfront and grows linearly with type count. Function pointers are open — any type conforming to the trait can be erased without modifying the container. This is critical for <code>PrimitiveArray[T]</code> where <code>T</code> can be any <code>DataType</code>.</p>
+<p><strong>Why <code>ArcPointer[NoneType]</code> + <code>rebind</code>?</strong> Mojo’s <code>ArcPointer[T]</code> has uniform layout regardless of <code>T</code> (it stores a pointer to a heap block). <code>rebind</code> reinterprets the bits without copying or allocating. This gives us type erasure with zero overhead beyond the function pointer call.</p>
+<p><strong>Why <code>deinit self</code> in <code>__del__</code>?</strong> Mojo requires <code>deinit</code> (not <code>var</code>) to move fields out of self during destruction. <code>var self</code> causes “field destroyed out of the middle of a value” errors.</p>
+<p><strong>Why <code>ImplicitlyCopyable</code> on <code>AnyArray</code> but not on the <code>Array</code> trait?</strong> <code>AnyArray</code> needs <code>ImplicitlyCopyable</code> to be stored in <code>List[AnyArray]</code>. The trait doesn’t require it because concrete types like <code>ListArray</code> contain <code>List</code> fields which aren’t <code>ImplicitlyCopyable</code>. The <code>AnyArray</code> wrapper adds copyability through <code>ArcPointer</code> ref-counting.</p>
+<p><strong>Why a generic <code>downcast[T]</code> instead of <code>as_primitive[T]</code>, <code>as_list()</code>, etc.?</strong> <code>AnyArray</code> is defined before the concrete types (it only depends on the <code>Array</code> trait). Adding methods that return concrete types would create circular references. A generic <code>downcast[T: Array]</code> avoids this by using the trait bound.</p>
+</section>
+<section id="prototype-status" class="level2">
+<h2 class="anchored" data-anchor-id="prototype-status">Prototype Status</h2>
+<p>The current prototype in <code>marrow/dyn.mojo</code> implements <code>AnyArray</code> with 3 virtual methods (<code>length</code>, <code>null_count</code>, <code>is_valid</code>) plus typed destruction. Tests cover all array types, heterogeneous lists, nested structures, copy semantics, refcount safety, and upcast/downcast round-trips.</p>
+<p>Next steps: - Expand <code>Array</code> trait with <code>type()</code>, <code>child()</code>, <code>slice()</code> - Implement <code>AnyBuilder</code> with the same pattern - Implement <code>AnyConverter</code> for Python interop - Replace the existing <code>Array</code>/<code>Builder</code> types in <code>marrow/arrays.mojo</code> and <code>marrow/builders.mojo</code> with this pattern</p>
 
 
+</section>
 </section>
 
 </main> <!-- /main -->

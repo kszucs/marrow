@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.8.27">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>groupby-design – Marrow</title>
+<style>
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-8b4baf804e461d9b72633f0de59a0cac.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-7aa4c7b3796345b174ec3606a54e4e58.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="./index.html" class="navbar-brand navbar-brand-logo">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo dark-content">
+    </a>
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Marrow</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Quickstart</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-guides" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Guides</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
+        <li>
+    <a class="dropdown-item" href="./guide/arrays.html">
+ <span class="dropdown-text">Arrays</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/compute.html">
+ <span class="dropdown-text">Compute</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/expressions.html">
+ <span class="dropdown-text">Expressions</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/types.html">
+ <span class="dropdown-text">Type System</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/interop.html">
+ <span class="dropdown-text">PyArrow Interop</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-examples" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Examples</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
+        <li>
+    <a class="dropdown-item" href="./examples/datafusion.html">
+ <span class="dropdown-text">DataFusion UDFs</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./benchmarks/"> 
+<span class="menu-text">Benchmarks</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#plan-group-by-kernel-for-marrow" id="toc-plan-group-by-kernel-for-marrow" class="nav-link active" data-scroll-target="#plan-group-by-kernel-for-marrow">Plan: Group-By Kernel for Marrow</a>
+  <ul class="collapse">
+  <li><a href="#context" id="toc-context" class="nav-link" data-scroll-target="#context">Context</a></li>
+  <li><a href="#prior-art" id="toc-prior-art" class="nav-link" data-scroll-target="#prior-art">Prior Art</a>
+  <ul class="collapse">
+  <li><a href="#clickhouse-specialization-king" id="toc-clickhouse-specialization-king" class="nav-link" data-scroll-target="#clickhouse-specialization-king">ClickHouse — Specialization King</a></li>
+  <li><a href="#duckdb-vectorized-adaptive" id="toc-duckdb-vectorized-adaptive" class="nav-link" data-scroll-target="#duckdb-vectorized-adaptive">DuckDB — Vectorized &amp; Adaptive</a></li>
+  <li><a href="#polars-streaming-cache-efficient" id="toc-polars-streaming-cache-efficient" class="nav-link" data-scroll-target="#polars-streaming-cache-efficient">Polars — Streaming &amp; Cache-Efficient</a></li>
+  </ul></li>
+  <li><a href="#parallel-approach-comparison" id="toc-parallel-approach-comparison" class="nav-link" data-scroll-target="#parallel-approach-comparison">Parallel Approach Comparison</a></li>
+  <li><a href="#mojo-stdlib-building-blocks" id="toc-mojo-stdlib-building-blocks" class="nav-link" data-scroll-target="#mojo-stdlib-building-blocks">Mojo Stdlib Building Blocks</a></li>
+  <li><a href="#grouper-catalog" id="toc-grouper-catalog" class="nav-link" data-scroll-target="#grouper-catalog">Grouper Catalog</a>
+  <ul class="collapse">
+  <li><a href="#directmapgrouper-zero-hash-array-indexed" id="toc-directmapgrouper-zero-hash-array-indexed" class="nav-link" data-scroll-target="#directmapgrouper-zero-hash-array-indexed">1. DirectMapGrouper — Zero-hash array-indexed</a></li>
+  <li><a href="#primitivehashgroupert-swiss-table-for-single-numeric-keys" id="toc-primitivehashgroupert-swiss-table-for-single-numeric-keys" class="nav-link" data-scroll-target="#primitivehashgroupert-swiss-table-for-single-numeric-keys">2. PrimitiveHashGrouper[T] — Swiss Table for single numeric keys</a></li>
+  <li><a href="#stringhashgrouper-swiss-table-for-string-keys" id="toc-stringhashgrouper-swiss-table-for-string-keys" class="nav-link" data-scroll-target="#stringhashgrouper-swiss-table-for-string-keys">3. StringHashGrouper — Swiss Table for string keys</a></li>
+  <li><a href="#packedkeygrouper-multi-key-fixed-width-packing" id="toc-packedkeygrouper-multi-key-fixed-width-packing" class="nav-link" data-scroll-target="#packedkeygrouper-multi-key-fixed-width-packing">4. PackedKeyGrouper — Multi-key fixed-width packing</a></li>
+  <li><a href="#rowencodedgrouper-multi-key-general-fallback" id="toc-rowencodedgrouper-multi-key-general-fallback" class="nav-link" data-scroll-target="#rowencodedgrouper-multi-key-general-fallback">5. RowEncodedGrouper — Multi-key general fallback</a></li>
+  <li><a href="#twolevelgrouper-parallel-wrapper-clickhouse-approach" id="toc-twolevelgrouper-parallel-wrapper-clickhouse-approach" class="nav-link" data-scroll-target="#twolevelgrouper-parallel-wrapper-clickhouse-approach">6. TwoLevelGrouper — Parallel wrapper (ClickHouse approach)</a></li>
+  <li><a href="#spillinggrouper-memory-constrained-operation" id="toc-spillinggrouper-memory-constrained-operation" class="nav-link" data-scroll-target="#spillinggrouper-memory-constrained-operation">7. SpillingGrouper — Memory-constrained operation</a></li>
+  </ul></li>
+  <li><a href="#selection-logic" id="toc-selection-logic" class="nav-link" data-scroll-target="#selection-logic">Selection Logic</a></li>
+  <li><a href="#public-api" id="toc-public-api" class="nav-link" data-scroll-target="#public-api">Public API</a></li>
+  <li><a href="#implementation-order" id="toc-implementation-order" class="nav-link" data-scroll-target="#implementation-order">Implementation Order</a>
+  <ul class="collapse">
+  <li><a href="#step-1-primitivehashgrouper-stringhashgrouper-type-erased-dispatch" id="toc-step-1-primitivehashgrouper-stringhashgrouper-type-erased-dispatch" class="nav-link" data-scroll-target="#step-1-primitivehashgrouper-stringhashgrouper-type-erased-dispatch">Step 1: PrimitiveHashGrouper + StringHashGrouper + type-erased dispatch</a></li>
+  <li><a href="#step-2-directmapgrouper" id="toc-step-2-directmapgrouper" class="nav-link" data-scroll-target="#step-2-directmapgrouper">Step 2: DirectMapGrouper</a></li>
+  <li><a href="#step-3-packedkeygrouper-multi-key-fixed-width" id="toc-step-3-packedkeygrouper-multi-key-fixed-width" class="nav-link" data-scroll-target="#step-3-packedkeygrouper-multi-key-fixed-width">Step 3: PackedKeyGrouper (multi-key, fixed-width)</a></li>
+  <li><a href="#step-4-rowencodedgrouper-multi-key-general" id="toc-step-4-rowencodedgrouper-multi-key-general" class="nav-link" data-scroll-target="#step-4-rowencodedgrouper-multi-key-general">Step 4: RowEncodedGrouper (multi-key, general)</a></li>
+  <li><a href="#step-5-vectorized-hash-pre-computation" id="toc-step-5-vectorized-hash-pre-computation" class="nav-link" data-scroll-target="#step-5-vectorized-hash-pre-computation">Step 5: Vectorized hash pre-computation</a></li>
+  <li><a href="#step-6-twolevelgrouper-parallel" id="toc-step-6-twolevelgrouper-parallel" class="nav-link" data-scroll-target="#step-6-twolevelgrouper-parallel">Step 6: TwoLevelGrouper (parallel)</a></li>
+  <li><a href="#step-7-spillinggrouper-memory-constrained" id="toc-step-7-spillinggrouper-memory-constrained" class="nav-link" data-scroll-target="#step-7-spillinggrouper-memory-constrained">Step 7: SpillingGrouper (memory-constrained)</a></li>
+  <li><a href="#step-8-fused-grouped-aggregation" id="toc-step-8-fused-grouped-aggregation" class="nav-link" data-scroll-target="#step-8-fused-grouped-aggregation">Step 8: Fused grouped aggregation</a></li>
+  <li><a href="#step-9-sorted-input-optimization" id="toc-step-9-sorted-input-optimization" class="nav-link" data-scroll-target="#step-9-sorted-input-optimization">Step 9: Sorted input optimization</a></li>
+  </ul></li>
+  <li><a href="#tests" id="toc-tests" class="nav-link" data-scroll-target="#tests">Tests</a></li>
+  <li><a href="#files-to-createmodify" id="toc-files-to-createmodify" class="nav-link" data-scroll-target="#files-to-createmodify">Files to Create/Modify</a></li>
+  <li><a href="#verification" id="toc-verification" class="nav-link" data-scroll-target="#verification">Verification</a></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+
+
+
+
+<section id="plan-group-by-kernel-for-marrow" class="level1">
+<h1>Plan: Group-By Kernel for Marrow</h1>
+<section id="context" class="level2">
+<h2 class="anchored" data-anchor-id="context">Context</h2>
+<p>Marrow needs a group-by kernel — the fundamental primitive that assigns each row a group index. The goal is state-of-the-art performance with multi-key support, good parallelization, and memory-constrained operation. This means multiple specialized grouper implementations, like ClickHouse (40+), DuckDB (4), and Polars (3) all have.</p>
+<hr>
+</section>
+<section id="prior-art" class="level2">
+<h2 class="anchored" data-anchor-id="prior-art">Prior Art</h2>
+<section id="clickhouse-specialization-king" class="level3">
+<h3 class="anchored" data-anchor-id="clickhouse-specialization-king">ClickHouse — Specialization King</h3>
+<p><strong>Single-key specializations by type:</strong> - <code>key8/key16</code>: UInt8/16 → <code>FixedHashMap</code> (direct array indexing, 256/65536 slots, O(1), zero hash) - <code>key32/key64</code>: UInt32/64 → <code>HashMap</code> with CRC32 hash - <code>key_string</code>: → <code>StringHashMap</code> with inline short-string storage - Low-cardinality variants: work with dictionary indices instead of values</p>
+<p><strong>Multi-key packing:</strong> - <code>keys16/32/64/128/256</code>: Pack N fixed-width keys into 2-32 byte blob → single hash lookup - Decision: total key bytes ≤ 32 and all fixed-width → pack; else serialize - <code>serialized</code>/<code>prealloc_serialized</code>: Binary concatenation fallback for mixed types</p>
+<p><strong>Nullable keys:</strong> Every method has <code>nullable_*</code> variant with separate <code>null_key_data</code>.</p>
+<p><strong>Two-level hash tables</strong> (for parallelism + spilling): - 256 fixed sub-tables, bucket = <code>(hash &gt;&gt; 24) &amp; 0xFF</code> - Enables lock-free parallel merge AND partition-aligned spilling</p>
+<p><strong>Parallel merge</strong> (Aggregator.cpp:3722-3871): - <code>std::atomic&lt;UInt32&gt; next_bucket_to_merge</code> distributes 256 buckets across threads - Each thread grabs bucket via <code>fetch_add(1)</code>, merges all chunks for that bucket - No locks: each bucket is a disjoint hash table, threads write to independent targets - <strong>Scales linearly up to 256 threads</strong></p>
+<p><strong>External aggregation</strong> (spilling, Aggregator.cpp:1875-2117): - Triggered when <code>current_memory_usage &gt; max_bytes_before_external_group_by</code> - Writes each of 256 buckets independently to temp files - Later merges: read spilled buckets back, merge with in-memory buckets - Two-level structure is critical: bucket-aligned writes = efficient sequential I/O</p>
+<p><strong>Aggregation-in-order</strong> (pre-sorted input): - No hash table, O(n) scan: accumulate while key matches, emit on change</p>
+</section>
+<section id="duckdb-vectorized-adaptive" class="level3">
+<h3 class="anchored" data-anchor-id="duckdb-vectorized-adaptive">DuckDB — Vectorized &amp; Adaptive</h3>
+<p><strong>4 strategies:</strong> Ungrouped, PerfectHash, Partitioned, HashAggregate.</p>
+<p><strong>Hash Aggregate (main workhorse):</strong> - Linear probing with salt-based collision detection (top hash bits as fingerprint) - Vectorized probing: branchless hash loop, multi-pass with selection vectors - Radix partitioning for cache locality</p>
+<p><strong>Parallel aggregation:</strong> - Thread-local hash tables during sink (no synchronization) - <strong>Sequential combine</strong> after sink (each thread’s table merged one-at-a-time into global state) - Weakest parallel merge of the three systems</p>
+<p><strong>Memory management</strong> (radix_partitioned_hashtable.cpp:220-236): - Reservation-based: <code>min_reservation = num_threads × num_partitions × blocks_per_partition × block_size</code> - Adaptive radix bits: starts at 4, increases to 8 under memory pressure → more, smaller partitions - Repartitioning on OOM: <code>SetRadixBitsToExternal()</code> increases partition count</p>
+</section>
+<section id="polars-streaming-cache-efficient" class="level3">
+<h3 class="anchored" data-anchor-id="polars-streaming-cache-efficient">Polars — Streaming &amp; Cache-Efficient</h3>
+<p><strong>3 groupers:</strong> SingleKey, Binview (strings), RowEncoded (multi-key).</p>
+<p><strong>Hot/cold streaming</strong> (fixed_index_table.rs:19-44): - <code>FixedIndexTable</code>: 4096 slots, cuckoo hashing with 2 probes (<code>h1</code>, <code>h2 = hash * H2_MULT</code>) - LRU eviction: <code>last_access_tag</code> tracks recency; on miss, evict oldest entry - Evicted keys stored as pre-aggregates in per-partition cold storage - Hot table fits in L2 cache → excellent locality</p>
+<p><strong>Parallel group-by</strong> (group_by.rs:251-334, 4 phases): 1. Streaming ingest: each thread has own hot table, processes morsels independently 2. Partition evictions: evicted keys hashed to partition P, pre-aggs stored per-partition 3. Per-partition grouper: sized via cardinality estimation, pre-aggs merged in 4. Output: partitions converted to DataFrames in parallel</p>
+<p><strong>Cardinality estimation</strong> (Chao-Srichand): - Sample-based: <code>u + (ui / m) * (s - m)</code> where u = unique in sample, ui = singletons - Pre-sizes output grouper at estimate × 1.25</p>
+<hr>
+</section>
+</section>
+<section id="parallel-approach-comparison" class="level2">
+<h2 class="anchored" data-anchor-id="parallel-approach-comparison">Parallel Approach Comparison</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 22%">
+<col style="width: 31%">
+<col style="width: 22%">
+<col style="width: 22%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Aspect</th>
+<th>ClickHouse</th>
+<th>DuckDB</th>
+<th>Polars</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Merge parallelism</strong></td>
+<td><strong>Best</strong>: atomic counter distributes 256 buckets</td>
+<td>Worst: sequential combine</td>
+<td>Good: parallel per-partition</td>
+</tr>
+<tr class="even">
+<td><strong>Scalability</strong></td>
+<td>Linear to 256 threads</td>
+<td>Sublinear (merge bottleneck)</td>
+<td>Linear with partition count</td>
+</tr>
+<tr class="odd">
+<td><strong>Cache behavior</strong></td>
+<td>Good (bucket-isolated)</td>
+<td>Good (thread-local sink)</td>
+<td><strong>Best</strong> (4KB hot table in L2)</td>
+</tr>
+<tr class="even">
+<td><strong>Memory control</strong></td>
+<td>Threshold-based spill</td>
+<td>Adaptive radix bits</td>
+<td>Fixed hot table + pre-agg buffer</td>
+</tr>
+<tr class="odd">
+<td><strong>Spill mechanism</strong></td>
+<td>Bucket-aligned file writes</td>
+<td>Repartition + block writes</td>
+<td>Pre-agg overflow to cold storage</td>
+</tr>
+<tr class="even">
+<td><strong>Complexity</strong></td>
+<td>High (256 × method variants)</td>
+<td>Medium</td>
+<td>Medium-high (4 phases)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommendation for Marrow</strong>: Adopt <strong>ClickHouse’s two-level approach</strong> for the parallel grouper (best merge scalability, proven at massive scale), combined with <strong>DuckDB’s adaptive memory management</strong> (radix bits increase under pressure). Polars’ hot/cold approach is excellent for streaming but adds complexity we don’t need initially.</p>
+<hr>
+</section>
+<section id="mojo-stdlib-building-blocks" class="level2">
+<h2 class="anchored" data-anchor-id="mojo-stdlib-building-blocks">Mojo Stdlib Building Blocks</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Component</th>
+<th>What it provides</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>Dict[K, V]</code></td>
+<td>Swiss Table, 16-way SIMD probing, 7/8 load factor, insertion-order</td>
+</tr>
+<tr class="even">
+<td><code>hash()</code> / <code>AHasher</code></td>
+<td>64-bit SIMD-aware hash, works on any <code>Hashable</code></td>
+</tr>
+<tr class="odd">
+<td><code>Scalar[T]</code></td>
+<td>Satisfies <code>KeyElement</code> → <code>Dict[Scalar[T], UInt32]</code> works directly</td>
+</tr>
+<tr class="even">
+<td><code>String</code></td>
+<td>Satisfies <code>KeyElement</code> → <code>Dict[String, UInt32]</code> for string keys</td>
+</tr>
+<tr class="odd">
+<td><code>elementwise()</code></td>
+<td>SIMD vectorized element-wise loop (CPU + GPU)</td>
+</tr>
+<tr class="even">
+<td><code>vectorize()</code></td>
+<td>Lower-level SIMD loop with width + unroll</td>
+</tr>
+<tr class="odd">
+<td><code>Tuple[*Ts]</code> / <code>InlineArray[T, N]</code></td>
+<td>Hashable composite keys / fixed-size packing</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+<section id="grouper-catalog" class="level2">
+<h2 class="anchored" data-anchor-id="grouper-catalog">Grouper Catalog</h2>
+<section id="directmapgrouper-zero-hash-array-indexed" class="level3">
+<h3 class="anchored" data-anchor-id="directmapgrouper-zero-hash-array-indexed">1. DirectMapGrouper — Zero-hash array-indexed</h3>
+<p><strong>Inspired by</strong>: ClickHouse <code>key8</code>/<code>key16</code>, DuckDB PerfectHash</p>
+<p><strong>When</strong>: Single key with tiny value range — <code>bool_</code>, <code>uint8</code>, <code>int8</code> (and optionally <code>uint16</code>/<code>int16</code>).</p>
+<p><strong>How</strong>: Flat array of <code>Int32</code> slots indexed by key value. No hashing. - <code>bool_</code>: 3 slots (false, true, null) - <code>uint8</code>: 256 slots, <code>index = value</code> - <code>int8</code>: 256 slots, <code>index = value + 128</code> - <code>uint16</code>/<code>int16</code>: 65536 slots (128KB, fits in L2)</p>
+<p><strong>Performance</strong>: O(1), zero hash overhead, perfectly cache-friendly.</p>
+</section>
+<section id="primitivehashgroupert-swiss-table-for-single-numeric-keys" class="level3">
+<h3 class="anchored" data-anchor-id="primitivehashgroupert-swiss-table-for-single-numeric-keys">2. PrimitiveHashGrouper[T] — Swiss Table for single numeric keys</h3>
+<p><strong>Inspired by</strong>: ClickHouse <code>key32</code>/<code>key64</code>, Polars SingleKeyHashGrouper</p>
+<p><strong>When</strong>: Single numeric key not handled by DirectMap (int32, int64, uint32, uint64, float32, float64).</p>
+<p><strong>How</strong>: <code>Dict[Scalar[T.native], UInt32]</code> — stdlib Swiss Table with 16-way SIMD probing, AHasher.</p>
+</section>
+<section id="stringhashgrouper-swiss-table-for-string-keys" class="level3">
+<h3 class="anchored" data-anchor-id="stringhashgrouper-swiss-table-for-string-keys">3. StringHashGrouper — Swiss Table for string keys</h3>
+<p><strong>Inspired by</strong>: ClickHouse <code>key_string</code>, Polars BinviewHashGrouper</p>
+<p><strong>When</strong>: Single string key.</p>
+<p><strong>How</strong>: <code>Dict[String, UInt32]</code>. StringSlice from array → String for Dict key.</p>
+</section>
+<section id="packedkeygrouper-multi-key-fixed-width-packing" class="level3">
+<h3 class="anchored" data-anchor-id="packedkeygrouper-multi-key-fixed-width-packing">4. PackedKeyGrouper — Multi-key fixed-width packing</h3>
+<p><strong>Inspired by</strong>: ClickHouse <code>keys16</code>/<code>keys32</code>/<code>keys64</code>/<code>keys128</code>/<code>keys256</code></p>
+<p><strong>When</strong>: Multiple key columns, all fixed-width, total bytes ≤ 16.</p>
+<p><strong>How</strong>: Pack all key bytes into a single blob per row → single hash lookup. - Total ≤ 8 bytes → <code>Dict[UInt64, UInt32]</code> - Total ≤ 16 bytes → <code>Dict[InlineArray[UInt8, 16], UInt32]</code></p>
+<p>Packing: concatenate column bytes + 1-byte null flag per nullable column.</p>
+</section>
+<section id="rowencodedgrouper-multi-key-general-fallback" class="level3">
+<h3 class="anchored" data-anchor-id="rowencodedgrouper-multi-key-general-fallback">5. RowEncodedGrouper — Multi-key general fallback</h3>
+<p><strong>Inspired by</strong>: ClickHouse <code>serialized</code>/<code>prealloc_serialized</code> (preferred), Polars RowEncodedHashGrouper</p>
+<p><strong>When</strong>: Multi-key with variable-width types or total bytes &gt; 16.</p>
+<p><strong>How</strong>: Serialize each row’s keys into a contiguous byte sequence, then hash/compare the bytes. Following <strong>ClickHouse’s approach</strong> (simpler and faster than Polars for hash-based grouping — no byte normalization needed since we only hash, not sort):</p>
+<p><strong>Encoding format</strong> (per row, columns concatenated): - <strong>Fixed-width types</strong>: Raw <code>memcpy</code>, native byte order. No sign-flipping or big-endian conversion. - int32 → 4 bytes, int64 → 8 bytes, float64 → 8 bytes, etc. - <strong>Strings</strong>: 8-byte UInt64 length prefix + raw bytes. <code>[length: UInt64 (8B)] [payload: N bytes]</code> - <strong>Nullable columns</strong>: 1-byte prefix per column (0x00 = valid, 0x01 = null). Value omitted if null. <code>[null_flag: 1B] [value: N bytes if not null]</code></p>
+<p><strong>Example</strong> — row with keys <code>(int32=42, string="hello", nullable int64=None)</code>:</p>
+<pre><code>[42 as 4 raw bytes] [0x00][5 as UInt64][h][e][l][l][o] [0x01]
+     int32               valid  strlen      payload       null</code></pre>
+<p><strong>Two variants</strong> (following ClickHouse): 1. <strong>On-demand serialization</strong>: For each row, serialize into arena, hash, insert into Dict. If key already exists, rollback arena allocation. Simple, good for moderate key counts. 2. <strong>Prealloc batch serialization</strong> (ClickHouse’s <code>prealloc_serialized</code>): Pre-calculate all row sizes in one pass, batch-allocate the full buffer, then serialize all rows. Better cache behavior, chosen when all keys are numeric or string.</p>
+<p><strong>Hash table</strong>: <code>Dict[String, UInt32]</code> where the String holds the serialized bytes. Or a custom approach using arena-allocated <code>StringSlice</code> keys to avoid copying.</p>
+<p><strong>Why ClickHouse over Polars</strong>: ClickHouse skips byte normalization (no sign-flipping, no big-endian) because hash equality doesn’t require it. This saves ~2 instructions per numeric key per row. Polars normalizes bytes because its RowEncoded format doubles as a sort key — we don’t need that for group-by.</p>
+</section>
+<section id="twolevelgrouper-parallel-wrapper-clickhouse-approach" class="level3">
+<h3 class="anchored" data-anchor-id="twolevelgrouper-parallel-wrapper-clickhouse-approach">6. TwoLevelGrouper — Parallel wrapper (ClickHouse approach)</h3>
+<p><strong>Inspired by</strong>: ClickHouse two-level hash tables</p>
+<p><strong>When</strong>: Large datasets where single-threaded grouping is the bottleneck.</p>
+<p><strong>How</strong>: 256 sub-groupers (one per bucket). Three phases:</p>
+<ol type="1">
+<li><strong>Hash + bucket assignment</strong>: For each key, compute hash, extract bucket = <code>(hash &gt;&gt; 56) &amp; 0xFF</code>. Each thread accumulates keys into per-bucket sub-groupers.</li>
+<li><strong>Parallel merge</strong>: Atomic counter distributes 256 buckets across threads. Each thread merges all partial results for its assigned buckets. No locks — bucket targets are disjoint.</li>
+<li><strong>Global ID assignment</strong>: Walk buckets 0..255, assign global IDs by offsetting each bucket’s local IDs.</li>
+</ol>
+<p><strong>SIMD pre-hashing with <code>elementwise()</code></strong>: Hash all keys in a single SIMD pass, then scatter to buckets. This is the natural fit for <code>elementwise()</code>.</p>
+<pre><code>Thread 0: aggregate into local sub-groupers[0..255]
+Thread 1: aggregate into local sub-groupers[0..255]
+...
+Barrier
+Thread 0: merge bucket 0, 4, 8, ... (atomic counter)
+Thread 1: merge bucket 1, 5, 9, ...
+...</code></pre>
+</section>
+<section id="spillinggrouper-memory-constrained-operation" class="level3">
+<h3 class="anchored" data-anchor-id="spillinggrouper-memory-constrained-operation">7. SpillingGrouper — Memory-constrained operation</h3>
+<p><strong>Inspired by</strong>: ClickHouse external aggregation, DuckDB adaptive radix</p>
+<p><strong>When</strong>: Memory budget exceeded during grouping.</p>
+<p><strong>How</strong>: Wraps TwoLevelGrouper. When memory threshold crossed: 1. Flush each of 256 buckets independently to temp files (sequential I/O per bucket) 2. Clear in-memory hash tables, reclaim memory 3. Continue aggregating into fresh tables 4. At end: for each bucket, merge in-memory results with spilled data (read back per-bucket)</p>
+<p><strong>Why bucket-aligned spilling works</strong>: Each of the 256 buckets is a self-contained hash table — no cross-bucket dependencies. Flushing bucket N only requires sequential writes. Merging bucket N only requires reading bucket N’s spill files + in-memory bucket N. This is exactly how ClickHouse achieves efficient external aggregation.</p>
+<p><strong>Memory tracking</strong>: Track total hash table memory. When exceeding threshold, trigger spill. DuckDB’s adaptive approach (increase radix bits under pressure to create more, smaller partitions) is also worth considering as an alternative — it avoids disk I/O by reducing per-partition memory footprint.</p>
+<hr>
+</section>
+</section>
+<section id="selection-logic" class="level2">
+<h2 class="anchored" data-anchor-id="selection-logic">Selection Logic</h2>
+<pre><code>group_id(keys: Array)             → single-key dispatch
+group_id(keys: List[Array])       → multi-key dispatch
+
+Single-key:
+  bool/uint8/int8       → DirectMapGrouper (256 slots)
+  uint16/int16          → DirectMapGrouper (65536 slots)
+  other numeric         → PrimitiveHashGrouper[T]
+  string                → StringHashGrouper
+
+Multi-key:
+  all fixed, total ≤ 8B     → PackedKeyGrouper (UInt64)
+  all fixed, total ≤ 16B    → PackedKeyGrouper (InlineArray)
+  mixed/variable             → RowEncodedGrouper
+
+Parallel (orthogonal, wraps any above):
+  len(keys) &gt; parallel_threshold → TwoLevelGrouper(inner)
+
+Memory-constrained (orthogonal):
+  memory &gt; budget → SpillingGrouper(TwoLevelGrouper(inner))</code></pre>
+<hr>
+</section>
+<section id="public-api" class="level2">
+<h2 class="anchored" data-anchor-id="public-api">Public API</h2>
+<pre class="mojo"><code># Single-key (typed)
+def group_id[T: DataType](keys: PrimitiveArray[T]) raises -&gt; PrimitiveArray[uint32]
+def group_id(keys: StringArray) raises -&gt; PrimitiveArray[uint32]
+
+# Single-key (type-erased)
+def group_id(keys: Array) raises -&gt; PrimitiveArray[uint32]
+
+# Multi-key
+def group_id(keys: List[Array]) raises -&gt; PrimitiveArray[uint32]
+
+# Unique (companion)
+def unique[T: DataType](keys: PrimitiveArray[T]) raises -&gt; PrimitiveArray[T]
+def unique(keys: StringArray) raises -&gt; StringArray
+def unique(keys: Array) raises -&gt; Array</code></pre>
+<hr>
+</section>
+<section id="implementation-order" class="level2">
+<h2 class="anchored" data-anchor-id="implementation-order">Implementation Order</h2>
+<section id="step-1-primitivehashgrouper-stringhashgrouper-type-erased-dispatch" class="level3">
+<h3 class="anchored" data-anchor-id="step-1-primitivehashgrouper-stringhashgrouper-type-erased-dispatch">Step 1: PrimitiveHashGrouper + StringHashGrouper + type-erased dispatch</h3>
+<p>Core Dict-based groupers covering all numeric and string types. Minimum viable <code>group_id</code>.</p>
+<p><strong>Files:</strong> - Create <code>marrow/kernels/groupby.mojo</code> - Create <code>marrow/kernels/tests/test_groupby.mojo</code> - Update <code>marrow/kernels/__init__.mojo</code> docstring - Update <code>CHANGELOG.md</code></p>
+</section>
+<section id="step-2-directmapgrouper" class="level3">
+<h3 class="anchored" data-anchor-id="step-2-directmapgrouper">Step 2: DirectMapGrouper</h3>
+<p>Zero-hash fast path for bool/uint8/int8. Small self-contained optimization.</p>
+</section>
+<section id="step-3-packedkeygrouper-multi-key-fixed-width" class="level3">
+<h3 class="anchored" data-anchor-id="step-3-packedkeygrouper-multi-key-fixed-width">Step 3: PackedKeyGrouper (multi-key, fixed-width)</h3>
+<p>Multi-key support for the common case (e.g., <code>group_by(year, month)</code>). Packs columns into UInt64 or InlineArray.</p>
+</section>
+<section id="step-4-rowencodedgrouper-multi-key-general" class="level3">
+<h3 class="anchored" data-anchor-id="step-4-rowencodedgrouper-multi-key-general">Step 4: RowEncodedGrouper (multi-key, general)</h3>
+<p>General multi-key fallback. Requires implementing row encoding format.</p>
+<p><strong>File:</strong> <code>marrow/kernels/row.mojo</code> (reusable for sorting, joins).</p>
+</section>
+<section id="step-5-vectorized-hash-pre-computation" class="level3">
+<h3 class="anchored" data-anchor-id="step-5-vectorized-hash-pre-computation">Step 5: Vectorized hash pre-computation</h3>
+<p><code>elementwise()</code> to SIMD-parallelize hash computation. Foundation for TwoLevelGrouper.</p>
+</section>
+<section id="step-6-twolevelgrouper-parallel" class="level3">
+<h3 class="anchored" data-anchor-id="step-6-twolevelgrouper-parallel">Step 6: TwoLevelGrouper (parallel)</h3>
+<p>256 sub-groupers + atomic bucket distribution for parallel merge. Depends on Mojo threading primitives.</p>
+</section>
+<section id="step-7-spillinggrouper-memory-constrained" class="level3">
+<h3 class="anchored" data-anchor-id="step-7-spillinggrouper-memory-constrained">Step 7: SpillingGrouper (memory-constrained)</h3>
+<p>Bucket-aligned spill to temp files when memory budget exceeded. Wraps TwoLevelGrouper.</p>
+</section>
+<section id="step-8-fused-grouped-aggregation" class="level3">
+<h3 class="anchored" data-anchor-id="step-8-fused-grouped-aggregation">Step 8: Fused grouped aggregation</h3>
+<p><code>group_sum</code>, <code>group_min</code>, <code>group_max</code>, <code>group_count</code> — accumulate aggregate state during grouping pass.</p>
+</section>
+<section id="step-9-sorted-input-optimization" class="level3">
+<h3 class="anchored" data-anchor-id="step-9-sorted-input-optimization">Step 9: Sorted input optimization</h3>
+<p>Pre-sorted keys → run-detection, no hash table, O(n).</p>
+<hr>
+</section>
+</section>
+<section id="tests" class="level2">
+<h2 class="anchored" data-anchor-id="tests">Tests</h2>
+<p><strong>File: <code>marrow/kernels/tests/test_groupby.mojo</code></strong></p>
+<ul>
+<li><code>test_group_id_int32_basic</code> — <code>[1, 2, 1, 3, 2]</code> → <code>[0, 1, 0, 2, 1]</code></li>
+<li><code>test_group_id_int32_all_same</code> — <code>[5, 5, 5]</code> → <code>[0, 0, 0]</code></li>
+<li><code>test_group_id_int32_all_unique</code> — <code>[1, 2, 3]</code> → <code>[0, 1, 2]</code></li>
+<li><code>test_group_id_int32_empty</code> — <code>[]</code> → <code>[]</code></li>
+<li><code>test_group_id_int32_with_nulls</code> — <code>[1, null, 2, null, 1]</code> → nulls get own group</li>
+<li><code>test_group_id_uint8_directmap</code> — exercises DirectMapGrouper path</li>
+<li><code>test_group_id_bool_directmap</code> — <code>[true, false, true, null]</code></li>
+<li><code>test_group_id_string_basic</code> — <code>["foo", "bar", "foo"]</code> → <code>[0, 1, 0]</code></li>
+<li><code>test_group_id_array_dispatch</code> — type-erased dispatch</li>
+<li><code>test_group_id_large</code> — 200+ elements for hash table growth</li>
+<li><code>test_group_id_multikey_packed</code> — two int32 columns</li>
+<li><code>test_group_id_multikey_mixed</code> — int32 + string columns</li>
+<li><code>test_unique_int32</code> — encounter-order uniqueness</li>
+<li><code>test_unique_string</code> — string uniqueness</li>
+</ul>
+</section>
+<section id="files-to-createmodify" class="level2">
+<h2 class="anchored" data-anchor-id="files-to-createmodify">Files to Create/Modify</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Step</th>
+<th>File</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td><code>marrow/kernels/groupby.mojo</code></td>
+<td>Create — core groupers + public API</td>
+</tr>
+<tr class="even">
+<td>1</td>
+<td><code>marrow/kernels/tests/test_groupby.mojo</code></td>
+<td>Create — tests</td>
+</tr>
+<tr class="odd">
+<td>1</td>
+<td><code>marrow/kernels/__init__.mojo</code></td>
+<td>Update docstring</td>
+</tr>
+<tr class="even">
+<td>1</td>
+<td><code>CHANGELOG.md</code></td>
+<td>Add feature entry</td>
+</tr>
+<tr class="odd">
+<td>4</td>
+<td><code>marrow/kernels/row.mojo</code></td>
+<td>Create — row encoding</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="verification" class="level2">
+<h2 class="anchored" data-anchor-id="verification">Verification</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">mojo</span> test marrow/kernels/tests/test_groupby.mojo <span class="at">-I</span> .</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run test</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+
+
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>

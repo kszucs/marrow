@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>Marrow</title>
+<title>PyArrow Interop – Marrow</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -58,24 +58,24 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </style>
 
 
-<script src="site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="site_libs/quarto-nav/headroom.min.js"></script>
-<script src="site_libs/clipboard/clipboard.min.js"></script>
-<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
-<script src="site_libs/quarto-search/fuse.min.js"></script>
-<script src="site_libs/quarto-search/quarto-search.js"></script>
-<meta name="quarto:offset" content="./">
-<script src="site_libs/quarto-html/quarto.js" type="module"></script>
-<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="site_libs/quarto-html/axe/axe-check.js" type="module"></script>
-<script src="site_libs/quarto-html/popper.min.js"></script>
-<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
-<script src="site_libs/quarto-html/anchor.min.js"></script>
-<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-8b4baf804e461d9b72633f0de59a0cac.css" rel="stylesheet" id="quarto-text-highlighting-styles">
-<script src="site_libs/bootstrap/bootstrap.min.js"></script>
-<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-7aa4c7b3796345b174ec3606a54e4e58.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/axe/axe-check.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-8b4baf804e461d9b72633f0de59a0cac.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-7aa4c7b3796345b174ec3606a54e4e58.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -114,11 +114,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
-    <a href="./index.html" class="navbar-brand navbar-brand-logo">
-    <img src="./../logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="./../logo.png" alt="marrow" class="navbar-logo dark-content">
+    <a href="../index.html" class="navbar-brand navbar-brand-logo">
+    <img src="../../logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="../../logo.png" alt="marrow" class="navbar-logo dark-content">
     </a>
-    <a class="navbar-brand" href="./index.html">
+    <a class="navbar-brand" href="../index.html">
     <span class="navbar-title">Marrow</span>
     </a>
   </div>
@@ -129,7 +129,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
-    <a class="nav-link active" href="./index.html" aria-current="page"> 
+    <a class="nav-link" href="../index.html"> 
 <span class="menu-text">Quickstart</span></a>
   </li>  
   <li class="nav-item dropdown ">
@@ -138,23 +138,23 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </a>
     <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
         <li>
-    <a class="dropdown-item" href="./guide/arrays.html">
+    <a class="dropdown-item" href="../guide/arrays.html">
  <span class="dropdown-text">Arrays</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./guide/compute.html">
+    <a class="dropdown-item" href="../guide/compute.html">
  <span class="dropdown-text">Compute</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./guide/expressions.html">
+    <a class="dropdown-item" href="../guide/expressions.html">
  <span class="dropdown-text">Expressions</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./guide/types.html">
+    <a class="dropdown-item" href="../guide/types.html">
  <span class="dropdown-text">Type System</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="./guide/interop.html">
+    <a class="dropdown-item" href="../guide/interop.html">
  <span class="dropdown-text">PyArrow Interop</span></a>
   </li>  
     </ul>
@@ -165,7 +165,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </a>
     <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
         <li>
-    <a class="dropdown-item" href="./examples/datafusion.html">
+    <a class="dropdown-item" href="../examples/datafusion.html">
  <span class="dropdown-text">DataFusion UDFs</span></a>
   </li>  
     </ul>
@@ -173,7 +173,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item">
-    <a class="nav-link" href="./benchmarks/"> 
+    <a class="nav-link" href="../benchmarks/"> 
 <span class="menu-text">Benchmarks</span></a>
   </li>  
   <li class="nav-item compact">
@@ -197,16 +197,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#build" id="toc-build" class="nav-link active" data-scroll-target="#build">Build</a></li>
-  <li><a href="#minute-example" id="toc-minute-example" class="nav-link" data-scroll-target="#minute-example">5-minute example</a>
+  <li><a href="#same-data-model" id="toc-same-data-model" class="nav-link active" data-scroll-target="#same-data-model">Same data model</a></li>
+  <li><a href="#construction-performance" id="toc-construction-performance" class="nav-link" data-scroll-target="#construction-performance">Construction performance</a></li>
+  <li><a href="#zero-copy-c-data-interface" id="toc-zero-copy-c-data-interface" class="nav-link" data-scroll-target="#zero-copy-c-data-interface">Zero-copy C Data Interface</a>
   <ul class="collapse">
-  <li><a href="#create-arrays" id="toc-create-arrays" class="nav-link" data-scroll-target="#create-arrays">Create arrays</a></li>
-  <li><a href="#arithmetic" id="toc-arithmetic" class="nav-link" data-scroll-target="#arithmetic">Arithmetic</a></li>
-  <li><a href="#aggregates" id="toc-aggregates" class="nav-link" data-scroll-target="#aggregates">Aggregates</a></li>
-  <li><a href="#filter-and-drop-nulls" id="toc-filter-and-drop-nulls" class="nav-link" data-scroll-target="#filter-and-drop-nulls">Filter and drop nulls</a></li>
-  <li><a href="#inspect-arrays" id="toc-inspect-arrays" class="nav-link" data-scroll-target="#inspect-arrays">Inspect arrays</a></li>
+  <li><a href="#python-level" id="toc-python-level" class="nav-link" data-scroll-target="#python-level">Python level</a></li>
+  <li><a href="#mojo-level" id="toc-mojo-level" class="nav-link" data-scroll-target="#mojo-level">Mojo level</a></li>
   </ul></li>
-  <li><a href="#whats-next" id="toc-whats-next" class="nav-link" data-scroll-target="#whats-next">What’s next</a></li>
   </ul>
 </nav>
     </div>
@@ -215,8 +212,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
-<h1 class="title">Marrow</h1>
-<p class="subtitle lead">Apache Arrow in Mojo</p>
+<h1 class="title">PyArrow Interop</h1>
 </div>
 
 
@@ -233,140 +229,145 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<p>Marrow is an implementation of <a href="https://arrow.apache.org">Apache Arrow</a> written in <a href="https://www.modular.com/mojo">Mojo</a>. It provides a columnar in-memory array format with null handling, SIMD-accelerated compute kernels, GPU support, and a Python binding layer that outperforms PyArrow on numeric array construction.</p>
-<section id="build" class="level2">
-<h2 class="anchored" data-anchor-id="build">Build</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">git</span> clone https://github.com/kszucs/marrow</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> marrow</span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run build_python    <span class="co"># compiles python/marrow.so</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Then in Python:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Marrow and <a href="https://arrow.apache.org/docs/python/">PyArrow</a> implement the same Apache Arrow columnar format. This page covers how they relate, where Marrow is faster, and how to exchange data between them at the Mojo level via the <a href="https://arrow.apache.org/docs/format/CDataInterface.html">Arrow C Data Interface</a>.</p>
+<section id="same-data-model" class="level2">
+<h2 class="anchored" data-anchor-id="same-data-model">Same data model</h2>
+<p>Both libraries represent the same Arrow memory layout. An <code>int64</code> array in Marrow and in PyArrow are bitwise identical in memory.</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Marrow</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>ma_arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"marrow:"</span>, ma_arr)</span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:  "</span>, ma_arr.<span class="bu">type</span>())</span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="co"># PyArrow</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>pa_arr <span class="op">=</span> pa.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"pyarrow:"</span>, pa_arr)</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:   "</span>, pa_arr.<span class="bu">type</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
-<section id="minute-example" class="level2">
-<h2 class="anchored" data-anchor-id="minute-example">5-minute example</h2>
-<div id="218d26a1" class="cell" data-execution_count="1">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../python"</span>)</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
-<section id="create-arrays" class="level3">
-<h3 class="anchored" data-anchor-id="create-arrays">Create arrays</h3>
-<div id="02aeb291" class="cell" data-execution_count="2">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Primitive arrays — type is inferred from the Python data</span></span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(a)</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([1, 2, 3, NULL, 5])
-PrimitiveArray[int64]([10, 20, 30, 40, 50])</code></pre>
-</div>
-</div>
-<div id="cf76c176" class="cell" data-execution_count="3">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Strings and nested structures work too</span></span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="va">None</span>, <span class="st">"Dana"</span>])</span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>scores <span class="op">=</span> ma.array([<span class="fl">9.5</span>, <span class="fl">8.2</span>, <span class="fl">7.8</span>, <span class="va">None</span>])</span>
-<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(names)</span>
-<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(scores)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>StringArray([Alice, Bob, NULL, Dana])
-PrimitiveArray[float64]([9.5, 8.2, 7.8, NULL])</code></pre>
-</div>
-</div>
-</section>
-<section id="arithmetic" class="level3">
-<h3 class="anchored" data-anchor-id="arithmetic">Arithmetic</h3>
-<p>Null values propagate through element-wise operations — if either input is null, the output is null.</p>
-<div id="1223c9d3" class="cell" data-execution_count="4">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.add(a, b)</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result)   <span class="co"># index 3 is null because a[3] is null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([11, 22, 33, NULL, 55])</code></pre>
-</div>
-</div>
-<div id="cd01d9c8" class="cell" data-execution_count="5">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.mul(a, b))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>PrimitiveArray[int64]([10, 40, 90, NULL, 250])</code></pre>
-</div>
-</div>
-</section>
-<section id="aggregates" class="level3">
-<h3 class="anchored" data-anchor-id="aggregates">Aggregates</h3>
-<p>Aggregates skip null values.</p>
-<div id="eee804a2" class="cell" data-execution_count="6">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum:    "</span>, ma.sum_(a))    <span class="co"># 1+2+3+5 = 11, null skipped</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"min:    "</span>, ma.min_(a))</span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"max:    "</span>, ma.max_(a))</span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"product:"</span>, ma.product(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>sum:     11
-min:     1
-max:     5
-product: 30</code></pre>
-</div>
-</div>
-</section>
-<section id="filter-and-drop-nulls" class="level3">
-<h3 class="anchored" data-anchor-id="filter-and-drop-nulls">Filter and drop nulls</h3>
-<div id="585e2414" class="cell" data-execution_count="7">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
-<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"filter:"</span>, ma.filter_(a, mask))</span>
-<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"drop nulls:"</span>, ma.drop_nulls(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>filter: PrimitiveArray[int64]([1, 3, 5])
-drop nulls: PrimitiveArray[int64]([1, 2, 3, 5])</code></pre>
-</div>
-</div>
-</section>
-<section id="inspect-arrays" class="level3">
-<h3 class="anchored" data-anchor-id="inspect-arrays">Inspect arrays</h3>
-<div id="565217fb" class="cell" data-execution_count="8">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, a.<span class="fu">__len__</span>())</span>
-<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, a.null_count())</span>
-<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:      "</span>, a.<span class="bu">type</span>())</span>
-<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"is_valid(3):"</span>, a.is_valid(<span class="dv">3</span>))   <span class="co"># False — index 3 is null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<div class="cell-output cell-output-stdout">
-<pre><code>length:     5
-null count: 1
-type:       int64
-is_valid(3): False</code></pre>
-</div>
-</div>
-<hr>
-</section>
-</section>
-<section id="whats-next" class="level2">
-<h2 class="anchored" data-anchor-id="whats-next">What’s next</h2>
+<section id="construction-performance" class="level2">
+<h2 class="anchored" data-anchor-id="construction-performance">Construction performance</h2>
+<p>When converting Python data to Arrow arrays, Marrow is faster than PyArrow for numeric and string types when an explicit type is provided. Results below are from <code>pixi run bench_python</code> on Apple M-series hardware (n=100,000 elements, mean time):</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
-<th>Page</th>
-<th>What you’ll learn</th>
+<th>Array type</th>
+<th style="text-align: right;">marrow</th>
+<th style="text-align: right;">PyArrow</th>
+<th>speedup</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><a href="./guide/arrays.html">Arrays</a></td>
-<td>All array types, nulls, slicing, nested structures</td>
+<td><code>int64</code> (explicit type)</td>
+<td style="text-align: right;">0.37 ms</td>
+<td style="text-align: right;">0.89 ms</td>
+<td><strong>2.4x</strong></td>
 </tr>
 <tr class="even">
-<td><a href="./guide/compute.html">Compute</a></td>
-<td>Arithmetic, aggregates, filter, drop_nulls</td>
+<td><code>int64</code> + nulls (explicit)</td>
+<td style="text-align: right;">0.36 ms</td>
+<td style="text-align: right;">0.87 ms</td>
+<td><strong>2.4x</strong></td>
 </tr>
 <tr class="odd">
-<td><a href="./guide/types.html">Type System</a></td>
-<td>Type inference, explicit schemas, struct types</td>
+<td><code>float64</code> (explicit)</td>
+<td style="text-align: right;">0.34 ms</td>
+<td style="text-align: right;">0.48 ms</td>
+<td><strong>1.4x</strong></td>
 </tr>
 <tr class="even">
-<td><a href="./guide/interop.html">PyArrow Interop</a></td>
-<td>Benchmarks vs PyArrow, zero-copy C Data Interface</td>
+<td><code>float64</code> + nulls</td>
+<td style="text-align: right;">0.34 ms</td>
+<td style="text-align: right;">0.51 ms</td>
+<td><strong>1.5x</strong></td>
+</tr>
+<tr class="odd">
+<td><code>string</code> (explicit)</td>
+<td style="text-align: right;">0.72 ms</td>
+<td style="text-align: right;">1.06 ms</td>
+<td><strong>1.5x</strong></td>
+</tr>
+<tr class="even">
+<td><code>string</code> + nulls</td>
+<td style="text-align: right;">0.70 ms</td>
+<td style="text-align: right;">1.04 ms</td>
+<td><strong>1.5x</strong></td>
+</tr>
+<tr class="odd">
+<td>struct, primitive fields (explicit)</td>
+<td style="text-align: right;">5.41 ms</td>
+<td style="text-align: right;">6.54 ms</td>
+<td><strong>1.2x</strong></td>
+</tr>
+<tr class="even">
+<td><code>int64</code> (inferred)</td>
+<td style="text-align: right;">1.40 ms</td>
+<td style="text-align: right;">1.27 ms</td>
+<td>1.1x slower</td>
+</tr>
+<tr class="odd">
+<td><code>string</code> (inferred)</td>
+<td style="text-align: right;">1.57 ms</td>
+<td style="text-align: right;">1.02 ms</td>
+<td>1.5x slower</td>
+</tr>
+<tr class="even">
+<td>nested list (inferred)</td>
+<td style="text-align: right;">3.92 ms</td>
+<td style="text-align: right;">2.36 ms</td>
+<td>1.7x slower</td>
 </tr>
 </tbody>
 </table>
+<p>The pattern: <strong>provide an explicit type when you know it</strong>. Marrow’s builder path is highly optimized for known types. When the type must be inferred from a scan of Python objects, PyArrow currently wins for complex nested structures.</p>
+<p>Reproduce with:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run bench_python</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="zero-copy-c-data-interface" class="level2">
+<h2 class="anchored" data-anchor-id="zero-copy-c-data-interface">Zero-copy C Data Interface</h2>
+<p>Marrow arrays implement the Arrow C Data Interface protocol (<code>__arrow_c_array__</code> / <code>__arrow_c_schema__</code>), so they exchange data with PyArrow with <strong>zero copies</strong> at both the Python and Mojo level.</p>
+<section id="python-level" class="level3">
+<h3 class="anchored" data-anchor-id="python-level">Python level</h3>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a><span class="co"># PyArrow -&gt; Marrow (via __arrow_c_array__ protocol)</span></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>pa_arr <span class="op">=</span> pa.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>ma_arr <span class="op">=</span> ma.array(pa_arr)</span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma_arr)</span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a><span class="co"># Marrow -&gt; PyArrow (via __arrow_c_array__ protocol)</span></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a>ma_arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a>pa_arr <span class="op">=</span> pa.array(ma_arr)</span>
+<span id="cb3-12"><a href="#cb3-12" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(pa_arr)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="mojo-level" class="level3">
+<h3 class="anchored" data-anchor-id="mojo-level">Mojo level</h3>
+<p>At the Mojo level the underlying <code>CArrowSchema</code> and <code>CArrowArray</code> structs are directly accessible for low-level interop.</p>
+<pre class="mojo"><code>from std.python import Python
+from marrow.c_data import CArrowArray, CArrowSchema
+
+var pa = Python.import_module("pyarrow")
+var pyarr = pa.array([1, 2, 3, 4, 5], mask=[False, False, False, False, True])
+
+# Import from PyArrow via the Arrow C Data Interface capsule protocol
+var capsules = pyarr.__arrow_c_array__()
+var dtype = CArrowSchema.from_pycapsule(capsules[0]).to_dtype()  # int64
+var data  = CArrowArray.from_pycapsule(capsules[1])^.to_array(dtype)
+var typed = data.as_int64()
+
+print(typed.is_valid(0))    # True
+print(typed.is_valid(4))    # False — null
+print(typed.unsafe_get(0))  # 1
+print(typed.unsafe_get(3))  # 4
+
+# Export from Mojo back to PyArrow — __arrow_c_array__ protocol is supported
+var pa_result = pa.array(data)</code></pre>
 
 
+</section>
 </section>
 
 </main> <!-- /main -->
