@@ -24,6 +24,11 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/dev/**/.mojo_cache
+        key: mojo-cache-dev-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-dev-${{ runner.os }}-
     - name: tests
       run: |
         pixi run -e dev test_parallel --no-gpu
@@ -45,6 +50,11 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/dev/**/.mojo_cache
+        key: mojo-cache-dev-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-dev-${{ runner.os }}-
     - name: tests
       run: |
         pixi run -e dev test_parallel --no-gpu
@@ -86,6 +96,11 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: asan
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/asan/**/.mojo_cache
+        key: mojo-cache-asan-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-asan-${{ runner.os }}-
     - name: asan tests
       run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
 
@@ -106,5 +121,10 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: asan
+    - uses: actions/cache@v4
+      with:
+        path: .pixi/envs/asan/**/.mojo_cache
+        key: mojo-cache-asan-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-asan-${{ runner.os }}-
     - name: asan tests
       run: pixi run -e asan test_mojo_asan_parallel --no-gpu --no-python
