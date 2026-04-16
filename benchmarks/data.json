@@ -1,0 +1,2789 @@
+{
+  "runs": [
+    {
+      "commit": "f7bbb20e3f55320bea10097f459f7194fff5d852",
+      "short_commit": "f7bbb20",
+      "timestamp": "2026-04-16T15:20:54Z",
+      "ref": "main",
+      "results": {
+        "bench_sum_int64_1k": {
+          "mean_ns": 55.067587428969205,
+          "throughput_gelems_s": 18.1595
+        },
+        "bench_sum_int64_100k": {
+          "mean_ns": 9578.588902670966,
+          "throughput_gelems_s": 10.44
+        },
+        "bench_sum_int64_1m": {
+          "mean_ns": 98900.23247293921,
+          "throughput_gelems_s": 10.1112
+        },
+        "bench_sum_float64_1k": {
+          "mean_ns": 56.28500931813712,
+          "throughput_gelems_s": 17.7667
+        },
+        "bench_sum_float64_100k": {
+          "mean_ns": 9569.334950495047,
+          "throughput_gelems_s": 10.45
+        },
+        "bench_sum_float64_1m": {
+          "mean_ns": 98588.50107705053,
+          "throughput_gelems_s": 10.1432
+        },
+        "bench_sum_nulls_int64_100k": {
+          "mean_ns": 21686.898265068863,
+          "throughput_gelems_s": 4.6111
+        },
+        "bench_sum_nulls_int64_1m": {
+          "mean_ns": 215868.41461538462,
+          "throughput_gelems_s": 4.6325
+        },
+        "bench_product_int64_100k": {
+          "mean_ns": 16588.77378917379,
+          "throughput_gelems_s": 6.0282
+        },
+        "bench_product_int64_1m": {
+          "mean_ns": 164554.7174386921,
+          "throughput_gelems_s": 6.077
+        },
+        "bench_min_int64_100k": {
+          "mean_ns": 9625.212603272315,
+          "throughput_gelems_s": 10.3894
+        },
+        "bench_min_int64_1m": {
+          "mean_ns": 99060.47466887417,
+          "throughput_gelems_s": 10.0948
+        },
+        "bench_max_int64_100k": {
+          "mean_ns": 9638.757101308773,
+          "throughput_gelems_s": 10.3748
+        },
+        "bench_max_int64_1m": {
+          "mean_ns": 99318.72260216848,
+          "throughput_gelems_s": 10.0686
+        },
+        "bench_min_nulls_int64_1m": {
+          "mean_ns": 237769.35582822087,
+          "throughput_gelems_s": 4.2058
+        },
+        "bench_add_int32_1k": {
+          "mean_ns": 249.9596465318851,
+          "throughput_gelems_s": 4.0006
+        },
+        "bench_add_int32_10k": {
+          "mean_ns": 1129.3092972534062,
+          "throughput_gelems_s": 8.855
+        },
+        "bench_add_int32_100k": {
+          "mean_ns": 9977.979846620296,
+          "throughput_gelems_s": 10.0221
+        },
+        "bench_add_int32_1m": {
+          "mean_ns": 105706.9623853211,
+          "throughput_gelems_s": 9.4601
+        },
+        "bench_add_nulls_int32_1k": {
+          "mean_ns": 362.78353118471074,
+          "throughput_gelems_s": 2.7565
+        },
+        "bench_add_nulls_int32_10k": {
+          "mean_ns": 1293.441745842581,
+          "throughput_gelems_s": 7.7313
+        },
+        "bench_add_nulls_int32_100k": {
+          "mean_ns": 10621.087801890095,
+          "throughput_gelems_s": 9.4152
+        },
+        "bench_add_nulls_int32_1m": {
+          "mean_ns": 111808.77752161384,
+          "throughput_gelems_s": 8.9438
+        },
+        "bench_add_float64_1k": {
+          "mean_ns": 329.3887939255556,
+          "throughput_gelems_s": 3.0359
+        },
+        "bench_add_float64_10k": {
+          "mean_ns": 2074.1091241927556,
+          "throughput_gelems_s": 4.8213
+        },
+        "bench_add_float64_100k": {
+          "mean_ns": 21517.171765138966,
+          "throughput_gelems_s": 4.6475
+        },
+        "bench_add_float64_1m": {
+          "mean_ns": 211432.45901060072,
+          "throughput_gelems_s": 4.7296
+        },
+        "bench_add_nulls_float64_1k": {
+          "mean_ns": 446.4314846881514,
+          "throughput_gelems_s": 2.24
+        },
+        "bench_add_nulls_float64_10k": {
+          "mean_ns": 2235.145608179801,
+          "throughput_gelems_s": 4.474
+        },
+        "bench_add_nulls_float64_100k": {
+          "mean_ns": 22220.4865237366,
+          "throughput_gelems_s": 4.5004
+        },
+        "bench_add_nulls_float64_1m": {
+          "mean_ns": 217978.50327272728,
+          "throughput_gelems_s": 4.5876
+        },
+        "bench_equal_int32_10k": {
+          "mean_ns": 3120.985814713184,
+          "throughput_gelems_s": 3.2041
+        },
+        "bench_equal_int32_100k": {
+          "mean_ns": 29760.52888015717,
+          "throughput_gelems_s": 3.3602
+        },
+        "bench_equal_int32_1m": {
+          "mean_ns": 298725.8535626536,
+          "throughput_gelems_s": 3.3476
+        },
+        "bench_equal_int64_10k": {
+          "mean_ns": 4000.9948637181797,
+          "throughput_gelems_s": 2.4994
+        },
+        "bench_equal_int64_100k": {
+          "mean_ns": 38870.703390377785,
+          "throughput_gelems_s": 2.5726
+        },
+        "bench_equal_int64_1m": {
+          "mean_ns": 384657.90168350167,
+          "throughput_gelems_s": 2.5997
+        },
+        "bench_filter_50pct_10k": {
+          "mean_ns": 1109.7344004255235,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_50pct_100k": {
+          "mean_ns": 6931.511611265005,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_50pct_1m": {
+          "mean_ns": 68613.7336585366,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_10pct_100k": {
+          "mean_ns": 2394.9800386015877,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_10pct_1m": {
+          "mean_ns": 25602.97578297309,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_90pct_100k": {
+          "mean_ns": 12618.8619820693,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_90pct_1m": {
+          "mean_ns": 119354.07692307692,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_50pct_nulls_100k": {
+          "mean_ns": 14206.384009642426,
+          "throughput_gelems_s": null
+        },
+        "bench_filter_50pct_nulls_1m": {
+          "mean_ns": 139423.1545571245,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int64_10k": {
+          "mean_ns": 10877.104497898596,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int64_100k": {
+          "mean_ns": 109048.04126357356,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int64_1m": {
+          "mean_ns": 1086470.7,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int32_10k": {
+          "mean_ns": 12747.648810646548,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int32_100k": {
+          "mean_ns": 127247.7894847529,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_int32_1m": {
+          "mean_ns": 1280826.675268817,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_bool_10k": {
+          "mean_ns": 2249.8792372106627,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_bool_100k": {
+          "mean_ns": 22939.976226132534,
+          "throughput_gelems_s": null
+        },
+        "bench_rapidhash_bool_1m": {
+          "mean_ns": 224672.2300187617,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_build_100k": {
+          "mean_ns": 1138505.1476635514,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_build_1m": {
+          "mean_ns": 15234847.42857143,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_insert_100k": {
+          "mean_ns": 881508.4161764706,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_insert_1m": {
+          "mean_ns": 10314238.327272728,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_probe_100k": {
+          "mean_ns": 1618328.718918919,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_probe_1m": {
+          "mean_ns": 22823907.96,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_probe_semi_100k": {
+          "mean_ns": 1558757.7368421054,
+          "throughput_gelems_s": null
+        },
+        "bench_hash_table_probe_semi_1m": {
+          "mean_ns": 21165467.4,
+          "throughput_gelems_s": null
+        },
+        "bench_join_build_10k": {
+          "mean_ns": 118559.14357976653,
+          "throughput_gelems_s": null
+        },
+        "bench_join_build_100k": {
+          "mean_ns": 1235363.0515463918,
+          "throughput_gelems_s": null
+        },
+        "bench_join_build_1m": {
+          "mean_ns": 15534877.085714286,
+          "throughput_gelems_s": null
+        },
+        "bench_join_probe_10k": {
+          "mean_ns": 162991.58693333334,
+          "throughput_gelems_s": null
+        },
+        "bench_join_probe_100k": {
+          "mean_ns": 1821744.093939394,
+          "throughput_gelems_s": null
+        },
+        "bench_join_probe_1m": {
+          "mean_ns": 25088214.2,
+          "throughput_gelems_s": null
+        },
+        "bench_join_full_10k": {
+          "mean_ns": 279343.7250574713,
+          "throughput_gelems_s": null
+        },
+        "bench_join_full_100k": {
+          "mean_ns": 3087510.7,
+          "throughput_gelems_s": null
+        },
+        "bench_join_full_1m": {
+          "mean_ns": 43100050.9,
+          "throughput_gelems_s": null
+        },
+        "bench_count_set_bits_1k": {
+          "mean_ns": 4.41304403802626,
+          "throughput_gelems_s": 226.601
+        },
+        "bench_count_set_bits_10k": {
+          "mean_ns": 49.132019650016304,
+          "throughput_gelems_s": 203.5333
+        },
+        "bench_count_set_bits_100k": {
+          "mean_ns": 375.4385348754056,
+          "throughput_gelems_s": 266.3552
+        },
+        "bench_count_set_bits_1m": {
+          "mean_ns": 3635.314853787224,
+          "throughput_gelems_s": 275.0793
+        },
+        "bench_count_set_bits_10m": {
+          "mean_ns": 36608.455985811415,
+          "throughput_gelems_s": 273.1609
+        },
+        "bench_count_set_bits_100m": {
+          "mean_ns": 363452.6985250737,
+          "throughput_gelems_s": 275.139
+        },
+        "bench_count_set_bits_aligned_1k": {
+          "mean_ns": 15.766843301902746,
+          "throughput_gelems_s": 63.4242
+        },
+        "bench_count_set_bits_aligned_10k": {
+          "mean_ns": 59.54853876081206,
+          "throughput_gelems_s": 167.9302
+        },
+        "bench_count_set_bits_aligned_100k": {
+          "mean_ns": 391.1977997739494,
+          "throughput_gelems_s": 255.6252
+        },
+        "bench_count_set_bits_aligned_1m": {
+          "mean_ns": 3687.9196898243395,
+          "throughput_gelems_s": 271.1556
+        },
+        "bench_count_set_bits_aligned_10m": {
+          "mean_ns": 37176.067765567765,
+          "throughput_gelems_s": 268.9903
+        },
+        "bench_count_set_bits_aligned_100m": {
+          "mean_ns": 370445.0664556962,
+          "throughput_gelems_s": 269.9456
+        },
+        "bench_count_set_bits_unaligned_1k": {
+          "mean_ns": 45.77617785035822,
+          "throughput_gelems_s": 21.8454
+        },
+        "bench_count_set_bits_unaligned_10k": {
+          "mean_ns": 85.70111227004756,
+          "throughput_gelems_s": 116.6846
+        },
+        "bench_count_set_bits_unaligned_100k": {
+          "mean_ns": 395.06022769133614,
+          "throughput_gelems_s": 253.126
+        },
+        "bench_count_set_bits_unaligned_1m": {
+          "mean_ns": 3692.33584052739,
+          "throughput_gelems_s": 270.8313
+        },
+        "bench_count_set_bits_unaligned_10m": {
+          "mean_ns": 37138.8907635468,
+          "throughput_gelems_s": 269.2595
+        },
+        "bench_count_set_bits_unaligned_100m": {
+          "mean_ns": 370199.7802469136,
+          "throughput_gelems_s": 270.1244
+        },
+        "bench_and_1k": {
+          "mean_ns": 82.68423982292634,
+          "throughput_gelems_s": 12.0942
+        },
+        "bench_and_10k": {
+          "mean_ns": 79.5885565740216,
+          "throughput_gelems_s": 125.6462
+        },
+        "bench_and_100k": {
+          "mean_ns": 326.9072559912676,
+          "throughput_gelems_s": 305.8972
+        },
+        "bench_and_1m": {
+          "mean_ns": 3829.676403970422,
+          "throughput_gelems_s": 261.1187
+        },
+        "bench_and_10m": {
+          "mean_ns": 47891.177577002054,
+          "throughput_gelems_s": 208.8067
+        },
+        "bench_and_100m": {
+          "mean_ns": 555829.958,
+          "throughput_gelems_s": 179.9111
+        },
+        "bench_or_1k": {
+          "mean_ns": 71.7524160977951,
+          "throughput_gelems_s": 13.9368
+        },
+        "bench_or_10k": {
+          "mean_ns": 73.01173825403055,
+          "throughput_gelems_s": 136.9643
+        },
+        "bench_or_100k": {
+          "mean_ns": 307.3878862414314,
+          "throughput_gelems_s": 325.3219
+        },
+        "bench_or_1m": {
+          "mean_ns": 3822.761219808393,
+          "throughput_gelems_s": 261.591
+        },
+        "bench_or_10m": {
+          "mean_ns": 47858.224096385544,
+          "throughput_gelems_s": 208.9505
+        },
+        "bench_or_100m": {
+          "mean_ns": 577430.6721951219,
+          "throughput_gelems_s": 173.181
+        },
+        "bench_invert_1k": {
+          "mean_ns": 74.50968906372601,
+          "throughput_gelems_s": 13.4211
+        },
+        "bench_invert_10k": {
+          "mean_ns": 75.03539820686147,
+          "throughput_gelems_s": 133.2704
+        },
+        "bench_invert_100k": {
+          "mean_ns": 203.682641723433,
+          "throughput_gelems_s": 490.9599
+        },
+        "bench_invert_1m": {
+          "mean_ns": 2630.081567024962,
+          "throughput_gelems_s": 380.2163
+        },
+        "bench_invert_10m": {
+          "mean_ns": 32112.286755703946,
+          "throughput_gelems_s": 311.4073
+        },
+        "bench_invert_100m": {
+          "mean_ns": 320259.0434523809,
+          "throughput_gelems_s": 312.2472
+        },
+        "bench_set_range_1k": {
+          "mean_ns": 4.364034426547767,
+          "throughput_gelems_s": 229.1458
+        },
+        "bench_set_range_10k": {
+          "mean_ns": 13.711205411241508,
+          "throughput_gelems_s": 729.3305
+        },
+        "bench_set_range_100k": {
+          "mean_ns": 144.37324963662482,
+          "throughput_gelems_s": 692.6491
+        },
+        "bench_set_range_1m": {
+          "mean_ns": 1382.7869140026555,
+          "throughput_gelems_s": 723.1772
+        },
+        "bench_set_range_10m": {
+          "mean_ns": 15476.34432352546,
+          "throughput_gelems_s": 646.1474
+        },
+        "bench_set_range_100m": {
+          "mean_ns": 154185.31313131313,
+          "throughput_gelems_s": 648.5702
+        },
+        "bench_invert_cache_aligned_1k": {
+          "mean_ns": 72.89734930492425,
+          "throughput_gelems_s": 13.7179
+        },
+        "bench_invert_cache_aligned_10k": {
+          "mean_ns": 73.82846678724914,
+          "throughput_gelems_s": 135.4491
+        },
+        "bench_invert_cache_aligned_100k": {
+          "mean_ns": 197.32027412027412,
+          "throughput_gelems_s": 506.7903
+        },
+        "bench_invert_cache_aligned_1m": {
+          "mean_ns": 2635.6727645400974,
+          "throughput_gelems_s": 379.4098
+        },
+        "bench_invert_cache_aligned_10m": {
+          "mean_ns": 31974.977511682246,
+          "throughput_gelems_s": 312.7446
+        },
+        "bench_invert_cache_aligned_100m": {
+          "mean_ns": 314235.7142091153,
+          "throughput_gelems_s": 318.2324
+        },
+        "bench_invert_cache_unaligned_1k": {
+          "mean_ns": 73.02675821363039,
+          "throughput_gelems_s": 13.6936
+        },
+        "bench_invert_cache_unaligned_10k": {
+          "mean_ns": 73.71845574202929,
+          "throughput_gelems_s": 135.6512
+        },
+        "bench_invert_cache_unaligned_100k": {
+          "mean_ns": 199.46946265297512,
+          "throughput_gelems_s": 501.3299
+        },
+        "bench_invert_cache_unaligned_1m": {
+          "mean_ns": 2635.2469950484597,
+          "throughput_gelems_s": 379.4711
+        },
+        "bench_invert_cache_unaligned_10m": {
+          "mean_ns": 32063.499415204682,
+          "throughput_gelems_s": 311.8811
+        },
+        "bench_invert_cache_unaligned_100m": {
+          "mean_ns": 315507.7352112676,
+          "throughput_gelems_s": 316.9494
+        },
+        "bench_and_cache_unaligned_1k": {
+          "mean_ns": 82.75054849729504,
+          "throughput_gelems_s": 12.0845
+        },
+        "bench_and_cache_unaligned_10k": {
+          "mean_ns": 79.40202624971603,
+          "throughput_gelems_s": 125.9414
+        },
+        "bench_and_cache_unaligned_100k": {
+          "mean_ns": 330.4505074860299,
+          "throughput_gelems_s": 302.6172
+        },
+        "bench_and_cache_unaligned_1m": {
+          "mean_ns": 3832.28024488368,
+          "throughput_gelems_s": 260.9413
+        },
+        "bench_and_cache_unaligned_10m": {
+          "mean_ns": 47737.71759297953,
+          "throughput_gelems_s": 209.478
+        },
+        "bench_and_cache_unaligned_100m": {
+          "mean_ns": 568753.7515151515,
+          "throughput_gelems_s": 175.823
+        },
+        "bench_and_same_offset_1k": {
+          "mean_ns": 105.19527626666377,
+          "throughput_gelems_s": 9.4301
+        },
+        "bench_and_same_offset_10k": {
+          "mean_ns": 110.57495645933673,
+          "throughput_gelems_s": 90.364
+        },
+        "bench_and_same_offset_100k": {
+          "mean_ns": 595.4780635836486,
+          "throughput_gelems_s": 167.9189
+        },
+        "bench_and_same_offset_1m": {
+          "mean_ns": 4852.297820186599,
+          "throughput_gelems_s": 206.0863
+        },
+        "bench_and_same_offset_10m": {
+          "mean_ns": 50627.21934084995,
+          "throughput_gelems_s": 197.522
+        },
+        "bench_and_same_offset_100m": {
+          "mean_ns": 702245.4082758621,
+          "throughput_gelems_s": 142.4004
+        },
+        "bench_and_diff_offset_1k": {
+          "mean_ns": 105.28806065420544,
+          "throughput_gelems_s": 9.4218
+        },
+        "bench_and_diff_offset_10k": {
+          "mean_ns": 110.44416581729337,
+          "throughput_gelems_s": 90.4711
+        },
+        "bench_and_diff_offset_100k": {
+          "mean_ns": 595.8981671729057,
+          "throughput_gelems_s": 167.8005
+        },
+        "bench_and_diff_offset_1m": {
+          "mean_ns": 4859.6483805405405,
+          "throughput_gelems_s": 205.7746
+        },
+        "bench_and_diff_offset_10m": {
+          "mean_ns": 50606.66628571429,
+          "throughput_gelems_s": 197.6023
+        },
+        "bench_and_diff_offset_100m": {
+          "mean_ns": 770683.92,
+          "throughput_gelems_s": 129.7549
+        },
+        "bench_pack_bools_w8_1k": {
+          "mean_ns": 83.0649444187603,
+          "throughput_gelems_s": 12.0388
+        },
+        "bench_pack_bools_w8_10k": {
+          "mean_ns": 784.975424834878,
+          "throughput_gelems_s": 12.7393
+        },
+        "bench_pack_bools_w8_100k": {
+          "mean_ns": 7880.578577405859,
+          "throughput_gelems_s": 12.6894
+        },
+        "bench_pack_bools_w8_1m": {
+          "mean_ns": 77903.72737789204,
+          "throughput_gelems_s": 12.8364
+        },
+        "bench_pack_bools_w8_10m": {
+          "mean_ns": 780312.3150326797,
+          "throughput_gelems_s": 12.8154
+        },
+        "bench_pack_bools_w8_100m": {
+          "mean_ns": 7802085.72,
+          "throughput_gelems_s": 12.8171
+        },
+        "bench_pack_bools_w32_1k": {
+          "mean_ns": 10.578350183574306,
+          "throughput_gelems_s": 94.5327
+        },
+        "bench_pack_bools_w32_10k": {
+          "mean_ns": 103.21142833183731,
+          "throughput_gelems_s": 96.8885
+        },
+        "bench_pack_bools_w32_100k": {
+          "mean_ns": 990.2669144720694,
+          "throughput_gelems_s": 100.9829
+        },
+        "bench_pack_bools_w32_1m": {
+          "mean_ns": 9887.327747341282,
+          "throughput_gelems_s": 101.1396
+        },
+        "bench_pack_bools_w32_10m": {
+          "mean_ns": 99600.01012861737,
+          "throughput_gelems_s": 100.4016
+        },
+        "bench_pack_bools_w32_100m": {
+          "mean_ns": 978088.5786885247,
+          "throughput_gelems_s": 102.2402
+        },
+        "bench_pack_bools_w64_1k": {
+          "mean_ns": 5.049299398898883,
+          "throughput_gelems_s": 198.0473
+        },
+        "bench_pack_bools_w64_10k": {
+          "mean_ns": 54.19866647097058,
+          "throughput_gelems_s": 184.5064
+        },
+        "bench_pack_bools_w64_100k": {
+          "mean_ns": 491.70503378996995,
+          "throughput_gelems_s": 203.374
+        },
+        "bench_pack_bools_w64_1m": {
+          "mean_ns": 4869.902546277584,
+          "throughput_gelems_s": 205.3429
+        },
+        "bench_pack_bools_w64_10m": {
+          "mean_ns": 50854.70447039871,
+          "throughput_gelems_s": 196.6386
+        },
+        "bench_pack_bools_w64_100m": {
+          "mean_ns": 489704.0892703862,
+          "throughput_gelems_s": 204.205
+        },
+        "test_marrow_int64[n=10000]": {
+          "mean_ns": 72013.23684881769,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_int64[n=100000]": {
+          "mean_ns": 713447.1060708491,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64[n=10000]": {
+          "mean_ns": 296857.22940014297,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64[n=100000]": {
+          "mean_ns": 2920689.3117625844,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_int64_nulls[n=10000]": {
+          "mean_ns": 83617.30794352503,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_int64_nulls[n=100000]": {
+          "mean_ns": 832593.8281244838,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64_nulls[n=10000]": {
+          "mean_ns": 280552.839217967,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64_nulls[n=100000]": {
+          "mean_ns": 2757609.527773436,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_float64[n=10000]": {
+          "mean_ns": 72472.56853099457,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_float64[n=100000]": {
+          "mean_ns": 681151.584053499,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_float64[n=10000]": {
+          "mean_ns": 162146.6040287498,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_float64[n=100000]": {
+          "mean_ns": 1575887.67090396,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_float64_nulls[n=10000]": {
+          "mean_ns": 74050.69284056792,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_float64_nulls[n=100000]": {
+          "mean_ns": 712223.485133164,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_float64_nulls[n=10000]": {
+          "mean_ns": 151362.24585370292,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_float64_nulls[n=100000]": {
+          "mean_ns": 1496247.4446104388,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string[n=10000]": {
+          "mean_ns": 285849.0432828385,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string[n=100000]": {
+          "mean_ns": 2869134.1048126803,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string[n=10000]": {
+          "mean_ns": 375940.2594560868,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string[n=100000]": {
+          "mean_ns": 3687909.200768996,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string_nulls[n=10000]": {
+          "mean_ns": 264447.69036774227,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string_nulls[n=100000]": {
+          "mean_ns": 2611167.672731048,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string_nulls[n=10000]": {
+          "mean_ns": 355143.0599828478,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string_nulls[n=100000]": {
+          "mean_ns": 3462664.3835560125,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_int64_infer[n=10000]": {
+          "mean_ns": 398483.3348717049,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_int64_infer[n=100000]": {
+          "mean_ns": 3859270.7070317366,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64_infer[n=10000]": {
+          "mean_ns": 377201.8979637843,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_int64_infer[n=100000]": {
+          "mean_ns": 3691791.007437389,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string_infer[n=10000]": {
+          "mean_ns": 315734.4405395491,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_string_infer[n=100000]": {
+          "mean_ns": 3042137.246198365,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string_infer[n=10000]": {
+          "mean_ns": 355933.7612960597,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_string_infer[n=100000]": {
+          "mean_ns": 3470604.058620195,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_nested_list[n=10000]": {
+          "mean_ns": 818486.9131986065,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_nested_list[n=100000]": {
+          "mean_ns": 8114428.42856776,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_nested_list[n=10000]": {
+          "mean_ns": 655496.13378019,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_nested_list[n=100000]": {
+          "mean_ns": 6416287.6000042865,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct[n=10000]": {
+          "mean_ns": 1451074.9046166893,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct[n=100000]": {
+          "mean_ns": 14452025.30434623,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct[n=10000]": {
+          "mean_ns": 1221456.1212118312,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct[n=100000]": {
+          "mean_ns": 12036488.39758027,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct_primitives[n=10000]": {
+          "mean_ns": 3993596.142855617,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct_primitives[n=100000]": {
+          "mean_ns": 39887871.23998918,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct_primitives[n=10000]": {
+          "mean_ns": 1691764.9535719599,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct_primitives[n=100000]": {
+          "mean_ns": 16990092.54237014,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct_primitives_infer[n=10000]": {
+          "mean_ns": 4014033.037814435,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_struct_primitives_infer[n=100000]": {
+          "mean_ns": 40105578.23077166,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct_primitives_infer[n=10000]": {
+          "mean_ns": 3290950.2389101433,
+          "throughput_gelems_s": null
+        },
+        "test_pyarrow_struct_primitives_infer[n=100000]": {
+          "mean_ns": 32928038.967739783,
+          "throughput_gelems_s": null
+        },
+        "test_marrow_add[n=10000-int64]": {
+          "mean_ns": 6562.725654955952,
+          "throughput_gelems_s": 1.5238
+        },
+        "test_marrow_add[n=10000-float64]": {
+          "mean_ns": 7298.021742943968,
+          "throughput_gelems_s": 1.3702
+        },
+        "test_marrow_add[n=10000-int64_nulls]": {
+          "mean_ns": 6187.291501857479,
+          "throughput_gelems_s": 1.6162
+        },
+        "test_pyarrow_add[n=10000-int64]": {
+          "mean_ns": 9776.557261865857,
+          "throughput_gelems_s": 1.0229
+        },
+        "test_pyarrow_add[n=10000-float64]": {
+          "mean_ns": 7410.467812845816,
+          "throughput_gelems_s": 1.3494
+        },
+        "test_pyarrow_add[n=10000-int64_nulls]": {
+          "mean_ns": 10152.007139735571,
+          "throughput_gelems_s": 0.985
+        },
+        "test_marrow_sub[n=10000]": {
+          "mean_ns": 6604.050690725651,
+          "throughput_gelems_s": 1.5142
+        },
+        "test_pyarrow_sub[n=10000]": {
+          "mean_ns": 9920.807776008292,
+          "throughput_gelems_s": 1.008
+        },
+        "test_marrow_mul[n=10000]": {
+          "mean_ns": 6768.453907693754,
+          "throughput_gelems_s": 1.4774
+        },
+        "test_pyarrow_mul[n=10000]": {
+          "mean_ns": 9745.334696551356,
+          "throughput_gelems_s": 1.0261
+        },
+        "test_marrow_div[n=10000]": {
+          "mean_ns": 8133.016753597843,
+          "throughput_gelems_s": 1.2296
+        },
+        "test_pyarrow_div[n=10000]": {
+          "mean_ns": 17782.637426963014,
+          "throughput_gelems_s": 0.5623
+        },
+        "test_marrow_sum[n=10000-int64]": {
+          "mean_ns": 2360.6043175567406,
+          "throughput_gelems_s": 4.2362
+        },
+        "test_marrow_sum[n=10000-float64]": {
+          "mean_ns": 3285.848379905737,
+          "throughput_gelems_s": 3.0434
+        },
+        "test_marrow_sum[n=10000-int64_nulls]": {
+          "mean_ns": 3499.1498409245883,
+          "throughput_gelems_s": 2.8578
+        },
+        "test_pyarrow_sum[n=10000-int64]": {
+          "mean_ns": 3192.551350884008,
+          "throughput_gelems_s": 3.1323
+        },
+        "test_pyarrow_sum[n=10000-float64]": {
+          "mean_ns": 5326.446002633605,
+          "throughput_gelems_s": 1.8774
+        },
+        "test_pyarrow_sum[n=10000-int64_nulls]": {
+          "mean_ns": 8085.937328063272,
+          "throughput_gelems_s": 1.2367
+        },
+        "test_marrow_product[n=10000]": {
+          "mean_ns": 3223.463848291509,
+          "throughput_gelems_s": 3.1023
+        },
+        "test_pyarrow_product[n=10000]": {
+          "mean_ns": 11685.214281293449,
+          "throughput_gelems_s": 0.8558
+        },
+        "test_marrow_min[n=10000-int64]": {
+          "mean_ns": 2488.783761062073,
+          "throughput_gelems_s": 4.018
+        },
+        "test_marrow_min[n=10000-float64]": {
+          "mean_ns": 3529.2244021374263,
+          "throughput_gelems_s": 2.8335
+        },
+        "test_pyarrow_min[n=10000-int64]": {
+          "mean_ns": 5668.009559985305,
+          "throughput_gelems_s": 1.7643
+        },
+        "test_pyarrow_min[n=10000-float64]": {
+          "mean_ns": 47821.092177265054,
+          "throughput_gelems_s": 0.2091
+        },
+        "test_marrow_max[n=10000]": {
+          "mean_ns": 2388.897905714643,
+          "throughput_gelems_s": 4.186
+        },
+        "test_pyarrow_max[n=10000]": {
+          "mean_ns": 5662.232439712217,
+          "throughput_gelems_s": 1.7661
+        },
+        "test_marrow_any[n=10000]": {
+          "mean_ns": 596.2594731045701,
+          "throughput_gelems_s": 16.7712
+        },
+        "test_pyarrow_any[n=10000]": {
+          "mean_ns": 2045.9925054273356,
+          "throughput_gelems_s": 4.8876
+        },
+        "test_marrow_all[n=10000]": {
+          "mean_ns": 603.0882989208744,
+          "throughput_gelems_s": 16.5813
+        },
+        "test_pyarrow_all[n=10000]": {
+          "mean_ns": 2047.5175551150608,
+          "throughput_gelems_s": 4.884
+        },
+        "test_marrow_filter[n=10000-int64_50pct]": {
+          "mean_ns": 6607.943552725834,
+          "throughput_gelems_s": 1.5133
+        },
+        "test_marrow_filter[n=10000-int64_90pct]": {
+          "mean_ns": 6717.220813437364,
+          "throughput_gelems_s": 1.4887
+        },
+        "test_marrow_filter[n=10000-int64_10pct]": {
+          "mean_ns": 3588.5469901534952,
+          "throughput_gelems_s": 2.7866
+        },
+        "test_marrow_filter[n=10000-int64_1pct]": {
+          "mean_ns": 2879.9495387408265,
+          "throughput_gelems_s": 3.4723
+        },
+        "test_marrow_filter[n=10000-int64_0pct]": {
+          "mean_ns": 2515.0952152883046,
+          "throughput_gelems_s": 3.976
+        },
+        "test_marrow_filter[n=10000-float64_50pct]": {
+          "mean_ns": 7190.6324023450115,
+          "throughput_gelems_s": 1.3907
+        },
+        "test_marrow_filter[n=10000-string_50pct]": {
+          "mean_ns": 38677.41281763751,
+          "throughput_gelems_s": 0.2585
+        },
+        "test_marrow_filter[n=10000-string_10pct]": {
+          "mean_ns": 22254.136675423575,
+          "throughput_gelems_s": 0.4494
+        },
+        "test_marrow_filter[n=10000-int64_rand50]": {
+          "mean_ns": 6864.58677154455,
+          "throughput_gelems_s": 1.4568
+        },
+        "test_marrow_filter[n=10000-int64_rand10]": {
+          "mean_ns": 3656.655255069417,
+          "throughput_gelems_s": 2.7347
+        },
+        "test_marrow_filter[n=10000-int64_rand90]": {
+          "mean_ns": 6724.581748954421,
+          "throughput_gelems_s": 1.4871
+        },
+        "test_marrow_filter[n=10000-int64_clustered50]": {
+          "mean_ns": 3435.1307596991364,
+          "throughput_gelems_s": 2.9111
+        },
+        "test_marrow_filter[n=10000-int64_head50]": {
+          "mean_ns": 3566.874592979433,
+          "throughput_gelems_s": 2.8036
+        },
+        "test_pyarrow_filter[n=10000-int64_50pct]": {
+          "mean_ns": 29508.307875313483,
+          "throughput_gelems_s": 0.3389
+        },
+        "test_pyarrow_filter[n=10000-int64_90pct]": {
+          "mean_ns": 11758.862153613572,
+          "throughput_gelems_s": 0.8504
+        },
+        "test_pyarrow_filter[n=10000-int64_10pct]": {
+          "mean_ns": 8955.8125984268,
+          "throughput_gelems_s": 1.1166
+        },
+        "test_pyarrow_filter[n=10000-int64_1pct]": {
+          "mean_ns": 4317.334065915242,
+          "throughput_gelems_s": 2.3162
+        },
+        "test_pyarrow_filter[n=10000-int64_0pct]": {
+          "mean_ns": 3619.101950820654,
+          "throughput_gelems_s": 2.7631
+        },
+        "test_pyarrow_filter[n=10000-float64_50pct]": {
+          "mean_ns": 29312.15122168955,
+          "throughput_gelems_s": 0.3412
+        },
+        "test_pyarrow_filter[n=10000-string_50pct]": {
+          "mean_ns": 45821.74726326644,
+          "throughput_gelems_s": 0.2182
+        },
+        "test_pyarrow_filter[n=10000-string_10pct]": {
+          "mean_ns": 12635.166507266946,
+          "throughput_gelems_s": 0.7914
+        },
+        "test_pyarrow_filter[n=10000-int64_rand50]": {
+          "mean_ns": 17905.7396580494,
+          "throughput_gelems_s": 0.5585
+        },
+        "test_pyarrow_filter[n=10000-int64_rand10]": {
+          "mean_ns": 8816.514864369587,
+          "throughput_gelems_s": 1.1342
+        },
+        "test_pyarrow_filter[n=10000-int64_rand90]": {
+          "mean_ns": 10531.70635566015,
+          "throughput_gelems_s": 0.9495
+        },
+        "test_pyarrow_filter[n=10000-int64_clustered50]": {
+          "mean_ns": 4475.956114702208,
+          "throughput_gelems_s": 2.2342
+        },
+        "test_pyarrow_filter[n=10000-int64_head50]": {
+          "mean_ns": 4686.8979429263545,
+          "throughput_gelems_s": 2.1336
+        },
+        "test_polars_filter[n=10000-int64_50pct]": {
+          "mean_ns": 5679.500209788627,
+          "throughput_gelems_s": 1.7607
+        },
+        "test_polars_filter[n=10000-int64_90pct]": {
+          "mean_ns": 5693.001100933841,
+          "throughput_gelems_s": 1.7565
+        },
+        "test_polars_filter[n=10000-int64_10pct]": {
+          "mean_ns": 1984.969913393551,
+          "throughput_gelems_s": 5.0379
+        },
+        "test_polars_filter[n=10000-int64_1pct]": {
+          "mean_ns": 1263.043875060728,
+          "throughput_gelems_s": 7.9174
+        },
+        "test_polars_filter[n=10000-int64_0pct]": {
+          "mean_ns": 904.7637194368473,
+          "throughput_gelems_s": 11.0526
+        },
+        "test_polars_filter[n=10000-float64_50pct]": {
+          "mean_ns": 5548.836319489381,
+          "throughput_gelems_s": 1.8022
+        },
+        "test_polars_filter[n=10000-string_50pct]": {
+          "mean_ns": 5946.656550896534,
+          "throughput_gelems_s": 1.6816
+        },
+        "test_polars_filter[n=10000-string_10pct]": {
+          "mean_ns": 1977.6434996403339,
+          "throughput_gelems_s": 5.0565
+        },
+        "test_polars_filter[n=10000-int64_rand50]": {
+          "mean_ns": 5506.900549389525,
+          "throughput_gelems_s": 1.8159
+        },
+        "test_polars_filter[n=10000-int64_rand10]": {
+          "mean_ns": 1966.147072117827,
+          "throughput_gelems_s": 5.0861
+        },
+        "test_polars_filter[n=10000-int64_rand90]": {
+          "mean_ns": 5680.924541941795,
+          "throughput_gelems_s": 1.7603
+        },
+        "test_polars_filter[n=10000-int64_clustered50]": {
+          "mean_ns": 1843.8658634016788,
+          "throughput_gelems_s": 5.4234
+        },
+        "test_polars_filter[n=10000-int64_head50]": {
+          "mean_ns": 875.7285153131317,
+          "throughput_gelems_s": 11.4191
+        },
+        "test_marrow_drop_nulls[n=10000-int64]": {
+          "mean_ns": 16609.786542830254,
+          "throughput_gelems_s": 0.6021
+        },
+        "test_marrow_drop_nulls[n=10000-float64]": {
+          "mean_ns": 17116.0033684512,
+          "throughput_gelems_s": 0.5842
+        },
+        "test_pyarrow_drop_nulls[n=10000-int64]": {
+          "mean_ns": 33333.486294825605,
+          "throughput_gelems_s": 0.3
+        },
+        "test_pyarrow_drop_nulls[n=10000-float64]": {
+          "mean_ns": 33577.56333179289,
+          "throughput_gelems_s": 0.2978
+        },
+        "test_polars_drop_nulls[n=10000-int64]": {
+          "mean_ns": 43929.816565713765,
+          "throughput_gelems_s": 0.2276
+        },
+        "test_polars_drop_nulls[n=10000-float64]": {
+          "mean_ns": 42635.01432085208,
+          "throughput_gelems_s": 0.2345
+        },
+        "test_marrow_equal[n=10000-int64]": {
+          "mean_ns": 6711.967996219234,
+          "throughput_gelems_s": 1.4899
+        },
+        "test_marrow_equal[n=10000-float64]": {
+          "mean_ns": 7498.264964783499,
+          "throughput_gelems_s": 1.3336
+        },
+        "test_pyarrow_equal[n=10000-int64]": {
+          "mean_ns": 7473.933927037444,
+          "throughput_gelems_s": 1.338
+        },
+        "test_pyarrow_equal[n=10000-float64]": {
+          "mean_ns": 7588.656166212693,
+          "throughput_gelems_s": 1.3178
+        },
+        "test_marrow_less[n=10000-int64]": {
+          "mean_ns": 6533.423883026774,
+          "throughput_gelems_s": 1.5306
+        },
+        "test_marrow_less[n=10000-float64]": {
+          "mean_ns": 7567.67642038502,
+          "throughput_gelems_s": 1.3214
+        },
+        "test_pyarrow_less[n=10000-int64]": {
+          "mean_ns": 7653.607552338013,
+          "throughput_gelems_s": 1.3066
+        },
+        "test_pyarrow_less[n=10000-float64]": {
+          "mean_ns": 7898.627330768648,
+          "throughput_gelems_s": 1.266
+        },
+        "test_pyarrow_join[n=10000-inner]": {
+          "mean_ns": 1191822.1884102884,
+          "throughput_gelems_s": 0.0084
+        },
+        "test_pyarrow_join[n=10000-left]": {
+          "mean_ns": 1152208.761123111,
+          "throughput_gelems_s": 0.0087
+        },
+        "test_pyarrow_join[n=10000-semi]": {
+          "mean_ns": 1019962.7278672003,
+          "throughput_gelems_s": 0.0098
+        },
+        "test_polars_join[n=10000-inner]": {
+          "mean_ns": 466472.6808967611,
+          "throughput_gelems_s": 0.0214
+        },
+        "test_polars_join[n=10000-left]": {
+          "mean_ns": 488302.4533498253,
+          "throughput_gelems_s": 0.0205
+        },
+        "test_polars_join[n=10000-semi]": {
+          "mean_ns": 418931.1614372766,
+          "throughput_gelems_s": 0.0239
+        },
+        "test_marrow_join[n=10000-inner]": {
+          "mean_ns": 267965.54612833814,
+          "throughput_gelems_s": 0.0373
+        },
+        "test_marrow_join[n=10000-left]": {
+          "mean_ns": 342165.00509820157,
+          "throughput_gelems_s": 0.0292
+        },
+        "test_marrow_join[n=10000-semi]": {
+          "mean_ns": 336452.4035472505,
+          "throughput_gelems_s": 0.0297
+        },
+        "test_pyarrow_join_half[n=10000-inner]": {
+          "mean_ns": 887916.9781959378,
+          "throughput_gelems_s": 0.0113
+        },
+        "test_pyarrow_join_half[n=10000-left]": {
+          "mean_ns": 876747.4145433948,
+          "throughput_gelems_s": 0.0114
+        },
+        "test_pyarrow_join_half[n=10000-semi]": {
+          "mean_ns": 731418.9277312707,
+          "throughput_gelems_s": 0.0137
+        },
+        "test_polars_join_half[n=10000-inner]": {
+          "mean_ns": 463760.31514029054,
+          "throughput_gelems_s": 0.0216
+        },
+        "test_polars_join_half[n=10000-left]": {
+          "mean_ns": 663939.3672698814,
+          "throughput_gelems_s": 0.0151
+        },
+        "test_polars_join_half[n=10000-semi]": {
+          "mean_ns": 332558.972649954,
+          "throughput_gelems_s": 0.0301
+        },
+        "test_marrow_join_half[n=10000-inner]": {
+          "mean_ns": 267469.7571877919,
+          "throughput_gelems_s": 0.0374
+        },
+        "test_marrow_join_half[n=10000-left]": {
+          "mean_ns": 454338.870517041,
+          "throughput_gelems_s": 0.022
+        },
+        "test_marrow_join_half[n=10000-semi]": {
+          "mean_ns": 313588.85402689263,
+          "throughput_gelems_s": 0.0319
+        },
+        "test_duckdb_join[n=10000-inner]": {
+          "mean_ns": 1687538.7781044112,
+          "throughput_gelems_s": 0.0059
+        },
+        "test_duckdb_join[n=10000-left]": {
+          "mean_ns": 1376948.2862273618,
+          "throughput_gelems_s": 0.0073
+        },
+        "test_duckdb_join[n=10000-semi]": {
+          "mean_ns": 1450416.3006117053,
+          "throughput_gelems_s": 0.0069
+        },
+        "test_duckdb_join_half[n=10000-inner]": {
+          "mean_ns": 1595425.6045067834,
+          "throughput_gelems_s": 0.0063
+        },
+        "test_duckdb_join_half[n=10000-left]": {
+          "mean_ns": 1484615.0228282786,
+          "throughput_gelems_s": 0.0067
+        },
+        "test_duckdb_join_half[n=10000-semi]": {
+          "mean_ns": 1348343.082967704,
+          "throughput_gelems_s": 0.0074
+        },
+        "test_marrow_add[n=100000-int64]": {
+          "mean_ns": 44183.517297001075,
+          "throughput_gelems_s": 2.2633
+        },
+        "test_marrow_add[n=100000-float64]": {
+          "mean_ns": 45536.359750912736,
+          "throughput_gelems_s": 2.196
+        },
+        "test_marrow_add[n=100000-int64_nulls]": {
+          "mean_ns": 44715.57461409888,
+          "throughput_gelems_s": 2.2364
+        },
+        "test_pyarrow_add[n=100000-int64]": {
+          "mean_ns": 62982.89169209982,
+          "throughput_gelems_s": 1.5877
+        },
+        "test_pyarrow_add[n=100000-float64]": {
+          "mean_ns": 35518.65733769522,
+          "throughput_gelems_s": 2.8154
+        },
+        "test_pyarrow_add[n=100000-int64_nulls]": {
+          "mean_ns": 62855.9565171141,
+          "throughput_gelems_s": 1.5909
+        },
+        "test_marrow_sub[n=100000]": {
+          "mean_ns": 43852.629334649384,
+          "throughput_gelems_s": 2.2804
+        },
+        "test_pyarrow_sub[n=100000]": {
+          "mean_ns": 62276.13728464963,
+          "throughput_gelems_s": 1.6058
+        },
+        "test_marrow_mul[n=100000]": {
+          "mean_ns": 44597.874243308295,
+          "throughput_gelems_s": 2.2423
+        },
+        "test_pyarrow_mul[n=100000]": {
+          "mean_ns": 62404.42178006937,
+          "throughput_gelems_s": 1.6025
+        },
+        "test_marrow_div[n=100000]": {
+          "mean_ns": 51652.82726757733,
+          "throughput_gelems_s": 1.936
+        },
+        "test_pyarrow_div[n=100000]": {
+          "mean_ns": 147889.48989826755,
+          "throughput_gelems_s": 0.6762
+        },
+        "test_marrow_sum[n=100000-int64]": {
+          "mean_ns": 12110.59303840149,
+          "throughput_gelems_s": 8.2572
+        },
+        "test_marrow_sum[n=100000-float64]": {
+          "mean_ns": 12909.897431296036,
+          "throughput_gelems_s": 7.746
+        },
+        "test_marrow_sum[n=100000-int64_nulls]": {
+          "mean_ns": 20634.159937883007,
+          "throughput_gelems_s": 4.8463
+        },
+        "test_pyarrow_sum[n=100000-int64]": {
+          "mean_ns": 13871.18319882188,
+          "throughput_gelems_s": 7.2092
+        },
+        "test_pyarrow_sum[n=100000-float64]": {
+          "mean_ns": 32761.17498319975,
+          "throughput_gelems_s": 3.0524
+        },
+        "test_pyarrow_sum[n=100000-int64_nulls]": {
+          "mean_ns": 60748.01623387687,
+          "throughput_gelems_s": 1.6461
+        },
+        "test_marrow_product[n=100000]": {
+          "mean_ns": 18607.183390209328,
+          "throughput_gelems_s": 5.3743
+        },
+        "test_pyarrow_product[n=100000]": {
+          "mean_ns": 97663.3648653404,
+          "throughput_gelems_s": 1.0239
+        },
+        "test_marrow_min[n=100000-int64]": {
+          "mean_ns": 12264.086661363932,
+          "throughput_gelems_s": 8.1539
+        },
+        "test_marrow_min[n=100000-float64]": {
+          "mean_ns": 13330.905828142442,
+          "throughput_gelems_s": 7.5014
+        },
+        "test_pyarrow_min[n=100000-int64]": {
+          "mean_ns": 21742.844745957358,
+          "throughput_gelems_s": 4.5992
+        },
+        "test_pyarrow_min[n=100000-float64]": {
+          "mean_ns": 444440.0059824526,
+          "throughput_gelems_s": 0.225
+        },
+        "test_marrow_max[n=100000]": {
+          "mean_ns": 12300.678068801897,
+          "throughput_gelems_s": 8.1296
+        },
+        "test_pyarrow_max[n=100000]": {
+          "mean_ns": 21725.593131604823,
+          "throughput_gelems_s": 4.6029
+        },
+        "test_marrow_any[n=100000]": {
+          "mean_ns": 692.514898399505,
+          "throughput_gelems_s": 144.4012
+        },
+        "test_pyarrow_any[n=100000]": {
+          "mean_ns": 2110.368899910099,
+          "throughput_gelems_s": 47.3851
+        },
+        "test_marrow_all[n=100000]": {
+          "mean_ns": 690.5212093610633,
+          "throughput_gelems_s": 144.8181
+        },
+        "test_pyarrow_all[n=100000]": {
+          "mean_ns": 2104.7011022456386,
+          "throughput_gelems_s": 47.5127
+        },
+        "test_marrow_filter[n=100000-int64_50pct]": {
+          "mean_ns": 43274.425855126035,
+          "throughput_gelems_s": 2.3108
+        },
+        "test_marrow_filter[n=100000-int64_90pct]": {
+          "mean_ns": 43909.625246074116,
+          "throughput_gelems_s": 2.2774
+        },
+        "test_marrow_filter[n=100000-int64_10pct]": {
+          "mean_ns": 14920.39306046519,
+          "throughput_gelems_s": 6.7022
+        },
+        "test_marrow_filter[n=100000-int64_1pct]": {
+          "mean_ns": 5855.9960650143275,
+          "throughput_gelems_s": 17.0765
+        },
+        "test_marrow_filter[n=100000-int64_0pct]": {
+          "mean_ns": 2974.304944090615,
+          "throughput_gelems_s": 33.6213
+        },
+        "test_marrow_filter[n=100000-float64_50pct]": {
+          "mean_ns": 39968.071714830316,
+          "throughput_gelems_s": 2.502
+        },
+        "test_marrow_filter[n=100000-string_50pct]": {
+          "mean_ns": 305372.74059591454,
+          "throughput_gelems_s": 0.3275
+        },
+        "test_marrow_filter[n=100000-string_10pct]": {
+          "mean_ns": 187713.0893008453,
+          "throughput_gelems_s": 0.5327
+        },
+        "test_marrow_filter[n=100000-int64_rand50]": {
+          "mean_ns": 43393.54148924008,
+          "throughput_gelems_s": 2.3045
+        },
+        "test_marrow_filter[n=100000-int64_rand10]": {
+          "mean_ns": 15208.98730335495,
+          "throughput_gelems_s": 6.5751
+        },
+        "test_marrow_filter[n=100000-int64_rand90]": {
+          "mean_ns": 43654.60787317607,
+          "throughput_gelems_s": 2.2907
+        },
+        "test_marrow_filter[n=100000-int64_clustered50]": {
+          "mean_ns": 12169.049201398615,
+          "throughput_gelems_s": 8.2176
+        },
+        "test_marrow_filter[n=100000-int64_head50]": {
+          "mean_ns": 14254.104634985812,
+          "throughput_gelems_s": 7.0155
+        },
+        "test_pyarrow_filter[n=100000-int64_50pct]": {
+          "mean_ns": 263276.03280191263,
+          "throughput_gelems_s": 0.3798
+        },
+        "test_pyarrow_filter[n=100000-int64_90pct]": {
+          "mean_ns": 76966.68101214753,
+          "throughput_gelems_s": 1.2993
+        },
+        "test_pyarrow_filter[n=100000-int64_10pct]": {
+          "mean_ns": 61560.349792117,
+          "throughput_gelems_s": 1.6244
+        },
+        "test_pyarrow_filter[n=100000-int64_1pct]": {
+          "mean_ns": 11500.138555806489,
+          "throughput_gelems_s": 8.6955
+        },
+        "test_pyarrow_filter[n=100000-int64_0pct]": {
+          "mean_ns": 5377.865120871689,
+          "throughput_gelems_s": 18.5947
+        },
+        "test_pyarrow_filter[n=100000-float64_50pct]": {
+          "mean_ns": 265580.3820066823,
+          "throughput_gelems_s": 0.3765
+        },
+        "test_pyarrow_filter[n=100000-string_50pct]": {
+          "mean_ns": 422874.35553482955,
+          "throughput_gelems_s": 0.2365
+        },
+        "test_pyarrow_filter[n=100000-string_10pct]": {
+          "mean_ns": 94160.4555486178,
+          "throughput_gelems_s": 1.062
+        },
+        "test_pyarrow_filter[n=100000-int64_rand50]": {
+          "mean_ns": 225646.04581224738,
+          "throughput_gelems_s": 0.4432
+        },
+        "test_pyarrow_filter[n=100000-int64_rand10]": {
+          "mean_ns": 62157.69424747334,
+          "throughput_gelems_s": 1.6088
+        },
+        "test_pyarrow_filter[n=100000-int64_rand90]": {
+          "mean_ns": 95080.64259383945,
+          "throughput_gelems_s": 1.0517
+        },
+        "test_pyarrow_filter[n=100000-int64_clustered50]": {
+          "mean_ns": 15696.276827817726,
+          "throughput_gelems_s": 6.3709
+        },
+        "test_pyarrow_filter[n=100000-int64_head50]": {
+          "mean_ns": 18121.093107238103,
+          "throughput_gelems_s": 5.5184
+        },
+        "test_polars_filter[n=100000-int64_50pct]": {
+          "mean_ns": 43718.08700309425,
+          "throughput_gelems_s": 2.2874
+        },
+        "test_polars_filter[n=100000-int64_90pct]": {
+          "mean_ns": 43824.702562146056,
+          "throughput_gelems_s": 2.2818
+        },
+        "test_polars_filter[n=100000-int64_10pct]": {
+          "mean_ns": 14827.23837259883,
+          "throughput_gelems_s": 6.7443
+        },
+        "test_polars_filter[n=100000-int64_1pct]": {
+          "mean_ns": 4607.054143175247,
+          "throughput_gelems_s": 21.7058
+        },
+        "test_polars_filter[n=100000-int64_0pct]": {
+          "mean_ns": 1362.346798648765,
+          "throughput_gelems_s": 73.4027
+        },
+        "test_polars_filter[n=100000-float64_50pct]": {
+          "mean_ns": 43534.94856561131,
+          "throughput_gelems_s": 2.297
+        },
+        "test_polars_filter[n=100000-string_50pct]": {
+          "mean_ns": 45629.26567363565,
+          "throughput_gelems_s": 2.1916
+        },
+        "test_polars_filter[n=100000-string_10pct]": {
+          "mean_ns": 20441.702309598782,
+          "throughput_gelems_s": 4.892
+        },
+        "test_polars_filter[n=100000-int64_rand50]": {
+          "mean_ns": 43966.019978902856,
+          "throughput_gelems_s": 2.2745
+        },
+        "test_polars_filter[n=100000-int64_rand10]": {
+          "mean_ns": 14474.369863190497,
+          "throughput_gelems_s": 6.9088
+        },
+        "test_polars_filter[n=100000-int64_rand90]": {
+          "mean_ns": 43521.85043589064,
+          "throughput_gelems_s": 2.2977
+        },
+        "test_polars_filter[n=100000-int64_clustered50]": {
+          "mean_ns": 11274.972968773196,
+          "throughput_gelems_s": 8.8692
+        },
+        "test_polars_filter[n=100000-int64_head50]": {
+          "mean_ns": 1233.396925264864,
+          "throughput_gelems_s": 81.0769
+        },
+        "test_marrow_drop_nulls[n=100000-int64]": {
+          "mean_ns": 148503.77883213325,
+          "throughput_gelems_s": 0.6734
+        },
+        "test_marrow_drop_nulls[n=100000-float64]": {
+          "mean_ns": 145090.5513163494,
+          "throughput_gelems_s": 0.6892
+        },
+        "test_pyarrow_drop_nulls[n=100000-int64]": {
+          "mean_ns": 299164.8830868529,
+          "throughput_gelems_s": 0.3343
+        },
+        "test_pyarrow_drop_nulls[n=100000-float64]": {
+          "mean_ns": 299443.27361420303,
+          "throughput_gelems_s": 0.334
+        },
+        "test_polars_drop_nulls[n=100000-int64]": {
+          "mean_ns": 87140.47821739143,
+          "throughput_gelems_s": 1.1476
+        },
+        "test_polars_drop_nulls[n=100000-float64]": {
+          "mean_ns": 86053.25383520716,
+          "throughput_gelems_s": 1.1621
+        },
+        "test_marrow_equal[n=100000-int64]": {
+          "mean_ns": 42431.45010529166,
+          "throughput_gelems_s": 2.3567
+        },
+        "test_marrow_equal[n=100000-float64]": {
+          "mean_ns": 42222.60418115183,
+          "throughput_gelems_s": 2.3684
+        },
+        "test_pyarrow_equal[n=100000-int64]": {
+          "mean_ns": 51649.29014053897,
+          "throughput_gelems_s": 1.9361
+        },
+        "test_pyarrow_equal[n=100000-float64]": {
+          "mean_ns": 52978.78401400568,
+          "throughput_gelems_s": 1.8875
+        },
+        "test_marrow_less[n=100000-int64]": {
+          "mean_ns": 40978.328224951525,
+          "throughput_gelems_s": 2.4403
+        },
+        "test_marrow_less[n=100000-float64]": {
+          "mean_ns": 42639.607614019624,
+          "throughput_gelems_s": 2.3452
+        },
+        "test_pyarrow_less[n=100000-int64]": {
+          "mean_ns": 51579.21326350962,
+          "throughput_gelems_s": 1.9388
+        },
+        "test_pyarrow_less[n=100000-float64]": {
+          "mean_ns": 53515.26026144973,
+          "throughput_gelems_s": 1.8686
+        },
+        "test_pyarrow_join[n=100000-inner]": {
+          "mean_ns": 11066236.708877943,
+          "throughput_gelems_s": 0.009
+        },
+        "test_pyarrow_join[n=100000-left]": {
+          "mean_ns": 10679986.043466829,
+          "throughput_gelems_s": 0.0094
+        },
+        "test_pyarrow_join[n=100000-semi]": {
+          "mean_ns": 9028166.252267158,
+          "throughput_gelems_s": 0.0111
+        },
+        "test_polars_join[n=100000-inner]": {
+          "mean_ns": 3642553.7810577997,
+          "throughput_gelems_s": 0.0275
+        },
+        "test_polars_join[n=100000-left]": {
+          "mean_ns": 4238694.301306581,
+          "throughput_gelems_s": 0.0236
+        },
+        "test_polars_join[n=100000-semi]": {
+          "mean_ns": 3250619.527667146,
+          "throughput_gelems_s": 0.0308
+        },
+        "test_marrow_join[n=100000-inner]": {
+          "mean_ns": 2942736.782142674,
+          "throughput_gelems_s": 0.034
+        },
+        "test_marrow_join[n=100000-left]": {
+          "mean_ns": 3688244.5513310465,
+          "throughput_gelems_s": 0.0271
+        },
+        "test_marrow_join[n=100000-semi]": {
+          "mean_ns": 3683083.4681628463,
+          "throughput_gelems_s": 0.0272
+        },
+        "test_pyarrow_join_half[n=100000-inner]": {
+          "mean_ns": 7178740.395167713,
+          "throughput_gelems_s": 0.0139
+        },
+        "test_pyarrow_join_half[n=100000-left]": {
+          "mean_ns": 7397306.4492658675,
+          "throughput_gelems_s": 0.0135
+        },
+        "test_pyarrow_join_half[n=100000-semi]": {
+          "mean_ns": 5422150.245719552,
+          "throughput_gelems_s": 0.0184
+        },
+        "test_polars_join_half[n=100000-inner]": {
+          "mean_ns": 3628295.447630253,
+          "throughput_gelems_s": 0.0276
+        },
+        "test_polars_join_half[n=100000-left]": {
+          "mean_ns": 5331619.320002877,
+          "throughput_gelems_s": 0.0188
+        },
+        "test_polars_join_half[n=100000-semi]": {
+          "mean_ns": 2449938.855386447,
+          "throughput_gelems_s": 0.0408
+        },
+        "test_marrow_join_half[n=100000-inner]": {
+          "mean_ns": 2935145.896676105,
+          "throughput_gelems_s": 0.0341
+        },
+        "test_marrow_join_half[n=100000-left]": {
+          "mean_ns": 4891131.025771624,
+          "throughput_gelems_s": 0.0204
+        },
+        "test_marrow_join_half[n=100000-semi]": {
+          "mean_ns": 3417869.127221174,
+          "throughput_gelems_s": 0.0293
+        },
+        "test_duckdb_join[n=100000-inner]": {
+          "mean_ns": 4427180.727263862,
+          "throughput_gelems_s": 0.0226
+        },
+        "test_duckdb_join[n=100000-left]": {
+          "mean_ns": 3956137.353909685,
+          "throughput_gelems_s": 0.0253
+        },
+        "test_duckdb_join[n=100000-semi]": {
+          "mean_ns": 4859004.034150108,
+          "throughput_gelems_s": 0.0206
+        },
+        "test_duckdb_join_half[n=100000-inner]": {
+          "mean_ns": 5860276.053682972,
+          "throughput_gelems_s": 0.0171
+        },
+        "test_duckdb_join_half[n=100000-left]": {
+          "mean_ns": 5295134.972682648,
+          "throughput_gelems_s": 0.0189
+        },
+        "test_duckdb_join_half[n=100000-semi]": {
+          "mean_ns": 5604182.254543929,
+          "throughput_gelems_s": 0.0178
+        },
+        "test_marrow_add[n=1000000-int64]": {
+          "mean_ns": 417595.31842175376,
+          "throughput_gelems_s": 2.3947
+        },
+        "test_marrow_add[n=1000000-float64]": {
+          "mean_ns": 413980.37895004725,
+          "throughput_gelems_s": 2.4156
+        },
+        "test_marrow_add[n=1000000-int64_nulls]": {
+          "mean_ns": 418016.8550824757,
+          "throughput_gelems_s": 2.3922
+        },
+        "test_pyarrow_add[n=1000000-int64]": {
+          "mean_ns": 591184.8709467029,
+          "throughput_gelems_s": 1.6915
+        },
+        "test_pyarrow_add[n=1000000-float64]": {
+          "mean_ns": 314937.7252668775,
+          "throughput_gelems_s": 3.1752
+        },
+        "test_pyarrow_add[n=1000000-int64_nulls]": {
+          "mean_ns": 586973.9111619566,
+          "throughput_gelems_s": 1.7037
+        },
+        "test_marrow_sub[n=1000000]": {
+          "mean_ns": 407909.34999987175,
+          "throughput_gelems_s": 2.4515
+        },
+        "test_pyarrow_sub[n=1000000]": {
+          "mean_ns": 575950.4347845847,
+          "throughput_gelems_s": 1.7363
+        },
+        "test_marrow_mul[n=1000000]": {
+          "mean_ns": 410815.7201414156,
+          "throughput_gelems_s": 2.4342
+        },
+        "test_pyarrow_mul[n=1000000]": {
+          "mean_ns": 594127.1696769946,
+          "throughput_gelems_s": 1.6831
+        },
+        "test_marrow_div[n=1000000]": {
+          "mean_ns": 483923.3082497437,
+          "throughput_gelems_s": 2.0664
+        },
+        "test_pyarrow_div[n=1000000]": {
+          "mean_ns": 1432363.25640614,
+          "throughput_gelems_s": 0.6981
+        },
+        "test_marrow_sum[n=1000000-int64]": {
+          "mean_ns": 104234.3420033797,
+          "throughput_gelems_s": 9.5938
+        },
+        "test_marrow_sum[n=1000000-float64]": {
+          "mean_ns": 102495.34650507152,
+          "throughput_gelems_s": 9.7565
+        },
+        "test_marrow_sum[n=1000000-int64_nulls]": {
+          "mean_ns": 187570.86220334962,
+          "throughput_gelems_s": 5.3313
+        },
+        "test_pyarrow_sum[n=1000000-int64]": {
+          "mean_ns": 103698.04129686783,
+          "throughput_gelems_s": 9.6434
+        },
+        "test_pyarrow_sum[n=1000000-float64]": {
+          "mean_ns": 293426.2484207017,
+          "throughput_gelems_s": 3.408
+        },
+        "test_pyarrow_sum[n=1000000-int64_nulls]": {
+          "mean_ns": 572083.7229685377,
+          "throughput_gelems_s": 1.748
+        },
+        "test_marrow_product[n=1000000]": {
+          "mean_ns": 169098.62633971515,
+          "throughput_gelems_s": 5.9137
+        },
+        "test_pyarrow_product[n=1000000]": {
+          "mean_ns": 942671.4294318869,
+          "throughput_gelems_s": 1.0608
+        },
+        "test_marrow_min[n=1000000-int64]": {
+          "mean_ns": 103371.35641705933,
+          "throughput_gelems_s": 9.6739
+        },
+        "test_marrow_min[n=1000000-float64]": {
+          "mean_ns": 104145.04799247376,
+          "throughput_gelems_s": 9.602
+        },
+        "test_pyarrow_min[n=1000000-int64]": {
+          "mean_ns": 164878.85191164803,
+          "throughput_gelems_s": 6.0651
+        },
+        "test_pyarrow_min[n=1000000-float64]": {
+          "mean_ns": 4388392.211458348,
+          "throughput_gelems_s": 0.2279
+        },
+        "test_marrow_max[n=1000000]": {
+          "mean_ns": 104044.06628137798,
+          "throughput_gelems_s": 9.6113
+        },
+        "test_pyarrow_max[n=1000000]": {
+          "mean_ns": 164868.62281712075,
+          "throughput_gelems_s": 6.0654
+        },
+        "test_marrow_any[n=1000000]": {
+          "mean_ns": 693.7600138737621,
+          "throughput_gelems_s": 1441.4206
+        },
+        "test_pyarrow_any[n=1000000]": {
+          "mean_ns": 2106.517849064574,
+          "throughput_gelems_s": 474.7171
+        },
+        "test_marrow_all[n=1000000]": {
+          "mean_ns": 692.310846781382,
+          "throughput_gelems_s": 1444.4379
+        },
+        "test_pyarrow_all[n=1000000]": {
+          "mean_ns": 2099.0572447694763,
+          "throughput_gelems_s": 476.4043
+        },
+        "test_marrow_filter[n=1000000-int64_50pct]": {
+          "mean_ns": 405035.6841281384,
+          "throughput_gelems_s": 2.4689
+        },
+        "test_marrow_filter[n=1000000-int64_90pct]": {
+          "mean_ns": 413890.1282215438,
+          "throughput_gelems_s": 2.4161
+        },
+        "test_marrow_filter[n=1000000-int64_10pct]": {
+          "mean_ns": 120137.99673630482,
+          "throughput_gelems_s": 8.3238
+        },
+        "test_marrow_filter[n=1000000-int64_1pct]": {
+          "mean_ns": 35206.57960314969,
+          "throughput_gelems_s": 28.4038
+        },
+        "test_marrow_filter[n=1000000-int64_0pct]": {
+          "mean_ns": 6154.459527636002,
+          "throughput_gelems_s": 162.4838
+        },
+        "test_marrow_filter[n=1000000-float64_50pct]": {
+          "mean_ns": 359277.04046318965,
+          "throughput_gelems_s": 2.7834
+        },
+        "test_marrow_filter[n=1000000-string_50pct]": {
+          "mean_ns": 3346151.986704815,
+          "throughput_gelems_s": 0.2989
+        },
+        "test_marrow_filter[n=1000000-string_10pct]": {
+          "mean_ns": 1840410.7572174373,
+          "throughput_gelems_s": 0.5434
+        },
+        "test_marrow_filter[n=1000000-int64_rand50]": {
+          "mean_ns": 411557.3335121447,
+          "throughput_gelems_s": 2.4298
+        },
+        "test_marrow_filter[n=1000000-int64_rand10]": {
+          "mean_ns": 223883.39680492316,
+          "throughput_gelems_s": 4.4666
+        },
+        "test_marrow_filter[n=1000000-int64_rand90]": {
+          "mean_ns": 407060.65559001616,
+          "throughput_gelems_s": 2.4566
+        },
+        "test_marrow_filter[n=1000000-int64_clustered50]": {
+          "mean_ns": 112789.30909773357,
+          "throughput_gelems_s": 8.8661
+        },
+        "test_marrow_filter[n=1000000-int64_head50]": {
+          "mean_ns": 113179.17383927136,
+          "throughput_gelems_s": 8.8355
+        },
+        "test_pyarrow_filter[n=1000000-int64_50pct]": {
+          "mean_ns": 2584213.921059137,
+          "throughput_gelems_s": 0.387
+        },
+        "test_pyarrow_filter[n=1000000-int64_90pct]": {
+          "mean_ns": 711841.9880958712,
+          "throughput_gelems_s": 1.4048
+        },
+        "test_pyarrow_filter[n=1000000-int64_10pct]": {
+          "mean_ns": 565353.0712148867,
+          "throughput_gelems_s": 1.7688
+        },
+        "test_pyarrow_filter[n=1000000-int64_1pct]": {
+          "mean_ns": 86248.79932066839,
+          "throughput_gelems_s": 11.5944
+        },
+        "test_pyarrow_filter[n=1000000-int64_0pct]": {
+          "mean_ns": 22981.59274387852,
+          "throughput_gelems_s": 43.5131
+        },
+        "test_pyarrow_filter[n=1000000-float64_50pct]": {
+          "mean_ns": 2573835.6370740146,
+          "throughput_gelems_s": 0.3885
+        },
+        "test_pyarrow_filter[n=1000000-string_50pct]": {
+          "mean_ns": 4153456.0970527916,
+          "throughput_gelems_s": 0.2408
+        },
+        "test_pyarrow_filter[n=1000000-string_10pct]": {
+          "mean_ns": 886116.4232074188,
+          "throughput_gelems_s": 1.1285
+        },
+        "test_pyarrow_filter[n=1000000-int64_rand50]": {
+          "mean_ns": 2321956.018017199,
+          "throughput_gelems_s": 0.4307
+        },
+        "test_pyarrow_filter[n=1000000-int64_rand10]": {
+          "mean_ns": 636171.5949847802,
+          "throughput_gelems_s": 1.5719
+        },
+        "test_pyarrow_filter[n=1000000-int64_rand90]": {
+          "mean_ns": 1158485.3688011204,
+          "throughput_gelems_s": 0.8632
+        },
+        "test_pyarrow_filter[n=1000000-int64_clustered50]": {
+          "mean_ns": 127079.48496887866,
+          "throughput_gelems_s": 7.8691
+        },
+        "test_pyarrow_filter[n=1000000-int64_head50]": {
+          "mean_ns": 125529.91969920052,
+          "throughput_gelems_s": 7.9662
+        },
+        "test_polars_filter[n=1000000-int64_50pct]": {
+          "mean_ns": 414856.6460533092,
+          "throughput_gelems_s": 2.4105
+        },
+        "test_polars_filter[n=1000000-int64_90pct]": {
+          "mean_ns": 420095.27706553804,
+          "throughput_gelems_s": 2.3804
+        },
+        "test_polars_filter[n=1000000-int64_10pct]": {
+          "mean_ns": 117985.91715138352,
+          "throughput_gelems_s": 8.4756
+        },
+        "test_polars_filter[n=1000000-int64_1pct]": {
+          "mean_ns": 41202.61557155588,
+          "throughput_gelems_s": 24.2703
+        },
+        "test_polars_filter[n=1000000-int64_0pct]": {
+          "mean_ns": 5882.443639551556,
+          "throughput_gelems_s": 169.9974
+        },
+        "test_polars_filter[n=1000000-float64_50pct]": {
+          "mean_ns": 415351.4689866963,
+          "throughput_gelems_s": 2.4076
+        },
+        "test_polars_filter[n=1000000-string_50pct]": {
+          "mean_ns": 433540.9628615599,
+          "throughput_gelems_s": 2.3066
+        },
+        "test_polars_filter[n=1000000-string_10pct]": {
+          "mean_ns": 194959.5942829486,
+          "throughput_gelems_s": 5.1293
+        },
+        "test_polars_filter[n=1000000-int64_rand50]": {
+          "mean_ns": 416674.18767988944,
+          "throughput_gelems_s": 2.4
+        },
+        "test_polars_filter[n=1000000-int64_rand10]": {
+          "mean_ns": 177942.98056279254,
+          "throughput_gelems_s": 5.6198
+        },
+        "test_polars_filter[n=1000000-int64_rand90]": {
+          "mean_ns": 417048.5505060011,
+          "throughput_gelems_s": 2.3978
+        },
+        "test_polars_filter[n=1000000-int64_clustered50]": {
+          "mean_ns": 108466.85888371909,
+          "throughput_gelems_s": 9.2194
+        },
+        "test_polars_filter[n=1000000-int64_head50]": {
+          "mean_ns": 4786.598116490841,
+          "throughput_gelems_s": 208.9166
+        },
+        "test_marrow_drop_nulls[n=1000000-int64]": {
+          "mean_ns": 1455957.008289535,
+          "throughput_gelems_s": 0.6868
+        },
+        "test_marrow_drop_nulls[n=1000000-float64]": {
+          "mean_ns": 1419626.8346959767,
+          "throughput_gelems_s": 0.7044
+        },
+        "test_pyarrow_drop_nulls[n=1000000-int64]": {
+          "mean_ns": 2928614.74926478,
+          "throughput_gelems_s": 0.3415
+        },
+        "test_pyarrow_drop_nulls[n=1000000-float64]": {
+          "mean_ns": 2909725.7122033583,
+          "throughput_gelems_s": 0.3437
+        },
+        "test_polars_drop_nulls[n=1000000-int64]": {
+          "mean_ns": 504985.1529236217,
+          "throughput_gelems_s": 1.9803
+        },
+        "test_polars_drop_nulls[n=1000000-float64]": {
+          "mean_ns": 505398.93924396776,
+          "throughput_gelems_s": 1.9786
+        },
+        "test_marrow_equal[n=1000000-int64]": {
+          "mean_ns": 398616.66027554974,
+          "throughput_gelems_s": 2.5087
+        },
+        "test_marrow_equal[n=1000000-float64]": {
+          "mean_ns": 392293.1856972577,
+          "throughput_gelems_s": 2.5491
+        },
+        "test_pyarrow_equal[n=1000000-int64]": {
+          "mean_ns": 477205.5501948855,
+          "throughput_gelems_s": 2.0955
+        },
+        "test_pyarrow_equal[n=1000000-float64]": {
+          "mean_ns": 500213.80427295086,
+          "throughput_gelems_s": 1.9991
+        },
+        "test_marrow_less[n=1000000-int64]": {
+          "mean_ns": 380456.5082373301,
+          "throughput_gelems_s": 2.6284
+        },
+        "test_marrow_less[n=1000000-float64]": {
+          "mean_ns": 392154.5572868359,
+          "throughput_gelems_s": 2.55
+        },
+        "test_pyarrow_less[n=1000000-int64]": {
+          "mean_ns": 478579.2596268993,
+          "throughput_gelems_s": 2.0895
+        },
+        "test_pyarrow_less[n=1000000-float64]": {
+          "mean_ns": 502543.7847885213,
+          "throughput_gelems_s": 1.9899
+        },
+        "test_pyarrow_join[n=1000000-inner]": {
+          "mean_ns": 123006818.49998796,
+          "throughput_gelems_s": 0.0081
+        },
+        "test_pyarrow_join[n=1000000-left]": {
+          "mean_ns": 113358488.55555418,
+          "throughput_gelems_s": 0.0088
+        },
+        "test_pyarrow_join[n=1000000-semi]": {
+          "mean_ns": 97147762.54548435,
+          "throughput_gelems_s": 0.0103
+        },
+        "test_polars_join[n=1000000-inner]": {
+          "mean_ns": 73805057.53845821,
+          "throughput_gelems_s": 0.0135
+        },
+        "test_polars_join[n=1000000-left]": {
+          "mean_ns": 99562391.90000816,
+          "throughput_gelems_s": 0.01
+        },
+        "test_polars_join[n=1000000-semi]": {
+          "mean_ns": 49835036.849970035,
+          "throughput_gelems_s": 0.0201
+        },
+        "test_marrow_join[n=1000000-inner]": {
+          "mean_ns": 41037279.84002035,
+          "throughput_gelems_s": 0.0244
+        },
+        "test_marrow_join[n=1000000-left]": {
+          "mean_ns": 51137965.90001129,
+          "throughput_gelems_s": 0.0196
+        },
+        "test_marrow_join[n=1000000-semi]": {
+          "mean_ns": 50118162.25002121,
+          "throughput_gelems_s": 0.02
+        },
+        "test_pyarrow_join_half[n=1000000-inner]": {
+          "mean_ns": 84900802.416693,
+          "throughput_gelems_s": 0.0118
+        },
+        "test_pyarrow_join_half[n=1000000-left]": {
+          "mean_ns": 86791941.83332583,
+          "throughput_gelems_s": 0.0115
+        },
+        "test_pyarrow_join_half[n=1000000-semi]": {
+          "mean_ns": 62067467.500000365,
+          "throughput_gelems_s": 0.0161
+        },
+        "test_polars_join_half[n=1000000-inner]": {
+          "mean_ns": 73420510.00002286,
+          "throughput_gelems_s": 0.0136
+        },
+        "test_polars_join_half[n=1000000-left]": {
+          "mean_ns": 118818579.33331554,
+          "throughput_gelems_s": 0.0084
+        },
+        "test_polars_join_half[n=1000000-semi]": {
+          "mean_ns": 29844140.818175383,
+          "throughput_gelems_s": 0.0335
+        },
+        "test_marrow_join_half[n=1000000-inner]": {
+          "mean_ns": 40682583.208356015,
+          "throughput_gelems_s": 0.0246
+        },
+        "test_marrow_join_half[n=1000000-left]": {
+          "mean_ns": 60806313.37496811,
+          "throughput_gelems_s": 0.0164
+        },
+        "test_marrow_join_half[n=1000000-semi]": {
+          "mean_ns": 45625960.086938545,
+          "throughput_gelems_s": 0.0219
+        },
+        "test_duckdb_join[n=1000000-inner]": {
+          "mean_ns": 44581658.0740686,
+          "throughput_gelems_s": 0.0224
+        },
+        "test_duckdb_join[n=1000000-left]": {
+          "mean_ns": 38911916.26922382,
+          "throughput_gelems_s": 0.0257
+        },
+        "test_duckdb_join[n=1000000-semi]": {
+          "mean_ns": 34817609.18521104,
+          "throughput_gelems_s": 0.0287
+        },
+        "test_duckdb_join_half[n=1000000-inner]": {
+          "mean_ns": 47268768.47825145,
+          "throughput_gelems_s": 0.0212
+        },
+        "test_duckdb_join_half[n=1000000-left]": {
+          "mean_ns": 43098472.875006646,
+          "throughput_gelems_s": 0.0232
+        },
+        "test_duckdb_join_half[n=1000000-semi]": {
+          "mean_ns": 40217119.846138656,
+          "throughput_gelems_s": 0.0249
+        },
+        "test_pyarrow_join[n=10000000-inner]": {
+          "mean_ns": 1539915243.7999876,
+          "throughput_gelems_s": 0.0065
+        },
+        "test_pyarrow_join[n=10000000-left]": {
+          "mean_ns": 1487031103.9999707,
+          "throughput_gelems_s": 0.0067
+        },
+        "test_pyarrow_join[n=10000000-semi]": {
+          "mean_ns": 1325404811.000044,
+          "throughput_gelems_s": 0.0075
+        },
+        "test_polars_join[n=10000000-inner]": {
+          "mean_ns": 888390022.3999263,
+          "throughput_gelems_s": 0.0113
+        },
+        "test_polars_join[n=10000000-left]": {
+          "mean_ns": 1532857733.600031,
+          "throughput_gelems_s": 0.0065
+        },
+        "test_polars_join[n=10000000-semi]": {
+          "mean_ns": 729655388.5999856,
+          "throughput_gelems_s": 0.0137
+        },
+        "test_marrow_join[n=10000000-inner]": {
+          "mean_ns": 1012781840.8000166,
+          "throughput_gelems_s": 0.0099
+        },
+        "test_marrow_join[n=10000000-left]": {
+          "mean_ns": 1042465090.2000394,
+          "throughput_gelems_s": 0.0096
+        },
+        "test_marrow_join[n=10000000-semi]": {
+          "mean_ns": 1039867579.2000176,
+          "throughput_gelems_s": 0.0096
+        },
+        "test_pyarrow_join_half[n=10000000-inner]": {
+          "mean_ns": 1057124814.7999542,
+          "throughput_gelems_s": 0.0095
+        },
+        "test_pyarrow_join_half[n=10000000-left]": {
+          "mean_ns": 1029050763.1999843,
+          "throughput_gelems_s": 0.0097
+        },
+        "test_pyarrow_join_half[n=10000000-semi]": {
+          "mean_ns": 791453058.7999706,
+          "throughput_gelems_s": 0.0126
+        },
+        "test_polars_join_half[n=10000000-inner]": {
+          "mean_ns": 972736194.2000699,
+          "throughput_gelems_s": 0.0103
+        },
+        "test_polars_join_half[n=10000000-left]": {
+          "mean_ns": 1624466671.59993,
+          "throughput_gelems_s": 0.0062
+        },
+        "test_polars_join_half[n=10000000-semi]": {
+          "mean_ns": 510748525.1999606,
+          "throughput_gelems_s": 0.0196
+        },
+        "test_marrow_join_half[n=10000000-inner]": {
+          "mean_ns": 959504840.9999436,
+          "throughput_gelems_s": 0.0104
+        },
+        "test_marrow_join_half[n=10000000-left]": {
+          "mean_ns": 1219467114.2000062,
+          "throughput_gelems_s": 0.0082
+        },
+        "test_marrow_join_half[n=10000000-semi]": {
+          "mean_ns": 1001875544.600034,
+          "throughput_gelems_s": 0.01
+        },
+        "test_duckdb_join[n=10000000-inner]": {
+          "mean_ns": 546041352.8000572,
+          "throughput_gelems_s": 0.0183
+        },
+        "test_duckdb_join[n=10000000-left]": {
+          "mean_ns": 494488132.80000645,
+          "throughput_gelems_s": 0.0202
+        },
+        "test_duckdb_join[n=10000000-semi]": {
+          "mean_ns": 489713975.80003214,
+          "throughput_gelems_s": 0.0204
+        },
+        "test_duckdb_join_half[n=10000000-inner]": {
+          "mean_ns": 460052195.9999241,
+          "throughput_gelems_s": 0.0217
+        },
+        "test_duckdb_join_half[n=10000000-left]": {
+          "mean_ns": 417585247.5999363,
+          "throughput_gelems_s": 0.0239
+        },
+        "test_duckdb_join_half[n=10000000-semi]": {
+          "mean_ns": 395020508.2000139,
+          "throughput_gelems_s": 0.0253
+        }
+      }
+    }
+  ],
+  "operations": [
+    "bench_sum_int64_1k",
+    "bench_sum_int64_100k",
+    "bench_sum_int64_1m",
+    "bench_sum_float64_1k",
+    "bench_sum_float64_100k",
+    "bench_sum_float64_1m",
+    "bench_sum_nulls_int64_100k",
+    "bench_sum_nulls_int64_1m",
+    "bench_product_int64_100k",
+    "bench_product_int64_1m",
+    "bench_min_int64_100k",
+    "bench_min_int64_1m",
+    "bench_max_int64_100k",
+    "bench_max_int64_1m",
+    "bench_min_nulls_int64_1m",
+    "bench_add_int32_1k",
+    "bench_add_int32_10k",
+    "bench_add_int32_100k",
+    "bench_add_int32_1m",
+    "bench_add_nulls_int32_1k",
+    "bench_add_nulls_int32_10k",
+    "bench_add_nulls_int32_100k",
+    "bench_add_nulls_int32_1m",
+    "bench_add_float64_1k",
+    "bench_add_float64_10k",
+    "bench_add_float64_100k",
+    "bench_add_float64_1m",
+    "bench_add_nulls_float64_1k",
+    "bench_add_nulls_float64_10k",
+    "bench_add_nulls_float64_100k",
+    "bench_add_nulls_float64_1m",
+    "bench_equal_int32_10k",
+    "bench_equal_int32_100k",
+    "bench_equal_int32_1m",
+    "bench_equal_int64_10k",
+    "bench_equal_int64_100k",
+    "bench_equal_int64_1m",
+    "bench_filter_50pct_10k",
+    "bench_filter_50pct_100k",
+    "bench_filter_50pct_1m",
+    "bench_filter_10pct_100k",
+    "bench_filter_10pct_1m",
+    "bench_filter_90pct_100k",
+    "bench_filter_90pct_1m",
+    "bench_filter_50pct_nulls_100k",
+    "bench_filter_50pct_nulls_1m",
+    "bench_rapidhash_int64_10k",
+    "bench_rapidhash_int64_100k",
+    "bench_rapidhash_int64_1m",
+    "bench_rapidhash_int32_10k",
+    "bench_rapidhash_int32_100k",
+    "bench_rapidhash_int32_1m",
+    "bench_rapidhash_bool_10k",
+    "bench_rapidhash_bool_100k",
+    "bench_rapidhash_bool_1m",
+    "bench_hash_table_build_100k",
+    "bench_hash_table_build_1m",
+    "bench_hash_table_insert_100k",
+    "bench_hash_table_insert_1m",
+    "bench_hash_table_probe_100k",
+    "bench_hash_table_probe_1m",
+    "bench_hash_table_probe_semi_100k",
+    "bench_hash_table_probe_semi_1m",
+    "bench_join_build_10k",
+    "bench_join_build_100k",
+    "bench_join_build_1m",
+    "bench_join_probe_10k",
+    "bench_join_probe_100k",
+    "bench_join_probe_1m",
+    "bench_join_full_10k",
+    "bench_join_full_100k",
+    "bench_join_full_1m",
+    "bench_count_set_bits_1k",
+    "bench_count_set_bits_10k",
+    "bench_count_set_bits_100k",
+    "bench_count_set_bits_1m",
+    "bench_count_set_bits_10m",
+    "bench_count_set_bits_100m",
+    "bench_count_set_bits_aligned_1k",
+    "bench_count_set_bits_aligned_10k",
+    "bench_count_set_bits_aligned_100k",
+    "bench_count_set_bits_aligned_1m",
+    "bench_count_set_bits_aligned_10m",
+    "bench_count_set_bits_aligned_100m",
+    "bench_count_set_bits_unaligned_1k",
+    "bench_count_set_bits_unaligned_10k",
+    "bench_count_set_bits_unaligned_100k",
+    "bench_count_set_bits_unaligned_1m",
+    "bench_count_set_bits_unaligned_10m",
+    "bench_count_set_bits_unaligned_100m",
+    "bench_and_1k",
+    "bench_and_10k",
+    "bench_and_100k",
+    "bench_and_1m",
+    "bench_and_10m",
+    "bench_and_100m",
+    "bench_or_1k",
+    "bench_or_10k",
+    "bench_or_100k",
+    "bench_or_1m",
+    "bench_or_10m",
+    "bench_or_100m",
+    "bench_invert_1k",
+    "bench_invert_10k",
+    "bench_invert_100k",
+    "bench_invert_1m",
+    "bench_invert_10m",
+    "bench_invert_100m",
+    "bench_set_range_1k",
+    "bench_set_range_10k",
+    "bench_set_range_100k",
+    "bench_set_range_1m",
+    "bench_set_range_10m",
+    "bench_set_range_100m",
+    "bench_invert_cache_aligned_1k",
+    "bench_invert_cache_aligned_10k",
+    "bench_invert_cache_aligned_100k",
+    "bench_invert_cache_aligned_1m",
+    "bench_invert_cache_aligned_10m",
+    "bench_invert_cache_aligned_100m",
+    "bench_invert_cache_unaligned_1k",
+    "bench_invert_cache_unaligned_10k",
+    "bench_invert_cache_unaligned_100k",
+    "bench_invert_cache_unaligned_1m",
+    "bench_invert_cache_unaligned_10m",
+    "bench_invert_cache_unaligned_100m",
+    "bench_and_cache_unaligned_1k",
+    "bench_and_cache_unaligned_10k",
+    "bench_and_cache_unaligned_100k",
+    "bench_and_cache_unaligned_1m",
+    "bench_and_cache_unaligned_10m",
+    "bench_and_cache_unaligned_100m",
+    "bench_and_same_offset_1k",
+    "bench_and_same_offset_10k",
+    "bench_and_same_offset_100k",
+    "bench_and_same_offset_1m",
+    "bench_and_same_offset_10m",
+    "bench_and_same_offset_100m",
+    "bench_and_diff_offset_1k",
+    "bench_and_diff_offset_10k",
+    "bench_and_diff_offset_100k",
+    "bench_and_diff_offset_1m",
+    "bench_and_diff_offset_10m",
+    "bench_and_diff_offset_100m",
+    "bench_pack_bools_w8_1k",
+    "bench_pack_bools_w8_10k",
+    "bench_pack_bools_w8_100k",
+    "bench_pack_bools_w8_1m",
+    "bench_pack_bools_w8_10m",
+    "bench_pack_bools_w8_100m",
+    "bench_pack_bools_w32_1k",
+    "bench_pack_bools_w32_10k",
+    "bench_pack_bools_w32_100k",
+    "bench_pack_bools_w32_1m",
+    "bench_pack_bools_w32_10m",
+    "bench_pack_bools_w32_100m",
+    "bench_pack_bools_w64_1k",
+    "bench_pack_bools_w64_10k",
+    "bench_pack_bools_w64_100k",
+    "bench_pack_bools_w64_1m",
+    "bench_pack_bools_w64_10m",
+    "bench_pack_bools_w64_100m",
+    "test_marrow_int64[n=10000]",
+    "test_marrow_int64[n=100000]",
+    "test_pyarrow_int64[n=10000]",
+    "test_pyarrow_int64[n=100000]",
+    "test_marrow_int64_nulls[n=10000]",
+    "test_marrow_int64_nulls[n=100000]",
+    "test_pyarrow_int64_nulls[n=10000]",
+    "test_pyarrow_int64_nulls[n=100000]",
+    "test_marrow_float64[n=10000]",
+    "test_marrow_float64[n=100000]",
+    "test_pyarrow_float64[n=10000]",
+    "test_pyarrow_float64[n=100000]",
+    "test_marrow_float64_nulls[n=10000]",
+    "test_marrow_float64_nulls[n=100000]",
+    "test_pyarrow_float64_nulls[n=10000]",
+    "test_pyarrow_float64_nulls[n=100000]",
+    "test_marrow_string[n=10000]",
+    "test_marrow_string[n=100000]",
+    "test_pyarrow_string[n=10000]",
+    "test_pyarrow_string[n=100000]",
+    "test_marrow_string_nulls[n=10000]",
+    "test_marrow_string_nulls[n=100000]",
+    "test_pyarrow_string_nulls[n=10000]",
+    "test_pyarrow_string_nulls[n=100000]",
+    "test_marrow_int64_infer[n=10000]",
+    "test_marrow_int64_infer[n=100000]",
+    "test_pyarrow_int64_infer[n=10000]",
+    "test_pyarrow_int64_infer[n=100000]",
+    "test_marrow_string_infer[n=10000]",
+    "test_marrow_string_infer[n=100000]",
+    "test_pyarrow_string_infer[n=10000]",
+    "test_pyarrow_string_infer[n=100000]",
+    "test_marrow_nested_list[n=10000]",
+    "test_marrow_nested_list[n=100000]",
+    "test_pyarrow_nested_list[n=10000]",
+    "test_pyarrow_nested_list[n=100000]",
+    "test_marrow_struct[n=10000]",
+    "test_marrow_struct[n=100000]",
+    "test_pyarrow_struct[n=10000]",
+    "test_pyarrow_struct[n=100000]",
+    "test_marrow_struct_primitives[n=10000]",
+    "test_marrow_struct_primitives[n=100000]",
+    "test_pyarrow_struct_primitives[n=10000]",
+    "test_pyarrow_struct_primitives[n=100000]",
+    "test_marrow_struct_primitives_infer[n=10000]",
+    "test_marrow_struct_primitives_infer[n=100000]",
+    "test_pyarrow_struct_primitives_infer[n=10000]",
+    "test_pyarrow_struct_primitives_infer[n=100000]",
+    "test_marrow_add[n=10000-int64]",
+    "test_marrow_add[n=10000-float64]",
+    "test_marrow_add[n=10000-int64_nulls]",
+    "test_pyarrow_add[n=10000-int64]",
+    "test_pyarrow_add[n=10000-float64]",
+    "test_pyarrow_add[n=10000-int64_nulls]",
+    "test_marrow_sub[n=10000]",
+    "test_pyarrow_sub[n=10000]",
+    "test_marrow_mul[n=10000]",
+    "test_pyarrow_mul[n=10000]",
+    "test_marrow_div[n=10000]",
+    "test_pyarrow_div[n=10000]",
+    "test_marrow_sum[n=10000-int64]",
+    "test_marrow_sum[n=10000-float64]",
+    "test_marrow_sum[n=10000-int64_nulls]",
+    "test_pyarrow_sum[n=10000-int64]",
+    "test_pyarrow_sum[n=10000-float64]",
+    "test_pyarrow_sum[n=10000-int64_nulls]",
+    "test_marrow_product[n=10000]",
+    "test_pyarrow_product[n=10000]",
+    "test_marrow_min[n=10000-int64]",
+    "test_marrow_min[n=10000-float64]",
+    "test_pyarrow_min[n=10000-int64]",
+    "test_pyarrow_min[n=10000-float64]",
+    "test_marrow_max[n=10000]",
+    "test_pyarrow_max[n=10000]",
+    "test_marrow_any[n=10000]",
+    "test_pyarrow_any[n=10000]",
+    "test_marrow_all[n=10000]",
+    "test_pyarrow_all[n=10000]",
+    "test_marrow_filter[n=10000-int64_50pct]",
+    "test_marrow_filter[n=10000-int64_90pct]",
+    "test_marrow_filter[n=10000-int64_10pct]",
+    "test_marrow_filter[n=10000-int64_1pct]",
+    "test_marrow_filter[n=10000-int64_0pct]",
+    "test_marrow_filter[n=10000-float64_50pct]",
+    "test_marrow_filter[n=10000-string_50pct]",
+    "test_marrow_filter[n=10000-string_10pct]",
+    "test_marrow_filter[n=10000-int64_rand50]",
+    "test_marrow_filter[n=10000-int64_rand10]",
+    "test_marrow_filter[n=10000-int64_rand90]",
+    "test_marrow_filter[n=10000-int64_clustered50]",
+    "test_marrow_filter[n=10000-int64_head50]",
+    "test_pyarrow_filter[n=10000-int64_50pct]",
+    "test_pyarrow_filter[n=10000-int64_90pct]",
+    "test_pyarrow_filter[n=10000-int64_10pct]",
+    "test_pyarrow_filter[n=10000-int64_1pct]",
+    "test_pyarrow_filter[n=10000-int64_0pct]",
+    "test_pyarrow_filter[n=10000-float64_50pct]",
+    "test_pyarrow_filter[n=10000-string_50pct]",
+    "test_pyarrow_filter[n=10000-string_10pct]",
+    "test_pyarrow_filter[n=10000-int64_rand50]",
+    "test_pyarrow_filter[n=10000-int64_rand10]",
+    "test_pyarrow_filter[n=10000-int64_rand90]",
+    "test_pyarrow_filter[n=10000-int64_clustered50]",
+    "test_pyarrow_filter[n=10000-int64_head50]",
+    "test_polars_filter[n=10000-int64_50pct]",
+    "test_polars_filter[n=10000-int64_90pct]",
+    "test_polars_filter[n=10000-int64_10pct]",
+    "test_polars_filter[n=10000-int64_1pct]",
+    "test_polars_filter[n=10000-int64_0pct]",
+    "test_polars_filter[n=10000-float64_50pct]",
+    "test_polars_filter[n=10000-string_50pct]",
+    "test_polars_filter[n=10000-string_10pct]",
+    "test_polars_filter[n=10000-int64_rand50]",
+    "test_polars_filter[n=10000-int64_rand10]",
+    "test_polars_filter[n=10000-int64_rand90]",
+    "test_polars_filter[n=10000-int64_clustered50]",
+    "test_polars_filter[n=10000-int64_head50]",
+    "test_marrow_drop_nulls[n=10000-int64]",
+    "test_marrow_drop_nulls[n=10000-float64]",
+    "test_pyarrow_drop_nulls[n=10000-int64]",
+    "test_pyarrow_drop_nulls[n=10000-float64]",
+    "test_polars_drop_nulls[n=10000-int64]",
+    "test_polars_drop_nulls[n=10000-float64]",
+    "test_marrow_equal[n=10000-int64]",
+    "test_marrow_equal[n=10000-float64]",
+    "test_pyarrow_equal[n=10000-int64]",
+    "test_pyarrow_equal[n=10000-float64]",
+    "test_marrow_less[n=10000-int64]",
+    "test_marrow_less[n=10000-float64]",
+    "test_pyarrow_less[n=10000-int64]",
+    "test_pyarrow_less[n=10000-float64]",
+    "test_pyarrow_join[n=10000-inner]",
+    "test_pyarrow_join[n=10000-left]",
+    "test_pyarrow_join[n=10000-semi]",
+    "test_polars_join[n=10000-inner]",
+    "test_polars_join[n=10000-left]",
+    "test_polars_join[n=10000-semi]",
+    "test_marrow_join[n=10000-inner]",
+    "test_marrow_join[n=10000-left]",
+    "test_marrow_join[n=10000-semi]",
+    "test_pyarrow_join_half[n=10000-inner]",
+    "test_pyarrow_join_half[n=10000-left]",
+    "test_pyarrow_join_half[n=10000-semi]",
+    "test_polars_join_half[n=10000-inner]",
+    "test_polars_join_half[n=10000-left]",
+    "test_polars_join_half[n=10000-semi]",
+    "test_marrow_join_half[n=10000-inner]",
+    "test_marrow_join_half[n=10000-left]",
+    "test_marrow_join_half[n=10000-semi]",
+    "test_duckdb_join[n=10000-inner]",
+    "test_duckdb_join[n=10000-left]",
+    "test_duckdb_join[n=10000-semi]",
+    "test_duckdb_join_half[n=10000-inner]",
+    "test_duckdb_join_half[n=10000-left]",
+    "test_duckdb_join_half[n=10000-semi]",
+    "test_marrow_add[n=100000-int64]",
+    "test_marrow_add[n=100000-float64]",
+    "test_marrow_add[n=100000-int64_nulls]",
+    "test_pyarrow_add[n=100000-int64]",
+    "test_pyarrow_add[n=100000-float64]",
+    "test_pyarrow_add[n=100000-int64_nulls]",
+    "test_marrow_sub[n=100000]",
+    "test_pyarrow_sub[n=100000]",
+    "test_marrow_mul[n=100000]",
+    "test_pyarrow_mul[n=100000]",
+    "test_marrow_div[n=100000]",
+    "test_pyarrow_div[n=100000]",
+    "test_marrow_sum[n=100000-int64]",
+    "test_marrow_sum[n=100000-float64]",
+    "test_marrow_sum[n=100000-int64_nulls]",
+    "test_pyarrow_sum[n=100000-int64]",
+    "test_pyarrow_sum[n=100000-float64]",
+    "test_pyarrow_sum[n=100000-int64_nulls]",
+    "test_marrow_product[n=100000]",
+    "test_pyarrow_product[n=100000]",
+    "test_marrow_min[n=100000-int64]",
+    "test_marrow_min[n=100000-float64]",
+    "test_pyarrow_min[n=100000-int64]",
+    "test_pyarrow_min[n=100000-float64]",
+    "test_marrow_max[n=100000]",
+    "test_pyarrow_max[n=100000]",
+    "test_marrow_any[n=100000]",
+    "test_pyarrow_any[n=100000]",
+    "test_marrow_all[n=100000]",
+    "test_pyarrow_all[n=100000]",
+    "test_marrow_filter[n=100000-int64_50pct]",
+    "test_marrow_filter[n=100000-int64_90pct]",
+    "test_marrow_filter[n=100000-int64_10pct]",
+    "test_marrow_filter[n=100000-int64_1pct]",
+    "test_marrow_filter[n=100000-int64_0pct]",
+    "test_marrow_filter[n=100000-float64_50pct]",
+    "test_marrow_filter[n=100000-string_50pct]",
+    "test_marrow_filter[n=100000-string_10pct]",
+    "test_marrow_filter[n=100000-int64_rand50]",
+    "test_marrow_filter[n=100000-int64_rand10]",
+    "test_marrow_filter[n=100000-int64_rand90]",
+    "test_marrow_filter[n=100000-int64_clustered50]",
+    "test_marrow_filter[n=100000-int64_head50]",
+    "test_pyarrow_filter[n=100000-int64_50pct]",
+    "test_pyarrow_filter[n=100000-int64_90pct]",
+    "test_pyarrow_filter[n=100000-int64_10pct]",
+    "test_pyarrow_filter[n=100000-int64_1pct]",
+    "test_pyarrow_filter[n=100000-int64_0pct]",
+    "test_pyarrow_filter[n=100000-float64_50pct]",
+    "test_pyarrow_filter[n=100000-string_50pct]",
+    "test_pyarrow_filter[n=100000-string_10pct]",
+    "test_pyarrow_filter[n=100000-int64_rand50]",
+    "test_pyarrow_filter[n=100000-int64_rand10]",
+    "test_pyarrow_filter[n=100000-int64_rand90]",
+    "test_pyarrow_filter[n=100000-int64_clustered50]",
+    "test_pyarrow_filter[n=100000-int64_head50]",
+    "test_polars_filter[n=100000-int64_50pct]",
+    "test_polars_filter[n=100000-int64_90pct]",
+    "test_polars_filter[n=100000-int64_10pct]",
+    "test_polars_filter[n=100000-int64_1pct]",
+    "test_polars_filter[n=100000-int64_0pct]",
+    "test_polars_filter[n=100000-float64_50pct]",
+    "test_polars_filter[n=100000-string_50pct]",
+    "test_polars_filter[n=100000-string_10pct]",
+    "test_polars_filter[n=100000-int64_rand50]",
+    "test_polars_filter[n=100000-int64_rand10]",
+    "test_polars_filter[n=100000-int64_rand90]",
+    "test_polars_filter[n=100000-int64_clustered50]",
+    "test_polars_filter[n=100000-int64_head50]",
+    "test_marrow_drop_nulls[n=100000-int64]",
+    "test_marrow_drop_nulls[n=100000-float64]",
+    "test_pyarrow_drop_nulls[n=100000-int64]",
+    "test_pyarrow_drop_nulls[n=100000-float64]",
+    "test_polars_drop_nulls[n=100000-int64]",
+    "test_polars_drop_nulls[n=100000-float64]",
+    "test_marrow_equal[n=100000-int64]",
+    "test_marrow_equal[n=100000-float64]",
+    "test_pyarrow_equal[n=100000-int64]",
+    "test_pyarrow_equal[n=100000-float64]",
+    "test_marrow_less[n=100000-int64]",
+    "test_marrow_less[n=100000-float64]",
+    "test_pyarrow_less[n=100000-int64]",
+    "test_pyarrow_less[n=100000-float64]",
+    "test_pyarrow_join[n=100000-inner]",
+    "test_pyarrow_join[n=100000-left]",
+    "test_pyarrow_join[n=100000-semi]",
+    "test_polars_join[n=100000-inner]",
+    "test_polars_join[n=100000-left]",
+    "test_polars_join[n=100000-semi]",
+    "test_marrow_join[n=100000-inner]",
+    "test_marrow_join[n=100000-left]",
+    "test_marrow_join[n=100000-semi]",
+    "test_pyarrow_join_half[n=100000-inner]",
+    "test_pyarrow_join_half[n=100000-left]",
+    "test_pyarrow_join_half[n=100000-semi]",
+    "test_polars_join_half[n=100000-inner]",
+    "test_polars_join_half[n=100000-left]",
+    "test_polars_join_half[n=100000-semi]",
+    "test_marrow_join_half[n=100000-inner]",
+    "test_marrow_join_half[n=100000-left]",
+    "test_marrow_join_half[n=100000-semi]",
+    "test_duckdb_join[n=100000-inner]",
+    "test_duckdb_join[n=100000-left]",
+    "test_duckdb_join[n=100000-semi]",
+    "test_duckdb_join_half[n=100000-inner]",
+    "test_duckdb_join_half[n=100000-left]",
+    "test_duckdb_join_half[n=100000-semi]",
+    "test_marrow_add[n=1000000-int64]",
+    "test_marrow_add[n=1000000-float64]",
+    "test_marrow_add[n=1000000-int64_nulls]",
+    "test_pyarrow_add[n=1000000-int64]",
+    "test_pyarrow_add[n=1000000-float64]",
+    "test_pyarrow_add[n=1000000-int64_nulls]",
+    "test_marrow_sub[n=1000000]",
+    "test_pyarrow_sub[n=1000000]",
+    "test_marrow_mul[n=1000000]",
+    "test_pyarrow_mul[n=1000000]",
+    "test_marrow_div[n=1000000]",
+    "test_pyarrow_div[n=1000000]",
+    "test_marrow_sum[n=1000000-int64]",
+    "test_marrow_sum[n=1000000-float64]",
+    "test_marrow_sum[n=1000000-int64_nulls]",
+    "test_pyarrow_sum[n=1000000-int64]",
+    "test_pyarrow_sum[n=1000000-float64]",
+    "test_pyarrow_sum[n=1000000-int64_nulls]",
+    "test_marrow_product[n=1000000]",
+    "test_pyarrow_product[n=1000000]",
+    "test_marrow_min[n=1000000-int64]",
+    "test_marrow_min[n=1000000-float64]",
+    "test_pyarrow_min[n=1000000-int64]",
+    "test_pyarrow_min[n=1000000-float64]",
+    "test_marrow_max[n=1000000]",
+    "test_pyarrow_max[n=1000000]",
+    "test_marrow_any[n=1000000]",
+    "test_pyarrow_any[n=1000000]",
+    "test_marrow_all[n=1000000]",
+    "test_pyarrow_all[n=1000000]",
+    "test_marrow_filter[n=1000000-int64_50pct]",
+    "test_marrow_filter[n=1000000-int64_90pct]",
+    "test_marrow_filter[n=1000000-int64_10pct]",
+    "test_marrow_filter[n=1000000-int64_1pct]",
+    "test_marrow_filter[n=1000000-int64_0pct]",
+    "test_marrow_filter[n=1000000-float64_50pct]",
+    "test_marrow_filter[n=1000000-string_50pct]",
+    "test_marrow_filter[n=1000000-string_10pct]",
+    "test_marrow_filter[n=1000000-int64_rand50]",
+    "test_marrow_filter[n=1000000-int64_rand10]",
+    "test_marrow_filter[n=1000000-int64_rand90]",
+    "test_marrow_filter[n=1000000-int64_clustered50]",
+    "test_marrow_filter[n=1000000-int64_head50]",
+    "test_pyarrow_filter[n=1000000-int64_50pct]",
+    "test_pyarrow_filter[n=1000000-int64_90pct]",
+    "test_pyarrow_filter[n=1000000-int64_10pct]",
+    "test_pyarrow_filter[n=1000000-int64_1pct]",
+    "test_pyarrow_filter[n=1000000-int64_0pct]",
+    "test_pyarrow_filter[n=1000000-float64_50pct]",
+    "test_pyarrow_filter[n=1000000-string_50pct]",
+    "test_pyarrow_filter[n=1000000-string_10pct]",
+    "test_pyarrow_filter[n=1000000-int64_rand50]",
+    "test_pyarrow_filter[n=1000000-int64_rand10]",
+    "test_pyarrow_filter[n=1000000-int64_rand90]",
+    "test_pyarrow_filter[n=1000000-int64_clustered50]",
+    "test_pyarrow_filter[n=1000000-int64_head50]",
+    "test_polars_filter[n=1000000-int64_50pct]",
+    "test_polars_filter[n=1000000-int64_90pct]",
+    "test_polars_filter[n=1000000-int64_10pct]",
+    "test_polars_filter[n=1000000-int64_1pct]",
+    "test_polars_filter[n=1000000-int64_0pct]",
+    "test_polars_filter[n=1000000-float64_50pct]",
+    "test_polars_filter[n=1000000-string_50pct]",
+    "test_polars_filter[n=1000000-string_10pct]",
+    "test_polars_filter[n=1000000-int64_rand50]",
+    "test_polars_filter[n=1000000-int64_rand10]",
+    "test_polars_filter[n=1000000-int64_rand90]",
+    "test_polars_filter[n=1000000-int64_clustered50]",
+    "test_polars_filter[n=1000000-int64_head50]",
+    "test_marrow_drop_nulls[n=1000000-int64]",
+    "test_marrow_drop_nulls[n=1000000-float64]",
+    "test_pyarrow_drop_nulls[n=1000000-int64]",
+    "test_pyarrow_drop_nulls[n=1000000-float64]",
+    "test_polars_drop_nulls[n=1000000-int64]",
+    "test_polars_drop_nulls[n=1000000-float64]",
+    "test_marrow_equal[n=1000000-int64]",
+    "test_marrow_equal[n=1000000-float64]",
+    "test_pyarrow_equal[n=1000000-int64]",
+    "test_pyarrow_equal[n=1000000-float64]",
+    "test_marrow_less[n=1000000-int64]",
+    "test_marrow_less[n=1000000-float64]",
+    "test_pyarrow_less[n=1000000-int64]",
+    "test_pyarrow_less[n=1000000-float64]",
+    "test_pyarrow_join[n=1000000-inner]",
+    "test_pyarrow_join[n=1000000-left]",
+    "test_pyarrow_join[n=1000000-semi]",
+    "test_polars_join[n=1000000-inner]",
+    "test_polars_join[n=1000000-left]",
+    "test_polars_join[n=1000000-semi]",
+    "test_marrow_join[n=1000000-inner]",
+    "test_marrow_join[n=1000000-left]",
+    "test_marrow_join[n=1000000-semi]",
+    "test_pyarrow_join_half[n=1000000-inner]",
+    "test_pyarrow_join_half[n=1000000-left]",
+    "test_pyarrow_join_half[n=1000000-semi]",
+    "test_polars_join_half[n=1000000-inner]",
+    "test_polars_join_half[n=1000000-left]",
+    "test_polars_join_half[n=1000000-semi]",
+    "test_marrow_join_half[n=1000000-inner]",
+    "test_marrow_join_half[n=1000000-left]",
+    "test_marrow_join_half[n=1000000-semi]",
+    "test_duckdb_join[n=1000000-inner]",
+    "test_duckdb_join[n=1000000-left]",
+    "test_duckdb_join[n=1000000-semi]",
+    "test_duckdb_join_half[n=1000000-inner]",
+    "test_duckdb_join_half[n=1000000-left]",
+    "test_duckdb_join_half[n=1000000-semi]",
+    "test_pyarrow_join[n=10000000-inner]",
+    "test_pyarrow_join[n=10000000-left]",
+    "test_pyarrow_join[n=10000000-semi]",
+    "test_polars_join[n=10000000-inner]",
+    "test_polars_join[n=10000000-left]",
+    "test_polars_join[n=10000000-semi]",
+    "test_marrow_join[n=10000000-inner]",
+    "test_marrow_join[n=10000000-left]",
+    "test_marrow_join[n=10000000-semi]",
+    "test_pyarrow_join_half[n=10000000-inner]",
+    "test_pyarrow_join_half[n=10000000-left]",
+    "test_pyarrow_join_half[n=10000000-semi]",
+    "test_polars_join_half[n=10000000-inner]",
+    "test_polars_join_half[n=10000000-left]",
+    "test_polars_join_half[n=10000000-semi]",
+    "test_marrow_join_half[n=10000000-inner]",
+    "test_marrow_join_half[n=10000000-left]",
+    "test_marrow_join_half[n=10000000-semi]",
+    "test_duckdb_join[n=10000000-inner]",
+    "test_duckdb_join[n=10000000-left]",
+    "test_duckdb_join[n=10000000-semi]",
+    "test_duckdb_join_half[n=10000000-inner]",
+    "test_duckdb_join_half[n=10000000-left]",
+    "test_duckdb_join_half[n=10000000-semi]"
+  ]
+}
