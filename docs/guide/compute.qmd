@@ -181,24 +181,12 @@ print("null count:", result.null_count())   # 1
 print("is_valid(3):", result.is_valid(3))   # False
 ```
 
-## String kernels
-
-`string_lengths` returns the byte length of each string element as `uint32`. Null elements produce null output.
-
-```{python}
-s = ma.array(["hello", None, "world", "mañana"])
-print(ma.string_lengths(s))   # [5, NULL, 5, 7]
-```
-
-Note that `mañana` is 7 bytes (the `ñ` character is 2 bytes in UTF-8).
-
 ## Null behaviour summary
 
 | Operation | Null input | Null output |
 |-----------|-----------|-------------|
 | `add`, `sub`, `mul`, `div` | either operand null | null propagates |
-| `equal`, `less`, `greater`, … | either operand null | null propagates |
-| `string_lengths` | element null | null propagates |
+| `equal`, `less`, `greater`, ... | either operand null | null propagates |
 | `sum_`, `product`, `min_`, `max_` | element null | element skipped |
 | `any_`, `all_` | element null | element skipped |
 | `filter_` (source null) | source element null | null preserved in output |

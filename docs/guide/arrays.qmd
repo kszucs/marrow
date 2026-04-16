@@ -38,8 +38,6 @@ print(f64)
 # Boolean
 b = ma.array([True, False, True, False])
 print(b)
-print("true count: ", b.true_count())
-print("false count:", b.false_count())
 ```
 
 ### Null values
@@ -63,10 +61,9 @@ print("is_valid(1):", arr.is_valid(1))   # False — null
 ```{python}
 arr = ma.array([10, 20, 30, None, 50], type=ma.int32())
 
-print("length:    ", arr.__len__())
+print("length:    ", len(arr))
 print("null count:", arr.null_count())
 print("type:      ", arr.type())
-print("as string: ", str(arr))
 ```
 
 ## String arrays
@@ -80,13 +77,6 @@ print("null count:", s.null_count())
 print("is_valid(1):", s.is_valid(1))
 ```
 
-Access individual values with `__getitem__`:
-
-```{python}
-print(s.__getitem__(0))    # "hello"
-print(s.__getitem__(3))    # "mañana"
-```
-
 ## List arrays
 
 List arrays store variable-length sequences. Each element is itself a list.
@@ -95,24 +85,6 @@ List arrays store variable-length sequences. Each element is itself a list.
 nested = ma.array([[1, 2], [3, 4, 5], [6]])
 print(nested)
 print("type:", nested.type())
-```
-
-### Flatten
-
-`flatten()` returns the child array with all list elements concatenated:
-
-```{python}
-flat = nested.flatten()
-print("flattened:", flat)
-```
-
-### Value lengths
-
-`value_lengths()` returns how many elements each list contains:
-
-```{python}
-lengths = nested.value_lengths()
-print("lengths:", lengths)   # [2, 3, 1]
 ```
 
 ### Nulls in list arrays
@@ -135,39 +107,6 @@ people = ma.array([
 ])
 print(people)
 print("type:", people.type())
-```
-
-### Accessing fields
-
-Use `field(index)` to extract a column by position:
-
-```{python}
-names = people.field(0)   # first field — "name"
-ages  = people.field(1)   # second field — "age"
-print("names:", names)
-print("ages: ", ages)
-```
-
-::: {.callout-tip}
-The field order matches the order the keys appear in the first dict element (or the explicit schema — see [Type System](types.qmd)).
-:::
-
-### Nested null handling
-
-A null at the struct level means the entire row is absent. Field-level nulls mean a specific field is absent for that row.
-
-```{python}
-partial = ma.array([
-    {"x": 1,    "y": 1.5},
-    {"x": None, "y": 2.5},   # x is null for this row
-    None,                      # entire row is null
-])
-print(partial)
-print("struct null count:", partial.null_count())   # 1 (the full-row null)
-xs = partial.field(0)
-print("x field:")
-print(xs)
-print("x null count:", xs.null_count())   # 1 (the field-level null)
 ```
 
 ## Slicing
@@ -197,5 +136,4 @@ FixedSizeList arrays store sequences of a fixed length per element — useful fo
 coords = ma.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
 print(coords)
 print("type:", coords.type())
-print("flatten:", coords.flatten())
 ```

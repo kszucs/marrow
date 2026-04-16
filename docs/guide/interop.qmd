@@ -1,29 +1,24 @@
 ---
 title: "PyArrow Interop"
+execute:
+  enabled: false
 ---
 
 Marrow and [PyArrow](https://arrow.apache.org/docs/python/) implement the same Apache Arrow columnar format. This page covers how they relate, where Marrow is faster, and how to exchange data between them at the Mojo level via the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
-
-```{python}
-#| echo: false
-import sys
-sys.path.insert(0, "../../python")
-import marrow as ma
-import pyarrow as pa
-```
 
 ## Same data model
 
 Both libraries represent the same Arrow memory layout. An `int64` array in Marrow and in PyArrow are bitwise identical in memory.
 
-```{python}
+```python
+import marrow as ma
+import pyarrow as pa
+
 # Marrow
 ma_arr = ma.array([1, 2, 3, None, 5])
 print("marrow:", ma_arr)
 print("type:  ", ma_arr.type())
-```
 
-```{python}
 # PyArrow
 pa_arr = pa.array([1, 2, 3, None, 5])
 print("pyarrow:", pa_arr)
@@ -36,16 +31,16 @@ When converting Python data to Arrow arrays, Marrow is faster than PyArrow for n
 
 | Array type | marrow | PyArrow | speedup |
 |------------|-------:|--------:|---------|
-| `int64` (explicit type) | 0.37 ms | 0.89 ms | **2.4×** |
-| `int64` + nulls (explicit) | 0.36 ms | 0.87 ms | **2.4×** |
-| `float64` (explicit) | 0.34 ms | 0.48 ms | **1.4×** |
-| `float64` + nulls | 0.34 ms | 0.51 ms | **1.5×** |
-| `string` (explicit) | 0.72 ms | 1.06 ms | **1.5×** |
-| `string` + nulls | 0.70 ms | 1.04 ms | **1.5×** |
-| struct, primitive fields (explicit) | 5.41 ms | 6.54 ms | **1.2×** |
-| `int64` (inferred) | 1.40 ms | 1.27 ms | 1.1× slower |
-| `string` (inferred) | 1.57 ms | 1.02 ms | 1.5× slower |
-| nested list (inferred) | 3.92 ms | 2.36 ms | 1.7× slower |
+| `int64` (explicit type) | 0.37 ms | 0.89 ms | **2.4x** |
+| `int64` + nulls (explicit) | 0.36 ms | 0.87 ms | **2.4x** |
+| `float64` (explicit) | 0.34 ms | 0.48 ms | **1.4x** |
+| `float64` + nulls | 0.34 ms | 0.51 ms | **1.5x** |
+| `string` (explicit) | 0.72 ms | 1.06 ms | **1.5x** |
+| `string` + nulls | 0.70 ms | 1.04 ms | **1.5x** |
+| struct, primitive fields (explicit) | 5.41 ms | 6.54 ms | **1.2x** |
+| `int64` (inferred) | 1.40 ms | 1.27 ms | 1.1x slower |
+| `string` (inferred) | 1.57 ms | 1.02 ms | 1.5x slower |
+| nested list (inferred) | 3.92 ms | 2.36 ms | 1.7x slower |
 
 The pattern: **provide an explicit type when you know it**. Marrow's builder path is highly optimized for known types. When the type must be inferred from a scan of Python objects, PyArrow currently wins for complex nested structures.
 
@@ -61,15 +56,16 @@ Marrow arrays implement the Arrow C Data Interface protocol (`__arrow_c_array__`
 
 ### Python level
 
-```{python}
-# PyArrow → Marrow (via __arrow_c_array__ protocol)
+```python
+import marrow as ma
+import pyarrow as pa
+
+# PyArrow -> Marrow (via __arrow_c_array__ protocol)
 pa_arr = pa.array([1, 2, 3, None, 5])
 ma_arr = ma.array(pa_arr)
 print(ma_arr)
-```
 
-```{python}
-# Marrow → PyArrow (via __arrow_c_array__ protocol)
+# Marrow -> PyArrow (via __arrow_c_array__ protocol)
 ma_arr = ma.array([1, 2, 3, None, 5])
 pa_arr = pa.array(ma_arr)
 print(pa_arr)

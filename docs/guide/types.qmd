@@ -129,14 +129,6 @@ records = ma.array([
 print(records)
 ```
 
-Access fields by position:
-
-```{python}
-print("names: ", records.field(0))
-print("scores:", records.field(1))
-print("ranks: ", records.field(2))
-```
-
 ## Nested list types
 
 List arrays hold variable-length sequences. Type inference handles the common cases automatically:

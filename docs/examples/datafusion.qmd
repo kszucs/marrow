@@ -1,5 +1,7 @@
 ---
 title: "DataFusion UDFs"
+execute:
+  enabled: false
 ---
 
 [Apache Arrow DataFusion](https://datafusion.apache.org) is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.
