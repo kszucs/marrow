@@ -330,7 +330,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tr>
 </tbody>
 </table>
-<div id="86a344cf" class="cell" data-execution_count="2">
+<div id="ba3212d8" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Type objects are just values — print them to inspect</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.int64())</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.float32())</span>
@@ -345,7 +345,7 @@ string</code></pre>
 <section id="type-inference" class="level2">
 <h2 class="anchored" data-anchor-id="type-inference">Type inference</h2>
 <p>When <code>type=</code> is omitted from <code>ma.array()</code>, the type is inferred from the data in a single pass:</p>
-<div id="652c5a57" class="cell" data-execution_count="3">
+<div id="2ba1eafc" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.infer_type([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>]))             <span class="co"># int64  (Python int)</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.infer_type([<span class="fl">1.0</span>, <span class="fl">2.0</span>]))            <span class="co"># float64  (Python float)</span></span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.infer_type([<span class="va">True</span>, <span class="va">False</span>]))         <span class="co"># bool</span></span>
@@ -376,7 +376,7 @@ struct&lt;x: int64, y: float64&gt;</code></pre>
 <section id="when-inference-fails" class="level3">
 <h3 class="anchored" data-anchor-id="when-inference-fails">When inference fails</h3>
 <p>Inference requires at least one non-None element to determine the type. An all-<code>None</code> list needs an explicit type:</p>
-<div id="6dfa6843" class="cell" data-execution_count="4">
+<div id="0e778228" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># This raises — can't infer type from all Nones</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ma.array([<span class="va">None</span>, <span class="va">None</span>])</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-error">
@@ -391,7 +391,7 @@ struct&lt;x: int64, y: float64&gt;</code></pre>
 </div>
 </div>
 </div>
-<div id="f4b60a21" class="cell" data-execution_count="5">
+<div id="64bc9d14" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Provide an explicit type instead</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="va">None</span>, <span class="va">None</span>], <span class="bu">type</span><span class="op">=</span>ma.int64())</span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
@@ -402,7 +402,7 @@ null count: 2</code></pre>
 </div>
 </div>
 <p>Mixing incompatible Python types also raises:</p>
-<div id="a38d9243" class="cell" data-execution_count="6">
+<div id="3930715a" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>ma.array([<span class="dv">1</span>, <span class="st">"two"</span>, <span class="dv">3</span>])   <span class="co"># int and str are incompatible</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-error">
 <div class="ansi-escaped-output">
@@ -420,7 +420,7 @@ null count: 2</code></pre>
 <section id="explicit-types" class="level2">
 <h2 class="anchored" data-anchor-id="explicit-types">Explicit types</h2>
 <p>Providing <code>type=</code> skips inference and coerces the data:</p>
-<div id="46c17028" class="cell" data-execution_count="7">
+<div id="2da6ce90" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Coerce Python ints to int32</span></span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
@@ -438,7 +438,7 @@ PrimitiveArray[float32]([1.0, 2.0, 3.0])</code></pre>
 <section id="struct-types" class="level2">
 <h2 class="anchored" data-anchor-id="struct-types">Struct types</h2>
 <p>Structs group multiple named fields into a single array. Use <code>ma.field()</code> and <code>ma.struct()</code> to build a schema, then pass it as <code>type=</code>:</p>
-<div id="f94fdeaa" class="cell" data-execution_count="8">
+<div id="1c51e46d" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>schema <span class="op">=</span> ma.struct([</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>    ma.field(<span class="st">"name"</span>,  ma.string()),</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>    ma.field(<span class="st">"score"</span>, ma.float64()),</span>
@@ -449,7 +449,7 @@ PrimitiveArray[float32]([1.0, 2.0, 3.0])</code></pre>
 <pre><code>struct&lt;name: string, score: float64, rank: int32&gt;</code></pre>
 </div>
 </div>
-<div id="4e86774d" class="cell" data-execution_count="9">
+<div id="acf581bd" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>records <span class="op">=</span> ma.array([</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"score"</span>: <span class="fl">9.5</span>, <span class="st">"rank"</span>: <span class="dv">1</span>},</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Bob"</span>,   <span class="st">"score"</span>: <span class="fl">8.2</span>, <span class="st">"rank"</span>: <span class="dv">2</span>},</span>
@@ -465,7 +465,7 @@ PrimitiveArray[float32]([1.0, 2.0, 3.0])</code></pre>
 <section id="nested-list-types" class="level2">
 <h2 class="anchored" data-anchor-id="nested-list-types">Nested list types</h2>
 <p>List arrays hold variable-length sequences. Type inference handles the common cases automatically:</p>
-<div id="b1a573f8" class="cell" data-execution_count="10">
+<div id="3d80ea72" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>nested <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>], [<span class="dv">4</span>, <span class="dv">5</span>]])</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(nested.<span class="bu">type</span>())   <span class="co"># list&lt;int64&gt;</span></span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a></span>
@@ -492,7 +492,7 @@ Note
 </section>
 <section id="checking-types-at-runtime" class="level2">
 <h2 class="anchored" data-anchor-id="checking-types-at-runtime">Checking types at runtime</h2>
-<div id="691a7330" class="cell" data-execution_count="11">
+<div id="cbccd93d" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>])</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>t <span class="op">=</span> arr.<span class="bu">type</span>()</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(t)</span>
