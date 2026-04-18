@@ -14,6 +14,9 @@
       --border: #d0d7de;
       --text: #1f2328;
       --text-muted: #656d76;
+      --red: #cf222e;
+      --red-bg: rgba(207, 34, 46, 0.06);
+      --green: #1a7f37;
     }
 
     @media (prefers-color-scheme: dark) {
@@ -23,6 +26,9 @@
         --border: #30363d;
         --text: #e6edf3;
         --text-muted: #8b949e;
+        --red: #f85149;
+        --red-bg: rgba(248, 81, 73, 0.08);
+        --green: #3fb950;
       }
     }
 
@@ -33,142 +39,156 @@
       background: var(--bg);
       color: var(--text);
       padding: 2rem 1.5rem;
-      max-width: 1400px;
+      max-width: 1600px;
       margin: 0 auto;
     }
 
-    h1 {
-      font-size: 1.6rem;
-      font-weight: 600;
-      margin-bottom: 0.25rem;
-    }
-
-    #subtitle {
-      color: var(--text-muted);
-      font-size: 0.875rem;
-      margin-bottom: 2rem;
-    }
-
-    h2 {
-      font-size: 1.1rem;
-      font-weight: 600;
-      margin-bottom: 0.75rem;
-    }
-
+    h1 { font-size: 1.6rem; font-weight: 600; margin-bottom: 0.25rem; }
+    #subtitle { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem; }
+    h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; }
     section { margin-bottom: 2.5rem; }
 
-    /* Summary table */
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.875rem;
-    }
+    /* Attention section */
+    #attention-section { display: none; }
+    .attention-subtitle { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 0.75rem; }
+    #attention-cards { display: flex; flex-wrap: wrap; gap: 0.625rem; }
 
-    th, td {
-      text-align: left;
-      padding: 0.5rem 0.75rem;
-      border: 1px solid var(--border);
-    }
-
-    th {
+    .attention-card {
       background: var(--bg-alt);
-      font-weight: 600;
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--red);
+      border-radius: 6px;
+      padding: 0.6rem 0.85rem;
+      min-width: 280px;
+      flex: 1 1 calc(33.333% - 0.5rem);
+      max-width: calc(50% - 0.325rem);
+      display: flex; align-items: center; gap: 0.75rem;
+      cursor: pointer;
+      transition: border-color 0.15s;
     }
+    .attention-card:hover { border-color: var(--red); }
+    .attention-info { flex: 1; min-width: 0; }
+    .attention-name { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .attention-detail { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.15rem; }
+    .attention-pct { font-size: 1.25rem; font-weight: 700; color: var(--red); white-space: nowrap; }
+    .attention-spark canvas { display: block; }
 
-    thead th {
-      position: sticky;
-      top: 0;
-      z-index: 1;
+    /* Search */
+    #table-search, #speedup-search {
+      width: 100%;
+      max-width: 400px;
+      padding: 0.4rem 0.7rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+      outline: none;
     }
+    #table-search:focus, #speedup-search:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.15); }
+    #table-search::placeholder, #speedup-search::placeholder { color: var(--text-muted); }
+    #table-count { color: var(--text-muted); font-size: 0.8rem; margin-left: 0.5rem; }
 
+    /* Summary table */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    th, td { text-align: left; padding: 0.4rem 0.6rem; border: 1px solid var(--border); white-space: nowrap; }
+    th { background: var(--bg-alt); font-weight: 600; }
+    thead th { position: sticky; top: 0; z-index: 1; }
     tr:nth-child(even) td { background: var(--bg-alt); }
+    tr.row-regressed td { background: var(--red-bg) !important; }
+    tr.row-highlight td { outline: 2px solid #2563eb; outline-offset: -2px; }
 
-    .trend-up   { color: #1a7f37; font-weight: 600; }
-    .trend-down { color: #cf222e; font-weight: 600; }
-    .trend-flat { color: var(--text-muted); }
+    .change-up   { color: var(--green); font-weight: 600; }
+    .change-down { color: var(--red); font-weight: 600; }
+    .change-flat { color: var(--text-muted); }
+    .ratio-fast  { color: var(--green); font-weight: 600; }
+    .ratio-slow  { color: var(--red); font-weight: 600; }
+    .ratio-par   { color: var(--text-muted); }
 
-    @media (prefers-color-scheme: dark) {
-      .trend-up   { color: #3fb950; }
-      .trend-down { color: #f85149; }
+    th.sortable { cursor: pointer; user-select: none; position: relative; padding-right: 1.25rem; }
+    th.sortable:hover { background: var(--border); }
+    th.sortable::after { content: "\2195"; position: absolute; right: 0.35rem; opacity: 0.3; font-size: 0.7rem; }
+    th.sort-asc::after { content: "\2191"; opacity: 0.8; }
+    th.sort-desc::after { content: "\2193"; opacity: 0.8; }
+
+    .badge-new {
+      display: inline-block; font-size: 0.65rem; font-weight: 600; padding: 0.1rem 0.35rem;
+      border-radius: 3px; background: #2563eb22; color: #2563eb; vertical-align: middle;
     }
+    @media (prefers-color-scheme: dark) { .badge-new { background: #2563eb33; color: #79b8ff; } }
+
+    td.sparkline-cell { padding: 0.2rem 0.4rem; width: 130px; }
+    canvas.sparkline { width: 120px; height: 28px; display: block; }
+
+    td.group-cell { color: var(--text-muted); font-size: 0.75rem; }
+    td.clickable { cursor: pointer; }
+    td.clickable:hover { text-decoration: underline; color: #2563eb; }
 
     /* Controls bar */
-    #controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      align-items: center;
-      margin-bottom: 1rem;
-    }
-
-    #range-selector {
-      display: flex;
-      gap: 0.25rem;
-    }
-
+    #controls { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 1rem; }
+    #range-selector { display: flex; gap: 0.25rem; }
     .range-btn, #reset-zoom {
-      padding: 0.35rem 0.75rem;
-      border: 1px solid var(--border);
-      background: var(--bg-alt);
-      color: var(--text);
-      border-radius: 4px;
-      font-size: 0.8rem;
-      cursor: pointer;
-      user-select: none;
+      padding: 0.35rem 0.75rem; border: 1px solid var(--border); background: var(--bg-alt);
+      color: var(--text); border-radius: 4px; font-size: 0.8rem; cursor: pointer; user-select: none;
     }
-
-    .range-btn:hover, #reset-zoom:hover {
-      border-color: var(--text-muted);
-    }
-
-    .range-btn.active {
-      background: var(--text);
-      color: var(--bg);
-      border-color: var(--text);
-    }
-
+    .range-btn:hover, #reset-zoom:hover { border-color: var(--text-muted); }
+    .range-btn.active { background: var(--text); color: var(--bg); border-color: var(--text); }
     #reset-zoom { margin-left: auto; }
-
-    #range-info {
-      color: var(--text-muted);
-      font-size: 0.8rem;
-    }
+    #range-info { color: var(--text-muted); font-size: 0.8rem; }
 
     /* Chart grid */
-    #chart-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 1rem;
-    }
-
+    #chart-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
     @media (max-width: 800px) {
       #chart-grid { grid-template-columns: 1fr; }
+      .attention-card { max-width: 100%; flex: 1 1 100%; }
     }
 
     .category-card {
-      background: var(--bg-alt);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 0.75rem 0.9rem 0.9rem;
+      background: var(--bg-alt); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.75rem 0.9rem 0.9rem;
     }
+    .category-card.has-regression { border-left: 3px solid var(--red); }
+    .category-card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text); }
+    .canvas-wrap { position: relative; height: 260px; }
+    #no-data { color: var(--text-muted); font-size: 0.95rem; padding: 2rem 0; }
 
-    .category-card h3 {
-      font-size: 0.95rem;
-      font-weight: 600;
-      margin-bottom: 0.4rem;
-      color: var(--text);
+    /* Collapsible chart sections */
+    .chart-section { margin-bottom: 1.5rem; }
+    .chart-section-header {
+      display: flex; align-items: center; gap: 0.5rem;
+      cursor: pointer; user-select: none; padding: 0.4rem 0;
+      margin-bottom: 0.5rem; border-bottom: 1px solid var(--border);
     }
+    .chart-section-header:hover { color: #2563eb; }
+    .chart-section-header h3 { font-size: 1rem; font-weight: 600; }
+    .chart-section-toggle { font-size: 0.7rem; color: var(--text-muted); transition: transform 0.15s; }
+    .chart-section-toggle.collapsed { transform: rotate(-90deg); }
+    .chart-section-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem;
+    }
+    @media (max-width: 800px) { .chart-section-grid { grid-template-columns: 1fr; } }
+    .chart-section-grid.hidden { display: none; }
+    .section-badge {
+      font-size: 0.7rem; font-weight: 600; padding: 0.1rem 0.4rem;
+      border-radius: 3px; margin-left: 0.25rem;
+    }
+    .section-badge.regression { background: var(--red-bg); color: var(--red); }
+    .section-badge.count { background: var(--bg-alt); color: var(--text-muted); border: 1px solid var(--border); }
 
-    .canvas-wrap {
-      position: relative;
-      height: 260px;
+    /* Competition section */
+    #competition-section { display: none; }
+    #competition-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem;
     }
-
-    #no-data {
-      color: var(--text-muted);
-      font-size: 0.95rem;
-      padding: 2rem 0;
+    @media (max-width: 800px) { #competition-grid { grid-template-columns: 1fr; } }
+    .competition-card {
+      background: var(--bg-alt); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.75rem 0.9rem 0.9rem;
     }
+    .competition-card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--text); }
+    .competition-canvas-wrap { position: relative; min-height: 200px; }
   </style>
 </head>
 <body>
@@ -180,24 +200,77 @@
   </div>
 
   <div id="content" style="display:none">
-    <section>
+    <section id="attention-section">
+      <h2>Needs attention</h2>
+      <p class="attention-subtitle">Benchmarks with significant throughput regressions (beyond normal variance)</p>
+      <div id="attention-cards"></div>
+    </section>
+
+    <section id="table-section">
       <h2>Latest run</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Benchmark</th>
-            <th>Mean time</th>
-            <th>Throughput (GElems/s)</th>
-            <th>Trend</th>
-          </tr>
-        </thead>
-        <tbody id="summary-body"></tbody>
-      </table>
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap">
+        <input id="table-search" type="text" placeholder="Filter benchmarks..." />
+        <span id="table-count"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" data-sort="name">Benchmark</th>
+              <th class="sortable" data-sort="group">Group</th>
+              <th class="sortable" data-sort="file">File</th>
+              <th class="sortable" data-sort="mean_ns">Mean</th>
+              <th class="sortable" data-sort="median_ns">Median</th>
+              <th class="sortable" data-sort="stddev_ns">&sigma;</th>
+              <th class="sortable" data-sort="throughput">Throughput</th>
+              <th class="sortable" data-sort="prev_mean_ns">Prev mean</th>
+              <th class="sortable" data-sort="prev_throughput">Prev throughput</th>
+              <th class="sortable sort-desc" data-sort="change">Change</th>
+              <th>History</th>
+            </tr>
+          </thead>
+          <tbody id="summary-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="competition-section">
+      <h2>Competition (latest run)</h2>
+      <p class="attention-subtitle">Marrow vs PyArrow / Polars / DuckDB — throughput comparison</p>
+      <div id="competition-grid"></div>
+    </section>
+
+    <section id="speedup-section" style="display:none">
+      <h2>Speedup tracking</h2>
+      <p class="attention-subtitle">Marrow throughput / competitor throughput over time (higher = marrow is faster)</p>
+      <div id="speedup-search-wrap" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem">
+        <input id="speedup-search" type="text" placeholder="Filter comparisons..." style="max-width:300px" class="table-search-input" />
+        <span id="speedup-count" style="color:var(--text-muted);font-size:0.8rem"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="speedup-table">
+          <thead>
+            <tr>
+              <th>Kernel</th>
+              <th>Params</th>
+              <th>Competitor</th>
+              <th>Latest ratio</th>
+              <th>Trend</th>
+            </tr>
+          </thead>
+          <tbody id="speedup-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="comp-charts-section" style="display:none">
+      <h2>Competition over time (GElems/s)</h2>
+      <p class="attention-subtitle">Python benchmark throughput — all engines on same chart, colored by engine</p>
+      <div id="comp-chart-grid"></div>
     </section>
 
     <section>
-      <h2>Throughput over time (GElems/s)</h2>
-
+      <h2>Kernel throughput over time (GElems/s)</h2>
       <div id="controls">
         <div id="range-selector" role="group" aria-label="Commit range">
           <button class="range-btn" data-range="20" type="button">Last 20</button>
@@ -208,133 +281,371 @@
         <span id="range-info"></span>
         <button id="reset-zoom" type="button">Reset zoom</button>
       </div>
-
       <div id="chart-grid"></div>
     </section>
   </div>
 
   <script>
-    // ---------------------------------------------------------------------------
-    // Register the zoom plugin once Chart.js is on the page.
-    // ---------------------------------------------------------------------------
+    // =========================================================================
+    // Chart.js plugin registration
+    // =========================================================================
     if (typeof Chart !== "undefined") {
       const zoomPlugin = window["chartjs-plugin-zoom"] || window.ChartZoom;
       if (zoomPlugin) Chart.register(zoomPlugin);
     }
 
-    // ---------------------------------------------------------------------------
-    // Colour palette — 10 distinct colours readable on both light and dark
-    // ---------------------------------------------------------------------------
+    // Noise floor plugin — draws per-point ±2σ band when stddev data is
+    // available on the dataset, otherwise falls back to series-level variance.
+    const noiseFloorPlugin = {
+      id: "noiseFloor",
+      beforeDatasetsDraw(chart) {
+        if (!chart.options.plugins.noiseFloor) return;
+        const { ctx, chartArea: area, scales } = chart;
+        if (!area) return;
+
+        for (let di = 0; di < chart.data.datasets.length; di++) {
+          const ds = chart.data.datasets[di];
+          const color = (ds.borderColor || "#888") + "0C";
+          const stddevs = ds._stddevThroughput; // per-point stddev in throughput units
+
+          if (stddevs && stddevs.some(v => v != null)) {
+            // Per-point band using measured stddev
+            ctx.save();
+            ctx.fillStyle = color;
+            const meta = chart.getDatasetMeta(di);
+            for (let i = 0; i < ds.data.length; i++) {
+              const v = ds.data[i];
+              const sd = stddevs[i];
+              if (v == null || sd == null || sd === 0) continue;
+              const pt = meta.data[i];
+              if (!pt) continue;
+              const yTop = scales.y.getPixelForValue(Math.max(0, v + 2 * sd));
+              const yBot = scales.y.getPixelForValue(Math.max(0, v - 2 * sd));
+              const halfW = ds.data.length > 40 ? 2 : 4;
+              ctx.fillRect(pt.x - halfW, Math.min(yTop, yBot), halfW * 2, Math.abs(yBot - yTop));
+            }
+            ctx.restore();
+          } else {
+            // Fallback: series-level variance band
+            const vals = ds.data.filter(v => v != null);
+            if (vals.length < 4) continue;
+            const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+            let ss = 0;
+            for (const v of vals) ss += (v - mean) ** 2;
+            const std = Math.sqrt(ss / (vals.length - 1));
+            if (std === 0) continue;
+            const yTop = scales.y.getPixelForValue(Math.max(0, mean + 2 * std));
+            const yBot = scales.y.getPixelForValue(Math.max(0, mean - 2 * std));
+            ctx.save();
+            ctx.fillStyle = color;
+            ctx.fillRect(area.left, Math.min(yTop, yBot), area.right - area.left, Math.abs(yBot - yTop));
+            ctx.restore();
+          }
+        }
+      },
+    };
+    if (typeof Chart !== "undefined") Chart.register(noiseFloorPlugin);
+
+    // =========================================================================
+    // Constants
+    // =========================================================================
     const PALETTE = [
       "#2563eb", "#16a34a", "#dc2626", "#d97706", "#7c3aed",
       "#0891b2", "#db2777", "#65a30d", "#ea580c", "#4f46e5",
     ];
 
-    // ---------------------------------------------------------------------------
-    // Benchmark categories — prefix-matched against benchmark names.
-    // Unknown operations fall into a catch-all "Other" card.
-    // ---------------------------------------------------------------------------
-    const CATEGORIES = [
-      { key: "arithmetic", label: "Arithmetic",
-        prefixes: ["bench_add_", "bench_sub_", "bench_mul_", "bench_div_"] },
-      { key: "aggregate", label: "Aggregate",
-        prefixes: ["bench_sum_", "bench_product_", "bench_min_", "bench_max_", "bench_mean_"] },
-      { key: "filter", label: "Filter",
-        prefixes: ["bench_filter_"] },
-      { key: "join", label: "Join",
-        prefixes: ["bench_join_"] },
-      { key: "compare", label: "Compare",
-        prefixes: ["bench_equal_", "bench_compare_"] },
-      { key: "hashing", label: "Hashing",
-        prefixes: ["bench_rapidhash_"] },
-      { key: "bitmap", label: "Bitmap",
-        prefixes: ["bench_and_", "bench_or_", "bench_invert_",
-                   "bench_count_set_bits_", "bench_set_range_", "bench_pack_bools_"] },
-    ];
+    const ENGINE_COLORS = {
+      marrow:  "#2563eb",
+      pyarrow: "#d97706",
+      polars:  "#16a34a",
+      duckdb:  "#dc2626",
+    };
 
-    // Categorise a benchmark name by checking prefixes.
-    function categoryFor(name) {
-      for (const cat of CATEGORIES) {
-        if (cat.prefixes.some(p => name.startsWith(p))) return cat.key;
-      }
-      return "other";
+    // Super-category mapping — first word of group key → section label
+    const SUPER_MAP = {
+      add: "Arithmetic", sub: "Arithmetic", mul: "Arithmetic", div: "Arithmetic",
+      and: "Bitwise", or: "Bitwise", invert: "Bitwise",
+      count: "Bitmap", set: "Bitmap", pack: "Bitmap",
+      sum: "Aggregate", product: "Aggregate", min: "Aggregate", max: "Aggregate", mean: "Aggregate",
+      filter: "Filter",
+      join: "Join", hash: "Join",
+      equal: "Compare", less: "Compare", compare: "Compare",
+      rapidhash: "Hashing",
+    };
+
+    function superCategoryFor(groupKey) {
+      const first = groupKey.split("_")[0];
+      return SUPER_MAP[first] || groupKey.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
     }
 
-    const GITHUB_COMMIT_URL = (sha) =>
-      `https://github.com/kszucs/marrow/commit/${sha}`;
+    // =========================================================================
+    // Benchmark name parsing
+    // =========================================================================
+    const SIZE_RE = /^(\d+[kmbt]?)$/i;
+    const TYPE_RE = /^(bool|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float16|float32|float64|string|binary)$/i;
+    const ENGINE_PREFIXES = ["bench_", "test_marrow_", "test_pyarrow_", "test_polars_", "test_duckdb_"];
 
-    // ---------------------------------------------------------------------------
-    // Helpers
-    // ---------------------------------------------------------------------------
+    function parseBenchName(name) {
+      const bracketIdx = name.indexOf("[");
+      const base = bracketIdx >= 0 ? name.slice(0, bracketIdx) : name;
+      const params = bracketIdx >= 0 ? name.slice(bracketIdx) : null;
 
-    // Format nanoseconds as a human-readable string.
+      let engine = null;
+      let stripped = base;
+      for (const p of ENGINE_PREFIXES) {
+        if (base.startsWith(p)) {
+          if (p.startsWith("test_")) engine = p.slice(5, -1);
+          stripped = base.slice(p.length);
+          break;
+        }
+      }
+
+      const parts = stripped.split("_");
+      while (parts.length > 1 && SIZE_RE.test(parts[parts.length - 1])) parts.pop();
+      while (parts.length > 1 && TYPE_RE.test(parts[parts.length - 1])) parts.pop();
+
+      return { group: parts.join("_"), engine, params };
+    }
+
+    function groupLabel(key) {
+      return key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    const GITHUB_COMMIT_URL = (sha) => `https://github.com/kszucs/marrow/commit/${sha}`;
+
+    // =========================================================================
+    // Stats helpers
+    // =========================================================================
+    function arrMean(arr) {
+      if (!arr.length) return 0;
+      let s = 0; for (const v of arr) s += v; return s / arr.length;
+    }
+
+    function arrStddev(arr, mean) {
+      if (arr.length < 2) return 0;
+      let s = 0; for (const v of arr) s += (v - mean) ** 2;
+      return Math.sqrt(s / (arr.length - 1));
+    }
+
+    // =========================================================================
+    // Regression detection
+    // =========================================================================
+    const REGRESSION_WINDOW = 5;
+
+    function detectRegression(op, runs) {
+      const W = REGRESSION_WINDOW;
+      const vals = [];
+      for (const r of runs) {
+        const res = r.results ? r.results[op] : null;
+        vals.push(res && res.throughput_gelems_s != null ? res.throughput_gelems_s : null);
+      }
+      const nonNull = vals.filter(v => v !== null);
+      if (nonNull.length < 2) return { isRegression: false, changePct: null, isNew: nonNull.length < 10 };
+
+      if (nonNull.length < 2 * W) {
+        const latest = nonNull[nonNull.length - 1];
+        const first = nonNull[0];
+        const pct = (latest - first) / Math.abs(first);
+        return { isRegression: false, changePct: pct, isNew: nonNull.length < 10 };
+      }
+
+      const recent = nonNull.slice(-W);
+      const baseline = nonNull.slice(-2 * W, -W);
+      const baseMean = arrMean(baseline);
+      const recentMean = arrMean(recent);
+      if (baseMean === 0) return { isRegression: false, changePct: null, isNew: false };
+
+      const baseStd = arrStddev(baseline, baseMean);
+      const cv = baseStd / Math.abs(baseMean);
+      const threshold = Math.max(0.05, 2.0 * cv);
+      const changePct = (recentMean - baseMean) / Math.abs(baseMean);
+      const isRegression = changePct < -threshold;
+
+      return { isRegression, changePct, threshold, recentMean, baseMean, isNew: false };
+    }
+
+    // =========================================================================
+    // Sparkline drawing
+    // =========================================================================
+    function drawSparkline(canvas, values, color) {
+      const dpr = window.devicePixelRatio || 1;
+      const w = 120, h = 28;
+      canvas.width = w * dpr;
+      canvas.height = h * dpr;
+      canvas.style.width = w + "px";
+      canvas.style.height = h + "px";
+
+      const ctx = canvas.getContext("2d");
+      ctx.scale(dpr, dpr);
+
+      const pts = [];
+      for (let i = 0; i < values.length; i++) {
+        if (values[i] !== null) pts.push({ x: i, y: values[i] });
+      }
+      if (pts.length < 2) return;
+
+      const yMin = Math.min(...pts.map(p => p.y));
+      const yMax = Math.max(...pts.map(p => p.y));
+      const yRange = yMax - yMin || 1;
+      const pad = yRange * 0.1;
+
+      function sx(i) { return (i / (values.length - 1)) * w; }
+      function sy(v) { return h - ((v - yMin + pad) / (yRange + 2 * pad)) * h; }
+
+      ctx.beginPath();
+      ctx.moveTo(sx(pts[0].x), h);
+      ctx.lineTo(sx(pts[0].x), sy(pts[0].y));
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
+      ctx.lineTo(sx(pts[pts.length - 1].x), h);
+      ctx.closePath();
+      ctx.fillStyle = color + "18";
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.moveTo(sx(pts[0].x), sy(pts[0].y));
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(sx(pts[i].x), sy(pts[i].y));
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.lineJoin = "round";
+      ctx.stroke();
+
+      const last = pts[pts.length - 1];
+      ctx.beginPath();
+      ctx.arc(sx(last.x), sy(last.y), 2, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
+
+    // =========================================================================
+    // Formatting helpers
+    // =========================================================================
     function fmtNs(ns) {
-      if (ns == null) return "—";
+      if (ns == null) return "\u2014";
       if (ns < 1_000) return `${ns.toFixed(1)} ns`;
-      if (ns < 1_000_000) return `${(ns / 1_000).toFixed(2)} µs`;
+      if (ns < 1_000_000) return `${(ns / 1_000).toFixed(2)} \u00b5s`;
       if (ns < 1_000_000_000) return `${(ns / 1_000_000).toFixed(2)} ms`;
       return `${(ns / 1_000_000_000).toFixed(2)} s`;
     }
 
-    function fmtThroughput(v) {
-      return v == null ? "—" : v.toFixed(3);
+    function fmtThroughput(v) { return v == null ? "\u2014" : v.toFixed(3); }
+
+    function fmtChangePct(pct) {
+      if (pct == null) return { text: "\u2014", cls: "change-flat" };
+      const sign = pct >= 0 ? "+" : "";
+      const text = `${sign}${(pct * 100).toFixed(1)}%`;
+      if (pct > 0.05)  return { text, cls: "change-up" };
+      if (pct < -0.05) return { text, cls: "change-down" };
+      return { text, cls: "change-flat" };
     }
 
-    // Trend based on throughput: higher is better (faster).
-    function trendArrow(latestTp, oldTp) {
-      if (latestTp == null || oldTp == null) return { text: "—", cls: "trend-flat" };
-      // Treat a >5% change as meaningful.
-      const pct = (latestTp - oldTp) / Math.abs(oldTp);
-      if (pct >  0.05) return { text: "↑", cls: "trend-up" };   // throughput increased = faster
-      if (pct < -0.05) return { text: "↓", cls: "trend-down" }; // throughput decreased = slower
-      return { text: "→", cls: "trend-flat" };
-    }
-
-    // Stable per-op colour indexed by position in data.operations.
     function colorFor(op, allOps) {
       const i = allOps.indexOf(op);
       return PALETTE[((i < 0 ? 0 : i) % PALETTE.length)];
     }
 
-    // Build the categories that will actually render for this dataset, adding a
-    // catch-all "Other" card for any op not matched by a category prefix.
     function resolveCategories(allOps) {
-      const catMap = {};
-      for (const cat of CATEGORIES) catMap[cat.key] = [];
-      const other = [];
-
+      const groups = new Map();
       for (const op of allOps) {
-        const key = categoryFor(op);
-        if (key === "other") {
-          other.push(op);
-        } else {
-          catMap[key].push(op);
-        }
+        if (!op.startsWith("bench_")) continue;
+        const { group } = parseBenchName(op);
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(op);
       }
-
-      const result = CATEGORIES
-        .map(c => ({ key: c.key, label: c.label, ops: catMap[c.key] }))
-        .filter(c => c.ops.length > 0);
-      if (other.length) {
-        result.push({ key: "other", label: "Other", ops: other });
-      }
-      return result;
+      return Array.from(groups, ([key, ops]) => ({ key, label: groupLabel(key), ops }));
     }
 
-    // ---------------------------------------------------------------------------
+    function sparklineValues(op, runs, n) {
+      const slice = runs.slice(-n);
+      return slice.map(r => {
+        const res = r.results ? r.results[op] : null;
+        return (res && res.throughput_gelems_s != null) ? res.throughput_gelems_s : null;
+      });
+    }
+
+    // =========================================================================
     // Dashboard state
-    // ---------------------------------------------------------------------------
+    // =========================================================================
     const STATE = {
-      allRuns: [],    // chronological (oldest first)
+      allRuns: [],
       allOps: [],
       categories: [],
-      range: 50,      // "all" or a positive integer
-      charts: {},     // { [category.key]: Chart instance }
+      compCategories: [],
+      speedupRows: [],
+      speedupFilter: "",
+      range: 50,
+      charts: {},
+      compCharts: {},
+      competitionCharts: {},
+      tableRows: [],
+      tableSort: { key: "change", dir: "asc" },
+      tableFilter: "",
+      regressionMap: {},
     };
 
-    // ---------------------------------------------------------------------------
+    // =========================================================================
+    // Permalink helpers
+    // =========================================================================
+    // Sanitize strings for use as HTML IDs and URL hash fragments.
+    // Replaces characters that are problematic in CSS selectors and URLs.
+    function safeId(s) {
+      return s.replace(/[^a-zA-Z0-9_-]/g, "_");
+    }
+
+    function setHash(id) {
+      history.replaceState(null, "", "#" + encodeURIComponent(id));
+    }
+
+    function scrollToId(id) {
+      // Try sanitized ID first (table rows), then raw (chart cards)
+      const el = document.getElementById("row-" + safeId(id))
+              || document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("row-highlight");
+        setTimeout(() => el.classList.remove("row-highlight"), 2000);
+      }
+    }
+
+    // Resize all Chart.js instances inside a container (needed after unhiding)
+    function resizeChartsIn(container) {
+      container.querySelectorAll("canvas").forEach(canvas => {
+        const chart = Chart.getChart(canvas);
+        if (chart) chart.resize();
+      });
+    }
+
+    function scrollToChart(groupKey) {
+      let el = document.getElementById("card-" + groupKey);
+      // Fuzzy match: "join" should find "join_build", "filter" should find "filter_50pct"
+      if (!el) {
+        for (const cat of STATE.categories) {
+          if (cat.key === groupKey || cat.key.startsWith(groupKey + "_") || cat.key.startsWith(groupKey)) {
+            el = document.getElementById("card-" + cat.key);
+            if (el) break;
+          }
+        }
+      }
+      if (!el) return;
+      // Open the parent section if collapsed
+      const grid = el.closest(".chart-section-grid");
+      if (grid && grid.classList.contains("hidden")) {
+        grid.classList.remove("hidden");
+        const toggle = grid.previousElementSibling?.querySelector(".chart-section-toggle");
+        if (toggle) toggle.classList.remove("collapsed");
+        // Charts rendered at 0x0 inside hidden sections need resizing
+        requestAnimationFrame(() => resizeChartsIn(grid));
+      }
+      // Wait for layout before scrolling
+      requestAnimationFrame(() => {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.style.boxShadow = "0 0 0 2px #2563eb";
+        setTimeout(() => { el.style.boxShadow = ""; }, 2000);
+      });
+    }
+
+    // =========================================================================
     // Main
-    // ---------------------------------------------------------------------------
+    // =========================================================================
     fetch("data.json")
       .then(r => r.json())
       .then(data => render(data))
@@ -346,7 +657,6 @@
     function render(data) {
       const runs = data.runs || [];
       const ops  = data.operations || [];
-
       if (runs.length === 0) {
         document.getElementById("subtitle").textContent = "No runs recorded yet.";
         document.getElementById("no-data").style.display = "";
@@ -354,70 +664,648 @@
       }
 
       document.getElementById("content").style.display = "";
-
-      // Runs are stored newest-first; latest is index 0.
       const latest = runs[0];
-      const ts = latest.timestamp
-        ? new Date(latest.timestamp).toUTCString()
-        : "unknown";
+      const ts = latest.timestamp ? new Date(latest.timestamp).toUTCString() : "unknown";
       document.getElementById("subtitle").textContent =
-        `Last updated: ${ts} — commit ${latest.short_commit} (${latest.ref}) — ${runs.length} run(s) in history`;
+        `Last updated: ${ts} \u2014 commit ${latest.short_commit} (${latest.ref}) \u2014 ${runs.length} run(s) in history`;
 
-      // ------------------------------------------------------------------
-      // Summary table — compare latest against ~10 commits back for trend.
-      // ------------------------------------------------------------------
-      const oldRun = runs.length > 10 ? runs[10] : runs[runs.length - 1];
-
-      const tbody = document.getElementById("summary-body");
-      tbody.innerHTML = "";
-      for (const op of ops) {
-        const res    = latest.results ? latest.results[op] : null;
-        const oldRes = oldRun.results ? oldRun.results[op] : null;
-        const tr = document.createElement("tr");
-
-        if (!res || res.mean_ns == null) {
-          tr.innerHTML = `
-            <td>${op}</td>
-            <td class="skipped" colspan="3" style="color:var(--text-muted);font-style:italic">—</td>`;
-        } else {
-          const { text: arrow, cls: arrowCls } = trendArrow(
-            res.throughput_gelems_s,
-            oldRes ? oldRes.throughput_gelems_s : null
-          );
-          tr.innerHTML = `
-            <td>${op}</td>
-            <td>${fmtNs(res.mean_ns)}</td>
-            <td>${fmtThroughput(res.throughput_gelems_s)}</td>
-            <td class="${arrowCls}">${arrow}</td>`;
-        }
-        tbody.appendChild(tr);
-      }
-
-      // ------------------------------------------------------------------
-      // Category charts
-      // ------------------------------------------------------------------
-      STATE.allRuns    = [...runs].reverse();  // oldest → newest
+      STATE.allRuns    = [...runs].reverse();
       STATE.allOps     = ops;
       STATE.categories = resolveCategories(ops);
 
-      // Default to "all" when fewer than 50 runs exist.
-      if (STATE.allRuns.length <= 50) STATE.range = "all";
+      // Regression detection
+      const regressionMap = {};
+      for (const op of ops) regressionMap[op] = detectRegression(op, STATE.allRuns);
+      STATE.regressionMap = regressionMap;
 
+      // ── Needs Attention ──
+      const regressed = ops
+        .filter(op => regressionMap[op].isRegression)
+        .sort((a, b) => regressionMap[a].changePct - regressionMap[b].changePct);
+
+      const attSection = document.getElementById("attention-section");
+      const attCards = document.getElementById("attention-cards");
+      if (regressed.length > 0) {
+        attSection.style.display = "";
+        attCards.innerHTML = "";
+        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const redColor = isDark ? "#f85149" : "#cf222e";
+
+        for (const op of regressed) {
+          const info = regressionMap[op];
+          const card = document.createElement("div");
+          card.className = "attention-card";
+          const { group } = parseBenchName(op);
+          card.dataset.group = group;
+          card.innerHTML = `
+            <div class="attention-info">
+              <div class="attention-name" title="${op}">${op}</div>
+              <div class="attention-detail">${fmtThroughput(info.baseMean)} \u2192 ${fmtThroughput(info.recentMean)} GElems/s</div>
+            </div>
+            <div class="attention-spark"><canvas data-att-op="${op}"></canvas></div>
+            <div class="attention-pct">${(info.changePct * 100).toFixed(1)}%</div>`;
+          card.addEventListener("click", () => scrollToChart(group));
+          attCards.appendChild(card);
+        }
+
+        attCards.querySelectorAll("canvas[data-att-op]").forEach(canvas => {
+          drawSparkline(canvas, sparklineValues(canvas.dataset.attOp, STATE.allRuns, 20), redColor);
+        });
+      }
+
+      // ── Summary table ──
+      const prevRun = runs.length > 1 ? runs[1] : null;
+      STATE.tableRows = ops.map(op => {
+        const res = latest.results ? latest.results[op] : null;
+        const prev = prevRun && prevRun.results ? prevRun.results[op] : null;
+        const info = regressionMap[op];
+        const { group } = parseBenchName(op);
+        return {
+          op, group,
+          file: res ? (res.file || null) : null,
+          mean_ns: res ? res.mean_ns : null,
+          median_ns: res ? (res.median_ns || null) : null,
+          stddev_ns: res ? (res.stddev_ns || null) : null,
+          throughput: res ? res.throughput_gelems_s : null,
+          prev_mean_ns: prev ? prev.mean_ns : null,
+          prev_throughput: prev ? prev.throughput_gelems_s : null,
+          changePct: info.changePct,
+          isRegression: info.isRegression,
+          isNew: info.isNew,
+          extra_info: res ? (res.extra_info || null) : null,
+        };
+      });
+
+      STATE.tableSort = { key: "change", dir: "asc" };
+      renderTable();
+      wireSortHeaders();
+      wireTableSearch();
+
+      // ── Competition ──
+      buildCompetition(ops, latest.results || {});
+
+      // ── Speedup table ──
+      STATE.speedupRows = buildSpeedupData(ops, STATE.allRuns);
+      renderSpeedupTable();
+      document.getElementById("speedup-search").addEventListener("input", (e) => {
+        STATE.speedupFilter = e.target.value.toLowerCase();
+        renderSpeedupTable();
+      });
+
+      // ── Charts ──
+      STATE.compCategories = resolveCompetitionCategories(ops);
+      if (STATE.allRuns.length <= 50) STATE.range = "all";
       buildChartGrid();
+      buildCompChartGrid();
       wireControls();
       renderCharts();
+      renderCompCharts();
+
+      // ── Handle permalink on load ──
+      if (location.hash) {
+        const id = decodeURIComponent(location.hash.slice(1));
+        requestAnimationFrame(() => setTimeout(() => scrollToId(id) || scrollToChart(id), 100));
+      }
     }
 
+    // =========================================================================
+    // Table — search, sort, render
+    // =========================================================================
+    function wireTableSearch() {
+      const input = document.getElementById("table-search");
+      input.addEventListener("input", () => {
+        STATE.tableFilter = input.value.toLowerCase();
+        renderTable();
+      });
+    }
+
+    const STRING_SORT_KEYS = new Set(["name", "group", "file"]);
+
+    function sortTableRows(rows, key, dir) {
+      const mult = dir === "asc" ? 1 : -1;
+      return [...rows].sort((a, b) => {
+        if (a.isRegression !== b.isRegression) return a.isRegression ? -1 : 1;
+        let va, vb;
+        if (STRING_SORT_KEYS.has(key)) {
+          va = (key === "name" ? a.op : (a[key] || "")).toLowerCase();
+          vb = (key === "name" ? b.op : (b[key] || "")).toLowerCase();
+          return mult * (va < vb ? -1 : va > vb ? 1 : 0);
+        }
+        va = a[key === "change" ? "changePct" : key];
+        vb = b[key === "change" ? "changePct" : key];
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        return mult * (va - vb);
+      });
+    }
+
+    function renderTable() {
+      let filtered = STATE.tableRows;
+      if (STATE.tableFilter) {
+        const q = STATE.tableFilter;
+        filtered = filtered.filter(r =>
+          r.op.toLowerCase().includes(q) ||
+          r.group.toLowerCase().includes(q) ||
+          (r.file || "").toLowerCase().includes(q)
+        );
+      }
+
+      const sorted = sortTableRows(filtered, STATE.tableSort.key, STATE.tableSort.dir);
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const mutedColor = isDark ? "#8b949e" : "#656d76";
+      const redColor = isDark ? "#f85149" : "#cf222e";
+
+      const tbody = document.getElementById("summary-body");
+      tbody.innerHTML = "";
+
+      const countEl = document.getElementById("table-count");
+      countEl.textContent = STATE.tableFilter
+        ? `${sorted.length} of ${STATE.tableRows.length}`
+        : `${STATE.tableRows.length} benchmarks`;
+
+      for (const row of sorted) {
+        const tr = document.createElement("tr");
+        tr.id = "row-" + safeId(row.op);
+        if (row.isRegression) tr.className = "row-regressed";
+
+        const fileCell = `<td class="group-cell">${row.file || "\u2014"}</td>`;
+
+        if (row.mean_ns == null) {
+          tr.innerHTML = `
+            <td class="clickable" data-group="${row.group}">${row.op}</td>
+            <td class="group-cell">${groupLabel(row.group)}</td>
+            ${fileCell}
+            <td class="skipped" colspan="7" style="color:var(--text-muted);font-style:italic">\u2014</td>
+            <td class="sparkline-cell"><canvas class="sparkline" data-op="${row.op}"></canvas></td>`;
+        } else {
+          let changeHtml;
+          if (row.isNew) {
+            changeHtml = `<span class="badge-new">new</span>`;
+          } else {
+            const { text, cls } = fmtChangePct(row.changePct);
+            changeHtml = `<span class="${cls}">${text}</span>`;
+          }
+
+          tr.innerHTML = `
+            <td class="clickable" data-group="${row.group}">${row.op}</td>
+            <td class="group-cell">${groupLabel(row.group)}</td>
+            ${fileCell}
+            <td>${fmtNs(row.mean_ns)}</td>
+            <td>${fmtNs(row.median_ns)}</td>
+            <td>${fmtNs(row.stddev_ns)}</td>
+            <td>${fmtThroughput(row.throughput)}</td>
+            <td style="color:var(--text-muted)">${fmtNs(row.prev_mean_ns)}</td>
+            <td style="color:var(--text-muted)">${fmtThroughput(row.prev_throughput)}</td>
+            <td>${changeHtml}</td>
+            <td class="sparkline-cell"><canvas class="sparkline" data-op="${row.op}"></canvas></td>`;
+        }
+
+        // Click benchmark name → scroll to its chart
+        tr.querySelector(".clickable").addEventListener("click", () => {
+          setHash(row.op);
+          scrollToChart(row.group);
+        });
+
+        tbody.appendChild(tr);
+      }
+
+      // Draw sparklines
+      tbody.querySelectorAll("canvas.sparkline").forEach(canvas => {
+        const op = canvas.dataset.op;
+        const vals = sparklineValues(op, STATE.allRuns, 20);
+        const rowData = STATE.tableRows.find(r => r.op === op);
+        drawSparkline(canvas, vals, (rowData && rowData.isRegression) ? redColor : mutedColor);
+      });
+
+      // Update sort indicators
+      document.querySelectorAll("th.sortable").forEach(th => {
+        th.classList.remove("sort-asc", "sort-desc");
+        if (th.dataset.sort === STATE.tableSort.key) {
+          th.classList.add(STATE.tableSort.dir === "asc" ? "sort-asc" : "sort-desc");
+        }
+      });
+    }
+
+    function wireSortHeaders() {
+      document.querySelectorAll("th.sortable").forEach(th => {
+        th.addEventListener("click", () => {
+          const key = th.dataset.sort;
+          if (STATE.tableSort.key === key) {
+            STATE.tableSort.dir = STATE.tableSort.dir === "asc" ? "desc" : "asc";
+          } else {
+            STATE.tableSort.key = key;
+            STATE.tableSort.dir = STRING_SORT_KEYS.has(key) ? "asc" : "desc";
+          }
+          renderTable();
+        });
+      });
+    }
+
+    // =========================================================================
+    // Competition — bar charts comparing engines
+    // =========================================================================
+    function buildCompetition(ops, latestResults) {
+      // Group test_* ops by kernel, using extra_info.lib for engine when available
+      const kernels = new Map();
+      for (const op of ops) {
+        if (!op.startsWith("test_")) continue;
+        const res = latestResults[op];
+        const { group, engine: parsedEngine, params } = parseBenchName(op);
+        const engine = (res && res.extra_info && res.extra_info.lib) || parsedEngine;
+        if (!engine) continue;
+        const key = group;
+        if (!kernels.has(key)) kernels.set(key, new Map());
+        const paramMap = kernels.get(key);
+        const pKey = params || "";
+        if (!paramMap.has(pKey)) paramMap.set(pKey, {});
+        if (res && res.throughput_gelems_s != null) {
+          paramMap.get(pKey)[engine] = res.throughput_gelems_s;
+        }
+      }
+
+      // Filter to kernels with 2+ engines in at least one param
+      const compKernels = [];
+      for (const [name, paramMap] of kernels) {
+        const hasMulti = Array.from(paramMap.values()).some(engines => Object.keys(engines).length >= 2);
+        if (hasMulti) compKernels.push({ name, paramMap });
+      }
+
+      if (compKernels.length === 0) return;
+      document.getElementById("competition-section").style.display = "";
+
+      const grid = document.getElementById("competition-grid");
+      grid.innerHTML = "";
+
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+      const labelColor = isDark ? "#8b949e" : "#656d76";
+
+      for (const { name, paramMap } of compKernels) {
+        // Collect all engines across all params
+        const allEngines = new Set();
+        for (const engines of paramMap.values()) {
+          for (const e of Object.keys(engines)) allEngines.add(e);
+        }
+
+        const paramKeys = Array.from(paramMap.keys()).sort();
+        // Limit to 15 params per chart for readability
+        const visibleParams = paramKeys.slice(0, 15);
+        const labels = visibleParams.map(p => p.replace(/^\[|\]$/g, "").replace("n=", ""));
+
+        const datasets = Array.from(allEngines).sort().map(engine => ({
+          label: engine,
+          data: visibleParams.map(p => (paramMap.get(p) || {})[engine] || null),
+          backgroundColor: (ENGINE_COLORS[engine] || "#888") + "CC",
+          borderColor: ENGINE_COLORS[engine] || "#888",
+          borderWidth: 1,
+        }));
+
+        const card = document.createElement("div");
+        card.className = "competition-card";
+        const chartHeight = Math.max(200, visibleParams.length * 28 + 60);
+        card.innerHTML = `
+          <h3>${groupLabel(name)}${paramKeys.length > 15 ? ` (top 15 of ${paramKeys.length})` : ""}</h3>
+          <div class="competition-canvas-wrap" style="height:${chartHeight}px"><canvas id="comp-${name}"></canvas></div>`;
+        grid.appendChild(card);
+
+        STATE.competitionCharts[name] = new Chart(document.getElementById(`comp-${name}`), {
+          type: "bar",
+          data: { labels, datasets },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: "top", labels: { color: labelColor, boxWidth: 10, font: { size: 11 }, padding: 6 } },
+              tooltip: {
+                callbacks: {
+                  label: (item) => `${item.dataset.label}: ${item.raw != null ? item.raw.toFixed(3) : "\u2014"} GElems/s`,
+                },
+              },
+            },
+            scales: {
+              x: {
+                title: { display: true, text: "GElems/s", color: labelColor },
+                ticks: { color: labelColor },
+                grid: { color: gridColor },
+              },
+              y: {
+                ticks: { color: labelColor, font: { size: 10 } },
+                grid: { color: gridColor },
+              },
+            },
+          },
+        });
+      }
+    }
+
+    // =========================================================================
+    // Competition time-series charts — all engines on same chart per kernel
+    // =========================================================================
+    function resolveCompetitionCategories(allOps) {
+      const groups = new Map();
+      for (const op of allOps) {
+        if (!op.startsWith("test_")) continue;
+        const { group } = parseBenchName(op);
+        if (!groups.has(group)) groups.set(group, []);
+        groups.get(group).push(op);
+      }
+      // Only include groups with 2+ ops (implies multiple engines or params)
+      return Array.from(groups, ([key, ops]) => ({ key, label: groupLabel(key), ops }))
+        .filter(c => c.ops.length >= 2);
+    }
+
+    function engineColorFor(op) {
+      const res = STATE.allRuns.length > 0
+        ? (STATE.allRuns[STATE.allRuns.length - 1].results || {})[op]
+        : null;
+      const { engine: parsedEngine } = parseBenchName(op);
+      const engine = (res && res.extra_info && res.extra_info.lib) || parsedEngine;
+      return ENGINE_COLORS[engine] || PALETTE[STATE.allOps.indexOf(op) % PALETTE.length];
+    }
+
+    function buildCompChartGrid() {
+      const grid = document.getElementById("comp-chart-grid");
+      grid.innerHTML = "";
+      if (STATE.compCategories.length === 0) return;
+      document.getElementById("comp-charts-section").style.display = "";
+
+      // Group into super-categories
+      const sections = new Map();
+      for (const cat of STATE.compCategories) {
+        const superCat = superCategoryFor(cat.key);
+        if (!sections.has(superCat)) sections.set(superCat, []);
+        sections.get(superCat).push(cat);
+      }
+
+      for (const [sectionName, cats] of sections) {
+        const section = document.createElement("div");
+        section.className = "chart-section";
+        section.innerHTML = `
+          <div class="chart-section-header">
+            <span class="chart-section-toggle collapsed">\u25BC</span>
+            <h3>${sectionName}</h3>
+            <span class="section-badge count">${cats.reduce((s, c) => s + c.ops.length, 0)} benchmarks</span>
+          </div>
+          <div class="chart-section-grid hidden"></div>`;
+
+        const header = section.querySelector(".chart-section-header");
+        const innerGrid = section.querySelector(".chart-section-grid");
+        const toggle = section.querySelector(".chart-section-toggle");
+        header.addEventListener("click", () => {
+          const wasHidden = innerGrid.classList.contains("hidden");
+          innerGrid.classList.toggle("hidden");
+          toggle.classList.toggle("collapsed");
+          if (wasHidden) requestAnimationFrame(() => resizeChartsIn(innerGrid));
+        });
+
+        for (const cat of cats) {
+          const card = document.createElement("div");
+          card.className = "category-card";
+          card.id = "compcard-" + cat.key;
+          card.innerHTML = `
+            <h3>${cat.label}</h3>
+            <div class="canvas-wrap"><canvas id="compchart-${cat.key}"></canvas></div>`;
+          innerGrid.appendChild(card);
+        }
+        grid.appendChild(section);
+      }
+    }
+
+    function renderCompCharts() {
+      const runs = visibleRuns();
+      const labels = runs.map(r => r.short_commit);
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+      const labelColor = isDark ? "#8b949e" : "#656d76";
+
+      for (const cat of STATE.compCategories) {
+        const canvas = document.getElementById(`compchart-${cat.key}`);
+        if (!canvas) continue;
+
+        const datasets = cat.ops.map(op => {
+          const { engine: parsedEngine, params } = parseBenchName(op);
+          // Short label: "marrow [n=100k-int64]" instead of full op name
+          const eng = parsedEngine || "?";
+          const shortParams = (params || "").replace(/^\[|\]$/g, "").replace("n=", "");
+          const label = `${eng} ${shortParams}`.trim();
+
+          return {
+            label,
+            data: runs.map(r => {
+              const res = r.results ? r.results[op] : null;
+              return (res && res.throughput_gelems_s != null) ? res.throughput_gelems_s : null;
+            }),
+            borderColor: engineColorFor(op),
+            backgroundColor: engineColorFor(op) + "33",
+            borderWidth: 2,
+            pointRadius: runs.length > 40 ? 1.5 : 3,
+            pointHoverRadius: 5,
+            tension: 0.2,
+            spanGaps: true,
+          };
+        });
+
+        if (STATE.compCharts[cat.key]) STATE.compCharts[cat.key].destroy();
+        STATE.compCharts[cat.key] = new Chart(canvas, {
+          type: "line",
+          data: { labels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { position: "top", labels: { color: labelColor, boxWidth: 10, font: { size: 10 }, padding: 6 } },
+              tooltip: {
+                callbacks: {
+                  label: (item) => {
+                    const v = item.raw;
+                    return v != null ? `${item.dataset.label}: ${v.toFixed(3)} GElems/s` : `${item.dataset.label}: \u2014`;
+                  },
+                },
+              },
+              zoom: {
+                pan: { enabled: true, mode: "x", modifierKey: "shift" },
+                zoom: { wheel: { enabled: true }, pinch: { enabled: true }, drag: { enabled: true, backgroundColor: "rgba(100,100,100,0.15)" }, mode: "x" },
+              },
+            },
+            scales: {
+              x: { ticks: { color: labelColor, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 }, grid: { color: gridColor } },
+              y: { title: { display: true, text: "GElems/s", color: labelColor }, ticks: { color: labelColor }, grid: { color: gridColor }, min: 0 },
+            },
+          },
+        });
+      }
+    }
+
+    // =========================================================================
+    // Speedup ratio table — marrow vs competitors over time
+    // =========================================================================
+    function fmtRatio(v) {
+      if (v == null) return { text: "\u2014", cls: "ratio-par" };
+      const text = v.toFixed(2) + "x";
+      if (v >= 1.05) return { text, cls: "ratio-fast" };
+      if (v <= 0.95) return { text, cls: "ratio-slow" };
+      return { text, cls: "ratio-par" };
+    }
+
+    function buildSpeedupData(ops, runs) {
+      // For each kernel+params, find marrow and competitor ops
+      const pairs = new Map(); // key: "kernel|params|competitor" → {marrowOp, compOp}
+      const opIndex = new Map();
+      for (const op of ops) {
+        if (!op.startsWith("test_")) continue;
+        const { group, engine: parsedEngine, params } = parseBenchName(op);
+        const latestRun = runs[runs.length - 1];
+        const res = latestRun && latestRun.results ? latestRun.results[op] : null;
+        const engine = (res && res.extra_info && res.extra_info.lib) || parsedEngine;
+        if (!engine) continue;
+        const pKey = params || "";
+        const iKey = `${group}|${pKey}|${engine}`;
+        opIndex.set(iKey, op);
+      }
+
+      const rows = [];
+      for (const [iKey, compOp] of opIndex) {
+        const [kernel, params, engine] = iKey.split("|");
+        if (engine === "marrow") continue;
+        const marrowKey = `${kernel}|${params}|marrow`;
+        const marrowOp = opIndex.get(marrowKey);
+        if (!marrowOp) continue;
+
+        // Compute ratio for each run
+        const ratios = runs.map(r => {
+          const mRes = r.results ? r.results[marrowOp] : null;
+          const cRes = r.results ? r.results[compOp] : null;
+          if (!mRes || !cRes || mRes.throughput_gelems_s == null || cRes.throughput_gelems_s == null || cRes.throughput_gelems_s === 0) return null;
+          return mRes.throughput_gelems_s / cRes.throughput_gelems_s;
+        });
+
+        const latestRatio = ratios[ratios.length - 1];
+        const shortParams = (params || "").replace(/^\[|\]$/g, "").replace("n=", "");
+
+        rows.push({ kernel, params: shortParams, competitor: engine, latestRatio, ratios });
+      }
+
+      // Sort: slowest (worst ratio) first
+      rows.sort((a, b) => (a.latestRatio || 999) - (b.latestRatio || 999));
+      return rows;
+    }
+
+    function renderSpeedupTable() {
+      const section = document.getElementById("speedup-section");
+      const tbody = document.getElementById("speedup-body");
+      const countEl = document.getElementById("speedup-count");
+      let rows = STATE.speedupRows;
+      if (rows.length === 0) return;
+      section.style.display = "";
+
+      if (STATE.speedupFilter) {
+        const q = STATE.speedupFilter;
+        rows = rows.filter(r =>
+          r.kernel.toLowerCase().includes(q) ||
+          r.params.toLowerCase().includes(q) ||
+          r.competitor.toLowerCase().includes(q)
+        );
+      }
+
+      countEl.textContent = STATE.speedupFilter
+        ? `${rows.length} of ${STATE.speedupRows.length}`
+        : `${STATE.speedupRows.length} comparisons`;
+
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      tbody.innerHTML = "";
+
+      for (const row of rows) {
+        const tr = document.createElement("tr");
+        const { text, cls } = fmtRatio(row.latestRatio);
+        if (row.latestRatio != null && row.latestRatio < 0.95) tr.className = "row-regressed";
+
+        tr.innerHTML = `
+          <td>${groupLabel(row.kernel)}</td>
+          <td style="font-size:0.75rem">${row.params || "\u2014"}</td>
+          <td>${row.competitor}</td>
+          <td class="${cls}">${text}</td>
+          <td class="sparkline-cell"><canvas class="sparkline" data-speedup-idx="${rows.indexOf(row)}"></canvas></td>`;
+        tbody.appendChild(tr);
+      }
+
+      // Draw ratio sparklines
+      const greenColor = isDark ? "#3fb950" : "#1a7f37";
+      const redColor = isDark ? "#f85149" : "#cf222e";
+
+      tbody.querySelectorAll("canvas[data-speedup-idx]").forEach(canvas => {
+        const idx = parseInt(canvas.dataset.speedupIdx);
+        const row = rows[idx];
+        if (!row) return;
+        const color = (row.latestRatio != null && row.latestRatio >= 1) ? greenColor : redColor;
+        drawSparkline(canvas, row.ratios.slice(-20), color);
+      });
+    }
+
+    // =========================================================================
+    // Chart grid — collapsible sections with regression badges
+    // =========================================================================
     function buildChartGrid() {
       const grid = document.getElementById("chart-grid");
       grid.innerHTML = "";
+
+      // Group categories by super-category
+      const sections = new Map();
       for (const cat of STATE.categories) {
-        const card = document.createElement("div");
-        card.className = "category-card";
-        card.innerHTML = `
-          <h3>${cat.label}</h3>
-          <div class="canvas-wrap"><canvas id="chart-${cat.key}"></canvas></div>`;
-        grid.appendChild(card);
+        const superCat = superCategoryFor(cat.key);
+        if (!sections.has(superCat)) sections.set(superCat, []);
+        sections.get(superCat).push(cat);
+      }
+
+      for (const [sectionName, cats] of sections) {
+        // Count regressions in this section
+        let regCount = 0;
+        for (const cat of cats) {
+          for (const op of cat.ops) {
+            if (STATE.regressionMap[op] && STATE.regressionMap[op].isRegression) regCount++;
+          }
+        }
+
+        const section = document.createElement("div");
+        section.className = "chart-section";
+
+        const hasReg = regCount > 0;
+        const collapsed = !hasReg;
+
+        section.innerHTML = `
+          <div class="chart-section-header">
+            <span class="chart-section-toggle ${collapsed ? "collapsed" : ""}">\u25BC</span>
+            <h3>${sectionName}</h3>
+            <span class="section-badge count">${cats.reduce((s, c) => s + c.ops.length, 0)} benchmarks</span>
+            ${hasReg ? `<span class="section-badge regression">${regCount} regression${regCount > 1 ? "s" : ""}</span>` : ""}
+          </div>
+          <div class="chart-section-grid ${collapsed ? "hidden" : ""}"></div>`;
+
+        const header = section.querySelector(".chart-section-header");
+        const innerGrid = section.querySelector(".chart-section-grid");
+        const toggle = section.querySelector(".chart-section-toggle");
+
+        header.addEventListener("click", () => {
+          const wasHidden = innerGrid.classList.contains("hidden");
+          innerGrid.classList.toggle("hidden");
+          toggle.classList.toggle("collapsed");
+          if (wasHidden) requestAnimationFrame(() => resizeChartsIn(innerGrid));
+        });
+
+        for (const cat of cats) {
+          const hasOpRegression = cat.ops.some(op => STATE.regressionMap[op] && STATE.regressionMap[op].isRegression);
+          const card = document.createElement("div");
+          card.className = "category-card" + (hasOpRegression ? " has-regression" : "");
+          card.id = "card-" + cat.key;
+          card.innerHTML = `
+            <h3>${cat.label}</h3>
+            <div class="canvas-wrap"><canvas id="chart-${cat.key}"></canvas></div>`;
+          innerGrid.appendChild(card);
+        }
+
+        grid.appendChild(section);
       }
     }
 
@@ -425,20 +1313,18 @@
       const buttons = document.querySelectorAll(".range-btn");
       buttons.forEach(btn => {
         const r = btn.dataset.range;
-        const isActive =
-          (r === "all" && STATE.range === "all") ||
-          (r !== "all" && STATE.range === parseInt(r, 10));
+        const isActive = (r === "all" && STATE.range === "all") || (r !== "all" && STATE.range === parseInt(r, 10));
         btn.classList.toggle("active", isActive);
-
         btn.addEventListener("click", () => {
           STATE.range = r === "all" ? "all" : parseInt(r, 10);
           buttons.forEach(b => b.classList.toggle("active", b === btn));
           renderCharts();
+          renderCompCharts();
         });
       });
 
       document.getElementById("reset-zoom").addEventListener("click", () => {
-        Object.values(STATE.charts).forEach(c => {
+        [...Object.values(STATE.charts), ...Object.values(STATE.compCharts)].forEach(c => {
           if (typeof c.resetZoom === "function") c.resetZoom();
         });
       });
@@ -450,38 +1336,51 @@
     }
 
     function renderCharts() {
-      const runs   = visibleRuns();
+      const runs = visibleRuns();
       const labels = runs.map(r => r.short_commit);
 
       const info = document.getElementById("range-info");
       if (runs.length > 0) {
         const first = runs[0].timestamp ? runs[0].timestamp.slice(0, 10) : "?";
-        const last  = runs[runs.length - 1].timestamp
-          ? runs[runs.length - 1].timestamp.slice(0, 10)
-          : "?";
-        info.textContent =
-          `showing ${runs.length} of ${STATE.allRuns.length} (${first} → ${last})`;
+        const last = runs[runs.length - 1].timestamp ? runs[runs.length - 1].timestamp.slice(0, 10) : "?";
+        info.textContent = `showing ${runs.length} of ${STATE.allRuns.length} (${first} \u2192 ${last})`;
       } else {
         info.textContent = "";
       }
 
       for (const cat of STATE.categories) {
-        const datasets = cat.ops.map(op => ({
-          label: op,
-          data: runs.map(r => {
+        const datasets = cat.ops.map(op => {
+          const data = [];
+          const stddevTp = [];
+          for (const r of runs) {
             const res = r.results ? r.results[op] : null;
-            return (res && res.throughput_gelems_s != null) ? res.throughput_gelems_s : null;
-          }),
-          borderColor: colorFor(op, STATE.allOps),
-          backgroundColor: colorFor(op, STATE.allOps) + "33",
-          borderWidth: 2,
-          pointRadius: runs.length > 40 ? 1.5 : 3,
-          pointHoverRadius: 5,
-          tension: 0.2,
-          spanGaps: true,
-        }));
+            if (res && res.throughput_gelems_s != null) {
+              data.push(res.throughput_gelems_s);
+              // Convert stddev from time to throughput: σ_tp ≈ tp × (σ_t / mean_t)
+              if (res.stddev_ns != null && res.mean_ns > 0) {
+                stddevTp.push(res.throughput_gelems_s * (res.stddev_ns / res.mean_ns));
+              } else {
+                stddevTp.push(null);
+              }
+            } else {
+              data.push(null);
+              stddevTp.push(null);
+            }
+          }
+          return {
+            label: op,
+            data,
+            _stddevThroughput: stddevTp,
+            borderColor: colorFor(op, STATE.allOps),
+            backgroundColor: colorFor(op, STATE.allOps) + "33",
+            borderWidth: 2,
+            pointRadius: runs.length > 40 ? 1.5 : 3,
+            pointHoverRadius: 5,
+            tension: 0.2,
+            spanGaps: true,
+          };
+        });
 
-        // Destroy + rebuild on every render (cheap) to avoid stale zoom state.
         if (STATE.charts[cat.key]) STATE.charts[cat.key].destroy();
         STATE.charts[cat.key] = buildCategoryChart(cat, labels, datasets, runs);
       }
@@ -489,7 +1388,7 @@
 
     function buildCategoryChart(cat, labels, datasets, runs) {
       const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-      const gridColor  = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
+      const gridColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
       const labelColor = isDark ? "#8b949e" : "#656d76";
 
       return new Chart(document.getElementById(`chart-${cat.key}`), {
@@ -501,54 +1400,45 @@
           interaction: { mode: "index", intersect: false },
           onClick: (evt, elements, chart) => {
             let idx = null;
-            if (elements && elements.length) {
-              idx = elements[0].index;
-            } else {
-              const near = chart.getElementsAtEventForMode(
-                evt, "nearest", { intersect: false }, true
-              );
+            if (elements && elements.length) idx = elements[0].index;
+            else {
+              const near = chart.getElementsAtEventForMode(evt, "nearest", { intersect: false }, true);
               if (near.length) idx = near[0].index;
             }
             if (idx == null) return;
             const run = runs[idx];
-            if (run && run.commit) {
-              window.open(GITHUB_COMMIT_URL(run.commit), "_blank", "noopener");
-            }
+            if (run && run.commit) window.open(GITHUB_COMMIT_URL(run.commit), "_blank", "noopener");
           },
           plugins: {
+            noiseFloor: true,
             legend: {
               display: true,
               position: "top",
-              labels: {
-                color: labelColor,
-                boxWidth: 10,
-                font: { size: 11 },
-                padding: 8,
-              },
+              labels: { color: labelColor, boxWidth: 10, font: { size: 11 }, padding: 8 },
             },
             tooltip: {
               callbacks: {
                 title: (items) => {
                   const r = runs[items[0].dataIndex];
-                  const ts = r.timestamp
-                    ? new Date(r.timestamp).toISOString().replace("T", " ").slice(0, 19) + " UTC"
-                    : "";
+                  const ts = r.timestamp ? new Date(r.timestamp).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "";
                   return `${r.short_commit} (${r.ref || "?"})\n${ts}`;
                 },
                 label: (item) => {
                   const v = item.raw;
-                  if (v == null) return `${item.dataset.label}: —`;
-                  return `${item.dataset.label}: ${v.toFixed(3)} GElems/s`;
+                  if (v == null) return `${item.dataset.label}: \u2014`;
+                  const sd = item.dataset._stddevThroughput ? item.dataset._stddevThroughput[item.dataIndex] : null;
+                  const sdText = sd != null ? ` \u00b1${sd.toFixed(3)}` : "";
+                  return `${item.dataset.label}: ${v.toFixed(3)}${sdText} GElems/s`;
                 },
                 footer: () => "Click point to open commit on GitHub",
               },
             },
             zoom: {
-              pan:  { enabled: true, mode: "x", modifierKey: "shift" },
+              pan: { enabled: true, mode: "x", modifierKey: "shift" },
               zoom: {
                 wheel: { enabled: true },
                 pinch: { enabled: true },
-                drag:  { enabled: true, backgroundColor: "rgba(100,100,100,0.15)" },
+                drag: { enabled: true, backgroundColor: "rgba(100,100,100,0.15)" },
                 mode: "x",
               },
             },
@@ -556,12 +1446,12 @@
           scales: {
             x: {
               ticks: { color: labelColor, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
-              grid:  { color: gridColor },
+              grid: { color: gridColor },
             },
             y: {
               title: { display: true, text: "GElems/s", color: labelColor },
               ticks: { color: labelColor },
-              grid:  { color: gridColor },
+              grid: { color: gridColor },
               min: 0,
             },
           },
