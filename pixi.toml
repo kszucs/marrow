@@ -17,14 +17,14 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==0.26.3.0.dev2026041520"
+mojo-compiler = "==0.26.3.0.dev2026041805"
 
 [package.host-dependencies]
-mojo = "==0.26.3.0.dev2026041520"
+mojo = "==0.26.3.0.dev2026041805"
 
 [package.run-dependencies]
-mojo = "==0.26.3.0.dev2026041520"
-pontoneer = "==0.6.6.dev2026041520"
+mojo = "==0.26.3.0.dev2026041805"
+pontoneer = "==0.6.6.dev2026041805"
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"
@@ -115,8 +115,8 @@ docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=0.26.3.0.dev2026041520,<0.27"
-pontoneer = ">=0.6.6.dev2026041520,<0.7"
+mojo = ">=0.26.3.0.dev2026041805,<0.27"
+pontoneer = ">=0.6.6.dev2026041805,<0.7"
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"
