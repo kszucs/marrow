@@ -28,6 +28,82 @@ Supported strictness:
 Future join algorithms (implement the Join trait):
   RadixHashJoin   — partitioned hash join (SwissHashTable + RadixPartitioner)
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
+
+Performance / Optimization Notes
+--------------------------------
+At 10M × 10M INNER join on Apple Silicon (10-core P, parallel path), the
+time budget looks roughly like this (from ``sample``-based profiling):
+
+  20%  SwissHashTable.probe       — probe-loop CSR walk
+  25%  take SIMD gather           — random gather of output columns
+  14%  SwissHashTable.build_hashes — insertion + slot claim
+  11%  nested semaphore waits     — tcmalloc spinlock on take's output buf
+   8%  take(AnyArray) dispatch    — runtime type dispatch
+   7%  RadixPartitioner scatter   — histogram + scatter passes
+   2%  tcmalloc::PageHeap::New    — allocator
+   ... dispatch + allocator small ops
+
+The hot paths are memory-latency / bandwidth bound; further single-digit
+percent wins are available but require structural work.  Ordered by
+expected payoff for the next round of optimization:
+
+1. **Fused equality verification**
+   Current ``SwissHashTable.probe`` does
+   ``take(build_keys, bi) + take(probe_keys, pi) + equal(...)`` which
+   allocates three intermediate Arrays (two gathered keys + one mask)
+   then ``filter_`` rebuilds two Int32 arrays from the candidates.
+   A fused kernel could walk ``(bi[i], pi[i])`` once, load
+   ``build_keys[bi[i]]`` and ``probe_keys[pi[i]]`` into registers,
+   compare, and emit verified pairs into preallocated Int32 buffers —
+   no intermediate gathered-key arrays, no bitmap.  Expected saving:
+   3–6 ms at 10M (hot inside the per-partition probe worker).
+
+2. **Buffer reuse / arena allocator for ``take()``**
+   Every ``take()`` inside a partition worker allocates a fresh
+   ``Buffer`` via tcmalloc.  With 64 partitions × (probe-key gather +
+   equality takes) = ~200 heap allocations per join, contending on
+   tcmalloc's page-heap spinlock.  The profile shows ~11% of worker
+   time in nested semaphore waits that are largely this contention.
+   A thread-local arena (bump allocator reset between joins) or a
+   small-object pool inside ``ExecutionContext`` would eliminate it.
+   Expected saving: ~5–8 ms at 10M.
+
+3. **Software Write-Combine Buffers (SWWCB) in ``RadixPartitioner``**
+   Classic PRO radix-join trick (Balkesen et al.): instead of scattering
+   one row at a time (each write touches a different cache line across
+   64 partitions), each worker keeps a small per-partition staging
+   buffer (cache-line-sized) and flushes when full.  Reduces cross-core
+   cache-line ping-pong and TLB pressure.  Expected saving at 10M:
+   1–3 ms.  Bigger win at 100M+ rows where the scatter dominates.
+
+4. **Fused probe + output materialization**
+   Currently the probe emits ``IndexPairs`` (two global row-index arrays),
+   which are concatenated across partitions, then ``_assemble`` re-scans
+   them to gather the output columns.  A fused pass would emit output
+   rows directly from the per-partition probe worker into a preallocated
+   output StructArray — skipping ``_concat_int32`` and the per-column
+   ``take()`` in ``_assemble`` entirely.  Largest refactor of the four;
+   potentially eliminates the 25% take-gather cost.  Expected saving:
+   10–15 ms at 10M, but needs careful output-row-count handling for
+   LEFT / FULL / SEMI / ANTI (where matched count isn't known up front).
+
+5. **Deeper prefetch pipeline in probe / build**
+   ``_PIPE_DEPTH = 16`` in ``SwissHashTable`` — try 24 or 32 for larger
+   build sides where DRAM latency (~100 ns) exceeds the 16-iteration
+   compute window.
+
+6. **Adaptive radix bits**
+   ``_DEFAULT_RADIX_BITS`` is fixed at 6 (64 partitions).  Sweep at 10M
+   showed 32/64/128 all within 1 ms — but at 1M the parallel path barely
+   beats serial because of dispatch overhead.  An adaptive choice
+   (log2(build_rows) − 10) would auto-tune across scales.
+
+7. **Parallel ``_emit_unmatched`` for LEFT / FULL / SEMI / ANTI**
+   Currently serial.  Doesn't affect INNER-join benchmarks but needed
+   for full parallelism on outer-join workloads.
+
+See ``docs/joins-design.md`` for the high-level architecture and the
+``Phase 1b`` performance table.
 """
 
 from std.algorithm.functional import sync_parallelize
@@ -168,7 +244,14 @@ partitioning overhead dominates below ~100k rows on typical inputs."""
 # practical. See docs/joins-design.md → "Known limits / future work".
 
 comptime _DEFAULT_RADIX_BITS = 6
-"""Default radix fanout for ``RadixPartitioner`` (64 partitions)."""
+"""Default radix fanout for ``RadixPartitioner`` (64 partitions).
+
+Sweep at 10M INNER join on Apple Silicon shows 32 / 64 / 128 partitions
+all land within ~1 ms of each other — the hash table per partition
+already exceeds L2 at these sizes, so reducing fanout further doesn't
+help cache locality but does reduce sync_parallelize dispatch overhead.
+64 is the default; fanout is a runtime parameter on ``RadixPartitioner``
+and can be tuned per workload."""
 
 
 struct HashJoin[
@@ -544,16 +627,25 @@ struct HashJoin[
     def _assemble(
         self, right: StructArray, pairs: IndexPairs, kind: UInt8
     ) raises -> StructArray:
-        """Gather left + right columns using index pairs."""
+        """Gather left + right columns using index pairs.
+
+        After ``sync_parallelize`` in ``probe_parallel`` has finished
+        there's no outer parallel region, so each per-column ``take``
+        can safely fan its SIMD gather loop across workers internally.
+        We pass an ``ExecutionContext.parallel(num_threads)`` through,
+        and ``take`` decides per-column whether it's big enough to
+        stripe (its own grain threshold inside ``apply``).
+        """
         ref left = self._left_data.value()
         var out_cols = List[AnyArray]()
+        var ctx = ExecutionContext.parallel(self._num_threads)
 
         for c in range(len(left.children)):
-            out_cols.append(take(left.children[c].copy(), pairs[0]))
+            out_cols.append(take(left.children[c].copy(), pairs[0], ctx))
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI and kind != JOIN_MARK:
             for c in range(len(right.children)):
-                out_cols.append(take(right.children[c].copy(), pairs[1]))
+                out_cols.append(take(right.children[c].copy(), pairs[1], ctx))
 
         var out_length = out_cols[0].length() if len(out_cols) > 0 else 0
         return StructArray(

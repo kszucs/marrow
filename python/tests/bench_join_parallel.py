@@ -146,7 +146,8 @@ def test_polars_join(benchmark, tables, n, pl_type):
 def test_marrow_join(benchmark, tables, n, join_type):
     benchmark.extra_info.update(lib="marrow", n=n)
     left, right = tables["ma_left"], tables["ma_right"]
-    benchmark(left.join, right, ["k"], None, join_type)
+    # num_threads=0 → auto (num_physical_cores()).
+    benchmark(left.join, right, ["k"], None, join_type, 0)
 
 
 @_skip_no_duckdb

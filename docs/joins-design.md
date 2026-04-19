@@ -419,8 +419,12 @@ then per partition `take` + `probe_hashes` (raw candidate pairs) +
 `equal` / `filter_` for equality verification + remap partition-local
 indices → original row numbering. Per-partition `IndexPairs` merge into
 a single result via a direct Int32 buffer memcpy (skipping the generic
-`concat(AnyArray)` dispatch). Output assembly (`_assemble`) currently
-stays serial — per-column `take` for output materialization.
+`concat(AnyArray)` dispatch). Output assembly (`_assemble`) runs
+after `sync_parallelize` completes and passes an
+`ExecutionContext.parallel(num_threads)` to each per-column `take`;
+`take`'s no-null fast path stripes its SIMD gather loop across workers
+internally, so all 4 output columns materialize with thread-level
+parallelism with zero risk of nested parallel regions.
 
 ### Public `insert_hashes` / `build_hashes` / `probe_hashes`
 
@@ -438,20 +442,19 @@ At 10M × 10M INNER join (Apple Silicon, `num_threads=0` → auto):
 | Implementation | Time | vs. Polars |
 |---|---|---|
 | Marrow serial (pre-parallel) | 330 ms | 3.5× slower |
-| Marrow parallel | 131 ms | 1.4× slower |
-| Polars | 95 ms | 1.0× |
-| PyArrow | 100 ms | 1.1× slower |
-| DuckDB | 120 ms | 1.3× slower |
+| Marrow parallel | **67 ms** | **1.4× faster** |
+| Polars | 97 ms | 1.0× |
+| PyArrow | 111 ms | 1.1× slower |
+| DuckDB | 122 ms | 1.3× slower |
 
-2.4× single-thread → parallel speedup; gap vs. Polars narrowed from
-3.5× to 1.4×.  All 10 performance cores utilized during build and
-probe; partitioning pass is memory-bandwidth-bound on the scatter.
+4.9× single-thread → parallel speedup; Marrow is now the fastest among
+measured libraries at 10M. The final lever was parallelizing per-column
+output `take()` via the same `ExecutionContext` plumbing — the old
+serial `_assemble()` was dominating after build and probe were already
+parallel.
 
 ### Known limits / future work
 
-- **`_assemble` parallelization** — attempted per-column `take` via
-  `sync_parallelize` but hit Mojo runtime crashes on Optional[AnyArray]
-  closure captures. Deferred.
 - **Skew handling** — a pathologically-imbalanced key distribution will
   produce one oversized partition; secondary-hash split (subdivide the
   offending partition) is a follow-up.

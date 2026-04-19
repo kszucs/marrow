@@ -361,6 +361,7 @@ def _record_batch_join(
     keys: PythonObject,
     right_keys: PythonObject,
     join_type: PythonObject,
+    num_threads: PythonObject,
 ) raises -> PythonObject:
     """Join two RecordBatches on key column names.
 
@@ -371,6 +372,9 @@ def _record_batch_join(
             to use the same names as ``keys``.
         join_type: Join kind string ("inner", "left", "right", "full",
             "semi", "anti").  Default: "inner".
+        num_threads: Worker count for the partition-parallel path.  ``0``
+            (default) picks ``num_physical_cores()``; ``1`` forces the
+            serial path; ``>=2`` opts into parallel execution.
     """
     from marrow.expr.relations import (
         JOIN_INNER,
@@ -427,7 +431,15 @@ def _record_batch_join(
 
     var left_sa = left.to_struct_array()
     var right_sa = right_rb.to_struct_array()
-    var result_sa = hash_join(left_sa, right_sa, left_on, right_on, kind)
+    var nt = Int(py=num_threads)
+    var result_sa = hash_join(
+        left_sa,
+        right_sa,
+        left_on,
+        right_on,
+        kind,
+        num_threads=nt,
+    )
 
     # Build output schema and RecordBatch from StructArray result.
     var out_fields = List[Field]()

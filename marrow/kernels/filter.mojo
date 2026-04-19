@@ -49,8 +49,11 @@ from ..dtypes import (
     float64,
     string,
 )
+from std.algorithm.functional import sync_parallelize
+
 from ..views import BitmapView, BufferView
 from .aggregate import sum_
+from .execution import ExecutionContext
 from .string import string_lengths
 
 
@@ -605,7 +608,9 @@ def drop_nulls(array: AnyArray) raises -> AnyArray:
 def take[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], indices: PrimitiveArray[Int32Type]
+    array: PrimitiveArray[T],
+    indices: PrimitiveArray[Int32Type],
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Gather elements from a primitive array at the given indices.
 
@@ -613,9 +618,16 @@ def take[
     null output elements (used by outer joins for unmatched rows).
     Source nulls are also propagated.
 
+    When ``ctx.num_threads > 1`` and ``indices`` is long enough, the
+    no-null fast path stripes the gather loop across workers via
+    ``sync_parallelize`` — each worker writes to a disjoint output
+    slice.  The slow path (null indices or source nulls) stays serial
+    because it builds the validity bitmap in-order.
+
     Args:
         array: Source array.
         indices: Row indices to gather. Null index → null output.
+        ctx: Execution context — controls CPU stripe parallelism.
 
     Returns:
         A new PrimitiveArray with one element per index.
@@ -639,14 +651,39 @@ def take[
 
     if not has_null_indices and not has_src_nulls:
         # Fast path: no nulls — pure SIMD gather, no bitmap.
-        while i + W <= n:
-            var offsets = idx.load[W](i).cast[DType.int64]()
-            var vals = src.gather[W](offsets)
-            out.store[W](i, vals)
-            i += W
-        while i < n:
-            out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
-            i += 1
+        if ctx.wants_parallel(n):
+            var nt = ctx.resolved_num_threads()
+            # Round chunk up to a SIMD width so each worker owns a
+            # self-contained gather boundary and the tail scalar loop
+            # only runs at the very end of the last worker's stripe.
+            var chunk = ((n + nt - 1) // nt + W - 1) // W * W
+
+            @parameter
+            def worker(t: Int):
+                var start = t * chunk
+                if start >= n:
+                    return
+                var end = min(start + chunk, n)
+                var k = start
+                while k + W <= end:
+                    var offsets = idx.load[W](k).cast[DType.int64]()
+                    var vals = src.gather[W](offsets)
+                    out.store[W](k, vals)
+                    k += W
+                while k < end:
+                    out.unsafe_set(k, src[Int(idx.unsafe_get(k))])
+                    k += 1
+
+            sync_parallelize[worker](nt)
+        else:
+            while i + W <= n:
+                var offsets = idx.load[W](i).cast[DType.int64]()
+                var vals = src.gather[W](offsets)
+                out.store[W](i, vals)
+                i += W
+            while i < n:
+                out.unsafe_set(i, src[Int(idx.unsafe_get(i))])
+                i += 1
     else:
         # TODO: optimize this, the implementation below could be vectorized
         # Slow path: null indices or source nulls — scalar + bitmap.
@@ -732,15 +769,21 @@ def take(
 
 
 def take(
-    array: AnyArray, indices: PrimitiveArray[Int32Type]
+    array: AnyArray,
+    indices: PrimitiveArray[Int32Type],
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Gather elements from a type-erased array at the given indices.
 
-    Dispatches to the appropriate typed overload at runtime.
+    Dispatches to the appropriate typed overload at runtime, threading
+    ``ctx`` through so the primitive-array fast path can stripe its
+    gather loop across workers.
 
     Args:
         array: Source array (runtime-typed).
         indices: Row indices to gather. -1 produces a null output element.
+        ctx: Execution context — threads through to the primitive ``take``
+            implementation.
 
     Returns:
         A new AnyArray with one element per index.
@@ -749,46 +792,48 @@ def take(
         return take(array.as_bool().copy(), indices).to_any()
 
     if array.dtype() == int8:
-        return take[Int8Type](array.as_primitive[Int8Type](), indices).to_any()
+        return take[Int8Type](
+            array.as_primitive[Int8Type](), indices, ctx
+        ).to_any()
     elif array.dtype() == int16:
         return take[Int16Type](
-            array.as_primitive[Int16Type](), indices
+            array.as_primitive[Int16Type](), indices, ctx
         ).to_any()
     elif array.dtype() == int32:
         return take[Int32Type](
-            array.as_primitive[Int32Type](), indices
+            array.as_primitive[Int32Type](), indices, ctx
         ).to_any()
     elif array.dtype() == int64:
         return take[Int64Type](
-            array.as_primitive[Int64Type](), indices
+            array.as_primitive[Int64Type](), indices, ctx
         ).to_any()
     elif array.dtype() == uint8:
         return take[UInt8Type](
-            array.as_primitive[UInt8Type](), indices
+            array.as_primitive[UInt8Type](), indices, ctx
         ).to_any()
     elif array.dtype() == uint16:
         return take[UInt16Type](
-            array.as_primitive[UInt16Type](), indices
+            array.as_primitive[UInt16Type](), indices, ctx
         ).to_any()
     elif array.dtype() == uint32:
         return take[UInt32Type](
-            array.as_primitive[UInt32Type](), indices
+            array.as_primitive[UInt32Type](), indices, ctx
         ).to_any()
     elif array.dtype() == uint64:
         return take[UInt64Type](
-            array.as_primitive[UInt64Type](), indices
+            array.as_primitive[UInt64Type](), indices, ctx
         ).to_any()
     elif array.dtype() == float16:
         return take[Float16Type](
-            array.as_primitive[Float16Type](), indices
+            array.as_primitive[Float16Type](), indices, ctx
         ).to_any()
     elif array.dtype() == float32:
         return take[Float32Type](
-            array.as_primitive[Float32Type](), indices
+            array.as_primitive[Float32Type](), indices, ctx
         ).to_any()
     elif array.dtype() == float64:
         return take[Float64Type](
-            array.as_primitive[Float64Type](), indices
+            array.as_primitive[Float64Type](), indices, ctx
         ).to_any()
 
     if array.dtype().is_string():

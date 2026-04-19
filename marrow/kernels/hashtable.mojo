@@ -204,24 +204,26 @@ struct RadixPartitioner(Partitioner):
         var hash_view = hash_buf.view[uint64.native](0, n)
 
         # 4. Parallel scatter — each thread scans its chunk and writes
-        # into its precomputed per-partition slots.  No contention.
+        # into its precomputed per-partition slots.  No cross-thread
+        # contention: every thread ``t`` owns indices ``t * p .. (t+1) * p``
+        # of ``write_offsets`` exclusively, so we mutate that array in
+        # place as the cursor — avoiding a per-worker ``List[Int]``
+        # allocation (each alloc contends on tcmalloc's page heap
+        # spinlock, which showed up as ~11% of worker time in profiling).
         @parameter
         def scatter_worker(t: Int):
             var start = t * chunk
             if start >= n:
                 return
             var end = min(start + chunk, n)
-            # Thread-local cursor per partition (p-sized stack copy).
-            var cursors = List[Int](length=p, fill=0)
-            for pid in range(p):
-                cursors[pid] = write_offsets[t * p + pid]
+            var base = t * p
             for i in range(start, end):
                 var h = UInt64(src.load[1](i))
                 var pid = Int(h >> shift)
-                var pos = cursors[pid]
+                var pos = write_offsets[base + pid]
                 row_view.store[1](pos, Int32(i))
                 hash_view.store[1](pos, h)
-                cursors[pid] = pos + 1
+                write_offsets[base + pid] = pos + 1
 
         sync_parallelize[scatter_worker](nt)
 

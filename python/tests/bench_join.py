@@ -159,7 +159,8 @@ def test_polars_join(benchmark, tables, n, pl_type):
 def test_marrow_join(benchmark, tables, n, join_type):
     benchmark.extra_info.update(lib="marrow", n=n)
     left, right = tables["ma_left"], tables["ma_right"]
-    benchmark(left.join, right, ["k"], None, join_type)
+    # num_threads=1 — single-threaded comparison.
+    benchmark(left.join, right, ["k"], None, join_type, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +189,8 @@ def test_polars_join_half(benchmark, tables_half, n, pl_type):
 def test_marrow_join_half(benchmark, tables_half, n, join_type):
     benchmark.extra_info.update(lib="marrow", n=n)
     left, right = tables_half["ma_left"], tables_half["ma_right"]
-    benchmark(left.join, right, ["k"], None, join_type)
+    # num_threads=1 — single-threaded comparison.
+    benchmark(left.join, right, ["k"], None, join_type, 1)
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,13 @@
 
 ### Features
 
+- **Parallel per-column `take()`** (`marrow/kernels/filter.mojo`):
+  `take[T](PrimitiveArray, indices, ctx)` and the `AnyArray` dispatcher
+  now accept an `ExecutionContext`. The no-null fast path stripes its
+  SIMD-gather loop across workers via `sync_parallelize`. `HashJoin`'s
+  `_assemble()` uses this to fan the per-output-column gathers across
+  threads — the final materialization step was the last serial piece
+  of the parallel join. End-to-end 10M inner join: **143 ms → 67 ms**.
 - **`ExecutionContext`** (`marrow/kernels/execution.mojo`): New struct
   bundling the two axes of kernel dispatch — `num_threads` for CPU
   stripe parallelism and `device: Optional[DeviceContext]` for GPU.
@@ -59,10 +66,11 @@
   at 1M / 10M (100M gated behind `MARROW_BENCH_LARGE=1`). Mojo-side bench
   refactored around shared helpers with a 10M tier plus a build×probe
   shape matrix (100k×10M, 10M×100k, 1M×10M, 10M×1M). At 10M×10M INNER
-  join: Marrow 330 ms (serial, pre-parallel) → 143 ms (parallel, 2.3×
-  speedup); vs Polars 97 ms (1.5× gap, down from 3.5×), DuckDB 123 ms
-  (1.2× gap, down from 1.3×), PyArrow 108 ms. At 1M INNER join Marrow
-  (8.9 ms) now beats DuckDB (16.2 ms) outright.
+  join: Marrow 330 ms (serial, pre-parallel) → 67 ms (parallel, **4.9×
+  speedup**), now the fastest among all measured libraries — Polars
+  97 ms (Marrow 1.4× faster), PyArrow 111 ms (Marrow 1.7× faster),
+  DuckDB 122 ms (Marrow 1.8× faster). At 1M INNER: Marrow 7.1 ms beats
+  PyArrow (7.7 ms) and DuckDB (17.2 ms) outright, within 1.2× of Polars.
 
 ## [Unreleased] — 2026-04-09
 
