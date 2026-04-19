@@ -26,8 +26,9 @@ from ..arrays import (
     StringArray,
     StructArray,
     AnyArray,
+    UInt64Array,
 )
-from ..builders import PrimitiveBuilder
+from ..builders import PrimitiveBuilder, UInt64Builder
 from ..buffers import Buffer
 from ..views import apply
 from .execution import ExecutionContext

@@ -18,6 +18,7 @@ from ..arrays import (
     StringArray,
     AnyArray,
     StructArray,
+    Int32Array,
 )
 from ..buffers import Buffer
 from ..buffers import Bitmap

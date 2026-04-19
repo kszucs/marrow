@@ -17,6 +17,7 @@ from marrow.builders import (
     nulls,
     PrimitiveBuilder,
     StringBuilder,
+    Int32Builder,
 )
 from marrow.dtypes import (
     int32,

@@ -9,7 +9,7 @@ from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray, AnyArray, StructArray
 from marrow.buffers import Bitmap
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import PrimitiveBuilder, UInt64Builder
 from marrow.dtypes import uint64, UInt64Type, struct_, Field
 from marrow.kernels.hashtable import SwissHashTable
 from marrow.kernels.hashing import rapidhash

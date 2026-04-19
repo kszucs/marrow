@@ -8,7 +8,13 @@ from marrow.testing import TestSuite
 from std.gpu.host import DeviceContext
 
 from marrow.arrays import BoolArray, PrimitiveArray
-from marrow.builders import array, arange, BoolBuilder, PrimitiveBuilder
+from marrow.builders import (
+    array,
+    arange,
+    BoolBuilder,
+    PrimitiveBuilder,
+    Int32Builder,
+)
 from marrow.dtypes import (
     bool_,
     int32,

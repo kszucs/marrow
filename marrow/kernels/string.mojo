@@ -1,6 +1,6 @@
 """String compute kernels."""
 
-from ..arrays import StringArray, PrimitiveArray
+from ..arrays import StringArray, PrimitiveArray, UInt32Array
 from ..buffers import Buffer
 from ..dtypes import uint32
 

@@ -27,7 +27,20 @@ from std.gpu.host import DeviceContext
 import std.math as math
 
 from marrow.arrays import PrimitiveArray, AnyArray
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import (
+    PrimitiveBuilder,
+    Int8Builder,
+    Int16Builder,
+    Int32Builder,
+    Int64Builder,
+    UInt8Builder,
+    UInt16Builder,
+    UInt32Builder,
+    UInt64Builder,
+    Float16Builder,
+    Float32Builder,
+    Float64Builder,
+)
 from marrow.dtypes import (
     Int8Type,
     Int16Type,

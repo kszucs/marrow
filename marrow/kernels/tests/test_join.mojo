@@ -3,9 +3,21 @@
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, PrimitiveArray, StringArray, StructArray
+from marrow.arrays import (
+    AnyArray,
+    PrimitiveArray,
+    StringArray,
+    StructArray,
+    UInt64Array,
+)
 from marrow.kernels.execution import ExecutionContext
-from marrow.builders import array, PrimitiveBuilder, StringBuilder
+from marrow.builders import (
+    array,
+    PrimitiveBuilder,
+    StringBuilder,
+    Int32Builder,
+    UInt64Builder,
+)
 from marrow.dtypes import (
     int32,
     int64,

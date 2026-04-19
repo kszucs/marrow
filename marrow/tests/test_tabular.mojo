@@ -13,7 +13,7 @@ from marrow.dtypes import (
     Int64Type,
     Float64Type,
 )
-from marrow.builders import array, PrimitiveBuilder
+from marrow.builders import array, PrimitiveBuilder, Float64Builder
 
 
 def test_record_batch_construction() raises:

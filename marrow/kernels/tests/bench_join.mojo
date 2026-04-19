@@ -19,7 +19,7 @@ where competitor runtimes (DuckDB/Polars) can be run at full parallelism.
 from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray, AnyArray, StructArray
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, Int64Type, struct_, Field
 from marrow.expr.relations import JOIN_INNER, JOIN_ALL
 from marrow.kernels.join import HashJoin, hash_join

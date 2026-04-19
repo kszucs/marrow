@@ -25,7 +25,7 @@ from std.math import iota
 from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
-from std.algorithm.functional import elementwise, sync_parallelize
+from std.algorithm.functional import elementwise
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
@@ -996,6 +996,43 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 """A parameterized SIMD function that takes a value vector and a validity mask."""
 
 
+def _apply_dispatch[
+    Out: DType,
+    gpu_ok: Bool,
+    process: def[W: Int, rank: Int, alignment: Int = 1](
+        IndexList[rank]
+    ) capturing -> None,
+](length: Int, ctx: ExecutionContext) raises:
+    """Dispatch `process` to GPU or CPU (serial/parallel) based on `ctx`.
+
+    `gpu_ok` is the caller's has_accelerator_support[...] check — passed as a
+    comptime Bool so the GPU branch is dead-code-eliminated when unsupported.
+    When ``ctx`` wants parallel execution, defers to elementwise's built-in
+    parallel executor; otherwise runs in-thread via ``use_blocking_impl=True``.
+    """
+    if ctx.is_gpu():
+        comptime if gpu_ok:
+            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
+        else:
+            raise Error("apply: no GPU accelerator available")
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if ctx.wants_parallel(length):
+        # TODO: elementwise does not expose a thread-count parameter, so
+        # ctx.num_threads / ctx.resolved_num_threads() are ignored here.
+        # We need to either switch back to sync_parallelize striping or wait
+        # for elementwise to gain a num_threads knob.
+        elementwise[process, cpu_width, target="cpu"](length)
+    else:
+        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
+            length
+        )
+
+
 def apply[
     In: DType,
     Out: DType,
@@ -1007,12 +1044,8 @@ def apply[
 ) raises:
     """Apply a type-mapping unary SIMD op element-wise over src into dst.
 
-    The ``ctx`` parameter controls both device (CPU vs GPU) and CPU
-    worker count. When ``ctx.num_threads > 1`` and the input is large
-    enough, the row range is striped across workers via
-    ``sync_parallelize`` — each worker writes to a disjoint output slice.
-    Implicit conversion from ``Optional[DeviceContext]`` keeps existing
-    callers passing ``None`` / ``Some(device)`` working unchanged.
+    The ``ctx`` parameter controls both device (CPU vs GPU) and whether CPU
+    execution runs in parallel; see ``_apply_dispatch`` for the details.
     """
     var length = len(dst)
 
@@ -1021,50 +1054,12 @@ def apply[
     def process[
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
-        dst.store[W](idx[0], op[W](src.load[W](idx[0])))
+        var i = idx[0]
+        dst.store[W](i, op[W](src.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In, Out]():
-            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-        return
-
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-    if not ctx.wants_parallel(length):
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-        return
-
-    var nt = ctx.resolved_num_threads()
-    var chunk = (length + nt - 1) // nt
-
-    @parameter
-    def worker(i: Int) raises:
-        var start = i * chunk
-        if start >= length:
-            return
-        var end = min(start + chunk, length)
-        var m = end - start
-        var src_slice = src.slice(start, m)
-        var dst_slice = dst.slice(start, m)
-
-        @parameter
-        @always_inline
-        def sub_process[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            dst_slice.store[W](idx[0], op[W](src_slice.load[W](idx[0])))
-
-        elementwise[
-            sub_process, cpu_width, target="cpu", use_blocking_impl=True
-        ](m)
-
-    sync_parallelize[worker](nt)
+    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
+        length, ctx
+    )
 
 
 def apply[
@@ -1089,52 +1084,9 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In, Out]():
-            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-        return
-
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-    if not ctx.wants_parallel(length):
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-        return
-
-    var nt = ctx.resolved_num_threads()
-    var chunk = (length + nt - 1) // nt
-
-    @parameter
-    def worker(i: Int) raises:
-        var start = i * chunk
-        if start >= length:
-            return
-        var end = min(start + chunk, length)
-        var m = end - start
-        var lhs_slice = lhs.slice(start, m)
-        var rhs_slice = rhs.slice(start, m)
-        var dst_slice = dst.slice(start, m)
-
-        @parameter
-        @always_inline
-        def sub_process[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var j = idx[0]
-            dst_slice.store[W](
-                j, op[W](lhs_slice.load[W](j), rhs_slice.load[W](j))
-            )
-
-        elementwise[
-            sub_process, cpu_width, target="cpu", use_blocking_impl=True
-        ](m)
-
-    sync_parallelize[worker](nt)
+    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
+        length, ctx
+    )
 
 
 def apply[
@@ -1207,50 +1159,10 @@ def apply[
     def process[
         W: Int, rank: Int, alignment: Int = 1
     ](idx: IndexList[rank]) -> None:
-        dst.store[W](idx[0], op[W](src.mask[W](idx[0])))
+        var i = idx[0]
+        dst.store[W](i, op[W](src.mask[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[Out]():
-            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-        return
-
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-    if not ctx.wants_parallel(length):
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-        return
-
-    var nt = ctx.resolved_num_threads()
-    var chunk = (length + nt - 1) // nt
-
-    @parameter
-    def worker(i: Int) raises:
-        var start = i * chunk
-        if start >= length:
-            return
-        var end = min(start + chunk, length)
-        var m = end - start
-        var src_slice = src.slice(start, m)
-        var dst_slice = dst.slice(start, m)
-
-        @parameter
-        @always_inline
-        def sub_process[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            dst_slice.store[W](idx[0], op[W](src_slice.mask[W](idx[0])))
-
-        elementwise[
-            sub_process, cpu_width, target="cpu", use_blocking_impl=True
-        ](m)
-
-    sync_parallelize[worker](nt)
+    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
 
 
 def apply[
@@ -1274,52 +1186,9 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[In, Out]():
-            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-        return
-
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-    if not ctx.wants_parallel(length):
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-        return
-
-    var nt = ctx.resolved_num_threads()
-    var chunk = (length + nt - 1) // nt
-
-    @parameter
-    def worker(i: Int) raises:
-        var start = i * chunk
-        if start >= length:
-            return
-        var end = min(start + chunk, length)
-        var m = end - start
-        var src_slice = src.slice(start, m)
-        var val_slice = validity.slice(start, m)
-        var dst_slice = dst.slice(start, m)
-
-        @parameter
-        @always_inline
-        def sub_process[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var j = idx[0]
-            dst_slice.store[W](
-                j, op[W](src_slice.load[W](j), val_slice.mask[W](j))
-            )
-
-        elementwise[
-            sub_process, cpu_width, target="cpu", use_blocking_impl=True
-        ](m)
-
-    sync_parallelize[worker](nt)
+    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
+        length, ctx
+    )
 
 
 def apply[
@@ -1342,52 +1211,7 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
-    if ctx.is_gpu():
-        comptime if has_accelerator_support[Out]():
-            comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
-            )
-        else:
-            raise Error("apply: no GPU accelerator available")
-        return
-
-    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
-    if not ctx.wants_parallel(length):
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
-        return
-
-    var nt = ctx.resolved_num_threads()
-    var chunk = (length + nt - 1) // nt
-
-    @parameter
-    def worker(i: Int) raises:
-        var start = i * chunk
-        if start >= length:
-            return
-        var end = min(start + chunk, length)
-        var m = end - start
-        var src_slice = src.slice(start, m)
-        var val_slice = validity.slice(start, m)
-        var dst_slice = dst.slice(start, m)
-
-        @parameter
-        @always_inline
-        def sub_process[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var j = idx[0]
-            dst_slice.store[W](
-                j, op[W](src_slice.mask[W](j), val_slice.mask[W](j))
-            )
-
-        elementwise[
-            sub_process, cpu_width, target="cpu", use_blocking_impl=True
-        ](m)
-
-    sync_parallelize[worker](nt)
+    _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
 
 
 def apply[

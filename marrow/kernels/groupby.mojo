@@ -14,10 +14,13 @@ Abstractions:
 """
 
 from std.memory import ArcPointer
-from ..arrays import PrimitiveArray, StructArray, AnyArray
+from ..arrays import PrimitiveArray, StructArray, AnyArray, UInt32Array
 from ..builders import (
     PrimitiveBuilder,
     AnyBuilder,
+    Int64Builder,
+    UInt32Builder,
+    Float64Builder,
 )
 from ..dtypes import (
     PrimitiveType,

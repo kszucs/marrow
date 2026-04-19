@@ -14,8 +14,14 @@ from std.bit import count_trailing_zeros, next_power_of_two
 from std.gpu.host import DeviceContext
 from std.memory import pack_bits
 from std.sys import size_of
-from ..arrays import PrimitiveArray, AnyArray, StructArray
-from ..builders import PrimitiveBuilder
+from ..arrays import (
+    PrimitiveArray,
+    AnyArray,
+    StructArray,
+    Int32Array,
+    UInt64Array,
+)
+from ..builders import PrimitiveBuilder, Int32Builder
 from ..buffers import Buffer
 from ..dtypes import int32, uint64, UInt64Type
 from ..views import BufferView

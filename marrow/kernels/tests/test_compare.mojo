@@ -2,7 +2,12 @@ from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
 from marrow.arrays import PrimitiveArray, AnyArray
-from marrow.builders import array, PrimitiveBuilder
+from marrow.builders import (
+    array,
+    PrimitiveBuilder,
+    Int64Builder,
+    Float64Builder,
+)
 from marrow.dtypes import int64, float64, Int64Type, Float64Type
 
 from marrow.kernels.compare import (

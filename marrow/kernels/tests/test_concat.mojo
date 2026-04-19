@@ -25,6 +25,8 @@ from marrow.builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    Int32Builder,
+    Float32Builder,
 )
 from marrow.dtypes import *
 from marrow.kernels.concat import concat

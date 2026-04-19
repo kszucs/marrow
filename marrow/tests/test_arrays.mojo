@@ -12,6 +12,9 @@ from marrow.builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    Int8Builder,
+    Int32Builder,
+    Int64Builder,
 )
 from marrow.dtypes import *
 from marrow.buffers import Buffer

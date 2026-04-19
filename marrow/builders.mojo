@@ -227,6 +227,39 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
         return self._ptr[][BoolBuilder]
 
+    def as_int8(ref self) -> ref[self._ptr[]] Int8Builder:
+        return self._ptr[][Int8Builder]
+
+    def as_int16(ref self) -> ref[self._ptr[]] Int16Builder:
+        return self._ptr[][Int16Builder]
+
+    def as_int32(ref self) -> ref[self._ptr[]] Int32Builder:
+        return self._ptr[][Int32Builder]
+
+    def as_int64(ref self) -> ref[self._ptr[]] Int64Builder:
+        return self._ptr[][Int64Builder]
+
+    def as_uint8(ref self) -> ref[self._ptr[]] UInt8Builder:
+        return self._ptr[][UInt8Builder]
+
+    def as_uint16(ref self) -> ref[self._ptr[]] UInt16Builder:
+        return self._ptr[][UInt16Builder]
+
+    def as_uint32(ref self) -> ref[self._ptr[]] UInt32Builder:
+        return self._ptr[][UInt32Builder]
+
+    def as_uint64(ref self) -> ref[self._ptr[]] UInt64Builder:
+        return self._ptr[][UInt64Builder]
+
+    def as_float16(ref self) -> ref[self._ptr[]] Float16Builder:
+        return self._ptr[][Float16Builder]
+
+    def as_float32(ref self) -> ref[self._ptr[]] Float32Builder:
+        return self._ptr[][Float32Builder]
+
+    def as_float64(ref self) -> ref[self._ptr[]] Float64Builder:
+        return self._ptr[][Float64Builder]
+
     def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
         return self._ptr[][StringBuilder]
 

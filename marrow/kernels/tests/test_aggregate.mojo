@@ -2,7 +2,7 @@ from std.testing import assert_equal
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray
-from marrow.builders import array, nulls, PrimitiveBuilder
+from marrow.builders import array, nulls, PrimitiveBuilder, Int32Builder
 from marrow.dtypes import int32, int64, Int32Type, Int64Type
 from marrow.kernels.aggregate import sum_
 

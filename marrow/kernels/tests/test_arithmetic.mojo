@@ -7,7 +7,14 @@ from std.testing import (
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray
-from marrow.builders import array, arange, PrimitiveBuilder
+from marrow.builders import (
+    array,
+    arange,
+    PrimitiveBuilder,
+    Int32Builder,
+    Float32Builder,
+    Float64Builder,
+)
 from marrow.dtypes import (
     int32,
     int64,

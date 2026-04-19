@@ -7,7 +7,7 @@ Run with:
 from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import AnyArray
-from marrow.builders import PrimitiveBuilder
+from marrow.builders import PrimitiveBuilder, Int32Builder, Float64Builder
 from marrow.dtypes import int32, float64, Int32Type, Float64Type
 from marrow.kernels.groupby import groupby
 from marrow.testing import BenchSuite, Benchmark

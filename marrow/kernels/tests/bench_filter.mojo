@@ -7,8 +7,8 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import BoolArray, PrimitiveArray
-from marrow.builders import arange, BoolBuilder, PrimitiveBuilder
+from marrow.arrays import BoolArray, PrimitiveArray, Int64Array
+from marrow.builders import arange, BoolBuilder, PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, Int64Type
 from marrow.kernels.filter import filter_
 from marrow.testing import BenchSuite, Benchmark

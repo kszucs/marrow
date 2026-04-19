@@ -464,6 +464,39 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def as_primitive[T: PrimitiveType](self) -> PrimitiveScalar[T]:
         return self._v[PrimitiveScalar[T]].copy()
 
+    def as_int8(self) -> Int8Scalar:
+        return self._v[Int8Scalar].copy()
+
+    def as_int16(self) -> Int16Scalar:
+        return self._v[Int16Scalar].copy()
+
+    def as_int32(self) -> Int32Scalar:
+        return self._v[Int32Scalar].copy()
+
+    def as_int64(self) -> Int64Scalar:
+        return self._v[Int64Scalar].copy()
+
+    def as_uint8(self) -> UInt8Scalar:
+        return self._v[UInt8Scalar].copy()
+
+    def as_uint16(self) -> UInt16Scalar:
+        return self._v[UInt16Scalar].copy()
+
+    def as_uint32(self) -> UInt32Scalar:
+        return self._v[UInt32Scalar].copy()
+
+    def as_uint64(self) -> UInt64Scalar:
+        return self._v[UInt64Scalar].copy()
+
+    def as_float16(self) -> Float16Scalar:
+        return self._v[Float16Scalar].copy()
+
+    def as_float32(self) -> Float32Scalar:
+        return self._v[Float32Scalar].copy()
+
+    def as_float64(self) -> Float64Scalar:
+        return self._v[Float64Scalar].copy()
+
     def as_string(self) -> StringScalar:
         return self._v[StringScalar].copy()
 

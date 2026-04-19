@@ -7,8 +7,13 @@ Run with:
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.arrays import PrimitiveArray, BoolArray
-from marrow.builders import PrimitiveBuilder, BoolBuilder
+from marrow.arrays import PrimitiveArray, BoolArray, Int32Array, Int64Array
+from marrow.builders import (
+    PrimitiveBuilder,
+    BoolBuilder,
+    Int32Builder,
+    Int64Builder,
+)
 from marrow.dtypes import PrimitiveType, int32, int64, Int32Type, Int64Type
 from marrow.kernels.hashing import rapidhash
 from marrow.testing import BenchSuite, Benchmark

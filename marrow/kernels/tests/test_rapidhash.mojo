@@ -8,8 +8,8 @@ with default seed=0 and default secrets. See:
 from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray
-from marrow.builders import PrimitiveBuilder
+from marrow.arrays import PrimitiveArray, UInt64Array
+from marrow.builders import PrimitiveBuilder, Int32Builder, Int64Builder
 from marrow.dtypes import int32, int64, uint64, Int32Type, Int64Type, UInt64Type
 from marrow.kernels.hashing import (
     rapidhash,

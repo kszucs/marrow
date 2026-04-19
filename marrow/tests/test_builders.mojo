@@ -23,6 +23,12 @@ from marrow.builders import (
     array,
     nulls,
     arange,
+    Int16Builder,
+    Int32Builder,
+    Int64Builder,
+    UInt32Builder,
+    Float32Builder,
+    Float64Builder,
 )
 from marrow.dtypes import *
 from marrow.views import BitmapView

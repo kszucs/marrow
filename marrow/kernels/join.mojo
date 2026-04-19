@@ -110,9 +110,9 @@ from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
 from std.sys.info import num_physical_cores
 
-from ..arrays import PrimitiveArray, AnyArray, StructArray
+from ..arrays import PrimitiveArray, AnyArray, StructArray, Int32Array
 from ..buffers import Buffer
-from ..builders import PrimitiveBuilder
+from ..builders import PrimitiveBuilder, Int32Builder
 from ..dtypes import (
     AnyDataType,
     Field,

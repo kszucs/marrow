@@ -17,6 +17,7 @@ from marrow.builders import (
     StringBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    Int32Builder,
 )
 from marrow.dtypes import (
     int32,
