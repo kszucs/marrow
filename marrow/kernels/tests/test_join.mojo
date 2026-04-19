@@ -1,10 +1,10 @@
 """Tests for the hash join kernel."""
 
-from std.gpu.host import DeviceContext
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray, StringArray, StructArray
+from marrow.kernels.execution import ExecutionContext
 from marrow.builders import array, PrimitiveBuilder, StringBuilder
 from marrow.dtypes import (
     int32,
@@ -545,7 +545,7 @@ def test_output_schema_column_name_collision() raises:
 
 def _constant_hash(
     keys: StructArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[UInt64Type]:
     """Degenerate hash function: all keys map to the same hash.
 
@@ -622,6 +622,90 @@ def test_collision_left_join() raises:
 
     # k=1 unmatched (left), k=2 matched → 2 result rows.
     assert_equal(len(result), 2)
+
+
+# ---------------------------------------------------------------------------
+# parallel path correctness — equivalence with serial results
+# ---------------------------------------------------------------------------
+
+
+def _dense_struct(n: Int) raises -> StructArray:
+    """Build a StructArray of (k=Int32, v=Int32) with unique keys 0..n."""
+    var kb = PrimitiveBuilder[Int32Type](capacity=n)
+    var vb = PrimitiveBuilder[Int32Type](capacity=n)
+    for i in range(n):
+        kb.append(Scalar[int32.native](i))
+        vb.append(Scalar[int32.native](i * 10))
+    var cols = List[AnyArray]()
+    cols.append(kb.finish().to_any())
+    cols.append(vb.finish().to_any())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+def _run_inner(left: StructArray, right: StructArray, num_threads: Int) raises -> StructArray:
+    return hash_join(
+        left, right, _left_on(), _right_on(),
+        JOIN_INNER, JOIN_ALL,
+        num_threads=num_threads,
+    )
+
+
+def test_parallel_inner_matches_serial() raises:
+    """Inner join results are equivalent between serial and parallel paths.
+
+    Uses 200k rows to exceed ``_PARALLEL_THRESHOLD``; every probe row has
+    exactly one match so both paths produce the same number of pairs.
+    """
+    var n = 200_000
+    var left = _dense_struct(n)
+    var right = _dense_struct(n)
+
+    var serial = _run_inner(left, right, 1)
+    var parallel = _run_inner(left, right, 4)
+
+    # Row count must match; per-row ordering may differ across paths.
+    assert_equal(len(serial), len(parallel))
+    assert_equal(len(serial), n)
+
+
+def test_parallel_inner_no_matches() raises:
+    """Parallel path must correctly produce zero rows when nothing matches."""
+    var n = 150_000
+    # left keys 0..n, right keys n..2n — disjoint.
+    var left = _dense_struct(n)
+    var kb = PrimitiveBuilder[Int32Type](capacity=n)
+    var vb = PrimitiveBuilder[Int32Type](capacity=n)
+    for i in range(n):
+        kb.append(Scalar[int32.native](n + i))
+        vb.append(Scalar[int32.native](i * 10))
+    var cols = List[AnyArray]()
+    cols.append(kb.finish().to_any())
+    cols.append(vb.finish().to_any())
+    var right = record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+    var parallel = _run_inner(left, right, 4)
+    assert_equal(len(parallel), 0)
+
+
+def test_parallel_partial_match() raises:
+    """Parallel inner join with partial key overlap."""
+    var n = 150_000
+    var left = _dense_struct(n)
+    # right keys are [n/2, 3n/2) — half overlap.
+    var kb = PrimitiveBuilder[Int32Type](capacity=n)
+    var vb = PrimitiveBuilder[Int32Type](capacity=n)
+    for i in range(n):
+        kb.append(Scalar[int32.native](n // 2 + i))
+        vb.append(Scalar[int32.native](i * 10))
+    var cols = List[AnyArray]()
+    cols.append(kb.finish().to_any())
+    cols.append(vb.finish().to_any())
+    var right = record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+    var serial = _run_inner(left, right, 1)
+    var parallel = _run_inner(left, right, 4)
+    assert_equal(len(serial), len(parallel))
+    assert_equal(len(serial), n // 2)
 
 
 def main() raises:

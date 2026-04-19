@@ -30,6 +30,7 @@ from ..arrays import (
 from ..builders import PrimitiveBuilder
 from ..buffers import Buffer
 from ..views import apply
+from .execution import ExecutionContext
 from ..dtypes import (
     PrimitiveType,
     Int8Type,
@@ -234,18 +235,21 @@ def _rapidhash_primitive_masked[
 
 def rapidhash(
     keys: BoolArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[UInt64Type]:
     """Vectorized rapidhash for bool arrays.
 
     Precomputes hash(false) and hash(true), loads data bits via the
     bitmap-mask pattern, and uses ``SIMD.select()`` for branchless dispatch.
     Null elements are replaced with ``NULL_HASH_SENTINEL`` inline.
+
+    Parallelism is delegated to ``apply`` via the ``ExecutionContext`` —
+    no per-kernel stripe logic here.
     """
     var n = len(keys)
     var buf: Buffer[mut=True]
-    if ctx:
-        buf = Buffer.alloc_device[uint64.native](ctx.value(), n)
+    if ctx.is_gpu():
+        buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
@@ -253,10 +257,7 @@ def rapidhash(
     var validity = keys.validity()
     if validity:
         apply[uint64.native, _rapidhash_bool_masked](
-            keys.values(),
-            validity.value(),
-            dst,
-            ctx,
+            keys.values(), validity.value(), dst, ctx,
         )
     else:
         apply[uint64.native, _rapidhash_bool](keys.values(), dst, ctx)
@@ -275,19 +276,21 @@ def rapidhash[
     T: PrimitiveType
 ](
     keys: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[UInt64Type]:
     """Vectorized rapidhash for primitive arrays.
 
     Each SIMD lane independently computes the rapidhash of one element.
     Null elements are replaced with ``NULL_HASH_SENTINEL`` inline.
 
-    Dispatches to GPU when ``ctx`` is provided, CPU SIMD otherwise.
+    Parallelism is handled uniformly by ``apply`` using the
+    ``ExecutionContext`` — CPU vs GPU is picked from ``ctx.device``, and
+    CPU stripe-parallelism is driven by ``ctx.num_threads``.
     """
     var n = len(keys)
     var buf: Buffer[mut=True]
-    if ctx:
-        buf = Buffer.alloc_device[uint64.native](ctx.value(), n)
+    if ctx.is_gpu():
+        buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
     else:
         buf = Buffer.alloc_uninit[uint64.native](n)
 
@@ -295,16 +298,11 @@ def rapidhash[
     var validity = keys.validity()
     if validity:
         apply[T.native, uint64.native, _rapidhash_primitive_masked[T, ...]](
-            keys.values(),
-            validity.value(),
-            dst,
-            ctx,
+            keys.values(), validity.value(), dst, ctx,
         )
     else:
         apply[T.native, uint64.native, _rapidhash_primitive[T, ...]](
-            keys.values(),
-            dst,
-            ctx,
+            keys.values(), dst, ctx,
         )
 
     return PrimitiveArray[UInt64Type](
@@ -316,12 +314,18 @@ def rapidhash[
     )
 
 
-def rapidhash(keys: StringArray) raises -> PrimitiveArray[UInt64Type]:
+def rapidhash(
+    keys: StringArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[UInt64Type]:
     """Hash each element of a string array.
 
     Uses AHash for variable-length strings (rapidhash for strings requires
-    the full multi-branch rapidhash_internal — future work).
+    the full multi-branch rapidhash_internal — future work). Currently
+    scalar-serial; parallelizing variable-length string hashing is future
+    work — the ``ctx`` parameter exists for API consistency.
     """
+    _ = ctx  # TODO: SIMD + parallel string hashing
     var n = len(keys)
     var builder = PrimitiveBuilder[UInt64Type](capacity=n)
     var has_bitmap = Bool(keys.bitmap)
@@ -349,12 +353,14 @@ def _combine_hashes[
 
 def rapidhash(
     keys: StructArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[UInt64Type]:
     """Hash a struct array by combining per-field hashes column-wise.
 
-    Each field is hashed independently via ``rapidhash(AnyArray)``
-    and the results are combined element-wise using ``_combine_hashes``.
+    Each field is hashed independently via ``rapidhash(AnyArray)`` and
+    the results are combined element-wise using ``_combine_hashes``. The
+    ``ExecutionContext`` is forwarded to per-field hashing and to the
+    combine pass — all stripe-parallelism is handled inside ``apply``.
     """
     var n = len(keys)
     var num_fields = len(keys.children)
@@ -367,8 +373,8 @@ def rapidhash(
         var field_hashes = rapidhash(keys.children[k], ctx)
 
         var buf: Buffer[mut=True]
-        if ctx:
-            buf = Buffer.alloc_device[uint64.native](ctx.value(), n)
+        if ctx.is_gpu():
+            buf = Buffer.alloc_device[uint64.native](ctx.device.value(), n)
         else:
             buf = Buffer.alloc_uninit[uint64.native](n)
         apply[uint64.native, uint64.native, _combine_hashes](
@@ -390,7 +396,7 @@ def rapidhash(
 
 def rapidhash(
     keys: AnyArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[UInt64Type]:
     """Runtime-typed rapidhash dispatch."""
     if keys.dtype() == bool_:
@@ -418,7 +424,7 @@ def rapidhash(
     elif keys.dtype() == float64:
         return rapidhash(keys.as_float64(), ctx)
     elif keys.dtype().is_string():
-        return rapidhash(keys.as_string())
+        return rapidhash(keys.as_string(), ctx)
     elif keys.dtype().is_struct():
         return rapidhash(keys.as_struct(), ctx)
     else:

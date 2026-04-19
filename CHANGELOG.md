@@ -1,5 +1,69 @@
 # Changelog
 
+## [Unreleased] — 2026-04-19
+
+### Features
+
+- **`ExecutionContext`** (`marrow/kernels/execution.mojo`): New struct
+  bundling the two axes of kernel dispatch — `num_threads` for CPU
+  stripe parallelism and `device: Optional[DeviceContext]` for GPU.
+  Implicit conversion from `Optional[DeviceContext]` keeps existing
+  callers working. Factories: `.serial()`, `.parallel(num_threads=0)`
+  (0 = auto via `num_physical_cores()`), `.gpu(device)`. Kernels accept
+  an `ExecutionContext` parameter and forward it through the call
+  graph; `apply()` in `marrow/views.mojo` picks up CPU stripe-
+  parallelism uniformly rather than each kernel reimplementing
+  `sync_parallelize`. `rapidhash`, `SwissHashTable.build/probe/insert`,
+  `HashJoin`, and `hash_join()` all take `ExecutionContext` in place of
+  the old `Optional[DeviceContext]` + `num_threads` pair.
+- **Partition-parallel hash join** (`marrow/kernels/join.mojo`,
+  `marrow/kernels/hashtable.mojo`): `HashJoin` and top-level `hash_join()`
+  gain a `num_threads` argument (`0` = auto via `num_physical_cores()`,
+  `1` = serial, `>1` = partition-parallel). The parallel path radix-
+  partitions both sides by the top bits of their hash into
+  `2^radix_bits` independent `SwissHashTable` instances, builds and probes
+  them concurrently via `sync_parallelize`, and concatenates per-partition
+  index pairs into the final result. No atomics on the hot path: each
+  partition is fully independent.  Serial path is unchanged —
+  `build_serial` / `probe_serial` methods preserve the pre-parallel
+  implementation and are used when `num_threads == 1` or the build side
+  is below `_PARALLEL_THRESHOLD` (100k rows).
+- **`RadixPartitioner`** (`marrow/kernels/hashtable.mojo`): Implements the
+  previously-stubbed `Partitioner` trait. Partitions hashes + row indices
+  by the top `num_bits` (default 6 → 64 partitions). Per-thread histogram
+  → partition-major prefix sum → parallel scatter into two shared flat
+  buffers, then per-partition zero-copy slice via `ArcPointer`-shared
+  immutable buffers. Single allocation per output (N Int32 + N UInt64).
+- **`num_threads` on `rapidhash`** (`marrow/kernels/hashing.mojo`): Bool
+  and primitive overloads stripe the row range across workers via
+  `sync_parallelize` when `num_threads > 1` and rows ≥ 32768. Struct
+  overload forwards to per-field calls.  Struct array / `AnyArray`
+  dispatch threads the parameter through.
+- **Public `SwissHashTable.insert_hashes` / `build_hashes` /
+  `probe_hashes`**: The previously-private `_insert_hashes` /
+  `_build_hashes` / `_probe_hashes` primitives are now public. Enables
+  callers that have already computed hashes (e.g. the partition-parallel
+  HashJoin, which hashes once up-front and then builds per-partition
+  tables against the pre-computed hashes) to skip the hasher entirely —
+  no need for separate `build_with_hashes` / `probe_with_hashes`
+  variants. `probe_hashes` returns raw candidate `(build_row, probe_row)`
+  pairs; callers that need the equality-verified result use the
+  convenience `probe()` wrapper which adds the hash + equality filter
+  step.
+
+### Benchmarks
+
+- **Parallel join competition** (`python/tests/bench_join_parallel.py`,
+  `marrow/kernels/tests/bench_join.mojo`): Multi-threaded competition
+  benchmarks (marrow vs DuckDB vs Polars vs PyArrow, no forced thread=1)
+  at 1M / 10M (100M gated behind `MARROW_BENCH_LARGE=1`). Mojo-side bench
+  refactored around shared helpers with a 10M tier plus a build×probe
+  shape matrix (100k×10M, 10M×100k, 1M×10M, 10M×1M). At 10M×10M INNER
+  join: Marrow 330 ms (serial, pre-parallel) → 143 ms (parallel, 2.3×
+  speedup); vs Polars 97 ms (1.5× gap, down from 3.5×), DuckDB 123 ms
+  (1.2× gap, down from 1.3×), PyArrow 108 ms. At 1M INNER join Marrow
+  (8.9 ms) now beats DuckDB (16.2 ms) outright.
+
 ## [Unreleased] — 2026-04-09
 
 ### Features

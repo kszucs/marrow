@@ -25,11 +25,12 @@ from std.math import iota
 from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
-from std.algorithm.functional import elementwise
+from std.algorithm.functional import elementwise, sync_parallelize
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
 from .buffers import Buffer, Bitmap
+from .kernels.execution import ExecutionContext
 
 
 def _packed_uint_dtype[W: Int]() -> DType:
@@ -1002,9 +1003,17 @@ def apply[
 ](
     src: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
-    """Apply a type-mapping unary SIMD op element-wise over src into dst."""
+    """Apply a type-mapping unary SIMD op element-wise over src into dst.
+
+    The ``ctx`` parameter controls both device (CPU vs GPU) and CPU
+    worker count. When ``ctx.num_threads > 1`` and the input is large
+    enough, the row range is striped across workers via
+    ``sync_parallelize`` — each worker writes to a disjoint output slice.
+    Implicit conversion from ``Optional[DeviceContext]`` keeps existing
+    callers passing ``None`` / ``Some(device)`` working unchanged.
+    """
     var length = len(dst)
 
     @parameter
@@ -1014,17 +1023,48 @@ def apply[
     ](idx: IndexList[rank]) -> None:
         dst.store[W](idx[0], op[W](src.load[W](idx[0])))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if not ctx.wants_parallel(length):
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
+        return
+
+    var nt = ctx.resolved_num_threads()
+    var chunk = (length + nt - 1) // nt
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        if start >= length:
+            return
+        var end = min(start + chunk, length)
+        var m = end - start
+        var src_slice = src.slice(start, m)
+        var dst_slice = dst.slice(start, m)
+
+        @parameter
+        @always_inline
+        def sub_process[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            dst_slice.store[W](idx[0], op[W](src_slice.load[W](idx[0])))
+
+        elementwise[
+            sub_process, cpu_width, target="cpu", use_blocking_impl=True
+        ](m)
+
+    sync_parallelize[worker](nt)
 
 
 def apply[
@@ -1035,7 +1075,7 @@ def apply[
     lhs: BufferView[In, _],
     rhs: BufferView[In, _],
     dst: BufferView[mut=True, Out, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a type-mapping binary SIMD op element-wise over lhs,rhs into dst.
     """
@@ -1049,17 +1089,52 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if not ctx.wants_parallel(length):
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
+        return
+
+    var nt = ctx.resolved_num_threads()
+    var chunk = (length + nt - 1) // nt
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        if start >= length:
+            return
+        var end = min(start + chunk, length)
+        var m = end - start
+        var lhs_slice = lhs.slice(start, m)
+        var rhs_slice = rhs.slice(start, m)
+        var dst_slice = dst.slice(start, m)
+
+        @parameter
+        @always_inline
+        def sub_process[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            var j = idx[0]
+            dst_slice.store[W](
+                j, op[W](lhs_slice.load[W](j), rhs_slice.load[W](j))
+            )
+
+        elementwise[
+            sub_process, cpu_width, target="cpu", use_blocking_impl=True
+        ](m)
+
+    sync_parallelize[worker](nt)
 
 
 def apply[
@@ -1069,13 +1144,16 @@ def apply[
     lhs: BufferView[In, _],
     rhs: BufferView[In, _],
     dst: BitmapView[mut=True, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a binary comparison and bit-pack results into a bitmap.
 
     Compares W elements per call, packs the ``SIMD[bool, W]`` result
     into the output bitmap via ``BitmapView.store``.
-    Over-read on the tail is safe (Arrow 64-byte padding).
+    Over-read on the tail is safe (Arrow 64-byte padding). CPU
+    parallelism via ``ctx`` is not used here — bit-packed outputs need
+    whole-byte-aligned stride to avoid scalar read-modify-write races
+    between workers; threading support is future work.
     """
     var length = len(dst)
 
@@ -1087,7 +1165,7 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[In]():
             comptime gpu_width = max(
                 8, simd_width_of[In, target=get_gpu_target()]()
@@ -1101,7 +1179,9 @@ def apply[
                 math.align_up(length, gpu_width),
                 length + max_pad,
             )
-            elementwise[process, gpu_width, target="gpu"](padded, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                padded, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
     else:
@@ -1117,7 +1197,7 @@ def apply[
 ](
     src: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a bool-to-Out unary op from a BitmapView into a BufferView."""
     var length = len(dst)
@@ -1129,17 +1209,48 @@ def apply[
     ](idx: IndexList[rank]) -> None:
         dst.store[W](idx[0], op[W](src.mask[W](idx[0])))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if not ctx.wants_parallel(length):
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
+        return
+
+    var nt = ctx.resolved_num_threads()
+    var chunk = (length + nt - 1) // nt
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        if start >= length:
+            return
+        var end = min(start + chunk, length)
+        var m = end - start
+        var src_slice = src.slice(start, m)
+        var dst_slice = dst.slice(start, m)
+
+        @parameter
+        @always_inline
+        def sub_process[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            dst_slice.store[W](idx[0], op[W](src_slice.mask[W](idx[0])))
+
+        elementwise[
+            sub_process, cpu_width, target="cpu", use_blocking_impl=True
+        ](m)
+
+    sync_parallelize[worker](nt)
 
 
 def apply[
@@ -1150,7 +1261,7 @@ def apply[
     src: BufferView[In, _],
     validity: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a masked SIMD op element-wise: op(values, validity) into dst."""
     var length = len(dst)
@@ -1163,17 +1274,52 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[In, Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if not ctx.wants_parallel(length):
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
+        return
+
+    var nt = ctx.resolved_num_threads()
+    var chunk = (length + nt - 1) // nt
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        if start >= length:
+            return
+        var end = min(start + chunk, length)
+        var m = end - start
+        var src_slice = src.slice(start, m)
+        var val_slice = validity.slice(start, m)
+        var dst_slice = dst.slice(start, m)
+
+        @parameter
+        @always_inline
+        def sub_process[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            var j = idx[0]
+            dst_slice.store[W](
+                j, op[W](src_slice.load[W](j), val_slice.mask[W](j))
+            )
+
+        elementwise[
+            sub_process, cpu_width, target="cpu", use_blocking_impl=True
+        ](m)
+
+    sync_parallelize[worker](nt)
 
 
 def apply[
@@ -1183,7 +1329,7 @@ def apply[
     src: BitmapView[_],
     validity: BitmapView[_],
     dst: BufferView[mut=True, Out, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a masked bool-to-Out op: op(bits, validity) into dst."""
     var length = len(dst)
@@ -1196,17 +1342,52 @@ def apply[
         var i = idx[0]
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
-    if ctx:
+    if ctx.is_gpu():
         comptime if has_accelerator_support[Out]():
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-            elementwise[process, gpu_width, target="gpu"](length, ctx.value())
+            elementwise[process, gpu_width, target="gpu"](
+                length, ctx.device.value()
+            )
         else:
             raise Error("apply: no GPU accelerator available")
-    else:
-        comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+        return
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+    if not ctx.wants_parallel(length):
         elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
             length
         )
+        return
+
+    var nt = ctx.resolved_num_threads()
+    var chunk = (length + nt - 1) // nt
+
+    @parameter
+    def worker(i: Int) raises:
+        var start = i * chunk
+        if start >= length:
+            return
+        var end = min(start + chunk, length)
+        var m = end - start
+        var src_slice = src.slice(start, m)
+        var val_slice = validity.slice(start, m)
+        var dst_slice = dst.slice(start, m)
+
+        @parameter
+        @always_inline
+        def sub_process[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            var j = idx[0]
+            dst_slice.store[W](
+                j, op[W](src_slice.mask[W](j), val_slice.mask[W](j))
+            )
+
+        elementwise[
+            sub_process, cpu_width, target="cpu", use_blocking_impl=True
+        ](m)
+
+    sync_parallelize[worker](nt)
 
 
 def apply[
@@ -1214,7 +1395,7 @@ def apply[
 ](
     src: BitmapView[_],
     dst: BitmapView[mut=True, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a byte-level unary SIMD op from src into dst (pre-allocated, offset-0).
 
@@ -1288,7 +1469,7 @@ def apply[
     lhs: BitmapView[_],
     rhs: BitmapView[_],
     dst: BitmapView[mut=True, _],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises:
     """Apply a byte-level binary SIMD op from lhs and rhs into dst (pre-allocated, offset-0).
 

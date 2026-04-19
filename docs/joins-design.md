@@ -332,13 +332,146 @@ def sort_merge_join(
 
 ---
 
+## Phase 1b — Partition-Parallel Hash Join (shipped 2026-04-19)
+
+### `ExecutionContext` — unified CPU + GPU dispatch
+
+Kernels accept an `ExecutionContext`
+([marrow/kernels/execution.mojo](../marrow/kernels/execution.mojo))
+bundling:
+
+- `num_threads: Int` — CPU stripe-parallel worker count (`0` = auto via
+  `num_physical_cores()`, `1` = serial, `>1` = explicit)
+- `device: Optional[DeviceContext]` — optional GPU device
+
+This replaces the old `Optional[DeviceContext]` parameter plus ad-hoc
+`num_threads` arguments scattered across kernels. `apply()` in
+[marrow/views.mojo](../marrow/views.mojo) reads the context once and
+handles CPU stripe-parallelism uniformly via `sync_parallelize` —
+kernels above `apply` no longer reimplement the stripe loop themselves.
+The net effect on `rapidhash` alone: ~50 lines of duplicated
+histogram / scatter / slice boilerplate removed, replaced by forwarding
+a single `ctx` argument.
+
+Implicit conversion from `Optional[DeviceContext]` keeps pre-existing
+call sites working without source changes; explicit factories
+(`ExecutionContext.serial()`, `.parallel(num_threads)`, `.gpu(device)`)
+make the call-site intent obvious where it matters.
+
+### Kernel-level thread control
+
+`hash_join()`, `HashJoin`, `SwissHashTable.build/probe/insert`, and
+`rapidhash` all accept an `ExecutionContext`. `hash_join()` retains a
+convenience `num_threads: Int` parameter (default `0` → auto) that's
+forwarded to the internal context; `1` forces the serial fast path,
+`>= 2` opts into radix-partitioned parallel execution. The context
+threads through the entire call graph so nested calls inside parallel
+regions can force serial behavior and avoid over-subscription.
+
+### `RadixPartitioner`
+
+Implements the previously-stubbed `Partitioner` trait. Splits rows by the
+top `num_bits` of their hash (default `num_bits = 6` → 64 partitions,
+matching L2-fit). The `SwissHashTable` probes on the low bits
+(`h & mask`), so top/bottom split keeps the partition router independent
+from the per-table probe order without double-hashing.
+
+Parallelization (enabled when `num_threads > 1` and rows ≥ 65k):
+
+1. **Per-thread histogram** — each worker scans its `N/T` stripe and
+   accumulates `histograms[t * p + pid]`.
+2. **Partition-major prefix sum** — serial pass over `T × P` counters;
+   writes per-`(thread, partition)` output offsets so each worker can
+   scatter to disjoint regions without atomics.
+3. **Parallel scatter** — each worker scans its stripe again and writes
+   to its pre-computed `(partition, thread)` slot. No contention.
+
+Output: two shared flat buffers (`N` Int32 rows, `N` UInt64 hashes).
+Each `Partition` is a zero-copy `PrimitiveArray` slice sharing the
+immutable backing buffer via `ArcPointer`. One allocation per output.
+
+### `HashJoin` serial / parallel split
+
+`build()` / `probe()` are thin dispatchers:
+
+```mojo
+def build(mut self, left, key_indices) raises:
+    if self._num_threads <= 1 or left.length < _PARALLEL_THRESHOLD:
+        self.build_serial(left, key_indices)
+    else:
+        self.build_parallel(left, key_indices)
+```
+
+`_PARALLEL_THRESHOLD = 100_000` — below this the partitioning overhead
+eclipses the parallel gain. Above it, the parallel path runs:
+
+1. Hash the full build side once (parallel SIMD).
+2. `RadixPartitioner.partition()` — per-thread histograms + parallel
+   scatter.
+3. `sync_parallelize` across partitions; each worker owns one partition
+   end-to-end:
+   - `take` on the build-side keys to gather its rows.
+   - `SwissHashTable.build_hashes()` to build the per-partition table
+     against pre-computed hashes (no re-hashing).
+
+`probe_parallel` mirrors the same structure: partition the probe side,
+then per partition `take` + `probe_hashes` (raw candidate pairs) +
+`equal` / `filter_` for equality verification + remap partition-local
+indices → original row numbering. Per-partition `IndexPairs` merge into
+a single result via a direct Int32 buffer memcpy (skipping the generic
+`concat(AnyArray)` dispatch). Output assembly (`_assemble`) currently
+stays serial — per-column `take` for output materialization.
+
+### Public `insert_hashes` / `build_hashes` / `probe_hashes`
+
+`SwissHashTable` exposes the hash-level primitives as first-class
+public methods. Callers that have already computed hashes (like the
+partition-parallel HashJoin) use them directly — no separate
+`*_with_hashes` variants. Keeps the SwissHashTable itself thread-
+agnostic: the concurrency pattern is "one table per partition, one
+worker per partition" rather than intra-table concurrency.
+
+### Performance
+
+At 10M × 10M INNER join (Apple Silicon, `num_threads=0` → auto):
+
+| Implementation | Time | vs. Polars |
+|---|---|---|
+| Marrow serial (pre-parallel) | 330 ms | 3.5× slower |
+| Marrow parallel | 131 ms | 1.4× slower |
+| Polars | 95 ms | 1.0× |
+| PyArrow | 100 ms | 1.1× slower |
+| DuckDB | 120 ms | 1.3× slower |
+
+2.4× single-thread → parallel speedup; gap vs. Polars narrowed from
+3.5× to 1.4×.  All 10 performance cores utilized during build and
+probe; partitioning pass is memory-bandwidth-bound on the scatter.
+
+### Known limits / future work
+
+- **`_assemble` parallelization** — attempted per-column `take` via
+  `sync_parallelize` but hit Mojo runtime crashes on Optional[AnyArray]
+  closure captures. Deferred.
+- **Skew handling** — a pathologically-imbalanced key distribution will
+  produce one oversized partition; secondary-hash split (subdivide the
+  offending partition) is a follow-up.
+- **Radix bits** — currently fixed at 6. Adaptive selection based on
+  build-side size is a follow-up.
+- **`PartitionedOp` abstraction** — the divide/map/gather orchestration
+  in `build_parallel` / `probe_parallel` is duplicated. A reusable
+  `PartitionedOp[T]` trait + `partition_apply` driver would collapse
+  both call sites and be reusable for future partition-parallel kernels
+  (groupby, radix sort). Mojo's current generics make this non-trivial;
+  tracked as a follow-up refactor.
+
+---
+
 ## Future Work
 
 - **ASOF join**: Nearest-match on last key, exact match on other keys; needs sorted inputs + sorted row refs; Polars is best reference.
 - **IEJoin / Piecewise Merge**: Inequality conditions (`a.x < b.y`). Sort order selection: `<`/`<=` → ascending, `>`/`>=` → descending. DuckDB/DataFusion patterns.
 - **CROSS join**: Trivial cartesian product, no hash table.
 - **Grace Hash Join**: Partition-based spill-to-disk for out-of-memory joins; needs disk I/O infrastructure.
-- **Parallel Hash Join**: Multi-threaded build phase (ClickHouse pattern).
 - **MARK join**: Boolean marker for `EXISTS`/`IN` subquery decorrelation.
 - **SINGLE join**: At-most-1 match for scalar subqueries.
 - **Join reordering**: Adaptive build-side selection (always build on shorter side, like Polars).

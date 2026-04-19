@@ -9,6 +9,7 @@ Architecture:
   Each layer is independently swappable.
 """
 
+from std.algorithm.functional import sync_parallelize
 from std.bit import count_trailing_zeros, next_power_of_two
 from std.gpu.host import DeviceContext
 from std.memory import pack_bits
@@ -19,6 +20,7 @@ from ..buffers import Buffer
 from ..dtypes import int32, uint64, UInt64Type
 from ..views import BufferView
 from .compare import equal
+from .execution import ExecutionContext
 from .filter import take, filter_
 from .hashing import rapidhash
 
@@ -89,12 +91,165 @@ struct NoPartition(Partitioner):
         return result^
 
 
-# Future:
-# struct RadixPartitioner(Partitioner):
-#     """Partition by hash prefix bits. Enables partition-parallel joins
-#     and better cache locality for large build sides.
-#     Not yet implemented."""
-#     var num_bits: Int
+struct RadixPartitioner(Partitioner):
+    """Partition rows by the top ``num_bits`` of their hash.
+
+    The partitioner is the key enabler of partition-parallel joins: each
+    partition is independent, so per-partition hash-table builds and probes
+    run in parallel with zero cross-thread synchronization.
+
+    Partition count is ``2^num_bits``.  Default (``num_bits=6`` → 64
+    partitions) is chosen so each partition's hash table tends to fit in
+    L2 cache on typical build sides.
+
+    Top bits are used for partitioning (``h >> (64 - num_bits)``) while the
+    ``SwissHashTable`` probes with low bits (``h & mask``). This split
+    keeps the partition router and the per-table probe order independent,
+    avoiding double-hashing.
+
+    Parallelism of the partitioning pass itself is deliberately deferred:
+    the scatter loop is a memory-bandwidth-bound pass that's already quick
+    relative to the build phase, and the win from parallel scatter is
+    modest compared to the partition-parallel build/probe it enables.
+    """
+
+    var num_bits: Int
+    """Number of top hash bits consumed by partition routing."""
+
+    var _num_partitions: Int
+    """Cached ``1 << num_bits``."""
+
+    var num_threads: Int
+    """Workers used for the histogram + scatter passes. ``1`` forces
+    serial; ``>1`` uses per-thread histograms and parallel scatter."""
+
+    def __init__(out self, num_bits: Int = 6, num_threads: Int = 1):
+        self.num_bits = num_bits
+        self._num_partitions = 1 << num_bits
+        self.num_threads = max(1, num_threads)
+
+    def __init__(out self, *, copy: Self):
+        self.num_bits = copy.num_bits
+        self._num_partitions = copy._num_partitions
+        self.num_threads = copy.num_threads
+
+    def num_partitions(self) -> Int:
+        return self._num_partitions
+
+    def partition(
+        self, var hashes: PrimitiveArray[UInt64Type]
+    ) raises -> List[Partition]:
+        """Split ``hashes`` into ``num_partitions()`` partitions by top bits.
+
+        Each returned ``Partition`` carries the per-partition hash array
+        and an ``Int32`` ``row_indices`` mapping partition-local rows back
+        to the original input row number.
+
+        Implementation: per-thread histogram → prefix-sum per (thread,
+        partition) → parallel scatter into two shared flat buffers (one
+        for Int32 row indices, one for UInt64 hashes). Each partition is
+        then exposed as a zero-copy ``PrimitiveArray`` slice with
+        ``offset`` baked in — ref-counted via ``ArcPointer`` on the
+        immutable buffer, so all partitions share the same backing
+        storage.  Total allocation: 2 flat buffers of N elements each.
+        No atomics: each (thread, partition) writes into a distinct
+        contiguous slot computed by the prefix sum.
+        """
+        var n = len(hashes)
+        var p = self._num_partitions
+        var shift = UInt64(64 - self.num_bits)
+        var src = hashes.values()
+
+        var nt = self.num_threads
+        if n < _MIN_PARALLEL_PARTITION_ROWS:
+            nt = 1  # dispatch overhead would dominate
+        var chunk = (n + nt - 1) // nt
+
+        # 1. Per-thread histogram — ``histograms[t * p + pid]`` is the
+        # count of rows for partition ``pid`` handled by thread ``t``.
+        var histograms = List[Int](length=nt * p, fill=0)
+
+        @parameter
+        def hist_worker(t: Int):
+            var start = t * chunk
+            if start >= n:
+                return
+            var end = min(start + chunk, n)
+            var base = t * p
+            for i in range(start, end):
+                var pid = Int(UInt64(src.load[1](i)) >> shift)
+                histograms[base + pid] += 1
+
+        sync_parallelize[hist_worker](nt)
+
+        # 2. Partition-major prefix sum → per-thread write offsets into
+        # the flat buffers.  ``write_offsets[t * p + pid]`` is where
+        # thread ``t`` starts writing partition ``pid``'s rows.
+        var write_offsets = List[Int](length=nt * p, fill=0)
+        var partition_offsets = List[Int](length=p + 1, fill=0)
+        var counts = List[Int](length=p, fill=0)
+        var running = 0
+        for pid in range(p):
+            partition_offsets[pid] = running
+            for t in range(nt):
+                write_offsets[t * p + pid] = running
+                running += histograms[t * p + pid]
+            counts[pid] = running - partition_offsets[pid]
+        partition_offsets[p] = running
+
+        # 3. Allocate the two flat buffers (N rows total each).
+        var row_buf = Buffer.alloc_uninit[int32.native](n)
+        var hash_buf = Buffer.alloc_uninit[uint64.native](n)
+        var row_view = row_buf.view[int32.native](0, n)
+        var hash_view = hash_buf.view[uint64.native](0, n)
+
+        # 4. Parallel scatter — each thread scans its chunk and writes
+        # into its precomputed per-partition slots.  No contention.
+        @parameter
+        def scatter_worker(t: Int):
+            var start = t * chunk
+            if start >= n:
+                return
+            var end = min(start + chunk, n)
+            # Thread-local cursor per partition (p-sized stack copy).
+            var cursors = List[Int](length=p, fill=0)
+            for pid in range(p):
+                cursors[pid] = write_offsets[t * p + pid]
+            for i in range(start, end):
+                var h = UInt64(src.load[1](i))
+                var pid = Int(h >> shift)
+                var pos = cursors[pid]
+                row_view.store[1](pos, Int32(i))
+                hash_view.store[1](pos, h)
+                cursors[pid] = pos + 1
+
+        sync_parallelize[scatter_worker](nt)
+
+        # 5. Freeze buffers once, then expose per-partition slices via
+        # ref-counted shares (ArcPointer bumps — O(1)).
+        var row_imm = row_buf^.to_immutable()
+        var hash_imm = hash_buf^.to_immutable()
+
+        var result = List[Partition](capacity=p)
+        for pid in range(p):
+            var sz = counts[pid]
+            var off = partition_offsets[pid]
+            var row_arr = PrimitiveArray[Int32Type](
+                length=sz,
+                nulls=0,
+                offset=off,
+                bitmap=None,
+                buffer=row_imm.copy(),
+            )
+            var hash_arr = PrimitiveArray[UInt64Type](
+                length=sz,
+                nulls=0,
+                offset=off,
+                bitmap=None,
+                buffer=hash_imm.copy(),
+            )
+            result.append(Partition(hash_arr^, row_arr^))
+        return result^
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +260,10 @@ struct NoPartition(Partitioner):
 comptime _GROUP_WIDTH: Int = 16
 """Number of control bytes per group (matches Mojo Dict / abseil)."""
 
+comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
+"""Row count below which the partitioner collapses to a single worker —
+dispatch + per-thread histogram overhead would dominate."""
+
 comptime _CTRL_EMPTY: UInt8 = 0xFF
 """Control byte for an empty slot."""
 
@@ -114,9 +273,9 @@ comptime _PIPE_DEPTH: Int = 16
 
 struct SwissHashTable[
     hasher: def(
-        StructArray, Optional[DeviceContext]
+        StructArray, ExecutionContext
     ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
-](Movable):
+](Copyable, Movable):
     """Swiss Table hash table with SIMD group matching.
 
     Open-addressing hash table using the Swiss Table design (abseil /
@@ -422,10 +581,13 @@ struct SwissHashTable[
             self._bucket_hashes.resize[DType.uint64](n)
 
     # ------------------------------------------------------------------
-    # Hash-level operations (private)
+    # Hash-level operations — public for callers that have pre-computed
+    # hashes (e.g. the partition-parallel HashJoin, which hashes the
+    # entire build side once up-front and then builds per-partition
+    # tables without re-hashing).
     # ------------------------------------------------------------------
 
-    def _insert_hashes(
+    def insert_hashes(
         mut self, hashes: PrimitiveArray[UInt64Type]
     ) raises -> PrimitiveArray[Int32Type]:
         """Batch insert hashes, returning a bucket ID per input hash.
@@ -481,7 +643,7 @@ struct SwissHashTable[
 
         return bid_builder.finish()
 
-    def _build_hashes(mut self, hashes: PrimitiveArray[UInt64Type]) raises:
+    def build_hashes(mut self, hashes: PrimitiveArray[UInt64Type]) raises:
         """Insert hashes and build a CSR row index.
 
         Calls ``insert()`` to populate the hash table, then constructs
@@ -494,7 +656,7 @@ struct SwissHashTable[
 
         Must be called before ``probe()``.
         """
-        var bids = self._insert_hashes(hashes)
+        var bids = self.insert_hashes(hashes)
         var n = len(bids)
         var nb = self._num_buckets
 
@@ -519,7 +681,7 @@ struct SwissHashTable[
             self._set_row(counts[bid], Int32(i))
             counts[bid] += 1
 
-    def _probe_hashes(
+    def probe_hashes(
         self,
         hashes: PrimitiveArray[UInt64Type],
         num_build_rows: Int,
@@ -595,20 +757,33 @@ struct SwissHashTable[
     # Public API
     # ------------------------------------------------------------------
 
-    def insert(mut self, keys: StructArray) raises -> PrimitiveArray[Int32Type]:
+    def insert(
+        mut self,
+        keys: StructArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[Int32Type]:
         """Hash keys and insert, returning a bucket ID per row.
 
         Used by groupby to assign group IDs.  Does not store keys or
         build a CSR index.
-        """
-        return self._insert_hashes(Self.hasher(keys, None))
 
-    def build(mut self, keys: StructArray) raises:
+        ``ctx`` is forwarded to the hasher only — the insert loop itself
+        is serial (concurrent inserts would require atomic slot claiming;
+        the designed concurrency pattern is partition-parallel with one
+        table per partition).
+        """
+        return self.insert_hashes(Self.hasher(keys, ctx))
+
+    def build(
+        mut self,
+        keys: StructArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises:
         """Hash keys, insert, and build a CSR row index for ``probe()``.
 
         Must be called before ``probe()``.
         """
-        self._build_hashes(Self.hasher(keys, None))
+        self.build_hashes(Self.hasher(keys, ctx))
 
     def probe(
         self,
@@ -616,12 +791,17 @@ struct SwissHashTable[
         probe_keys: StructArray,
         num_build_rows: Int,
         single_match: Bool = False,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+        hashes: Optional[PrimitiveArray[UInt64Type]] = None,
     ) raises -> Tuple[PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]]:
         """Hash probe keys, look up matches, verify key equality.
 
-        1. Hash ``probe_keys`` via ``hash_fn``.
+        1. Hash ``probe_keys`` via ``hasher`` (driven by ``ctx``), unless
+           ``hashes`` is provided — callers that have already computed
+           probe-side hashes (e.g. the partition-parallel HashJoin) pass
+           them in to skip re-hashing.
         2. Probe the hash table for candidate ``(build_row, probe_row)``
-           pairs.
+           pairs via ``probe_hashes``.
         3. Gather build/probe key values at matched indices and compare
            with vectorized equality. Filter out hash-collision false
            positives.
@@ -631,13 +811,20 @@ struct SwissHashTable[
             probe_keys: Right (probe) side key columns to look up.
             num_build_rows: Number of build-side rows (for capacity estimation).
             single_match: If True, emit at most one match per probe row.
+            ctx: Execution context — threads through to the hasher. The
+                lookup loop itself is serial (parallel lookups happen at
+                the partition granularity in HashJoin).
+            hashes: Optional pre-computed probe-side hashes. When
+                provided, ``ctx`` is ignored for the hashing step.
 
         Returns:
             ``(left_indices, right_indices)`` — verified matching row pairs.
         """
-        var probe_hashes = Self.hasher(probe_keys, None)
-        var indices = self._probe_hashes(
-            probe_hashes, num_build_rows, single_match
+        var resolved = (
+            hashes.value().copy() if hashes else Self.hasher(probe_keys, ctx)
+        )
+        var indices = self.probe_hashes(
+            resolved, num_build_rows, single_match
         )
         ref build_indices = indices[0]
         ref probe_indices = indices[1]

@@ -30,9 +30,12 @@ Future join algorithms (implement the Join trait):
   SortMergeJoin   — sort both sides, two-pointer merge (no hash table)
 """
 
+from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
+from std.sys.info import num_physical_cores
 
 from ..arrays import PrimitiveArray, AnyArray, StructArray
+from ..buffers import Buffer
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
     AnyDataType,
@@ -46,8 +49,9 @@ from ..dtypes import (
 )
 from .boolean import and_
 from .compare import equal
+from .execution import ExecutionContext
 from .filter import take, filter_
-from .hashtable import SwissHashTable
+from .hashtable import SwissHashTable, RadixPartitioner
 from .hashing import rapidhash
 from ..expr.relations import (
     JOIN_INNER,
@@ -66,6 +70,48 @@ comptime IndexPairs = Tuple[
     PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]
 ]
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
+
+
+def _concat_int32(
+    var parts: List[Optional[PrimitiveArray[Int32Type]]],
+) raises -> PrimitiveArray[Int32Type]:
+    """Concatenate a list of Int32 index arrays into one.
+
+    Used by the parallel probe path to merge per-partition pair arrays
+    into a single ``IndexPairs``. Direct buffer-level memcpy rather than
+    going through the generic ``concat(AnyArray)`` path — the per-
+    partition pair arrays are always valid dense Int32 buffers with
+    ``nulls == 0``, so we can skip bitmap and type-dispatch overhead.
+    """
+    var total = 0
+    for ref p in parts:
+        if p:
+            total += len(p.value())
+    if total == 0:
+        var empty = PrimitiveBuilder[Int32Type](capacity=0)
+        return empty.finish()
+
+    var out_buf = Buffer.alloc_uninit[int32.native](total)
+    var out_view = out_buf.view[int32.native](0, total)
+    var write = 0
+    for ref p in parts:
+        if not p:
+            continue
+        ref arr = p.value()
+        var n = len(arr)
+        if n == 0:
+            continue
+        var src = arr.values()
+        out_view.slice(write, n).copy_from(src, n)
+        write += n
+
+    return PrimitiveArray[Int32Type](
+        length=total,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=out_buf^.to_immutable(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,40 +155,103 @@ trait Join(Movable):
 # ---------------------------------------------------------------------------
 
 
+comptime _PARALLEL_THRESHOLD = 100_000
+"""Below this build-side row count the parallel path falls back to serial —
+partitioning overhead dominates below ~100k rows on typical inputs."""
+
+# TODO(partitioned-op): the divide/map/gather logic in `build_parallel`
+# and `probe_parallel` is duplicated (hash → partition → per-partition
+# parallel work → merge). A reusable `PartitionedOp[T]` trait with a
+# `partition_apply` driver would collapse both call sites and be reusable
+# for future partition-parallel kernels (groupby, radix sort). Deferred
+# until Mojo's generics make variable-output-shape abstractions
+# practical. See docs/joins-design.md → "Known limits / future work".
+
+comptime _DEFAULT_RADIX_BITS = 6
+"""Default radix fanout for ``RadixPartitioner`` (64 partitions)."""
+
+
 struct HashJoin[
     hasher: def(
-        StructArray, Optional[DeviceContext]
+        StructArray, ExecutionContext
     ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 
     Build phase: hash left-side key columns, insert rows into hash table.
     Probe phase: hash right-side key columns, look up in hash table,
-    emit index pairs via comptime-specialised branchless loop.
-    Equality post-pass: vectorized key comparison filters hash collisions.
+    emit index pairs, verify key equality (filter hash collisions).
 
-    Stores the full build-side StructArray for output assembly via take().
+    Supports two execution paths, chosen by ``num_threads``:
+
+    * **Serial** — a single ``SwissHashTable`` over the full build side.
+      Used when ``num_threads == 1`` or the build side is below
+      ``_PARALLEL_THRESHOLD``.
+    * **Partition-parallel** — rows are split by the top bits of their
+      hash into ``2^radix_bits`` independent ``SwissHashTable`` instances,
+      built and probed concurrently via ``sync_parallelize``. No atomics,
+      no locks: each partition is fully independent.
+
+    The public ``build`` / ``probe`` entry points are thin dispatchers over
+    ``build_serial`` / ``build_parallel`` and ``probe_serial`` /
+    ``probe_parallel``. The serial implementation is unchanged from the
+    pre-parallel version; the parallel path reuses the same
+    ``SwissHashTable`` primitive per partition.
     """
 
-    var _table: SwissHashTable[Self.hasher]
+    # Global state (shared by both paths)
+    var _num_threads: Int
     var _left_key_indices: List[Int]
     var _left_dtype: AnyDataType
     var _left_data: Optional[StructArray]
     var _left_rows: Int
 
-    def __init__(out self):
-        self._table = SwissHashTable[Self.hasher]()
+    # Serial path state
+    var _table: SwissHashTable[Self.hasher]
+
+    # Parallel path state (populated by build_parallel)
+    var _tables: List[SwissHashTable[Self.hasher]]
+    """One SwissHashTable per partition (parallel path only)."""
+    var _left_partition_keys: List[StructArray]
+    """Per-partition build-side keys, used for equality verification."""
+    var _left_partition_rows: List[PrimitiveArray[Int32Type]]
+    """Per-partition original row indices — maps partition-local row
+    numbers back to the original build-side row index after probe."""
+    var _radix_bits: Int
+
+    def __init__(out self, num_threads: Int = 1):
+        """Create a HashJoin.
+
+        Args:
+            num_threads: ``1`` for serial (default), ``>1`` for partition-
+                parallel build + probe, ``0`` means auto-pick via
+                ``num_physical_cores()``.
+        """
+        var nt = num_threads
+        if nt == 0:
+            nt = num_physical_cores()
+        self._num_threads = nt
         self._left_key_indices = List[Int]()
         self._left_dtype = null
         self._left_data = None
         self._left_rows = 0
+        self._table = SwissHashTable[Self.hasher]()
+        self._tables = List[SwissHashTable[Self.hasher]]()
+        self._left_partition_keys = List[StructArray]()
+        self._left_partition_rows = List[PrimitiveArray[Int32Type]]()
+        self._radix_bits = _DEFAULT_RADIX_BITS
 
-    def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
-        self._left_dtype = left.dtype.copy()
-        self._left_rows = left.length
-        self._left_data = left.copy()
-        self._left_key_indices = left_key_indices.copy()
-        self._table.build(left.select(left_key_indices))
+    # ------------------------------------------------------------------
+    # Public dispatchers — route to serial or parallel implementations.
+    # ------------------------------------------------------------------
+
+    def build(
+        mut self, left: StructArray, left_key_indices: List[Int]
+    ) raises:
+        if self._num_threads <= 1 or left.length < _PARALLEL_THRESHOLD:
+            self.build_serial(left, left_key_indices)
+        else:
+            self.build_parallel(left, left_key_indices)
 
     def probe(
         self,
@@ -151,6 +260,35 @@ struct HashJoin[
         kind: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
+        if self._num_threads <= 1 or self._left_rows < _PARALLEL_THRESHOLD:
+            return self.probe_serial(
+                right, right_key_indices, kind, strictness
+            )
+        return self.probe_parallel(
+            right, right_key_indices, kind, strictness
+        )
+
+    # ------------------------------------------------------------------
+    # Serial path — one SwissHashTable over the whole build side.
+    # ------------------------------------------------------------------
+
+    def build_serial(
+        mut self, left: StructArray, left_key_indices: List[Int]
+    ) raises:
+        self._left_dtype = left.dtype.copy()
+        self._left_rows = left.length
+        self._left_data = left.copy()
+        self._left_key_indices = left_key_indices.copy()
+        var ctx = ExecutionContext.parallel(self._num_threads)
+        self._table.build(left.select(left_key_indices), ctx)
+
+    def probe_serial(
+        self,
+        right: StructArray,
+        right_key_indices: List[Int],
+        kind: UInt8,
+        strictness: UInt8,
+    ) raises -> StructArray:
         var left_keys = self._left_data.value().select(self._left_key_indices)
         var right_keys = right.select(right_key_indices)
         var pairs = self._table.probe(
@@ -158,11 +296,152 @@ struct HashJoin[
             right_keys,
             self._left_rows,
             single_match=strictness == JOIN_ANY,
+            ctx=ExecutionContext.parallel(self._num_threads),
         )
         var verified = (pairs[0].copy(), pairs[1].copy())
-        # Emit unmatched rows for outer/semi/anti joins.
         var final = self._emit_unmatched(
             verified^, len(right), kind, strictness
+        )
+        return self._assemble(right, final, kind)
+
+    # ------------------------------------------------------------------
+    # Parallel path — radix-partitioned, one table per partition.
+    # ------------------------------------------------------------------
+
+    def build_parallel(
+        mut self, left: StructArray, left_key_indices: List[Int]
+    ) raises:
+        """Radix-partitioned build.
+
+        1. Hash the full build side once (parallel SIMD over key columns).
+        2. Partition rows by the top ``_radix_bits`` of their hash.
+        3. For each partition *in parallel*: gather the partition's keys
+           via ``take``, build an independent ``SwissHashTable`` against
+           the pre-computed hashes, and store per-partition state back
+           on ``self``. No cross-partition synchronization: each worker
+           writes to a distinct index slot.
+        """
+        self._left_dtype = left.dtype.copy()
+        self._left_rows = left.length
+        self._left_data = left.copy()
+        self._left_key_indices = left_key_indices.copy()
+
+        var left_keys = left.select(left_key_indices)
+
+        # 1. Hash once, in parallel.
+        var hashes = Self.hasher(
+            left_keys, ExecutionContext.parallel(self._num_threads)
+        )
+
+        # 2. Partition.
+        var partitioner = RadixPartitioner(
+            num_bits=self._radix_bits, num_threads=self._num_threads
+        )
+        var partitions = partitioner.partition(hashes^)
+        var p = len(partitions)
+
+        # 3. Allocate per-partition slots — pre-sized so workers can
+        # assign by index without racing on list growth.
+        var tables = List[SwissHashTable[Self.hasher]](capacity=p)
+        for _ in range(p):
+            tables.append(SwissHashTable[Self.hasher]())
+        var part_keys = List[Optional[StructArray]](length=p, fill=None)
+        var part_rows = List[Optional[PrimitiveArray[Int32Type]]](
+            length=p, fill=None
+        )
+
+        # 4. Parallel per-partition work: gather keys + build table.
+        @parameter
+        def build_worker(i: Int) raises:
+            var rows = partitions[i].row_indices.value().copy()
+            var k = take(left_keys, rows)
+            tables[i].build_hashes(partitions[i].hashes.copy())
+            part_keys[i] = k^
+            part_rows[i] = rows^
+
+        sync_parallelize[build_worker](p)
+
+        # 5. Unwrap Optionals into dense lists (order preserved).
+        var keys_out = List[StructArray](capacity=p)
+        var rows_out = List[PrimitiveArray[Int32Type]](capacity=p)
+        for i in range(p):
+            keys_out.append(part_keys[i].value().copy())
+            rows_out.append(part_rows[i].value().copy())
+
+        self._tables = tables^
+        self._left_partition_keys = keys_out^
+        self._left_partition_rows = rows_out^
+
+    def probe_parallel(
+        self,
+        right: StructArray,
+        right_key_indices: List[Int],
+        kind: UInt8,
+        strictness: UInt8,
+    ) raises -> StructArray:
+        """Radix-partitioned probe.
+
+        1. Hash the full probe side once in parallel.
+        2. Partition probe rows by the same radix bits used at build time.
+        3. For each partition: gather probe-side keys, look up in the
+           matching partition's hash table, remap partition-local row
+           indices to original row indices. Partitions probe concurrently.
+        4. Concatenate per-partition index pairs, then run the shared
+           ``_emit_unmatched`` + ``_assemble`` steps.
+        """
+        var right_keys = right.select(right_key_indices)
+        var right_n = len(right)
+
+        # 1. Hash probe side in parallel.
+        var probe_hashes = Self.hasher(
+            right_keys, ExecutionContext.parallel(self._num_threads)
+        )
+
+        # 2. Partition probe rows.
+        var partitioner = RadixPartitioner(
+            num_bits=self._radix_bits, num_threads=self._num_threads
+        )
+        var probe_partitions = partitioner.partition(probe_hashes^)
+        var p = len(probe_partitions)
+
+        # 3. Parallel probe — each worker gathers its probe keys, looks
+        # them up, and remaps partition-local row indices to global row
+        # numbering. Pre-sized Optional slots let workers assign by
+        # partition index without racing on list growth.
+        var part_build_idx = List[Optional[PrimitiveArray[Int32Type]]](
+            length=p, fill=None
+        )
+        var part_probe_idx = List[Optional[PrimitiveArray[Int32Type]]](
+            length=p, fill=None
+        )
+        var single = strictness == JOIN_ANY
+
+        @parameter
+        def probe_worker(i: Int) raises:
+            var rows = probe_partitions[i].row_indices.value().copy()
+            var probe_keys_i = take(right_keys, rows)
+            var pairs = self._tables[i].probe(
+                self._left_partition_keys[i],
+                probe_keys_i,
+                len(self._left_partition_keys[i]),
+                single_match=single,
+                hashes=probe_partitions[i].hashes.copy(),
+            )
+            # Remap partition-local indices → original row indices.
+            part_build_idx[i] = take(
+                self._left_partition_rows[i], pairs[0]
+            )
+            part_probe_idx[i] = take(rows, pairs[1])
+
+        sync_parallelize[probe_worker](p)
+
+        # 5. Concat per-partition pairs into a single IndexPairs.
+        var combined_build = _concat_int32(part_build_idx^)
+        var combined_probe = _concat_int32(part_probe_idx^)
+        var verified = (combined_build^, combined_probe^)
+
+        var final = self._emit_unmatched(
+            verified^, right_n, kind, strictness
         )
         return self._assemble(right, final, kind)
 
@@ -334,7 +613,8 @@ def hash_join(
     right_on: List[Int],
     kind: UInt8 = JOIN_INNER,
     strictness: UInt8 = JOIN_ALL,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+    num_threads: Int = 0,
 ) raises -> StructArray:
     """Equijoin two StructArrays on positional key column indices.
 
@@ -349,6 +629,11 @@ def hash_join(
               JOIN_SEMI, JOIN_ANTI).
         strictness: JOIN_ALL (default) or JOIN_ANY.
         ctx: Optional GPU device context (future GPU acceleration hook).
+        num_threads: Worker count for the partition-parallel path.
+            ``0`` (default) auto-picks ``num_physical_cores()``; ``1`` forces
+            the serial single-table path; ``>1`` runs radix-partitioned
+            parallel build + probe. Builds smaller than
+            ``_PARALLEL_THRESHOLD`` always fall back to serial regardless.
 
     Returns:
         Output StructArray:
@@ -358,9 +643,6 @@ def hash_join(
     if len(left_on) != len(right_on):
         raise Error("hash_join: len(left_on) != len(right_on)")
 
-    # Algorithm selection — currently only HashJoin is implemented.
-    # Future: if algorithm == JOIN_ALGO_SORT_MERGE: var j = SortMergeJoin() ...
-    # Future: if algorithm == JOIN_ALGO_RADIX: var j = RadixHashJoin(bits=4) ...
-    var join = HashJoin()
+    var join = HashJoin(num_threads=num_threads)
     join.build(left, left_on)
     return join.probe(right, right_on, kind, strictness)
