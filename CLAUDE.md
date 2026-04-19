@@ -278,6 +278,7 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - **Never use `alias` — always use `comptime` instead.** `alias` is deprecated in Mojo. Use `comptime var` or `comptime` parameters everywhere a compile-time value is needed.
 - **Never call `_underscore_prefixed` methods outside of the type/struct that defines them.** They are private implementation details. Use the public factory methods and APIs instead (e.g. use `Buffer.alloc_uninit[T](n)` directly rather than computing `Buffer._aligned_size[T](n)` and passing bytes manually).
 - **Do not use `PrimitiveArray[bool_]` or `as_primitive[bool_]()`.**  Boolean arrays are bit-packed and require `BoolArray` for correct values access. Use `BoolArray` and `as_bool()` directly everywhere booleans are handled. Likewise, use `BoolBuilder` instead of `PrimitiveBuilder[bool_]`.
+- **Prefer typed shorthand accessors over `.as_primitive[T]()`** when dispatching on a concrete type. `AnyArray` exposes `.as_int8()`, `.as_int16()`, `.as_int32()`, `.as_int64()`, `.as_uint8()`, `.as_uint16()`, `.as_uint32()`, `.as_uint64()`, `.as_float16()`, `.as_float32()`, `.as_float64()` — use these instead of `.as_primitive[Int32Type]()` etc. Mojo can then infer the type parameter on the kernel call too, so no explicit `kernel[Int32Type](arr.as_int32())` is needed — write `kernel(arr.as_int32())`. Exception: when the type is a generic parameter `T` (e.g. inside a parameterized function), `.as_primitive[T]()` is the only option. `AnyScalar` and `Builder` do **not** have these shorthands.
 - **Prefer `.values()` over `.buffer.view[native](array.offset)`.**  `PrimitiveArray[T].values()` and `BoolArray.values()` return a properly offset `BufferView` / `BitmapView` in one call. Call `.buffer.view[native]()` only inside `buffers.mojo` or when constructing a view with explicit parameters not covered by `.values()`.
 - Prefer explicit `if/else` over early-return `if + return` guard clauses. Keep the control flow flat and readable with `if/else` branches.
 - Prefer PyArrow's API naming everywhere — both in the Mojo core types and in the Python bindings. When in doubt, match PyArrow's method names and signatures.
@@ -301,7 +302,7 @@ This applies especially to: new kernels, array type behaviour, validity/null han
 When writing or modifying tests:
 
 - **Prefer `arr[i]` over `arr.unsafe_get(i)`** for indexed element access. Use `unsafe_get` only when the explicit point of the test is to exercise the unsafe API.
-- **Prefer `x.as_primitive[T]()`** over `PrimitiveArray[T](data=x)` for obtaining a typed view of a type-erased `AnyArray`.
+- **Prefer typed shorthands** (`x.as_int32()`, `x.as_float64()`, etc.) over `x.as_primitive[Int32Type]()` when the concrete type is known. Fall back to `x.as_primitive[T]()` only when `T` is a generic parameter. Prefer either over `PrimitiveArray[T](data=x)`.
 - **Prefer `assert_true(arr1 == arr2)`** over element-by-element loops when asserting that two typed arrays have equal contents. `PrimitiveArray[T].__eq__` returns `Bool` (structural equality), so a single `assert_true(result == expected)` replaces the whole loop.
 
 ### Kernel Implementation Pattern

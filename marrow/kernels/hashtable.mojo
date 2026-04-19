@@ -274,9 +274,9 @@ comptime _PIPE_DEPTH: Int = 16
 
 
 struct SwissHashTable[
-    hasher: def(
-        StructArray, ExecutionContext
-    ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
+    hasher: def(StructArray, ExecutionContext) thin raises -> PrimitiveArray[
+        UInt64Type
+    ] = rapidhash
 ](Copyable, Movable):
     """Swiss Table hash table with SIMD group matching.
 
@@ -822,12 +822,10 @@ struct SwissHashTable[
         Returns:
             ``(left_indices, right_indices)`` — verified matching row pairs.
         """
-        var resolved = (
-            hashes.value().copy() if hashes else Self.hasher(probe_keys, ctx)
+        var resolved = hashes.value().copy() if hashes else Self.hasher(
+            probe_keys, ctx
         )
-        var indices = self.probe_hashes(
-            resolved, num_build_rows, single_match
-        )
+        var indices = self.probe_hashes(resolved, num_build_rows, single_match)
         ref build_indices = indices[0]
         ref probe_indices = indices[1]
 

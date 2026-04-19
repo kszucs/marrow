@@ -257,7 +257,10 @@ def rapidhash(
     var validity = keys.validity()
     if validity:
         apply[uint64.native, _rapidhash_bool_masked](
-            keys.values(), validity.value(), dst, ctx,
+            keys.values(),
+            validity.value(),
+            dst,
+            ctx,
         )
     else:
         apply[uint64.native, _rapidhash_bool](keys.values(), dst, ctx)
@@ -298,11 +301,16 @@ def rapidhash[
     var validity = keys.validity()
     if validity:
         apply[T.native, uint64.native, _rapidhash_primitive_masked[T, ...]](
-            keys.values(), validity.value(), dst, ctx,
+            keys.values(),
+            validity.value(),
+            dst,
+            ctx,
         )
     else:
         apply[T.native, uint64.native, _rapidhash_primitive[T, ...]](
-            keys.values(), dst, ctx,
+            keys.values(),
+            dst,
+            ctx,
         )
 
     return PrimitiveArray[UInt64Type](
@@ -479,7 +487,7 @@ def hash_identity(keys: AnyArray) raises -> PrimitiveArray[UInt64Type]:
     if keys.dtype() == bool_:
         return hash_identity(keys.as_bool())
     if keys.dtype() == uint8:
-        return hash_identity[UInt8Type](keys.as_primitive[UInt8Type]())
+        return hash_identity(keys.as_uint8())
     if keys.dtype() == int8:
-        return hash_identity[Int8Type](keys.as_primitive[Int8Type]())
+        return hash_identity(keys.as_int8())
     raise Error("hash_identity: only supports bool, uint8, int8")

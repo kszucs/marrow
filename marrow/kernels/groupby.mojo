@@ -98,27 +98,27 @@ def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
     if col.dtype() == bool_:
         return Float64(col.as_bool()[row].value())
     elif col.dtype() == int8:
-        return Float64(col.as_primitive[Int8Type]().unsafe_get(row))
+        return Float64(col.as_int8().unsafe_get(row))
     elif col.dtype() == int16:
-        return Float64(col.as_primitive[Int16Type]().unsafe_get(row))
+        return Float64(col.as_int16().unsafe_get(row))
     elif col.dtype() == int32:
-        return Float64(col.as_primitive[Int32Type]().unsafe_get(row))
+        return Float64(col.as_int32().unsafe_get(row))
     elif col.dtype() == int64:
-        return Float64(col.as_primitive[Int64Type]().unsafe_get(row))
+        return Float64(col.as_int64().unsafe_get(row))
     elif col.dtype() == uint8:
-        return Float64(col.as_primitive[UInt8Type]().unsafe_get(row))
+        return Float64(col.as_uint8().unsafe_get(row))
     elif col.dtype() == uint16:
-        return Float64(col.as_primitive[UInt16Type]().unsafe_get(row))
+        return Float64(col.as_uint16().unsafe_get(row))
     elif col.dtype() == uint32:
-        return Float64(col.as_primitive[UInt32Type]().unsafe_get(row))
+        return Float64(col.as_uint32().unsafe_get(row))
     elif col.dtype() == uint64:
-        return Float64(col.as_primitive[UInt64Type]().unsafe_get(row))
+        return Float64(col.as_uint64().unsafe_get(row))
     elif col.dtype() == float16:
-        return Float64(col.as_primitive[Float16Type]().unsafe_get(row))
+        return Float64(col.as_float16().unsafe_get(row))
     elif col.dtype() == float32:
-        return Float64(col.as_primitive[Float32Type]().unsafe_get(row))
+        return Float64(col.as_float32().unsafe_get(row))
     elif col.dtype() == float64:
-        return Float64(col.as_primitive[Float64Type]().unsafe_get(row))
+        return Float64(col.as_float64().unsafe_get(row))
     raise Error("unsupported dtype for aggregation: ", col.dtype())
 
 

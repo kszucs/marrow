@@ -70,7 +70,12 @@ def main() raises:
     # attribute time. ``num_threads=0`` → auto (num_physical_cores()).
     for _ in range(iters):
         var out = hash_join(
-            left, right, left_on, right_on, JOIN_INNER, JOIN_ALL,
+            left,
+            right,
+            left_on,
+            right_on,
+            JOIN_INNER,
+            JOIN_ALL,
             num_threads=0,
         )
         keep(out.length)

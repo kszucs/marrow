@@ -171,27 +171,27 @@ def sum_[
 def sum_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed sum."""
     if array.dtype() == int8:
-        return sum_[Int8Type](array.as_primitive[Int8Type]())
+        return sum_(array.as_int8())
     elif array.dtype() == int16:
-        return sum_[Int16Type](array.as_primitive[Int16Type]())
+        return sum_(array.as_int16())
     elif array.dtype() == int32:
-        return sum_[Int32Type](array.as_primitive[Int32Type]())
+        return sum_(array.as_int32())
     elif array.dtype() == int64:
-        return sum_[Int64Type](array.as_primitive[Int64Type]())
+        return sum_(array.as_int64())
     elif array.dtype() == uint8:
-        return sum_[UInt8Type](array.as_primitive[UInt8Type]())
+        return sum_(array.as_uint8())
     elif array.dtype() == uint16:
-        return sum_[UInt16Type](array.as_primitive[UInt16Type]())
+        return sum_(array.as_uint16())
     elif array.dtype() == uint32:
-        return sum_[UInt32Type](array.as_primitive[UInt32Type]())
+        return sum_(array.as_uint32())
     elif array.dtype() == uint64:
-        return sum_[UInt64Type](array.as_primitive[UInt64Type]())
+        return sum_(array.as_uint64())
     elif array.dtype() == float16:
-        return sum_[Float16Type](array.as_primitive[Float16Type]())
+        return sum_(array.as_float16())
     elif array.dtype() == float32:
-        return sum_[Float32Type](array.as_primitive[Float32Type]())
+        return sum_(array.as_float32())
     elif array.dtype() == float64:
-        return sum_[Float64Type](array.as_primitive[Float64Type]())
+        return sum_(array.as_float64())
     raise Error("sum: unsupported dtype ", array.dtype())
 
 
@@ -211,27 +211,27 @@ def product[
 def product(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed product."""
     if array.dtype() == int8:
-        return product[Int8Type](array.as_primitive[Int8Type]())
+        return product(array.as_int8())
     elif array.dtype() == int16:
-        return product[Int16Type](array.as_primitive[Int16Type]())
+        return product(array.as_int16())
     elif array.dtype() == int32:
-        return product[Int32Type](array.as_primitive[Int32Type]())
+        return product(array.as_int32())
     elif array.dtype() == int64:
-        return product[Int64Type](array.as_primitive[Int64Type]())
+        return product(array.as_int64())
     elif array.dtype() == uint8:
-        return product[UInt8Type](array.as_primitive[UInt8Type]())
+        return product(array.as_uint8())
     elif array.dtype() == uint16:
-        return product[UInt16Type](array.as_primitive[UInt16Type]())
+        return product(array.as_uint16())
     elif array.dtype() == uint32:
-        return product[UInt32Type](array.as_primitive[UInt32Type]())
+        return product(array.as_uint32())
     elif array.dtype() == uint64:
-        return product[UInt64Type](array.as_primitive[UInt64Type]())
+        return product(array.as_uint64())
     elif array.dtype() == float16:
-        return product[Float16Type](array.as_primitive[Float16Type]())
+        return product(array.as_float16())
     elif array.dtype() == float32:
-        return product[Float32Type](array.as_primitive[Float32Type]())
+        return product(array.as_float32())
     elif array.dtype() == float64:
-        return product[Float64Type](array.as_primitive[Float64Type]())
+        return product(array.as_float64())
     raise Error("product: unsupported dtype ", array.dtype())
 
 
@@ -255,27 +255,27 @@ def min_[
 def min_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed min."""
     if array.dtype() == int8:
-        return min_[Int8Type](array.as_primitive[Int8Type]())
+        return min_(array.as_int8())
     elif array.dtype() == int16:
-        return min_[Int16Type](array.as_primitive[Int16Type]())
+        return min_(array.as_int16())
     elif array.dtype() == int32:
-        return min_[Int32Type](array.as_primitive[Int32Type]())
+        return min_(array.as_int32())
     elif array.dtype() == int64:
-        return min_[Int64Type](array.as_primitive[Int64Type]())
+        return min_(array.as_int64())
     elif array.dtype() == uint8:
-        return min_[UInt8Type](array.as_primitive[UInt8Type]())
+        return min_(array.as_uint8())
     elif array.dtype() == uint16:
-        return min_[UInt16Type](array.as_primitive[UInt16Type]())
+        return min_(array.as_uint16())
     elif array.dtype() == uint32:
-        return min_[UInt32Type](array.as_primitive[UInt32Type]())
+        return min_(array.as_uint32())
     elif array.dtype() == uint64:
-        return min_[UInt64Type](array.as_primitive[UInt64Type]())
+        return min_(array.as_uint64())
     elif array.dtype() == float16:
-        return min_[Float16Type](array.as_primitive[Float16Type]())
+        return min_(array.as_float16())
     elif array.dtype() == float32:
-        return min_[Float32Type](array.as_primitive[Float32Type]())
+        return min_(array.as_float32())
     elif array.dtype() == float64:
-        return min_[Float64Type](array.as_primitive[Float64Type]())
+        return min_(array.as_float64())
     raise Error("min_: unsupported dtype ", array.dtype())
 
 
@@ -299,27 +299,27 @@ def max_[
 def max_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed max."""
     if array.dtype() == int8:
-        return max_[Int8Type](array.as_primitive[Int8Type]())
+        return max_(array.as_int8())
     elif array.dtype() == int16:
-        return max_[Int16Type](array.as_primitive[Int16Type]())
+        return max_(array.as_int16())
     elif array.dtype() == int32:
-        return max_[Int32Type](array.as_primitive[Int32Type]())
+        return max_(array.as_int32())
     elif array.dtype() == int64:
-        return max_[Int64Type](array.as_primitive[Int64Type]())
+        return max_(array.as_int64())
     elif array.dtype() == uint8:
-        return max_[UInt8Type](array.as_primitive[UInt8Type]())
+        return max_(array.as_uint8())
     elif array.dtype() == uint16:
-        return max_[UInt16Type](array.as_primitive[UInt16Type]())
+        return max_(array.as_uint16())
     elif array.dtype() == uint32:
-        return max_[UInt32Type](array.as_primitive[UInt32Type]())
+        return max_(array.as_uint32())
     elif array.dtype() == uint64:
-        return max_[UInt64Type](array.as_primitive[UInt64Type]())
+        return max_(array.as_uint64())
     elif array.dtype() == float16:
-        return max_[Float16Type](array.as_primitive[Float16Type]())
+        return max_(array.as_float16())
     elif array.dtype() == float32:
-        return max_[Float32Type](array.as_primitive[Float32Type]())
+        return max_(array.as_float32())
     elif array.dtype() == float64:
-        return max_[Float64Type](array.as_primitive[Float64Type]())
+        return max_(array.as_float64())
     raise Error("max_: unsupported dtype ", array.dtype())
 
 

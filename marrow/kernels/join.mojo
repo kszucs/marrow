@@ -255,9 +255,9 @@ and can be tuned per workload."""
 
 
 struct HashJoin[
-    hasher: def(
-        StructArray, ExecutionContext
-    ) thin raises -> PrimitiveArray[UInt64Type] = rapidhash
+    hasher: def(StructArray, ExecutionContext) thin raises -> PrimitiveArray[
+        UInt64Type
+    ] = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 
@@ -328,9 +328,7 @@ struct HashJoin[
     # Public dispatchers — route to serial or parallel implementations.
     # ------------------------------------------------------------------
 
-    def build(
-        mut self, left: StructArray, left_key_indices: List[Int]
-    ) raises:
+    def build(mut self, left: StructArray, left_key_indices: List[Int]) raises:
         if self._num_threads <= 1 or left.length < _PARALLEL_THRESHOLD:
             self.build_serial(left, left_key_indices)
         else:
@@ -344,12 +342,8 @@ struct HashJoin[
         strictness: UInt8 = JOIN_ALL,
     ) raises -> StructArray:
         if self._num_threads <= 1 or self._left_rows < _PARALLEL_THRESHOLD:
-            return self.probe_serial(
-                right, right_key_indices, kind, strictness
-            )
-        return self.probe_parallel(
-            right, right_key_indices, kind, strictness
-        )
+            return self.probe_serial(right, right_key_indices, kind, strictness)
+        return self.probe_parallel(right, right_key_indices, kind, strictness)
 
     # ------------------------------------------------------------------
     # Serial path — one SwissHashTable over the whole build side.
@@ -511,9 +505,7 @@ struct HashJoin[
                 hashes=probe_partitions[i].hashes.copy(),
             )
             # Remap partition-local indices → original row indices.
-            part_build_idx[i] = take(
-                self._left_partition_rows[i], pairs[0]
-            )
+            part_build_idx[i] = take(self._left_partition_rows[i], pairs[0])
             part_probe_idx[i] = take(rows, pairs[1])
 
         sync_parallelize[probe_worker](p)
@@ -523,9 +515,7 @@ struct HashJoin[
         var combined_probe = _concat_int32(part_probe_idx^)
         var verified = (combined_build^, combined_probe^)
 
-        var final = self._emit_unmatched(
-            verified^, right_n, kind, strictness
-        )
+        var final = self._emit_unmatched(verified^, right_n, kind, strictness)
         return self._assemble(right, final, kind)
 
     def _emit_unmatched(

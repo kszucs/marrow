@@ -642,10 +642,16 @@ def _dense_struct(n: Int) raises -> StructArray:
     return record_batch(cols^, names=["k", "v"]).to_struct_array()
 
 
-def _run_inner(left: StructArray, right: StructArray, num_threads: Int) raises -> StructArray:
+def _run_inner(
+    left: StructArray, right: StructArray, num_threads: Int
+) raises -> StructArray:
     return hash_join(
-        left, right, _left_on(), _right_on(),
-        JOIN_INNER, JOIN_ALL,
+        left,
+        right,
+        _left_on(),
+        _right_on(),
+        JOIN_INNER,
+        JOIN_ALL,
         num_threads=num_threads,
     )
 
