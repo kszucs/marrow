@@ -95,17 +95,21 @@ def not_(arr: AnyArray) raises -> AnyArray:
 
 
 # TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
-def is_null[T: PrimitiveType](arr: PrimitiveArray[T]) -> BoolArray:
+def is_null[T: PrimitiveType](arr: PrimitiveArray[T]) raises -> BoolArray:
     """Return a bool array that is True where arr has a null value."""
     var length = len(arr)
-    var builder = Bitmap.alloc_zeroed(length)
-    for i in range(length):
-        if not arr.is_valid(i):
-            builder.set(i)
-        else:
-            builder.clear(i)
-    var bm = builder.to_immutable()
-    return BoolArray(length=length, nulls=0, offset=0, bitmap=None, buffer=bm)
+    if not arr.bitmap:
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=Bitmap.alloc_zeroed(length).to_immutable(),
+        )
+    var bm = (~arr.bitmap.value().view()).to_immutable()
+    return BoolArray(
+        length=length, nulls=0, offset=arr.offset, bitmap=None, buffer=bm
+    )
 
 
 def is_null(arr: AnyArray) raises -> AnyArray:
