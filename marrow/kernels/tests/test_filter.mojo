@@ -132,7 +132,7 @@ def test_filter_sparse_zero_byte() raises:
 
 def test_filter_preserves_null_count() raises:
     """Nulls in the source are preserved at filtered positions."""
-    var b = PrimitiveBuilder[Int32Type](4)
+    var b = Int32Builder(4)
     b.append(1)
     b.append_null()
     b.append(3)
@@ -352,7 +352,7 @@ def test_filter_array_dispatch_length_mismatch_raises() raises:
 
 
 def test_drop_nulls_typed() raises:
-    var b = PrimitiveBuilder[Int32Type](4)
+    var b = Int32Builder(4)
     b.append(10)
     b.append_null()
     b.append(30)
@@ -430,7 +430,7 @@ def test_filter_sliced_keep_all() raises:
 
 def test_filter_sliced_with_nulls() raises:
     """Sliced array with nulls preserves validity."""
-    var b = PrimitiveBuilder[Int32Type](6)
+    var b = Int32Builder(6)
     b.append(1)
     b.append_null()
     b.append(3)
@@ -476,7 +476,7 @@ def test_filter_sliced_strings() raises:
 
 def test_drop_nulls_sliced() raises:
     """``drop_nulls`` on a sliced array with nulls."""
-    var b = PrimitiveBuilder[Int32Type](6)
+    var b = Int32Builder(6)
     b.append(10)
     b.append_null()
     b.append(30)

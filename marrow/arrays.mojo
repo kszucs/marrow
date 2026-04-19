@@ -825,14 +825,14 @@ struct ListArray(
         """Unnest this ListArray, returning the flat child values."""
         return self.child[].copy()
 
-    def value_lengths(self) -> PrimitiveArray[Int32Type]:
+    def value_lengths(self) -> Int32Array:
         """Return an array of list lengths for each element."""
         var buf = Buffer.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
             var start = self.offsets.unsafe_get[DType.int32](self.offset + i)
             var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
             buf.unsafe_set[DType.int32](i, end - start)
-        return PrimitiveArray[Int32Type](
+        return Int32Array(
             length=self.length,
             nulls=0,
             offset=0,

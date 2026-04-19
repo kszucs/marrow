@@ -15,7 +15,7 @@ def test_sum_typed() raises:
 
 def test_sum_with_nulls() raises:
     """Sum skips null values."""
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(10)
     a.append(20)
     a.append_null()  # index 2 is null
@@ -38,7 +38,7 @@ def test_sum_empty() raises:
 def test_sum_untyped() raises:
     var a = AnyArray(array[Int64Type]([1, 2, 3]))
     var result = sum_(a)
-    assert_equal(result.as_primitive[Int64Type]().value(), 6)
+    assert_equal(result.as_int64().value(), 6)
 
 
 def main() raises:

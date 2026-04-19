@@ -142,15 +142,13 @@ from ..expr.relations import (
 )
 
 
-comptime IndexPairs = Tuple[
-    PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]
-]
+comptime IndexPairs = Tuple[Int32Array, Int32Array]
 """Parallel (left_indices, right_indices) arrays from the probe phase."""
 
 
 def _concat_int32(
-    var parts: List[Optional[PrimitiveArray[Int32Type]]],
-) raises -> PrimitiveArray[Int32Type]:
+    var parts: List[Optional[Int32Array]],
+) raises -> Int32Array:
     """Concatenate a list of Int32 index arrays into one.
 
     Used by the parallel probe path to merge per-partition pair arrays
@@ -164,7 +162,7 @@ def _concat_int32(
         if p:
             total += len(p.value())
     if total == 0:
-        var empty = PrimitiveBuilder[Int32Type](capacity=0)
+        var empty = Int32Builder(capacity=0)
         return empty.finish()
 
     var out_buf = Buffer.alloc_uninit[int32.native](total)
@@ -181,7 +179,7 @@ def _concat_int32(
         out_view.slice(write, n).copy_from(src, n)
         write += n
 
-    return PrimitiveArray[Int32Type](
+    return Int32Array(
         length=total,
         nulls=0,
         offset=0,
@@ -297,7 +295,7 @@ struct HashJoin[
     """One SwissHashTable per partition (parallel path only)."""
     var _left_partition_keys: List[StructArray]
     """Per-partition build-side keys, used for equality verification."""
-    var _left_partition_rows: List[PrimitiveArray[Int32Type]]
+    var _left_partition_rows: List[Int32Array]
     """Per-partition original row indices — maps partition-local row
     numbers back to the original build-side row index after probe."""
     var _radix_bits: Int
@@ -321,7 +319,7 @@ struct HashJoin[
         self._table = SwissHashTable[Self.hasher]()
         self._tables = List[SwissHashTable[Self.hasher]]()
         self._left_partition_keys = List[StructArray]()
-        self._left_partition_rows = List[PrimitiveArray[Int32Type]]()
+        self._left_partition_rows = List[Int32Array]()
         self._radix_bits = _DEFAULT_RADIX_BITS
 
     # ------------------------------------------------------------------
@@ -423,9 +421,7 @@ struct HashJoin[
         for _ in range(p):
             tables.append(SwissHashTable[Self.hasher]())
         var part_keys = List[Optional[StructArray]](length=p, fill=None)
-        var part_rows = List[Optional[PrimitiveArray[Int32Type]]](
-            length=p, fill=None
-        )
+        var part_rows = List[Optional[Int32Array]](length=p, fill=None)
 
         # 4. Parallel per-partition work: gather keys + build table.
         @parameter
@@ -440,7 +436,7 @@ struct HashJoin[
 
         # 5. Unwrap Optionals into dense lists (order preserved).
         var keys_out = List[StructArray](capacity=p)
-        var rows_out = List[PrimitiveArray[Int32Type]](capacity=p)
+        var rows_out = List[Int32Array](capacity=p)
         for i in range(p):
             keys_out.append(part_keys[i].value().copy())
             rows_out.append(part_rows[i].value().copy())
@@ -485,12 +481,8 @@ struct HashJoin[
         # them up, and remaps partition-local row indices to global row
         # numbering. Pre-sized Optional slots let workers assign by
         # partition index without racing on list growth.
-        var part_build_idx = List[Optional[PrimitiveArray[Int32Type]]](
-            length=p, fill=None
-        )
-        var part_probe_idx = List[Optional[PrimitiveArray[Int32Type]]](
-            length=p, fill=None
-        )
+        var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
+        var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
         var single = strictness == JOIN_ANY
 
         @parameter
@@ -550,8 +542,8 @@ struct HashJoin[
                 matched_probe[rid] = True
 
         if kind == JOIN_SEMI:
-            var lb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
-            var rb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
+            var lb = Int32Builder(capacity=self._left_rows)
+            var rb = Int32Builder(capacity=self._left_rows)
             for i in range(self._left_rows):
                 if matched_build[i]:
                     lb.append(Scalar[int32.native](i))
@@ -559,8 +551,8 @@ struct HashJoin[
             return (lb.finish(), rb.finish())
 
         if kind == JOIN_ANTI:
-            var lb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
-            var rb = PrimitiveBuilder[Int32Type](capacity=self._left_rows)
+            var lb = Int32Builder(capacity=self._left_rows)
+            var rb = Int32Builder(capacity=self._left_rows)
             for i in range(self._left_rows):
                 if not matched_build[i]:
                     lb.append(Scalar[int32.native](i))
@@ -568,8 +560,8 @@ struct HashJoin[
             return (lb.finish(), rb.finish())
 
         # LEFT / RIGHT / FULL: matched pairs + unmatched rows.
-        var lb = PrimitiveBuilder[Int32Type](capacity=n_pairs + self._left_rows)
-        var rb = PrimitiveBuilder[Int32Type](capacity=n_pairs + right_rows)
+        var lb = Int32Builder(capacity=n_pairs + self._left_rows)
+        var rb = Int32Builder(capacity=n_pairs + right_rows)
         for i in range(n_pairs):
             lb.append(pairs[0].unsafe_get(i))
             rb.append(pairs[1].unsafe_get(i))
@@ -676,7 +668,7 @@ struct HashJoin[
 #
 #     Does NOT use HashTable — proves the Join trait is not hash-specific.
 #     """
-#     var _sort_order: Optional[PrimitiveArray[Int32Type]]
+#     var _sort_order: Optional[Int32Array]
 #     var _sorted_keys: Optional[StructArray]
 #     var _build_dtype: DataType
 #     var _left_data: Optional[StructArray]

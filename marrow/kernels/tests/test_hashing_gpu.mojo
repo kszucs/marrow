@@ -68,7 +68,7 @@ def test_rapidhash_gpu_large() raises:
 def test_rapidhash_gpu_nulls() raises:
     """GPU rapidhash with nulls produces sentinel values matching CPU."""
     var ctx = DeviceContext()
-    var b = PrimitiveBuilder[Int32Type](capacity=5)
+    var b = Int32Builder(capacity=5)
     b.append(Scalar[int32.native](1))
     b.append_null()
     b.append(Scalar[int32.native](3))

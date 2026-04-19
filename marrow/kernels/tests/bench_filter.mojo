@@ -26,8 +26,8 @@ def _make_mask(size: Int, selectivity_pct: Int) raises -> BoolArray:
     return b.finish()
 
 
-def _make_array_with_nulls(size: Int) raises -> PrimitiveArray[Int64Type]:
-    var b = PrimitiveBuilder[Int64Type](size)
+def _make_array_with_nulls(size: Int) raises -> Int64Array:
+    var b = Int64Builder(size)
     for i in range(size):
         if i % 10 == 0:
             b.append_null()

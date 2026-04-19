@@ -20,12 +20,10 @@ from marrow.expr import (
 )
 
 
-def _exec(
-    expr: AnyValue, batch: RecordBatch
-) raises -> PrimitiveArray[Int64Type]:
+def _exec(expr: AnyValue, batch: RecordBatch) raises -> Int64Array:
     """Helper: build a value processor and evaluate against the batch."""
     var tmp = Planner().build(expr).eval(batch)
-    ref result = tmp.as_primitive[Int64Type]()
+    ref result = tmp.as_int64()
     return result.copy()
 
 

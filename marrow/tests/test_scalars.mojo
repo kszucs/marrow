@@ -177,7 +177,7 @@ def test_bool_scalar_from_array() raises:
 
 
 def test_list_scalar_from_fixed_size_list_array() raises:
-    var inner = PrimitiveBuilder[Int32Type]()
+    var inner = Int32Builder()
     var fsl = FixedSizeListBuilder(AnyBuilder(inner^), 2)
     fsl.values().as_primitive[Int32Type]().append(10)
     fsl.values().as_primitive[Int32Type]().append(20)
@@ -241,7 +241,7 @@ def test_any_array_getitem_primitive() raises:
 
 
 def test_any_array_getitem_primitive_null() raises:
-    var b = PrimitiveBuilder[Int32Type](3)
+    var b = Int32Builder(3)
     b.append(1)
     b.append_null()
     b.append(3)
@@ -273,7 +273,7 @@ def test_any_array_getitem_string() raises:
 
 
 def test_any_array_getitem_fixed_size_list() raises:
-    var inner = PrimitiveBuilder[Int32Type]()
+    var inner = Int32Builder()
     var fsl = FixedSizeListBuilder(AnyBuilder(inner^), 2)
     fsl.values().as_primitive[Int32Type]().append(7)
     fsl.values().as_primitive[Int32Type]().append(8)

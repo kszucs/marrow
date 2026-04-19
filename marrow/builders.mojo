@@ -14,13 +14,13 @@ conform to the `Builder` trait.
 
 Example
 -------
-    var b = PrimitiveBuilder[Int64Type](capacity=1024)
+    var b = Int64Builder(capacity=1024)
     b.append(42)
     b.append_null()
-    var arr = b.finish()  # PrimitiveArray[Int64Type]
+    var arr = b.finish()  # Int64Array
 
     # Typed builders implicitly convert to AnyBuilder
-    var child = PrimitiveBuilder[Float32Type](capacity=64)
+    var child = Float32Builder(capacity=64)
     var list_b = ListBuilder(child^, capacity=10)
 """
 
@@ -126,27 +126,27 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         if dtype == bool_:
             self = BoolBuilder(capacity)
         elif dtype == int8:
-            self = PrimitiveBuilder[Int8Type](capacity)
+            self = Int8Builder(capacity)
         elif dtype == int16:
-            self = PrimitiveBuilder[Int16Type](capacity)
+            self = Int16Builder(capacity)
         elif dtype == int32:
-            self = PrimitiveBuilder[Int32Type](capacity)
+            self = Int32Builder(capacity)
         elif dtype == int64:
-            self = PrimitiveBuilder[Int64Type](capacity)
+            self = Int64Builder(capacity)
         elif dtype == uint8:
-            self = PrimitiveBuilder[UInt8Type](capacity)
+            self = UInt8Builder(capacity)
         elif dtype == uint16:
-            self = PrimitiveBuilder[UInt16Type](capacity)
+            self = UInt16Builder(capacity)
         elif dtype == uint32:
-            self = PrimitiveBuilder[UInt32Type](capacity)
+            self = UInt32Builder(capacity)
         elif dtype == uint64:
-            self = PrimitiveBuilder[UInt64Type](capacity)
+            self = UInt64Builder(capacity)
         elif dtype == float16:
-            self = PrimitiveBuilder[Float16Type](capacity)
+            self = Float16Builder(capacity)
         elif dtype == float32:
-            self = PrimitiveBuilder[Float32Type](capacity)
+            self = Float32Builder(capacity)
         elif dtype == float64:
-            self = PrimitiveBuilder[Float64Type](capacity)
+            self = Float64Builder(capacity)
         elif dtype.is_string():
             self = StringBuilder(capacity)
         elif dtype.is_list():

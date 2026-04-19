@@ -126,9 +126,9 @@ def _add_batch_typed[
     T: PrimitiveType
 ](
     name: String,
-    mut val_ptr: PrimitiveBuilder[Float64Type],
-    mut cnt_ptr: PrimitiveBuilder[Int64Type],
-    group_ids: PrimitiveArray[UInt32Type],
+    mut val_ptr: Float64Builder,
+    mut cnt_ptr: Int64Builder,
+    group_ids: UInt32Array,
     input_col: AnyArray,
     has_bitmap: Bool,
 ) raises:
@@ -162,9 +162,9 @@ def _add_batch_typed[
 
 def _add_batch_bool(
     name: String,
-    mut val_ptr: PrimitiveBuilder[Float64Type],
-    mut cnt_ptr: PrimitiveBuilder[Int64Type],
-    group_ids: PrimitiveArray[UInt32Type],
+    mut val_ptr: Float64Builder,
+    mut cnt_ptr: Int64Builder,
+    group_ids: UInt32Array,
     input_col: AnyArray,
     has_bitmap: Bool,
 ) raises:
@@ -210,13 +210,13 @@ struct AggregateFunction(Copyable, Movable):
 
     def __init__(out self, name: String):
         self.name = name
-        self.values = PrimitiveBuilder[Float64Type]()
-        self.counts = PrimitiveBuilder[Int64Type]()
+        self.values = Float64Builder()
+        self.counts = Int64Builder()
 
     def __init__(out self, *, copy: Self):
         self.name = copy.name
-        self.values = PrimitiveBuilder[Float64Type]()
-        self.counts = PrimitiveBuilder[Int64Type]()
+        self.values = Float64Builder()
+        self.counts = Int64Builder()
 
     def num_groups(self) -> Int:
         return self.values.length()
@@ -232,7 +232,7 @@ struct AggregateFunction(Copyable, Movable):
 
     def add_batch(
         mut self,
-        group_ids: PrimitiveArray[UInt32Type],
+        group_ids: UInt32Array,
         input_col: AnyArray,
     ) raises:
         """Scatter-update: single O(N) pass over the batch.
@@ -309,7 +309,7 @@ struct AggregateFunction(Copyable, Movable):
 
         if self.name == "mean":
             # Compute value / count for each group.
-            var b = PrimitiveBuilder[Float64Type](capacity=num_groups)
+            var b = Float64Builder(capacity=num_groups)
             ref val_ptr = self.values.builder.as_primitive[Float64Type]()
             ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
             for g in range(num_groups):
@@ -325,7 +325,7 @@ struct AggregateFunction(Copyable, Movable):
             )
 
         # sum, min, max — emit value if count > 0, else null.
-        var b = PrimitiveBuilder[Float64Type](capacity=num_groups)
+        var b = Float64Builder(capacity=num_groups)
         ref val_ptr = self.values.builder.as_primitive[Float64Type]()
         ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
         for g in range(num_groups):
@@ -383,9 +383,7 @@ struct HashGrouper(Movable):
     def num_groups(self) -> Int:
         return self._table.num_keys()
 
-    def consume_keys(
-        mut self, keys: StructArray
-    ) raises -> PrimitiveArray[UInt32Type]:
+    def consume_keys(mut self, keys: StructArray) raises -> UInt32Array:
         """Hash keys and resolve group indices. Returns group_ids array.
 
         Can be called multiple times — groups accumulate across calls.
@@ -394,7 +392,7 @@ struct HashGrouper(Movable):
         """
         var n = len(keys)
         if n == 0:
-            var empty = PrimitiveBuilder[UInt32Type](0)
+            var empty = UInt32Builder(0)
             return empty.finish()
 
         var prev = self._table.num_keys()
@@ -411,7 +409,7 @@ struct HashGrouper(Movable):
                     self._register_new_group(keys, i)
 
         # Convert int32 bucket_ids → uint32 group_ids.
-        var gid_builder = PrimitiveBuilder[UInt32Type](capacity=n)
+        var gid_builder = UInt32Builder(capacity=n)
         for i in range(n):
             gid_builder.unsafe_append(
                 Scalar[uint32.native](Int(bids.unsafe_get(i)))
@@ -420,7 +418,7 @@ struct HashGrouper(Movable):
 
     def consume_values(
         mut self,
-        group_ids: PrimitiveArray[UInt32Type],
+        group_ids: UInt32Array,
         values: List[AnyArray],
     ) raises:
         """Scatter-update aggregate state using pre-resolved group_ids.

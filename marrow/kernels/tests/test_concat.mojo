@@ -41,7 +41,7 @@ def test_concat_primitive() raises:
         array[Int32Type]([3, 4, 5]),
     ]
     var tmp = concat(arrs)
-    ref result = tmp.as_primitive[Int32Type]()
+    ref result = tmp.as_int32()
     assert_equal(result.length, 5)
     assert_equal(result[0], 1)
     assert_equal(result[1], 2)
@@ -53,7 +53,7 @@ def test_concat_primitive() raises:
 def test_concat_single() raises:
     var arrs: List[AnyArray] = [array[Int32Type]([10, 20, 30])]
     var tmp = concat(arrs)
-    ref result = tmp.as_primitive[Int32Type]()
+    ref result = tmp.as_int32()
     assert_equal(result.length, 3)
     assert_equal(result[0], 10)
     assert_equal(result[2], 30)
@@ -66,11 +66,11 @@ def test_concat_empty_list_raises() raises:
 
 
 def test_concat_with_nulls() raises:
-    var b1 = PrimitiveBuilder[Int32Type]()
+    var b1 = Int32Builder()
     b1.append(1)
     b1.append_null()
     b1.append(3)
-    var b2 = PrimitiveBuilder[Int32Type]()
+    var b2 = Int32Builder()
     b2.append(4)
     b2.append_null()
     var arrs: List[AnyArray] = [
@@ -78,7 +78,7 @@ def test_concat_with_nulls() raises:
         b2.finish().to_any(),
     ]
     var tmp_with_nulls = concat(arrs)
-    ref result = tmp_with_nulls.as_primitive[Int32Type]()
+    ref result = tmp_with_nulls.as_int32()
     assert_equal(result.length, 5)
     assert_equal(result.null_count(), 2)
     assert_true(result.is_valid(0))
@@ -98,7 +98,7 @@ def test_concat_with_offset() raises:
     var s2 = a.slice(4, 1)  # [4], offset=4
     var arrs: List[AnyArray] = [AnyArray(s1^), AnyArray(s2^)]
     var tmp_offset = concat(arrs)
-    ref result = tmp_offset.as_primitive[Int32Type]()
+    ref result = tmp_offset.as_int32()
     assert_equal(result.length, 4)
     assert_equal(result[0], 1)
     assert_equal(result[1], 2)
@@ -108,7 +108,7 @@ def test_concat_with_offset() raises:
 
 def test_concat_with_offset_and_nulls() raises:
     # Build [1, null, 3], take slice [null, 3] (offset=1)
-    var b = PrimitiveBuilder[Int32Type]()
+    var b = Int32Builder()
     b.append(1)
     b.append_null()
     b.append(3)
@@ -118,7 +118,7 @@ def test_concat_with_offset_and_nulls() raises:
         AnyArray(array[Int32Type]([4])),
     ]
     var tmp_offset_nulls = concat(arrs)
-    ref result = tmp_offset_nulls.as_primitive[Int32Type]()
+    ref result = tmp_offset_nulls.as_int32()
     assert_equal(result.length, 3)
     assert_equal(result.null_count(), 1)
     assert_false(result.is_valid(0))
@@ -216,18 +216,18 @@ def test_concat_string_with_nulls() raises:
 
 def test_concat_list() raises:
     # Chunk 1: [[1, 2], [3]]
-    var lb1 = ListBuilder(AnyBuilder(PrimitiveBuilder[Int32Type]()), capacity=2)
+    var lb1 = ListBuilder(AnyBuilder(Int32Builder()), capacity=2)
     var c1_any = lb1.values()
-    ref c1 = c1_any.as_primitive[Int32Type]()
+    ref c1 = c1_any.as_int32()
     c1.append(1)
     c1.append(2)
     lb1.append_valid()  # [1, 2]
     c1.append(3)
     lb1.append_valid()  # [3]
     # Chunk 2: [[4, 5, 6]]
-    var lb2 = ListBuilder(AnyBuilder(PrimitiveBuilder[Int32Type]()), capacity=1)
+    var lb2 = ListBuilder(AnyBuilder(Int32Builder()), capacity=1)
     var c2_any = lb2.values()
-    ref c2 = c2_any.as_primitive[Int32Type]()
+    ref c2 = c2_any.as_int32()
     c2.append(4)
     c2.append(5)
     c2.append(6)
@@ -240,31 +240,31 @@ def test_concat_list() raises:
     ref result = tmp_list.as_list()
     assert_equal(result.length, 3)
     var raw_elem0 = result[0].value()
-    ref elem0 = raw_elem0.as_primitive[Int32Type]()
+    ref elem0 = raw_elem0.as_int32()
     assert_equal(elem0.length, 2)
     assert_equal(elem0[0], 1)
     assert_equal(elem0[1], 2)
     var raw_elem1 = result[1].value()
-    ref elem1 = raw_elem1.as_primitive[Int32Type]()
+    ref elem1 = raw_elem1.as_int32()
     assert_equal(elem1.length, 1)
     assert_equal(elem1[0], 3)
     var raw_elem2 = result[2].value()
-    ref elem2 = raw_elem2.as_primitive[Int32Type]()
+    ref elem2 = raw_elem2.as_int32()
     assert_equal(elem2.length, 3)
     assert_equal(elem2[0], 4)
     assert_equal(elem2[2], 6)
 
 
 def test_concat_list_with_nulls() raises:
-    var lb1 = ListBuilder(AnyBuilder(PrimitiveBuilder[Int32Type]()), capacity=2)
+    var lb1 = ListBuilder(AnyBuilder(Int32Builder()), capacity=2)
     var c1_any = lb1.values()
-    ref c1 = c1_any.as_primitive[Int32Type]()
+    ref c1 = c1_any.as_int32()
     c1.append(1)
     lb1.append_valid()  # [1]
     lb1.append_null()  # null
-    var lb2 = ListBuilder(AnyBuilder(PrimitiveBuilder[Int32Type]()), capacity=1)
+    var lb2 = ListBuilder(AnyBuilder(Int32Builder()), capacity=1)
     var c2_any = lb2.values()
-    ref c2 = c2_any.as_primitive[Int32Type]()
+    ref c2 = c2_any.as_int32()
     c2.append(2)
     c2.append(3)
     lb2.append_valid()  # [2, 3]
@@ -280,10 +280,10 @@ def test_concat_list_with_nulls() raises:
     assert_false(result.is_valid(1))
     assert_true(result.is_valid(2))
     var raw_elem0 = result[0].value()
-    ref elem0 = raw_elem0.as_primitive[Int32Type]()
+    ref elem0 = raw_elem0.as_int32()
     assert_equal(elem0[0], 1)
     var raw_elem2 = result[2].value()
-    ref elem2 = raw_elem2.as_primitive[Int32Type]()
+    ref elem2 = raw_elem2.as_int32()
     assert_equal(elem2.length, 2)
 
 
@@ -294,7 +294,7 @@ def test_concat_list_with_nulls() raises:
 
 def test_concat_fixed_size_list() raises:
     # Chunk 1: [[1.0, 2.0], [3.0, 4.0]]
-    var child1 = PrimitiveBuilder[Float32Type]()
+    var child1 = Float32Builder()
     child1.append(1.0)
     child1.append(2.0)
     child1.append(3.0)
@@ -303,7 +303,7 @@ def test_concat_fixed_size_list() raises:
     fsl1.append_valid()
     fsl1.append_valid()
     # Chunk 2: [[5.0, 6.0]]
-    var child2 = PrimitiveBuilder[Float32Type]()
+    var child2 = Float32Builder()
     child2.append(5.0)
     child2.append(6.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
@@ -316,21 +316,21 @@ def test_concat_fixed_size_list() raises:
     ref result = tmp_fsl.as_fixed_size_list()
     assert_equal(result.length, 3)
     var raw_fsl_elem0 = result[0].value()
-    ref elem0 = raw_fsl_elem0.as_primitive[Float32Type]()
+    ref elem0 = raw_fsl_elem0.as_float32()
     assert_equal(elem0[0], 1.0)
     assert_equal(elem0[1], 2.0)
     var raw_fsl_elem1 = result[1].value()
-    ref elem1 = raw_fsl_elem1.as_primitive[Float32Type]()
+    ref elem1 = raw_fsl_elem1.as_float32()
     assert_equal(elem1[0], 3.0)
     var raw_fsl_elem2 = result[2].value()
-    ref elem2 = raw_fsl_elem2.as_primitive[Float32Type]()
+    ref elem2 = raw_fsl_elem2.as_float32()
     assert_equal(elem2[0], 5.0)
     assert_equal(elem2[1], 6.0)
 
 
 def test_concat_fixed_size_list_with_offset() raises:
     # Build [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], then slice at offset=1
-    var child = PrimitiveBuilder[Float32Type]()
+    var child = Float32Builder()
     child.append(1.0)
     child.append(2.0)
     child.append(3.0)
@@ -342,7 +342,7 @@ def test_concat_fixed_size_list_with_offset() raises:
     fsl.append_valid()
     fsl.append_valid()
     var sliced = fsl.finish().slice(1, 2)  # [[3.0, 4.0], [5.0, 6.0]]
-    var child2 = PrimitiveBuilder[Float32Type]()
+    var child2 = Float32Builder()
     child2.append(7.0)
     child2.append(8.0)
     var fsl2 = FixedSizeListBuilder(child2^, list_size=2)
@@ -355,14 +355,14 @@ def test_concat_fixed_size_list_with_offset() raises:
     ref result = tmp_fsl_offset.as_fixed_size_list()
     assert_equal(result.length, 3)
     var raw_fsl_off_elem0 = result[0].value()
-    ref elem0 = raw_fsl_off_elem0.as_primitive[Float32Type]()
+    ref elem0 = raw_fsl_off_elem0.as_float32()
     assert_equal(elem0[0], 3.0)
     assert_equal(elem0[1], 4.0)
     var raw_fsl_off_elem1 = result[1].value()
-    ref elem1 = raw_fsl_off_elem1.as_primitive[Float32Type]()
+    ref elem1 = raw_fsl_off_elem1.as_float32()
     assert_equal(elem1[0], 5.0)
     var raw_fsl_off_elem2 = result[2].value()
-    ref elem2 = raw_fsl_off_elem2.as_primitive[Float32Type]()
+    ref elem2 = raw_fsl_off_elem2.as_float32()
     assert_equal(elem2[0], 7.0)
     assert_equal(elem2[1], 8.0)
 
@@ -394,12 +394,12 @@ def test_concat_struct() raises:
     ref result = tmp_struct.as_struct()
     assert_equal(result.length, 3)
     ref id_data = result.unsafe_get("id")
-    ref id_arr = id_data.as_primitive[Int32Type]()
+    ref id_arr = id_data.as_int32()
     assert_equal(id_arr[0], 1)
     assert_equal(id_arr[1], 2)
     assert_equal(id_arr[2], 3)
     ref score_data = result.unsafe_get("score")
-    ref score_arr = score_data.as_primitive[Float32Type]()
+    ref score_arr = score_data.as_float32()
     assert_equal(score_arr[0], 0.5)
     assert_equal(score_arr[2], 0.7)
 
@@ -417,7 +417,7 @@ def test_combine_chunks_delegates() raises:
     ]
     var ca = ChunkedArray(int32, chunks^)
     var combined = ca^.combine_chunks()
-    ref result = combined.as_primitive[Int32Type]()
+    ref result = combined.as_int32()
     assert_equal(result.length, 5)
     assert_equal(result[0], 10)
     assert_equal(result[1], 20)

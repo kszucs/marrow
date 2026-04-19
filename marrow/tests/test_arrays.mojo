@@ -95,7 +95,7 @@ def test_array_from_string() raises:
 
 
 def test_array_from_list() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var l = ListBuilder(AnyBuilder(ints_b^))
     var a: AnyArray = l.finish()
     assert_true(a.dtype().is_list())
@@ -173,7 +173,7 @@ def test_boolean_array() raises:
 
 
 def test_append() raises:
-    var a = PrimitiveBuilder[Int8Type]()
+    var a = Int8Builder()
     assert_equal(len(a), 0)
     assert_equal(a._capacity, 0)
     a.append(1)
@@ -265,7 +265,7 @@ def test_arange_uint64() raises:
 
 def test_primitive_array_with_offset() raises:
     """Test PrimitiveArray with offset functionality."""
-    var b = PrimitiveBuilder[Int32Type](10)
+    var b = Int32Builder(10)
     b.append(100)
     b.append(200)
     b.append(300)
@@ -366,16 +366,14 @@ def test_list_str() raises:
 def test_list_of_list() raises:
     var top_b = ListBuilder(
         AnyBuilder(
-            ListBuilder(
-                AnyBuilder(PrimitiveBuilder[Int64Type](capacity=10)), capacity=6
-            )
+            ListBuilder(AnyBuilder(Int64Builder(capacity=10)), capacity=6)
         ),
         capacity=3,
     )
     var middle_any = top_b.values()
     ref middle = middle_any.as_list()
     var child_any = middle.values()
-    ref child = child_any.as_primitive[Int64Type]()
+    ref child = child_any.as_int64()
     child.append(1)
     child.append(2)
     middle.append_valid()
@@ -400,18 +398,18 @@ def test_list_of_list() raises:
     var top_val = list2[0].value()
     ref top = top_val.as_list()
     middle_0 = top[0].value()
-    ref bottom_0 = middle_0.as_primitive[Int64Type]()
+    ref bottom_0 = middle_0.as_int64()
     assert_equal(bottom_0[1], 2)
     assert_equal(bottom_0[0], 1)
     middle_1 = top[1].value()
-    ref bottom_1 = middle_1.as_primitive[Int64Type]()
+    ref bottom_1 = middle_1.as_int64()
     assert_equal(bottom_1[0], 3)
     assert_equal(bottom_1[1], 4)
 
 
 def test_fixed_size_list_int_array() raises:
     """Construct a FixedSizeListArray of int64 lists, size=3."""
-    var ints_b = PrimitiveBuilder[Int64Type](6)
+    var ints_b = Int64Builder(6)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -443,7 +441,7 @@ def test_fixed_size_list_int_array() raises:
 
 def test_fixed_size_list_roundtrip() raises:
     """FixedSizeListArray round-trip through builder."""
-    var ints_b = PrimitiveBuilder[Int32Type](4)
+    var ints_b = Int32Builder(4)
     ints_b.append(10)
     ints_b.append(20)
     ints_b.append(30)
@@ -464,7 +462,7 @@ def test_fixed_size_list_roundtrip() raises:
 
 def test_fixed_size_list_with_nulls() raises:
     """FixedSizeListArray with null lists."""
-    var ints_b = PrimitiveBuilder[Int64Type](6)
+    var ints_b = Int64Builder(6)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -497,7 +495,7 @@ def test_fixed_size_list_with_nulls() raises:
 
 def test_fixed_size_list_unsafe_get_dtype() raises:
     # unsafe_get returns a slice with the child element dtype, not the list dtype.
-    var ints_b = PrimitiveBuilder[Int32Type](4)
+    var ints_b = Int32Builder(4)
     ints_b.append(10)
     ints_b.append(20)
     ints_b.append(30)
@@ -520,7 +518,7 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
 
 # # def test_fixed_size_list_pretty_print():
 # #     """Pretty printing FixedSizeListArray."""
-# #     var ints_b = PrimitiveBuilder[Int64Type](4)
+# #     var ints_b = Int64Builder(4)
 # #     ints_b.append(1)
 # #     ints_b.append(2)
 # #     ints_b.append(3)
@@ -566,11 +564,11 @@ def test_struct_array_unsafe_get() raises:
     sb.append_valid()
     var struct_array = sb.finish()
     ref int_data_a = struct_array.unsafe_get("int_data_a")
-    ref int_a = int_data_a.as_primitive[Int32Type]()
+    ref int_a = int_data_a.as_int32()
     assert_equal(int_a[0], 1)
     assert_equal(int_a[4], 5)
     ref int_data_b = struct_array.unsafe_get("int_data_b")
-    ref int_b = int_data_b.as_primitive[Int32Type]()
+    ref int_b = int_data_b.as_int32()
     assert_equal(int_b[0], 10)
     assert_equal(int_b[2], 30)
 
@@ -613,7 +611,7 @@ def test_combine_chunked_array() raises:
 
 def test_primitive_finish_shrinks() raises:
     """Freeze() on an over-allocated builder trims capacity to length."""
-    var a = PrimitiveBuilder[Int64Type](capacity=100)
+    var a = Int64Builder(capacity=100)
     a.append(42)
     a.append(99)
     var frozen = a.finish()
@@ -628,7 +626,7 @@ def test_primitive_finish_shrinks() raises:
 
 def test_primitive_finish_via_append() raises:
     """Freeze() works on a builder built with append() (auto-grow capacity)."""
-    var a = PrimitiveBuilder[Int64Type]()
+    var a = Int64Builder()
     a.append(1)
     a.append(2)
     a.append(3)
@@ -640,7 +638,7 @@ def test_primitive_finish_via_append() raises:
 
 def test_primitive_finish_preserves_nulls() raises:
     """Freeze() preserves null validity information."""
-    var a = PrimitiveBuilder[Int64Type](capacity=3)
+    var a = Int64Builder(capacity=3)
     a.append(1)
     a.append_null()
     a.append(3)
@@ -653,7 +651,7 @@ def test_primitive_finish_preserves_nulls() raises:
 
 def test_primitive_finish_converts_to_array() raises:
     """PrimitiveBuilder.finish() returns a typed PrimitiveArray."""
-    var a = PrimitiveBuilder[Int64Type]()
+    var a = Int64Builder()
     a.append(7)
     a.append(8)
     var frozen = a.finish()
@@ -664,7 +662,7 @@ def test_primitive_finish_converts_to_array() raises:
 
 def test_getitem_bounds_check() raises:
     """__getitem__ raises on out-of-bounds access."""
-    var b = PrimitiveBuilder[Int64Type]()
+    var b = Int64Builder()
     b.append(1)
     b.append(2)
     var a = b.finish()
@@ -684,7 +682,7 @@ def test_getitem_bounds_check() raises:
 
 def test_setitem_bounds_check() raises:
     """PrimitiveArray __getitem__ returns correct values."""
-    var a = PrimitiveBuilder[Int64Type]()
+    var a = Int64Builder()
     a.append(99)
     var frozen = a.finish()
     assert_equal(frozen[0], 99)
@@ -775,7 +773,7 @@ def test_str_string_array_with_nulls() raises:
 
 
 def test_str_list_array() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -787,7 +785,7 @@ def test_str_list_array() raises:
 
 
 def test_str_fixed_size_list_array() raises:
-    var ints_b = PrimitiveBuilder[Int64Type](4)
+    var ints_b = Int64Builder(4)
     ints_b.append(10)
     ints_b.append(20)
     ints_b.append(30)
@@ -842,7 +840,7 @@ def test_string_array_no_nulls() raises:
 
 
 def test_list_array_is_valid() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -907,10 +905,10 @@ def test_string_array_getitem_bounds() raises:
 
 
 def test_list_array_getitem() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_any = list_b.values()
-    ref child = child_any.as_primitive[Int64Type]()
+    ref child = child_any.as_int64()
     child.append(10)
     child.append(20)
     list_b.append_valid()  # [10, 20]
@@ -926,7 +924,7 @@ def test_list_array_getitem() raises:
 
 
 def test_list_array_getitem_bounds() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     ints_b.append(1)
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     list_b.append_valid()
@@ -944,7 +942,7 @@ def test_list_array_getitem_bounds() raises:
 
 
 def test_fixed_size_list_getitem() raises:
-    var ints_b = PrimitiveBuilder[Int32Type](6)
+    var ints_b = Int32Builder(6)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -966,7 +964,7 @@ def test_fixed_size_list_getitem() raises:
 
 
 def test_fixed_size_list_getitem_bounds() raises:
-    var ints_b = PrimitiveBuilder[Int32Type](3)
+    var ints_b = Int32Builder(3)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -1059,7 +1057,7 @@ def test_string_array_slice() raises:
 
 
 def test_fixed_size_list_len_and_null_count() raises:
-    var ints_b = PrimitiveBuilder[Int64Type](6)
+    var ints_b = Int64Builder(6)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -1076,7 +1074,7 @@ def test_fixed_size_list_len_and_null_count() raises:
 
 
 def test_list_array_null_count() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     ints_b.append(1)
     ints_b.append(2)
     var list_b = ListBuilder(AnyBuilder(ints_b^))
@@ -1122,10 +1120,10 @@ def test_string_array_slice_with_length() raises:
 
 
 def test_list_array_slice() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_any = list_b.values()
-    ref child = child_any.as_primitive[Int64Type]()
+    ref child = child_any.as_int64()
     child.append(1)
     child.append(2)
     list_b.append_valid()
@@ -1140,7 +1138,7 @@ def test_list_array_slice() raises:
 
 
 def test_fixed_size_list_slice() raises:
-    var ints_b = PrimitiveBuilder[Int32Type](6)
+    var ints_b = Int32Builder(6)
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
@@ -1165,10 +1163,10 @@ def test_fixed_size_list_slice() raises:
 
 
 def test_list_array_flatten() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_any = list_b.values()
-    ref child = child_any.as_primitive[Int64Type]()
+    ref child = child_any.as_int64()
     child.append(1)
     child.append(2)
     list_b.append_valid()
@@ -1180,10 +1178,10 @@ def test_list_array_flatten() raises:
 
 
 def test_list_array_value_lengths() raises:
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_any = list_b.values()
-    ref child = child_any.as_primitive[Int64Type]()
+    ref child = child_any.as_int64()
     child.append(1)
     child.append(2)
     list_b.append_valid()  # length 2
@@ -1202,7 +1200,7 @@ def test_list_array_value_lengths() raises:
 
 
 def test_fixed_size_list_flatten() raises:
-    var ints_b = PrimitiveBuilder[Int32Type](4)
+    var ints_b = Int32Builder(4)
     ints_b.append(10)
     ints_b.append(20)
     ints_b.append(30)
@@ -1428,10 +1426,10 @@ def test_string_array_eq_nulls() raises:
 
 
 def test_list_array_eq() raises:
-    var ints_a = PrimitiveBuilder[Int64Type]()
+    var ints_a = Int64Builder()
     var list_a = ListBuilder(AnyBuilder(ints_a^))
     var child_a_any = list_a.values()
-    ref child_a = child_a_any.as_primitive[Int64Type]()
+    ref child_a = child_a_any.as_int64()
     child_a.append(1)
     child_a.append(2)
     list_a.append_valid()
@@ -1439,10 +1437,10 @@ def test_list_array_eq() raises:
     list_a.append_valid()
     var a = list_a.finish()
 
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_b_any = list_b.values()
-    ref child_b = child_b_any.as_primitive[Int64Type]()
+    ref child_b = child_b_any.as_int64()
     child_b.append(1)
     child_b.append(2)
     list_b.append_valid()
@@ -1454,19 +1452,19 @@ def test_list_array_eq() raises:
 
 
 def test_list_array_eq_unequal() raises:
-    var ints_a = PrimitiveBuilder[Int64Type]()
+    var ints_a = Int64Builder()
     var list_a = ListBuilder(AnyBuilder(ints_a^))
     var child_a_any = list_a.values()
-    ref child_a = child_a_any.as_primitive[Int64Type]()
+    ref child_a = child_a_any.as_int64()
     child_a.append(1)
     child_a.append(2)
     list_a.append_valid()
     var a = list_a.finish()
 
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     var child_b_any = list_b.values()
-    ref child_b = child_b_any.as_primitive[Int64Type]()
+    ref child_b = child_b_any.as_int64()
     child_b.append(1)
     child_b.append(99)
     list_b.append_valid()
@@ -1476,14 +1474,14 @@ def test_list_array_eq_unequal() raises:
 
 
 def test_list_array_eq_nulls() raises:
-    var ints_a = PrimitiveBuilder[Int64Type]()
+    var ints_a = Int64Builder()
     ints_a.append(1)
     var list_a = ListBuilder(AnyBuilder(ints_a^))
     list_a.append_valid()
     list_a.append_null()
     var a = list_a.finish()
 
-    var ints_b = PrimitiveBuilder[Int64Type]()
+    var ints_b = Int64Builder()
     ints_b.append(1)
     var list_b = ListBuilder(AnyBuilder(ints_b^))
     list_b.append_valid()
@@ -1494,7 +1492,7 @@ def test_list_array_eq_nulls() raises:
 
 
 def test_fixed_size_list_array_eq() raises:
-    var a_b = PrimitiveBuilder[Int32Type](4)
+    var a_b = Int32Builder(4)
     a_b.append(1)
     a_b.append(2)
     a_b.append(3)
@@ -1503,7 +1501,7 @@ def test_fixed_size_list_array_eq() raises:
     builder_a.append_valid()
     builder_a.append_valid()
 
-    var b_b = PrimitiveBuilder[Int32Type](4)
+    var b_b = Int32Builder(4)
     b_b.append(1)
     b_b.append(2)
     b_b.append(3)
@@ -1516,7 +1514,7 @@ def test_fixed_size_list_array_eq() raises:
 
 
 def test_fixed_size_list_array_eq_unequal() raises:
-    var a_b = PrimitiveBuilder[Int32Type](4)
+    var a_b = Int32Builder(4)
     a_b.append(1)
     a_b.append(2)
     a_b.append(3)
@@ -1525,7 +1523,7 @@ def test_fixed_size_list_array_eq_unequal() raises:
     builder_a.append_valid()
     builder_a.append_valid()
 
-    var b_b = PrimitiveBuilder[Int32Type](4)
+    var b_b = Int32Builder(4)
     b_b.append(1)
     b_b.append(2)
     b_b.append(3)
@@ -1599,7 +1597,7 @@ def test_array_eq_via_dispatch() raises:
 
 
 def test_primitive_array_list_literal() raises:
-    var arr: PrimitiveArray[Int64Type] = [1, 2, 3, 4, 5]
+    var arr: Int64Array = [1, 2, 3, 4, 5]
     assert_equal(len(arr), 5)
     assert_equal(arr[0], 1)
     assert_equal(arr[4], 5)
@@ -1607,7 +1605,7 @@ def test_primitive_array_list_literal() raises:
 
 
 def test_primitive_array_list_literal_float() raises:
-    var arr: PrimitiveArray[Float64Type] = [1.0, 2.5, 3.14]
+    var arr: Float64Array = [1.0, 2.5, 3.14]
     assert_equal(len(arr), 3)
     assert_equal(arr[0], 1.0)
 
@@ -1622,7 +1620,7 @@ def test_string_array_list_literal() raises:
 
 
 def test_primitive_array_list_literal_empty() raises:
-    var arr: PrimitiveArray[Int32Type] = []
+    var arr: Int32Array = []
     assert_equal(len(arr), 0)
 
 

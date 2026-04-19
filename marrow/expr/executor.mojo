@@ -1060,67 +1060,67 @@ def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
     """Broadcast a length-1 scalar array to the given length."""
     if scalar_array.dtype() == int8:
         var val = scalar_array.as_int8().unsafe_get(0)
-        var builder = PrimitiveBuilder[Int8Type](length)
+        var builder = Int8Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == int16:
         var val = scalar_array.as_int16().unsafe_get(0)
-        var builder = PrimitiveBuilder[Int16Type](length)
+        var builder = Int16Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == int32:
         var val = scalar_array.as_int32().unsafe_get(0)
-        var builder = PrimitiveBuilder[Int32Type](length)
+        var builder = Int32Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == int64:
         var val = scalar_array.as_int64().unsafe_get(0)
-        var builder = PrimitiveBuilder[Int64Type](length)
+        var builder = Int64Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == uint8:
         var val = scalar_array.as_uint8().unsafe_get(0)
-        var builder = PrimitiveBuilder[UInt8Type](length)
+        var builder = UInt8Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == uint16:
         var val = scalar_array.as_uint16().unsafe_get(0)
-        var builder = PrimitiveBuilder[UInt16Type](length)
+        var builder = UInt16Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == uint32:
         var val = scalar_array.as_uint32().unsafe_get(0)
-        var builder = PrimitiveBuilder[UInt32Type](length)
+        var builder = UInt32Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == uint64:
         var val = scalar_array.as_uint64().unsafe_get(0)
-        var builder = PrimitiveBuilder[UInt64Type](length)
+        var builder = UInt64Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == float16:
         var val = scalar_array.as_float16().unsafe_get(0)
-        var builder = PrimitiveBuilder[Float16Type](length)
+        var builder = Float16Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == float32:
         var val = scalar_array.as_float32().unsafe_get(0)
-        var builder = PrimitiveBuilder[Float32Type](length)
+        var builder = Float32Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()
     elif scalar_array.dtype() == float64:
         var val = scalar_array.as_float64().unsafe_get(0)
-        var builder = PrimitiveBuilder[Float64Type](length)
+        var builder = Float64Builder(length)
         for _ in range(length):
             builder.unsafe_append(val)
         return builder.finish().to_any()

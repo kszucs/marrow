@@ -103,7 +103,7 @@ def test_bool_builder_as_any_builder() raises:
 
 
 def test_primitive_builder_int16() raises:
-    var b = PrimitiveBuilder[Int16Type](2)
+    var b = Int16Builder(2)
     b.append(32767)
     b.append(-32768)
     var frozen = b.finish()
@@ -112,7 +112,7 @@ def test_primitive_builder_int16() raises:
 
 
 def test_primitive_builder_uint32() raises:
-    var b = PrimitiveBuilder[UInt32Type](2)
+    var b = UInt32Builder(2)
     b.append(0)
     b.append(42)
     var frozen = b.finish()
@@ -121,7 +121,7 @@ def test_primitive_builder_uint32() raises:
 
 
 def test_primitive_builder_float32() raises:
-    var b = PrimitiveBuilder[Float32Type](3)
+    var b = Float32Builder(3)
     b.append(1.5)
     b.append(0.0)
     b.append(-3.14)
@@ -133,7 +133,7 @@ def test_primitive_builder_float32() raises:
 
 
 def test_primitive_builder_float64() raises:
-    var b = PrimitiveBuilder[Float64Type](2)
+    var b = Float64Builder(2)
     b.append(1.0)
     b.append_null()
     var frozen = b.finish()
@@ -144,7 +144,7 @@ def test_primitive_builder_float64() raises:
 
 def test_primitive_builder_capacity_doubling() raises:
     """Builder doubles capacity starting from zero capacity."""
-    var b = PrimitiveBuilder[Int32Type]()
+    var b = Int32Builder()
     b.append(0)
     b.append(1)
     b.append(2)
@@ -163,7 +163,7 @@ def test_primitive_builder_capacity_doubling() raises:
 
 
 def test_primitive_builder_as_any_builder() raises:
-    var b = PrimitiveBuilder[Int64Type](3)
+    var b = Int64Builder(3)
     b.append(1)
     b.append(2)
     b.append(3)
@@ -173,7 +173,7 @@ def test_primitive_builder_as_any_builder() raises:
 
 
 def test_primitive_builder_null_count() raises:
-    var b = PrimitiveBuilder[Int32Type](5)
+    var b = Int32Builder(5)
     b.append(1)
     b.append_null()
     b.append_null()
@@ -184,7 +184,7 @@ def test_primitive_builder_null_count() raises:
 
 
 def test_primitive_builder_all_nulls() raises:
-    var b = PrimitiveBuilder[Int64Type](4)
+    var b = Int64Builder(4)
     for _ in range(4):
         b.append_null()
     var frozen = b.finish()
@@ -317,7 +317,7 @@ def test_string_builder_as_any_builder() raises:
 
 
 def test_list_builder_empty() raises:
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     var b = ListBuilder(child^)
     var frozen = b.finish()
     assert_equal(frozen.length, 0)
@@ -325,7 +325,7 @@ def test_list_builder_empty() raises:
 
 
 def test_list_builder_append_null() raises:
-    var child = PrimitiveBuilder[Int64Type]()
+    var child = Int64Builder()
     var b = ListBuilder(child^)
     b.append_valid()
     b.append_null()
@@ -338,7 +338,7 @@ def test_list_builder_append_null() raises:
 
 
 def test_list_builder_null_count() raises:
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     var b = ListBuilder(child^)
     b.append_valid()
     b.append_null()
@@ -354,25 +354,25 @@ def test_list_builder_null_count() raises:
 
 def test_list_builder_empty_list() raises:
     """A valid but empty list (zero child elements) is valid."""
-    var child = PrimitiveBuilder[Int64Type]()
+    var child = Int64Builder()
     var b = ListBuilder(child^)
     b.append_valid()
     var frozen = b.finish()
     assert_equal(frozen.length, 1)
     assert_true(frozen.is_valid(0))
     var inner_val = frozen[0].value()
-    ref inner = inner_val.as_primitive[Int64Type]()
+    ref inner = inner_val.as_int64()
     assert_equal(inner.length, 0)
 
 
 def test_list_builder_dtype() raises:
-    var child = PrimitiveBuilder[Int64Type]()
+    var child = Int64Builder()
     var b: AnyBuilder = ListBuilder(child^)
     assert_equal(b.dtype(), list_(int64))
 
 
 def test_list_builder_child_accessor() raises:
-    var child = PrimitiveBuilder[Int32Type](4)
+    var child = Int32Builder(4)
     child.append(10)
     var b = ListBuilder(child^)
     var child_view = b.values()
@@ -381,7 +381,7 @@ def test_list_builder_child_accessor() raises:
 
 def test_list_builder_multiple_nulls_offsets() raises:
     """Multiple null entries must not advance child offsets."""
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     child.append(1)
     child.append(2)
     var b = ListBuilder(child^)
@@ -394,7 +394,7 @@ def test_list_builder_multiple_nulls_offsets() raises:
     assert_false(frozen.is_valid(1))
     assert_false(frozen.is_valid(2))
     var first_val = frozen[0].value()
-    ref first = first_val.as_primitive[Int32Type]()
+    ref first = first_val.as_int32()
     assert_equal(first.length, 2)
     assert_equal(first[0], 1)
     assert_equal(first[1], 2)
@@ -420,7 +420,7 @@ def test_list_builder_string_child() raises:
 
 
 def test_fixed_size_list_builder_zero_length() raises:
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     var b = FixedSizeListBuilder(child^, list_size=4)
     var frozen = b.finish()
     assert_equal(frozen.length, 0)
@@ -429,7 +429,7 @@ def test_fixed_size_list_builder_zero_length() raises:
 
 
 def test_fixed_size_list_builder_float32() raises:
-    var child = PrimitiveBuilder[Float32Type](4)
+    var child = Float32Builder(4)
     child.append(1.0)
     child.append(2.0)
     child.append(3.0)
@@ -446,7 +446,7 @@ def test_fixed_size_list_builder_float32() raises:
 
 
 def test_fixed_size_list_builder_with_nulls() raises:
-    var child = PrimitiveBuilder[Int64Type](6)
+    var child = Int64Builder(6)
     child.append(0)
     child.append(1)
     child.append(2)
@@ -465,13 +465,13 @@ def test_fixed_size_list_builder_with_nulls() raises:
 
 
 def test_fixed_size_list_builder_dtype() raises:
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     var b: AnyBuilder = FixedSizeListBuilder(child^, list_size=3)
     assert_equal(b.dtype(), fixed_size_list_(int32, 3))
 
 
 def test_fixed_size_list_builder_child_accessor() raises:
-    var child = PrimitiveBuilder[Int64Type](2)
+    var child = Int64Builder(2)
     child.append(100)
     child.append(200)
     var b = FixedSizeListBuilder(child^, list_size=2)
@@ -481,7 +481,7 @@ def test_fixed_size_list_builder_child_accessor() raises:
 
 def test_fixed_size_list_builder_size1() raises:
     """FixedSizeList of size 1 — each entry is a single-element list."""
-    var child = PrimitiveBuilder[Int32Type](3)
+    var child = Int32Builder(3)
     child.append(7)
     child.append(8)
     child.append(9)
@@ -557,7 +557,7 @@ def test_struct_builder_field_values_accessible() raises:
     var frozen = sb.finish()
 
     ref field_data = frozen.unsafe_get("x")
-    ref x_arr = field_data.as_primitive[Int32Type]()
+    ref x_arr = field_data.as_int32()
     assert_equal(x_arr[0], 42)
     assert_equal(x_arr[1], 99)
 
@@ -729,7 +729,7 @@ def test_factory_arange_empty() raises:
 
 def test_primitive_builder_finish_shrinks_data_buffer() raises:
     """Finish() shrinks the data buffer to fit the actual element count."""
-    var b = PrimitiveBuilder[Int32Type](128)
+    var b = Int32Builder(128)
     b.append(1)
     b.append(2)
     # capacity allocated 512 bytes; only 2 elements written
@@ -753,7 +753,7 @@ def test_string_builder_finish_shrinks_offsets_buffer() raises:
 
 def test_list_builder_finish_shrinks_offsets_buffer() raises:
     """Finish() shrinks the offsets buffer to (length+1) uint32 entries."""
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     child.append(10)
     child.append(20)
     child.append(30)
@@ -769,7 +769,7 @@ def test_list_builder_finish_shrinks_offsets_buffer() raises:
 
 def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
     """Finish() with nulls resizes the bitmap to fit exactly `length` bits."""
-    var b = PrimitiveBuilder[Int32Type](128)
+    var b = Int32Builder(128)
     b.append(1)
     b.append_null()
     b.append(3)
@@ -782,7 +782,7 @@ def test_primitive_builder_finish_with_nulls_shrinks_bitmap() raises:
 def test_any_builder_finish_dispatch_primitive() raises:
     """AnyBuilder.finish() dispatches to PrimitiveBuilder.finish() and returns AnyArray.
     """
-    var b = PrimitiveBuilder[Int32Type](10)
+    var b = Int32Builder(10)
     b.append(42)
     b.append(99)
     var builder: AnyBuilder = b^
@@ -810,7 +810,7 @@ def test_any_builder_finish_dispatch_string() raises:
 def test_any_builder_finish_dispatch_list() raises:
     """AnyBuilder.finish() dispatches to ListBuilder.finish() and returns AnyArray.
     """
-    var child = PrimitiveBuilder[Int32Type]()
+    var child = Int32Builder()
     child.append(1)
     child.append(2)
     var b = ListBuilder(child^, 10)

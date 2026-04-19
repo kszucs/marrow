@@ -583,7 +583,7 @@ def take[
     T: PrimitiveType
 ](
     array: PrimitiveArray[T],
-    indices: PrimitiveArray[Int32Type],
+    indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Gather elements from a primitive array at the given indices.
@@ -685,9 +685,7 @@ def take[
     )
 
 
-def take(
-    array: BoolArray, indices: PrimitiveArray[Int32Type]
-) raises -> BoolArray:
+def take(array: BoolArray, indices: Int32Array) raises -> BoolArray:
     """Gather elements from a bool array at the given indices.
 
     Null indices produce null output elements.
@@ -715,9 +713,7 @@ def take(
     return builder.finish()
 
 
-def take(
-    array: StringArray, indices: PrimitiveArray[Int32Type]
-) raises -> StringArray:
+def take(array: StringArray, indices: Int32Array) raises -> StringArray:
     """Gather elements from a string array at the given indices.
 
     Null indices produce null output elements.
@@ -744,7 +740,7 @@ def take(
 
 def take(
     array: AnyArray,
-    indices: PrimitiveArray[Int32Type],
+    indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Gather elements from a type-erased array at the given indices.
@@ -794,9 +790,7 @@ def take(
     raise Error("take: unsupported dtype ", array.dtype())
 
 
-def take(
-    array: StructArray, indices: PrimitiveArray[Int32Type]
-) raises -> StructArray:
+def take(array: StructArray, indices: Int32Array) raises -> StructArray:
     """Gather rows from a StructArray at the given indices.
 
     Applies ``take`` to each child column independently.

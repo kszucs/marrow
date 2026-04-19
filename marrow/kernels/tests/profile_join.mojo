@@ -25,8 +25,8 @@ from marrow.kernels.join import hash_join
 
 def _make_struct(n: Int) raises -> StructArray:
     """Build a StructArray with columns (k: int64, v: int64)."""
-    var kb = PrimitiveBuilder[Int64Type](capacity=n)
-    var vb = PrimitiveBuilder[Int64Type](capacity=n)
+    var kb = Int64Builder(capacity=n)
+    var vb = Int64Builder(capacity=n)
     for i in range(n):
         kb.append(Scalar[int64.native](i))
         vb.append(Scalar[int64.native](i * 10))

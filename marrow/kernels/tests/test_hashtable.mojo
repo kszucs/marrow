@@ -18,7 +18,7 @@ from marrow.kernels.hashing import rapidhash
 
 def _keys(*values: Int) raises -> StructArray:
     """Build a single-column StructArray from uint64 values."""
-    var b = PrimitiveBuilder[UInt64Type](capacity=len(values))
+    var b = UInt64Builder(capacity=len(values))
     for i in range(len(values)):
         b.append(Scalar[uint64.native](values[i]))
     var children = List[AnyArray]()
@@ -35,7 +35,7 @@ def _keys(*values: Int) raises -> StructArray:
 
 def _keys_range(n: Int, offset: Int = 0) raises -> StructArray:
     """Build a single-column StructArray with n sequential uint64 values."""
-    var b = PrimitiveBuilder[UInt64Type](capacity=n)
+    var b = UInt64Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[uint64.native](i + offset))
     var children = List[AnyArray]()

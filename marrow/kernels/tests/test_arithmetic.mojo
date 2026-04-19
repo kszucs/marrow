@@ -65,7 +65,7 @@ def test_add_typed() raises:
 
 def test_add_with_nulls() raises:
     """Nulls propagate: null + valid = null."""
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(1)
     a.append(2)
     a.append_null()
@@ -92,7 +92,7 @@ def test_add_untyped() raises:
     var b = AnyArray(array[Int64Type]([4, 5, 6]))
     var result = add(a, b)
     assert_equal(result.length(), 3)
-    ref typed = result.as_primitive[Int64Type]()
+    ref typed = result.as_int64()
     assert_equal(typed[0], 5)
     assert_equal(typed[1], 7)
     assert_equal(typed[2], 9)
@@ -143,7 +143,7 @@ def test_sub_typed() raises:
 
 
 def test_sub_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(10)
     a.append(20)
     a.append_null()
@@ -161,7 +161,7 @@ def test_sub_untyped() raises:
     var a = AnyArray(array[Int64Type]([10, 20, 30]))
     var b = AnyArray(array[Int64Type]([1, 2, 3]))
     var result = sub(a, b)
-    ref typed = result.as_primitive[Int64Type]()
+    ref typed = result.as_int64()
     assert_equal(typed[0], 9)
     assert_equal(typed[1], 18)
     assert_equal(typed[2], 27)
@@ -183,7 +183,7 @@ def test_mul_typed() raises:
 
 
 def test_mul_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(2)
     a.append(3)
     a.append_null()
@@ -221,7 +221,7 @@ def test_div_typed() raises:
 
 
 def test_div_with_nulls() raises:
-    var a = PrimitiveBuilder[Float64Type](3)
+    var a = Float64Builder(3)
     a.append(10)
     a.append(20)
     a.append_null()
@@ -289,7 +289,7 @@ def test_max_typed() raises:
 
 
 def test_min_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(1)
     a.append(5)
     a.append_null()
@@ -318,7 +318,7 @@ def test_neg_typed() raises:
 
 
 def test_neg_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(1)
     a.append(-2)
     a.append_null()
@@ -355,7 +355,7 @@ def test_abs_typed() raises:
 
 
 def test_abs_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(-3)
     a.append(4)
     a.append_null()
@@ -392,7 +392,7 @@ def test_sign_typed() raises:
 
 
 def test_sign_with_nulls() raises:
-    var a = PrimitiveBuilder[Int32Type](3)
+    var a = Int32Builder(3)
     a.append(-3)
     a.append_null()
     a.append(5)
@@ -407,7 +407,7 @@ def test_sign_with_nulls() raises:
 def test_sign_runtime_typed() raises:
     var a = array[Int32Type]([-3, 0, 5])
     var result = sign(AnyArray(a^))
-    ref r = result.as_primitive[Int32Type]()
+    ref r = result.as_int32()
     assert_equal(r[0], -1)
     assert_equal(r[1], 0)
     assert_equal(r[2], 1)
@@ -428,7 +428,7 @@ def test_sqrt_typed() raises:
 
 
 def test_sqrt_with_nulls() raises:
-    var a = PrimitiveBuilder[Float32Type](3)
+    var a = Float32Builder(3)
     a.append(4.0)
     a.append_null()
     a.append(9.0)
@@ -443,7 +443,7 @@ def test_sqrt_with_nulls() raises:
 def test_sqrt_runtime_typed() raises:
     var a = array[Float64Type]([1.0, 4.0, 9.0])
     var result = sqrt(AnyArray(a^))
-    ref r = result.as_primitive[Float64Type]()
+    ref r = result.as_float64()
     assert_equal(r[0], 1.0)
     assert_equal(r[1], 2.0)
     assert_equal(r[2], 3.0)
@@ -544,7 +544,7 @@ def test_round_typed() raises:
 
 
 def test_floor_with_nulls() raises:
-    var a = PrimitiveBuilder[Float32Type](3)
+    var a = Float32Builder(3)
     a.append(1.7)
     a.append_null()
     a.append(-1.7)
@@ -587,7 +587,7 @@ def test_pow_typed() raises:
 
 
 def test_pow_with_nulls() raises:
-    var a = PrimitiveBuilder[Float32Type](3)
+    var a = Float32Builder(3)
     a.append(2.0)
     a.append_null()
     a.append(4.0)
@@ -603,7 +603,7 @@ def test_pow_runtime_typed() raises:
     var a = array[Float64Type]([2.0, 3.0])
     var b = array[Float64Type]([3.0, 2.0])
     var result = pow_(AnyArray(a^), AnyArray(b^))
-    ref r = result.as_primitive[Float64Type]()
+    ref r = result.as_float64()
     assert_equal(r[0], 8.0)
     assert_equal(r[1], 9.0)
 

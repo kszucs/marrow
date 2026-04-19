@@ -20,7 +20,7 @@ def test_record_batch_construction() raises:
     """Test basic RecordBatch construction and property accessors."""
     var schema = Schema(fields=[Field("x", int32), Field("y", float64)])
     var col_x: AnyArray = array[Int32Type]([1, 2, 3])
-    var by = PrimitiveBuilder[Float64Type](3)
+    var by = Float64Builder(3)
     by.append(1.0)
     by.append(2.0)
     by.append(3.0)
@@ -102,7 +102,7 @@ def test_table_from_batches() raises:
 def test_table_column_access() raises:
     """Test Table column access by index and name."""
     var schema = Schema(fields=[Field("a", int32), Field("b", float64)])
-    var bf = PrimitiveBuilder[Float64Type](2)
+    var bf = Float64Builder(2)
     bf.append(3.0)
     bf.append(4.0)
     var columns = List[AnyArray]()

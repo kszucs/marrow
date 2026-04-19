@@ -6,7 +6,7 @@ from ..dtypes import uint32
 
 
 # TODO: implement using SIMD
-def string_lengths(array: StringArray) -> PrimitiveArray[UInt32Type]:
+def string_lengths(array: StringArray) -> UInt32Array:
     """Compute per-element byte lengths of a StringArray.
 
     Handles arrays with non-zero offsets (sliced arrays).
@@ -15,7 +15,7 @@ def string_lengths(array: StringArray) -> PrimitiveArray[UInt32Type]:
         array: The input string array.
 
     Returns:
-        A PrimitiveArray[UInt32Type] of byte lengths with all-valid bitmap.
+        A UInt32Array of byte lengths with all-valid bitmap.
     """
     var n = len(array)
     var off = array.offset
@@ -24,7 +24,7 @@ def string_lengths(array: StringArray) -> PrimitiveArray[UInt32Type]:
         var start = array.offsets.unsafe_get[DType.uint32](off + i)
         var end = array.offsets.unsafe_get[DType.uint32](off + i + 1)
         buf.unsafe_set[DType.uint32](i, end - start)
-    return PrimitiveArray[UInt32Type](
+    return UInt32Array(
         length=n,
         nulls=0,
         offset=0,

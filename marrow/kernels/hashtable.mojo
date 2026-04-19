@@ -37,13 +37,13 @@ struct Partition(Copyable, Movable):
     avoids allocating an identity index array).
     """
 
-    var row_indices: Optional[PrimitiveArray[Int32Type]]
-    var hashes: PrimitiveArray[UInt64Type]
+    var row_indices: Optional[Int32Array]
+    var hashes: UInt64Array
 
     def __init__(
         out self,
-        var hashes: PrimitiveArray[UInt64Type],
-        var row_indices: Optional[PrimitiveArray[Int32Type]] = None,
+        var hashes: UInt64Array,
+        var row_indices: Optional[Int32Array] = None,
     ):
         self.hashes = hashes^
         self.row_indices = row_indices^
@@ -68,9 +68,7 @@ trait Partitioner(Movable):
     def num_partitions(self) -> Int:
         ...
 
-    def partition(
-        self, var hashes: PrimitiveArray[UInt64Type]
-    ) raises -> List[Partition]:
+    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
         ...
 
 
@@ -83,9 +81,7 @@ struct NoPartition(Partitioner):
     def num_partitions(self) -> Int:
         return 1
 
-    def partition(
-        self, var hashes: PrimitiveArray[UInt64Type]
-    ) raises -> List[Partition]:
+    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
         var result = List[Partition]()
         result.append(Partition(hashes^))
         return result^
@@ -136,9 +132,7 @@ struct RadixPartitioner(Partitioner):
     def num_partitions(self) -> Int:
         return self._num_partitions
 
-    def partition(
-        self, var hashes: PrimitiveArray[UInt64Type]
-    ) raises -> List[Partition]:
+    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
         """Split ``hashes`` into ``num_partitions()`` partitions by top bits.
 
         Each returned ``Partition`` carries the per-partition hash array
@@ -236,14 +230,14 @@ struct RadixPartitioner(Partitioner):
         for pid in range(p):
             var sz = counts[pid]
             var off = partition_offsets[pid]
-            var row_arr = PrimitiveArray[Int32Type](
+            var row_arr = Int32Array(
                 length=sz,
                 nulls=0,
                 offset=off,
                 bitmap=None,
                 buffer=row_imm.copy(),
             )
-            var hash_arr = PrimitiveArray[UInt64Type](
+            var hash_arr = UInt64Array(
                 length=sz,
                 nulls=0,
                 offset=off,
@@ -340,7 +334,7 @@ struct SwissHashTable[
     Parameters
     ----------
     ``hash_fn``
-        Hash function mapping ``StructArray`` → ``PrimitiveArray[UInt64Type]``.
+        Hash function mapping ``StructArray`` → ``UInt64Array``.
         Defaults to ``rapidhash``.
     """
 
@@ -589,9 +583,7 @@ struct SwissHashTable[
     # tables without re-hashing).
     # ------------------------------------------------------------------
 
-    def insert_hashes(
-        mut self, hashes: PrimitiveArray[UInt64Type]
-    ) raises -> PrimitiveArray[Int32Type]:
+    def insert_hashes(mut self, hashes: UInt64Array) raises -> Int32Array:
         """Batch insert hashes, returning a bucket ID per input hash.
 
         For each hash:
@@ -605,13 +597,13 @@ struct SwissHashTable[
         memory latency on the critical lookup path.
 
         Returns:
-            ``PrimitiveArray[Int32Type]`` of length ``len(hashes)`` where
+            ``Int32Array`` of length ``len(hashes)`` where
             element ``i`` is the bucket ID for ``hashes[i]``.
         """
         var n = len(hashes)
         self.reserve(n)
 
-        var bid_builder = PrimitiveBuilder[Int32Type](capacity=n, zeroed=False)
+        var bid_builder = Int32Builder(capacity=n, zeroed=False)
 
         # Warm up the prefetch pipeline.
         for i in range(min(_PIPE_DEPTH, n)):
@@ -645,7 +637,7 @@ struct SwissHashTable[
 
         return bid_builder.finish()
 
-    def build_hashes(mut self, hashes: PrimitiveArray[UInt64Type]) raises:
+    def build_hashes(mut self, hashes: UInt64Array) raises:
         """Insert hashes and build a CSR row index.
 
         Calls ``insert()`` to populate the hash table, then constructs
@@ -685,10 +677,10 @@ struct SwissHashTable[
 
     def probe_hashes(
         self,
-        hashes: PrimitiveArray[UInt64Type],
+        hashes: UInt64Array,
         num_build_rows: Int,
         single_match: Bool = False,
-    ) raises -> Tuple[PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]]:
+    ) raises -> Tuple[Int32Array, Int32Array]:
         """Look up probe-side hashes and return matching row index pairs.
 
         For each probe hash, finds the corresponding bucket via
@@ -717,8 +709,8 @@ struct SwissHashTable[
         """
         var n = len(hashes)
         var est = min(n, num_build_rows)
-        var left_out = PrimitiveBuilder[Int32Type](capacity=est, zeroed=False)
-        var right_out = PrimitiveBuilder[Int32Type](capacity=est, zeroed=False)
+        var left_out = Int32Builder(capacity=est, zeroed=False)
+        var right_out = Int32Builder(capacity=est, zeroed=False)
 
         if n == 0:
             return (
@@ -763,7 +755,7 @@ struct SwissHashTable[
         mut self,
         keys: StructArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[Int32Type]:
+    ) raises -> Int32Array:
         """Hash keys and insert, returning a bucket ID per row.
 
         Used by groupby to assign group IDs.  Does not store keys or
@@ -794,8 +786,8 @@ struct SwissHashTable[
         num_build_rows: Int,
         single_match: Bool = False,
         ctx: ExecutionContext = ExecutionContext.serial(),
-        hashes: Optional[PrimitiveArray[UInt64Type]] = None,
-    ) raises -> Tuple[PrimitiveArray[Int32Type], PrimitiveArray[Int32Type]]:
+        hashes: Optional[UInt64Array] = None,
+    ) raises -> Tuple[Int32Array, Int32Array]:
         """Hash probe keys, look up matches, verify key equality.
 
         1. Hash ``probe_keys`` via ``hasher`` (driven by ``ctx``), unless

@@ -38,8 +38,8 @@ def _make_struct(n: Int, key_stride: Int = 1) raises -> StructArray:
     keys are unique; with larger strides the join produces a Cartesian
     fan-out useful for probing multi-match cost.
     """
-    var kb = PrimitiveBuilder[Int64Type](capacity=n)
-    var vb = PrimitiveBuilder[Int64Type](capacity=n)
+    var kb = Int64Builder(capacity=n)
+    var vb = Int64Builder(capacity=n)
     for i in range(n):
         kb.append(Scalar[int64.native](i * key_stride))
         vb.append(Scalar[int64.native](i * 10))

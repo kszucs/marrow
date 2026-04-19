@@ -14,14 +14,14 @@ from marrow.testing import BenchSuite, Benchmark
 
 
 def _make_keys(n: Int, num_groups: Int) raises -> AnyArray:
-    var b = PrimitiveBuilder[Int32Type](n)
+    var b = Int32Builder(n)
     for i in range(n):
         b.append(Scalar[int32.native](i % num_groups))
     return AnyArray(b.finish())
 
 
 def _make_vals(n: Int) raises -> List[AnyArray]:
-    var b = PrimitiveBuilder[Float64Type](n)
+    var b = Float64Builder(n)
     for i in range(n):
         b.append(Scalar[float64.native](Float64(i)))
     var vals = List[AnyArray]()

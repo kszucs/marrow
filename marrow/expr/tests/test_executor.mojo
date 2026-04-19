@@ -44,7 +44,7 @@ def test_large_add() raises:
     var b = arange[Int64Type](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var tmp_large_add = Planner().build(col(0) + col(1)).eval(batch)
-    ref result = tmp_large_add.as_primitive[Int64Type]()
+    ref result = tmp_large_add.as_int64()
     for i in range(n):
         assert_equal(result[i], Scalar[int64.native](i * 2))
 
@@ -56,7 +56,7 @@ def test_large_mul() raises:
     var b = arange[Int64Type](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var tmp_large_mul = Planner().build(col(0) * col(1)).eval(batch)
-    ref result = tmp_large_mul.as_primitive[Int64Type]()
+    ref result = tmp_large_mul.as_int64()
     for i in range(n):
         assert_equal(result[i], Scalar[int64.native]((i + 1) * i))
 
@@ -68,7 +68,7 @@ def test_chunk_boundary_values() raises:
     var tmp_chunk_boundary = (
         Planner().build(col(0) + lit[Int64Type](1)).eval(batch)
     )
-    ref result = tmp_chunk_boundary.as_primitive[Int64Type]()
+    ref result = tmp_chunk_boundary.as_int64()
     for i in range(128):
         assert_equal(result[i], Scalar[int64.native](i + 1))
 
@@ -78,7 +78,7 @@ def test_non_aligned_length() raises:
     var a = arange[Int64Type](0, 100)
     var batch = record_batch([a^], names=["c0"])
     var tmp_non_aligned = Planner().build(-col(0)).eval(batch)
-    ref result = tmp_non_aligned.as_primitive[Int64Type]()
+    ref result = tmp_non_aligned.as_int64()
     for i in range(100):
         assert_equal(result[i], Scalar[int64.native](-i))
 
@@ -114,7 +114,7 @@ def test_chained_expression() raises:
     var tmp_chained = (
         Planner().build((col(0) + col(1)) * (col(0) - col(1))).eval(batch)
     )
-    ref result = tmp_chained.as_primitive[Int64Type]()
+    ref result = tmp_chained.as_int64()
     for i in range(256):
         var expected = (i + (i + 1)) * (i - (i + 1))
         assert_equal(result[i], Scalar[int64.native](expected))
@@ -164,7 +164,7 @@ def test_select_single_column() raises:
     assert_equal(result.num_columns(), 1)
     assert_equal(result.num_rows(), 5)
     assert_equal(result.schema.fields[0].name, "x")
-    ref col_x = result.columns[0].as_primitive[Int64Type]()
+    ref col_x = result.columns[0].as_int64()
     assert_equal(col_x[0], 1)
     assert_equal(col_x[4], 5)
 
@@ -181,9 +181,9 @@ def test_select_multiple_columns() raises:
     assert_equal(result.num_columns(), 2)
     assert_equal(result.schema.fields[0].name, "y")
     assert_equal(result.schema.fields[1].name, "x")
-    ref col_y = result.columns[0].as_primitive[Int64Type]()
+    ref col_y = result.columns[0].as_int64()
     assert_equal(col_y[0], 10)
-    ref col_x = result.columns[1].as_primitive[Int64Type]()
+    ref col_x = result.columns[1].as_int64()
     assert_equal(col_x[0], 1)
 
 
@@ -194,7 +194,7 @@ def test_select_preserves_values() raises:
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).select("x")
     )
-    ref col_x = result.columns[0].as_primitive[Int64Type]()
+    ref col_x = result.columns[0].as_int64()
     for i in range(5):
         assert_equal(col_x[i], Scalar[int64.native](i + 1))
 
@@ -214,7 +214,7 @@ def test_filter_greater_than() raises:
         )
     )
     assert_equal(result.num_rows(), 2)
-    ref col_x = result.columns[0].as_primitive[Int64Type]()
+    ref col_x = result.columns[0].as_int64()
     assert_equal(col_x[0], 4)
     assert_equal(col_x[1], 5)
 
@@ -229,9 +229,9 @@ def test_filter_equality() raises:
         )
     )
     assert_equal(result.num_rows(), 1)
-    ref col_x = result.columns[0].as_primitive[Int64Type]()
+    ref col_x = result.columns[0].as_int64()
     assert_equal(col_x[0], 3)
-    ref col_y = result.columns[1].as_primitive[Int64Type]()
+    ref col_y = result.columns[1].as_int64()
     assert_equal(col_y[0], 30)
 
 
@@ -263,7 +263,7 @@ def test_select_then_filter() raises:
     )
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 2)
-    ref col_x = result.columns[0].as_primitive[Int64Type]()
+    ref col_x = result.columns[0].as_int64()
     assert_equal(col_x[0], 3)
     assert_equal(col_x[1], 4)
     assert_equal(col_x[2], 5)
@@ -281,7 +281,7 @@ def test_filter_then_select() raises:
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
-    ref col_y = result.columns[0].as_primitive[Int64Type]()
+    ref col_y = result.columns[0].as_int64()
     assert_equal(col_y[0], 40)
     assert_equal(col_y[1], 50)
 
@@ -339,7 +339,7 @@ def test_streaming_filter_skips_empty() raises:
     var batches = proc.to_batches()
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 1)
-    ref col_x = batches[0].columns[0].as_primitive[Int64Type]()
+    ref col_x = batches[0].columns[0].as_int64()
     assert_equal(col_x[0], 5)
 
 
@@ -358,7 +358,7 @@ def test_streaming_chained_filter_project() raises:
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
-    ref col_y = result.columns[0].as_primitive[Int64Type]()
+    ref col_y = result.columns[0].as_int64()
     assert_equal(col_y[0], 30)
     assert_equal(col_y[1], 40)
     assert_equal(col_y[2], 50)

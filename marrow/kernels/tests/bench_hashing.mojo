@@ -14,15 +14,15 @@ from marrow.kernels.hashing import rapidhash
 from marrow.testing import BenchSuite, Benchmark
 
 
-def _make_int64(n: Int) raises -> PrimitiveArray[Int64Type]:
-    var b = PrimitiveBuilder[Int64Type](capacity=n)
+def _make_int64(n: Int) raises -> Int64Array:
+    var b = Int64Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[int64.native](i))
     return b.finish()
 
 
-def _make_int32(n: Int) raises -> PrimitiveArray[Int32Type]:
-    var b = PrimitiveBuilder[Int32Type](capacity=n)
+def _make_int32(n: Int) raises -> Int32Array:
+    var b = Int32Builder(capacity=n)
     for i in range(n):
         b.append(Scalar[int32.native](i))
     return b.finish()

@@ -99,11 +99,11 @@ def test_greater_equal() raises:
 
 def test_less_float64() raises:
     """``less`` works for float64."""
-    var ab = PrimitiveBuilder[Float64Type](3)
+    var ab = Float64Builder(3)
     ab.unsafe_append(1.0)
     ab.unsafe_append(2.5)
     ab.unsafe_append(3.0)
-    var bb = PrimitiveBuilder[Float64Type](3)
+    var bb = Float64Builder(3)
     bb.unsafe_append(1.0)
     bb.unsafe_append(2.0)
     bb.unsafe_append(5.0)
@@ -192,7 +192,7 @@ def test_equal_array_overload() raises:
 def test_dtype_mismatch_raises() raises:
     """Type-erased kernels raise on dtype mismatch."""
     var a = AnyArray(array[Int64Type]([1, 2, 3]))
-    var fb = PrimitiveBuilder[Float64Type](3)
+    var fb = Float64Builder(3)
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
@@ -209,8 +209,8 @@ def test_equal_large_array() raises:
     """Regression: equal must write all bitmap bytes, not just the first
     of each SIMD batch (previously only byte 0 of every 16 was written)."""
     var n = 200
-    var ab = PrimitiveBuilder[Int64Type](n)
-    var bb = PrimitiveBuilder[Int64Type](n)
+    var ab = Int64Builder(n)
+    var bb = Int64Builder(n)
     for i in range(n):
         ab.unsafe_append(Scalar[int64.native](i))
         bb.unsafe_append(Scalar[int64.native](i))

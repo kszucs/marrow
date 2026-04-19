@@ -5,7 +5,7 @@ partitioning. Follows the DuckDB/DataFusion approach of hashing each
 column independently and combining hashes across columns.
 
 Public API:
-  - ``rapidhash``: hash any array → PrimitiveArray[UInt64Type]
+  - ``rapidhash``: hash any array → UInt64Array
     - BoolArray: vectorized via precomputed hash + SIMD select
     - PrimitiveArray[T]: vectorized rapidhash (SIMD via elementwise)
     - StringArray: per-element AHash (variable-length fallback)
@@ -236,7 +236,7 @@ def _rapidhash_primitive_masked[
 def rapidhash(
     keys: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[UInt64Type]:
+) raises -> UInt64Array:
     """Vectorized rapidhash for bool arrays.
 
     Precomputes hash(false) and hash(true), loads data bits via the
@@ -265,7 +265,7 @@ def rapidhash(
     else:
         apply[uint64.native, _rapidhash_bool](keys.values(), dst, ctx)
 
-    return PrimitiveArray[UInt64Type](
+    return UInt64Array(
         length=n,
         nulls=0,
         offset=0,
@@ -280,7 +280,7 @@ def rapidhash[
 ](
     keys: PrimitiveArray[T],
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[UInt64Type]:
+) raises -> UInt64Array:
     """Vectorized rapidhash for primitive arrays.
 
     Each SIMD lane independently computes the rapidhash of one element.
@@ -313,7 +313,7 @@ def rapidhash[
             ctx,
         )
 
-    return PrimitiveArray[UInt64Type](
+    return UInt64Array(
         length=n,
         nulls=0,
         offset=0,
@@ -325,7 +325,7 @@ def rapidhash[
 def rapidhash(
     keys: StringArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[UInt64Type]:
+) raises -> UInt64Array:
     """Hash each element of a string array.
 
     Uses AHash for variable-length strings (rapidhash for strings requires
@@ -335,7 +335,7 @@ def rapidhash(
     """
     _ = ctx  # TODO: SIMD + parallel string hashing
     var n = len(keys)
-    var builder = PrimitiveBuilder[UInt64Type](capacity=n)
+    var builder = UInt64Builder(capacity=n)
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
@@ -362,7 +362,7 @@ def _combine_hashes[
 def rapidhash(
     keys: StructArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[UInt64Type]:
+) raises -> UInt64Array:
     """Hash a struct array by combining per-field hashes column-wise.
 
     Each field is hashed independently via ``rapidhash(AnyArray)`` and
@@ -391,7 +391,7 @@ def rapidhash(
             buf.view[uint64.native](0, n),
             ctx,
         )
-        result = PrimitiveArray[UInt64Type](
+        result = UInt64Array(
             length=n,
             nulls=0,
             offset=0,
@@ -405,7 +405,7 @@ def rapidhash(
 def rapidhash(
     keys: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[UInt64Type]:
+) raises -> UInt64Array:
     """Runtime-typed rapidhash dispatch."""
     if keys.dtype() == bool_:
         return rapidhash(keys.as_bool(), ctx)
@@ -446,7 +446,7 @@ def rapidhash(
 
 def hash_identity[
     T: PrimitiveType
-](keys: PrimitiveArray[T]) raises -> PrimitiveArray[UInt64Type]:
+](keys: PrimitiveArray[T]) raises -> UInt64Array:
     """Identity hash: returns values cast to uint64 with no hash overhead.
 
     For int8, values are offset by +128 to produce non-negative indices.
@@ -457,7 +457,7 @@ def hash_identity[
     comptime _OFFSET = 128 if T.native == DType.int8 else 0
 
     var n = len(keys)
-    var builder = PrimitiveBuilder[UInt64Type](capacity=n)
+    var builder = UInt64Builder(capacity=n)
     var has_bitmap = Bool(keys.bitmap)
 
     for i in range(n):
@@ -469,10 +469,10 @@ def hash_identity[
     return builder.finish()
 
 
-def hash_identity(keys: BoolArray) raises -> PrimitiveArray[UInt64Type]:
+def hash_identity(keys: BoolArray) raises -> UInt64Array:
     """Identity hash for bool arrays (values 0 and 1)."""
     var n = len(keys)
-    var builder = PrimitiveBuilder[UInt64Type](capacity=n)
+    var builder = UInt64Builder(capacity=n)
     var has_bitmap = Bool(keys.bitmap)
     for i in range(n):
         if has_bitmap and not keys.bitmap.value().test(keys.offset + i):
@@ -482,7 +482,7 @@ def hash_identity(keys: BoolArray) raises -> PrimitiveArray[UInt64Type]:
     return builder.finish()
 
 
-def hash_identity(keys: AnyArray) raises -> PrimitiveArray[UInt64Type]:
+def hash_identity(keys: AnyArray) raises -> UInt64Array:
     """Runtime-typed identity hash dispatch."""
     if keys.dtype() == bool_:
         return hash_identity(keys.as_bool())
