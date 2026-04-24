@@ -8,12 +8,11 @@ from std.python.bindings import PythonModuleBuilder
 from std.collections import OwnedKwargsDict
 from std.python._cpython import (
     CPython,
-    ExternalFunction,
     PyObjectPtr,
     PyTypeObject,
     PyTypeObjectPtr,
 )
-from std.ffi import c_char, c_int, c_ssize_t, _CPointer
+from std.ffi import c_char, c_int, c_ssize_t, _CPointer, external_call
 from std.memory import ArcPointer, alloc
 from std.utils import Variant
 from std.builtin.variadics import Variadic
@@ -46,18 +45,6 @@ from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod, def_display
 
 
-# char *PyBytes_AsString(PyObject *o)
-comptime _PyBytesAsStringFn = ExternalFunction[
-    "PyBytes_AsString",
-    def(PyObjectPtr) thin -> _CPointer[c_char, ImmutAnyOrigin],
-]
-# Py_ssize_t PyBytes_Size(PyObject *o)
-comptime _PyBytesSizeFn = ExternalFunction[
-    "PyBytes_Size",
-    def(PyObjectPtr) thin -> c_ssize_t,
-]
-
-
 # ---------------------------------------------------------------------------
 # PyHelpers — cached CPython state for hot-path converters
 # ---------------------------------------------------------------------------
@@ -78,8 +65,6 @@ struct PyHelpers(Copyable, Movable):
     var _list_type: PyTypeObjectPtr
     var _tuple_type: PyTypeObjectPtr
     var _dict_type: PyTypeObjectPtr
-    var _bytes_as_string_fn: _PyBytesAsStringFn.type
-    var _bytes_size_fn: _PyBytesSizeFn.type
 
     def __init__(out self):
         self.py = Python()
@@ -98,9 +83,6 @@ struct PyHelpers(Copyable, Movable):
             "PyTuple_Type"
         ).value()
         self._dict_type = cpy.PyDict_Type()
-        self._bytes_as_string_fn = _PyBytesAsStringFn.load(cpy.lib.borrow())
-        self._bytes_size_fn = _PyBytesSizeFn.load(cpy.lib.borrow())
-
     def __init__(out self, var other: Self):
         # Python is not Movable/Copyable; re-create it. Cached pointers are process-wide constants.
         self = PyHelpers()
@@ -188,14 +170,16 @@ struct PyHelpers(Copyable, Movable):
     ) raises -> StringSlice[ImmutAnyOrigin]:
         """Return the raw bytes buffer of a Python bytes object as a StringSlice.
         """
-        var size = self._bytes_size_fn(ptr)
+        var size = external_call["PyBytes_Size", c_ssize_t](ptr)
         if size < 0:
             self.raise_on_error()
-        var data_ptr = self._bytes_as_string_fn(ptr)
+        var data_ptr = external_call[
+            "PyBytes_AsString", UnsafePointer[c_char, ImmutAnyOrigin]
+        ](ptr)
         if not data_ptr:
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
-            ptr=data_ptr.value().bitcast[UInt8](), length=Int(size)
+            ptr=data_ptr.bitcast[UInt8](), length=Int(size)
         )
 
     @always_inline
