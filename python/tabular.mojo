@@ -102,6 +102,17 @@ def _build_from_arrays(
     return RecordBatch(schema=Schema(fields=fields^), columns=columns^)
 
 
+def _build_from_arrays_with_schema(
+    data: PythonObject, schema_obj: PythonObject
+) raises -> RecordBatch:
+    """Build a RecordBatch from a list of arrays + explicit schema."""
+    var schema = Schema(py=schema_obj)
+    var columns = List[AnyArray]()
+    for arr_obj in data:
+        columns.append(AnyArray(py=arr_obj))
+    return RecordBatch(schema=schema^, columns=columns^)
+
+
 # ---------------------------------------------------------------------------
 # RecordBatch: methods that need custom Python ↔ Mojo dispatch
 # ---------------------------------------------------------------------------
@@ -227,12 +238,17 @@ def record_batch(
     if builtins.isinstance(data, builtins.dict):
         return _build_from_dict(data).to_python_object()
 
+    if opt := kwargs.find("schema"):
+        return _build_from_arrays_with_schema(
+            data, opt.value()
+        ).to_python_object()
+
     if opt := kwargs.find("names"):
         return _build_from_arrays(data, opt.value()).to_python_object()
 
     raise Error(
-        "record_batch: expected a dict, or a list of arrays with names= kwarg,"
-        " or an object with __arrow_c_record_batch__"
+        "record_batch: expected a dict, or a list of arrays with names= or"
+        " schema= kwarg, or an object with __arrow_c_record_batch__"
     )
 
 

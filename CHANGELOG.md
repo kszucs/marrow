@@ -1,6 +1,47 @@
 # Changelog
 
-## [Unreleased] — 2026-04-19
+## [Unreleased] — 2026-04-21
+
+### Fixes
+
+- **Arrow IPC flatbuffer soffset sign convention** (`marrow/ipc/flatbuf.mojo`):
+  Mojo-generated flatbuffers were rejected by PyArrow and arrow-rs because
+  the soffset (table→vtable pointer) was stored as a *negative* integer
+  (Rust convention) while the Arrow C++/PyArrow reader expects a *positive*
+  integer (`vtable = table - soffset`, Google FlatBuffers convention). Fixed
+  the writer to store positive soffset and the reader to subtract it.
+  Upgraded all IPC messages to `MetadataVersion::V5` (value 4), which is
+  what modern PyArrow generates and accepts. All 6 IPC round-trip tests now
+  pass, including `test_pyarrow_can_read` and `test_write_read_stream`.
+
+### Refactors
+
+- **IPC: encapsulate reader/writer state in structs** (`marrow/ipc/`): Scattered
+  helpers in `reader.mojo`, `writer.mojo`, `format.mojo`, and `flatbuf.mojo`
+  are regrouped around proper objects:
+  - New public structs `RecordBatchFileReader`, `RecordBatchStreamReader`,
+    `RecordBatchFileWriter`, `RecordBatchStreamWriter` (PyArrow-named),
+    re-exported from `marrow.ipc`. Writers support streaming `write_batch`
+    followed by `close()`; file readers expose `num_record_batches()` and
+    `read_batch(i)`.
+  - New internal `ArrayReader` / `ArrayBodyBuilder` structs own the
+    node/buffer cursor state previously threaded through recursive helpers
+    as `mut` parameters.
+  - New `MessageReader` struct in `format.mojo` replaces the ad-hoc
+    `_read_message` and the three copies of little-endian byte-reading
+    logic that had accumulated across files.
+  - `FlatBufferBuilder` gains `write_table(...)` as a method (replacing the
+    free `write_arrow_table` function); `FlatBuffersReader` gains
+    `read_struct_i32` / `read_struct_i64` static methods that subsume
+    `_read_i32_from` / `_read_i64_from`.
+  - Framing helpers (`assemble_body`, `frame_message`, `magic_bytes`) in
+    `format.mojo` are no longer private cross-module.
+  - Public free functions (`read_ipc_file`, `write_ipc_file`, stream and
+    schema variants) become thin wrappers over the new structs.
+- **Flatbuffer implementation rewrite** (`marrow/ipc/flatbuf.mojo`): Replaced
+  the generic vtable/alignment machinery (which had an alignment bug causing
+  external verifier failures) with a Rust-faithful port. Removed
+  `vendor_flatbuffers.mojo`, `vendor_arrow.mojo`, and `FLATBUF_NOTES.md`.
 
 ### Features
 

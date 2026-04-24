@@ -1,0 +1,60 @@
+name: Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  c-data-integration:
+    name: C Data Interface Integration
+    runs-on: ubuntu-latest
+    env:
+      MODULAR_HOME: "/home/runner/.modular"
+      FORCE_COLOR: "1"
+      PYTEST_ADDOPTS: "--color=yes"
+
+    steps:
+      - name: Checkout marrow
+        uses: actions/checkout@v4
+
+      - name: Checkout apache/arrow (archery + golden test data)
+        uses: actions/checkout@v4
+        with:
+          repository: apache/arrow
+          path: arrow
+          # Sparse checkout: only the archery integration package and the
+          # pre-generated golden .arrow_file files for cpp-21.0.0.
+          sparse-checkout: |
+            testing/data/arrow-ipc-stream/integration/cpp-21.0.0
+            dev/archery
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Set up pixi
+        uses: prefix-dev/setup-pixi@v0.9.4
+        with:
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+          frozen: true
+          environments: dev
+
+      - uses: actions/cache@v4
+        with:
+          path: .pixi/envs/dev/**/.mojo_cache
+          key: mojo-cache-dev-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+          restore-keys: mojo-cache-dev-${{ runner.os }}-
+
+      - name: Install archery
+        run: |
+          # archery is not on PyPI; install from the checked-out arrow source.
+          # The [integration] extra pulls in cffi and other test deps.
+          .pixi/envs/dev/bin/python -m ensurepip --upgrade
+          .pixi/envs/dev/bin/python -m pip install -e "arrow/dev/archery[integration]" --quiet
+
+      - name: Run integration tests
+        env:
+          # Point the golden-file tests at the sparse-checked-out arrow data.
+          ARROW_TESTING_DIR: ${{ github.workspace }}/arrow/testing/data
+        run: pixi run -e dev pytest python/tests/test_integration.py -v --python

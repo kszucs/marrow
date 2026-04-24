@@ -78,6 +78,14 @@ struct RecordBatch(
         """Returns the number of columns."""
         return len(self.columns)
 
+    @staticmethod
+    def empty(schema: Schema) raises -> RecordBatch:
+        """Create a 0-row RecordBatch for the given schema."""
+        var cols = List[AnyArray]()
+        for f in schema.fields:
+            cols.append(AnyArray.empty(f.dtype))
+        return RecordBatch(schema=schema, columns=cols^)
+
     def column(self, index: Int) -> ref[self.columns] AnyArray:
         """Returns the column at the given index."""
         return self.columns[index]

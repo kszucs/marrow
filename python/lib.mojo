@@ -9,6 +9,7 @@ from scalars import add_to_module as add_scalars
 from compute import add_to_module as add_compute
 from schema import add_to_module as add_schema
 from tabular import add_to_module as add_tabular
+from ipc import add_to_module as add_ipc
 
 
 @export
@@ -21,6 +22,7 @@ def PyInit_marrow() -> PythonObject:
         add_compute(m)
         add_schema(m)
         add_tabular(m)
+        add_ipc(m)
         return m.finalize()
     except e:
         abort(String("error creating Python Mojo module:", e))

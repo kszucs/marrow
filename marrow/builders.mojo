@@ -147,7 +147,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = Float32Builder(capacity)
         elif dtype == float64:
             self = Float64Builder(capacity)
-        elif dtype.is_string():
+        elif dtype.is_string() or dtype.is_binary():
             self = StringBuilder(capacity)
         elif dtype.is_list():
             var child = AnyBuilder(dtype.as_list_type().value_type())
