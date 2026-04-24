@@ -1,0 +1,35 @@
+{
+  "schema": {
+    "fields": [
+      {
+        "name": "lst",
+        "nullable": true,
+        "type": {"name": "list"},
+        "children": [
+          {"name": "item", "nullable": true, "type": {"name": "int", "isSigned": true, "bitWidth": 32}, "children": []}
+        ]
+      }
+    ]
+  },
+  "batches": [
+    {
+      "count": 4,
+      "columns": [
+        {
+          "name": "lst",
+          "count": 4,
+          "VALIDITY": [1, 0, 1, 1],
+          "OFFSET": [0, 3, 3, 3, 6],
+          "children": [
+            {
+              "name": "item",
+              "count": 6,
+              "VALIDITY": [1, 1, 1, 1, 1, 1],
+              "DATA": [1, 2, 3, 4, 5, 6]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

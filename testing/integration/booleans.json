@@ -1,0 +1,15 @@
+{
+  "schema": {
+    "fields": [
+      {"name": "bools", "nullable": true, "type": {"name": "bool"}, "children": []}
+    ]
+  },
+  "batches": [
+    {
+      "count": 6,
+      "columns": [
+        {"name": "bools", "count": 6, "VALIDITY": [1, 1, 0, 1, 1, 0], "DATA": [1, 0, 0, 0, 1, 0]}
+      ]
+    }
+  ]
+}

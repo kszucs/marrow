@@ -40,6 +40,7 @@ publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://pre
 pytest = ">=9.0.2,<10"
 pytest-benchmark = ">=5.2.3,<6"
 pytest-xdist = ">=3,<4"
+json = { git = "https://github.com/ehsanmok/json.git", tag = "v0.1.2" }
 
 [feature.dev.pypi-dependencies]
 # PyPI wheel is used instead of conda-forge: the conda-forge libarrow bundles

@@ -1,0 +1,49 @@
+{
+  "schema": {
+    "fields": [
+      {
+        "name": "rec",
+        "nullable": true,
+        "type": {"name": "struct"},
+        "children": [
+          {"name": "x", "nullable": true, "type": {"name": "int",          "isSigned": true, "bitWidth": 32}, "children": []},
+          {"name": "y", "nullable": true, "type": {"name": "floatingpoint", "precision": "DOUBLE"},            "children": []},
+          {"name": "s", "nullable": true, "type": {"name": "utf8"},                                            "children": []}
+        ]
+      }
+    ]
+  },
+  "batches": [
+    {
+      "count": 3,
+      "columns": [
+        {
+          "name": "rec",
+          "count": 3,
+          "VALIDITY": [1, 0, 1],
+          "children": [
+            {
+              "name": "x",
+              "count": 3,
+              "VALIDITY": [1, 0, 1],
+              "DATA": [10, 0, 30]
+            },
+            {
+              "name": "y",
+              "count": 3,
+              "VALIDITY": [1, 0, 1],
+              "DATA": [1.5, 0.0, 3.14]
+            },
+            {
+              "name": "s",
+              "count": 3,
+              "VALIDITY": [1, 0, 1],
+              "OFFSET": [0, 3, 3, 8],
+              "DATA": ["foo", "", "marrow"]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

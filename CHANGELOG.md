@@ -164,3 +164,10 @@
 - Minor executor dispatch fixes for type handling in binary and unary expression nodes.
 - Python binding test cleanup and interop edge-case fixes.
 - Code formatting.
+
+## [Unreleased] — 2026-04-18
+
+### Features
+
+- **Arrow integration JSON reader** (`marrow/integration.mojo`): `read_json_file(path)` parses Apache Arrow integration testing JSON files and returns an `IntegrationJson` holding a `Schema` and `List[RecordBatch]`. Supports bool, int8/16/32/64, uint8/16/32/64, float32/64, string, list, fixed-size list, and struct column types. Uses Python's `json` module via Mojo interop. Includes integration JSON fixtures under `testing/integration/` (primitives, booleans, strings, lists, structs) and 16 tests in `marrow/tests/test_json_integration.mojo`.
+

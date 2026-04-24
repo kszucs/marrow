@@ -1,0 +1,33 @@
+{
+  "schema": {
+    "fields": [
+      {"name": "i8",  "nullable": true, "type": {"name": "int", "isSigned": true,  "bitWidth":  8}, "children": []},
+      {"name": "i16", "nullable": true, "type": {"name": "int", "isSigned": true,  "bitWidth": 16}, "children": []},
+      {"name": "i32", "nullable": true, "type": {"name": "int", "isSigned": true,  "bitWidth": 32}, "children": []},
+      {"name": "i64", "nullable": true, "type": {"name": "int", "isSigned": true,  "bitWidth": 64}, "children": []},
+      {"name": "u8",  "nullable": true, "type": {"name": "int", "isSigned": false, "bitWidth":  8}, "children": []},
+      {"name": "u16", "nullable": true, "type": {"name": "int", "isSigned": false, "bitWidth": 16}, "children": []},
+      {"name": "u32", "nullable": true, "type": {"name": "int", "isSigned": false, "bitWidth": 32}, "children": []},
+      {"name": "u64", "nullable": true, "type": {"name": "int", "isSigned": false, "bitWidth": 64}, "children": []},
+      {"name": "f32", "nullable": true, "type": {"name": "floatingpoint", "precision": "SINGLE"}, "children": []},
+      {"name": "f64", "nullable": true, "type": {"name": "floatingpoint", "precision": "DOUBLE"}, "children": []}
+    ]
+  },
+  "batches": [
+    {
+      "count": 5,
+      "columns": [
+        {"name": "i8",  "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [-128, -1, 0, 1, 127]},
+        {"name": "i16", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [-32768, -1, 0, 1, 32767]},
+        {"name": "i32", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [-2147483648, -1, 0, 1, 2147483647]},
+        {"name": "i64", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": ["-100", "-1", "0", "1", "100"]},
+        {"name": "u8",  "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [0, 1, 0, 127, 255]},
+        {"name": "u16", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [0, 1, 0, 32767, 65535]},
+        {"name": "u32", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [0, 1, 0, 2147483647, 4294967295]},
+        {"name": "u64", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": ["0", "1", "0", "100", "1000"]},
+        {"name": "f32", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [-1.5, 0.0, 0.0, 1.5, 3.14]},
+        {"name": "f64", "count": 5, "VALIDITY": [1, 1, 0, 1, 1], "DATA": [-1.5, 0.0, 0.0, 1.5, 3.141592653589793]}
+      ]
+    }
+  ]
+}
