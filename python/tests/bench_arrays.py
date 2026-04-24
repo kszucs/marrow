@@ -26,9 +26,9 @@ DATA = {n: _make_data(n) for n in SIZES}
 
 struct_prim_type = ma.struct(
     [
-        ma.field("a", ma.int64()),
-        ma.field("b", ma.float64()),
-        ma.field("c", ma.int64()),
+        ma.field("a", type=ma.int64()),
+        ma.field("b", type=ma.float64()),
+        ma.field("c", type=ma.int64()),
     ]
 )
 struct_prim_pa_type = pa.struct(

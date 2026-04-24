@@ -2,9 +2,22 @@
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
+from std.collections import OwnedKwargsDict
 from std.memory import ArcPointer
 import marrow.dtypes as dt
 from helpers import marrow_module
+
+
+def _field_name(
+    ptr: UnsafePointer[dt.Field, MutAnyOrigin]
+) raises -> PythonObject:
+    return ptr[].name.to_python_object()
+
+
+def _field_type(
+    ptr: UnsafePointer[dt.Field, MutAnyOrigin]
+) raises -> PythonObject:
+    return ptr[].dtype.copy().to_python_object()
 
 
 def null() raises -> PythonObject:
@@ -82,17 +95,39 @@ def binary() raises -> PythonObject:
     return dt.AnyDataType(dt.BinaryType()).to_python_object()
 
 
-def field(name: PythonObject, dtype: PythonObject) raises -> PythonObject:
-    """Create a Field with the given name and data type."""
-    var d = dtype.downcast_value_ptr[dt.AnyDataType]()[].copy()
-    var f = dt.Field(String(py=name), d^)
-    return f^.to_python_object()
+def field(
+    name: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+) raises -> PythonObject:
+    """Create a Field with the given name, data type, and optional nullability.
+
+    Python API: field(name, *, type, nullable=True)
+    """
+    var d = (
+        kwargs.find("type")
+        .value()
+        .downcast_value_ptr[dt.AnyDataType]()[]
+        .copy()
+    )
+    var nullable = True
+    if opt := kwargs.find("nullable"):
+        nullable = Bool(Int(py=opt.value()))
+    return dt.Field(String(py=name), d^, nullable)^.to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
     """Create a list DataType from a value type."""
     var d = value_type.downcast_value_ptr[dt.AnyDataType]()[].copy()
     return dt.list_(d^).to_any().to_python_object()
+
+
+def fixed_size_list_(
+    value_type: PythonObject, list_size: PythonObject
+) raises -> PythonObject:
+    """Create a fixed-size list DataType from a value type and list size."""
+    var d = value_type.downcast_value_ptr[dt.AnyDataType]()[].copy()
+    return (
+        dt.fixed_size_list_(d^, Int(py=list_size)).to_any().to_python_object()
+    )
 
 
 def struct_(fields_obj: PythonObject) raises -> PythonObject:
@@ -106,7 +141,12 @@ def struct_(fields_obj: PythonObject) raises -> PythonObject:
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add DataType related data to the Python API."""
 
-    _ = mb.add_type[dt.Field]("Field").def_method[marrow_module]("__module__")
+    _ = (
+        mb.add_type[dt.Field]("Field")
+        .def_method[marrow_module]("__module__")
+        .def_method[_field_name]("name")
+        .def_method[_field_type]("type")
+    )
     _ = mb.add_type[dt.AnyDataType]("DataType").def_method[marrow_module](
         "__module__"
     )
@@ -171,8 +211,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[field](
         "field",
         docstring=(
-            "field(name: str, dtype: DataType, /) -> Field\n--\n\nCreate a"
-            " Field with the given name and data type."
+            "field(name: str, /, *, type: DataType, nullable: bool = True) ->"
+            " Field\n--\n\nCreate a Field with the given name, data type, and"
+            " nullability."
         ),
     )
     mb.def_function[list_](
@@ -180,6 +221,14 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         docstring=(
             "list_(value_type: DataType, /) -> DataType\n--\n\nCreate a list"
             " DataType from a value type."
+        ),
+    )
+    mb.def_function[fixed_size_list_](
+        "fixed_size_list_",
+        docstring=(
+            "fixed_size_list_(value_type: DataType, list_size: int, /) ->"
+            " DataType\n--\n\nCreate a fixed-size list DataType from a value"
+            " type and list size."
         ),
     )
     mb.def_function[struct_](

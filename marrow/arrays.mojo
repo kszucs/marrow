@@ -43,7 +43,7 @@ from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
-from .builders import PrimitiveBuilder, StringBuilder
+from .builders import AnyBuilder, PrimitiveBuilder, StringBuilder
 from .scalars import (
     AnyScalar,
     BoolScalar,
@@ -864,6 +864,38 @@ struct ListArray(
                     return False
         return True
 
+    @staticmethod
+    def from_arrays(
+        offsets: Int32Array,
+        var values: AnyArray,
+        var mask: Optional[BoolArray] = None,
+    ) -> Self:
+        """Construct a ListArray from offsets, values, and optional null mask.
+
+        Matches PyArrow's ListArray.from_arrays(offsets, values, mask=None, type=None) API.
+        mask uses PyArrow convention: True=null, False=valid. dtype is derived from values.
+        """
+        var n = offsets.length - 1
+        var null_count = 0
+        var bitmap: Optional[Bitmap[mut=False]] = None
+        if m := mask^:
+            var bm = Bitmap[mut=True].alloc_zeroed(n)
+            for i in range(n):
+                if m.value().values().test(i):
+                    null_count += 1
+                else:
+                    bm.set(i)
+            bitmap = bm^.to_immutable(length=n)
+        return Self(
+            dtype=list_(values.dtype()),
+            length=n,
+            nulls=null_count,
+            offset=0,
+            bitmap=bitmap^,
+            offsets=offsets.buffer,
+            values=values^,
+        )
+
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
 
@@ -1070,6 +1102,37 @@ struct FixedSizeListArray(
                     return False
         return True
 
+    @staticmethod
+    def from_arrays(
+        var values: AnyArray,
+        list_size: Int,
+        var mask: Optional[BoolArray] = None,
+    ) -> Self:
+        """Construct a FixedSizeListArray from a flat child array and fixed list size.
+
+        Matches PyArrow's FixedSizeListArray.from_arrays(values, type=None, mask=None) API.
+        mask uses PyArrow convention: True=null, False=valid. dtype is derived from values.
+        """
+        var n = values.length() // list_size if list_size > 0 else 0
+        var null_count = 0
+        var bitmap: Optional[Bitmap[mut=False]] = None
+        if m := mask^:
+            var bm = Bitmap[mut=True].alloc_zeroed(n)
+            for i in range(n):
+                if m.value().values().test(i):
+                    null_count += 1
+                else:
+                    bm.set(i)
+            bitmap = bm^.to_immutable(length=n)
+        return Self(
+            dtype=fixed_size_list_(values.dtype(), list_size),
+            length=n,
+            nulls=null_count,
+            offset=0,
+            bitmap=bitmap^,
+            values=values^,
+        )
+
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
 
@@ -1267,6 +1330,37 @@ struct StructArray(
             if self.children[i] != other.children[i]:
                 return False
         return True
+
+    @staticmethod
+    def from_arrays(
+        var children: List[AnyArray],
+        fields: List[Field],
+        var mask: Optional[BoolArray] = None,
+    ) -> Self:
+        """Construct a StructArray from child arrays and field descriptors.
+
+        Matches PyArrow's StructArray.from_arrays(arrays, names=None, fields=None, mask=None) API.
+        mask uses PyArrow convention: True=null, False=valid.
+        """
+        var n = children[0].length() if len(children) > 0 else 0
+        var null_count = 0
+        var bitmap: Optional[Bitmap[mut=False]] = None
+        if m := mask^:
+            var bm = Bitmap[mut=True].alloc_zeroed(n)
+            for i in range(n):
+                if m.value().values().test(i):
+                    null_count += 1
+                else:
+                    bm.set(i)
+            bitmap = bm^.to_immutable(length=n)
+        return Self(
+            dtype=struct_(fields.copy()),
+            length=n,
+            nulls=null_count,
+            offset=0,
+            bitmap=bitmap^,
+            children=children^,
+        )
 
     def to_any(deinit self) -> AnyArray:
         return AnyArray(self^)
@@ -1623,3 +1717,28 @@ struct AnyArray(
         elif dt.is_struct():
             return AnyArray(StructArray(data))
         raise Error("from_data: unsupported dtype")
+
+    @staticmethod
+    def empty(dtype: AnyDataType) raises -> AnyArray:
+        """Create a 0-length array for the given dtype."""
+        if dtype.is_binary():
+            # AnyBuilder doesn't support binary yet — construct ArrayData directly.
+            var offsets = Buffer[mut=True].alloc_zeroed[DType.uint8](4)
+            var bufs = List[Buffer[mut=False]]()
+            bufs.append(offsets.to_immutable())
+            bufs.append(
+                Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
+            )
+            return AnyArray.from_data(
+                ArrayData(
+                    dtype=dtype.copy(),
+                    length=0,
+                    nulls=0,
+                    offset=0,
+                    bitmap=None,
+                    buffers=bufs^,
+                    children=List[ArrayData](),
+                )
+            )
+        var b = AnyBuilder(dtype)
+        return b.finish()
