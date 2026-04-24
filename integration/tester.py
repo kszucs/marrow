@@ -47,7 +47,7 @@ def _json_type_to_ma(type_obj: dict, children_fields: list):
         return None if child_type is None else ma.fixed_size_list_(child_type, type_obj["listSize"])
     if name == "struct":
         ma_fields = [_json_field_to_ma(f) for f in children_fields]
-        return None if any(f is None for f in ma_fields) else ma.struct_(ma_fields)
+        return None if any(f is None for f in ma_fields) else ma.struct(ma_fields)
     return None
 
 

@@ -111,7 +111,7 @@ def field(
     var nullable = True
     if opt := kwargs.find("nullable"):
         nullable = Bool(Int(py=opt.value()))
-    return dt.Field(String(py=name), d^, nullable)^.to_python_object()
+    return dt.Field(String(py=name), d^, nullable).to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:

@@ -130,7 +130,7 @@ def _read_le[T: DType](buf: List[UInt8], pos: Int) raises -> Scalar[T]:
         raise Error("ipc: _read_le out of bounds at " + String(pos))
     var result = Scalar[T](0)
     comptime for i in range(size_of[T]()):
-        result |= Scalar[T](buf[pos + i]) << (i * 8)
+        result |= Scalar[T](buf[pos + i]) << Scalar[T](i * 8)
     return result
 
 
@@ -1067,32 +1067,37 @@ struct _BatchEncoder(Movable):
         self.nodes = List[_FieldNode]()
         self.raw_bufs = List[List[UInt8]]()
 
-    def write_array(mut self, data: ArrayData) raises:
-        self.nodes.append(_FieldNode(Int64(data.length), Int64(data.nulls)))
+    def write_array(mut self, root: ArrayData) raises:
+        var stack = List[ArrayData]()
+        stack.append(root.copy())
+        while len(stack) > 0:
+            var data = stack.pop()
 
-        var validity_bytes = List[UInt8]()
-        if data.nulls > 0 and data.bitmap:
-            var bv = data.bitmap.value()
-            var n_bits = data.offset + data.length
-            var n_bytes = ceildiv(n_bits, 8)
-            for byte_idx in range(n_bytes):
-                var byte_val = UInt8(0)
-                for bit_idx in range(8):
-                    var bit_pos = byte_idx * 8 + bit_idx
-                    if bit_pos < n_bits and bv.unsafe_test(bit_pos):
-                        byte_val |= UInt8(1 << bit_idx)
-                validity_bytes.append(byte_val)
-        self.raw_bufs.append(validity_bytes^)
+            self.nodes.append(_FieldNode(Int64(data.length), Int64(data.nulls)))
 
-        for buf in data.buffers:
-            var n = buf.length[DType.uint8]()
-            var bytes = List[UInt8](capacity=n)
-            for i in range(n):
-                bytes.append(buf.unsafe_get[DType.uint8](i))
-            self.raw_bufs.append(bytes^)
+            var validity_bytes = List[UInt8]()
+            if data.nulls > 0 and data.bitmap:
+                var bv = data.bitmap.value()
+                var n_bits = data.offset + data.length
+                var n_bytes = ceildiv(n_bits, 8)
+                for byte_idx in range(n_bytes):
+                    var byte_val = UInt8(0)
+                    for bit_idx in range(8):
+                        var bit_pos = byte_idx * 8 + bit_idx
+                        if bit_pos < n_bits and bv.unsafe_test(bit_pos):
+                            byte_val |= UInt8(1 << bit_idx)
+                    validity_bytes.append(byte_val)
+            self.raw_bufs.append(validity_bytes^)
 
-        for child in data.children:
-            self.write_array(child)
+            for buf in data.buffers:
+                var n = buf.length[DType.uint8]()
+                var bytes = List[UInt8](capacity=n)
+                for i in range(n):
+                    bytes.append(buf.unsafe_get[DType.uint8](i))
+                self.raw_bufs.append(bytes^)
+
+            for i in range(len(data.children) - 1, -1, -1):
+                stack.append(data.children[i].copy())
 
     def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
         for col in batch.columns:
