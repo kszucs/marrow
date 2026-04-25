@@ -92,3 +92,9 @@
 - Minor executor dispatch fixes for type handling in binary and unary expression nodes.
 - Python binding test cleanup and interop edge-case fixes.
 - Code formatting.
+
+## [Unreleased] — 2026-04-24
+
+### Fixes
+
+- **Mojo 1.0.0b1 compatibility** (`marrow/utils.mojo`, `marrow/arrays.mojo`): `_TypePredicateGenerator` was moved from a top-level alias in `std.builtin.variadics` to a member of `TypeList`; redeclared the underlying `!lit.generator` MLIR type locally. Updated `__list_literal__` parameter type from `()` to `NoneType` per the new collection-literal protocol.

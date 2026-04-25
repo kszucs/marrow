@@ -39,7 +39,6 @@ from std.gpu.host import DeviceContext
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.utils import Variant
-from std.builtin.variadics import Variadic
 from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
@@ -333,7 +332,7 @@ struct PrimitiveArray[T: PrimitiveType](
         )
 
     def __init__(
-        out self, var *values: Self.scalar, __list_literal__: ()
+        out self, var *values: Self.scalar, __list_literal__: NoneType
     ) raises:
         """Constructs a primitive array from a list literal [v1, v2, ...].
 
@@ -538,7 +537,9 @@ struct StringArray(
     var offsets: Buffer[mut=False]
     var values: Buffer[mut=False]
 
-    def __init__(out self, var *values: String, __list_literal__: ()) raises:
+    def __init__(
+        out self, var *values: String, __list_literal__: NoneType
+    ) raises:
         """Constructs a string array from a list literal ["a", "b", ...].
 
         Args:

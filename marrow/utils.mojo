@@ -17,11 +17,23 @@ compiler currently crashes when `ref[_]` is used here (tracked as a TODO).
 """
 
 from std.utils import Variant
-from std.builtin.variadics import _TypePredicateGenerator
 from std.builtin.rebind import trait_downcast
 from std.os import abort
 from std.sys import has_accelerator, CompilationTarget
 from std.sys.info import _accelerator_arch
+
+
+# `_TypePredicateGenerator` was moved from a top-level alias in
+# `std.builtin.variadics` to a member of `TypeList` in Mojo 1.0.0b1; redeclare
+# the underlying MLIR generator type here so our variant-dispatch helpers keep
+# accepting an arbitrary type predicate.
+comptime _TypePredicateGenerator[T: type_of(AnyType)] = __mlir_type[
+    `!lit.generator<<"Type": `,
+    T,
+    `>`,
+    Bool,
+    `>`,
+]
 
 
 def has_accelerator_support[*dtypes: DType]() -> Bool:
