@@ -193,16 +193,6 @@ ul.task-list li input[type="checkbox"] {
   </ul></li>
   <li><a href="#phase-2-sorting-kernel-marrowkernelssort.mojo" id="toc-phase-2-sorting-kernel-marrowkernelssort.mojo" class="nav-link" data-scroll-target="#phase-2-sorting-kernel-marrowkernelssort.mojo">Phase 2 — Sorting Kernel (<code>marrow/kernels/sort.mojo</code>)</a></li>
   <li><a href="#phase-3-sort-merge-join" id="toc-phase-3-sort-merge-join" class="nav-link" data-scroll-target="#phase-3-sort-merge-join">Phase 3 — Sort-Merge Join</a></li>
-  <li><a href="#phase-1b-partition-parallel-hash-join-shipped-2026-04-19" id="toc-phase-1b-partition-parallel-hash-join-shipped-2026-04-19" class="nav-link" data-scroll-target="#phase-1b-partition-parallel-hash-join-shipped-2026-04-19">Phase 1b — Partition-Parallel Hash Join (shipped 2026-04-19)</a>
-  <ul class="collapse">
-  <li><a href="#executioncontext-unified-cpu-gpu-dispatch" id="toc-executioncontext-unified-cpu-gpu-dispatch" class="nav-link" data-scroll-target="#executioncontext-unified-cpu-gpu-dispatch"><code>ExecutionContext</code> — unified CPU + GPU dispatch</a></li>
-  <li><a href="#kernel-level-thread-control" id="toc-kernel-level-thread-control" class="nav-link" data-scroll-target="#kernel-level-thread-control">Kernel-level thread control</a></li>
-  <li><a href="#radixpartitioner" id="toc-radixpartitioner" class="nav-link" data-scroll-target="#radixpartitioner"><code>RadixPartitioner</code></a></li>
-  <li><a href="#hashjoin-serial-parallel-split" id="toc-hashjoin-serial-parallel-split" class="nav-link" data-scroll-target="#hashjoin-serial-parallel-split"><code>HashJoin</code> serial / parallel split</a></li>
-  <li><a href="#public-insert_hashes-build_hashes-probe_hashes" id="toc-public-insert_hashes-build_hashes-probe_hashes" class="nav-link" data-scroll-target="#public-insert_hashes-build_hashes-probe_hashes">Public <code>insert_hashes</code> / <code>build_hashes</code> / <code>probe_hashes</code></a></li>
-  <li><a href="#performance" id="toc-performance" class="nav-link" data-scroll-target="#performance">Performance</a></li>
-  <li><a href="#known-limits-future-work" id="toc-known-limits-future-work" class="nav-link" data-scroll-target="#known-limits-future-work">Known limits / future work</a></li>
-  </ul></li>
   <li><a href="#future-work" id="toc-future-work" class="nav-link" data-scroll-target="#future-work">Future Work</a></li>
   <li><a href="#gpu-design" id="toc-gpu-design" class="nav-link" data-scroll-target="#gpu-design">GPU Design</a></li>
   <li><a href="#file-map" id="toc-file-map" class="nav-link" data-scroll-target="#file-map">File Map</a></li>
@@ -621,108 +611,6 @@ struct Sort(Relation):
 <p><code>SortMergeJoinProcessor</code> checks metadata sortedness → uses sort-merge if both inputs sorted, else falls back to hash join. This is the <code>JOIN_ALGO_AUTO</code> implementation.</p>
 <hr>
 </section>
-<section id="phase-1b-partition-parallel-hash-join-shipped-2026-04-19" class="level2">
-<h2 class="anchored" data-anchor-id="phase-1b-partition-parallel-hash-join-shipped-2026-04-19">Phase 1b — Partition-Parallel Hash Join (shipped 2026-04-19)</h2>
-<section id="executioncontext-unified-cpu-gpu-dispatch" class="level3">
-<h3 class="anchored" data-anchor-id="executioncontext-unified-cpu-gpu-dispatch"><code>ExecutionContext</code> — unified CPU + GPU dispatch</h3>
-<p>Kernels accept an <code>ExecutionContext</code> (<a href="../marrow/kernels/execution.mojo">marrow/kernels/execution.mojo</a>) bundling:</p>
-<ul>
-<li><code>num_threads: Int</code> — CPU stripe-parallel worker count (<code>0</code> = auto via <code>num_physical_cores()</code>, <code>1</code> = serial, <code>&gt;1</code> = explicit)</li>
-<li><code>device: Optional[DeviceContext]</code> — optional GPU device</li>
-</ul>
-<p>This replaces the old <code>Optional[DeviceContext]</code> parameter plus ad-hoc <code>num_threads</code> arguments scattered across kernels. <code>apply()</code> in <a href="../marrow/views.mojo">marrow/views.mojo</a> reads the context once and handles CPU stripe-parallelism uniformly via <code>sync_parallelize</code> — kernels above <code>apply</code> no longer reimplement the stripe loop themselves. The net effect on <code>rapidhash</code> alone: ~50 lines of duplicated histogram / scatter / slice boilerplate removed, replaced by forwarding a single <code>ctx</code> argument.</p>
-<p>Implicit conversion from <code>Optional[DeviceContext]</code> keeps pre-existing call sites working without source changes; explicit factories (<code>ExecutionContext.serial()</code>, <code>.parallel(num_threads)</code>, <code>.gpu(device)</code>) make the call-site intent obvious where it matters.</p>
-</section>
-<section id="kernel-level-thread-control" class="level3">
-<h3 class="anchored" data-anchor-id="kernel-level-thread-control">Kernel-level thread control</h3>
-<p><code>hash_join()</code>, <code>HashJoin</code>, <code>SwissHashTable.build/probe/insert</code>, and <code>rapidhash</code> all accept an <code>ExecutionContext</code>. <code>hash_join()</code> retains a convenience <code>num_threads: Int</code> parameter (default <code>0</code> → auto) that’s forwarded to the internal context; <code>1</code> forces the serial fast path, <code>&gt;= 2</code> opts into radix-partitioned parallel execution. The context threads through the entire call graph so nested calls inside parallel regions can force serial behavior and avoid over-subscription.</p>
-</section>
-<section id="radixpartitioner" class="level3">
-<h3 class="anchored" data-anchor-id="radixpartitioner"><code>RadixPartitioner</code></h3>
-<p>Implements the previously-stubbed <code>Partitioner</code> trait. Splits rows by the top <code>num_bits</code> of their hash (default <code>num_bits = 6</code> → 64 partitions, matching L2-fit). The <code>SwissHashTable</code> probes on the low bits (<code>h &amp; mask</code>), so top/bottom split keeps the partition router independent from the per-table probe order without double-hashing.</p>
-<p>Parallelization (enabled when <code>num_threads &gt; 1</code> and rows ≥ 65k):</p>
-<ol type="1">
-<li><strong>Per-thread histogram</strong> — each worker scans its <code>N/T</code> stripe and accumulates <code>histograms[t * p + pid]</code>.</li>
-<li><strong>Partition-major prefix sum</strong> — serial pass over <code>T × P</code> counters; writes per-<code>(thread, partition)</code> output offsets so each worker can scatter to disjoint regions without atomics.</li>
-<li><strong>Parallel scatter</strong> — each worker scans its stripe again and writes to its pre-computed <code>(partition, thread)</code> slot. No contention.</li>
-</ol>
-<p>Output: two shared flat buffers (<code>N</code> Int32 rows, <code>N</code> UInt64 hashes). Each <code>Partition</code> is a zero-copy <code>PrimitiveArray</code> slice sharing the immutable backing buffer via <code>ArcPointer</code>. One allocation per output.</p>
-</section>
-<section id="hashjoin-serial-parallel-split" class="level3">
-<h3 class="anchored" data-anchor-id="hashjoin-serial-parallel-split"><code>HashJoin</code> serial / parallel split</h3>
-<p><code>build()</code> / <code>probe()</code> are thin dispatchers:</p>
-<pre class="mojo"><code>def build(mut self, left, key_indices) raises:
-    if self._num_threads &lt;= 1 or left.length &lt; _PARALLEL_THRESHOLD:
-        self.build_serial(left, key_indices)
-    else:
-        self.build_parallel(left, key_indices)</code></pre>
-<p><code>_PARALLEL_THRESHOLD = 100_000</code> — below this the partitioning overhead eclipses the parallel gain. Above it, the parallel path runs:</p>
-<ol type="1">
-<li>Hash the full build side once (parallel SIMD).</li>
-<li><code>RadixPartitioner.partition()</code> — per-thread histograms + parallel scatter.</li>
-<li><code>sync_parallelize</code> across partitions; each worker owns one partition end-to-end:
-<ul>
-<li><code>take</code> on the build-side keys to gather its rows.</li>
-<li><code>SwissHashTable.build_hashes()</code> to build the per-partition table against pre-computed hashes (no re-hashing).</li>
-</ul></li>
-</ol>
-<p><code>probe_parallel</code> mirrors the same structure: partition the probe side, then per partition <code>take</code> + <code>probe_hashes</code> (raw candidate pairs) + <code>equal</code> / <code>filter_</code> for equality verification + remap partition-local indices → original row numbering. Per-partition <code>IndexPairs</code> merge into a single result via a direct Int32 buffer memcpy (skipping the generic <code>concat(AnyArray)</code> dispatch). Output assembly (<code>_assemble</code>) runs after <code>sync_parallelize</code> completes and passes an <code>ExecutionContext.parallel(num_threads)</code> to each per-column <code>take</code>; <code>take</code>’s no-null fast path stripes its SIMD gather loop across workers internally, so all 4 output columns materialize with thread-level parallelism with zero risk of nested parallel regions.</p>
-</section>
-<section id="public-insert_hashes-build_hashes-probe_hashes" class="level3">
-<h3 class="anchored" data-anchor-id="public-insert_hashes-build_hashes-probe_hashes">Public <code>insert_hashes</code> / <code>build_hashes</code> / <code>probe_hashes</code></h3>
-<p><code>SwissHashTable</code> exposes the hash-level primitives as first-class public methods. Callers that have already computed hashes (like the partition-parallel HashJoin) use them directly — no separate <code>*_with_hashes</code> variants. Keeps the SwissHashTable itself thread- agnostic: the concurrency pattern is “one table per partition, one worker per partition” rather than intra-table concurrency.</p>
-</section>
-<section id="performance" class="level3">
-<h3 class="anchored" data-anchor-id="performance">Performance</h3>
-<p>At 10M × 10M INNER join (Apple Silicon, <code>num_threads=0</code> → auto):</p>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th>Implementation</th>
-<th>Time</th>
-<th>vs.&nbsp;Polars</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>Marrow serial (pre-parallel)</td>
-<td>330 ms</td>
-<td>3.5× slower</td>
-</tr>
-<tr class="even">
-<td>Marrow parallel</td>
-<td><strong>67 ms</strong></td>
-<td><strong>1.4× faster</strong></td>
-</tr>
-<tr class="odd">
-<td>Polars</td>
-<td>97 ms</td>
-<td>1.0×</td>
-</tr>
-<tr class="even">
-<td>PyArrow</td>
-<td>111 ms</td>
-<td>1.1× slower</td>
-</tr>
-<tr class="odd">
-<td>DuckDB</td>
-<td>122 ms</td>
-<td>1.3× slower</td>
-</tr>
-</tbody>
-</table>
-<p>4.9× single-thread → parallel speedup; Marrow is now the fastest among measured libraries at 10M. The final lever was parallelizing per-column output <code>take()</code> via the same <code>ExecutionContext</code> plumbing — the old serial <code>_assemble()</code> was dominating after build and probe were already parallel.</p>
-</section>
-<section id="known-limits-future-work" class="level3">
-<h3 class="anchored" data-anchor-id="known-limits-future-work">Known limits / future work</h3>
-<ul>
-<li><strong>Skew handling</strong> — a pathologically-imbalanced key distribution will produce one oversized partition; secondary-hash split (subdivide the offending partition) is a follow-up.</li>
-<li><strong>Radix bits</strong> — currently fixed at 6. Adaptive selection based on build-side size is a follow-up.</li>
-<li><strong><code>PartitionedOp</code> abstraction</strong> — the divide/map/gather orchestration in <code>build_parallel</code> / <code>probe_parallel</code> is duplicated. A reusable <code>PartitionedOp[T]</code> trait + <code>partition_apply</code> driver would collapse both call sites and be reusable for future partition-parallel kernels (groupby, radix sort). Mojo’s current generics make this non-trivial; tracked as a follow-up refactor.</li>
-</ul>
-<hr>
-</section>
-</section>
 <section id="future-work" class="level2">
 <h2 class="anchored" data-anchor-id="future-work">Future Work</h2>
 <ul>
@@ -730,6 +618,7 @@ struct Sort(Relation):
 <li><strong>IEJoin / Piecewise Merge</strong>: Inequality conditions (<code>a.x &lt; b.y</code>). Sort order selection: <code>&lt;</code>/<code>&lt;=</code> → ascending, <code>&gt;</code>/<code>&gt;=</code> → descending. DuckDB/DataFusion patterns.</li>
 <li><strong>CROSS join</strong>: Trivial cartesian product, no hash table.</li>
 <li><strong>Grace Hash Join</strong>: Partition-based spill-to-disk for out-of-memory joins; needs disk I/O infrastructure.</li>
+<li><strong>Parallel Hash Join</strong>: Multi-threaded build phase (ClickHouse pattern).</li>
 <li><strong>MARK join</strong>: Boolean marker for <code>EXISTS</code>/<code>IN</code> subquery decorrelation.</li>
 <li><strong>SINGLE join</strong>: At-most-1 match for scalar subqueries.</li>
 <li><strong>Join reordering</strong>: Adaptive build-side selection (always build on shorter side, like Polars).</li>
