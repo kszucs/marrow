@@ -48,6 +48,8 @@ pytest-xdist = ">=3,<4"
 # same binary to be reported as failed.  The PyPI wheel ships a
 # self-contained libarrow built without the OpenTelemetry SDK.
 pyarrow = ">=23.0.1,<24"
+numpy = ">=2.4.4, <3"
+cffi = "*"
 
 [feature.dev.tasks]
 test_mojo = { cmd = "pytest --mojo -v" }
