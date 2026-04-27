@@ -8,11 +8,12 @@ from std.python.bindings import PythonModuleBuilder
 from std.collections import OwnedKwargsDict
 from std.python._cpython import (
     CPython,
+    ExternalFunction,
     PyObjectPtr,
     PyTypeObject,
     PyTypeObjectPtr,
 )
-from std.ffi import c_char, c_int, c_ssize_t, _CPointer, external_call
+from std.ffi import c_char, c_int, c_ssize_t, _CPointer
 from std.memory import ArcPointer, alloc
 from std.utils import Variant
 from std.builtin.variadics import Variadic
@@ -45,6 +46,17 @@ from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod, def_display
 
 
+# int PyBytes_AsStringAndSize(PyObject *obj, char **buffer, Py_ssize_t *length)
+comptime _PyBytesAsStringAndSizeFn = ExternalFunction[
+    "PyBytes_AsStringAndSize",
+    def(
+        PyObjectPtr,
+        UnsafePointer[_CPointer[c_char, ImmutAnyOrigin], MutAnyOrigin],
+        UnsafePointer[c_ssize_t, MutAnyOrigin],
+    ) thin -> c_int,
+]
+
+
 # ---------------------------------------------------------------------------
 # PyHelpers — cached CPython state for hot-path converters
 # ---------------------------------------------------------------------------
@@ -65,6 +77,7 @@ struct PyHelpers(Copyable, Movable):
     var _list_type: PyTypeObjectPtr
     var _tuple_type: PyTypeObjectPtr
     var _dict_type: PyTypeObjectPtr
+    var _bytes_as_string_and_size_fn: _PyBytesAsStringAndSizeFn.type
 
     def __init__(out self):
         self.py = Python()
@@ -83,6 +96,10 @@ struct PyHelpers(Copyable, Movable):
             "PyTuple_Type"
         ).value()
         self._dict_type = cpy.PyDict_Type()
+        self._bytes_as_string_and_size_fn = _PyBytesAsStringAndSizeFn.load(
+            cpy.lib.borrow()
+        )
+
     def __init__(out self, var other: Self):
         # Python is not Movable/Copyable; re-create it. Cached pointers are process-wide constants.
         self = PyHelpers()
@@ -170,16 +187,15 @@ struct PyHelpers(Copyable, Movable):
     ) raises -> StringSlice[ImmutAnyOrigin]:
         """Return the raw bytes buffer of a Python bytes object as a StringSlice.
         """
-        var size = external_call["PyBytes_Size", c_ssize_t](ptr)
-        if size < 0:
-            self.raise_on_error()
-        var data_ptr = external_call[
-            "PyBytes_AsString", UnsafePointer[c_char, ImmutAnyOrigin]
-        ](ptr)
-        if not data_ptr:
+        var data_ptr = _CPointer[c_char, ImmutAnyOrigin]()
+        var size = c_ssize_t(0)
+        var rc = self._bytes_as_string_and_size_fn(
+            ptr, UnsafePointer(to=data_ptr), UnsafePointer(to=size)
+        )
+        if rc != 0:
             self.raise_on_error()
         return StringSlice[ImmutAnyOrigin](
-            ptr=data_ptr.bitcast[UInt8](), length=Int(size)
+            ptr=data_ptr.value().bitcast[UInt8](), length=Int(size)
         )
 
     @always_inline
@@ -478,6 +494,7 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
         PyStringConverter,
         PyBinaryConverter,
         PyListConverter,
+        PyFixedSizeListConverter,
         PyStructConverter,
     ]
 
@@ -490,8 +507,12 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
     def __init__(out self, *, copy: Self):
         self._v = copy._v.copy()
 
-    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
-        var dtype = builder.dtype()
+    def __init__(
+        out self,
+        builder: AnyBuilder,
+        dtype: dt.AnyDataType,
+        has_nulls: Bool = True,
+    ) raises:
         if dtype == dt.bool_:
             self = Self(PyBoolConverter(builder, has_nulls))
         elif dtype == dt.int8:
@@ -528,6 +549,8 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
             self = Self(PyBinaryConverter(builder, has_nulls))
         elif dtype.is_list():
             self = Self(PyListConverter(builder, has_nulls))
+        elif dtype.is_fixed_size_list():
+            self = Self(PyFixedSizeListConverter(builder, has_nulls))
         elif dtype.is_struct():
             self = Self(PyStructConverter(builder))
         else:
@@ -762,7 +785,8 @@ struct PyListConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
         var child_builder = builder.as_list().values()
-        self._child = PyAnyConverter(child_builder, True)
+        var child_dtype = builder.as_list().dtype().as_list_type().value_type().copy()
+        self._child = PyAnyConverter(child_builder, child_dtype, True)
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
@@ -796,6 +820,58 @@ struct PyListConverter(PyConverter):
 
 
 # ---------------------------------------------------------------------------
+# PyFixedSizeListConverter — fixed-size list conversion
+# ---------------------------------------------------------------------------
+
+
+struct PyFixedSizeListConverter(PyConverter):
+    var _builder: AnyBuilder
+    var _child: PyAnyConverter
+    var _has_nulls: Bool
+    var _list_size: Int
+    var py: PyHelpers
+
+    def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
+        self._builder = builder
+        var fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list_type()
+        var child_builder = builder.as_fixed_size_list().values()
+        var child_dtype = fsl.value_type()
+        self._child = PyAnyConverter(child_builder, child_dtype, True)
+        self._has_nulls = has_nulls
+        self._list_size = fsl.size
+        self.py = PyHelpers()
+
+    def extend(mut self, values: PyObjectPtr) raises:
+        ref b = self._builder.as_fixed_size_list()
+        var n = self.py.length(values)
+        b.reserve(n)
+        if self._has_nulls:
+            for i in range(n):
+                var item = self.py.list_getitem(values, i)
+                if self.py.is_none(item):
+                    for _ in range(self._list_size):
+                        self._child.append(self.py.none_ptr)
+                    b.unsafe_append_null()
+                else:
+                    self._child.extend(item)
+                    b.unsafe_append_valid()
+        else:
+            for i in range(n):
+                self._child.extend(self.py.list_getitem(values, i))
+                b.unsafe_append_valid()
+
+    def append(mut self, value: PyObjectPtr) raises:
+        ref b = self._builder.as_fixed_size_list()
+        if self._has_nulls and self.py.is_none(value):
+            for _ in range(self._list_size):
+                self._child.append(self.py.none_ptr)
+            b.append_null()
+        else:
+            self._child.extend(value)
+            b.append_valid()
+
+
+# ---------------------------------------------------------------------------
 # PyStructConverter — struct/dict conversion
 # ---------------------------------------------------------------------------
 
@@ -815,7 +891,8 @@ struct PyStructConverter(PyConverter):
         var field_keys = List[PythonObject](capacity=n)
         for i in range(n):
             var child_builder = builder.as_struct().field_builder(i)
-            children.append(PyAnyConverter(child_builder))
+            var child_dtype = st.fields[i].dtype.copy()
+            children.append(PyAnyConverter(child_builder, child_dtype^))
             field_keys.append(PythonObject(st.fields[i].name))
         self._children = children^
         self._field_keys = field_keys^
@@ -919,7 +996,7 @@ def array(
         )
 
     var builder = AnyBuilder(dtype, len(obj))
-    var converter = PyAnyConverter(builder, has_nulls)
+    var converter = PyAnyConverter(builder, dtype, has_nulls)
     converter.extend(obj._obj_ptr)
     return builder.finish().to_python_object()
 

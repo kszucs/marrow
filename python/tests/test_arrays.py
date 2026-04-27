@@ -176,10 +176,15 @@ def test_array_mixed_types_error():
         ma.array([1, "foo"])
 
 
-def test_array_bytes_raises():
-    # binary array construction not yet supported
-    with pytest.raises(Exception):
-        ma.array([b"foo", b"bar"])
+def test_array_bytes():
+    arr = ma.array([b"foo", b"bar"], type=ma.binary())
+    assert type(arr).__name__ == "Array"
+    assert len(arr) == 2
+    assert arr.null_count() == 0
+
+    arr = ma.array([b"foo", None, b""], type=ma.binary())
+    assert len(arr) == 3
+    assert arr.null_count() == 1
 
 
 def test_array_nested_list_int():
