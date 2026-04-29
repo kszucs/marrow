@@ -96,13 +96,19 @@ def binary() raises -> PythonObject:
 
 
 def field(
-    name: PythonObject, type: PythonObject, nullable: PythonObject=True
+    name: PythonObject, type: PythonObject, nullable: PythonObject=True,
+    metadata: PythonObject = None
 ) raises -> PythonObject:
     """Create a Field with the given name, data type, and optional nullability.
 
     Python API: field(name, *, type, nullable=True)
     """
-    return dt.Field(name=String(py=name), dtype=dt.AnyDataType(py=type), nullable=Bool(py=nullable)).to_python_object()
+    var m = Dict[String, String]()
+    if metadata is not None:
+        for item in metadata.items():
+            m[String(py=item[0])] = String(py=item[1])
+
+    return dt.Field(name=String(py=name), dtype=dt.AnyDataType(py=type), nullable=Bool(py=nullable), metadata=m^).to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:

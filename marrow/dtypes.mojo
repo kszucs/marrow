@@ -319,18 +319,21 @@ struct Field(
     var name: String
     var dtype: AnyDataType
     var nullable: Bool
+    var metadata: Dict[String, String]
 
     def __init__(
-        out self, name: String, var dtype: AnyDataType, nullable: Bool = True
+        out self, name: String, var dtype: AnyDataType, nullable: Bool = True,var  metadata: Dict[String, String] = {}
     ):
         self.name = name
         self.dtype = dtype^
         self.nullable = nullable
+        self.metadata = metadata^
 
     def __init__(out self, *, copy: Self):
         self.name = copy.name
         self.dtype = copy.dtype.copy()
         self.nullable = copy.nullable
+        self.metadata = copy.metadata.copy()
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Field]()[].copy()
