@@ -38,7 +38,7 @@ def _py_write_ipc_file(
             batches.append(RecordBatch(py=batches_obj[i]))
     if opt_s := kwargs.find("schema"):
         var schema_rb = RecordBatch(py=opt_s.value())
-        write_ipc_file(path, schema_rb.schema.fields.copy(), batches)
+        write_ipc_file(path, schema_rb.schema, batches)
     elif len(batches) > 0:
         write_ipc_file(path, batches)
     else:
@@ -72,7 +72,7 @@ def _py_write_ipc_stream(
             batches.append(RecordBatch(py=batches_obj[i]))
     if opt_s := kwargs.find("schema"):
         var schema_rb = RecordBatch(py=opt_s.value())
-        write_ipc_stream(path, schema_rb.schema.fields.copy(), batches)
+        write_ipc_stream(path, schema_rb.schema, batches)
     elif len(batches) > 0:
         write_ipc_stream(path, batches)
     else:

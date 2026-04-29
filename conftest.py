@@ -514,12 +514,9 @@ def pytest_sessionstart(session):
         + MojoRunner.asan_flags(config)
         + ["python/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow.so"]
     )
-    result = subprocess.run(cmd, cwd=config.rootpath, capture_output=True, text=True)
+    result = subprocess.run(cmd, cwd=config.rootpath)
     if result.returncode != 0:
-        pytest.exit(
-            f"Failed to build python/marrow.so:\n{result.stderr}",
-            returncode=1,
-        )
+        pytest.exit("Failed to build python/marrow.so", returncode=1)
     print("python/marrow.so built successfully", flush=True)
 
 

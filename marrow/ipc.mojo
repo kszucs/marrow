@@ -31,7 +31,6 @@ from .buffers import Buffer, Bitmap
 from .dtypes import (
     AnyDataType,
     Field,
-    field as mk_field,
     list_ as mk_list,
     fixed_size_list_ as mk_fixed_size_list,
     struct_ as mk_struct,
@@ -506,15 +505,15 @@ struct _IpcEncoder(Movable):
         self._fb = _FlatbufWriter(capacity)
 
     @staticmethod
-    def encode_schema(fields: List[Field]) raises -> List[UInt8]:
+    def encode_schema(schema: Schema) raises -> List[UInt8]:
         var enc = _IpcEncoder(256)
-        var schema_pos = enc._write_schema_table(fields)
+        var schema_pos = enc._write_schema_table(schema)
         return enc._finish(schema_pos)
 
     @staticmethod
-    def encode_schema_message(fields: List[Field]) raises -> List[UInt8]:
+    def encode_schema_message(schema: Schema) raises -> List[UInt8]:
         var enc = _IpcEncoder(512)
-        var schema_pos = enc._write_schema_table(fields)
+        var schema_pos = enc._write_schema_table(schema)
         var msg_pos = enc._write_message_table(
             _HEADER_SCHEMA, schema_pos, Int64(0)
         )
@@ -544,11 +543,11 @@ struct _IpcEncoder(Movable):
 
     @staticmethod
     def encode_footer(
-        fields: List[Field],
+        schema: Schema,
         blocks: List[_Block],
     ) raises -> List[UInt8]:
         var enc = _IpcEncoder(512)
-        var schema_pos = enc._write_schema_table(fields)
+        var schema_pos = enc._write_schema_table(schema)
         var blocks_vec = enc._write_blocks_vec(blocks)
         var footer_pos = enc._write_footer_table(schema_pos, blocks_vec)
         return enc._finish(footer_pos)
@@ -726,6 +725,20 @@ struct _IpcEncoder(Movable):
         else:
             raise Error("_IpcEncoder: unsupported dtype for type table: " + String(dtype))
 
+    def _write_kv_vec(mut self, metadata: Dict[String, String]) raises -> UInt32:
+        var kv_positions = List[UInt32]()
+        for entry in metadata.items():
+            var key_pos = self._fb.create_string(entry.key)
+            var val_pos = self._fb.create_string(entry.value)
+            var ts = self._fb.offset()
+            var val_at = self._fb.prepend_uoffset(val_pos)
+            var key_at = self._fb.prepend_uoffset(key_pos)
+            var kv_flds = List[_FieldOffset]()
+            kv_flds.append(_FieldOffset(0, key_at))
+            kv_flds.append(_FieldOffset(1, val_at))
+            kv_positions.append(self._fb.write_table(kv_flds, ts))
+        return self._fb.create_vector_offsets(kv_positions)
+
     def _write_field(mut self, f: Field) raises -> UInt32:
         var child_positions = List[UInt32]()
         var dtype = f.dtype.copy()
@@ -752,11 +765,18 @@ struct _IpcEncoder(Movable):
         if len(child_positions) > 0:
             children_vec_pos = self._fb.create_vector_offsets(child_positions)
 
+        var meta_vec_pos: Optional[UInt32] = None
+        if len(f.metadata) > 0:
+            meta_vec_pos = self._write_kv_vec(f.metadata)
+
         # Slot 4 (dictionary) is intentionally absent.
         var ts = self._fb.offset()
         var ch_at = UInt32(0)
         if children_vec_pos:
             ch_at = self._fb.prepend_uoffset(children_vec_pos.value())
+        var meta_at = UInt32(0)
+        if meta_vec_pos:
+            meta_at = self._fb.prepend_uoffset(meta_vec_pos.value())
         var tp_at = self._fb.prepend_uoffset(type_pos)
         var tc_at = self._fb.prepend_u8(type_code)
         var nb_at = self._fb.prepend_bool(f.nullable)
@@ -769,19 +789,31 @@ struct _IpcEncoder(Movable):
         flds.append(_FieldOffset(3, tp_at))
         if children_vec_pos:
             flds.append(_FieldOffset(5, ch_at))
+        if meta_vec_pos:
+            flds.append(_FieldOffset(6, meta_at))
         return self._fb.write_table(flds, ts)
 
-    def _write_schema_table(mut self, fields: List[Field]) raises -> UInt32:
+    def _write_schema_table(mut self, schema: Schema) raises -> UInt32:
         var field_positions = List[UInt32]()
-        for f in fields:
+        for f in schema.fields:
             field_positions.append(self._write_field(f))
         var fields_vec = self._fb.create_vector_offsets(field_positions)
+
+        var meta_vec_pos: Optional[UInt32] = None
+        if len(schema.metadata) > 0:
+            meta_vec_pos = self._write_kv_vec(schema.metadata)
+
         var ts = self._fb.offset()
+        var meta_at = UInt32(0)
+        if meta_vec_pos:
+            meta_at = self._fb.prepend_uoffset(meta_vec_pos.value())
         var fv_at = self._fb.prepend_uoffset(fields_vec)
         var en_at = self._fb.prepend_i16(_ENDIANNESS_LITTLE)
         var flds = List[_FieldOffset]()
         flds.append(_FieldOffset(0, en_at))
         flds.append(_FieldOffset(1, fv_at))
+        if meta_vec_pos:
+            flds.append(_FieldOffset(2, meta_at))
         return self._fb.write_table(flds, ts)
 
     def _write_message_table(
@@ -819,10 +851,27 @@ struct _IpcDecoder(Movable):
     def peek_header(self) raises -> UInt8:
         return self._r.read_u8(self._r.root(), 1, 0)
 
+    def _read_kv_vec(self, table_pos: UInt32, slot: Int) raises -> Dict[String, String]:
+        var result = Dict[String, String]()
+        var meta_vec = self._r.read_vector(table_pos, slot)
+        var n = Int(self._r.vector_len(meta_vec))
+        for i in range(n):
+            var kv_pos = self._r.vec_offset(meta_vec, UInt32(i))
+            var key = self._r.read_string(kv_pos, 0)
+            var val = self._r.read_string(kv_pos, 1)
+            result[key] = val
+        return result^
+
     def decode_schema(self) raises -> Schema:
         var msg_pos = self._r.root()
         var schema_pos = self._r.read_table(msg_pos, 2)
-        return Schema(fields=self._decode_schema_fields(schema_pos))
+        var fields = self._decode_schema_fields(schema_pos)
+        var metadata = Dict[String, String]()
+        try:
+            metadata = self._read_kv_vec(schema_pos, 2)
+        except:
+            pass
+        return Schema(fields=fields^, metadata=metadata^)
 
     def decode_record_batch(
         self,
@@ -846,14 +895,15 @@ struct _IpcDecoder(Movable):
             columns.append(batch_dec.read_array(f.dtype))
         return RecordBatch(schema=schema, columns=columns^)
 
-    def read_footer(
-        self,
-        mut fields: List[Field],
-        mut blocks: List[_Block],
-    ) raises:
+    def read_footer(self, mut blocks: List[_Block]) raises -> Schema:
         var footer_pos = self._r.root()
         var schema_pos = self._r.read_table(footer_pos, 1)
-        fields = self._decode_schema_fields(schema_pos)
+        var fields = self._decode_schema_fields(schema_pos)
+        var metadata = Dict[String, String]()
+        try:
+            metadata = self._read_kv_vec(schema_pos, 2)
+        except:
+            pass
         var rb_vec = self._r.read_vector(footer_pos, 3)
         var n = Int(self._r.vector_len(rb_vec))
         for i in range(n):
@@ -865,6 +915,7 @@ struct _IpcDecoder(Movable):
                     _read_le[DType.int64](sb, 16),
                 )
             )
+        return Schema(fields=fields^, metadata=metadata^)
 
     def _decode_schema_fields(self, schema_pos: UInt32) raises -> List[Field]:
         var fields = List[Field]()
@@ -916,6 +967,12 @@ struct _IpcDecoder(Movable):
         except:
             pass  # absent children vector is normal for leaf types
 
+        var metadata = Dict[String, String]()
+        try:
+            metadata = self._read_kv_vec(fp, 6)
+        except:
+            pass
+
         var dtype: AnyDataType
         if type_type == _TYPE_BOOL:
             dtype = bool_
@@ -966,13 +1023,13 @@ struct _IpcDecoder(Movable):
             dtype = mk_fixed_size_list(children[0].dtype.copy(), list_size)
         elif type_type == _TYPE_STRUCT:
             dtype = mk_struct(children^)
-            return mk_field(name, dtype^, nullable)
+            return Field(name, dtype^, nullable, metadata^)
         else:
             raise Error(
                 "_IpcDecoder: unsupported type_type: " + String(Int(type_type))
             )
 
-        return mk_field(name, dtype^, nullable)
+        return Field(name, dtype^, nullable, metadata^)
 
 
 # ---------------------------------------------------------------------------
@@ -1216,7 +1273,7 @@ struct RecordBatchFileWriter(Movable):
 
     var _out: List[UInt8]
     var _path: String
-    var _fields: List[Field]
+    var _schema: Schema
     var _blocks: List[_Block]
     var _enc: _BatchEncoder
     var _closed: Bool
@@ -1224,7 +1281,7 @@ struct RecordBatchFileWriter(Movable):
     def __init__(out self, path: String, schema: Schema) raises:
         self._out = List[UInt8]()
         self._path = path
-        self._fields = schema.fields.copy()
+        self._schema = Schema(copy=schema)
         self._blocks = List[_Block]()
         self._enc = _BatchEncoder()
         self._closed = False
@@ -1232,7 +1289,7 @@ struct RecordBatchFileWriter(Movable):
         for b in _magic():
             self._out.append(b)
         var schema_msg = _IpcEncoder.frame_message(
-            _IpcEncoder.encode_schema_message(self._fields), List[UInt8]()
+            _IpcEncoder.encode_schema_message(self._schema), List[UInt8]()
         )
         self._out.extend(Span(schema_msg))
 
@@ -1248,7 +1305,7 @@ struct RecordBatchFileWriter(Movable):
         if self._closed:
             return
         _pad_to(self._out, 8)
-        var footer_bytes = _IpcEncoder.encode_footer(self._fields, self._blocks)
+        var footer_bytes = _IpcEncoder.encode_footer(self._schema, self._blocks)
         self._out.extend(Span(footer_bytes))
         _append_le[DType.int32](self._out, Int32(len(footer_bytes)))
         var magic = _magic()
@@ -1277,7 +1334,7 @@ struct RecordBatchStreamWriter(Movable):
         self._closed = False
 
         var schema_msg = _IpcEncoder.frame_message(
-            _IpcEncoder.encode_schema_message(schema.fields.copy()),
+            _IpcEncoder.encode_schema_message(schema),
             List[UInt8](),
         )
         self._out.extend(Span(schema_msg))
@@ -1328,11 +1385,8 @@ struct RecordBatchFileReader(Movable):
             footer_bytes.append(file_bytes[footer_start + i])
 
         var dec = _IpcDecoder(footer_bytes^)
-        var fields = List[Field]()
         var blocks = List[_Block]()
-        dec.read_footer(fields, blocks)
-
-        self.schema = Schema(fields=fields^)
+        self.schema = dec.read_footer(blocks)
         self._blocks = blocks^
         self._msg_reader = _MessageReader(file_bytes^)
 
@@ -1394,11 +1448,9 @@ struct RecordBatchStreamReader(Movable):
 # ---------------------------------------------------------------------------
 
 
-def write_ipc_file(
-    path: String, fields: List[Field], batches: List[RecordBatch]
-) raises:
-    """Write RecordBatches to an Arrow IPC file with an explicit field list."""
-    var w = RecordBatchFileWriter(path, Schema(fields=fields.copy()))
+def write_ipc_file(path: String, schema: Schema, batches: List[RecordBatch]) raises:
+    """Write RecordBatches to an Arrow IPC file with an explicit schema."""
+    var w = RecordBatchFileWriter(path, schema)
     for batch in batches:
         w.write_batch(batch)
     w.close()
@@ -1408,17 +1460,15 @@ def write_ipc_file(path: String, batches: List[RecordBatch]) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
         raise Error(
-            "write_ipc_file: no batches; use write_ipc_file(path, fields, batches)"
+            "write_ipc_file: no batches; use write_ipc_file(path, schema, batches)"
             " for schema-only files"
         )
-    write_ipc_file(path, batches[0].schema.fields.copy(), batches)
+    write_ipc_file(path, batches[0].schema, batches)
 
 
-def write_ipc_stream(
-    path: String, fields: List[Field], batches: List[RecordBatch]
-) raises:
-    """Write RecordBatches to an Arrow IPC stream with an explicit field list."""
-    var w = RecordBatchStreamWriter(path, Schema(fields=fields.copy()))
+def write_ipc_stream(path: String, schema: Schema, batches: List[RecordBatch]) raises:
+    """Write RecordBatches to an Arrow IPC stream with an explicit schema."""
+    var w = RecordBatchStreamWriter(path, schema)
     for batch in batches:
         w.write_batch(batch)
     w.close()
@@ -1428,10 +1478,10 @@ def write_ipc_stream(path: String, batches: List[RecordBatch]) raises:
     """Write RecordBatches to an Arrow IPC stream."""
     if len(batches) == 0:
         raise Error(
-            "write_ipc_stream: no batches; use write_ipc_stream(path, fields,"
+            "write_ipc_stream: no batches; use write_ipc_stream(path, schema,"
             " batches) for schema-only streams"
         )
-    write_ipc_stream(path, batches[0].schema.fields.copy(), batches)
+    write_ipc_stream(path, batches[0].schema, batches)
 
 
 def read_ipc_file(path: String) raises -> List[RecordBatch]:
