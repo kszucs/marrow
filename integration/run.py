@@ -6,17 +6,20 @@ Usage (from the repo root):
     # C Data + IPC, Marrow-only:
     PYTHONPATH=python pixi run -e dev python -m integration.run --run-c-data --run-ipc
 
+    # Cross-test against arrow-rs (build first with build_arrow_rust task):
+    pixi run -e integration run_integration -- --run-c-data --run-ipc --with-rust
+
     # With C++ Arrow for cross-implementation tests:
     ARROW_CPP_EXE_PATH=/path/to/arrow/build/debug \\
-    PYTHONPATH=python pixi run -e dev python -m integration.run \\
+    PYTHONPATH=python pixi run -e integration python -m integration.run \\
         --run-c-data --run-ipc --with-cpp
 
     # With golden files:
-    PYTHONPATH=python pixi run -e dev python -m integration.run --run-ipc \\
+    pixi run -e integration run_integration -- --run-ipc \\
         --gold-dirs /path/to/arrow/testing/data/arrow-ipc-stream/integration/cpp-21.0.0
 
 Prerequisites:
-    pip install -e /path/to/arrow/dev/archery[integration]
+    pixi install -e integration  (installs archery from apache/arrow)
 """
 
 import argparse
@@ -31,6 +34,10 @@ from integration.tester import MarrowTester
 # modifying the upstream archery source.
 _UNSUPPORTED = {
     'large_binary',       # largebinary / largeutf8
+    'binary',             # contains fixed_size_binary fields
+    'binary_no_batches',  # contains fixed_size_binary fields
+    'binary_zerolength',  # contains fixed_size_binary fields
+    'null',               # null type
     'null_trivial',       # null-only schema (no supported columns remain)
     'decimal',            # decimal128
     'decimal256',
@@ -50,6 +57,9 @@ _UNSUPPORTED = {
     'binary_view',
     'list_view',
     'extension',
+    'run_end_encoded',
+    'recursive_nested',   # tester layer cannot preserve custom inner-field names
+    'custom_metadata',    # schema/field metadata not preserved end-to-end
 }
 
 _orig_get_generated = _datagen.get_generated_json_files
@@ -76,6 +86,8 @@ def main():
                         help="Run C Data Interface tests")
     parser.add_argument("--with-cpp", action="store_true",
                         help="Cross-test against C++ Arrow (needs ARROW_CPP_EXE_PATH)")
+    parser.add_argument("--with-rust", action="store_true",
+                        help="Cross-test against arrow-rs (needs ARROW_RUST_EXE_PATH)")
     parser.add_argument("--no-stop-on-error", action="store_true",
                         help="Continue after failures (default: stop on first error)")
     parser.add_argument("--match", default=None, metavar="PATTERN",
@@ -96,6 +108,13 @@ def main():
             other_testers.append(CppTester())
         except Exception as e:
             print(f"Warning: could not load CppTester: {e}", file=sys.stderr)
+
+    if args.with_rust:
+        try:
+            from archery.integration.tester_rust import RustTester
+            other_testers.append(RustTester())
+        except Exception as e:
+            print(f"Warning: could not load RustTester: {e}", file=sys.stderr)
 
     run_all_tests(
         testers=testers,

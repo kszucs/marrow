@@ -17,14 +17,14 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0b2.dev2026050306"
+mojo-compiler = "==1.0.0b1.dev2026042405"
 
 [package.host-dependencies]
-mojo = "==1.0.0b2.dev2026050306"
+mojo = "==1.0.0b1.dev2026042405"
 
 [package.run-dependencies]
-mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+mojo = "==1.0.0b1.dev2026042405"
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b1.dev2026042405" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"
@@ -58,6 +58,15 @@ test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v" }
 test_parallel = { cmd = "pytest -v -n auto --dist=loadfile" }
+
+# Integration — Arrow protocol conformance tests via archery.
+[feature.integration.pypi-dependencies]
+archery = { git = "https://github.com/apache/arrow", subdirectory = "dev/archery" }
+
+[feature.integration.tasks]
+test_integration = { cmd = "pytest python/tests/test_integration.py -v --python" }
+build_arrow_rust = { cmd = "cargo build -p arrow-integration-testing --manifest-path $HOME/Workspace/arrow-rs/Cargo.toml" }
+run_integration = { cmd = "python -m integration.run --run-ipc --run-c-data", depends-on = ["build_python"], env = { PYTHONPATH = "python", ARROW_RUST_EXE_PATH = "$HOME/Workspace/arrow-rs/target/debug" } }
 
 # Asan — ASAN runtime needed for --asan test runs.
 [feature.asan.dependencies]
@@ -115,10 +124,11 @@ bench = { features = ["dev", "bench"], solve-group = "default" }
 format = { features = ["format"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
+integration = { features = ["dev", "integration"], solve-group = "default" }
 
 [dependencies]
-mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+mojo = ">=1.0.0b1.dev2026042405,<2"
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b1.dev2026042405" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"

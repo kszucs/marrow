@@ -954,7 +954,7 @@ struct _IpcDecoder(Movable):
 
     def _read_field(self, fp: UInt32) raises -> Field:
         var name = self._r.read_string(fp, 0)
-        var nullable = self._r.read_bool(fp, 1, True)
+        var nullable = self._r.read_bool(fp, 1, False)
         var type_type = self._r.read_u8(fp, 2, 0)
 
         var children = List[Field]()
@@ -979,7 +979,7 @@ struct _IpcDecoder(Movable):
         elif type_type == _TYPE_INT:
             var tp = self._r.read_table(fp, 3)
             var bw = Int(self._r.read_i32(tp, 0, 32))
-            var signed = self._r.read_bool(tp, 1, True)
+            var signed = self._r.read_bool(tp, 1, False)
             if signed:
                 if bw == 8:
                     dtype = int8

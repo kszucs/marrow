@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — 2026-04-30
+
+### Fixes
+
+- **IPC reader: default `nullable` and `is_signed` to `false`**
+  (`marrow/ipc.mojo`): Arrow's FlatBuffers schema lets writers omit fields
+  that equal the default value; both `Field.nullable` and `Int.is_signed`
+  default to `false`. Marrow's reader was defaulting both to `true`, so
+  files written by arrow-rs (which omits these slots) were decoded with
+  wrong nullability and sign. Self-tests didn't catch this because Marrow's
+  writer always emits the slots explicitly. Verified with archery
+  cross-implementation tests against arrow-rs.
+
 ## [Unreleased] — 2026-04-21
 
 ### Fixes

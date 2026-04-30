@@ -60,7 +60,13 @@ def _json_field_to_ma(field_obj: dict):
     )
     if ma_type is None:
         return None
-    return ma.field(field_obj["name"], type=ma_type, nullable=field_obj.get("nullable", True))
+    metadata = {kv["key"]: kv["value"] for kv in field_obj.get("customMetadata") or []}
+    return ma.field(
+        field_obj["name"],
+        ma_type,
+        field_obj.get("nullable", True),
+        metadata,
+    )
 
 
 def _json_col_to_ma(col_obj: dict, field_obj: dict, ma_type) -> object:
@@ -183,13 +189,16 @@ class MarrowTester(Tester):
 
     def json_to_file(self, json_path, arrow_path):
         json_dict = _read_json(json_path)
-        ma_fields = _json_to_ma_schema(json_dict)
-        if not ma_fields:
-            raise NotImplementedError("no supported columns in this test case")
+        json_fields = json_dict["schema"]["fields"]
+        ma_fields = [_json_field_to_ma(f) for f in json_fields]
+        if any(f is None for f in ma_fields):
+            raise NotImplementedError("test case has unsupported column types")
         n_batches = len(json_dict.get("batches", []))
+        schema_meta = {kv["key"]: kv["value"] for kv in json_dict["schema"].get("customMetadata") or []}
+        ma_schema = ma.schema(ma_fields, metadata=schema_meta)
         empty_rb = ma.record_batch(
             [ma.array([], type=f.type()) for f in ma_fields],
-            schema=ma.schema(ma_fields),
+            schema=ma_schema,
         )
         batches = [_json_to_ma_batch(json_dict, i, ma_fields) for i in range(n_batches)]
         ma.write_ipc_file(str(arrow_path), schema=empty_rb, batches=batches)
