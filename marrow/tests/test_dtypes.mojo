@@ -20,6 +20,23 @@ from marrow.dtypes import (
     Float32Type,
     Float64Type,
     BinaryType,
+    Date32Type,
+    Date64Type,
+    Time32Type,
+    Time64Type,
+    TimestampType,
+    DurationType,
+    TimeUnit,
+    second,
+    millisecond,
+    microsecond,
+    nanosecond,
+    date32,
+    date64,
+    time32,
+    time64,
+    timestamp,
+    duration,
     list_,
     fixed_size_list_,
     struct_,
@@ -310,6 +327,90 @@ def test_is_fixed_size() raises:
     assert_false(AnyDataType(NullType()).is_fixed_size())
     assert_false(AnyDataType(StringType()).is_fixed_size())
     assert_false(AnyDataType(list_(AnyDataType(Int32Type()))).is_fixed_size())
+
+
+def test_temporal_dtypes_predicates() raises:
+    assert_true(AnyDataType(date32()).is_date32())
+    assert_true(AnyDataType(date32()).is_temporal())
+    assert_false(AnyDataType(date32()).is_date64())
+    assert_false(AnyDataType(date32()).is_primitive())
+    assert_false(AnyDataType(date32()).is_integer())
+
+    assert_true(AnyDataType(date64()).is_date64())
+    assert_true(AnyDataType(date64()).is_temporal())
+    assert_false(AnyDataType(date64()).is_date32())
+
+    assert_true(AnyDataType(time32(second)).is_time32())
+    assert_true(AnyDataType(time32(second)).is_temporal())
+    assert_false(AnyDataType(time32(second)).is_time64())
+
+    assert_true(AnyDataType(time64(microsecond)).is_time64())
+    assert_true(AnyDataType(time64(microsecond)).is_temporal())
+    assert_false(AnyDataType(time64(microsecond)).is_time32())
+
+    assert_true(AnyDataType(timestamp(second)).is_timestamp())
+    assert_true(AnyDataType(timestamp(second)).is_temporal())
+    assert_false(AnyDataType(timestamp(second)).is_duration())
+
+    assert_true(AnyDataType(duration(second)).is_duration())
+    assert_true(AnyDataType(duration(second)).is_temporal())
+    assert_false(AnyDataType(duration(second)).is_timestamp())
+
+
+def test_temporal_dtypes_bit_width() raises:
+    assert_equal(AnyDataType(date32()).temporal_bit_width(), 32)
+    assert_equal(AnyDataType(date64()).temporal_bit_width(), 64)
+    assert_equal(AnyDataType(time32(second)).temporal_bit_width(), 32)
+    assert_equal(AnyDataType(time32(millisecond)).temporal_bit_width(), 32)
+    assert_equal(AnyDataType(time64(microsecond)).temporal_bit_width(), 64)
+    assert_equal(AnyDataType(time64(nanosecond)).temporal_bit_width(), 64)
+    assert_equal(AnyDataType(timestamp(second)).temporal_bit_width(), 64)
+    assert_equal(AnyDataType(timestamp(nanosecond, "UTC")).temporal_bit_width(), 64)
+    assert_equal(AnyDataType(duration(millisecond)).temporal_bit_width(), 64)
+
+
+def test_temporal_dtypes_string() raises:
+    assert_equal(String(AnyDataType(date32())), "date32")
+    assert_equal(String(AnyDataType(date64())), "date64")
+    assert_equal(String(AnyDataType(time32(second))), "time32[s]")
+    assert_equal(String(AnyDataType(time32(millisecond))), "time32[ms]")
+    assert_equal(String(AnyDataType(time64(microsecond))), "time64[us]")
+    assert_equal(String(AnyDataType(time64(nanosecond))), "time64[ns]")
+    assert_equal(String(AnyDataType(timestamp(second))), "timestamp[s]")
+    assert_equal(String(AnyDataType(timestamp(millisecond))), "timestamp[ms]")
+    assert_equal(String(AnyDataType(timestamp(microsecond))), "timestamp[us]")
+    assert_equal(String(AnyDataType(timestamp(nanosecond))), "timestamp[ns]")
+    assert_equal(String(AnyDataType(timestamp(second, "UTC"))), "timestamp[s][tz=UTC]")
+    assert_equal(String(AnyDataType(duration(second))), "duration[s]")
+    assert_equal(String(AnyDataType(duration(nanosecond))), "duration[ns]")
+
+
+def test_temporal_dtypes_equality() raises:
+    assert_true(AnyDataType(date32()) == AnyDataType(date32()))
+    assert_false(AnyDataType(date32()) == AnyDataType(date64()))
+    assert_true(AnyDataType(time32(second)) == AnyDataType(time32(second)))
+    assert_false(AnyDataType(time32(second)) == AnyDataType(time32(millisecond)))
+    assert_true(AnyDataType(timestamp(second)) == AnyDataType(timestamp(second)))
+    assert_false(AnyDataType(timestamp(second)) == AnyDataType(timestamp(millisecond)))
+    assert_true(
+        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second, "UTC"))
+    )
+    assert_false(
+        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second, "US/Pacific"))
+    )
+    assert_false(
+        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second))
+    )
+    assert_true(AnyDataType(duration(nanosecond)) == AnyDataType(duration(nanosecond)))
+    assert_false(AnyDataType(duration(second)) == AnyDataType(duration(nanosecond)))
+    assert_false(AnyDataType(date32()) == AnyDataType(int32))
+
+
+def test_time_unit_string() raises:
+    assert_equal(String(second), "s")
+    assert_equal(String(millisecond), "ms")
+    assert_equal(String(microsecond), "us")
+    assert_equal(String(nanosecond), "ns")
 
 
 def main() raises:

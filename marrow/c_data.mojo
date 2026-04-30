@@ -284,6 +284,44 @@ struct CArrowSchema(Copyable, Movable):
         elif dtype.is_fixed_size_binary():
             var fsb = dtype.as_fixed_size_binary_type()
             fmt = {"w:", fsb.byte_width}
+        elif dtype.is_date32():
+            fmt = "tdD"
+        elif dtype.is_date64():
+            fmt = "tdm"
+        elif dtype.is_time32():
+            var u = dtype.as_time32_type().unit
+            if u == second:
+                fmt = "tts"
+            else:
+                fmt = "ttm"
+        elif dtype.is_time64():
+            var u = dtype.as_time64_type().unit
+            if u == microsecond:
+                fmt = "ttu"
+            else:
+                fmt = "ttn"
+        elif dtype.is_timestamp():
+            var ts = dtype.as_timestamp_type()
+            var uc: String
+            if ts.unit == second:
+                uc = "s"
+            elif ts.unit == millisecond:
+                uc = "m"
+            elif ts.unit == microsecond:
+                uc = "u"
+            else:
+                uc = "n"
+            fmt = {"ts", uc, ":", ts.timezone}
+        elif dtype.is_duration():
+            var u = dtype.as_duration_type().unit
+            if u == second:
+                fmt = "tDs"
+            elif u == millisecond:
+                fmt = "tDm"
+            elif u == microsecond:
+                fmt = "tDu"
+            else:
+                fmt = "tDn"
         elif dtype.is_struct():
             fmt = "+s"
             var st = dtype.as_struct_type()
@@ -452,6 +490,34 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt.startswith("w:"):
             var width = Int(String(fmt).removeprefix("w:"))
             return FixedSizeBinaryType(width).to_any()
+        elif fmt == "tdD":
+            return date32()
+        elif fmt == "tdm":
+            return date64()
+        elif fmt == "tts":
+            return time32(second)
+        elif fmt == "ttm":
+            return time32(millisecond)
+        elif fmt == "ttu":
+            return time64(microsecond)
+        elif fmt == "ttn":
+            return time64(nanosecond)
+        elif fmt.startswith("tss:"):
+            return timestamp(second, String(String(fmt).removeprefix("tss:"))).to_any()
+        elif fmt.startswith("tsm:"):
+            return timestamp(millisecond, String(String(fmt).removeprefix("tsm:"))).to_any()
+        elif fmt.startswith("tsu:"):
+            return timestamp(microsecond, String(String(fmt).removeprefix("tsu:"))).to_any()
+        elif fmt.startswith("tsn:"):
+            return timestamp(nanosecond, String(String(fmt).removeprefix("tsn:"))).to_any()
+        elif fmt == "tDs":
+            return duration(second)
+        elif fmt == "tDm":
+            return duration(millisecond)
+        elif fmt == "tDu":
+            return duration(microsecond)
+        elif fmt == "tDn":
+            return duration(nanosecond)
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
@@ -659,6 +725,15 @@ struct CArrowArray(Copyable, Movable):
                 Buffer.from_foreign(
                     self.buffers[1],
                     Int(length) * bw,
+                    owner,
+                )
+            )
+        elif dtype.is_temporal():
+            var byte_width = dtype.temporal_bit_width() // 8
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    Int(length) * byte_width,
                     owner,
                 )
             )

@@ -28,34 +28,9 @@ from std.sys import size_of
 from std.sys.info import is_big_endian
 from .arrays import AnyArray, ArrayData
 from .buffers import Buffer, Bitmap
-from .dtypes import (
-    AnyDataType,
-    Field,
-    ListType,
-    FixedSizeListType,
-    FixedSizeBinaryType,
-    list_ as mk_list,
-    fixed_size_list_ as mk_fixed_size_list,
-    fixed_size_binary_ as mk_fixed_size_binary,
-    struct_ as mk_struct,
-    null,
-    bool_,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-    binary,
-    string,
-)
 from .schema import Schema
 from .tabular import RecordBatch
+import .dtypes as dt
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +47,23 @@ comptime _TYPE_FLOATING_POINT: UInt8 = 3
 comptime _TYPE_BINARY: UInt8 = 4
 comptime _TYPE_UTF8: UInt8 = 5
 comptime _TYPE_BOOL: UInt8 = 6
+comptime _TYPE_DATE: UInt8 = 8
+comptime _TYPE_TIME: UInt8 = 9
+comptime _TYPE_TIMESTAMP: UInt8 = 10
 comptime _TYPE_LIST: UInt8 = 12
 comptime _TYPE_STRUCT: UInt8 = 13
-comptime _TYPE_FIXED_SIZE_LIST: UInt8 = 16
 comptime _TYPE_FIXED_SIZE_BINARY: UInt8 = 15
+comptime _TYPE_FIXED_SIZE_LIST: UInt8 = 16
+comptime _TYPE_DURATION: UInt8 = 18
 comptime _PRECISION_HALF: UInt16 = 0
 comptime _PRECISION_SINGLE: UInt16 = 1
 comptime _PRECISION_DOUBLE: UInt16 = 2
+comptime _DATE_UNIT_DAY: UInt16 = 0
+comptime _DATE_UNIT_MILLISECOND: UInt16 = 1
+comptime _TIME_UNIT_SECOND: UInt16 = 0
+comptime _TIME_UNIT_MILLISECOND: UInt16 = 1
+comptime _TIME_UNIT_MICROSECOND: UInt16 = 2
+comptime _TIME_UNIT_NANOSECOND: UInt16 = 3
 
 
 def _magic() -> List[UInt8]:
@@ -503,6 +488,28 @@ struct _FlatbufReader(Movable):
 # ---------------------------------------------------------------------------
 
 
+def _time_unit_to_ipc(unit: dt.TimeUnit) -> UInt16:
+    if unit == dt.second:
+        return _TIME_UNIT_SECOND
+    elif unit == dt.millisecond:
+        return _TIME_UNIT_MILLISECOND
+    elif unit == dt.microsecond:
+        return _TIME_UNIT_MICROSECOND
+    else:
+        return _TIME_UNIT_NANOSECOND
+
+
+def _ipc_to_time_unit(v: UInt16) -> dt.TimeUnit:
+    if v == _TIME_UNIT_SECOND:
+        return dt.second
+    elif v == _TIME_UNIT_MILLISECOND:
+        return dt.millisecond
+    elif v == _TIME_UNIT_MICROSECOND:
+        return dt.microsecond
+    else:
+        return dt.nanosecond
+
+
 struct _IpcEncoder(Movable):
     """Encodes Arrow IPC metadata (schema, record batch, footer) into FlatBuffers."""
 
@@ -645,7 +652,7 @@ struct _IpcEncoder(Movable):
             _write_le[DType.int64](data, i * 24 + 16, blocks[i].body_length)
         return self._fb.create_vector_structs(data, n, 24, 8)
 
-    def _type_code(self, dtype: AnyDataType) raises -> UInt8:
+    def _type_code(self, dtype: dt.AnyDataType) raises -> UInt8:
         if dtype.is_null():
             return _TYPE_NULL
         elif dtype.is_bool():
@@ -664,12 +671,20 @@ struct _IpcEncoder(Movable):
             return _TYPE_FIXED_SIZE_LIST
         elif dtype.is_fixed_size_binary():
             return _TYPE_FIXED_SIZE_BINARY
+        elif dtype.is_date32() or dtype.is_date64():
+            return _TYPE_DATE
+        elif dtype.is_time32() or dtype.is_time64():
+            return _TYPE_TIME
+        elif dtype.is_timestamp():
+            return _TYPE_TIMESTAMP
+        elif dtype.is_duration():
+            return _TYPE_DURATION
         elif dtype.is_struct():
             return _TYPE_STRUCT
         else:
             raise Error("_IpcEncoder: unsupported dtype: " + String(dtype))
 
-    def _write_type_table(mut self, dtype: AnyDataType) raises -> UInt32:
+    def _write_type_table(mut self, dtype: dt.AnyDataType) raises -> UInt32:
         if (
             dtype.is_null()
             or dtype.is_bool()
@@ -683,25 +698,25 @@ struct _IpcEncoder(Movable):
         elif dtype.is_integer():
             var bw: Int32
             var signed: Bool
-            if dtype == int8:
+            if dtype == dt.int8:
                 bw = 8
                 signed = True
-            elif dtype == int16:
+            elif dtype == dt.int16:
                 bw = 16
                 signed = True
-            elif dtype == int32:
+            elif dtype == dt.int32:
                 bw = 32
                 signed = True
-            elif dtype == int64:
+            elif dtype == dt.int64:
                 bw = 64
                 signed = True
-            elif dtype == uint8:
+            elif dtype == dt.uint8:
                 bw = 8
                 signed = False
-            elif dtype == uint16:
+            elif dtype == dt.uint16:
                 bw = 16
                 signed = False
-            elif dtype == uint32:
+            elif dtype == dt.uint32:
                 bw = 32
                 signed = False
             else:
@@ -716,9 +731,9 @@ struct _IpcEncoder(Movable):
             return self._fb.write_table(flds, ts)
         elif dtype.is_floating_point():
             var prec: UInt16
-            if dtype == float16:
+            if dtype == dt.float16:
                 prec = _PRECISION_HALF
-            elif dtype == float32:
+            elif dtype == dt.float32:
                 prec = _PRECISION_SINGLE
             else:
                 prec = _PRECISION_DOUBLE
@@ -741,6 +756,57 @@ struct _IpcEncoder(Movable):
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, bw_at))
             return self._fb.write_table(flds, ts)
+        elif dtype.is_date32():
+            var ts = self._fb.offset()
+            var u_at = self._fb.prepend_u16(_DATE_UNIT_DAY)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_date64():
+            var ts = self._fb.offset()
+            var u_at = self._fb.prepend_u16(_DATE_UNIT_MILLISECOND)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_time32() or dtype.is_time64():
+            var unit: dt.TimeUnit
+            var bw: Int32
+            if dtype.is_time32():
+                unit = dtype.as_time32_type().unit
+                bw = 32
+            else:
+                unit = dtype.as_time64_type().unit
+                bw = 64
+            var ipc_unit = _time_unit_to_ipc(unit)
+            var ts = self._fb.offset()
+            var bw_at = self._fb.prepend_i32(bw)
+            var u_at = self._fb.prepend_u16(ipc_unit)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            flds.append(_FieldOffset(1, bw_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_timestamp():
+            var tstype = dtype.as_timestamp_type()
+            var ipc_unit = _time_unit_to_ipc(tstype.unit)
+            var ts = self._fb.offset()
+            var tz_at: Optional[UInt32] = None
+            if tstype.timezone:
+                var tz_str_pos = self._fb.create_string(tstype.timezone)
+                tz_at = self._fb.prepend_uoffset(tz_str_pos)
+            var u_at = self._fb.prepend_u16(ipc_unit)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            if tz_at:
+                flds.append(_FieldOffset(1, tz_at.value()))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_duration():
+            var unit = dtype.as_duration_type().unit
+            var ipc_unit = _time_unit_to_ipc(unit)
+            var ts = self._fb.offset()
+            var u_at = self._fb.prepend_u16(ipc_unit)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            return self._fb.write_table(flds, ts)
         else:
             raise Error("_IpcEncoder: unsupported dtype for type table: " + String(dtype))
 
@@ -758,7 +824,7 @@ struct _IpcEncoder(Movable):
             kv_positions.append(self._fb.write_table(kv_flds, ts))
         return self._fb.create_vector_offsets(kv_positions)
 
-    def _write_field(mut self, f: Field) raises -> UInt32:
+    def _write_field(mut self, f: dt.Field) raises -> UInt32:
         var child_positions = List[UInt32]()
         var dtype = f.dtype.copy()
         if dtype.is_list():
@@ -936,8 +1002,8 @@ struct _IpcDecoder(Movable):
             )
         return Schema(fields=fields^, metadata=metadata^)
 
-    def _decode_schema_fields(self, schema_pos: UInt32) raises -> List[Field]:
-        var fields = List[Field]()
+    def _decode_schema_fields(self, schema_pos: UInt32) raises -> List[dt.Field]:
+        var fields = List[dt.Field]()
         var fields_vec = self._r.read_vector(schema_pos, 1)
         var n = Int(self._r.vector_len(fields_vec))
         for i in range(n):
@@ -971,12 +1037,12 @@ struct _IpcDecoder(Movable):
 
         return length
 
-    def _read_field(self, fp: UInt32) raises -> Field:
+    def _read_field(self, fp: UInt32) raises -> dt.Field:
         var name = self._r.read_string(fp, 0)
         var nullable = self._r.read_bool(fp, 1, False)
         var type_type = self._r.read_u8(fp, 2, 0)
 
-        var children = List[Field]()
+        var children = List[dt.Field]()
         try:
             var children_vec = self._r.read_vector(fp, 5)
             var n = Int(self._r.vector_len(children_vec))
@@ -992,71 +1058,96 @@ struct _IpcDecoder(Movable):
         except:
             pass
 
-        var dtype: AnyDataType
+        var dtype: dt.AnyDataType
         if type_type == _TYPE_NULL:
-            dtype = null
+            dtype = dt.null
         elif type_type == _TYPE_BOOL:
-            dtype = bool_
+            dtype = dt.bool_
         elif type_type == _TYPE_INT:
             var tp = self._r.read_table(fp, 3)
             var bw = Int(self._r.read_i32(tp, 0, 32))
             var signed = self._r.read_bool(tp, 1, False)
             if signed:
                 if bw == 8:
-                    dtype = int8
+                    dtype = dt.int8
                 elif bw == 16:
-                    dtype = int16
+                    dtype = dt.int16
                 elif bw == 32:
-                    dtype = int32
+                    dtype = dt.int32
                 else:
-                    dtype = int64
+                    dtype = dt.int64
             else:
                 if bw == 8:
-                    dtype = uint8
+                    dtype = dt.uint8
                 elif bw == 16:
-                    dtype = uint16
+                    dtype = dt.uint16
                 elif bw == 32:
-                    dtype = uint32
+                    dtype = dt.uint32
                 else:
-                    dtype = uint64
+                    dtype = dt.uint64
         elif type_type == _TYPE_FLOATING_POINT:
             var tp = self._r.read_table(fp, 3)
             var prec = self._r.read_u16(tp, 0, _PRECISION_DOUBLE)
             if prec == _PRECISION_HALF:
-                dtype = float16
+                dtype = dt.float16
             elif prec == _PRECISION_SINGLE:
-                dtype = float32
+                dtype = dt.float32
             else:
-                dtype = float64
+                dtype = dt.float64
         elif type_type == _TYPE_BINARY:
-            dtype = binary
+            dtype = dt.binary
         elif type_type == _TYPE_UTF8:
-            dtype = string
+            dtype = dt.string
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
                 raise Error("list Field must have 1 child, got 0")
             # Preserve the child Field as-is (its name may not be the default
             # "item" — e.g. arrow-rs uses "inner_list" for nested lists).
-            dtype = ListType(children[0].copy()).to_any()
+            dtype = dt.ListType(children[0].copy()).to_any()
         elif type_type == _TYPE_FIXED_SIZE_LIST:
             var tp = self._r.read_table(fp, 3)
             var list_size = Int(self._r.read_i32(tp, 0, 0))
             if len(children) == 0:
                 raise Error("fixed_size_list Field must have 1 child, got 0")
-            dtype = FixedSizeListType(children[0].copy(), list_size).to_any()
+            dtype = dt.FixedSizeListType(children[0].copy(), list_size).to_any()
         elif type_type == _TYPE_FIXED_SIZE_BINARY:
             var tp = self._r.read_table(fp, 3)
             var byte_width = Int(self._r.read_i32(tp, 0, 0))
-            dtype = FixedSizeBinaryType(byte_width).to_any()
+            dtype = dt.FixedSizeBinaryType(byte_width).to_any()
+        elif type_type == _TYPE_DATE:
+            var tp = self._r.read_table(fp, 3)
+            var unit_v = self._r.read_u16(tp, 0, _DATE_UNIT_MILLISECOND)
+            if unit_v == _DATE_UNIT_DAY:
+                dtype = dt.date32()
+            else:
+                dtype = dt.date64()
+        elif type_type == _TYPE_TIME:
+            var tp = self._r.read_table(fp, 3)
+            var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
+            var bw = Int(self._r.read_i32(tp, 1, 32))
+            var unit = _ipc_to_time_unit(unit_v)
+            if bw == 32:
+                dtype = dt.time32(unit)
+            else:
+                dtype = dt.time64(unit)
+        elif type_type == _TYPE_TIMESTAMP:
+            var tp = self._r.read_table(fp, 3)
+            var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_SECOND)
+            var tz = self._r.read_string(tp, 1)
+            dtype = dt.timestamp(_ipc_to_time_unit(unit_v), tz).to_any()
+        elif type_type == _TYPE_DURATION:
+            var tp = self._r.read_table(fp, 3)
+            var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
+            dtype = dt.duration(_ipc_to_time_unit(unit_v)).to_any()
         elif type_type == _TYPE_STRUCT:
-            dtype = mk_struct(children^)
-            return Field(name, dtype^, nullable, metadata^)
+            dtype = dt.struct_(children^)
+            return dt.Field(name, dtype^, nullable, metadata^)
         else:
             raise Error(
                 "_IpcDecoder: unsupported type_type: " + String(Int(type_type))
             )
 
-        return Field(name, dtype^, nullable, metadata^)
+        return dt.Field(name, dtype^, nullable, metadata^)
 
 
 # ---------------------------------------------------------------------------
@@ -1239,7 +1330,7 @@ struct _BatchDecoder(Movable):
         self.node_idx = 0
         self.buf_idx = 0
 
-    def read_array(mut self, dtype: AnyDataType) raises -> AnyArray:
+    def read_array(mut self, dtype: dt.AnyDataType) raises -> AnyArray:
         var node = self.nodes[self.node_idx]
         self.node_idx += 1
 
@@ -1250,7 +1341,7 @@ struct _BatchDecoder(Movable):
         # nor data — per Arrow spec.
         if dtype.is_null():
             var ad = ArrayData(
-                dtype=null,
+                dtype=dt.null,
                 length=length,
                 nulls=null_count,
                 offset=0,

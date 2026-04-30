@@ -4,7 +4,7 @@ from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
 from marrow.tabular import Table
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
+from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray, TemporalArray
 from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from marrow.dtypes import *
 
@@ -705,6 +705,228 @@ def test_all_numeric_array_imports() raises:
 #         var c_schema = CArrowSchema.from_dtype(int32)
 #     except Error:
 #         pass
+
+
+def test_temporal_dtype_schema_roundtrip() raises:
+    """All temporal dtypes survive a CArrowSchema.from_dtype → to_dtype roundtrip.
+
+    Regression coverage for the tts/ttS and tss:/tsS: format-string bugs where
+    time32[s] and timestamp[s, tz] failed to parse back from PyArrow capsules.
+    """
+    # date
+    var c = CArrowSchema.from_dtype(date32().to_any())
+    assert_equal(c.to_dtype(), date32().to_any())
+    c = CArrowSchema.from_dtype(date64().to_any())
+    assert_equal(c.to_dtype(), date64().to_any())
+    # time32 — seconds unit was the bug (tts, not ttS)
+    c = CArrowSchema.from_dtype(time32(second).to_any())
+    assert_equal(c.to_dtype(), time32(second).to_any())
+    c = CArrowSchema.from_dtype(time32(millisecond).to_any())
+    assert_equal(c.to_dtype(), time32(millisecond).to_any())
+    # time64
+    c = CArrowSchema.from_dtype(time64(microsecond).to_any())
+    assert_equal(c.to_dtype(), time64(microsecond).to_any())
+    c = CArrowSchema.from_dtype(time64(nanosecond).to_any())
+    assert_equal(c.to_dtype(), time64(nanosecond).to_any())
+    # timestamp — seconds unit was the bug (tss:, not tsS:)
+    c = CArrowSchema.from_dtype(timestamp(second).to_any())
+    assert_equal(c.to_dtype(), timestamp(second).to_any())
+    c = CArrowSchema.from_dtype(timestamp(millisecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(millisecond).to_any())
+    c = CArrowSchema.from_dtype(timestamp(microsecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(microsecond).to_any())
+    c = CArrowSchema.from_dtype(timestamp(nanosecond).to_any())
+    assert_equal(c.to_dtype(), timestamp(nanosecond).to_any())
+    # timestamp with timezone — seconds+tz was the bug (tss:UTC, not tsS:UTC)
+    c = CArrowSchema.from_dtype(timestamp(second, "UTC").to_any())
+    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_any())
+    c = CArrowSchema.from_dtype(timestamp(millisecond, "US/Eastern").to_any())
+    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_any())
+    c = CArrowSchema.from_dtype(timestamp(microsecond, "Europe/Paris").to_any())
+    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_any())
+    c = CArrowSchema.from_dtype(timestamp(nanosecond, "US/Pacific").to_any())
+    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_any())
+    # duration
+    c = CArrowSchema.from_dtype(duration(second).to_any())
+    assert_equal(c.to_dtype(), duration(second).to_any())
+    c = CArrowSchema.from_dtype(duration(millisecond).to_any())
+    assert_equal(c.to_dtype(), duration(millisecond).to_any())
+    c = CArrowSchema.from_dtype(duration(microsecond).to_any())
+    assert_equal(c.to_dtype(), duration(microsecond).to_any())
+    c = CArrowSchema.from_dtype(duration(nanosecond).to_any())
+    assert_equal(c.to_dtype(), duration(nanosecond).to_any())
+
+
+def test_temporal_schema_from_pyarrow() raises:
+    """PyArrow temporal type schemas are correctly parsed into Mojo temporal dtypes.
+
+    Regression coverage: time32('s') exports format 'tts' (not 'ttS'), and
+    timestamp('s') / timestamp('s', tz='UTC') export 'tss:' (not 'tsS:').
+    """
+    var pa = Python.import_module("pyarrow")
+
+    var c = c_schema_from_pyobj(pa.date32())
+    assert_equal(c.to_dtype(), date32().to_any())
+    c = c_schema_from_pyobj(pa.date64())
+    assert_equal(c.to_dtype(), date64().to_any())
+    # time32[s] — was broken (ttS), now tts
+    c = c_schema_from_pyobj(pa.time32("s"))
+    assert_equal(c.to_dtype(), time32(second).to_any())
+    c = c_schema_from_pyobj(pa.time32("ms"))
+    assert_equal(c.to_dtype(), time32(millisecond).to_any())
+    c = c_schema_from_pyobj(pa.time64("us"))
+    assert_equal(c.to_dtype(), time64(microsecond).to_any())
+    c = c_schema_from_pyobj(pa.time64("ns"))
+    assert_equal(c.to_dtype(), time64(nanosecond).to_any())
+    # timestamp[s] — was broken (tsS:), now tss:
+    c = c_schema_from_pyobj(pa.timestamp("s"))
+    assert_equal(c.to_dtype(), timestamp(second).to_any())
+    c = c_schema_from_pyobj(pa.timestamp("ms"))
+    assert_equal(c.to_dtype(), timestamp(millisecond).to_any())
+    c = c_schema_from_pyobj(pa.timestamp("us"))
+    assert_equal(c.to_dtype(), timestamp(microsecond).to_any())
+    c = c_schema_from_pyobj(pa.timestamp("ns"))
+    assert_equal(c.to_dtype(), timestamp(nanosecond).to_any())
+    # timestamp with timezone — was broken for seconds unit
+    c = c_schema_from_pyobj(pa.timestamp("s", tz="UTC"))
+    assert_equal(c.to_dtype(), timestamp(second, "UTC").to_any())
+    c = c_schema_from_pyobj(pa.timestamp("ms", tz="US/Eastern"))
+    assert_equal(c.to_dtype(), timestamp(millisecond, "US/Eastern").to_any())
+    c = c_schema_from_pyobj(pa.timestamp("us", tz="Europe/Paris"))
+    assert_equal(c.to_dtype(), timestamp(microsecond, "Europe/Paris").to_any())
+    c = c_schema_from_pyobj(pa.timestamp("ns", tz="US/Pacific"))
+    assert_equal(c.to_dtype(), timestamp(nanosecond, "US/Pacific").to_any())
+    c = c_schema_from_pyobj(pa.duration("s"))
+    assert_equal(c.to_dtype(), duration(second).to_any())
+    c = c_schema_from_pyobj(pa.duration("ms"))
+    assert_equal(c.to_dtype(), duration(millisecond).to_any())
+    c = c_schema_from_pyobj(pa.duration("us"))
+    assert_equal(c.to_dtype(), duration(microsecond).to_any())
+    c = c_schema_from_pyobj(pa.duration("ns"))
+    assert_equal(c.to_dtype(), duration(nanosecond).to_any())
+
+
+def test_date32_array_from_pyarrow() raises:
+    """date32 array import: length, null bitmap, and values."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(
+        Python.list(10, 20, 30),
+        type=pa.date32(),
+        mask=Python.list(False, True, False),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+    var dtype = c_schema.to_dtype()
+
+    assert_true(dtype.is_date32())
+    assert_equal(c_array.length, 3)
+    assert_equal(c_array.null_count, 1)
+    assert_equal(c_array.n_buffers, 2)
+
+    var data = c_array^.to_array(dtype)
+    ref arr = data.as_date32()
+
+    assert_equal(len(arr), 3)
+    assert_true(arr.is_valid(0))
+    assert_false(arr.is_valid(1))
+    assert_true(arr.is_valid(2))
+    assert_equal(arr[0].value(), 10)
+    assert_equal(arr[2].value(), 30)
+
+
+def test_timestamp_array_from_pyarrow() raises:
+    """timestamp[s, tz=UTC] array import — regression for the tss: format bug."""
+    var pa = Python.import_module("pyarrow")
+
+    var pyarr = pa.array(
+        Python.list(1000, 2000, 3000),
+        type=pa.timestamp("s", tz="UTC"),
+        mask=Python.list(False, False, True),
+    )
+
+    var c_array = c_array_from_pyobj(pyarr)
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+    var dtype = c_schema.to_dtype()
+
+    assert_true(dtype.is_timestamp())
+    var ts_type = dtype.as_timestamp_type()
+    assert_equal(ts_type.unit, second)
+    assert_equal(ts_type.timezone, "UTC")
+    assert_equal(c_array.length, 3)
+    assert_equal(c_array.null_count, 1)
+
+    var data = c_array^.to_array(dtype)
+    ref arr = data.as_timestamp()
+
+    assert_equal(len(arr), 3)
+    assert_true(arr.is_valid(0))
+    assert_true(arr.is_valid(1))
+    assert_false(arr.is_valid(2))
+    assert_equal(arr[0].value(), 1000)
+    assert_equal(arr[1].value(), 2000)
+
+
+def test_all_temporal_array_types_from_pyarrow() raises:
+    """One representative value import per temporal base type via C Data Interface."""
+    var pa = Python.import_module("pyarrow")
+
+    # date32
+    var ca_d32 = c_array_from_pyobj(pa.array(Python.list(100), type=pa.date32()))
+    var data_d32 = ca_d32^.to_array(date32().to_any())
+    ref arr_d32 = data_d32.as_date32()
+    assert_equal(arr_d32[0].value(), 100)
+
+    # date64
+    var ca_d64 = c_array_from_pyobj(pa.array(Python.list(86400000), type=pa.date64()))
+    var data_d64 = ca_d64^.to_array(date64().to_any())
+    ref arr_d64 = data_d64.as_date64()
+    assert_equal(arr_d64[0].value(), 86400000)
+
+    # time32[s]
+    var ca_t32s = c_array_from_pyobj(pa.array(Python.list(3600), type=pa.time32("s")))
+    var data_t32s = ca_t32s^.to_array(time32(second).to_any())
+    ref arr_t32s = data_t32s.as_time32()
+    assert_equal(arr_t32s[0].value(), 3600)
+
+    # time32[ms]
+    var ca_t32m = c_array_from_pyobj(pa.array(Python.list(3600000), type=pa.time32("ms")))
+    var data_t32m = ca_t32m^.to_array(time32(millisecond).to_any())
+    ref arr_t32m = data_t32m.as_time32()
+    assert_equal(arr_t32m[0].value(), 3600000)
+
+    # time64[us]
+    var ca_t64u = c_array_from_pyobj(pa.array(Python.list(3600000000), type=pa.time64("us")))
+    var data_t64u = ca_t64u^.to_array(time64(microsecond).to_any())
+    ref arr_t64u = data_t64u.as_time64()
+    assert_equal(arr_t64u[0].value(), 3600000000)
+
+    # time64[ns]
+    var ca_t64n = c_array_from_pyobj(pa.array(Python.list(3600000000000), type=pa.time64("ns")))
+    var data_t64n = ca_t64n^.to_array(time64(nanosecond).to_any())
+    ref arr_t64n = data_t64n.as_time64()
+    assert_equal(arr_t64n[0].value(), 3600000000000)
+
+    # timestamp[s]
+    var ca_ts_s = c_array_from_pyobj(pa.array(Python.list(1000), type=pa.timestamp("s")))
+    var data_ts_s = ca_ts_s^.to_array(timestamp(second).to_any())
+    ref arr_ts_s = data_ts_s.as_timestamp()
+    assert_equal(arr_ts_s[0].value(), 1000)
+
+    # timestamp[ns, tz=UTC]
+    var ca_ts_ntz = c_array_from_pyobj(
+        pa.array(Python.list(1000000000000), type=pa.timestamp("ns", tz="UTC"))
+    )
+    var data_ts_ntz = ca_ts_ntz^.to_array(timestamp(nanosecond, "UTC").to_any())
+    ref arr_ts_ntz = data_ts_ntz.as_timestamp()
+    assert_equal(arr_ts_ntz[0].value(), 1000000000000)
+
+    # duration[ms]
+    var ca_dur = c_array_from_pyobj(pa.array(Python.list(5000), type=pa.duration("ms")))
+    var data_dur = ca_dur^.to_array(duration(millisecond).to_any())
+    ref arr_dur = data_dur.as_duration()
+    assert_equal(arr_dur[0].value(), 5000)
 
 
 def main() raises:

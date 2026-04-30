@@ -72,9 +72,9 @@ def test_datatype_nested_roundtrip():
 def test_schema_to_pyarrow():
     schema = ma.schema(
         [
-            ma.field("x", type=ma.int32()),
-            ma.field("y", type=ma.float64()),
-            ma.field("s", type=ma.string()),
+            ma.field("x", ma.int32(), True, {}),
+            ma.field("y", ma.float64(), True, {}),
+            ma.field("s", ma.string(), True, {}),
         ]
     )
     pa_schema = pa.schema(schema)
@@ -87,15 +87,17 @@ def test_schema_to_pyarrow():
 def test_schema_to_pyarrow_nested():
     schema = ma.schema(
         [
-            ma.field("lst", type=ma.list_(ma.int32())),
+            ma.field("lst", ma.list_(ma.int32()), True, {}),
             ma.field(
                 "st",
-                type=ma.struct(
+                ma.struct(
                     [
-                        ma.field("a", type=ma.int32()),
-                        ma.field("b", type=ma.float64()),
+                        ma.field("a", ma.int32(), True, {}),
+                        ma.field("b", ma.float64(), True, {}),
                     ]
                 ),
+                True,
+                {},
             ),
         ]
     )
@@ -120,8 +122,8 @@ def test_schema_from_marrow_schema():
     """Passing a marrow Schema to ma.schema() should return an equal copy."""
     original = ma.schema(
         [
-            ma.field("a", type=ma.int64()),
-            ma.field("b", type=ma.string()),
+            ma.field("a", ma.int64(), True, {}),
+            ma.field("b", ma.string(), True, {}),
         ]
     )
     copy = ma.schema(original)

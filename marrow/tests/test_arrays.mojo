@@ -1627,5 +1627,210 @@ def test_primitive_array_list_literal_empty() raises:
     assert_equal(len(arr), 0)
 
 
+def test_temporal_array_date32() raises:
+    var arr = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=3,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[Buffer.alloc_zeroed[DType.int32](3).to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 3)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.type() == date32().to_any())
+    assert_true(arr.is_valid(0))
+    assert_true(arr.is_valid(1))
+    assert_true(arr.is_valid(2))
+
+
+def test_temporal_array_timestamp_values() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int64](4)
+    buf.unsafe_set[DType.int64](0, 1_000_000)
+    buf.unsafe_set[DType.int64](1, 2_000_000)
+    buf.unsafe_set[DType.int64](2, 3_000_000)
+    buf.unsafe_set[DType.int64](3, 4_000_000)
+    var arr = TimestampArray(
+        ArrayData(
+            dtype=timestamp(second, "UTC").to_any(),
+            length=4,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 4)
+    assert_true(arr.type() == timestamp(second, "UTC").to_any())
+    assert_equal(arr[0].value(), 1_000_000)
+    assert_equal(arr[1].value(), 2_000_000)
+    assert_equal(arr[2].value(), 3_000_000)
+    assert_equal(arr[3].value(), 4_000_000)
+
+
+def test_temporal_array_with_nulls() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int32](3)
+    buf.unsafe_set[DType.int32](0, 10)
+    buf.unsafe_set[DType.int32](1, 20)
+    buf.unsafe_set[DType.int32](2, 30)
+    var bm = Bitmap.alloc_zeroed(3)
+    bm.set(0)
+    bm.set(2)
+    var arr = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=3,
+            nulls=1,
+            offset=0,
+            bitmap=bm.to_immutable(),
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 3)
+    assert_equal(arr.null_count(), 1)
+    assert_true(arr.is_valid(0))
+    assert_false(arr.is_valid(1))
+    assert_true(arr.is_valid(2))
+    assert_equal(arr[0].value(), 10)
+    assert_true(arr[1].is_null())
+    assert_equal(arr[2].value(), 30)
+
+
+def test_temporal_array_slice() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int64](5)
+    for i in range(5):
+        buf.unsafe_set[DType.int64](i, Int64(i * 1000))
+    var arr = DurationArray(
+        ArrayData(
+            dtype=duration(millisecond).to_any(),
+            length=5,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    var sliced = arr.slice(1, 3)
+    assert_equal(len(sliced), 3)
+    assert_equal(sliced[0].value(), 1000)
+    assert_equal(sliced[1].value(), 2000)
+    assert_equal(sliced[2].value(), 3000)
+
+
+def test_temporal_array_equality() raises:
+    var buf1 = Buffer[mut=True].alloc_uninit[DType.int32](2)
+    buf1.unsafe_set[DType.int32](0, 100)
+    buf1.unsafe_set[DType.int32](1, 200)
+    var buf2 = Buffer[mut=True].alloc_uninit[DType.int32](2)
+    buf2.unsafe_set[DType.int32](0, 100)
+    buf2.unsafe_set[DType.int32](1, 200)
+    var arr1 = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf1.to_immutable()],
+            children=[],
+        )
+    )
+    var arr2 = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf2.to_immutable()],
+            children=[],
+        )
+    )
+    assert_true(arr1 == arr2)
+
+
+def test_temporal_array_dtype_mismatch() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int32](2)
+    buf.unsafe_set[DType.int32](0, 1)
+    buf.unsafe_set[DType.int32](1, 2)
+    var arr_date32 = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    var buf64 = Buffer[mut=True].alloc_uninit[DType.int64](2)
+    buf64.unsafe_set[DType.int64](0, 1)
+    buf64.unsafe_set[DType.int64](1, 2)
+    var arr_date64 = Date64Array(
+        ArrayData(
+            dtype=date64().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf64.to_immutable()],
+            children=[],
+        )
+    )
+    assert_false(arr_date32^.to_any() == arr_date64^.to_any())
+
+
+def test_temporal_array_to_any_roundtrip() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int64](2)
+    buf.unsafe_set[DType.int64](0, 999)
+    buf.unsafe_set[DType.int64](1, 1999)
+    var arr = TimestampArray(
+        ArrayData(
+            dtype=timestamp(nanosecond).to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    var any_arr = arr^.to_any()
+    assert_true(any_arr.dtype() == timestamp(nanosecond).to_any())
+    assert_equal(any_arr.length(), 2)
+    ref ta = any_arr.as_timestamp()
+    assert_equal(ta[0].value(), 999)
+    assert_equal(ta[1].value(), 1999)
+
+
+def test_temporal_array_index_out_of_bounds() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int32](1)
+    buf.unsafe_set[DType.int32](0, 42)
+    var arr = Date32Array(
+        ArrayData(
+            dtype=date32().to_any(),
+            length=1,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    var raised = False
+    try:
+        _ = arr[5]
+    except:
+        raised = True
+    assert_true(raised)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

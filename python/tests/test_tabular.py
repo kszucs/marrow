@@ -197,7 +197,7 @@ def test_rename_columns_wrong_count():
 def test_add_column():
     batch = make_batch()
     new_col = ma.array([10, 20, 30], type=ma.int64())
-    new_field = ma.field("w", type=ma.int64())
+    new_field = ma.field("w", ma.int64(), True, {})
     result = batch.add_column(0, new_field, new_col)
     assert result.num_columns() == 4
     assert list(result.column_names())[0] == "w"
@@ -206,7 +206,7 @@ def test_add_column():
 def test_append_column():
     batch = make_batch()
     new_col = ma.array([10, 20, 30], type=ma.int64())
-    new_field = ma.field("w", type=ma.int64())
+    new_field = ma.field("w", ma.int64(), True, {})
     result = batch.append_column(new_field, new_col)
     assert result.num_columns() == 4
     assert list(result.column_names())[-1] == "w"
@@ -222,7 +222,7 @@ def test_remove_column():
 def test_set_column():
     batch = make_batch()
     new_col = ma.array([10, 20, 30], type=ma.int32())
-    new_field = ma.field("xx", type=ma.int32())
+    new_field = ma.field("xx", ma.int32(), True, {})
     result = batch.set_column(0, new_field, new_col)
     assert result.num_columns() == 3
     assert list(result.column_names())[0] == "xx"

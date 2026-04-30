@@ -40,8 +40,6 @@ _UNSUPPORTED = {
     'decimal256',
     'decimal32',
     'decimal64',
-    'datetime',           # date / time / timestamp
-    'duration',
     'interval',
     'interval_mdn',       # month_day_nano_interval
     'map',

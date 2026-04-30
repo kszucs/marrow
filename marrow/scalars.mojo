@@ -50,6 +50,7 @@ from .dtypes import (
     Float64Type,
     NullType,
     FixedSizeBinaryType,
+    TimeUnit,
     bool_,
     null,
     int8,
@@ -396,6 +397,67 @@ struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
 
 
 # ---------------------------------------------------------------------------
+# TemporalScalar — date32, date64, time32, time64, timestamp, duration
+# ---------------------------------------------------------------------------
+
+
+struct TemporalScalar(Copyable, Equatable, Movable, Scalar, Writable):
+    """A single temporal value: holds an int64 physical value + temporal dtype + validity."""
+
+    var _value: Int64
+    var _dtype: AnyDataType
+    var _is_valid: Bool
+
+    def __init__(out self, value: Int64, dtype: AnyDataType):
+        self._value = value
+        self._dtype = dtype.copy()
+        self._is_valid = True
+
+    def __init__(out self, *, dtype: AnyDataType, is_valid: Bool):
+        self._value = 0
+        self._dtype = dtype.copy()
+        self._is_valid = is_valid
+
+    @staticmethod
+    def null(dtype: AnyDataType) -> Self:
+        return Self(dtype=dtype, is_valid=False)
+
+    def type(self) -> AnyDataType:
+        return self._dtype.copy()
+
+    def is_valid(self) -> Bool:
+        return self._is_valid
+
+    def is_null(self) -> Bool:
+        return not self._is_valid
+
+    def value(self) -> Int64:
+        return self._value
+
+    def to_any(deinit self) -> AnyScalar:
+        return self^
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.is_null() and other.is_null():
+            return True
+        if self.is_null() or other.is_null():
+            return False
+        return self._dtype == other._dtype and self._value == other._value
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self._is_valid:
+            writer.write(self._value)
+        else:
+            writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+# ---------------------------------------------------------------------------
 # ListScalar
 # ---------------------------------------------------------------------------
 
@@ -526,6 +588,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         Float64Scalar,
         StringScalar,
         FixedSizeBinaryScalar,
+        TemporalScalar,
         ListScalar,
         StructScalar,
     ]
@@ -609,6 +672,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     def as_fixed_size_binary(self) -> FixedSizeBinaryScalar:
         return self._v[FixedSizeBinaryScalar].copy()
+
+    def as_temporal(self) -> TemporalScalar:
+        return self._v[TemporalScalar].copy()
 
     def as_list(self) -> ListScalar:
         return self._v[ListScalar].copy()

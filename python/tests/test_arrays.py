@@ -231,7 +231,7 @@ def test_array_struct_missing_key():
 
 
 def test_array_struct_explicit_type():
-    ty = ma.struct([ma.field("x", type=ma.int32()), ma.field("y", type=ma.float64())])
+    ty = ma.struct([ma.field("x", ma.int32(), True, {}), ma.field("y", ma.float64(), True, {})])
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2
@@ -324,7 +324,7 @@ def test_array_nested_list_null_inner():
 
 
 def test_array_struct_wrong_field_type():
-    ty = ma.struct([ma.field("x", type=ma.int64())])
+    ty = ma.struct([ma.field("x", ma.int64(), True, {})])
     with pytest.raises(Exception):
         ma.array([{"x": "not_an_int"}], type=ty)
 

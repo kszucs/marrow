@@ -29,6 +29,16 @@ from marrow.dtypes import (
     Int32Type,
     Int64Type,
     Float64Type,
+    date32,
+    date64,
+    time32,
+    time64,
+    timestamp,
+    duration,
+    second,
+    millisecond,
+    microsecond,
+    nanosecond,
 )
 from marrow.scalars import (
     AnyScalar,
@@ -37,6 +47,7 @@ from marrow.scalars import (
     StringScalar,
     ListScalar,
     StructScalar,
+    TemporalScalar,
 )
 
 
@@ -304,6 +315,54 @@ def test_any_array_getitem_out_of_bounds() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_temporal_scalar_valid() raises:
+    var s = TemporalScalar(Int64(100), date32().to_any())
+    assert_true(s.is_valid())
+    assert_false(s.is_null())
+    assert_equal(s.value(), 100)
+    assert_true(s.type() == date32().to_any())
+
+
+def test_temporal_scalar_null() raises:
+    var s = TemporalScalar.null(date32().to_any())
+    assert_false(s.is_valid())
+    assert_true(s.is_null())
+    assert_true(s.type() == date32().to_any())
+
+
+def test_temporal_scalar_equality() raises:
+    var a = TemporalScalar(Int64(42), date32().to_any())
+    var b = TemporalScalar(Int64(42), date32().to_any())
+    var c = TemporalScalar(Int64(99), date32().to_any())
+    assert_true(a == b)
+    assert_false(a == c)
+    assert_false(a != b)
+    assert_true(a != c)
+
+
+def test_temporal_scalar_null_equality() raises:
+    var n1 = TemporalScalar.null(date32().to_any())
+    var n2 = TemporalScalar.null(date32().to_any())
+    var v = TemporalScalar(Int64(1), date32().to_any())
+    assert_true(n1 == n2)
+    assert_false(n1 == v)
+    assert_false(v == n1)
+
+
+def test_temporal_scalar_timestamp() raises:
+    var ts_dtype = timestamp(second, "UTC").to_any()
+    var s = TemporalScalar(Int64(1_000_000), ts_dtype)
+    assert_true(s.is_valid())
+    assert_equal(s.value(), 1_000_000)
+    assert_true(s.type() == ts_dtype)
+
+
+def test_temporal_scalar_to_any() raises:
+    var s = TemporalScalar(Int64(7), duration(nanosecond).to_any())
+    var any_s = s^.to_any()
+    assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_any()))
 
 
 def main() raises:

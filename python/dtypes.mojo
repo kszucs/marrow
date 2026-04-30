@@ -102,6 +102,51 @@ def fixed_size_binary(byte_width: PythonObject) raises -> PythonObject:
     )
 
 
+def date32() raises -> PythonObject:
+    """Create a date32 DataType."""
+    return dt.date32().to_any().to_python_object()
+
+
+def date64() raises -> PythonObject:
+    """Create a date64 DataType."""
+    return dt.date64().to_any().to_python_object()
+
+
+def time32(unit: PythonObject) raises -> PythonObject:
+    """Create a time32 DataType."""
+    return dt.time32(_parse_time_unit(unit)).to_any().to_python_object()
+
+
+def time64(unit: PythonObject) raises -> PythonObject:
+    """Create a time64 DataType."""
+    return dt.time64(_parse_time_unit(unit)).to_any().to_python_object()
+
+
+def timestamp(unit: PythonObject, tz: PythonObject = None) raises -> PythonObject:
+    """Create a timestamp DataType."""
+    var tz_str = "" if tz is None else String(py=tz)
+    return dt.timestamp(_parse_time_unit(unit), tz_str).to_any().to_python_object()
+
+
+def duration(unit: PythonObject) raises -> PythonObject:
+    """Create a duration DataType."""
+    return dt.duration(_parse_time_unit(unit)).to_any().to_python_object()
+
+
+def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
+    var s = String(py=unit)
+    if s == "s":
+        return dt.second
+    elif s == "ms":
+        return dt.millisecond
+    elif s == "us":
+        return dt.microsecond
+    elif s == "ns":
+        return dt.nanosecond
+    else:
+        raise Error("Unknown time unit: " + s)
+
+
 def field(
     name: PythonObject, type: PythonObject, nullable: PythonObject=True,
     metadata: PythonObject = None
@@ -248,4 +293,31 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
             "struct(fields: list[Field], /) -> DataType\n--\n\nCreate a struct"
             " DataType from a list of Fields."
         ),
+    )
+    mb.def_function[date32](
+        "date32",
+        docstring="date32() -> DataType\n--\n\nCreate a date32 DataType.",
+    )
+    mb.def_function[date64](
+        "date64",
+        docstring="date64() -> DataType\n--\n\nCreate a date64 DataType.",
+    )
+    mb.def_function[time32](
+        "time32",
+        docstring="time32(unit: str, /) -> DataType\n--\n\nCreate a time32 DataType.",
+    )
+    mb.def_function[time64](
+        "time64",
+        docstring="time64(unit: str, /) -> DataType\n--\n\nCreate a time64 DataType.",
+    )
+    mb.def_function[timestamp](
+        "timestamp",
+        docstring=(
+            "timestamp(unit: str, tz: str | None = None, /) -> DataType\n--\n\n"
+            "Create a timestamp DataType."
+        ),
+    )
+    mb.def_function[duration](
+        "duration",
+        docstring="duration(unit: str, /) -> DataType\n--\n\nCreate a duration DataType.",
     )

@@ -273,13 +273,13 @@ def test_multi_batch_file() raises:
 
 
 def test_schema_only_file() raises:
-    """Schema-only file (0 batches) round-trips with the explicit-fields overload."""
+    """Schema-only file (0 batches) round-trips via the schema overload."""
     var path = _tmp_path()
     var fields = List[Field]()
     fields.append(field("a", int32))
     fields.append(field("b", float64))
     var empty_batches = List[RecordBatch]()
-    write_ipc_file(path, fields, empty_batches)
+    write_ipc_file(path, Schema(fields=fields^), empty_batches)
     var result = read_ipc_file_schema(path)
     assert_equal(result.num_rows(), 0)
     assert_equal(len(result.schema.fields), 2)
@@ -364,12 +364,12 @@ def test_multi_batch_stream() raises:
 
 
 def test_schema_only_stream() raises:
-    """Schema-only stream (0 batches) round-trips with the explicit-fields overload."""
+    """Schema-only stream (0 batches) round-trips via the schema overload."""
     var path = _tmp_path(suffix=".arrows")
     var fields = List[Field]()
     fields.append(field("x", float32))
     var empty_batches = List[RecordBatch]()
-    write_ipc_stream(path, fields, empty_batches)
+    write_ipc_stream(path, Schema(fields=fields^), empty_batches)
     var result = read_ipc_stream_schema(path)
     assert_equal(result.num_rows(), 0)
     assert_equal(len(result.schema.fields), 1)

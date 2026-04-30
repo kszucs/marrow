@@ -49,6 +49,7 @@ from .scalars import (
     NullScalar,
     BoolScalar,
     FixedSizeBinaryScalar,
+    TemporalScalar,
     PrimitiveScalar,
     StringScalar,
     ListScalar,
@@ -1372,6 +1373,168 @@ struct FixedSizeBinaryArray(
 
 
 # ---------------------------------------------------------------------------
+# TemporalArray[T] — date32, date64, time32, time64, timestamp, duration
+# ---------------------------------------------------------------------------
+
+
+struct TemporalArray[T: TemporalType](
+    Array,
+    ConvertibleFromPython,
+    ConvertibleToPython,
+):
+    """An immutable Arrow array for a concrete temporal type T.
+
+    Physical storage is a single contiguous buffer of T.native values
+    (int32 for date32/time32, int64 for date64/time64/timestamp/duration).
+    The full logical dtype (including unit and timezone) is stored in `dtype`.
+    """
+
+    comptime ScalarType = TemporalScalar
+
+    var dtype: AnyDataType
+    var length: Int
+    var nulls: Int
+    var offset: Int
+    var bitmap: Optional[Bitmap[mut=False]]
+    var buffer: Buffer[mut=False]
+
+    def __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[Self]()[].copy()
+
+    def __init__(out self, data: ArrayData) raises:
+        if not data.dtype.is_temporal():
+            raise Error("TemporalArray requires a temporal dtype")
+        if len(data.buffers) != 1:
+            raise Error("TemporalArray requires exactly one buffer")
+        self.dtype = data.dtype.copy()
+        self.length = data.length
+        self.nulls = data.nulls
+        self.offset = data.offset
+        self.bitmap = data.bitmap
+        self.buffer = data.buffers[0]
+
+    def __init__(
+        out self,
+        *,
+        dtype: AnyDataType,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        bitmap: Optional[Bitmap[mut=False]],
+        buffer: Buffer[mut=False],
+    ):
+        self.dtype = dtype.copy()
+        self.length = length
+        self.nulls = nulls
+        self.offset = offset
+        self.bitmap = bitmap
+        self.buffer = buffer
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
+
+    def __len__(self) -> Int:
+        return self.length
+
+    def __str__(self) -> String:
+        return String.write(self)
+
+    def type(self) -> AnyDataType:
+        return self.dtype.copy()
+
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
+        var actual_length = length if length >= 0 else self.length - offset
+        return Self(
+            dtype=self.dtype.copy(),
+            length=actual_length,
+            nulls=self.nulls,
+            offset=self.offset + offset,
+            bitmap=self.bitmap,
+            buffer=self.buffer,
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("TemporalArray<", self.dtype, ">([")
+        for i in range(self.length):
+            if i > 0:
+                writer.write(", ")
+            if i >= 10:
+                writer.write("...")
+                break
+            if self.is_valid(i):
+                writer.write(self.buffer.unsafe_get[Self.T.native](self.offset + i))
+            else:
+                writer.write("NULL")
+        writer.write("])")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def null_count(self) -> Int:
+        return self.nulls
+
+    def is_valid(self, index: Int) -> Bool:
+        if not self.bitmap:
+            return True
+        return self.bitmap.value().test(self.offset + index)
+
+    def __getitem__(self, index: Int) raises -> TemporalScalar:
+        if index < 0 or index >= self.length:
+            raise Error("TemporalArray index out of bounds")
+        return self.unsafe_get(index)
+
+    def unsafe_get(self, index: Int) -> TemporalScalar:
+        if not self.is_valid(index):
+            return TemporalScalar.null(self.dtype)
+        var phys = self.offset + index
+        return TemporalScalar(
+            Int64(self.buffer.unsafe_get[Self.T.native](phys)), self.dtype
+        )
+
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
+
+    def to_data(self) -> ArrayData:
+        return ArrayData(
+            dtype=self.dtype.copy(),
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            buffers=[self.buffer],
+            children=[],
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.dtype != other.dtype:
+            return False
+        if self.length != other.length:
+            return False
+        for i in range(self.length):
+            var lv = self.is_valid(i)
+            var rv = other.is_valid(i)
+            if lv != rv:
+                return False
+            if lv:
+                var l = self.buffer.unsafe_get[Self.T.native](self.offset + i)
+                var r = other.buffer.unsafe_get[Self.T.native](other.offset + i)
+                if l != r:
+                    return False
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return not Self.__eq__(self, other)
+
+
+comptime Date32Array = TemporalArray[Date32Type]
+comptime Date64Array = TemporalArray[Date64Type]
+comptime Time32Array = TemporalArray[Time32Type]
+comptime Time64Array = TemporalArray[Time64Type]
+comptime DurationArray = TemporalArray[DurationType]
+comptime TimestampArray = TemporalArray[TimestampType]
+
+
+# ---------------------------------------------------------------------------
 # StructArray
 # ---------------------------------------------------------------------------
 
@@ -1716,6 +1879,12 @@ struct AnyArray(
         ListArray,
         FixedSizeListArray,
         FixedSizeBinaryArray,
+        Date32Array,
+        Date64Array,
+        Time32Array,
+        Time64Array,
+        DurationArray,
+        TimestampArray,
         StructArray,
     ]
 
@@ -1901,6 +2070,24 @@ struct AnyArray(
     def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryArray:
         return self._v[FixedSizeBinaryArray]
 
+    def as_date32(ref self) -> ref[self._v] Date32Array:
+        return self._v[Date32Array]
+
+    def as_date64(ref self) -> ref[self._v] Date64Array:
+        return self._v[Date64Array]
+
+    def as_time32(ref self) -> ref[self._v] Time32Array:
+        return self._v[Time32Array]
+
+    def as_time64(ref self) -> ref[self._v] Time64Array:
+        return self._v[Time64Array]
+
+    def as_duration(ref self) -> ref[self._v] DurationArray:
+        return self._v[DurationArray]
+
+    def as_timestamp(ref self) -> ref[self._v] TimestampArray:
+        return self._v[TimestampArray]
+
     def as_struct(ref self) -> ref[self._v] StructArray:
         return self._v[StructArray]
 
@@ -1948,6 +2135,18 @@ struct AnyArray(
             return AnyArray(FixedSizeListArray(data))
         elif dt.is_fixed_size_binary():
             return AnyArray(FixedSizeBinaryArray(data))
+        elif dt.is_date32():
+            return AnyArray(Date32Array(data))
+        elif dt.is_date64():
+            return AnyArray(Date64Array(data))
+        elif dt.is_time32():
+            return AnyArray(Time32Array(data))
+        elif dt.is_time64():
+            return AnyArray(Time64Array(data))
+        elif dt.is_timestamp():
+            return AnyArray(TimestampArray(data))
+        elif dt.is_duration():
+            return AnyArray(DurationArray(data))
         elif dt.is_struct():
             return AnyArray(StructArray(data))
         raise Error("from_data: unsupported dtype")
@@ -1971,6 +2170,19 @@ struct AnyArray(
                     offset=0,
                     bitmap=None,
                     buffers=bufs^,
+                    children=List[ArrayData](),
+                )
+            )
+        elif dtype.is_temporal():
+            var empty_buf = Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
+            return AnyArray.from_data(
+                ArrayData(
+                    dtype=dtype.copy(),
+                    length=0,
+                    nulls=0,
+                    offset=0,
+                    bitmap=None,
+                    buffers=[empty_buf],
                     children=List[ArrayData](),
                 )
             )

@@ -58,6 +58,16 @@ trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
         return bit_width_of[Self.native]()
 
 
+trait TemporalType(DataType):
+    """Trait for Arrow temporal types (date32, date64, time32, time64, timestamp, duration).
+
+    Extends DataType with a compile-time native DType for physical storage
+    (int32 or int64). Not a sub-trait of PrimitiveType.
+    """
+
+    comptime native: DType
+
+
 # ---------------------------------------------------------------------------
 # Concrete zero-size Arrow type structs
 # ---------------------------------------------------------------------------
@@ -322,6 +332,166 @@ struct FixedSizeBinaryType(DataType, TrivialRegisterPassable):
 
 
 # ---------------------------------------------------------------------------
+# Temporal types — date, time, timestamp, duration
+# ---------------------------------------------------------------------------
+
+
+struct TimeUnit(Copyable, Equatable, Movable, TrivialRegisterPassable, Writable):
+    """Unit for time-based Arrow types (SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3)."""
+
+    var value: Int
+
+    def __init__(out self, value: Int):
+        self.value = value
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.value == other.value
+
+    def to_string(self) -> String:
+        if self.value == 0:
+            return "s"
+        elif self.value == 1:
+            return "ms"
+        elif self.value == 2:
+            return "us"
+        else:
+            return "ns"
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.to_string())
+
+
+comptime second = TimeUnit(0)
+comptime millisecond = TimeUnit(1)
+comptime microsecond = TimeUnit(2)
+comptime nanosecond = TimeUnit(3)
+
+
+struct Date32Type(TemporalType, Defaultable, TrivialRegisterPassable):
+    """Date32 — days since Unix epoch (int32)."""
+
+    comptime native: DType = DType.int32
+
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("date32")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
+struct Date64Type(TemporalType, Defaultable, TrivialRegisterPassable):
+    """Date64 — milliseconds since Unix epoch (int64)."""
+
+    comptime native: DType = DType.int64
+
+    def __init__(out self):
+        pass
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("date64")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
+struct Time32Type(TemporalType, TrivialRegisterPassable):
+    """Time32 — seconds or milliseconds since midnight (int32)."""
+
+    comptime native: DType = DType.int32
+
+    var unit: TimeUnit
+
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.unit == other.unit
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("time32[", self.unit, "]")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
+struct Time64Type(TemporalType, TrivialRegisterPassable):
+    """Time64 — microseconds or nanoseconds since midnight (int64)."""
+
+    comptime native: DType = DType.int64
+
+    var unit: TimeUnit
+
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.unit == other.unit
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("time64[", self.unit, "]")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
+struct TimestampType(TemporalType):
+    """Timestamp — int64 elapsed units since Unix epoch, with optional timezone."""
+
+    comptime native: DType = DType.int64
+
+    var unit: TimeUnit
+    var timezone: String
+
+    def __init__(out self, unit: TimeUnit, timezone: String = ""):
+        self.unit = unit
+        self.timezone = timezone
+
+    def __init__(out self, *, copy: Self):
+        self.unit = copy.unit
+        self.timezone = copy.timezone
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.unit == other.unit and self.timezone == other.timezone
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("timestamp[", self.unit, "]")
+        if self.timezone:
+            writer.write("[tz=", self.timezone, "]")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self^)
+
+
+struct DurationType(TemporalType, TrivialRegisterPassable):
+    """Duration — elapsed int64 units, no epoch reference."""
+
+    comptime native: DType = DType.int64
+
+    var unit: TimeUnit
+
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.unit == other.unit
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("duration[", self.unit, "]")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
+# ---------------------------------------------------------------------------
 # Field and nested compound types
 # ---------------------------------------------------------------------------
 
@@ -485,6 +655,12 @@ struct AnyDataType(
         FixedSizeListType,
         FixedSizeBinaryType,
         StructType,
+        Date32Type,
+        Date64Type,
+        Time32Type,
+        Time64Type,
+        TimestampType,
+        DurationType,
     ]
 
     var _v: Self.VariantType
@@ -588,6 +764,41 @@ struct AnyDataType(
     def is_struct(self) -> Bool:
         return self._v.isa[StructType]()
 
+    def is_date32(self) -> Bool:
+        return self._v.isa[Date32Type]()
+
+    def is_date64(self) -> Bool:
+        return self._v.isa[Date64Type]()
+
+    def is_time32(self) -> Bool:
+        return self._v.isa[Time32Type]()
+
+    def is_time64(self) -> Bool:
+        return self._v.isa[Time64Type]()
+
+    def is_timestamp(self) -> Bool:
+        return self._v.isa[TimestampType]()
+
+    def is_duration(self) -> Bool:
+        return self._v.isa[DurationType]()
+
+    def is_temporal(self) -> Bool:
+        return (
+            self.is_date32()
+            or self.is_date64()
+            or self.is_time32()
+            or self.is_time64()
+            or self.is_timestamp()
+            or self.is_duration()
+        )
+
+    def temporal_bit_width(self) -> Int:
+        """Physical bit width of the temporal type's integer storage."""
+        if self.is_date32() or self.is_time32():
+            return 32
+        else:
+            return 64
+
     def is_fixed_size(self) -> Bool:
         return self.is_primitive()
 
@@ -618,6 +829,7 @@ struct AnyDataType(
             or self.is_primitive()
             or self.is_list()
             or self.is_fixed_size_binary()
+            or self.is_temporal()
         ):
             return 1
         else:
@@ -654,6 +866,18 @@ struct AnyDataType(
         """For fixed-size binary types, returns the inner FixedSizeBinaryType."""
         return self._v[FixedSizeBinaryType]
 
+    def as_time32_type(self) -> Time32Type:
+        return self._v[Time32Type]
+
+    def as_time64_type(self) -> Time64Type:
+        return self._v[Time64Type]
+
+    def as_timestamp_type(self) -> TimestampType:
+        return TimestampType(copy=self._v[TimestampType])
+
+    def as_duration_type(self) -> DurationType:
+        return self._v[DurationType]
+
 
 # ---------------------------------------------------------------------------
 # Field constructor and factory functions
@@ -682,6 +906,36 @@ def fixed_size_binary_(byte_width: Int) -> FixedSizeBinaryType:
     """Construct a fixed-size binary type. Equivalent to PyArrow's ``pa.binary(byte_width)``.
     """
     return FixedSizeBinaryType(byte_width)
+
+
+def date32() -> Date32Type:
+    """Construct a date32 type. Equivalent to PyArrow's ``pa.date32()``."""
+    return Date32Type()
+
+
+def date64() -> Date64Type:
+    """Construct a date64 type. Equivalent to PyArrow's ``pa.date64()``."""
+    return Date64Type()
+
+
+def time32(unit: TimeUnit) -> Time32Type:
+    """Construct a time32 type. Equivalent to PyArrow's ``pa.time32(unit)``."""
+    return Time32Type(unit)
+
+
+def time64(unit: TimeUnit) -> Time64Type:
+    """Construct a time64 type. Equivalent to PyArrow's ``pa.time64(unit)``."""
+    return Time64Type(unit)
+
+
+def timestamp(unit: TimeUnit, timezone: String = "") -> TimestampType:
+    """Construct a timestamp type. Equivalent to PyArrow's ``pa.timestamp(unit, tz)``."""
+    return TimestampType(unit, timezone)
+
+
+def duration(unit: TimeUnit) -> DurationType:
+    """Construct a duration type. Equivalent to PyArrow's ``pa.duration(unit)``."""
+    return DurationType(unit)
 
 
 def struct_(var fields: List[Field]) -> StructType:

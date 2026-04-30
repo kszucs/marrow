@@ -49,6 +49,23 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
         return pa.binary(type_obj["byteWidth"])
     if name == "utf8":
         return pa.utf8()
+    if name == "date":
+        return pa.date32() if type_obj.get("unit") == "DAY" else pa.date64()
+    if name == "time":
+        _UNIT_MAP = {"SECOND": "s", "MILLISECOND": "ms", "MICROSECOND": "us", "NANOSECOND": "ns"}
+        unit = _UNIT_MAP[type_obj["unit"]]
+        if type_obj.get("bitWidth", 32) == 32:
+            return pa.time32(unit)
+        else:
+            return pa.time64(unit)
+    if name == "timestamp":
+        _UNIT_MAP = {"SECOND": "s", "MILLISECOND": "ms", "MICROSECOND": "us", "NANOSECOND": "ns"}
+        unit = _UNIT_MAP[type_obj["unit"]]
+        tz = type_obj.get("timezone")
+        return pa.timestamp(unit, tz=tz)
+    if name == "duration":
+        _UNIT_MAP = {"SECOND": "s", "MILLISECOND": "ms", "MICROSECOND": "us", "NANOSECOND": "ns"}
+        return pa.duration(_UNIT_MAP[type_obj["unit"]])
     if name == "list":
         child = _json_field_to_pa(children_fields[0])
         return None if child is None else pa.list_(child)
@@ -122,6 +139,15 @@ def _json_col_to_pa(col_obj: dict, pa_type: pa.DataType) -> pa.Array:
 
     if pa.types.is_fixed_size_binary(pa_type):
         data = [bytes.fromhex(v) if v else b"" for v in col_obj.get("DATA", [])]
+        return pa.array(data, type=pa_type, mask=mask_np)
+
+    if (
+        pa.types.is_date(pa_type)
+        or pa.types.is_time(pa_type)
+        or pa.types.is_timestamp(pa_type)
+        or pa.types.is_duration(pa_type)
+    ):
+        data = [int(v) if isinstance(v, str) else v for v in col_obj.get("DATA", [])]
         return pa.array(data, type=pa_type, mask=mask_np)
 
     if pa.types.is_string(pa_type):
