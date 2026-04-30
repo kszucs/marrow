@@ -63,7 +63,7 @@ def _export_c_array(
     schema: Schema, columns: List[AnyArray]
 ) raises -> PythonObject:
     """Export schema + columns as Arrow C Data Interface capsule pair."""
-    var schema_cap = CArrowSchema.from_schema(schema.fields).to_pycapsule()
+    var schema_cap = CArrowSchema.from_schema(schema).to_pycapsule()
     var cols = List[AnyArray]()
     for col in columns:
         cols.append(col.copy())
@@ -207,7 +207,7 @@ def _record_batch_arrow_c_array(
 def _record_batch_arrow_c_schema(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
-    return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
+    return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
 def _record_batch_rich_compare(
@@ -321,14 +321,15 @@ def _table_arrow_c_stream(
     requested_schema: PythonObject,
 ) raises -> PythonObject:
     var batches = ptr[].to_batches()
-    var fields = List(ptr[].schema.fields)
-    return CArrowArrayStream.from_batches(fields^, batches^).to_pycapsule()
+    return CArrowArrayStream.from_batches(
+        ptr[].schema.copy(), batches^
+    ).to_pycapsule()
 
 
 def _table_arrow_c_schema(
     ptr: UnsafePointer[Table, MutAnyOrigin]
 ) raises -> PythonObject:
-    return CArrowSchema.from_schema(ptr[].schema.fields).to_pycapsule()
+    return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
 def _table_rich_compare(

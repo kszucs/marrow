@@ -40,9 +40,8 @@ def write_table(table: Table, path: String) raises -> None:
     var pq = Python.import_module("pyarrow.parquet")
 
     var batches = table.to_batches()
-    var fields = List(table.schema.fields)
     var capsule = CArrowArrayStream.from_batches(
-        fields^, batches^
+        table.schema.copy(), batches^
     ).to_pycapsule()
 
     # PyArrow's from_stream expects an object with __arrow_c_stream__,

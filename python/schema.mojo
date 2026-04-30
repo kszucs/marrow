@@ -9,7 +9,7 @@ from helpers import marrow_module
 def _schema_arrow_c_schema(
     ptr: UnsafePointer[Schema, MutAnyOrigin]
 ) raises -> PythonObject:
-    return CArrowSchema.from_schema(ptr[].fields).to_pycapsule()
+    return CArrowSchema.from_schema(ptr[]).to_pycapsule()
 
 
 def schema(fields_or_schema: PythonObject) raises -> PythonObject:

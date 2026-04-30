@@ -31,6 +31,8 @@ from .buffers import Buffer, Bitmap
 from .dtypes import (
     AnyDataType,
     Field,
+    ListType,
+    FixedSizeListType,
     list_ as mk_list,
     fixed_size_list_ as mk_fixed_size_list,
     struct_ as mk_struct,
@@ -1021,13 +1023,15 @@ struct _IpcDecoder(Movable):
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
                 raise Error("list Field must have 1 child, got 0")
-            dtype = mk_list(children[0].dtype.copy())
+            # Preserve the child Field as-is (its name may not be the default
+            # "item" — e.g. arrow-rs uses "inner_list" for nested lists).
+            dtype = ListType(children[0].copy()).to_any()
         elif type_type == _TYPE_FIXED_SIZE_LIST:
             var tp = self._r.read_table(fp, 3)
             var list_size = Int(self._r.read_i32(tp, 0, 0))
             if len(children) == 0:
                 raise Error("fixed_size_list Field must have 1 child, got 0")
-            dtype = mk_fixed_size_list(children[0].dtype.copy(), list_size)
+            dtype = FixedSizeListType(children[0].copy(), list_size).to_any()
         elif type_type == _TYPE_STRUCT:
             dtype = mk_struct(children^)
             return Field(name, dtype^, nullable, metadata^)

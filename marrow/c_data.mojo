@@ -37,6 +37,86 @@ def _alloc_c_string(s: String) -> UnsafePointer[c_char, MutAnyOrigin]:
     return UnsafePointer[c_char, MutAnyOrigin](unsafe_from_address=Int(buf))
 
 
+def _encode_c_metadata(
+    metadata: Dict[String, String],
+) raises -> UnsafePointer[c_char, MutAnyOrigin]:
+    """Encode a Dict into the Arrow C Data Interface metadata blob.
+
+    Format (native byte order, per the spec):
+        int32 num_kv_pairs
+        for each pair:
+            int32 key_length;   bytes key   (no null terminator)
+            int32 value_length; bytes value
+    Returns a null pointer when the dict is empty.
+    """
+    if len(metadata) == 0:
+        return UnsafePointer[c_char, MutAnyOrigin]()
+    # First pass: compute total byte length.
+    var total = 4  # num_kv_pairs
+    for entry in metadata.items():
+        total += 4 + entry.key.byte_length() + 4 + entry.value.byte_length()
+    var buf = alloc[UInt8](total)
+    var head = 0
+
+    var n_pairs = Int32(len(metadata))
+    memcpy(
+        dest=buf + head, src=UnsafePointer(to=n_pairs).bitcast[UInt8](), count=4
+    )
+    head += 4
+    for entry in metadata.items():
+        var k = entry.key
+        var v = entry.value
+        var k_len = Int32(k.byte_length())
+        memcpy(
+            dest=buf + head, src=UnsafePointer(to=k_len).bitcast[UInt8](), count=4
+        )
+        head += 4
+        memcpy(dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length())
+        head += k.byte_length()
+        var v_len = Int32(v.byte_length())
+        memcpy(
+            dest=buf + head, src=UnsafePointer(to=v_len).bitcast[UInt8](), count=4
+        )
+        head += 4
+        memcpy(dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length())
+        head += v.byte_length()
+    return buf.bitcast[c_char]()
+
+
+def _decode_c_metadata(
+    metadata: UnsafePointer[c_char, MutAnyOrigin],
+) raises -> Dict[String, String]:
+    """Decode an Arrow C Data Interface metadata blob into a Dict."""
+    var result = Dict[String, String]()
+    if not metadata:
+        return result^
+    var p = metadata.bitcast[UInt8]()
+    var head = 0
+
+    var n_pairs = Int32(0)
+    memcpy(
+        dest=UnsafePointer(to=n_pairs).bitcast[UInt8](), src=p + head, count=4
+    )
+    head += 4
+    for _ in range(Int(n_pairs)):
+        var k_len = Int32(0)
+        memcpy(
+            dest=UnsafePointer(to=k_len).bitcast[UInt8](), src=p + head, count=4
+        )
+        head += 4
+        var k = String(StringSlice(ptr=p + head, length=Int(k_len)))
+        head += Int(k_len)
+        var v_len = Int32(0)
+        memcpy(
+            dest=UnsafePointer(to=v_len).bitcast[UInt8](), src=p + head, count=4
+        )
+        head += 4
+        var v = String(StringSlice(ptr=p + head, length=Int(v_len)))
+        head += Int(v_len)
+        result[k^] = v^
+    return result^
+
+
 def _release_schema_capsule(capsule: PyObjectPtr):
     """PyCapsule destructor for "arrow_schema" capsules.
 
@@ -82,6 +162,8 @@ def _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
         ptr[].format.free()
     if ptr[].name:
         ptr[].name.free()
+    if ptr[].metadata:
+        ptr[].metadata.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
 
@@ -242,18 +324,18 @@ struct CArrowSchema(Copyable, Movable):
         c_schema.flags = Int64(
             ARROW_FLAG_NULLABLE
         ) if field.nullable else Int64(0)
+        c_schema.metadata = _encode_c_metadata(field.metadata)
         return c_schema^
 
     @staticmethod
-    def from_schema(
-        fields: List[Field],
-    ) raises -> CArrowSchema:
+    def from_schema(schema: Schema) raises -> CArrowSchema:
         """Build a top-level "+s" CArrowSchema representing a record-batch schema.
 
         Analogous to `from_dtype` for struct types but without a parent dtype:
         the format is always "+s" and children correspond to the schema fields.
+        Schema-level `custom_metadata` is encoded into the metadata blob.
         """
-        var n_fields = len(fields)
+        var n_fields = len(schema.fields)
         var children = UnsafePointer[
             UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
         ]()
@@ -263,7 +345,7 @@ struct CArrowSchema(Copyable, Movable):
             )
             for i in range(n_fields):
                 # Move each child value onto the heap so the pointer is stable.
-                var child = CArrowSchema.from_field(fields[i])
+                var child = CArrowSchema.from_field(schema.fields[i])
                 var child_ptr = alloc[CArrowSchema](1)
                 child_ptr.init_pointee_move(child^)
                 children[i] = child_ptr
@@ -271,7 +353,7 @@ struct CArrowSchema(Copyable, Movable):
         return CArrowSchema(
             format=_alloc_c_string("+s"),
             name=UnsafePointer[c_char, MutAnyOrigin](),
-            metadata=UnsafePointer[c_char, MutAnyOrigin](),
+            metadata=_encode_c_metadata(schema.metadata),
             flags=0,
             n_children=Int64(n_fields),
             children=children,
@@ -356,12 +438,14 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt == "u":
             return string
         elif fmt == "+l":
-            var f = self.children[0][].to_field()
-            return list_(f.dtype.copy())
+            # Preserve the child Field as-is (its name may not be the default
+            # "item" when constructed by other Arrow implementations).
+            return ListType(self.children[0][].to_field()).to_any()
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
-            var f = self.children[0][].to_field()
-            return fixed_size_list_(f.dtype.copy(), size)
+            return FixedSizeListType(
+                self.children[0][].to_field(), size
+            ).to_any()
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
@@ -374,14 +458,16 @@ struct CArrowSchema(Copyable, Movable):
         var name = StringSlice(unsafe_from_utf8_ptr=self.name)
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
-        return field(String(name), dtype^, nullable != 0)
+        var metadata = _decode_c_metadata(self.metadata)
+        return Field(String(name), dtype^, nullable != 0, metadata^)
 
     def to_schema(self) raises -> Schema:
         """Build a Schema from this top-level struct CArrowSchema."""
         var fields = List[Field]()
         for i in range(self.n_children):
             fields.append(self.children[i][].to_field())
-        return Schema(fields=fields^)
+        var metadata = _decode_c_metadata(self.metadata)
+        return Schema(fields=fields^, metadata=metadata^)
 
 
 def _release_array_capsule(capsule: PyObjectPtr):
@@ -838,18 +924,18 @@ struct CArrowDeviceArray(Movable):
 struct _StreamPrivateData(Movable):
     """Internal state for an exported CArrowArrayStream.
 
-    Holds the schema fields and record batches that the stream yields.
-    `index` tracks the current position in `batches`.
+    Holds the schema and record batches that the stream yields.  `index`
+    tracks the current position in `batches`.
     """
 
-    var fields: List[Field]
+    var schema: Schema
     var batches: List[RecordBatch]
     var index: Int
 
     def __init__(
-        out self, var fields: List[Field], var batches: List[RecordBatch]
+        out self, var schema: Schema, var batches: List[RecordBatch]
     ):
-        self.fields = fields^
+        self.schema = schema^
         self.batches = batches^
         self.index = 0
 
@@ -861,7 +947,7 @@ def _stream_get_schema(
     """Stream callback: write the schema into `schema_out`."""
     try:
         var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
-        schema_out.init_pointee_move(CArrowSchema.from_schema(data[].fields))
+        schema_out.init_pointee_move(CArrowSchema.from_schema(data[].schema))
         return 0
     except:
         return 1
@@ -949,7 +1035,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
 
     @staticmethod
     def from_batches(
-        var fields: List[Field], var batches: List[RecordBatch]
+        var schema: Schema, var batches: List[RecordBatch]
     ) -> CArrowArrayStream:
         """Build a CArrowArrayStream that yields the given batches.
 
@@ -957,7 +1043,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         mutate them after this call.
         """
         var data = alloc[_StreamPrivateData](1)
-        data.init_pointee_move(_StreamPrivateData(fields^, batches^))
+        data.init_pointee_move(_StreamPrivateData(schema^, batches^))
         return CArrowArrayStream(
             get_schema=_stream_get_schema,
             get_next=_stream_get_next,

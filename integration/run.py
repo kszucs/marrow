@@ -58,8 +58,6 @@ _UNSUPPORTED = {
     'list_view',
     'extension',
     'run_end_encoded',
-    'recursive_nested',   # tester layer cannot preserve custom inner-field names
-    'custom_metadata',    # schema/field metadata not preserved end-to-end
 }
 
 _orig_get_generated = _datagen.get_generated_json_files

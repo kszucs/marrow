@@ -4,6 +4,38 @@
 
 ### Features
 
+- **Custom metadata round-trip via the C Data Interface**
+  (`marrow/c_data.mojo`): `CArrowSchema.from_field` / `from_schema` now
+  encode `Field.metadata` and `Schema.metadata` into the spec-defined
+  metadata blob; `to_field` / `to_schema` decode it back.  New
+  `_encode_c_metadata` / `_decode_c_metadata` helpers handle the
+  `int32 num_pairs ; (int32 key_len, key_bytes, int32 val_len, val_bytes)*`
+  layout.  `from_schema` now takes a full `Schema` rather than `List[Field]`
+  so schema-level metadata flows through; `_StreamPrivateData` was updated
+  accordingly.
+
+- **Preserve nested-field names in IPC reader and C Data Interface**
+  (`marrow/ipc.mojo`, `marrow/c_data.mojo`): the IPC `_read_field`
+  decoder and the `CArrowSchema` list / fixed_size_list importer used to
+  drop the inner field's name (replacing it with the marrow default
+  "item") because they constructed types from `value_type` rather than
+  the full child `Field`.  Now they preserve the child Field as-is, so
+  Arrow files written by other implementations (e.g. arrow-rs uses
+  "inner_list" for nested lists) round-trip with the original schema.
+
+### Tests
+
+- **Re-route the integration tester's JSON converter through pyarrow**
+  (`integration/tester.py`): the previous direct JSON→marrow path could
+  not preserve nested-field names because `ma.list_(value_type)` accepts
+  only a value type, not a `Field`. The new converter builds a
+  `pa.Schema` / `pa.RecordBatch` (which has `pa.list_(field)`) from the
+  JSON, then bridges to marrow via the C Data Interface (`ma.record_batch
+  (pa_batch)`). Adds positional column matching to handle duplicate
+  field names. Together with the IPC and C-Data fixes above, the
+  archery `recursive_nested` and `custom_metadata` cases now pass in all
+  14 directional phases (Mojo↔{Mojo, Rust, Go, C++}).
+
 - **Arrow `Null` type end-to-end support** (`marrow/{arrays,scalars,builders,
   ipc,c_data}.mojo`, `python/arrows.mojo`, `integration/tester.py`): added
   `NullArray`, `NullScalar`, `NullBuilder` (registered in the `AnyArray`,
