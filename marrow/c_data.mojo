@@ -281,6 +281,9 @@ struct CArrowSchema(Copyable, Movable):
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
+        elif dtype.is_fixed_size_binary():
+            var fsb = dtype.as_fixed_size_binary_type()
+            fmt = {"w:", fsb.byte_width}
         elif dtype.is_struct():
             fmt = "+s"
             var st = dtype.as_struct_type()
@@ -446,6 +449,9 @@ struct CArrowSchema(Copyable, Movable):
             return FixedSizeListType(
                 self.children[0][].to_field(), size
             ).to_any()
+        elif fmt.startswith("w:"):
+            var width = Int(String(fmt).removeprefix("w:"))
+            return FixedSizeBinaryType(width).to_any()
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):
@@ -645,6 +651,15 @@ struct CArrowArray(Copyable, Movable):
             children.append(
                 self.children[0][].to_data(
                     dtype.as_fixed_size_list_type().value_type(), owner
+                )
+            )
+        elif dtype.is_fixed_size_binary():
+            var bw = dtype.as_fixed_size_binary_type().byte_width
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    Int(length) * bw,
+                    owner,
                 )
             )
         elif dtype.is_struct():

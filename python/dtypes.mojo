@@ -95,6 +95,13 @@ def binary() raises -> PythonObject:
     return dt.binary.to_any().to_python_object()
 
 
+def fixed_size_binary(byte_width: PythonObject) raises -> PythonObject:
+    """Create a fixed-size binary DataType."""
+    return (
+        dt.fixed_size_binary_(Int(py=byte_width)).to_any().to_python_object()
+    )
+
+
 def field(
     name: PythonObject, type: PythonObject, nullable: PythonObject=True,
     metadata: PythonObject = None
@@ -204,6 +211,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[binary](
         "binary",
         docstring="binary() -> DataType\n--\n\nCreate a binary DataType.",
+    )
+    mb.def_function[fixed_size_binary](
+        "fixed_size_binary",
+        docstring=(
+            "fixed_size_binary(byte_width: int, /) -> DataType\n--\n\nCreate a"
+            " fixed-size binary DataType."
+        ),
     )
     mb.def_function[field](
         "field",

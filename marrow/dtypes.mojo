@@ -303,6 +303,24 @@ struct StringType(DataType, Defaultable, TrivialRegisterPassable):
         return AnyDataType(self)
 
 
+struct FixedSizeBinaryType(DataType, TrivialRegisterPassable):
+    """Fixed-size binary type — every element is exactly `byte_width` bytes."""
+
+    var byte_width: Int
+
+    def __init__(out self, byte_width: Int):
+        self.byte_width = byte_width
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.byte_width == other.byte_width
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("fixed_size_binary[", self.byte_width, "]")
+
+    def to_any(deinit self) -> AnyDataType:
+        return AnyDataType(self)
+
+
 # ---------------------------------------------------------------------------
 # Field and nested compound types
 # ---------------------------------------------------------------------------
@@ -465,6 +483,7 @@ struct AnyDataType(
         StringType,
         ListType,
         FixedSizeListType,
+        FixedSizeBinaryType,
         StructType,
     ]
 
@@ -563,6 +582,9 @@ struct AnyDataType(
     def is_fixed_size_list(self) -> Bool:
         return self._v.isa[FixedSizeListType]()
 
+    def is_fixed_size_binary(self) -> Bool:
+        return self._v.isa[FixedSizeBinaryType]()
+
     def is_struct(self) -> Bool:
         return self._v.isa[StructType]()
 
@@ -591,7 +613,12 @@ struct AnyDataType(
         """Number of flat data buffers for this type (excludes validity bitmap)."""
         if self.is_string() or self.is_binary():
             return 2
-        elif self.is_bool() or self.is_primitive() or self.is_list():
+        elif (
+            self.is_bool()
+            or self.is_primitive()
+            or self.is_list()
+            or self.is_fixed_size_binary()
+        ):
             return 1
         else:
             return 0
@@ -623,6 +650,10 @@ struct AnyDataType(
         """For struct types, returns the inner StructType."""
         return StructType(copy=self._v[StructType])
 
+    def as_fixed_size_binary_type(self) -> FixedSizeBinaryType:
+        """For fixed-size binary types, returns the inner FixedSizeBinaryType."""
+        return self._v[FixedSizeBinaryType]
+
 
 # ---------------------------------------------------------------------------
 # Field constructor and factory functions
@@ -645,6 +676,12 @@ def fixed_size_list_(
     """Construct a fixed-size list type. Equivalent to PyArrow's ``pa.list_()`` with list_size.
     """
     return FixedSizeListType(field("item", value_type^), size)
+
+
+def fixed_size_binary_(byte_width: Int) -> FixedSizeBinaryType:
+    """Construct a fixed-size binary type. Equivalent to PyArrow's ``pa.binary(byte_width)``.
+    """
+    return FixedSizeBinaryType(byte_width)
 
 
 def struct_(var fields: List[Field]) -> StructType:

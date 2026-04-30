@@ -39,6 +39,7 @@ from .arrays import (
     StringArray,
     ListArray,
     FixedSizeListArray,
+    FixedSizeBinaryArray,
     StructArray,
 )
 
@@ -110,6 +111,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         StringBuilder,
         ListBuilder,
         FixedSizeListBuilder,
+        FixedSizeBinaryBuilder,
         StructBuilder,
     ]
 
@@ -160,6 +162,10 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             var fsl = dtype.as_fixed_size_list_type()
             var child = AnyBuilder(fsl.value_type())
             self = FixedSizeListBuilder(child^, fsl.size, capacity)
+        elif dtype.is_fixed_size_binary():
+            self = FixedSizeBinaryBuilder(
+                dtype.as_fixed_size_binary_type().byte_width, capacity
+            )
         elif dtype.is_struct():
             self = StructBuilder(dtype.as_struct_type().fields.copy(), capacity)
         else:
@@ -275,6 +281,11 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
         return self._ptr[][FixedSizeListBuilder]
+
+    def as_fixed_size_binary(
+        ref self,
+    ) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
+        return self._ptr[][FixedSizeBinaryBuilder]
 
     def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
         return self._ptr[][StructBuilder]
@@ -1083,6 +1094,136 @@ struct NullBuilder(Builder, Sized):
 
     def reset(mut self):
         self._length = 0
+
+
+struct FixedSizeBinaryBuilder(Builder, Sized):
+    """Builder for FixedSizeBinaryArray — fixed-width binary values."""
+
+    comptime ArrayType = FixedSizeBinaryArray
+
+    var _byte_width: Int
+    var _length: Int
+    var _capacity: Int
+    var _null_count: Int
+    var _bitmap: Bitmap[mut=True]
+    var _buffer: Buffer[mut=True]
+
+    def __init__(out self, byte_width: Int, capacity: Int = 0):
+        self._byte_width = byte_width
+        self._length = 0
+        self._capacity = capacity
+        self._null_count = 0
+        self._bitmap = Bitmap.alloc_zeroed(capacity)
+        self._buffer = Buffer.alloc_zeroed[DType.uint8](capacity * byte_width)
+
+    def __len__(self) -> Int:
+        return self._length
+
+    def length(self) -> Int:
+        return self._length
+
+    def null_count(self) -> Int:
+        return self._null_count
+
+    def dtype(self) -> AnyDataType:
+        return FixedSizeBinaryType(self._byte_width).to_any()
+
+    def reserve(mut self, additional: Int) raises:
+        var needed = self._length + additional
+        if needed > self._capacity:
+            var new_cap = max(self._capacity * 2, needed)
+            self._bitmap.resize(new_cap)
+            self._buffer.resize[DType.uint8](new_cap * self._byte_width)
+            self._capacity = new_cap
+
+    def append(mut self, bytes: Span[UInt8]) raises:
+        if len(bytes) != self._byte_width:
+            raise Error(
+                "FixedSizeBinaryBuilder.append: expected ",
+                self._byte_width,
+                " bytes, got ",
+                len(bytes),
+            )
+        self.reserve(1)
+        var index = self._length
+        self._bitmap.set(index)
+        var start = index * self._byte_width
+        for k in range(self._byte_width):
+            self._buffer.unsafe_set[DType.uint8](start + k, bytes[k])
+        self._length += 1
+
+    def append_null(mut self) raises:
+        self.reserve(1)
+        var index = self._length
+        self._bitmap.clear(index)
+        # Zero-pad the slot so the data buffer never has uninit bytes.
+        var start = index * self._byte_width
+        for k in range(self._byte_width):
+            self._buffer.unsafe_set[DType.uint8](start + k, UInt8(0))
+        self._null_count += 1
+        self._length += 1
+
+    def extend(mut self, arr: AnyArray) raises:
+        if not arr.dtype().is_fixed_size_binary():
+            raise Error(
+                "FixedSizeBinaryBuilder.extend: expected fixed_size_binary array"
+            )
+        self.extend(arr.as_fixed_size_binary())
+
+    def extend(mut self, b: FixedSizeBinaryArray) raises:
+        if b.byte_width != self._byte_width:
+            raise Error(
+                "FixedSizeBinaryBuilder.extend: byte_width mismatch ",
+                b.byte_width,
+                " vs ",
+                self._byte_width,
+            )
+        self.reserve(b.length)
+        var dst_start = self._length * self._byte_width
+        var src_start = b.offset * self._byte_width
+        var n_bytes = b.length * self._byte_width
+        for i in range(n_bytes):
+            self._buffer.unsafe_set[DType.uint8](
+                dst_start + i, b.buffer.unsafe_get[DType.uint8](src_start + i)
+            )
+        if b.nulls != 0:
+            if b.bitmap:
+                var bm = b.bitmap.value()
+                self._bitmap.extend(
+                    bm.view(b.offset, b.length), self._length, b.length
+                )
+            self._null_count += b.nulls
+        else:
+            self._bitmap.set_range(self._length, b.length, True)
+        self._length += b.length
+
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> FixedSizeBinaryArray:
+        if shrink_to_fit:
+            self._buffer.resize[DType.uint8](self._length * self._byte_width)
+        var null_count = self._null_count
+        var bm: Optional[Bitmap[]] = None
+        if null_count != 0:
+            bm = self._bitmap^.to_immutable(length=self._length)
+            self._bitmap = Bitmap.alloc_zeroed(0)
+        var values = self._buffer^.to_immutable()
+        self._buffer = Buffer.alloc_zeroed[DType.uint8](0)
+        var result = FixedSizeBinaryArray(
+            length=self._length,
+            nulls=null_count,
+            offset=0,
+            byte_width=self._byte_width,
+            bitmap=bm^,
+            buffer=values^,
+        )
+        self.reset()
+        return result^
+
+    def reset(mut self):
+        self._length = 0
+        self._capacity = 0
+        self._null_count = 0
 
 
 struct BoolBuilder(Builder, Sized):

@@ -48,6 +48,7 @@ from .scalars import (
     AnyScalar,
     NullScalar,
     BoolScalar,
+    FixedSizeBinaryScalar,
     PrimitiveScalar,
     StringScalar,
     ListScalar,
@@ -1226,6 +1227,151 @@ struct FixedSizeListArray(
 
 
 # ---------------------------------------------------------------------------
+# FixedSizeBinaryArray
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct FixedSizeBinaryArray(
+    Array,
+    ConvertibleFromPython,
+    ConvertibleToPython,
+):
+    """An immutable Arrow array of fixed-width binary values.
+
+    Layout: a single contiguous data buffer of `length * byte_width` bytes,
+    plus an optional validity bitmap.  Each element occupies exactly
+    `byte_width` bytes — no offset buffer.
+    """
+
+    comptime ScalarType = FixedSizeBinaryScalar
+
+    var length: Int
+    var nulls: Int
+    var offset: Int
+    var byte_width: Int
+    var bitmap: Optional[Bitmap[mut=False]]
+    var buffer: Buffer[mut=False]
+
+    def __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[Self]()[].copy()
+
+    def __init__(out self, data: ArrayData) raises:
+        if not data.dtype.is_fixed_size_binary():
+            raise Error("FixedSizeBinaryArray requires fixed_size_binary dtype")
+        if len(data.buffers) != 1:
+            raise Error("FixedSizeBinaryArray requires exactly one buffer")
+        self = Self(
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            byte_width=data.dtype.as_fixed_size_binary_type().byte_width,
+            bitmap=data.bitmap,
+            buffer=data.buffers[0],
+        )
+
+    def __len__(self) -> Int:
+        return self.length
+
+    def __str__(self) -> String:
+        return String.write(self)
+
+    def type(self) -> AnyDataType:
+        return FixedSizeBinaryType(self.byte_width).to_any()
+
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
+        """Zero-copy slice of this array."""
+        var actual_length = length if length >= 0 else self.length - offset
+        return Self(
+            length=actual_length,
+            nulls=self.nulls,
+            offset=self.offset + offset,
+            byte_width=self.byte_width,
+            bitmap=self.bitmap,
+            buffer=self.buffer,
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("FixedSizeBinaryArray([")
+        for i in range(self.length):
+            if i > 0:
+                writer.write(", ")
+            if i >= 10:
+                writer.write("...")
+                break
+            if self.is_valid(i):
+                writer.write("<", self.byte_width, " bytes>")
+            else:
+                writer.write("NULL")
+        writer.write("])")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def null_count(self) -> Int:
+        return self.nulls
+
+    def is_valid(self, index: Int) -> Bool:
+        if not self.bitmap:
+            return True
+        return self.bitmap.value().test(self.offset + index)
+
+    def __getitem__(self, index: Int) raises -> FixedSizeBinaryScalar:
+        if index < 0 or index >= self.length:
+            raise Error(t"index {index} out of bounds for length {self.length}")
+        if not self.is_valid(index):
+            return FixedSizeBinaryScalar.null(self.byte_width)
+        var bytes = List[UInt8](capacity=self.byte_width)
+        var start = (self.offset + index) * self.byte_width
+        for i in range(self.byte_width):
+            bytes.append(self.buffer.unsafe_get[DType.uint8](start + i))
+        return FixedSizeBinaryScalar(bytes^, self.byte_width)
+
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
+
+    def to_data(self) raises -> ArrayData:
+        return ArrayData(
+            dtype=FixedSizeBinaryType(self.byte_width).to_any(),
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            buffers=[self.buffer],
+            children=[],
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.byte_width != other.byte_width:
+            return False
+        if self.length != other.length:
+            return False
+        if self.nulls != other.nulls:
+            return False
+        if self.bitmap.__bool__() != other.bitmap.__bool__():
+            return False
+        if self.bitmap:
+            if not (self.bitmap.value() == other.bitmap.value()):
+                return False
+        for i in range(self.length):
+            if self.is_valid(i):
+                var ls = (self.offset + i) * self.byte_width
+                var rs = (other.offset + i) * self.byte_width
+                for k in range(self.byte_width):
+                    var lv = self.buffer.unsafe_get[DType.uint8](ls + k)
+                    var rv = other.buffer.unsafe_get[DType.uint8](rs + k)
+                    if lv != rv:
+                        return False
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return not Self.__eq__(self, other)
+
+
+# ---------------------------------------------------------------------------
 # StructArray
 # ---------------------------------------------------------------------------
 
@@ -1569,6 +1715,7 @@ struct AnyArray(
         StringArray,
         ListArray,
         FixedSizeListArray,
+        FixedSizeBinaryArray,
         StructArray,
     ]
 
@@ -1751,6 +1898,9 @@ struct AnyArray(
     def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
         return self._v[FixedSizeListArray]
 
+    def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryArray:
+        return self._v[FixedSizeBinaryArray]
+
     def as_struct(ref self) -> ref[self._v] StructArray:
         return self._v[StructArray]
 
@@ -1796,6 +1946,8 @@ struct AnyArray(
             return AnyArray(ListArray(data))
         elif dt.is_fixed_size_list():
             return AnyArray(FixedSizeListArray(data))
+        elif dt.is_fixed_size_binary():
+            return AnyArray(FixedSizeBinaryArray(data))
         elif dt.is_struct():
             return AnyArray(StructArray(data))
         raise Error("from_data: unsupported dtype")

@@ -33,8 +33,10 @@ from .dtypes import (
     Field,
     ListType,
     FixedSizeListType,
+    FixedSizeBinaryType,
     list_ as mk_list,
     fixed_size_list_ as mk_fixed_size_list,
+    fixed_size_binary_ as mk_fixed_size_binary,
     struct_ as mk_struct,
     null,
     bool_,
@@ -73,6 +75,7 @@ comptime _TYPE_BOOL: UInt8 = 6
 comptime _TYPE_LIST: UInt8 = 12
 comptime _TYPE_STRUCT: UInt8 = 13
 comptime _TYPE_FIXED_SIZE_LIST: UInt8 = 16
+comptime _TYPE_FIXED_SIZE_BINARY: UInt8 = 15
 comptime _PRECISION_HALF: UInt16 = 0
 comptime _PRECISION_SINGLE: UInt16 = 1
 comptime _PRECISION_DOUBLE: UInt16 = 2
@@ -659,6 +662,8 @@ struct _IpcEncoder(Movable):
             return _TYPE_LIST
         elif dtype.is_fixed_size_list():
             return _TYPE_FIXED_SIZE_LIST
+        elif dtype.is_fixed_size_binary():
+            return _TYPE_FIXED_SIZE_BINARY
         elif dtype.is_struct():
             return _TYPE_STRUCT
         else:
@@ -728,6 +733,13 @@ struct _IpcEncoder(Movable):
             var sz_at = self._fb.prepend_i32(Int32(fsl.size))
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, sz_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_fixed_size_binary():
+            var fsb = dtype.as_fixed_size_binary_type()
+            var ts = self._fb.offset()
+            var bw_at = self._fb.prepend_i32(Int32(fsb.byte_width))
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, bw_at))
             return self._fb.write_table(flds, ts)
         else:
             raise Error("_IpcEncoder: unsupported dtype for type table: " + String(dtype))
@@ -1032,6 +1044,10 @@ struct _IpcDecoder(Movable):
             if len(children) == 0:
                 raise Error("fixed_size_list Field must have 1 child, got 0")
             dtype = FixedSizeListType(children[0].copy(), list_size).to_any()
+        elif type_type == _TYPE_FIXED_SIZE_BINARY:
+            var tp = self._r.read_table(fp, 3)
+            var byte_width = Int(self._r.read_i32(tp, 0, 0))
+            dtype = FixedSizeBinaryType(byte_width).to_any()
         elif type_type == _TYPE_STRUCT:
             dtype = mk_struct(children^)
             return Field(name, dtype^, nullable, metadata^)

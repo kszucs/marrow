@@ -36,9 +36,6 @@ from integration.tester import MarrowTester
 # modifying the upstream archery source.
 _UNSUPPORTED = {
     'large_binary',       # largebinary / largeutf8
-    'binary',             # contains fixed_size_binary fields
-    'binary_no_batches',  # contains fixed_size_binary fields
-    'binary_zerolength',  # contains fixed_size_binary fields
     'decimal',            # decimal128
     'decimal256',
     'decimal32',

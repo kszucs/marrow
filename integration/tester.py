@@ -45,6 +45,8 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
         ]
     if name == "binary":
         return pa.binary()
+    if name == "fixedsizebinary":
+        return pa.binary(type_obj["byteWidth"])
     if name == "utf8":
         return pa.utf8()
     if name == "list":
@@ -115,6 +117,10 @@ def _json_col_to_pa(col_obj: dict, pa_type: pa.DataType) -> pa.Array:
         return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
 
     if pa.types.is_binary(pa_type):
+        data = [bytes.fromhex(v) if v else b"" for v in col_obj.get("DATA", [])]
+        return pa.array(data, type=pa_type, mask=mask_np)
+
+    if pa.types.is_fixed_size_binary(pa_type):
         data = [bytes.fromhex(v) if v else b"" for v in col_obj.get("DATA", [])]
         return pa.array(data, type=pa_type, mask=mask_np)
 

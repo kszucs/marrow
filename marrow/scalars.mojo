@@ -49,6 +49,7 @@ from .dtypes import (
     Float32Type,
     Float64Type,
     NullType,
+    FixedSizeBinaryType,
     bool_,
     null,
     int8,
@@ -331,6 +332,70 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
 
 
 # ---------------------------------------------------------------------------
+# FixedSizeBinaryScalar
+# ---------------------------------------------------------------------------
+
+
+struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
+    """A single fixed-size-binary value: holds `byte_width` bytes + validity flag.
+    """
+
+    var _value: List[UInt8]
+    var _is_valid: Bool
+    var _byte_width: Int
+
+    def __init__(out self, var value: List[UInt8], byte_width: Int):
+        self._value = value^
+        self._is_valid = True
+        self._byte_width = byte_width
+
+    def __init__(out self, *, byte_width: Int, is_valid: Bool):
+        self._value = List[UInt8]()
+        self._is_valid = is_valid
+        self._byte_width = byte_width
+
+    @staticmethod
+    def null(byte_width: Int) -> Self:
+        return Self(byte_width=byte_width, is_valid=False)
+
+    def type(self) -> AnyDataType:
+        return FixedSizeBinaryType(self._byte_width).to_any()
+
+    def is_valid(self) -> Bool:
+        return self._is_valid
+
+    def is_null(self) -> Bool:
+        return not self._is_valid
+
+    def to_any(deinit self) -> AnyScalar:
+        return self^
+
+    def __eq__(self, other: Self) -> Bool:
+        if self.is_null() and other.is_null():
+            return True
+        if self.is_null() or other.is_null():
+            return False
+        if self._byte_width != other._byte_width:
+            return False
+        return self._value == other._value
+
+    def __ne__(self, other: Self) -> Bool:
+        return not (self == other)
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self._is_valid:
+            writer.write("b'")
+            for i in range(len(self._value)):
+                writer.write(self._value[i])
+            writer.write("'")
+        else:
+            writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+# ---------------------------------------------------------------------------
 # ListScalar
 # ---------------------------------------------------------------------------
 
@@ -460,6 +525,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         Float32Scalar,
         Float64Scalar,
         StringScalar,
+        FixedSizeBinaryScalar,
         ListScalar,
         StructScalar,
     ]
@@ -540,6 +606,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     def as_string(self) -> StringScalar:
         return self._v[StringScalar].copy()
+
+    def as_fixed_size_binary(self) -> FixedSizeBinaryScalar:
+        return self._v[FixedSizeBinaryScalar].copy()
 
     def as_list(self) -> ListScalar:
         return self._v[ListScalar].copy()
