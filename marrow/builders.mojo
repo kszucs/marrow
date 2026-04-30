@@ -33,6 +33,7 @@ from .dtypes import *
 from .arrays import (
     Array,
     AnyArray,
+    NullArray,
     BoolArray,
     PrimitiveArray,
     StringArray,
@@ -93,6 +94,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     """
 
     comptime VariantType = Variant[
+        NullBuilder,
         BoolBuilder,
         Int8Builder,
         Int16Builder,
@@ -123,7 +125,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         self._ptr = copy._ptr.copy()
 
     def __init__(out self, dtype: AnyDataType, capacity: Int = 0) raises:
-        if dtype == bool_:
+        if dtype.is_null():
+            self = NullBuilder(capacity)
+        elif dtype == bool_:
             self = BoolBuilder(capacity)
         elif dtype == int8:
             self = Int8Builder(capacity)
@@ -223,6 +227,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         T: PrimitiveType
     ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
         return self._ptr[][PrimitiveBuilder[T]]
+
+    def as_null(ref self) -> ref[self._ptr[]] NullBuilder:
+        return self._ptr[][NullBuilder]
 
     def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
         return self._ptr[][BoolBuilder]
@@ -1034,6 +1041,48 @@ struct StructBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 # BoolBuilder — bit-packed boolean array builder
 # ---------------------------------------------------------------------------
+
+
+struct NullBuilder(Builder, Sized):
+    """Builder for NullArray — a length-only counter, no buffers."""
+
+    comptime ArrayType = NullArray
+
+    var _length: Int
+
+    def __init__(out self, capacity: Int = 0):
+        self._length = 0
+
+    def __len__(self) -> Int:
+        return self._length
+
+    def length(self) -> Int:
+        return self._length
+
+    def null_count(self) -> Int:
+        return self._length
+
+    def dtype(self) -> AnyDataType:
+        return null
+
+    def reserve(mut self, additional: Int) raises:
+        pass
+
+    def append_null(mut self) raises:
+        self._length += 1
+
+    def extend(mut self, arr: AnyArray) raises:
+        if not arr.dtype().is_null():
+            raise Error("NullBuilder.extend: expected a null array")
+        self._length += len(arr)
+
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> NullArray:
+        var n = self._length
+        self._length = 0
+        return NullArray(length=n)
+
+    def reset(mut self):
+        self._length = 0
 
 
 struct BoolBuilder(Builder, Sized):

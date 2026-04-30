@@ -28,6 +28,7 @@ from marrow.arrays import (
     StructArray,
     Int32Array,
     BoolArray,
+    NullArray,
 )
 from marrow.buffers import Buffer, Bitmap
 from marrow.builders import (
@@ -990,6 +991,10 @@ def array(
         has_nulls = inferrer.none_count > 0
 
     if dtype.is_null():
+        # Explicit `type=ma.null()` builds a NullArray of the given length
+        # regardless of the input values (every element is null by definition).
+        if kwargs.find("type"):
+            return NullArray(length=len(obj)).to_any().to_python_object()
         raise Error(
             "cannot build array: sequence is empty or all-None"
             " (provide type= explicitly)"

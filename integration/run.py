@@ -39,8 +39,6 @@ _UNSUPPORTED = {
     'binary',             # contains fixed_size_binary fields
     'binary_no_batches',  # contains fixed_size_binary fields
     'binary_zerolength',  # contains fixed_size_binary fields
-    'null',               # null type
-    'null_trivial',       # null-only schema (no supported columns remain)
     'decimal',            # decimal128
     'decimal256',
     'decimal32',

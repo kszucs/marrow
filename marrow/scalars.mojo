@@ -48,7 +48,9 @@ from .dtypes import (
     Float16Type,
     Float32Type,
     Float64Type,
+    NullType,
     bool_,
+    null,
     int8,
     int16,
     int32,
@@ -87,6 +89,41 @@ trait Scalar(Copyable, Movable, Writable):
 
     def to_any(deinit self) -> AnyScalar:
         ...
+
+
+struct NullScalar(Copyable, Equatable, Movable, Scalar, Writable):
+    """A single null value — Arrow's `Null` type holds nothing but null."""
+
+    def __init__(out self):
+        pass
+
+    @staticmethod
+    def null() -> Self:
+        return Self()
+
+    def type(self) -> AnyDataType:
+        return null
+
+    def is_valid(self) -> Bool:
+        return False
+
+    def is_null(self) -> Bool:
+        return True
+
+    def to_any(deinit self) -> AnyScalar:
+        return self^
+
+    def __eq__(self, other: Self) -> Bool:
+        return True
+
+    def __ne__(self, other: Self) -> Bool:
+        return False
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        writer.write("null")
 
 
 struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
@@ -409,6 +446,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     """
 
     comptime VariantType = Variant[
+        NullScalar,
         BoolScalar,
         Int8Scalar,
         Int16Scalar,
@@ -457,6 +495,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         return not self.is_valid()
 
     # --- typed downcasts ---
+
+    def as_null(self) -> NullScalar:
+        return self._v[NullScalar].copy()
 
     def as_bool(self) -> BoolScalar:
         return self._v[BoolScalar].copy()

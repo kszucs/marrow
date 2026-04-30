@@ -2,6 +2,18 @@
 
 ## [Unreleased] — 2026-04-30
 
+### Features
+
+- **Arrow `Null` type end-to-end support** (`marrow/{arrays,scalars,builders,
+  ipc,c_data}.mojo`, `python/arrows.mojo`, `integration/tester.py`): added
+  `NullArray`, `NullScalar`, `NullBuilder` (registered in the `AnyArray`,
+  `AnyScalar`, `AnyBuilder` variants); IPC writer emits `Type.Null = 1` with
+  zero body buffers; IPC reader skips the validity slot for null fields; C
+  Data Interface uses `n_buffers = 0` for null per the spec; Python factory
+  `ma.array(seq, type=ma.null())` builds a `NullArray` of the given length.
+  The archery `null` and `null_trivial` integration cases now pass in all 14
+  directional phases (Mojo↔{Mojo, Rust, Go, C++}, IPC + C Data).
+
 ### Tests
 
 - **Self-contained archery integration suite** (`integration/`, `pixi.toml`):

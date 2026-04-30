@@ -46,6 +46,7 @@ from .dtypes import *
 from .builders import AnyBuilder, PrimitiveBuilder, StringBuilder
 from .scalars import (
     AnyScalar,
+    NullScalar,
     BoolScalar,
     PrimitiveScalar,
     StringScalar,
@@ -124,6 +125,81 @@ struct ArrayData(Copyable, Movable):
 # ---------------------------------------------------------------------------
 # BoolArray
 # ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct NullArray(
+    Array,
+    ConvertibleFromPython,
+    ConvertibleToPython,
+):
+    """Immutable array of nulls — Arrow's `Null` type.
+
+    Holds nothing but a length: every element is null.  The Arrow spec
+    prescribes zero body buffers (no validity, no data) and `null_count`
+    equal to `length`.
+    """
+
+    comptime ScalarType = NullScalar
+
+    var length: Int
+
+    def __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[Self]()[].copy()
+
+    def __init__(out self, data: ArrayData) raises:
+        self.length = data.length
+
+    def __len__(self) -> Int:
+        return self.length
+
+    def __str__(self) -> String:
+        return String.write(self)
+
+    def type(self) -> AnyDataType:
+        return null
+
+    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
+        var actual_length = length if length >= 0 else self.length - offset
+        return Self(length=actual_length)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("NullArray(", self.length, ")")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+    def null_count(self) -> Int:
+        return self.length
+
+    def is_valid(self, index: Int) -> Bool:
+        return False
+
+    def __getitem__(self, index: Int) -> NullScalar:
+        return NullScalar()
+
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
+
+    def to_data(self) raises -> ArrayData:
+        return ArrayData(
+            dtype=null,
+            length=self.length,
+            nulls=self.length,
+            offset=0,
+            bitmap=None,
+            buffers=List[Buffer[mut=False]](),
+            children=List[ArrayData](),
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.length == other.length
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.length != other.length
 
 
 @fieldwise_init
@@ -1477,6 +1553,7 @@ struct AnyArray(
     """
 
     comptime VariantType = Variant[
+        NullArray,
         BoolArray,
         Int8Array,
         Int16Array,
@@ -1626,6 +1703,9 @@ struct AnyArray(
     ](ref self) -> ref[self._v] PrimitiveArray[T]:
         return self._v[PrimitiveArray[T]]
 
+    def as_null(ref self) -> ref[self._v] NullArray:
+        return self._v[NullArray]
+
     def as_bool(ref self) -> ref[self._v] BoolArray:
         return self._v[BoolArray]
 
@@ -1684,7 +1764,9 @@ struct AnyArray(
         7-field layout is the natural representation.
         """
         var dt = data.dtype.copy()
-        if dt == bool_:
+        if dt.is_null():
+            return AnyArray(NullArray(data))
+        elif dt == bool_:
             return AnyArray(BoolArray(data))
         elif dt == int8:
             return AnyArray(Int8Array(data))

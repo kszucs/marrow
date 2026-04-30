@@ -34,6 +34,7 @@ from .dtypes import (
     list_ as mk_list,
     fixed_size_list_ as mk_fixed_size_list,
     struct_ as mk_struct,
+    null,
     bool_,
     int8,
     int16,
@@ -61,6 +62,7 @@ comptime _HEADER_SCHEMA: UInt8 = 1
 comptime _HEADER_RECORD_BATCH: UInt8 = 3
 comptime _METADATA_VERSION_V5: Int16 = 4
 comptime _ENDIANNESS_LITTLE: Int16 = 0
+comptime _TYPE_NULL: UInt8 = 1
 comptime _TYPE_INT: UInt8 = 2
 comptime _TYPE_FLOATING_POINT: UInt8 = 3
 comptime _TYPE_BINARY: UInt8 = 4
@@ -639,7 +641,9 @@ struct _IpcEncoder(Movable):
         return self._fb.create_vector_structs(data, n, 24, 8)
 
     def _type_code(self, dtype: AnyDataType) raises -> UInt8:
-        if dtype.is_bool():
+        if dtype.is_null():
+            return _TYPE_NULL
+        elif dtype.is_bool():
             return _TYPE_BOOL
         elif dtype.is_integer():
             return _TYPE_INT
@@ -660,7 +664,8 @@ struct _IpcEncoder(Movable):
 
     def _write_type_table(mut self, dtype: AnyDataType) raises -> UInt32:
         if (
-            dtype.is_bool()
+            dtype.is_null()
+            or dtype.is_bool()
             or dtype.is_binary()
             or dtype.is_string()
             or dtype.is_list()
@@ -974,7 +979,9 @@ struct _IpcDecoder(Movable):
             pass
 
         var dtype: AnyDataType
-        if type_type == _TYPE_BOOL:
+        if type_type == _TYPE_NULL:
+            dtype = null
+        elif type_type == _TYPE_BOOL:
             dtype = bool_
         elif type_type == _TYPE_INT:
             var tp = self._r.read_table(fp, 3)
@@ -1132,6 +1139,10 @@ struct _BatchEncoder(Movable):
 
             self.nodes.append(_FieldNode(Int64(data.length), Int64(data.nulls)))
 
+            # Null type: emit FieldNode but NO body buffers (not even validity).
+            if data.dtype.is_null():
+                continue
+
             var validity_bytes = List[UInt8]()
             if data.nulls > 0 and data.bitmap:
                 var bv = data.bitmap.value()
@@ -1214,6 +1225,20 @@ struct _BatchDecoder(Movable):
 
         var length = Int(node.length)
         var null_count = Int(node.null_count)
+
+        # Null type: FieldNode is consumed but no body buffers — neither validity
+        # nor data — per Arrow spec.
+        if dtype.is_null():
+            var ad = ArrayData(
+                dtype=null,
+                length=length,
+                nulls=null_count,
+                offset=0,
+                bitmap=None,
+                buffers=List[Buffer[mut=False]](),
+                children=List[ArrayData](),
+            )
+            return AnyArray.from_data(ad)
 
         var validity_buf = self.bufs[self.buf_idx]
         self.buf_idx += 1

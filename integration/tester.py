@@ -21,6 +21,8 @@ from archery.integration.tester import Tester, CDataExporter, CDataImporter
 def _json_type_to_ma(type_obj: dict, children_fields: list):
     """Convert Arrow JSON type descriptor to a marrow DataType. Returns None for unsupported types."""
     name = type_obj["name"]
+    if name == "null":
+        return ma.null()
     if name == "bool":
         return ma.bool_()
     if name == "int":
@@ -81,6 +83,9 @@ def _json_col_to_ma(col_obj: dict, field_obj: dict, ma_type) -> object:
     validity = col_obj.get("VALIDITY")
     mask_list = None if validity is None else [v == 0 for v in validity]
     mask = [1 - v for v in validity] if validity else None
+
+    if type_name == "null":
+        return ma.array([None] * n, type=ma_type)
 
     if type_name in ("bool", "int", "floatingpoint"):
         data = col_obj.get("DATA", [])

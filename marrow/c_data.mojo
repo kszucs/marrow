@@ -505,8 +505,10 @@ struct CArrowArray(Copyable, Movable):
         # raw C buffers start at element 0 regardless of the logical array offset.
         var length = self.length + self.offset
 
-        var bitmap: Optional[Bitmap[]]
-        if self.buffers[0]:
+        # Null arrays carry no buffers — `self.buffers` itself may be a null
+        # pointer — so skip the validity read for them.
+        var bitmap: Optional[Bitmap[]] = None
+        if not dtype.is_null() and self.buffers[0]:
             bitmap = Bitmap(
                 Buffer.from_foreign(
                     self.buffers[0],
@@ -515,13 +517,13 @@ struct CArrowArray(Copyable, Movable):
                 ),
                 length=Int(length),
             )
-        else:
-            bitmap = None
 
         var buffers = List[Buffer[]](capacity=2)  # worst case for string
         var children = List[ArrayData](capacity=Int(self.n_children))
 
-        if dtype.is_bool():
+        if dtype.is_null():
+            pass  # no buffers, no children
+        elif dtype.is_bool():
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1],
@@ -604,8 +606,14 @@ struct CArrowArray(Copyable, Movable):
         Call `.to_pycapsule()` to wrap the result in a Python capsule, or pass
         `UnsafePointer(to=c_array)` directly to an Arrow importer.
         """
-        # n_buffers and n_children come directly from ArrayData — no dtype branching.
-        var n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
+        # Null arrays carry no buffers at all (not even validity).  Every other
+        # type has a leading validity slot followed by `data.buffers`.
+        var is_null_dtype = data.dtype.is_null()
+        var n_buffers: Int64
+        if is_null_dtype:
+            n_buffers = 0
+        else:
+            n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
         var n_children = Int64(len(data.children))
 
         # Heap-allocate ArrayData to keep ArcPointer ref-counts alive.
@@ -615,21 +623,23 @@ struct CArrowArray(Copyable, Movable):
         # Heap-allocate the buffers pointer array.
         # buffers[0] = validity bitmap (null pointer means all-valid).
         # buffers[1..n] = data.buffers[0..n-1] in order.
-        var buffers = alloc[OpaquePointer[MutAnyOrigin]](Int(n_buffers))
-        if data_heap[].bitmap:
-            buffers[0] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(
-                    data_heap[].bitmap.value().view().unsafe_ptr()
+        var buffers = UnsafePointer[OpaquePointer[MutAnyOrigin], MutAnyOrigin]()
+        if not is_null_dtype:
+            buffers = alloc[OpaquePointer[MutAnyOrigin]](Int(n_buffers))
+            if data_heap[].bitmap:
+                buffers[0] = OpaquePointer[MutAnyOrigin](
+                    unsafe_from_address=Int(
+                        data_heap[].bitmap.value().view().unsafe_ptr()
+                    )
                 )
-            )
-        else:
-            buffers[0] = OpaquePointer[MutAnyOrigin]()
-        for i in range(len(data_heap[].buffers)):
-            buffers[1 + i] = OpaquePointer[MutAnyOrigin](
-                unsafe_from_address=Int(
-                    data_heap[].buffers[i].view[DType.uint8]().unsafe_ptr()
+            else:
+                buffers[0] = OpaquePointer[MutAnyOrigin]()
+            for i in range(len(data_heap[].buffers)):
+                buffers[1 + i] = OpaquePointer[MutAnyOrigin](
+                    unsafe_from_address=Int(
+                        data_heap[].buffers[i].view[DType.uint8]().unsafe_ptr()
+                    )
                 )
-            )
 
         # Recursively build children; each child is moved onto the heap so the
         # pointer in children_ptr remains valid after this stack frame exits.
