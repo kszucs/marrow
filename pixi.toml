@@ -4,7 +4,7 @@ channels = [
   "https://prefix.dev/mojo-community",
   "https://conda.modular.com/max-nightly/",
   "conda-forge",
-  "https://prefix.dev/pixi-build-backends"
+  "https://prefix.dev/pixi-build-backends",
 ]
 platforms = ["osx-arm64", "linux-64"]
 preview = ["pixi-build"]
@@ -60,13 +60,50 @@ test = { cmd = "pytest -v" }
 test_parallel = { cmd = "pytest -v -n auto --dist=loadfile" }
 
 # Integration — Arrow protocol conformance tests via archery.
+# All reference Arrow implementations are cloned into ./integration/arrow/ and
+# built locally so the integration suite is self-contained inside the pixi env.
+[feature.integration.dependencies]
+git = "*"
+rust = ">=1.80"
+go = ">=1.22"
+cmake = ">=3.20"
+ninja = "*"
+cxx-compiler = "*"
+# C++ Arrow build deps (used via ARROW_DEPENDENCY_SOURCE=AUTO)
+libboost-devel = "*"
+gflags = "*"
+flatbuffers = "*"
+xsimd = "*"
+rapidjson = "*"
+
 [feature.integration.pypi-dependencies]
-archery = { git = "https://github.com/apache/arrow", subdirectory = "dev/archery" }
+# archery lives in the cloned apache/arrow tree (see clone_arrow); reusing it
+# avoids a redundant git fetch and keeps the version in sync with the rest of
+# the integration scripts we invoke.
+archery = { path = "integration/arrow/dev/archery", editable = true }
 
 [feature.integration.tasks]
-test_integration = { cmd = "pytest python/tests/test_integration.py -v --python" }
-build_arrow_rust = { cmd = "cargo build -p arrow-integration-testing --manifest-path $HOME/Workspace/arrow-rs/Cargo.toml" }
-run_integration = { cmd = "python -m integration.run --run-ipc --run-c-data", depends-on = ["build_python"], env = { PYTHONPATH = "python", ARROW_RUST_EXE_PATH = "$HOME/Workspace/arrow-rs/target/debug" } }
+# Clone reference implementations directly into the apache/arrow tree layout
+# the orchestrator scripts (rust_build.sh, integration_arrow_build.sh) expect.
+clone_arrow = { cmd = "test -d integration/arrow || git clone --depth 1 https://github.com/apache/arrow.git integration/arrow" }
+clone_arrow_rs = { cmd = "test -d integration/arrow/rust || git clone --depth 1 https://github.com/apache/arrow-rs.git integration/arrow/rust", depends-on = ["clone_arrow"] }
+clone_arrow_go = { cmd = "test -d integration/arrow/go || git clone --depth 1 https://github.com/apache/arrow-go.git integration/arrow/go", depends-on = ["clone_arrow"] }
+
+# Build all reference implementations via apache/arrow's official orchestrator.
+# Env mirrors ci/docker/conda-integration.dockerfile, minus features we don't need.
+# `CONDA_PREFIX=` clears pixi's auto-set value: arrow's cpp_build.sh treats a
+# non-empty CONDA_PREFIX as a signal to invoke `conda list` for diagnostics, and
+# pixi does not ship a `conda` binary.  Pixi's task schema rejects empty-string
+# env values, so the unset is done inline at the start of the cmd.
+build_arrow = { cmd = "CONDA_PREFIX= integration/arrow/ci/scripts/integration_arrow_build.sh $PIXI_PROJECT_ROOT/integration/arrow $PIXI_PROJECT_ROOT/integration/arrow/build", depends-on = [
+  "clone_arrow_rs",
+  "clone_arrow_go",
+], env = { ARCHERY_INTEGRATION_WITH_RUST = "1", ARCHERY_INTEGRATION_WITH_GO = "1", ARCHERY_INTEGRATION_WITH_NANOARROW = "0", ARCHERY_INTEGRATION_WITH_DOTNET = "0", ARCHERY_INTEGRATION_WITH_JAVA = "0", ARCHERY_INTEGRATION_WITH_JS = "0", ARROW_INTEGRATION_CPP = "ON", ARROW_BUILD_INTEGRATION = "ON", ARROW_BUILD_STATIC = "OFF", ARROW_BUILD_TESTS = "OFF", ARROW_BUILD_TYPE = "release", ARROW_USE_CCACHE = "OFF", ARROW_DEPENDENCY_SOURCE = "AUTO", ARROW_HDFS = "OFF", ARROW_MIMALLOC = "OFF", ARROW_WITH_UTF8PROC = "OFF", CMAKE_UNITY_BUILD = "ON", ARROW_ACERO = "OFF", ARROW_AZURE = "OFF", ARROW_COMPUTE = "OFF", ARROW_CSV = "OFF", ARROW_DATASET = "OFF", ARROW_FILESYSTEM = "OFF", ARROW_FLIGHT = "OFF", ARROW_FLIGHT_SQL = "OFF", ARROW_GANDIVA = "OFF", ARROW_GCS = "OFF", ARROW_JEMALLOC = "OFF", ARROW_JSON = "OFF", ARROW_ORC = "OFF", ARROW_PARQUET = "OFF", ARROW_S3 = "OFF", ARROW_SUBSTRAIT = "OFF", ARROW_USE_GLOG = "OFF", ARROW_WITH_BROTLI = "OFF", ARROW_WITH_BZ2 = "OFF", ARROW_WITH_LZ4 = "OFF", ARROW_WITH_SNAPPY = "OFF", ARROW_WITH_ZLIB = "OFF", ARROW_WITH_ZSTD = "OFF", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", ARROW_HOME = "$PIXI_PROJECT_ROOT/integration/arrow/install" } }
+
+# --- run all integration tests ---
+integration = { cmd = "python -m integration.run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
+  "build_python",
+], env = { PYTHONPATH = "python", ARROW_ROOT = "$PIXI_PROJECT_ROOT/integration/arrow", ARROW_RUST_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/rust/debug", ARROW_CPP_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", DYLD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", LD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release" } }
 
 # Asan — ASAN runtime needed for --asan test runs.
 [feature.asan.dependencies]
@@ -105,8 +142,12 @@ jupyter-cache = ">=1.0,<2"
 quarto = ">=1.6,<2"
 
 [feature.docs.tasks]
-docs = { cmd = "quarto render docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
-docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+docs = { cmd = "quarto render docs/", depends-on = [
+  "build_python",
+], env = { PYTHONPATH = "python" } }
+docs_preview = { cmd = "quarto preview docs/", depends-on = [
+  "build_python",
+], env = { PYTHONPATH = "python" } }
 
 # Examples — optional runnable examples.
 # Run with: pixi run -e examples datafusion_udf
@@ -114,7 +155,9 @@ docs_preview = { cmd = "quarto preview docs/", depends-on = ["build_python"], en
 datafusion = ">=44.0.0"
 
 [feature.examples.tasks]
-datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = ["build_python"], env = { PYTHONPATH = "python" } }
+datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
+  "build_python",
+], env = { PYTHONPATH = "python" } }
 
 [environments]
 default = { features = ["dev", "format"], solve-group = "default" }
@@ -136,4 +179,3 @@ python = ">=3.14,<3.15"
 # version constraint; pin to the real conda-forge zlib so that pyarrow's
 # libopentelemetry-cpp → prometheus-cpp → zlib chain can resolve on linux-64.
 zlib = ">=1.3.1"
-

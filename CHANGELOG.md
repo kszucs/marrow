@@ -2,6 +2,18 @@
 
 ## [Unreleased] — 2026-04-30
 
+### Tests
+
+- **Self-contained archery integration suite** (`integration/`, `pixi.toml`):
+  the `pixi run integration` task now clones apache/arrow + apache/arrow-rs
+  + apache/arrow-go into `integration/arrow/`, builds all reference
+  implementations via apache/arrow's official `integration_arrow_build.sh`
+  orchestrator, and runs cross-implementation tests against C++, Rust, Go,
+  and Mojo (Marrow). A new `integration/reporter.py` aggregates the
+  archery output into a per-phase + per-case summary table. All four
+  implementations pass: 63 / 441 cases across 14 directional phases (the
+  rest are cleanly skipped for unsupported types).
+
 ### Fixes
 
 - **IPC reader: default `nullable` and `is_signed` to `false`**

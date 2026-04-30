@@ -179,7 +179,7 @@ class MarrowTester(Tester):
     C_DATA_ARRAY_EXPORTER = True
     C_DATA_SCHEMA_IMPORTER = True
     C_DATA_ARRAY_IMPORTER = True
-    name = "Marrow"
+    name = "Mojo"
 
     def make_c_data_exporter(self):
         return MarrowCDataExporter()

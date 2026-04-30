@@ -23,10 +23,12 @@ Prerequisites:
 """
 
 import argparse
+import io
 import sys
 
 from archery.integration import datagen as _datagen
 from archery.integration.runner import run_all_tests
+from integration.reporter import Tee, report
 from integration.tester import MarrowTester
 
 # Types not yet implemented in Marrow — skip these test cases rather than
@@ -69,7 +71,7 @@ def _patched_get_generated_json_files(tempdir=None):
     files = _orig_get_generated(tempdir)
     for f in files:
         if f.name in _UNSUPPORTED:
-            f.skip_tester('Marrow')
+            f.skip_tester('Mojo')
     return files
 
 
@@ -88,6 +90,8 @@ def main():
                         help="Cross-test against C++ Arrow (needs ARROW_CPP_EXE_PATH)")
     parser.add_argument("--with-rust", action="store_true",
                         help="Cross-test against arrow-rs (needs ARROW_RUST_EXE_PATH)")
+    parser.add_argument("--with-go", action="store_true",
+                        help="Cross-test against arrow-go (needs GOBIN + ARROW_ROOT)")
     parser.add_argument("--no-stop-on-error", action="store_true",
                         help="Continue after failures (default: stop on first error)")
     parser.add_argument("--match", default=None, metavar="PATTERN",
@@ -116,15 +120,31 @@ def main():
         except Exception as e:
             print(f"Warning: could not load RustTester: {e}", file=sys.stderr)
 
-    run_all_tests(
-        testers=testers,
-        other_testers=other_testers,
-        run_ipc=args.run_ipc,
-        run_c_data=args.run_c_data,
-        stop_on_error=not args.no_stop_on_error,
-        match=args.match,
-        gold_dirs=args.gold_dirs,
-    )
+    if args.with_go:
+        try:
+            from archery.integration.tester_go import GoTester
+            other_testers.append(GoTester())
+        except Exception as e:
+            print(f"Warning: could not load GoTester: {e}", file=sys.stderr)
+
+    # Tee stdout to a buffer so report() can summarise without blocking the
+    # live stream the user sees.
+    buf = io.StringIO()
+    original_stdout = sys.stdout
+    sys.stdout = Tee(original_stdout, buf)
+    try:
+        run_all_tests(
+            testers=testers,
+            other_testers=other_testers,
+            run_ipc=args.run_ipc,
+            run_c_data=args.run_c_data,
+            stop_on_error=not args.no_stop_on_error,
+            match=args.match,
+            gold_dirs=args.gold_dirs,
+        )
+    finally:
+        sys.stdout = original_stdout
+        report(buf.getvalue())
 
 
 if __name__ == "__main__":

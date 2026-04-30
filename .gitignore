@@ -192,3 +192,6 @@ package/
 .DS_Store
 *.trace
 
+
+# integration test deps (cloned + built by pixi tasks)
+integration/arrow/
