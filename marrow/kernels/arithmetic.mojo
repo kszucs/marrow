@@ -45,6 +45,7 @@ def _unary[
         array.values(), buf.view[native](0, length), ctx
     )
     return PrimitiveArray[T](
+        dtype=array.dtype.copy(),
         length=length,
         nulls=length
         - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
@@ -88,6 +89,7 @@ def _binary[
         ctx,
     )
     return PrimitiveArray[T](
+        dtype=left.dtype.copy(),
         length=length,
         nulls=length - bm.value().view().count_set_bits() if bm else 0,
         offset=0,

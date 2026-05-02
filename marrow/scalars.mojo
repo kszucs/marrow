@@ -34,6 +34,10 @@ from .builders import PrimitiveBuilder, StringBuilder
 from .dtypes import (
     AnyDataType,
     PrimitiveType,
+    NumericType,
+    IntegerType,
+    FloatingType,
+    DecimalType,
     Field,
     variant_dispatch,
     BoolType,
@@ -50,6 +54,16 @@ from .dtypes import (
     Float64Type,
     NullType,
     FixedSizeBinaryType,
+    Date32Type,
+    Date64Type,
+    Time32Type,
+    Time64Type,
+    DurationType,
+    TimestampType,
+    Decimal32Type,
+    Decimal64Type,
+    Decimal128Type,
+    Decimal256Type,
     TimeUnit,
     bool_,
     null,
@@ -70,6 +84,7 @@ from .dtypes import (
 
 # Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
 from std.builtin.simd import Scalar as _Scalar
+
 
 
 # ---------------------------------------------------------------------------
@@ -170,38 +185,35 @@ struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
 
 
 struct PrimitiveScalar[T: PrimitiveType](
-    Boolable, Copyable, Equatable, Movable, Scalar, Writable
+    Copyable, Equatable, Movable, Scalar, Writable
 ):
-    """A single primitive value: holds a native Mojo scalar + validity flag."""
+    """A single primitive value: holds a native Mojo scalar + type info + validity flag.
 
-    var _value: _Scalar[Self.T.native]
+    `_dtype: T` carries runtime type information — zero-sized for NumericType,
+    but holds unit/timezone for TemporalType and precision/scale for DecimalType.
+    """
+
+    comptime NativeScalar = _Scalar[Self.T.native]
+
+    var _value: Self.NativeScalar
+    var _dtype: Self.T
     var _is_valid: Bool
 
-    @implicit
-    def __init__(out self, value: _Scalar[Self.T.native]):
-        self._value = value
-        self._is_valid = True
 
-    @implicit
-    def __init__(out self, value: IntLiteral):
-        self._value = _Scalar[Self.T.native](value)
-        self._is_valid = True
+    def __init__[DT: NumericType](out self: PrimitiveScalar[DT], value: Optional[_Scalar[DT.native]]):
+        self = PrimitiveScalar[DT](value, DT())
 
-    @implicit
-    def __init__(out self, value: FloatLiteral):
-        self._value = _Scalar[Self.T.native](value)
-        self._is_valid = True
-
-    def __init__(out self, *, is_valid: Bool):
-        self._value = 0
-        self._is_valid = is_valid
-
-    @staticmethod
-    def null() -> Self:
-        return Self(is_valid=False)
+    def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
+        if value:
+            self._value = value.value()
+            self._is_valid = True
+        else:
+            self._value = Self.NativeScalar(0)
+            self._is_valid = False
+        self._dtype = dtype.copy()
 
     def type(self) -> AnyDataType:
-        return Self.T()
+        return self._dtype.copy().to_any()
 
     def is_valid(self) -> Bool:
         return self._is_valid
@@ -209,18 +221,9 @@ struct PrimitiveScalar[T: PrimitiveType](
     def is_null(self) -> Bool:
         return not self._is_valid
 
-    def value(self) -> _Scalar[Self.T.native]:
+    def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
         return self._value
-
-    def to_array(self) raises -> PrimitiveArray[Self.T]:
-        """Build a length-1 PrimitiveArray from this scalar."""
-        var b = PrimitiveBuilder[Self.T](1)
-        if self._is_valid:
-            b.append(self._value)
-        else:
-            b.append_null()
-        return b.finish()
 
     def to_any(deinit self) -> AnyScalar:
         return self^
@@ -230,15 +233,15 @@ struct PrimitiveScalar[T: PrimitiveType](
             return True
         if self.is_null() or other.is_null():
             return False
-        return self._value == other._value
+        return self._dtype == other._dtype and self._value == other._value
 
     def __ne__(self, other: Self) -> Bool:
         return not (self == other)
 
-    def __bool__(self) -> Bool:
-        if self._is_valid:
-            return Bool(self._value)
-        return False
+    # def __bool__(self) -> Bool:
+    #     if self._is_valid:
+    #         return Bool(self._value)
+    #     return False
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -265,6 +268,18 @@ comptime UInt64Scalar = PrimitiveScalar[UInt64Type]
 comptime Float16Scalar = PrimitiveScalar[Float16Type]
 comptime Float32Scalar = PrimitiveScalar[Float32Type]
 comptime Float64Scalar = PrimitiveScalar[Float64Type]
+
+comptime Date32Scalar    = PrimitiveScalar[Date32Type]
+comptime Date64Scalar    = PrimitiveScalar[Date64Type]
+comptime Time32Scalar    = PrimitiveScalar[Time32Type]
+comptime Time64Scalar    = PrimitiveScalar[Time64Type]
+comptime DurationScalar  = PrimitiveScalar[DurationType]
+comptime TimestampScalar = PrimitiveScalar[TimestampType]
+
+comptime Decimal32Scalar  = PrimitiveScalar[Decimal32Type]
+comptime Decimal64Scalar  = PrimitiveScalar[Decimal64Type]
+comptime Decimal128Scalar = PrimitiveScalar[Decimal128Type]
+comptime Decimal256Scalar = PrimitiveScalar[Decimal256Type]
 
 
 # ---------------------------------------------------------------------------
@@ -389,67 +404,6 @@ struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
             for i in range(len(self._value)):
                 writer.write(self._value[i])
             writer.write("'")
-        else:
-            writer.write("null")
-
-    def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
-
-
-# ---------------------------------------------------------------------------
-# TemporalScalar — date32, date64, time32, time64, timestamp, duration
-# ---------------------------------------------------------------------------
-
-
-struct TemporalScalar(Copyable, Equatable, Movable, Scalar, Writable):
-    """A single temporal value: holds an int64 physical value + temporal dtype + validity."""
-
-    var _value: Int64
-    var _dtype: AnyDataType
-    var _is_valid: Bool
-
-    def __init__(out self, value: Int64, dtype: AnyDataType):
-        self._value = value
-        self._dtype = dtype.copy()
-        self._is_valid = True
-
-    def __init__(out self, *, dtype: AnyDataType, is_valid: Bool):
-        self._value = 0
-        self._dtype = dtype.copy()
-        self._is_valid = is_valid
-
-    @staticmethod
-    def null(dtype: AnyDataType) -> Self:
-        return Self(dtype=dtype, is_valid=False)
-
-    def type(self) -> AnyDataType:
-        return self._dtype.copy()
-
-    def is_valid(self) -> Bool:
-        return self._is_valid
-
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
-    def value(self) -> Int64:
-        return self._value
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
-
-    def __eq__(self, other: Self) -> Bool:
-        if self.is_null() and other.is_null():
-            return True
-        if self.is_null() or other.is_null():
-            return False
-        return self._dtype == other._dtype and self._value == other._value
-
-    def __ne__(self, other: Self) -> Bool:
-        return not (self == other)
-
-    def write_to[W: Writer](self, mut writer: W):
-        if self._is_valid:
-            writer.write(self._value)
         else:
             writer.write("null")
 
@@ -586,9 +540,18 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
         Float16Scalar,
         Float32Scalar,
         Float64Scalar,
+        Date32Scalar,
+        Date64Scalar,
+        Time32Scalar,
+        Time64Scalar,
+        DurationScalar,
+        TimestampScalar,
+        Decimal32Scalar,
+        Decimal64Scalar,
+        Decimal128Scalar,
+        Decimal256Scalar,
         StringScalar,
         FixedSizeBinaryScalar,
-        TemporalScalar,
         ListScalar,
         StructScalar,
     ]
@@ -673,8 +636,35 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def as_fixed_size_binary(self) -> FixedSizeBinaryScalar:
         return self._v[FixedSizeBinaryScalar].copy()
 
-    def as_temporal(self) -> TemporalScalar:
-        return self._v[TemporalScalar].copy()
+    def as_date32(self) -> Date32Scalar:
+        return self._v[Date32Scalar].copy()
+
+    def as_date64(self) -> Date64Scalar:
+        return self._v[Date64Scalar].copy()
+
+    def as_time32(self) -> Time32Scalar:
+        return self._v[Time32Scalar].copy()
+
+    def as_time64(self) -> Time64Scalar:
+        return self._v[Time64Scalar].copy()
+
+    def as_duration(self) -> DurationScalar:
+        return self._v[DurationScalar].copy()
+
+    def as_timestamp(self) -> TimestampScalar:
+        return self._v[TimestampScalar].copy()
+
+    def as_decimal32(self) -> Decimal32Scalar:
+        return self._v[Decimal32Scalar].copy()
+
+    def as_decimal64(self) -> Decimal64Scalar:
+        return self._v[Decimal64Scalar].copy()
+
+    def as_decimal128(self) -> Decimal128Scalar:
+        return self._v[Decimal128Scalar].copy()
+
+    def as_decimal256(self) -> Decimal256Scalar:
+        return self._v[Decimal256Scalar].copy()
 
     def as_list(self) -> ListScalar:
         return self._v[ListScalar].copy()
@@ -702,3 +692,18 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
     def to_python_object(var self) raises -> PythonObject:
         """Convert to a Python Scalar wrapper object."""
         return PythonObject(alloc=self^)
+
+
+# ---------------------------------------------------------------------------
+# scalar() factory
+# ---------------------------------------------------------------------------
+
+
+def scalar[T: NumericType](value: _Scalar[T.native]) -> PrimitiveScalar[T]:
+    """Create a typed primitive scalar from a native Mojo scalar."""
+    return PrimitiveScalar[T](value)
+
+
+def scalar(value: Bool) -> BoolScalar:
+    """Create a boolean scalar."""
+    return BoolScalar(value)

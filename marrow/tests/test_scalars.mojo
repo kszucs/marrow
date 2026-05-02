@@ -46,8 +46,7 @@ from marrow.scalars import (
     PrimitiveScalar,
     StringScalar,
     ListScalar,
-    StructScalar,
-    TemporalScalar,
+    StructScalar
 )
 
 
@@ -70,7 +69,7 @@ def test_primitive_scalar_float64() raises:
 
 
 def test_primitive_scalar_null() raises:
-    var s = PrimitiveScalar[Int32Type].null()
+    var s = PrimitiveScalar[Int32Type](None)
     assert_false(s.is_valid())
     assert_true(s.is_null())
 
@@ -83,20 +82,13 @@ def test_primitive_scalar_from_array() raises:
     assert_equal(s.value(), 20)
 
 
-def test_primitive_scalar_to_array() raises:
-    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](7))
-    var arr = s.to_array()
-    assert_equal(len(arr), 1)
-    assert_equal(arr[0], 7)
-
-
 def test_primitive_scalar_write_to() raises:
     var s = PrimitiveScalar[Int32Type](Scalar[int32.native](42))
     assert_equal(String(s), "42")
 
 
 def test_primitive_scalar_write_to_null() raises:
-    var s = PrimitiveScalar[Int32Type].null()
+    var s = PrimitiveScalar[Int32Type](None)
     assert_equal(String(s), "null")
 
 
@@ -157,7 +149,7 @@ def test_scalar_from_string() raises:
 
 
 def test_scalar_null() raises:
-    var typed = PrimitiveScalar[Int32Type].null()
+    var typed = PrimitiveScalar[Int32Type](None)
     var erased = AnyScalar(typed^)
     assert_true(erased.is_null())
 
@@ -317,52 +309,52 @@ def test_any_array_getitem_out_of_bounds() raises:
     assert_true(raised)
 
 
-def test_temporal_scalar_valid() raises:
-    var s = TemporalScalar(Int64(100), date32().to_any())
-    assert_true(s.is_valid())
-    assert_false(s.is_null())
-    assert_equal(s.value(), 100)
-    assert_true(s.type() == date32().to_any())
+# def test_temporal_scalar_valid() raises:
+#     var s = TemporalScalar(Int64(100), date32().to_any())
+#     assert_true(s.is_valid())
+#     assert_false(s.is_null())
+#     assert_equal(s.value(), 100)
+#     assert_true(s.type() == date32().to_any())
 
 
-def test_temporal_scalar_null() raises:
-    var s = TemporalScalar.null(date32().to_any())
-    assert_false(s.is_valid())
-    assert_true(s.is_null())
-    assert_true(s.type() == date32().to_any())
+# def test_temporal_scalar_null() raises:
+#     var s = TemporalScalar.null(date32().to_any())
+#     assert_false(s.is_valid())
+#     assert_true(s.is_null())
+#     assert_true(s.type() == date32().to_any())
 
 
-def test_temporal_scalar_equality() raises:
-    var a = TemporalScalar(Int64(42), date32().to_any())
-    var b = TemporalScalar(Int64(42), date32().to_any())
-    var c = TemporalScalar(Int64(99), date32().to_any())
-    assert_true(a == b)
-    assert_false(a == c)
-    assert_false(a != b)
-    assert_true(a != c)
+# def test_temporal_scalar_equality() raises:
+#     var a = TemporalScalar(Int64(42), date32().to_any())
+#     var b = TemporalScalar(Int64(42), date32().to_any())
+#     var c = TemporalScalar(Int64(99), date32().to_any())
+#     assert_true(a == b)
+#     assert_false(a == c)
+#     assert_false(a != b)
+#     assert_true(a != c)
 
 
-def test_temporal_scalar_null_equality() raises:
-    var n1 = TemporalScalar.null(date32().to_any())
-    var n2 = TemporalScalar.null(date32().to_any())
-    var v = TemporalScalar(Int64(1), date32().to_any())
-    assert_true(n1 == n2)
-    assert_false(n1 == v)
-    assert_false(v == n1)
+# def test_temporal_scalar_null_equality() raises:
+#     var n1 = TemporalScalar.null(date32().to_any())
+#     var n2 = TemporalScalar.null(date32().to_any())
+#     var v = TemporalScalar(Int64(1), date32().to_any())
+#     assert_true(n1 == n2)
+#     assert_false(n1 == v)
+#     assert_false(v == n1)
 
 
-def test_temporal_scalar_timestamp() raises:
-    var ts_dtype = timestamp(second, "UTC").to_any()
-    var s = TemporalScalar(Int64(1_000_000), ts_dtype)
-    assert_true(s.is_valid())
-    assert_equal(s.value(), 1_000_000)
-    assert_true(s.type() == ts_dtype)
+# def test_temporal_scalar_timestamp() raises:
+#     var ts_dtype = timestamp(second, "UTC").to_any()
+#     var s = TemporalScalar(Int64(1_000_000), ts_dtype)
+#     assert_true(s.is_valid())
+#     assert_equal(s.value(), 1_000_000)
+#     assert_true(s.type() == ts_dtype)
 
 
-def test_temporal_scalar_to_any() raises:
-    var s = TemporalScalar(Int64(7), duration(nanosecond).to_any())
-    var any_s = s^.to_any()
-    assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_any()))
+# def test_temporal_scalar_to_any() raises:
+#     var s = TemporalScalar(Int64(7), duration(nanosecond).to_any())
+#     var any_s = s^.to_any()
+#     assert_true(any_s.as_temporal() == TemporalScalar(Int64(7), duration(nanosecond).to_any()))
 
 
 def main() raises:

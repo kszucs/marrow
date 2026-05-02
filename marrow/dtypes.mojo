@@ -1,9 +1,18 @@
 """Arrow data type system — Variant-based implementation.
 
 `DataType` is the trait that all concrete Arrow type structs implement.
-`PrimitiveType` is a sub-trait that adds a `comptime native: DType` field,
-enabling primitive-typed generics to use `T.native` as a compile-time type
-parameter (e.g. `Buffer[T.native]`, `Scalar[T.native]`).
+`PrimitiveType` is a sub-trait for all fixed-width, buffer-backed types. It
+provides `comptime native: DType` — the physical storage type used for buffer
+reads and SIMD operations.
+
+Trait hierarchy:
+    DataType
+    └── PrimitiveType(DataType)        comptime native: DType
+        ├── NumericType(PrimitiveType) + TrivialRegisterPassable, Defaultable
+        │   ├── IntegerType(NumericType)
+        │   └── FloatingType(NumericType)
+        ├── TemporalType(PrimitiveType)
+        └── DecimalType(PrimitiveType)
 
 `AnyDataType` is the type-erased runtime container backed by a `Variant` — no
 heap allocation, no vtable, direct member access.
@@ -14,7 +23,9 @@ Concrete zero-size type structs (one per Arrow type):
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     Float16Type, Float32Type, Float64Type,
     BinaryType, StringType,
-    ListType, FixedSizeListType, StructType
+    ListType, FixedSizeListType, FixedSizeBinaryType, StructType,
+    Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
+    Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type
 
 Comptime singletons (same names as before):
     null, bool_, int8, int16, int32, int64,
@@ -40,16 +51,25 @@ from .utils import _always_true, variant_dispatch, variant_dispatch_raises
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Copyable, Equatable, ImplicitlyDestructible, Movable, Writable):
+trait DataType(Copyable, Equatable, Movable, Writable):
     def to_any(deinit self) -> AnyDataType:
         ...
 
 
-trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
+trait PrimitiveType(DataType, ImplicitlyCopyable):
+    """Base trait for all fixed-width, buffer-backed Arrow types.
+
+    Provides `comptime native: DType` — the physical storage type for buffer
+    reads and SIMD operations.
+    """
+
     comptime native: DType
 
-    def __init__(out self):
-        ...
+    # def __init__(out self, *, copy: Self):
+    #     self = copy
+
+    # def __init__(out self, *, deinit take: Self):
+    #     self = take
 
     def byte_width(self) -> Int:
         return size_of[Self.native]()
@@ -58,14 +78,37 @@ trait PrimitiveType(DataType, Defaultable, TrivialRegisterPassable):
         return bit_width_of[Self.native]()
 
 
-trait TemporalType(DataType):
-    """Trait for Arrow temporal types (date32, date64, time32, time64, timestamp, duration).
+trait NumericType(PrimitiveType, ImplicitlyCopyable, Defaultable):
+    """Integers, unsigned integers, and floats — zero-sized register-passable markers."""
+    pass
 
-    Extends DataType with a compile-time native DType for physical storage
-    (int32 or int64). Not a sub-trait of PrimitiveType.
+trait IntegerType(NumericType):
+    """Signed and unsigned integer types."""
+    pass
+
+
+trait FloatingType(NumericType):
+    """Floating-point types (float16, float32, float64)."""
+    pass
+
+
+trait TemporalType(PrimitiveType):
+    """Date, time, duration, and timestamp types.
+
+    Physical storage is int32 or int64. Logical type carries a time unit and
+    (for timestamps) an optional timezone — runtime values in `array.dtype`.
     """
 
-    comptime native: DType
+    pass
+
+
+trait DecimalType(PrimitiveType):
+    """Fixed-point decimal types backed by int32, int64, int128, or int256.
+
+    Logical type carries precision and scale — runtime values in `array.dtype`.
+    """
+
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -73,12 +116,10 @@ trait TemporalType(DataType):
 # ---------------------------------------------------------------------------
 
 
-struct NullType(DataType, Defaultable, TrivialRegisterPassable):
+struct NullType(DataType, ImplicitlyCopyable):
+
     def __init__(out self):
         pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("null")
@@ -87,20 +128,11 @@ struct NullType(DataType, Defaultable, TrivialRegisterPassable):
         return AnyDataType(self)
 
 
-struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
+struct BoolType(DataType, ImplicitlyCopyable):
     comptime native: DType = DType.bool
 
     def __init__(out self):
         pass
-
-    def byte_width(self) -> Int:
-        return 0
-
-    def bit_width(self) -> Int:
-        return 1
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("bool")
@@ -109,188 +141,71 @@ struct BoolType(DataType, Defaultable, TrivialRegisterPassable):
         return AnyDataType(self)
 
 
-struct Int8Type(PrimitiveType):
-    comptime native: DType = DType.int8
+struct _IntegerType[T: DType](IntegerType):
+    comptime native = Self.T
 
     def __init__(out self):
         pass
 
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("int8")
+        writer.write(Self.T)
 
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
 
-struct Int16Type(PrimitiveType):
-    comptime native: DType = DType.int16
+struct _FloatingType[T: DType](FloatingType):
+    comptime native = Self.T
 
     def __init__(out self):
         pass
 
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("int16")
+        writer.write(Self.T)
 
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
 
-struct Int32Type(PrimitiveType):
-    comptime native: DType = DType.int32
+struct _DecimalType[T: DType](DecimalType):
+    comptime native = Self.T
 
-    def __init__(out self):
-        pass
+    var precision: Int
+    var scale: Int
 
-    def __eq__(self, other: Self) -> Bool:
-        return True
+    def __init__(out self, precision: Int, scale: Int = 0):
+        self.precision = precision
+        self.scale = scale
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("int32")
+        writer.write("decimal", bit_width_of[Self.native](), "[", self.precision, ", ", self.scale, "]")
 
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
 
-struct Int64Type(PrimitiveType):
-    comptime native: DType = DType.int64
+comptime Int8Type = _IntegerType[DType.int8]
+comptime Int16Type = _IntegerType[DType.int16]
+comptime Int32Type = _IntegerType[DType.int32]
+comptime Int64Type = _IntegerType[DType.int64]
+comptime UInt8Type = _IntegerType[DType.uint8]
+comptime UInt16Type = _IntegerType[DType.uint16]
+comptime UInt32Type = _IntegerType[DType.uint32]
+comptime UInt64Type = _IntegerType[DType.uint64]
 
-    def __init__(out self):
-        pass
+comptime Float16Type = _FloatingType[DType.float16]
+comptime Float32Type = _FloatingType[DType.float32]
+comptime Float64Type = _FloatingType[DType.float64]
 
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("int64")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct UInt8Type(PrimitiveType):
-    comptime native: DType = DType.uint8
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("uint8")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
+comptime Decimal32Type = _DecimalType[DType.int32]
+comptime Decimal64Type = _DecimalType[DType.int64]
+comptime Decimal128Type = _DecimalType[DType.int128]
+comptime Decimal256Type = _DecimalType[DType.int256]
 
 
-struct UInt16Type(PrimitiveType):
-    comptime native: DType = DType.uint16
 
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("uint16")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct UInt32Type(PrimitiveType):
-    comptime native: DType = DType.uint32
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("uint32")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct UInt64Type(PrimitiveType):
-    comptime native: DType = DType.uint64
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("uint64")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct Float32Type(PrimitiveType):
-    comptime native: DType = DType.float32
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("float32")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct Float64Type(PrimitiveType):
-    comptime native: DType = DType.float64
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("float64")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct Float16Type(PrimitiveType):
-    comptime native: DType = DType.float16
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("float16")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
-
-struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
+@fieldwise_init
+struct BinaryType(DataType, ImplicitlyCopyable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("binary")
@@ -299,12 +214,8 @@ struct BinaryType(DataType, Defaultable, TrivialRegisterPassable):
         return AnyDataType(self)
 
 
-struct StringType(DataType, Defaultable, TrivialRegisterPassable):
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
+@fieldwise_init
+struct StringType(DataType, ImplicitlyCopyable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("string")
@@ -313,16 +224,11 @@ struct StringType(DataType, Defaultable, TrivialRegisterPassable):
         return AnyDataType(self)
 
 
-struct FixedSizeBinaryType(DataType, TrivialRegisterPassable):
+@fieldwise_init
+struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
     """Fixed-size binary type — every element is exactly `byte_width` bytes."""
 
     var byte_width: Int
-
-    def __init__(out self, byte_width: Int):
-        self.byte_width = byte_width
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.byte_width == other.byte_width
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_binary[", self.byte_width, "]")
@@ -336,16 +242,11 @@ struct FixedSizeBinaryType(DataType, TrivialRegisterPassable):
 # ---------------------------------------------------------------------------
 
 
-struct TimeUnit(Copyable, Equatable, Movable, TrivialRegisterPassable, Writable):
+@fieldwise_init
+struct TimeUnit(Equatable, Movable, Writable, ImplicitlyCopyable):
     """Unit for time-based Arrow types (SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3)."""
 
     var value: Int
-
-    def __init__(out self, value: Int):
-        self.value = value
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.value == other.value
 
     def to_string(self) -> String:
         if self.value == 0:
@@ -366,17 +267,11 @@ comptime millisecond = TimeUnit(1)
 comptime microsecond = TimeUnit(2)
 comptime nanosecond = TimeUnit(3)
 
-
-struct Date32Type(TemporalType, Defaultable, TrivialRegisterPassable):
+@fieldwise_init
+struct Date32Type(TemporalType):
     """Date32 — days since Unix epoch (int32)."""
 
     comptime native: DType = DType.int32
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date32")
@@ -384,17 +279,11 @@ struct Date32Type(TemporalType, Defaultable, TrivialRegisterPassable):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-
-struct Date64Type(TemporalType, Defaultable, TrivialRegisterPassable):
+@fieldwise_init
+struct Date64Type(TemporalType):
     """Date64 — milliseconds since Unix epoch (int64)."""
 
     comptime native: DType = DType.int64
-
-    def __init__(out self):
-        pass
-
-    def __eq__(self, other: Self) -> Bool:
-        return True
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date64")
@@ -402,19 +291,13 @@ struct Date64Type(TemporalType, Defaultable, TrivialRegisterPassable):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-
-struct Time32Type(TemporalType, TrivialRegisterPassable):
+@fieldwise_init
+struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
 
     comptime native: DType = DType.int32
 
     var unit: TimeUnit
-
-    def __init__(out self, unit: TimeUnit):
-        self.unit = unit
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.unit == other.unit
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time32[", self.unit, "]")
@@ -422,19 +305,13 @@ struct Time32Type(TemporalType, TrivialRegisterPassable):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-
-struct Time64Type(TemporalType, TrivialRegisterPassable):
+@fieldwise_init
+struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
 
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
-
-    def __init__(out self, unit: TimeUnit):
-        self.unit = unit
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.unit == other.unit
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time64[", self.unit, "]")
@@ -459,9 +336,6 @@ struct TimestampType(TemporalType):
         self.unit = copy.unit
         self.timezone = copy.timezone
 
-    def __eq__(self, other: Self) -> Bool:
-        return self.unit == other.unit and self.timezone == other.timezone
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write("timestamp[", self.unit, "]")
         if self.timezone:
@@ -470,19 +344,13 @@ struct TimestampType(TemporalType):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self^)
 
-
-struct DurationType(TemporalType, TrivialRegisterPassable):
+@fieldwise_init
+struct DurationType(TemporalType):
     """Duration — elapsed int64 units, no epoch reference."""
 
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
-
-    def __init__(out self, unit: TimeUnit):
-        self.unit = unit
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.unit == other.unit
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("duration[", self.unit, "]")
@@ -661,6 +529,10 @@ struct AnyDataType(
         Time64Type,
         TimestampType,
         DurationType,
+        Decimal32Type,
+        Decimal64Type,
+        Decimal128Type,
+        Decimal256Type,
     ]
 
     var _v: Self.VariantType
@@ -693,6 +565,8 @@ struct AnyDataType(
         return PythonObject(alloc=self^)
 
     def byte_width(self) raises -> Int:
+        """Physical byte width per element. Defined for all PrimitiveType sub-types
+        (numeric, temporal, and decimal)."""
         if not self.is_primitive():
             raise Error("byte_width is only defined for primitive types")
 
@@ -741,7 +615,11 @@ struct AnyDataType(
         return self.is_integer() or self.is_floating_point()
 
     def is_primitive(self) -> Bool:
-        return self.is_bool() or self.is_numeric()
+        """True for all fixed-width, buffer-backed types (numeric, temporal, decimal).
+
+        Matches PyArrow's ``pa.types.is_primitive()`` semantics.
+        """
+        return self.is_bool() or self.is_numeric() or self.is_temporal() or self.is_decimal()
 
     def is_string(self) -> Bool:
         return self._v.isa[StringType]()
@@ -799,6 +677,26 @@ struct AnyDataType(
         else:
             return 64
 
+    def is_decimal32(self) -> Bool:
+        return self._v.isa[Decimal32Type]()
+
+    def is_decimal64(self) -> Bool:
+        return self._v.isa[Decimal64Type]()
+
+    def is_decimal128(self) -> Bool:
+        return self._v.isa[Decimal128Type]()
+
+    def is_decimal256(self) -> Bool:
+        return self._v.isa[Decimal256Type]()
+
+    def is_decimal(self) -> Bool:
+        return (
+            self.is_decimal32()
+            or self.is_decimal64()
+            or self.is_decimal128()
+            or self.is_decimal256()
+        )
+
     def is_fixed_size(self) -> Bool:
         return self.is_primitive()
 
@@ -829,7 +727,6 @@ struct AnyDataType(
             or self.is_primitive()
             or self.is_list()
             or self.is_fixed_size_binary()
-            or self.is_temporal()
         ):
             return 1
         else:
@@ -877,6 +774,18 @@ struct AnyDataType(
 
     def as_duration_type(self) -> DurationType:
         return self._v[DurationType]
+
+    def as_decimal32(self) -> Decimal32Type:
+        return self._v[Decimal32Type]
+
+    def as_decimal64(self) -> Decimal64Type:
+        return self._v[Decimal64Type]
+
+    def as_decimal128(self) -> Decimal128Type:
+        return self._v[Decimal128Type]
+
+    def as_decimal256(self) -> Decimal256Type:
+        return self._v[Decimal256Type]
 
 
 # ---------------------------------------------------------------------------
@@ -949,6 +858,26 @@ def struct_(var *fields: Field) -> StructType:
     for field in fields:
         list.append(field.copy())
     return StructType(list^)
+
+
+def decimal32(precision: Int, scale: Int = 0) -> Decimal32Type:
+    """Construct a decimal32 type. Equivalent to PyArrow's ``pa.decimal32(precision, scale)``."""
+    return Decimal32Type(precision, scale)
+
+
+def decimal64(precision: Int, scale: Int = 0) -> Decimal64Type:
+    """Construct a decimal64 type. Equivalent to PyArrow's ``pa.decimal64(precision, scale)``."""
+    return Decimal64Type(precision, scale)
+
+
+def decimal128(precision: Int, scale: Int = 0) -> Decimal128Type:
+    """Construct a decimal128 type. Equivalent to PyArrow's ``pa.decimal128(precision, scale)``."""
+    return Decimal128Type(precision, scale)
+
+
+def decimal256(precision: Int, scale: Int = 0) -> Decimal256Type:
+    """Construct a decimal256 type. Equivalent to PyArrow's ``pa.decimal256(precision, scale)``."""
+    return Decimal256Type(precision, scale)
 
 
 # ---------------------------------------------------------------------------

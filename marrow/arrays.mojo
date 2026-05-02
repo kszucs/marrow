@@ -49,7 +49,6 @@ from .scalars import (
     NullScalar,
     BoolScalar,
     FixedSizeBinaryScalar,
-    TemporalScalar,
     PrimitiveScalar,
     StringScalar,
     ListScalar,
@@ -385,10 +384,10 @@ struct PrimitiveArray[T: PrimitiveType](
 
     comptime ScalarType = PrimitiveScalar[Self.T]
 
-    comptime dtype = Self.T
     comptime scalar = Scalar[Self.T.native]
 
     # TODO: make these protected to discourage direct access
+    var dtype: Self.T
     var length: Int
     var nulls: Int
     var offset: Int
@@ -402,6 +401,7 @@ struct PrimitiveArray[T: PrimitiveType](
         if len(data.buffers) != 1:
             raise Error("PrimitiveArray requires exactly one buffer")
         self = Self(
+            dtype=data.dtype._v[Self.T].copy(),
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
@@ -409,16 +409,19 @@ struct PrimitiveArray[T: PrimitiveType](
             buffer=data.buffers[0],
         )
 
-    def __init__(
-        out self, var *values: Self.scalar, __list_literal__: NoneType
+    def __init__[DT: NumericType](
+        out self: PrimitiveArray[DT], var *values: Scalar[DT.native], __list_literal__: NoneType
     ) raises:
         """Constructs a primitive array from a list literal [v1, v2, ...].
+
+        Only valid for numeric types (NumericType). Temporal and decimal types
+        require an explicit builder with a dtype instance.
 
         Args:
             values: The scalar values to populate the array with.
             __list_literal__: Tells Mojo to use this method for list literal syntax.
         """
-        var b = PrimitiveBuilder[Self.T](capacity=len(values))
+        var b = PrimitiveBuilder[DT](capacity=len(values))
         for value in values:
             b.unsafe_append(value)
         self = b.finish()
@@ -431,7 +434,7 @@ struct PrimitiveArray[T: PrimitiveType](
         return String.write(self)
 
     def type(self) -> AnyDataType:
-        return Self.T()
+        return self.dtype.copy().to_any()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
@@ -440,6 +443,7 @@ struct PrimitiveArray[T: PrimitiveType](
         """
         var actual_length = length if length >= 0 else self.length - offset
         return Self(
+            dtype=self.dtype.copy(),
             length=actual_length,
             nulls=self.nulls,
             offset=self.offset + offset,
@@ -503,8 +507,8 @@ struct PrimitiveArray[T: PrimitiveType](
         if index < 0 or index >= self.length:
             raise Error(t"index {index} out of bounds for length {self.length}")
         if not self.is_valid(index):
-            return PrimitiveScalar[Self.T].null()
-        return PrimitiveScalar[Self.T](self.unsafe_get(index))
+            return PrimitiveScalar[Self.T](None, self.dtype)
+        return PrimitiveScalar[Self.T](self.unsafe_get(index), self.dtype)
 
     def null_count(self) -> Int:
         return self.nulls
@@ -515,6 +519,7 @@ struct PrimitiveArray[T: PrimitiveType](
         if self.bitmap:
             bm = self.bitmap.value().to_device(ctx)
         return PrimitiveArray[Self.T](
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=0,
@@ -528,6 +533,7 @@ struct PrimitiveArray[T: PrimitiveType](
         if self.bitmap:
             bm = self.bitmap.value().to_cpu(ctx)
         return PrimitiveArray[Self.T](
+            dtype=self.dtype.copy(),
             length=self.length,
             nulls=self.nulls,
             offset=0,
@@ -569,7 +575,7 @@ struct PrimitiveArray[T: PrimitiveType](
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=self.type(),
+            dtype=self.dtype.copy().to_any(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -912,6 +918,7 @@ struct ListArray(
             var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
             buf.unsafe_set[DType.int32](i, end - start)
         return Int32Array(
+            dtype=Int32Type(),
             length=self.length,
             nulls=0,
             offset=0,
@@ -1372,166 +1379,17 @@ struct FixedSizeBinaryArray(
         return not Self.__eq__(self, other)
 
 
-# ---------------------------------------------------------------------------
-# TemporalArray[T] — date32, date64, time32, time64, timestamp, duration
-# ---------------------------------------------------------------------------
+comptime Date32Array    = PrimitiveArray[Date32Type]
+comptime Date64Array    = PrimitiveArray[Date64Type]
+comptime Time32Array    = PrimitiveArray[Time32Type]
+comptime Time64Array    = PrimitiveArray[Time64Type]
+comptime DurationArray  = PrimitiveArray[DurationType]
+comptime TimestampArray = PrimitiveArray[TimestampType]
 
-
-struct TemporalArray[T: TemporalType](
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
-    """An immutable Arrow array for a concrete temporal type T.
-
-    Physical storage is a single contiguous buffer of T.native values
-    (int32 for date32/time32, int64 for date64/time64/timestamp/duration).
-    The full logical dtype (including unit and timezone) is stored in `dtype`.
-    """
-
-    comptime ScalarType = TemporalScalar
-
-    var dtype: AnyDataType
-    var length: Int
-    var nulls: Int
-    var offset: Int
-    var bitmap: Optional[Bitmap[mut=False]]
-    var buffer: Buffer[mut=False]
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
-
-    def __init__(out self, data: ArrayData) raises:
-        if not data.dtype.is_temporal():
-            raise Error("TemporalArray requires a temporal dtype")
-        if len(data.buffers) != 1:
-            raise Error("TemporalArray requires exactly one buffer")
-        self.dtype = data.dtype.copy()
-        self.length = data.length
-        self.nulls = data.nulls
-        self.offset = data.offset
-        self.bitmap = data.bitmap
-        self.buffer = data.buffers[0]
-
-    def __init__(
-        out self,
-        *,
-        dtype: AnyDataType,
-        length: Int,
-        nulls: Int,
-        offset: Int,
-        bitmap: Optional[Bitmap[mut=False]],
-        buffer: Buffer[mut=False],
-    ):
-        self.dtype = dtype.copy()
-        self.length = length
-        self.nulls = nulls
-        self.offset = offset
-        self.bitmap = bitmap
-        self.buffer = buffer
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
-
-    def __len__(self) -> Int:
-        return self.length
-
-    def __str__(self) -> String:
-        return String.write(self)
-
-    def type(self) -> AnyDataType:
-        return self.dtype.copy()
-
-    def slice(self, offset: Int = 0, length: Int = -1) -> Self:
-        var actual_length = length if length >= 0 else self.length - offset
-        return Self(
-            dtype=self.dtype.copy(),
-            length=actual_length,
-            nulls=self.nulls,
-            offset=self.offset + offset,
-            bitmap=self.bitmap,
-            buffer=self.buffer,
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("TemporalArray<", self.dtype, ">([")
-        for i in range(self.length):
-            if i > 0:
-                writer.write(", ")
-            if i >= 10:
-                writer.write("...")
-                break
-            if self.is_valid(i):
-                writer.write(self.buffer.unsafe_get[Self.T.native](self.offset + i))
-            else:
-                writer.write("NULL")
-        writer.write("])")
-
-    def write_repr_to[W: Writer](self, mut writer: W):
-        self.write_to(writer)
-
-    def null_count(self) -> Int:
-        return self.nulls
-
-    def is_valid(self, index: Int) -> Bool:
-        if not self.bitmap:
-            return True
-        return self.bitmap.value().test(self.offset + index)
-
-    def __getitem__(self, index: Int) raises -> TemporalScalar:
-        if index < 0 or index >= self.length:
-            raise Error("TemporalArray index out of bounds")
-        return self.unsafe_get(index)
-
-    def unsafe_get(self, index: Int) -> TemporalScalar:
-        if not self.is_valid(index):
-            return TemporalScalar.null(self.dtype)
-        var phys = self.offset + index
-        return TemporalScalar(
-            Int64(self.buffer.unsafe_get[Self.T.native](phys)), self.dtype
-        )
-
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
-    def to_data(self) -> ArrayData:
-        return ArrayData(
-            dtype=self.dtype.copy(),
-            length=self.length,
-            nulls=self.nulls,
-            offset=self.offset,
-            bitmap=self.bitmap,
-            buffers=[self.buffer],
-            children=[],
-        )
-
-    def __eq__(self, other: Self) -> Bool:
-        if self.dtype != other.dtype:
-            return False
-        if self.length != other.length:
-            return False
-        for i in range(self.length):
-            var lv = self.is_valid(i)
-            var rv = other.is_valid(i)
-            if lv != rv:
-                return False
-            if lv:
-                var l = self.buffer.unsafe_get[Self.T.native](self.offset + i)
-                var r = other.buffer.unsafe_get[Self.T.native](other.offset + i)
-                if l != r:
-                    return False
-        return True
-
-    def __ne__(self, other: Self) -> Bool:
-        return not Self.__eq__(self, other)
-
-
-comptime Date32Array = TemporalArray[Date32Type]
-comptime Date64Array = TemporalArray[Date64Type]
-comptime Time32Array = TemporalArray[Time32Type]
-comptime Time64Array = TemporalArray[Time64Type]
-comptime DurationArray = TemporalArray[DurationType]
-comptime TimestampArray = TemporalArray[TimestampType]
+comptime Decimal32Array  = PrimitiveArray[Decimal32Type]
+comptime Decimal64Array  = PrimitiveArray[Decimal64Type]
+comptime Decimal128Array = PrimitiveArray[Decimal128Type]
+comptime Decimal256Array = PrimitiveArray[Decimal256Type]
 
 
 # ---------------------------------------------------------------------------
@@ -1875,16 +1733,20 @@ struct AnyArray(
         Float16Array,
         Float32Array,
         Float64Array,
-        StringArray,
-        ListArray,
-        FixedSizeListArray,
-        FixedSizeBinaryArray,
         Date32Array,
         Date64Array,
         Time32Array,
         Time64Array,
         DurationArray,
         TimestampArray,
+        Decimal32Array,
+        Decimal64Array,
+        Decimal128Array,
+        Decimal256Array,
+        StringArray,
+        ListArray,
+        FixedSizeListArray,
+        FixedSizeBinaryArray,
         StructArray,
     ]
 
@@ -2088,6 +1950,18 @@ struct AnyArray(
     def as_timestamp(ref self) -> ref[self._v] TimestampArray:
         return self._v[TimestampArray]
 
+    def as_decimal32(ref self) -> ref[self._v] Decimal32Array:
+        return self._v[Decimal32Array]
+
+    def as_decimal64(ref self) -> ref[self._v] Decimal64Array:
+        return self._v[Decimal64Array]
+
+    def as_decimal128(ref self) -> ref[self._v] Decimal128Array:
+        return self._v[Decimal128Array]
+
+    def as_decimal256(ref self) -> ref[self._v] Decimal256Array:
+        return self._v[Decimal256Array]
+
     def as_struct(ref self) -> ref[self._v] StructArray:
         return self._v[StructArray]
 
@@ -2147,6 +2021,14 @@ struct AnyArray(
             return AnyArray(TimestampArray(data))
         elif dt.is_duration():
             return AnyArray(DurationArray(data))
+        elif dt.is_decimal32():
+            return AnyArray(Decimal32Array(data))
+        elif dt.is_decimal64():
+            return AnyArray(Decimal64Array(data))
+        elif dt.is_decimal128():
+            return AnyArray(Decimal128Array(data))
+        elif dt.is_decimal256():
+            return AnyArray(Decimal256Array(data))
         elif dt.is_struct():
             return AnyArray(StructArray(data))
         raise Error("from_data: unsupported dtype")
@@ -2173,7 +2055,7 @@ struct AnyArray(
                     children=List[ArrayData](),
                 )
             )
-        elif dtype.is_temporal():
+        elif dtype.is_temporal() or dtype.is_decimal():
             var empty_buf = Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
             return AnyArray.from_data(
                 ArrayData(

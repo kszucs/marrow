@@ -239,6 +239,7 @@ def filter_[
     if out_len == 0:
         var empty_buf = Buffer.alloc_zeroed[T.native](0)
         return PrimitiveArray[T](
+            dtype=array.dtype.copy(),
             length=0,
             nulls=0,
             offset=0,
@@ -265,6 +266,7 @@ def filter_[
         out_len,
     )
     return PrimitiveArray[T](
+        dtype=array.dtype.copy(),
         length=out_len,
         nulls=null_count,
         offset=0,
@@ -678,6 +680,7 @@ def take[
             bitmap = bm_builder.to_immutable(length=n)
 
     return PrimitiveArray[T](
+        dtype=array.dtype.copy(),
         length=n,
         nulls=null_count,
         offset=0,

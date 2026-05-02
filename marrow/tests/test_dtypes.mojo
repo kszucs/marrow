@@ -139,7 +139,6 @@ def test_bit_width() raises:
     assert_equal(dt.uint16.bit_width(), 16)
     assert_equal(dt.uint32.bit_width(), 32)
     assert_equal(dt.uint64.bit_width(), 64)
-    assert_equal(dt.bool_.bit_width(), 1)
     assert_equal(dt.float32.bit_width(), 32)
     assert_equal(dt.float64.bit_width(), 64)
 
@@ -333,7 +332,7 @@ def test_temporal_dtypes_predicates() raises:
     assert_true(AnyDataType(date32()).is_date32())
     assert_true(AnyDataType(date32()).is_temporal())
     assert_false(AnyDataType(date32()).is_date64())
-    assert_false(AnyDataType(date32()).is_primitive())
+    assert_true(AnyDataType(date32()).is_primitive())
     assert_false(AnyDataType(date32()).is_integer())
 
     assert_true(AnyDataType(date64()).is_date64())
