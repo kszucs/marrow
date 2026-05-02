@@ -379,7 +379,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
     var _bitmap: Bitmap[mut=True]
     var _buffer: Buffer[mut=True]
 
-    def __init__[DT: NumericType](out self: PrimitiveBuilder[DT], capacity: Int = 0, *, zeroed: Bool = True):
+    def __init__[NT: NumericType](out self: PrimitiveBuilder[NT], capacity: Int = 0, *, zeroed: Bool = True):
         """Create a builder for a numeric type without an explicit dtype instance.
 
         Only available for NumericType. For temporal and decimal types, use
@@ -391,7 +391,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
                 False when every element will be written via
                 ``unsafe_append`` — avoids wasted memset.
         """
-        self = PrimitiveBuilder[DT](DT(), capacity, zeroed=zeroed)
+        self = PrimitiveBuilder[NT](NT(), capacity, zeroed=zeroed)
 
     def __init__(out self, dtype: Self.T, capacity: Int = 0, *, zeroed: Bool = True):
         """Create a builder with an explicit dtype (required for temporal and decimal).

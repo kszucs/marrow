@@ -76,7 +76,7 @@ def test_primitive_scalar_null() raises:
 
 def test_primitive_scalar_from_array() raises:
     """Construct via array __getitem__."""
-    var arr = array[Int32Type]([10, 20, 30])
+    var arr = array([10, 20, 30], int32)
     var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.value(), 20)
@@ -237,7 +237,7 @@ def test_struct_scalar_null_from_array() raises:
 
 
 def test_any_array_getitem_primitive() raises:
-    var arr: AnyArray = array[Int64Type]([10, 20, 30])
+    var arr: AnyArray = array([10, 20, 30], int64)
     var s = arr[1]
     assert_true(s.is_valid())
     assert_equal(s.type(), int64)
@@ -300,7 +300,7 @@ def test_any_array_getitem_struct() raises:
 
 
 def test_any_array_getitem_out_of_bounds() raises:
-    var arr: AnyArray = array[Int64Type]([1, 2, 3])
+    var arr: AnyArray = array([1, 2, 3], int64)
     var raised = False
     try:
         _ = arr[5]

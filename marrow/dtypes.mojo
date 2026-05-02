@@ -203,9 +203,10 @@ comptime Decimal128Type = _DecimalType[DType.int128]
 comptime Decimal256Type = _DecimalType[DType.int256]
 
 
-
-@fieldwise_init
 struct BinaryType(DataType, ImplicitlyCopyable):
+
+    def __init__(out self):
+        pass
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("binary")
@@ -214,8 +215,10 @@ struct BinaryType(DataType, ImplicitlyCopyable):
         return AnyDataType(self)
 
 
-@fieldwise_init
 struct StringType(DataType, ImplicitlyCopyable):
+
+    def __init__(out self):
+        pass
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("string")
@@ -224,11 +227,13 @@ struct StringType(DataType, ImplicitlyCopyable):
         return AnyDataType(self)
 
 
-@fieldwise_init
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
     """Fixed-size binary type — every element is exactly `byte_width` bytes."""
 
     var byte_width: Int
+
+    def __init__(out self, byte_width: Int):
+        self.byte_width = byte_width
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_binary[", self.byte_width, "]")
@@ -242,11 +247,14 @@ struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
 # ---------------------------------------------------------------------------
 
 
-@fieldwise_init
+
 struct TimeUnit(Equatable, Movable, Writable, ImplicitlyCopyable):
     """Unit for time-based Arrow types (SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3)."""
 
     var value: Int
+
+    def __init__(out self, value: Int):
+        self.value = value
 
     def to_string(self) -> String:
         if self.value == 0:
@@ -267,11 +275,14 @@ comptime millisecond = TimeUnit(1)
 comptime microsecond = TimeUnit(2)
 comptime nanosecond = TimeUnit(3)
 
-@fieldwise_init
+
 struct Date32Type(TemporalType):
     """Date32 — days since Unix epoch (int32)."""
 
     comptime native: DType = DType.int32
+
+    def __init__(out self):
+        pass
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date32")
@@ -279,11 +290,14 @@ struct Date32Type(TemporalType):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-@fieldwise_init
+
 struct Date64Type(TemporalType):
     """Date64 — milliseconds since Unix epoch (int64)."""
 
     comptime native: DType = DType.int64
+
+    def __init__(out self):
+        pass
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date64")
@@ -291,7 +305,6 @@ struct Date64Type(TemporalType):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-@fieldwise_init
 struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
 
@@ -299,19 +312,24 @@ struct Time32Type(TemporalType):
 
     var unit: TimeUnit
 
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time32[", self.unit, "]")
 
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self)
 
-@fieldwise_init
 struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
 
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
+
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time64[", self.unit, "]")
@@ -344,13 +362,16 @@ struct TimestampType(TemporalType):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self^)
 
-@fieldwise_init
+
 struct DurationType(TemporalType):
     """Duration — elapsed int64 units, no epoch reference."""
 
     comptime native: DType = DType.int64
 
     var unit: TimeUnit
+
+    def __init__(out self, unit: TimeUnit):
+        self.unit = unit
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("duration[", self.unit, "]")

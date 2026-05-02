@@ -200,8 +200,8 @@ struct PrimitiveScalar[T: PrimitiveType](
     var _is_valid: Bool
 
 
-    def __init__[DT: NumericType](out self: PrimitiveScalar[DT], value: Optional[_Scalar[DT.native]]):
-        self = PrimitiveScalar[DT](value, DT())
+    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: Optional[_Scalar[NT.native]]):
+        self = PrimitiveScalar[NT](value, NT())
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
