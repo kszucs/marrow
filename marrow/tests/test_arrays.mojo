@@ -557,14 +557,14 @@ def test_struct_array_unsafe_get() raises:
     var sb = StructBuilder(
         [field("int_data_a", int32), field("int_data_b", int32)], capacity=2
     )
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(3)
-    sb.field_builder(0).as_primitive[Int32Type]().append(4)
-    sb.field_builder(0).as_primitive[Int32Type]().append(5)
-    sb.field_builder(1).as_primitive[Int32Type]().append(10)
-    sb.field_builder(1).as_primitive[Int32Type]().append(20)
-    sb.field_builder(1).as_primitive[Int32Type]().append(30)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(0).as_int32().append(3)
+    sb.field_builder(0).as_int32().append(4)
+    sb.field_builder(0).as_int32().append(5)
+    sb.field_builder(1).as_int32().append(10)
+    sb.field_builder(1).as_int32().append(20)
+    sb.field_builder(1).as_int32().append(30)
     sb.append_valid()
     sb.append_valid()
     var struct_array = sb.finish()
@@ -805,8 +805,8 @@ def test_str_fixed_size_list_array() raises:
 
 def test_str_struct_array() raises:
     var sb = StructBuilder([field("x", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish()
@@ -863,9 +863,9 @@ def test_list_array_is_valid() raises:
 
 def test_struct_array_is_valid() raises:
     var sb = StructBuilder([field("val", int32)], capacity=3)
-    sb.field_builder(0).as_primitive[Int32Type]().append(10)
-    sb.field_builder(0).as_primitive[Int32Type]().append(20)
-    sb.field_builder(0).as_primitive[Int32Type]().append(30)
+    sb.field_builder(0).as_int32().append(10)
+    sb.field_builder(0).as_int32().append(20)
+    sb.field_builder(0).as_int32().append(30)
     sb.append_valid()
     sb.append_null()
     sb.append_valid()
@@ -992,8 +992,8 @@ def test_struct_array_field_by_index() raises:
     var sb = StructBuilder(
         [field("id", int32), field("name", string)], capacity=2
     )
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
     sb.field_builder(1).as_string().append("x")
     sb.field_builder(1).as_string().append("y")
     sb.append_valid()
@@ -1013,8 +1013,8 @@ def test_struct_array_field_by_index() raises:
 
 def test_struct_array_field_by_name() raises:
     var sb = StructBuilder([field("val", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(10)
-    sb.field_builder(0).as_primitive[Int32Type]().append(20)
+    sb.field_builder(0).as_int32().append(10)
+    sb.field_builder(0).as_int32().append(20)
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish()
@@ -1027,7 +1027,7 @@ def test_struct_array_field_by_name() raises:
 
 def test_struct_array_field_bounds() raises:
     var sb = StructBuilder([field("x", int32)], capacity=1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
+    sb.field_builder(0).as_int32().append(1)
     sb.append_valid()
     var sa = sb.finish()
     try:
@@ -1222,8 +1222,8 @@ def test_struct_array_flatten() raises:
     var sb = StructBuilder(
         [field("id", int32), field("name", string)], capacity=2
     )
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
     sb.field_builder(1).as_string().append("x")
     sb.field_builder(1).as_string().append("y")
     sb.append_valid()
@@ -1245,12 +1245,12 @@ def test_struct_array_select_basic() raises:
     var sb = StructBuilder(
         [field("a", int32), field("b", int32), field("c", int32)], capacity=2
     )
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
-    sb.field_builder(1).as_primitive[Int32Type]().append(10)
-    sb.field_builder(1).as_primitive[Int32Type]().append(20)
-    sb.field_builder(2).as_primitive[Int32Type]().append(100)
-    sb.field_builder(2).as_primitive[Int32Type]().append(200)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(1).as_int32().append(10)
+    sb.field_builder(1).as_int32().append(20)
+    sb.field_builder(2).as_int32().append(100)
+    sb.field_builder(2).as_int32().append(200)
     sb.append_valid()
     sb.append_valid()
     var sa = sb.finish()
@@ -1269,12 +1269,12 @@ def test_struct_array_select_basic() raises:
 def test_struct_array_select_inherits_nulls_and_bitmap() raises:
     """`select` preserves nulls count, bitmap, and offset from the source."""
     var sb = StructBuilder([field("x", int32), field("y", int32)], capacity=3)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(3)
-    sb.field_builder(1).as_primitive[Int32Type]().append(10)
-    sb.field_builder(1).as_primitive[Int32Type]().append(20)
-    sb.field_builder(1).as_primitive[Int32Type]().append(30)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(0).as_int32().append(3)
+    sb.field_builder(1).as_int32().append(10)
+    sb.field_builder(1).as_int32().append(20)
+    sb.field_builder(1).as_int32().append(30)
     sb.append_null()
     sb.append_valid()
     sb.append_valid()
@@ -1293,12 +1293,12 @@ def test_struct_array_select_inherits_nulls_and_bitmap() raises:
 def test_struct_array_select_inherits_offset() raises:
     """`select` preserves the offset of the source array."""
     var sb = StructBuilder([field("a", int32), field("b", int32)], capacity=3)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(3)
-    sb.field_builder(1).as_primitive[Int32Type]().append(10)
-    sb.field_builder(1).as_primitive[Int32Type]().append(20)
-    sb.field_builder(1).as_primitive[Int32Type]().append(30)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(0).as_int32().append(3)
+    sb.field_builder(1).as_int32().append(10)
+    sb.field_builder(1).as_int32().append(20)
+    sb.field_builder(1).as_int32().append(30)
     sb.append_valid()
     sb.append_valid()
     sb.append_valid()
@@ -1542,14 +1542,14 @@ def test_fixed_size_list_array_eq_unequal() raises:
 
 def test_struct_array_eq() raises:
     var sa = StructBuilder([field("x", int32)], capacity=2)
-    sa.field_builder(0).as_primitive[Int32Type]().append(1)
-    sa.field_builder(0).as_primitive[Int32Type]().append(2)
+    sa.field_builder(0).as_int32().append(1)
+    sa.field_builder(0).as_int32().append(2)
     sa.append_valid()
     sa.append_valid()
 
     var sb = StructBuilder([field("x", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(2)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
     sb.append_valid()
     sb.append_valid()
 
@@ -1558,14 +1558,14 @@ def test_struct_array_eq() raises:
 
 def test_struct_array_eq_unequal() raises:
     var sa = StructBuilder([field("x", int32)], capacity=2)
-    sa.field_builder(0).as_primitive[Int32Type]().append(1)
-    sa.field_builder(0).as_primitive[Int32Type]().append(2)
+    sa.field_builder(0).as_int32().append(1)
+    sa.field_builder(0).as_int32().append(2)
     sa.append_valid()
     sa.append_valid()
 
     var sb = StructBuilder([field("x", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb.field_builder(0).as_primitive[Int32Type]().append(99)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(99)
     sb.append_valid()
     sb.append_valid()
 
@@ -1574,13 +1574,13 @@ def test_struct_array_eq_unequal() raises:
 
 def test_struct_array_eq_dtype_mismatch() raises:
     var sa = StructBuilder([field("x", int32)], capacity=1)
-    sa.field_builder(0).as_primitive[Int32Type]().append(1)
+    sa.field_builder(0).as_int32().append(1)
     sa.append_valid()
 
     var sb = StructBuilder(
         [field("y", int32)], capacity=1
     )  # different field name
-    sb.field_builder(0).as_primitive[Int32Type]().append(1)
+    sb.field_builder(0).as_int32().append(1)
     sb.append_valid()
 
     assert_false(sa.finish() == sb.finish())

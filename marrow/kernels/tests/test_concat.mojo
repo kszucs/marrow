@@ -377,16 +377,16 @@ def test_concat_fixed_size_list_with_offset() raises:
 def test_concat_struct() raises:
     # Chunk 1: [{id:1, score:0.5}, {id:2, score:0.6}]
     var sb1 = StructBuilder([field("id", int32), field("score", float32)])
-    sb1.field_builder(0).as_primitive[Int32Type]().append(1)
-    sb1.field_builder(0).as_primitive[Int32Type]().append(2)
-    sb1.field_builder(1).as_primitive[Float32Type]().append(0.5)
-    sb1.field_builder(1).as_primitive[Float32Type]().append(0.6)
+    sb1.field_builder(0).as_int32().append(1)
+    sb1.field_builder(0).as_int32().append(2)
+    sb1.field_builder(1).as_float32().append(0.5)
+    sb1.field_builder(1).as_float32().append(0.6)
     sb1.append_valid()
     sb1.append_valid()
     # Chunk 2: [{id:3, score:0.7}]
     var sb2 = StructBuilder([field("id", int32), field("score", float32)])
-    sb2.field_builder(0).as_primitive[Int32Type]().append(3)
-    sb2.field_builder(1).as_primitive[Float32Type]().append(0.7)
+    sb2.field_builder(0).as_int32().append(3)
+    sb2.field_builder(1).as_float32().append(0.7)
     sb2.append_valid()
     var arrs: List[AnyArray] = [
         sb1.finish().to_any(),

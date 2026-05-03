@@ -254,9 +254,7 @@ and can be tuned per workload."""
 
 
 struct HashJoin[
-    hasher: def(StructArray, ExecutionContext) thin raises -> PrimitiveArray[
-        UInt64Type
-    ] = rapidhash
+    hasher: def(StructArray, ExecutionContext) thin raises -> UInt64Array = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 

@@ -153,7 +153,7 @@ def test_groupby_sum_uint64_wraps_for_large_values() raises:
     var vals = AnyArray(array([100, 50], uint8))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
-    ref s = result.columns[1].as_primitive[Int64Type]()
+    ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 150)  # uint8 values within int64 range sum correctly
 
 
@@ -193,7 +193,7 @@ def test_groupby_sum_float64_preserved() raises:
     var vals = AnyArray(array([1.5, 2.5], float64))
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(float64))
-    ref s = result.columns[1].as_primitive[Float64Type]()
+    ref s = result.columns[1].as_float64()
     assert_equal(s[0].value(), 4.0)
 
 

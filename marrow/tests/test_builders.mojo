@@ -521,12 +521,12 @@ def test_struct_builder_append_valid() raises:
     var sb = StructBuilder(
         [field("id", int64), field("score", float64)], capacity=3
     )
-    sb.field_builder(0).as_primitive[Int64Type]().append(1)
-    sb.field_builder(0).as_primitive[Int64Type]().append(2)
-    sb.field_builder(0).as_primitive[Int64Type]().append(3)
-    sb.field_builder(1).as_primitive[Float64Type]().append(0.1)
-    sb.field_builder(1).as_primitive[Float64Type]().append(0.2)
-    sb.field_builder(1).as_primitive[Float64Type]().append(0.3)
+    sb.field_builder(0).as_int64().append(1)
+    sb.field_builder(0).as_int64().append(2)
+    sb.field_builder(0).as_int64().append(3)
+    sb.field_builder(1).as_float64().append(0.1)
+    sb.field_builder(1).as_float64().append(0.2)
+    sb.field_builder(1).as_float64().append(0.3)
     sb.append_valid()
     sb.append_valid()
     sb.append_valid()
@@ -543,8 +543,8 @@ def test_struct_builder_append_valid() raises:
 def test_struct_builder_append_null() raises:
     """Null struct entries — validity bitmap reflects nulls."""
     var sb = StructBuilder([field("id", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(10)
-    sb.field_builder(0).as_primitive[Int32Type]().append(20)
+    sb.field_builder(0).as_int32().append(10)
+    sb.field_builder(0).as_int32().append(20)
     sb.append_valid()
     sb.append_null()
     var frozen = sb.finish()
@@ -556,8 +556,8 @@ def test_struct_builder_append_null() raises:
 def test_struct_builder_field_values_accessible() raises:
     """Child field values are accessible after finish."""
     var sb = StructBuilder([field("x", int32)], capacity=2)
-    sb.field_builder(0).as_primitive[Int32Type]().append(42)
-    sb.field_builder(0).as_primitive[Int32Type]().append(99)
+    sb.field_builder(0).as_int32().append(42)
+    sb.field_builder(0).as_int32().append(99)
     sb.append_valid()
     sb.append_valid()
     var frozen = sb.finish()
@@ -574,8 +574,8 @@ def test_struct_builder_multi_type_fields() raises:
         [field("id", int64), field("name", string), field("active", bool_)],
         capacity=2,
     )
-    sb.field_builder(0).as_primitive[Int64Type]().append(1)
-    sb.field_builder(0).as_primitive[Int64Type]().append(2)
+    sb.field_builder(0).as_int64().append(1)
+    sb.field_builder(0).as_int64().append(2)
     sb.field_builder(1).as_string().append("alice")
     sb.field_builder(1).as_string().append("bob")
     sb.field_builder(2).as_bool().append(True)
@@ -594,8 +594,8 @@ def test_struct_builder_multi_type_fields() raises:
 def test_struct_builder_field_builder() raises:
     var sb = StructBuilder([field("x", int32), field("y", int32)])
 
-    sb.field_builder(0).as_primitive[Int32Type]().append(7)
-    sb.field_builder(1).as_primitive[Int32Type]().append(8)
+    sb.field_builder(0).as_int32().append(7)
+    sb.field_builder(1).as_int32().append(8)
     sb.append_valid()
 
     assert_equal(sb.field_builder(0).length(), 1)
@@ -605,7 +605,7 @@ def test_struct_builder_field_builder() raises:
 def test_struct_builder_capacity_growth() raises:
     var sb = StructBuilder([field("id", int32)])
     for _ in range(5):
-        sb.field_builder(0).as_primitive[Int32Type]().append(0)
+        sb.field_builder(0).as_int32().append(0)
         sb.append_valid()
     var frozen = sb.finish()
     assert_equal(frozen.length, 5)
@@ -614,8 +614,8 @@ def test_struct_builder_capacity_growth() raises:
 def test_struct_builder_field_names_preserved() raises:
     """Field names survive builder → finish cycle."""
     var sb = StructBuilder([field("alpha", int8), field("beta", int8)])
-    sb.field_builder(0).as_primitive[Int8Type]().append(1)
-    sb.field_builder(1).as_primitive[Int8Type]().append(2)
+    sb.field_builder(0).as_int8().append(1)
+    sb.field_builder(1).as_int8().append(2)
     sb.append_valid()
     var frozen = sb.finish()
     assert_equal(frozen.dtype.as_struct_type().fields[0].name, "alpha")

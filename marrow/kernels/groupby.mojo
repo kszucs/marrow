@@ -275,14 +275,14 @@ struct AggregateFunction(Copyable, Movable):
     def create(mut self) raises:
         """Initialize state for a newly created group."""
         if self._value_dtype.is_integer() and self.name != "mean":
-            self.values.builder.as_primitive[Int64Type]().append(
+            self.values.builder.as_int64().append(
                 Scalar[int64.native](0)
             )
         else:
-            self.values.builder.as_primitive[Float64Type]().append(
+            self.values.builder.as_float64().append(
                 Scalar[float64.native](0)
             )
-        self.counts.builder.as_primitive[Int64Type]().append(
+        self.counts.builder.as_int64().append(
             Scalar[int64.native](0)
         )
 
@@ -300,11 +300,11 @@ struct AggregateFunction(Copyable, Movable):
         """
         var has_bitmap = input_col.null_count() > 0
         var use_int = self._value_dtype.is_integer() and self.name != "mean"
-        ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
+        ref cnt_ptr = self.counts.builder.as_int64()
         var dt = input_col.dtype()
 
         if use_int:
-            ref int_ptr = self.values.builder.as_primitive[Int64Type]()
+            ref int_ptr = self.values.builder.as_int64()
             if dt == int8:
                 _add_batch_typed_int[Int8Type](
                     self.name,
@@ -380,7 +380,7 @@ struct AggregateFunction(Copyable, Movable):
             else:
                 raise Error("unsupported integer dtype: ", dt)
         else:
-            ref val_ptr = self.values.builder.as_primitive[Float64Type]()
+            ref val_ptr = self.values.builder.as_float64()
             if dt == bool_:
                 _add_batch_bool(
                     self.name,
@@ -505,8 +505,8 @@ struct AggregateFunction(Copyable, Movable):
         if self.name == "mean":
             # Compute value / count for each group.
             var b = Float64Builder(capacity=num_groups)
-            ref val_ptr = self.values.builder.as_primitive[Float64Type]()
-            ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
+            ref val_ptr = self.values.builder.as_float64()
+            ref cnt_ptr = self.counts.builder.as_int64()
             for g in range(num_groups):
                 var c = Int(cnt_ptr.unsafe_get(g))
                 if c > 0:
@@ -519,10 +519,10 @@ struct AggregateFunction(Copyable, Movable):
                 b.finish().to_any(),
             )
 
-        ref cnt_ptr = self.counts.builder.as_primitive[Int64Type]()
+        ref cnt_ptr = self.counts.builder.as_int64()
         if self._value_dtype.is_integer():
-            var b = PrimitiveBuilder[Int64Type](capacity=num_groups)
-            ref int_ptr = self.values.builder.as_primitive[Int64Type]()
+            var b = Int64Builder(capacity=num_groups)
+            ref int_ptr = self.values.builder.as_int64()
             for g in range(num_groups):
                 var c = Int(cnt_ptr.unsafe_get(g))
                 if c > 0:
@@ -534,8 +534,8 @@ struct AggregateFunction(Copyable, Movable):
                 b.finish().to_any(),
             )
         else:
-            var b = PrimitiveBuilder[Float64Type](capacity=num_groups)
-            ref val_ptr = self.values.builder.as_primitive[Float64Type]()
+            var b = Float64Builder(capacity=num_groups)
+            ref val_ptr = self.values.builder.as_float64()
             for g in range(num_groups):
                 var c = Int(cnt_ptr.unsafe_get(g))
                 if c > 0:
