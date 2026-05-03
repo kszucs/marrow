@@ -272,92 +272,103 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_primitive[
         T: PrimitiveType
     ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
+        debug_assert(
+            self._ptr[].isa[PrimitiveBuilder[T]](),
+            "as_primitive: wrong type, holds ", self.dtype(),
+        )
         return self._ptr[][PrimitiveBuilder[T]]
 
     def as_null(ref self) -> ref[self._ptr[]] NullBuilder:
+        debug_assert(self._ptr[].isa[NullBuilder](), "expected null builder but holds ", self.dtype())
         return self._ptr[][NullBuilder]
 
     def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
+        debug_assert(self._ptr[].isa[BoolBuilder](), "expected bool builder but holds ", self.dtype())
         return self._ptr[][BoolBuilder]
 
     def as_int8(ref self) -> ref[self._ptr[]] Int8Builder:
-        return self._ptr[][Int8Builder]
+        return self.as_primitive[Int8Type]()
 
     def as_int16(ref self) -> ref[self._ptr[]] Int16Builder:
-        return self._ptr[][Int16Builder]
+        return self.as_primitive[Int16Type]()
 
     def as_int32(ref self) -> ref[self._ptr[]] Int32Builder:
-        return self._ptr[][Int32Builder]
+        return self.as_primitive[Int32Type]()
 
     def as_int64(ref self) -> ref[self._ptr[]] Int64Builder:
-        return self._ptr[][Int64Builder]
+        return self.as_primitive[Int64Type]()
 
     def as_uint8(ref self) -> ref[self._ptr[]] UInt8Builder:
-        return self._ptr[][UInt8Builder]
+        return self.as_primitive[UInt8Type]()
 
     def as_uint16(ref self) -> ref[self._ptr[]] UInt16Builder:
-        return self._ptr[][UInt16Builder]
+        return self.as_primitive[UInt16Type]()
 
     def as_uint32(ref self) -> ref[self._ptr[]] UInt32Builder:
-        return self._ptr[][UInt32Builder]
+        return self.as_primitive[UInt32Type]()
 
     def as_uint64(ref self) -> ref[self._ptr[]] UInt64Builder:
-        return self._ptr[][UInt64Builder]
+        return self.as_primitive[UInt64Type]()
 
     def as_float16(ref self) -> ref[self._ptr[]] Float16Builder:
-        return self._ptr[][Float16Builder]
+        return self.as_primitive[Float16Type]()
 
     def as_float32(ref self) -> ref[self._ptr[]] Float32Builder:
-        return self._ptr[][Float32Builder]
+        return self.as_primitive[Float32Type]()
 
     def as_float64(ref self) -> ref[self._ptr[]] Float64Builder:
-        return self._ptr[][Float64Builder]
+        return self.as_primitive[Float64Type]()
 
     def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
+        debug_assert(self._ptr[].isa[StringBuilder](), "expected string builder but holds ", self.dtype())
         return self._ptr[][StringBuilder]
 
     def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
+        debug_assert(self._ptr[].isa[ListBuilder](), "expected list builder but holds ", self.dtype())
         return self._ptr[][ListBuilder]
 
     def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
+        debug_assert(self._ptr[].isa[FixedSizeListBuilder](), "expected fixed_size_list builder but holds ", self.dtype())
         return self._ptr[][FixedSizeListBuilder]
 
     def as_fixed_size_binary(
         ref self,
     ) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
+        debug_assert(self._ptr[].isa[FixedSizeBinaryBuilder](), "expected fixed_size_binary builder but holds ", self.dtype())
         return self._ptr[][FixedSizeBinaryBuilder]
 
     def as_date32(ref self) -> ref[self._ptr[]] Date32Builder:
-        return self._ptr[][Date32Builder]
+        return self.as_primitive[Date32Type]()
 
     def as_date64(ref self) -> ref[self._ptr[]] Date64Builder:
-        return self._ptr[][Date64Builder]
+        return self.as_primitive[Date64Type]()
 
     def as_time32(ref self) -> ref[self._ptr[]] Time32Builder:
-        return self._ptr[][Time32Builder]
+        return self.as_primitive[Time32Type]()
 
     def as_time64(ref self) -> ref[self._ptr[]] Time64Builder:
-        return self._ptr[][Time64Builder]
+        return self.as_primitive[Time64Type]()
 
     def as_duration(ref self) -> ref[self._ptr[]] DurationBuilder:
-        return self._ptr[][DurationBuilder]
+        return self.as_primitive[DurationType]()
 
     def as_timestamp(ref self) -> ref[self._ptr[]] TimestampBuilder:
-        return self._ptr[][TimestampBuilder]
+        return self.as_primitive[TimestampType]()
 
     def as_decimal32(ref self) -> ref[self._ptr[]] Decimal32Builder:
-        return self._ptr[][Decimal32Builder]
+        return self.as_primitive[Decimal32Type]()
 
     def as_decimal64(ref self) -> ref[self._ptr[]] Decimal64Builder:
-        return self._ptr[][Decimal64Builder]
+        return self.as_primitive[Decimal64Type]()
 
     def as_decimal128(ref self) -> ref[self._ptr[]] Decimal128Builder:
-        return self._ptr[][Decimal128Builder]
+        return self.as_primitive[Decimal128Type]()
 
     def as_decimal256(ref self) -> ref[self._ptr[]] Decimal256Builder:
-        return self._ptr[][Decimal256Builder]
+        return self.as_primitive[Decimal256Type]()
 
     def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
+        debug_assert(self._ptr[].isa[StructBuilder](), "expected struct builder but holds ", self.dtype())
         return self._ptr[][StructBuilder]
 
 

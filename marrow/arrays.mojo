@@ -1913,90 +1913,100 @@ struct AnyArray(
     def as_primitive[
         T: PrimitiveType
     ](ref self) -> ref[self._v] PrimitiveArray[T]:
+        debug_assert(
+            self._v.isa[PrimitiveArray[T]](), "as_primitive: wrong type, holds ", self.dtype()
+        )
         return self._v[PrimitiveArray[T]]
 
     def as_null(ref self) -> ref[self._v] NullArray:
+        debug_assert(self._v.isa[NullArray](), "expected null array but holds ", self.dtype())
         return self._v[NullArray]
 
     def as_bool(ref self) -> ref[self._v] BoolArray:
+        debug_assert(self._v.isa[BoolArray](), "expected bool array but holds ", self.dtype())
         return self._v[BoolArray]
 
     def as_int8(ref self) -> ref[self._v] Int8Array:
-        return self._v[Int8Array]
+        return self.as_primitive[Int8Type]()
 
     def as_int16(ref self) -> ref[self._v] Int16Array:
-        return self._v[Int16Array]
+        return self.as_primitive[Int16Type]()
 
     def as_int32(ref self) -> ref[self._v] Int32Array:
-        return self._v[Int32Array]
+        return self.as_primitive[Int32Type]()
 
     def as_int64(ref self) -> ref[self._v] Int64Array:
-        return self._v[Int64Array]
+        return self.as_primitive[Int64Type]()
 
     def as_uint8(ref self) -> ref[self._v] UInt8Array:
-        return self._v[UInt8Array]
+        return self.as_primitive[UInt8Type]()
 
     def as_uint16(ref self) -> ref[self._v] UInt16Array:
-        return self._v[UInt16Array]
+        return self.as_primitive[UInt16Type]()
 
     def as_uint32(ref self) -> ref[self._v] UInt32Array:
-        return self._v[UInt32Array]
+        return self.as_primitive[UInt32Type]()
 
     def as_uint64(ref self) -> ref[self._v] UInt64Array:
-        return self._v[UInt64Array]
+        return self.as_primitive[UInt64Type]()
 
     def as_float16(ref self) -> ref[self._v] Float16Array:
-        return self._v[Float16Array]
+        return self.as_primitive[Float16Type]()
 
     def as_float32(ref self) -> ref[self._v] Float32Array:
-        return self._v[Float32Array]
+        return self.as_primitive[Float32Type]()
 
     def as_float64(ref self) -> ref[self._v] Float64Array:
-        return self._v[Float64Array]
+        return self.as_primitive[Float64Type]()
 
     def as_string(ref self) -> ref[self._v] StringArray:
+        debug_assert(self._v.isa[StringArray](), "expected string array but holds ", self.dtype())
         return self._v[StringArray]
 
     def as_list(ref self) -> ref[self._v] ListArray:
+        debug_assert(self._v.isa[ListArray](), "expected list array but holds ", self.dtype())
         return self._v[ListArray]
 
     def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
+        debug_assert(self._v.isa[FixedSizeListArray](), "expected fixed_size_list array but holds ", self.dtype())
         return self._v[FixedSizeListArray]
 
     def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryArray:
+        debug_assert(self._v.isa[FixedSizeBinaryArray](), "expected fixed_size_binary array but holds ", self.dtype())
         return self._v[FixedSizeBinaryArray]
 
     def as_date32(ref self) -> ref[self._v] Date32Array:
-        return self._v[Date32Array]
+        return self.as_primitive[Date32Type]()
 
     def as_date64(ref self) -> ref[self._v] Date64Array:
-        return self._v[Date64Array]
+        return self.as_primitive[Date64Type]()
 
     def as_time32(ref self) -> ref[self._v] Time32Array:
-        return self._v[Time32Array]
+        return self.as_primitive[Time32Type]()
 
     def as_time64(ref self) -> ref[self._v] Time64Array:
-        return self._v[Time64Array]
+        return self.as_primitive[Time64Type]()
 
     def as_duration(ref self) -> ref[self._v] DurationArray:
-        return self._v[DurationArray]
+        return self.as_primitive[DurationType]()
 
     def as_timestamp(ref self) -> ref[self._v] TimestampArray:
-        return self._v[TimestampArray]
+        return self.as_primitive[TimestampType]()
 
     def as_decimal32(ref self) -> ref[self._v] Decimal32Array:
-        return self._v[Decimal32Array]
+        return self.as_primitive[Decimal32Type]()
 
     def as_decimal64(ref self) -> ref[self._v] Decimal64Array:
-        return self._v[Decimal64Array]
+        return self.as_primitive[Decimal64Type]()
 
     def as_decimal128(ref self) -> ref[self._v] Decimal128Array:
-        return self._v[Decimal128Array]
+        return self.as_primitive[Decimal128Type]()
 
     def as_decimal256(ref self) -> ref[self._v] Decimal256Array:
-        return self._v[Decimal256Array]
+        return self.as_primitive[Decimal256Type]()
 
     def as_struct(ref self) -> ref[self._v] StructArray:
+        debug_assert(self._v.isa[StructArray](), "expected struct array but holds ", self.dtype())
         return self._v[StructArray]
 
     # --- factory from generic layout ---
@@ -2010,6 +2020,7 @@ struct AnyArray(
         """
         var dt = data.dtype.copy()
         if dt.is_null():
+            # TODO(kszucs): typed arrays can be implicitly converted to anyarray so we shouldn't need to explicitly construct anyarray
             return AnyArray(NullArray(data))
         elif dt == bool_:
             return AnyArray(BoolArray(data))

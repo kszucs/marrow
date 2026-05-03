@@ -143,6 +143,9 @@ struct NullScalar(Copyable, Equatable, Movable, Scalar, Writable):
         writer.write("null")
 
 
+# TODO(kszucs): base Scalar already inherits from copyable/movable/writable, so
+# we don't need to repeat those in each struct definition. We can just have the
+# struct definitions inherit from Scalar and then add Equatable where needed.
 struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
     """A single boolean value: holds a Bool + validity flag."""
 
@@ -200,20 +203,6 @@ struct PrimitiveScalar[T: PrimitiveType](
     var _is_valid: Bool
 
 
-    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: _Scalar[NT.native]):
-        self = PrimitiveScalar[NT](Optional(value), NT())
-
-    def __init__[NT: IntegerType](out self: PrimitiveScalar[NT], value: Int):
-        self = PrimitiveScalar[NT](_Scalar[NT.native](value), NT())
-
-    def __init__[NT: FloatingType](out self: PrimitiveScalar[NT], value: Float64):
-        self = PrimitiveScalar[NT](_Scalar[NT.native](value), NT())
-
-    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], none: NoneType):
-        self._value = _Scalar[NT.native](0)
-        self._dtype = NT()
-        self._is_valid = False
-
     def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: Optional[_Scalar[NT.native]]):
         self = PrimitiveScalar[NT](value, NT())
 
@@ -249,6 +238,7 @@ struct PrimitiveScalar[T: PrimitiveType](
             return False
         return self._dtype == other._dtype and self._value == other._value
 
+    # TODO(kszucs): shouldn't define __ne__ since there is a default impl
     def __ne__(self, other: Self) -> Bool:
         return not (self == other)
 
@@ -602,91 +592,105 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- typed downcasts ---
 
+    # TODO(kszucs): should remove references just like we do in arrays.mojo
     def as_null(self) -> NullScalar:
+        debug_assert(self._v.isa[NullScalar](), "expected null scalar but holds ", self.type())
         return self._v[NullScalar].copy()
 
     def as_bool(self) -> BoolScalar:
+        debug_assert(self._v.isa[BoolScalar](), "expected bool scalar but holds ", self.type())
         return self._v[BoolScalar].copy()
 
     def as_primitive[T: PrimitiveType](self) -> PrimitiveScalar[T]:
+        debug_assert(
+            self._v.isa[PrimitiveScalar[T]](), "as_primitive: wrong type, holds ", self.type()
+        )
         return self._v[PrimitiveScalar[T]].copy()
 
     def as_int8(self) -> Int8Scalar:
-        return self._v[Int8Scalar].copy()
+        return self.as_primitive[Int8Type]()
 
     def as_int16(self) -> Int16Scalar:
-        return self._v[Int16Scalar].copy()
+        return self.as_primitive[Int16Type]()
 
     def as_int32(self) -> Int32Scalar:
-        return self._v[Int32Scalar].copy()
+        return self.as_primitive[Int32Type]()
 
     def as_int64(self) -> Int64Scalar:
-        return self._v[Int64Scalar].copy()
+        return self.as_primitive[Int64Type]()
 
     def as_uint8(self) -> UInt8Scalar:
-        return self._v[UInt8Scalar].copy()
+        return self.as_primitive[UInt8Type]()
 
     def as_uint16(self) -> UInt16Scalar:
-        return self._v[UInt16Scalar].copy()
+        return self.as_primitive[UInt16Type]()
 
     def as_uint32(self) -> UInt32Scalar:
-        return self._v[UInt32Scalar].copy()
+        return self.as_primitive[UInt32Type]()
 
     def as_uint64(self) -> UInt64Scalar:
-        return self._v[UInt64Scalar].copy()
+        return self.as_primitive[UInt64Type]()
 
     def as_float16(self) -> Float16Scalar:
-        return self._v[Float16Scalar].copy()
+        return self.as_primitive[Float16Type]()
 
     def as_float32(self) -> Float32Scalar:
-        return self._v[Float32Scalar].copy()
+        return self.as_primitive[Float32Type]()
 
     def as_float64(self) -> Float64Scalar:
-        return self._v[Float64Scalar].copy()
+        return self.as_primitive[Float64Type]()
 
     def as_string(self) -> StringScalar:
+        debug_assert(self._v.isa[StringScalar](), "expected string scalar but holds ", self.type())
         return self._v[StringScalar].copy()
 
     def as_fixed_size_binary(self) -> FixedSizeBinaryScalar:
+        debug_assert(
+            self._v.isa[FixedSizeBinaryScalar](),
+            "expected fixed_size_binary scalar but holds ", self.type(),
+        )
         return self._v[FixedSizeBinaryScalar].copy()
 
     def as_date32(self) -> Date32Scalar:
-        return self._v[Date32Scalar].copy()
+        return self.as_primitive[Date32Type]()
 
     def as_date64(self) -> Date64Scalar:
-        return self._v[Date64Scalar].copy()
+        return self.as_primitive[Date64Type]()
 
     def as_time32(self) -> Time32Scalar:
-        return self._v[Time32Scalar].copy()
+        return self.as_primitive[Time32Type]()
 
     def as_time64(self) -> Time64Scalar:
-        return self._v[Time64Scalar].copy()
+        return self.as_primitive[Time64Type]()
 
     def as_duration(self) -> DurationScalar:
-        return self._v[DurationScalar].copy()
+        return self.as_primitive[DurationType]()
 
     def as_timestamp(self) -> TimestampScalar:
-        return self._v[TimestampScalar].copy()
+        return self.as_primitive[TimestampType]()
 
     def as_decimal32(self) -> Decimal32Scalar:
-        return self._v[Decimal32Scalar].copy()
+        return self.as_primitive[Decimal32Type]()
 
     def as_decimal64(self) -> Decimal64Scalar:
-        return self._v[Decimal64Scalar].copy()
+        return self.as_primitive[Decimal64Type]()
 
     def as_decimal128(self) -> Decimal128Scalar:
-        return self._v[Decimal128Scalar].copy()
+        return self.as_primitive[Decimal128Type]()
 
     def as_decimal256(self) -> Decimal256Scalar:
-        return self._v[Decimal256Scalar].copy()
+        return self.as_primitive[Decimal256Type]()
 
     def as_list(self) -> ListScalar:
+        debug_assert(self._v.isa[ListScalar](), "expected list scalar but holds ", self.type())
         return self._v[ListScalar].copy()
 
     def as_fixed_size_list(self) -> ListScalar:
+        debug_assert(self._v.isa[ListScalar](), "expected fixed_size_list scalar but holds ", self.type())
         return self._v[ListScalar].copy()
 
     def as_struct(self) -> StructScalar:
+        debug_assert(self._v.isa[StructScalar](), "expected struct scalar but holds ", self.type())
         return self._v[StructScalar].copy()
 
     def write_to[W: Writer](self, mut writer: W):

@@ -104,7 +104,9 @@ class MojoRunner:
         When *test_names* is provided, appends `--only name1 name2 ...` so that
         TestSuite skips unselected tests.
         """
-        opt = "-O3" if config.getoption("--benchmark") else "-O1"
+        benchmark = config.getoption("--benchmark")
+        opt = "-O3" if benchmark else "-O1"
+        assert_flag = [] if benchmark else ["-D", "ASSERT=all"]
         asan = MojoRunner.asan_flags(config)
 
         if asan:
@@ -118,7 +120,7 @@ class MojoRunner:
             src_hash = hashlib.sha256(str(src).encode()).hexdigest()[:16]
             binary = runners_dir / f"test_runner_{src_hash}"
             build_cmd = (
-                ["mojo", "build", opt, "-I", "."] + asan + [str(src), "-o", str(binary)]
+                ["mojo", "build", opt, "-I", "."] + assert_flag + asan + [str(src), "-o", str(binary)]
             )
             result = subprocess.run(
                 build_cmd, cwd=config.rootpath, capture_output=True, text=True
@@ -127,7 +129,7 @@ class MojoRunner:
                 raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
             cmd = [str(binary)]
         else:
-            cmd = ["mojo", "run", opt, "-I", "."] + [str(fspath)]
+            cmd = ["mojo", "run", opt, "-I", "."] + assert_flag + [str(fspath)]
 
         if test_names:
             cmd += ["--only"] + list(test_names)

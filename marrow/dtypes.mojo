@@ -770,42 +770,54 @@ struct AnyDataType(
 
     def as_list_type(self) -> ListType:
         """For list types, returns the inner ListType."""
+        debug_assert(self._v.isa[ListType](), "expected list type but holds ", self)
         return ListType(copy=self._v[ListType])
 
     def as_fixed_size_list_type(self) -> FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""
+        debug_assert(self._v.isa[FixedSizeListType](), "expected fixed_size_list type but holds ", self)
         return FixedSizeListType(copy=self._v[FixedSizeListType])
 
     def as_struct_type(self) -> StructType:
         """For struct types, returns the inner StructType."""
+        debug_assert(self._v.isa[StructType](), "expected struct type but holds ", self)
         return StructType(copy=self._v[StructType])
 
     def as_fixed_size_binary_type(self) -> FixedSizeBinaryType:
         """For fixed-size binary types, returns the inner FixedSizeBinaryType."""
+        debug_assert(self._v.isa[FixedSizeBinaryType](), "expected fixed_size_binary type but holds ", self)
         return self._v[FixedSizeBinaryType]
 
     def as_time32_type(self) -> Time32Type:
+        debug_assert(self._v.isa[Time32Type](), "expected time32 type but holds ", self)
         return self._v[Time32Type]
 
     def as_time64_type(self) -> Time64Type:
+        debug_assert(self._v.isa[Time64Type](), "expected time64 type but holds ", self)
         return self._v[Time64Type]
 
     def as_timestamp_type(self) -> TimestampType:
+        debug_assert(self._v.isa[TimestampType](), "expected timestamp type but holds ", self)
         return TimestampType(copy=self._v[TimestampType])
 
     def as_duration_type(self) -> DurationType:
+        debug_assert(self._v.isa[DurationType](), "expected duration type but holds ", self)
         return self._v[DurationType]
 
     def as_decimal32(self) -> Decimal32Type:
+        debug_assert(self._v.isa[Decimal32Type](), "expected decimal32 type but holds ", self)
         return self._v[Decimal32Type]
 
     def as_decimal64(self) -> Decimal64Type:
+        debug_assert(self._v.isa[Decimal64Type](), "expected decimal64 type but holds ", self)
         return self._v[Decimal64Type]
 
     def as_decimal128(self) -> Decimal128Type:
+        debug_assert(self._v.isa[Decimal128Type](), "expected decimal128 type but holds ", self)
         return self._v[Decimal128Type]
 
     def as_decimal256(self) -> Decimal256Type:
+        debug_assert(self._v.isa[Decimal256Type](), "expected decimal256 type but holds ", self)
         return self._v[Decimal256Type]
 
 
