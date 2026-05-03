@@ -108,28 +108,31 @@ class MojoRunner:
         opt = "-O3" if benchmark else "-O1"
         assert_flag = [] if benchmark else ["-D", "ASSERT=all"]
         asan = MojoRunner.asan_flags(config)
+        src = Path(fspath)
 
         if asan:
-            # mojo run cannot link ASAN symbols — build a real binary first.
-            # Use a stable name derived from the source path so each test file
-            # gets its own binary; mojo's own build cache decides whether to
-            # recompile.
-            src = Path(fspath)
+            # `mojo run` cannot resolve ASAN sanitizer symbols at runtime, so
+            # build a real binary instead.  Use a content-hash of the source
+            # file so each unique source gets its own cached binary.
             runners_dir = Path(config.rootpath) / ".test_runners"
             runners_dir.mkdir(exist_ok=True)
-            src_hash = hashlib.sha256(str(src).encode()).hexdigest()[:16]
+            src_hash = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
             binary = runners_dir / f"test_runner_{src_hash}"
-            build_cmd = (
-                ["mojo", "build", opt, "-I", "."] + assert_flag + asan + [str(src), "-o", str(binary)]
-            )
-            result = subprocess.run(
-                build_cmd, cwd=config.rootpath, capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
+            if not binary.exists():
+                build_cmd = (
+                    ["mojo", "build", opt, "-g1", "-I", "."] + assert_flag + asan + [str(src), "-o", str(binary)]
+                )
+                result = subprocess.run(
+                    build_cmd, cwd=config.rootpath, capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
             cmd = [str(binary)]
         else:
-            cmd = ["mojo", "run", opt, "-I", "."] + assert_flag + [str(fspath)]
+            # Use `mojo run` so Mojo's own build cache avoids recompilation.
+            # Pass -g1 (line-table debug info) so crashes produce symbolicated
+            # stack traces without needing a separate build step.
+            cmd = ["mojo", "run", opt, "-g1", "-I", "."] + assert_flag + [str(src)]
 
         if test_names:
             cmd += ["--only"] + list(test_names)
