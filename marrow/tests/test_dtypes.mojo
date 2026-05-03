@@ -1,66 +1,12 @@
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 import marrow.dtypes as dt
-from marrow.dtypes import (
-    AnyDataType,
-    string,
-    Field,
-    NullType,
-    BoolType,
-    StringType,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
-    BinaryType,
-    Date32Type,
-    Date64Type,
-    Time32Type,
-    Time64Type,
-    TimestampType,
-    DurationType,
-    TimeUnit,
-    second,
-    millisecond,
-    microsecond,
-    nanosecond,
-    date32,
-    date64,
-    time32,
-    time64,
-    timestamp,
-    duration,
-    list_,
-    fixed_size_list_,
-    struct_,
-    field,
-    binary,
-    float16,
-    float32,
-    float64,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    bool_,
-    null,
-)
+from marrow.dtypes import *
 
 
 def test_bool_type() raises:
-    assert_true(AnyDataType(dt.bool_) == AnyDataType(dt.bool_))
-    assert_false(AnyDataType(dt.bool_) == AnyDataType(dt.int64))
+    assert_true(dt.bool_ == dt.bool_)
+    assert_false(dt.bool_ == dt.int64)
 
     var t = AnyDataType(dt.bool_)
     assert_true(t.is_bool())
@@ -182,17 +128,17 @@ def test_byte_width() raises:
 
 
 def test_eq() raises:
-    var a = AnyDataType(UInt64Type())
-    var b = AnyDataType(UInt64Type())
-    var c = AnyDataType(Int32Type())
+    var a = UInt64Type()
+    var b = UInt64Type()
+    var c = Int32Type()
     assert_true(a == b)
     assert_false(a == c)
     assert_false(a != b)
     assert_true(a != c)
-    assert_true(AnyDataType(NullType()) == AnyDataType(NullType()))
-    assert_false(AnyDataType(NullType()) == AnyDataType(BoolType()))
-    assert_true(AnyDataType(Float32Type()) == AnyDataType(Float32Type()))
-    assert_false(AnyDataType(Float32Type()) == AnyDataType(Float64Type()))
+    assert_true(NullType() == NullType())
+    assert_false(NullType() == BoolType())
+    assert_true(Float32Type() == Float32Type())
+    assert_false(Float32Type() == Float64Type())
 
 
 def test_copy() raises:
@@ -375,36 +321,22 @@ def test_temporal_dtypes_string() raises:
 
 
 def test_temporal_dtypes_equality() raises:
-    assert_true(AnyDataType(date32()) == AnyDataType(date32()))
-    assert_false(AnyDataType(date32()) == AnyDataType(date64()))
-    assert_true(AnyDataType(time32(second)) == AnyDataType(time32(second)))
-    assert_false(
-        AnyDataType(time32(second)) == AnyDataType(time32(millisecond))
-    )
-    assert_true(
-        AnyDataType(timestamp(second)) == AnyDataType(timestamp(second))
-    )
-    assert_false(
-        AnyDataType(timestamp(second)) == AnyDataType(timestamp(millisecond))
-    )
-    assert_true(
-        AnyDataType(timestamp(second, "UTC"))
-        == AnyDataType(timestamp(second, "UTC"))
-    )
-    assert_false(
-        AnyDataType(timestamp(second, "UTC"))
-        == AnyDataType(timestamp(second, "US/Pacific"))
-    )
-    assert_false(
-        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second))
-    )
-    assert_true(
-        AnyDataType(duration(nanosecond)) == AnyDataType(duration(nanosecond))
-    )
-    assert_false(
-        AnyDataType(duration(second)) == AnyDataType(duration(nanosecond))
-    )
-    assert_false(AnyDataType(date32()) == AnyDataType(int32))
+    assert_true(date32() == date32())
+    assert_false(date32() == date64())
+    assert_true(time32(second) == time32(second))
+    assert_false(time32(second) == time32(millisecond))
+    assert_true(timestamp(second) == timestamp(second))
+    assert_false(timestamp(second) == timestamp(millisecond))
+    assert_true(timestamp(second, "UTC") == timestamp(second, "UTC"))
+    assert_false(timestamp(second, "UTC") == timestamp(second, "US/Pacific"))
+    assert_false(timestamp(second, "UTC") == timestamp(second))
+    assert_true(duration(nanosecond) == duration(nanosecond))
+    assert_false(duration(second) == duration(nanosecond))
+    assert_false(date32() == int32)
+    assert_false(date32() != date32())
+    assert_true(date32() != date64())
+    assert_true(time32(second) != time32(millisecond))
+    assert_true(timestamp(second, "UTC") != timestamp(second, "US/Pacific"))
 
 
 def test_time_unit_string() raises:
