@@ -188,20 +188,20 @@ def test_output_length() raises:
 
 def test_equal_array_overload() raises:
     """Type-erased equal(AnyArray, AnyArray) dispatches correctly."""
-    var a = AnyArray(array([1, 2, 3], int64))
-    var b = AnyArray(array([1, 0, 3], int64))
+    var a: AnyArray = array([1, 2, 3], int64)
+    var b: AnyArray = array([1, 0, 3], int64)
     var result = equal(a, b)
     assert_equal(result.length(), 3)
 
 
 def test_dtype_mismatch_raises() raises:
     """Type-erased kernels raise on dtype mismatch."""
-    var a = AnyArray(array([1, 2, 3], int64))
+    var a: AnyArray = array([1, 2, 3], int64)
     var fb = Float64Builder(3)
     fb.unsafe_append(1.0)
     fb.unsafe_append(2.0)
     fb.unsafe_append(3.0)
-    var b = AnyArray(fb.finish())
+    var b: AnyArray = fb.finish()
     var raised = False
     try:
         _ = equal(a, b)

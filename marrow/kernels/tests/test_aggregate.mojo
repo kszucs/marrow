@@ -36,7 +36,7 @@ def test_sum_empty() raises:
 
 
 def test_sum_untyped() raises:
-    var a = AnyArray(array([1, 2, 3], int64))
+    var a: AnyArray = array([1, 2, 3], int64)
     var result = sum_(a)
     assert_equal(result.as_int64().value(), 6)
 

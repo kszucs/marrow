@@ -97,7 +97,7 @@ def test_concat_with_offset() raises:
     var a = arange[Int32Type](0, 5)
     var s1 = a.slice(1, 3)  # [1, 2, 3], offset=1
     var s2 = a.slice(4, 1)  # [4], offset=4
-    var arrs: List[AnyArray] = [AnyArray(s1^), AnyArray(s2^)]
+    var arrs: List[AnyArray] = [s1^, s2^]
     var tmp_offset = concat(arrs)
     ref result = tmp_offset.as_int32()
     assert_equal(result.length, 4)
@@ -116,7 +116,7 @@ def test_concat_with_offset_and_nulls() raises:
     var sliced = b.finish().slice(1, 2)  # [null, 3], offset=1
     var arrs: List[AnyArray] = [
         (sliced^).to_any(),
-        AnyArray(array([4], int32)),
+        array([4], int32),
     ]
     var tmp_offset_nulls = concat(arrs)
     ref result = tmp_offset_nulls.as_int32()

@@ -156,8 +156,8 @@ def test_record_batch_eq_sliced() raises:
     var full_a = array([10, 20, 30, 40, 50], int32)
     var full_b = array([10, 20, 30, 40, 50], int32)
     # Slice both at the same range: [20, 30, 40]
-    var batch_a = RecordBatch(schema, [AnyArray(full_a.slice(1, 3))])
-    var batch_b = RecordBatch(schema, [AnyArray(full_b.slice(1, 3))])
+    var batch_a = RecordBatch(schema, [full_a.slice(1, 3)])
+    var batch_b = RecordBatch(schema, [full_b.slice(1, 3)])
     assert_true(batch_a == batch_b)
 
 

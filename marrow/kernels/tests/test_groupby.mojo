@@ -53,8 +53,8 @@ def _aggs(s: String) -> List[String]:
 
 def test_groupby_sum_basic() raises:
     """Sum aggregation: [1,2,1,3,2] keys, [10,20,30,40,50] values."""
-    var keys = AnyArray(array([1, 2, 1, 3, 2], int32))
-    var vals = AnyArray(array([10, 20, 30, 40, 50], int32))
+    var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
+    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
 
     # 3 groups: key=1 (sum=40), key=2 (sum=70), key=3 (sum=40)
@@ -75,8 +75,8 @@ def test_groupby_sum_basic() raises:
 
 
 def test_groupby_sum_all_same_key() raises:
-    var keys = AnyArray(array([5, 5, 5], int32))
-    var vals = AnyArray(array([1, 2, 3], int32))
+    var keys: AnyArray = array([5, 5, 5], int32)
+    var vals: AnyArray = array([1, 2, 3], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 1)
     ref s = result.columns[1].as_int64()
@@ -89,8 +89,8 @@ def test_groupby_sum_all_same_key() raises:
 
 
 def test_groupby_min() raises:
-    var keys = AnyArray(array([1, 2, 1, 2], int32))
-    var vals = AnyArray(array([30, 10, 20, 40], int32))
+    var keys: AnyArray = array([1, 2, 1, 2], int32)
+    var vals: AnyArray = array([30, 10, 20, 40], int32)
     var result = groupby(keys, _values(vals), _aggs("min"))
     ref m = result.columns[1].as_int64()
     assert_equal(m[0].value(), 20)  # min(30, 20)
@@ -98,8 +98,8 @@ def test_groupby_min() raises:
 
 
 def test_groupby_max() raises:
-    var keys = AnyArray(array([1, 2, 1, 2], int32))
-    var vals = AnyArray(array([30, 10, 20, 40], int32))
+    var keys: AnyArray = array([1, 2, 1, 2], int32)
+    var vals: AnyArray = array([30, 10, 20, 40], int32)
     var result = groupby(keys, _values(vals), _aggs("max"))
     ref m = result.columns[1].as_int64()
     assert_equal(m[0].value(), 30)  # max(30, 20)
@@ -108,8 +108,8 @@ def test_groupby_max() raises:
 
 def test_groupby_sum_int64_precision() raises:
     """Sum of int64 values above 2**53 must not lose precision via float64."""
-    var keys = AnyArray(array([1, 1], int32))
-    var vals = AnyArray(array([9_007_199_254_740_993, 1], int64))
+    var keys: AnyArray = array([1, 1], int32)
+    var vals: AnyArray = array([9_007_199_254_740_993, 1], int64)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 1)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
@@ -119,10 +119,8 @@ def test_groupby_sum_int64_precision() raises:
 
 def test_groupby_min_int64_precision() raises:
     """Min over int64 values above 2**53 must stay exact."""
-    var keys = AnyArray(array([1, 1], int32))
-    var vals = AnyArray(
-        array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
-    )
+    var keys: AnyArray = array([1, 1], int32)
+    var vals: AnyArray = array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
     var result = groupby(keys, _values(vals), _aggs("min"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
@@ -131,10 +129,8 @@ def test_groupby_min_int64_precision() raises:
 
 def test_groupby_max_int64_precision() raises:
     """Max over int64 values above 2**53 must stay exact."""
-    var keys = AnyArray(array([1, 1], int32))
-    var vals = AnyArray(
-        array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
-    )
+    var keys: AnyArray = array([1, 1], int32)
+    var vals: AnyArray = array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
     var result = groupby(keys, _values(vals), _aggs("max"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
@@ -149,8 +145,8 @@ def test_groupby_sum_uint64_wraps_for_large_values() raises:
     pandas wrapping-on-overflow semantics), not the float64 rounding of
     the old implementation.
     """
-    var keys = AnyArray(array([1, 1], int32))
-    var vals = AnyArray(array([100, 50], uint8))
+    var keys: AnyArray = array([1, 1], int32)
+    var vals: AnyArray = array([100, 50], uint8)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref s = result.columns[1].as_int64()
@@ -163,8 +159,8 @@ def test_groupby_sum_uint64_wraps_for_large_values() raises:
 
 
 def test_groupby_count() raises:
-    var keys = AnyArray(array([1, 2, 1, 3, 2], int32))
-    var vals = AnyArray(array([10, 20, 30, 40, 50], int32))
+    var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
+    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
     var result = groupby(keys, _values(vals), _aggs("count"))
     ref c = result.columns[1].as_int64()
     assert_equal(c[0].value(), 2)  # key=1: 2 rows
@@ -178,8 +174,8 @@ def test_groupby_count() raises:
 
 
 def test_groupby_mean() raises:
-    var keys = AnyArray(array([1, 2, 1, 2], int32))
-    var vals = AnyArray(array([10, 20, 30, 40], int32))
+    var keys: AnyArray = array([1, 2, 1, 2], int32)
+    var vals: AnyArray = array([10, 20, 30, 40], int32)
     var result = groupby(keys, _values(vals), _aggs("mean"))
     ref m = result.columns[1].as_float64()
     assert_equal(m[0].value(), 20.0)  # (10+30)/2
@@ -189,8 +185,8 @@ def test_groupby_mean() raises:
 def test_groupby_sum_float64_preserved() raises:
     """Float64 input to sum still produces a float64 result (regression guard).
     """
-    var keys = AnyArray(array([1, 1], int32))
-    var vals = AnyArray(array([1.5, 2.5], float64))
+    var keys: AnyArray = array([1, 1], int32)
+    var vals: AnyArray = array([1.5, 2.5], float64)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(float64))
     ref s = result.columns[1].as_float64()
@@ -204,8 +200,8 @@ def test_groupby_sum_float64_preserved() raises:
 
 def test_groupby_null_keys() raises:
     """Null keys form their own group."""
-    var keys = AnyArray(array([1, None, 2, None, 1], int32))
-    var vals = AnyArray(array([10, 20, 30, 40, 50], int32))
+    var keys: AnyArray = array([1, None, 2, None, 1], int32)
+    var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
@@ -217,8 +213,8 @@ def test_groupby_null_keys() raises:
 
 def test_groupby_null_values_skipped() raises:
     """Null values are skipped in aggregation."""
-    var keys = AnyArray(array([1, 1, 1], int32))
-    var vals = AnyArray(array([10, None, 30], int32))
+    var keys: AnyArray = array([1, 1, 1], int32)
+    var vals: AnyArray = array([10, None, 30], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 40)  # 10 + 30 (null skipped)
@@ -226,8 +222,8 @@ def test_groupby_null_values_skipped() raises:
 
 def test_groupby_count_skips_nulls() raises:
     """Count only counts non-null values."""
-    var keys = AnyArray(array([1, 1, 1], int32))
-    var vals = AnyArray(array([10, None, 30], int32))
+    var keys: AnyArray = array([1, 1, 1], int32)
+    var vals: AnyArray = array([10, None, 30], int32)
     var result = groupby(keys, _values(vals), _aggs("count"))
     ref c = result.columns[1].as_int64()
     assert_equal(c[0].value(), 2)  # 2 non-null values
@@ -244,8 +240,8 @@ def test_groupby_string_key() raises:
     b.append("b")
     b.append("a")
     b.append("b")
-    var keys = AnyArray(b.finish())
-    var vals = AnyArray(array([10, 20, 30, 40], int32))
+    var keys: AnyArray = b.finish()
+    var vals: AnyArray = array([10, 20, 30, 40], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()
@@ -259,8 +255,8 @@ def test_groupby_string_key() raises:
 
 
 def test_groupby_multikey() raises:
-    var a = AnyArray(array([1, 1, 2, 2], int32))
-    var b = AnyArray(array([10, 20, 10, 20], int32))
+    var a: AnyArray = array([1, 1, 2, 2], int32)
+    var b: AnyArray = array([10, 20, 10, 20], int32)
     var children = List[AnyArray]()
     children.append(a.copy())
     children.append(b.copy())
@@ -274,7 +270,7 @@ def test_groupby_multikey() raises:
         bitmap=None,
         children=children^,
     )
-    var vals = AnyArray(array([1, 2, 3, 4], int32))
+    var vals: AnyArray = array([1, 2, 3, 4], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 4)  # 4 unique combos
 
@@ -285,8 +281,8 @@ def test_groupby_multikey() raises:
 
 
 def test_groupby_empty() raises:
-    var keys = AnyArray(array(int32))
-    var vals = AnyArray(array(int32))
+    var keys: AnyArray = array(int32)
+    var vals: AnyArray = array(int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 0)
 
@@ -297,8 +293,8 @@ def test_groupby_empty() raises:
 
 
 def test_groupby_bool_key() raises:
-    var keys = AnyArray(array([True, False, True, False, True]))
-    var vals = AnyArray(array([1, 2, 3, 4, 5], int32))
+    var keys: AnyArray = array([True, False, True, False, True])
+    var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()
@@ -312,10 +308,10 @@ def test_groupby_bool_key() raises:
 
 
 def test_groupby_multiple_aggs() raises:
-    var keys = AnyArray(array([1, 2, 1, 2], int32))
+    var keys: AnyArray = array([1, 2, 1, 2], int32)
 
     var vals = List[AnyArray]()
-    var v = AnyArray(array([10, 20, 30, 40], int32))
+    var v: AnyArray = array([10, 20, 30, 40], int32)
     vals.append(v.copy())
     vals.append(v.copy())
 

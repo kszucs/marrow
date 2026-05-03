@@ -95,8 +95,8 @@ def test_add_length_mismatch() raises:
 
 
 def test_add_untyped() raises:
-    var a = AnyArray(array([1, 2, 3], int64))
-    var b = AnyArray(array([4, 5, 6], int64))
+    var a: AnyArray = array([1, 2, 3], int64)
+    var b: AnyArray = array([4, 5, 6], int64)
     var result = add(a, b)
     assert_equal(result.length(), 3)
     ref typed = result.as_int64()
@@ -165,8 +165,8 @@ def test_sub_with_nulls() raises:
 
 
 def test_sub_untyped() raises:
-    var a = AnyArray(array([10, 20, 30], int64))
-    var b = AnyArray(array([1, 2, 3], int64))
+    var a: AnyArray = array([10, 20, 30], int64)
+    var b: AnyArray = array([1, 2, 3], int64)
     var result = sub(a, b)
     ref typed = result.as_int64()
     assert_equal(typed[0].value(), 9)
@@ -413,7 +413,7 @@ def test_sign_with_nulls() raises:
 
 def test_sign_runtime_typed() raises:
     var a = array([-3, 0, 5], int32)
-    var result = sign(AnyArray(a^))
+    var result = sign(a^)
     ref r = result.as_int32()
     assert_equal(r[0].value(), -1)
     assert_equal(r[1].value(), 0)
@@ -449,7 +449,7 @@ def test_sqrt_with_nulls() raises:
 
 def test_sqrt_runtime_typed() raises:
     var a = array([1.0, 4.0, 9.0], float64)
-    var result = sqrt(AnyArray(a^))
+    var result = sqrt(a^)
     ref r = result.as_float64()
     assert_equal(r[0].value(), 1.0)
     assert_equal(r[1].value(), 2.0)
@@ -609,7 +609,7 @@ def test_pow_with_nulls() raises:
 def test_pow_runtime_typed() raises:
     var a = array([2.0, 3.0], float64)
     var b = array([3.0, 2.0], float64)
-    var result = pow_(AnyArray(a^), AnyArray(b^))
+    var result = pow_(a^, b^)
     ref r = result.as_float64()
     assert_equal(r[0].value(), 8.0)
     assert_equal(r[1].value(), 9.0)

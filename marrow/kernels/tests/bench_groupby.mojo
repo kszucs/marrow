@@ -17,7 +17,7 @@ def _make_keys(n: Int, num_groups: Int) raises -> AnyArray:
     var b = Int32Builder(n)
     for i in range(n):
         b.append(Scalar[int32.native](i % num_groups))
-    return AnyArray(b.finish())
+    return b.finish()
 
 
 def _make_vals(n: Int) raises -> List[AnyArray]:
@@ -25,7 +25,7 @@ def _make_vals(n: Int) raises -> List[AnyArray]:
     for i in range(n):
         b.append(Scalar[float64.native](Float64(i)))
     var vals = List[AnyArray]()
-    vals.append(AnyArray(b.finish()))
+    vals.append(b.finish())
     return vals^
 
 

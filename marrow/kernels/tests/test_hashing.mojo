@@ -113,7 +113,7 @@ def test_hash__string_nulls() raises:
 
 
 def test_hash__dispatch() raises:
-    var a = AnyArray(array([1, 2, 1], int32))
+    var a: AnyArray = array([1, 2, 1], int32)
     var h = rapidhash(a)
     assert_equal(len(h), 3)
     assert_equal(h[0], h[2])
@@ -123,7 +123,7 @@ def test_hash__dispatch_string() raises:
     var b = StringBuilder(2)
     b.append("x")
     b.append("x")
-    var a = AnyArray(b.finish())
+    var a: AnyArray = b.finish()
 
     var h = rapidhash(a)
     assert_equal(h[0], h[1])
@@ -136,8 +136,8 @@ def test_hash__dispatch_string() raises:
 
 def test_hash_struct_two_fields() raises:
     """StructArray hashing combines per-field hashes."""
-    var a = AnyArray(array([1, 1, 2, 2], int32))
-    var b = AnyArray(array([10, 20, 10, 20], int32))
+    var a: AnyArray = array([1, 1, 2, 2], int32)
+    var b: AnyArray = array([10, 20, 10, 20], int32)
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
@@ -163,7 +163,7 @@ def test_hash_struct_single_field() raises:
     var a = array([1, 2, 3], int32)
     var h1 = rapidhash(a)
 
-    var arr = AnyArray(a^)
+    var arr: AnyArray = a^
     var sa = StructArray(
         dtype=struct_(Field("a", arr.dtype().copy())),
         length=3,
@@ -180,8 +180,8 @@ def test_hash_struct_single_field() raises:
 
 def test_hash_dispatch_struct() raises:
     """Type-erased dispatch to struct hash."""
-    var a = AnyArray(array([1, 2, 1], int32))
-    var b = AnyArray(array([3, 3, 3], int32))
+    var a: AnyArray = array([1, 2, 1], int32)
+    var b: AnyArray = array([3, 3, 3], int32)
     var sa = StructArray(
         dtype=struct_(
             Field("a", a.dtype().copy()), Field("b", b.dtype().copy())
@@ -192,7 +192,7 @@ def test_hash_dispatch_struct() raises:
         bitmap=None,
         children=_children(a, b),
     )
-    var h = rapidhash(AnyArray(sa^))
+    var h = rapidhash(sa^)
     assert_equal(len(h), 3)
     # (1,3) == (1,3) but row 0 and 2 same
     assert_equal(h[0], h[2])
