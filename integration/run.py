@@ -36,10 +36,6 @@ from integration.tester import MarrowTester
 # modifying the upstream archery source.
 _UNSUPPORTED = {
     'large_binary',       # largebinary / largeutf8
-    'decimal',            # decimal128
-    'decimal256',
-    'decimal32',
-    'decimal64',
     'interval',
     'interval_mdn',       # month_day_nano_interval
     'map',

@@ -47,6 +47,7 @@ comptime _TYPE_FLOATING_POINT: UInt8 = 3
 comptime _TYPE_BINARY: UInt8 = 4
 comptime _TYPE_UTF8: UInt8 = 5
 comptime _TYPE_BOOL: UInt8 = 6
+comptime _TYPE_DECIMAL: UInt8 = 7
 comptime _TYPE_DATE: UInt8 = 8
 comptime _TYPE_TIME: UInt8 = 9
 comptime _TYPE_TIMESTAMP: UInt8 = 10
@@ -679,6 +680,8 @@ struct _IpcEncoder(Movable):
             return _TYPE_TIMESTAMP
         elif dtype.is_duration():
             return _TYPE_DURATION
+        elif dtype.is_decimal():
+            return _TYPE_DECIMAL
         elif dtype.is_struct():
             return _TYPE_STRUCT
         else:
@@ -806,6 +809,39 @@ struct _IpcEncoder(Movable):
             var u_at = self._fb.prepend_u16(ipc_unit)
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, u_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_decimal():
+            var precision: Int32
+            var scale: Int32
+            var bit_width: Int32
+            if dtype.is_decimal32():
+                ref d = dtype.as_decimal32()
+                precision = Int32(d.precision)
+                scale = Int32(d.scale)
+                bit_width = 32
+            elif dtype.is_decimal64():
+                ref d = dtype.as_decimal64()
+                precision = Int32(d.precision)
+                scale = Int32(d.scale)
+                bit_width = 64
+            elif dtype.is_decimal128():
+                ref d = dtype.as_decimal128()
+                precision = Int32(d.precision)
+                scale = Int32(d.scale)
+                bit_width = 128
+            else:
+                ref d = dtype.as_decimal256()
+                precision = Int32(d.precision)
+                scale = Int32(d.scale)
+                bit_width = 256
+            var ts = self._fb.offset()
+            var bw_at = self._fb.prepend_i32(bit_width)
+            var scale_at = self._fb.prepend_i32(scale)
+            var prec_at = self._fb.prepend_i32(precision)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, prec_at))
+            flds.append(_FieldOffset(1, scale_at))
+            flds.append(_FieldOffset(2, bw_at))
             return self._fb.write_table(flds, ts)
         else:
             raise Error("_IpcEncoder: unsupported dtype for type table: " + String(dtype))
@@ -1063,6 +1099,19 @@ struct _IpcDecoder(Movable):
             dtype = dt.null
         elif type_type == _TYPE_BOOL:
             dtype = dt.bool_
+        elif type_type == _TYPE_DECIMAL:
+            var tp = self._r.read_table(fp, 3)
+            var precision = Int(self._r.read_i32(tp, 0, 0))
+            var scale = Int(self._r.read_i32(tp, 1, 0))
+            var bit_width = Int(self._r.read_i32(tp, 2, 128))
+            if bit_width == 32:
+                dtype = dt.decimal32(precision, scale)
+            elif bit_width == 64:
+                dtype = dt.decimal64(precision, scale)
+            elif bit_width == 256:
+                dtype = dt.decimal256(precision, scale)
+            else:
+                dtype = dt.decimal128(precision, scale)
         elif type_type == _TYPE_INT:
             var tp = self._r.read_table(fp, 3)
             var bw = Int(self._r.read_i32(tp, 0, 32))

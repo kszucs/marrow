@@ -328,6 +328,18 @@ struct CArrowSchema(Copyable, Movable):
                 fmt = "tDu"
             else:
                 fmt = "tDn"
+        elif dtype.is_decimal32():
+            ref d = dtype.as_decimal32()
+            fmt = {"d:", d.precision, ",", d.scale, ",32"}
+        elif dtype.is_decimal64():
+            ref d = dtype.as_decimal64()
+            fmt = {"d:", d.precision, ",", d.scale, ",64"}
+        elif dtype.is_decimal128():
+            ref d = dtype.as_decimal128()
+            fmt = {"d:", d.precision, ",", d.scale}
+        elif dtype.is_decimal256():
+            ref d = dtype.as_decimal256()
+            fmt = {"d:", d.precision, ",", d.scale, ",256"}
         elif dtype.is_struct():
             fmt = "+s"
             ref st = dtype.as_struct()
@@ -529,6 +541,22 @@ struct CArrowSchema(Copyable, Movable):
             for i in range(self.n_children):
                 fields.append(self.children[i][].to_field())
             return struct_(fields^)
+        elif fmt.startswith("d:"):
+            var rest = String(fmt).removeprefix("d:")
+            var parts = rest.split(",")
+            var precision = Int(parts[0])
+            var scale = Int(parts[1])
+            var bit_width = 128  # default for legacy format without bitwidth
+            if len(parts) == 3:
+                bit_width = Int(parts[2])
+            if bit_width == 32:
+                return decimal32(precision, scale)
+            elif bit_width == 64:
+                return decimal64(precision, scale)
+            elif bit_width == 256:
+                return decimal256(precision, scale)
+            else:
+                return decimal128(precision, scale)
         else:
             raise Error("Unknown format: ", fmt)
 

@@ -83,6 +83,18 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
             if any(f is None for f in pa_fields)
             else pa.struct(pa_fields)
         )
+    if name == "decimal":
+        precision = type_obj["precision"]
+        scale = type_obj["scale"]
+        bit_width = type_obj.get("bitWidth", 128)
+        if bit_width == 32:
+            return pa.decimal32(precision, scale)
+        elif bit_width == 64:
+            return pa.decimal64(precision, scale)
+        elif bit_width == 256:
+            return pa.decimal256(precision, scale)
+        else:
+            return pa.decimal128(precision, scale)
     return None
 
 
@@ -152,6 +164,17 @@ def _json_col_to_pa(col_obj: dict, pa_type: pa.DataType) -> pa.Array:
 
     if pa.types.is_string(pa_type):
         return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
+
+    if pa.types.is_decimal(pa_type):
+        from decimal import Decimal as _Decimal
+        scale = pa_type.scale
+        # Use exponential notation to avoid Python's default 28-digit Decimal
+        # precision limit — large decimal256 values need up to 76 digits.
+        data = [
+            _Decimal(f"{v}E-{scale}") if v is not None else None
+            for v in col_obj.get("DATA", [])
+        ]
+        return pa.array(data, type=pa_type, mask=mask_np)
 
     if pa.types.is_list(pa_type) and not pa.types.is_fixed_size_list(pa_type):
         offsets = col_obj.get("OFFSET", [])
