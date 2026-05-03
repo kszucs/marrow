@@ -65,12 +65,6 @@ trait PrimitiveType(DataType, ImplicitlyCopyable):
 
     comptime native: DType
 
-    # def __init__(out self, *, copy: Self):
-    #     self = copy
-
-    # def __init__(out self, *, deinit take: Self):
-    #     self = take
-
     def byte_width(self) -> Int:
         return size_of[Self.native]()
 
@@ -78,7 +72,7 @@ trait PrimitiveType(DataType, ImplicitlyCopyable):
         return bit_width_of[Self.native]()
 
 
-trait NumericType(PrimitiveType, ImplicitlyCopyable, Defaultable):
+trait NumericType(PrimitiveType, Defaultable):
     """Integers, unsigned integers, and floats — zero-sized register-passable markers."""
     pass
 
@@ -757,68 +751,60 @@ struct AnyDataType(
         """Ordered list of child types (for list, fixed-size-list, and struct)."""
         var result = List[AnyDataType]()
         if self.is_list():
-            result.append(self.as_list_type().value_type().copy())
+            result.append(self.as_list().value_type().copy())
         elif self.is_fixed_size_list():
-            result.append(self.as_fixed_size_list_type().value_type())
+            result.append(self.as_fixed_size_list().value_type())
         elif self.is_struct():
-            var st = self.as_struct_type()
+            ref st = self.as_struct()
             for i in range(len(st.fields)):
                 result.append(st.fields[i].dtype.copy())
         return result^
 
     # --- compound type accessors ---
 
-    def as_list_type(self) -> ListType:
+    def _as[T: DataType](ref self) -> ref[self._v] T:
+        debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self)
+        return self._v[T]
+
+    def as_list(ref self) -> ref[self._v] ListType:
         """For list types, returns the inner ListType."""
-        debug_assert(self._v.isa[ListType](), "expected list type but holds ", self)
-        return ListType(copy=self._v[ListType])
+        return self._as[ListType]()
 
-    def as_fixed_size_list_type(self) -> FixedSizeListType:
+    def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""
-        debug_assert(self._v.isa[FixedSizeListType](), "expected fixed_size_list type but holds ", self)
-        return FixedSizeListType(copy=self._v[FixedSizeListType])
+        return self._as[FixedSizeListType]()
 
-    def as_struct_type(self) -> StructType:
+    def as_struct(ref self) -> ref[self._v] StructType:
         """For struct types, returns the inner StructType."""
-        debug_assert(self._v.isa[StructType](), "expected struct type but holds ", self)
-        return StructType(copy=self._v[StructType])
+        return self._as[StructType]()
 
-    def as_fixed_size_binary_type(self) -> FixedSizeBinaryType:
+    def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryType:
         """For fixed-size binary types, returns the inner FixedSizeBinaryType."""
-        debug_assert(self._v.isa[FixedSizeBinaryType](), "expected fixed_size_binary type but holds ", self)
-        return self._v[FixedSizeBinaryType]
+        return self._as[FixedSizeBinaryType]()
 
-    def as_time32_type(self) -> Time32Type:
-        debug_assert(self._v.isa[Time32Type](), "expected time32 type but holds ", self)
-        return self._v[Time32Type]
+    def as_time32(ref self) -> ref[self._v] Time32Type:
+        return self._as[Time32Type]()
 
-    def as_time64_type(self) -> Time64Type:
-        debug_assert(self._v.isa[Time64Type](), "expected time64 type but holds ", self)
-        return self._v[Time64Type]
+    def as_time64(ref self) -> ref[self._v] Time64Type:
+        return self._as[Time64Type]()
 
-    def as_timestamp_type(self) -> TimestampType:
-        debug_assert(self._v.isa[TimestampType](), "expected timestamp type but holds ", self)
-        return TimestampType(copy=self._v[TimestampType])
+    def as_timestamp(ref self) -> ref[self._v] TimestampType:
+        return self._as[TimestampType]()
 
-    def as_duration_type(self) -> DurationType:
-        debug_assert(self._v.isa[DurationType](), "expected duration type but holds ", self)
-        return self._v[DurationType]
+    def as_duration(ref self) -> ref[self._v] DurationType:
+        return self._as[DurationType]()
 
-    def as_decimal32(self) -> Decimal32Type:
-        debug_assert(self._v.isa[Decimal32Type](), "expected decimal32 type but holds ", self)
-        return self._v[Decimal32Type]
+    def as_decimal32(ref self) -> ref[self._v] Decimal32Type:
+        return self._as[Decimal32Type]()
 
-    def as_decimal64(self) -> Decimal64Type:
-        debug_assert(self._v.isa[Decimal64Type](), "expected decimal64 type but holds ", self)
-        return self._v[Decimal64Type]
+    def as_decimal64(ref self) -> ref[self._v] Decimal64Type:
+        return self._as[Decimal64Type]()
 
-    def as_decimal128(self) -> Decimal128Type:
-        debug_assert(self._v.isa[Decimal128Type](), "expected decimal128 type but holds ", self)
-        return self._v[Decimal128Type]
+    def as_decimal128(ref self) -> ref[self._v] Decimal128Type:
+        return self._as[Decimal128Type]()
 
-    def as_decimal256(self) -> Decimal256Type:
-        debug_assert(self._v.isa[Decimal256Type](), "expected decimal256 type but holds ", self)
-        return self._v[Decimal256Type]
+    def as_decimal256(ref self) -> ref[self._v] Decimal256Type:
+        return self._as[Decimal256Type]()
 
 
 # ---------------------------------------------------------------------------

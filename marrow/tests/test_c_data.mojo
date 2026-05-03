@@ -33,7 +33,7 @@ def test_schema_from_pyarrow() raises:
     var c_schema = c_schema_from_pyobj(pyschema)
     var schema = c_schema.to_dtype()
 
-    var sf = schema.as_struct_type().fields.copy()
+    var sf = schema.as_struct().fields.copy()
     assert_equal(sf[0].name, "int_field")
     assert_equal(sf[0].dtype, int32)
     assert_equal(sf[1].name, "string_field")
@@ -230,7 +230,7 @@ def test_struct_dtype_conversion() raises:
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_struct())
-    var df = dtype.as_struct_type().fields.copy()
+    var df = dtype.as_struct().fields.copy()
     assert_equal(len(df), 2)
     assert_equal(df[0].name, "x")
     assert_equal(df[0].dtype, int32)
@@ -246,7 +246,7 @@ def test_list_dtype_conversion() raises:
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_list())
-    assert_equal(dtype.as_list_type().value_type(), int32)
+    assert_equal(dtype.as_list().value_type(), int32)
 
 
 def test_fixed_size_list_dtype_conversion() raises:
@@ -258,7 +258,7 @@ def test_fixed_size_list_dtype_conversion() raises:
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_fixed_size_list())
-    var fsl = dtype.as_fixed_size_list_type()
+    ref fsl = dtype.as_fixed_size_list()
     assert_equal(fsl.size, 3)
     assert_equal(fsl.value_type(), float32)
 
@@ -281,7 +281,7 @@ def test_fixed_size_list_from_pyarrow() raises:
 
     var dtype = c_schema.to_dtype()
     assert_true(dtype.is_fixed_size_list())
-    assert_equal(dtype.as_fixed_size_list_type().size, 3)
+    assert_equal(dtype.as_fixed_size_list().size, 3)
 
     assert_equal(c_array.length, 3)
     assert_equal(c_array.n_buffers, 1)
@@ -584,13 +584,13 @@ def test_schema_from_dtype_all_types() raises:
     var c_list = CArrowSchema.from_dtype(list_dt.copy().to_any())
     var rt_list = c_list.to_dtype()
     assert_true(rt_list.is_list())
-    assert_equal(rt_list.as_list_type().value_type(), int64)
+    assert_equal(rt_list.as_list().value_type(), int64)
 
     var fsl_dt = fixed_size_list_(float32, 4)
     var c_fsl = CArrowSchema.from_dtype(fsl_dt.copy().to_any())
     var rt_fsl = c_fsl.to_dtype()
     assert_true(rt_fsl.is_fixed_size_list())
-    var rt_fsl_t = rt_fsl.as_fixed_size_list_type()
+    ref rt_fsl_t = rt_fsl.as_fixed_size_list()
     assert_equal(rt_fsl_t.size, 4)
     assert_equal(rt_fsl_t.value_type(), float32)
 
@@ -600,7 +600,7 @@ def test_schema_from_dtype_all_types() raises:
     var c_struct = CArrowSchema.from_dtype(struct_dt.copy().to_any())
     var rt_struct = c_struct.to_dtype()
     assert_true(rt_struct.is_struct())
-    var rt_sf = rt_struct.as_struct_type().fields.copy()
+    var rt_sf = rt_struct.as_struct().fields.copy()
     assert_equal(len(rt_sf), 1)
     assert_equal(rt_sf[0].name, "a")
     assert_equal(rt_sf[0].dtype, int32)
@@ -851,7 +851,7 @@ def test_timestamp_array_from_pyarrow() raises:
     var dtype = c_schema.to_dtype()
 
     assert_true(dtype.is_timestamp())
-    var ts_type = dtype.as_timestamp_type()
+    ref ts_type = dtype.as_timestamp()
     assert_equal(ts_type.unit, second)
     assert_equal(ts_type.timezone, "UTC")
     assert_equal(c_array.length, 3)

@@ -461,7 +461,7 @@ def _record_batch_join(
 
     # Build output schema and RecordBatch from StructArray result.
     var out_fields = List[Field]()
-    for ref f in result_sa.dtype.as_struct_type().fields:
+    for ref f in result_sa.dtype.as_struct().fields:
         out_fields.append(f.copy())
     return RecordBatch(
         schema=Schema(fields=out_fields^),

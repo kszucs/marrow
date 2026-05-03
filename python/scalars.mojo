@@ -90,7 +90,7 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
         var builtins = Python.import_module("builtins")
         var d = builtins.dict()
         for i in range(s.num_fields()):
-            d[dtype.as_struct_type().fields[i].name] = _as_py(s.field(i))
+            d[dtype.as_struct().fields[i].name] = _as_py(s.field(i))
         return d
     raise Error("as_py: unsupported dtype")
 

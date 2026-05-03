@@ -176,28 +176,28 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         elif dtype.is_string() or dtype.is_binary():
             self = StringBuilder(capacity)
         elif dtype.is_list():
-            var child = AnyBuilder(dtype.as_list_type().value_type())
+            var child = AnyBuilder(dtype.as_list().value_type())
             self = ListBuilder(child^, capacity)
         elif dtype.is_fixed_size_list():
-            var fsl = dtype.as_fixed_size_list_type()
+            ref fsl = dtype.as_fixed_size_list()
             var child = AnyBuilder(fsl.value_type())
             self = FixedSizeListBuilder(child^, fsl.size, capacity)
         elif dtype.is_fixed_size_binary():
             self = FixedSizeBinaryBuilder(
-                dtype.as_fixed_size_binary_type().byte_width, capacity
+                dtype.as_fixed_size_binary().byte_width, capacity
             )
         elif dtype.is_date32():
             self = Date32Builder(Date32Type(), capacity)
         elif dtype.is_date64():
             self = Date64Builder(Date64Type(), capacity)
         elif dtype.is_time32():
-            self = Time32Builder(dtype.as_time32_type(), capacity)
+            self = Time32Builder(dtype.as_time32(), capacity)
         elif dtype.is_time64():
-            self = Time64Builder(dtype.as_time64_type(), capacity)
+            self = Time64Builder(dtype.as_time64(), capacity)
         elif dtype.is_timestamp():
-            self = TimestampBuilder(dtype.as_timestamp_type(), capacity)
+            self = TimestampBuilder(dtype.as_timestamp(), capacity)
         elif dtype.is_duration():
-            self = DurationBuilder(dtype.as_duration_type(), capacity)
+            self = DurationBuilder(dtype.as_duration(), capacity)
         elif dtype.is_decimal32():
             self = Decimal32Builder(dtype.as_decimal32(), capacity)
         elif dtype.is_decimal64():
@@ -207,7 +207,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         elif dtype.is_decimal256():
             self = Decimal256Builder(dtype.as_decimal256(), capacity)
         elif dtype.is_struct():
-            self = StructBuilder(dtype.as_struct_type().fields.copy(), capacity)
+            self = StructBuilder(dtype.as_struct().fields.copy(), capacity)
         else:
             raise Error("unsupported type: ", dtype)
 
@@ -269,107 +269,96 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def as_primitive[
-        T: PrimitiveType
-    ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
-        debug_assert(
-            self._ptr[].isa[PrimitiveBuilder[T]](),
-            "as_primitive: wrong type, holds ", self.dtype(),
-        )
-        return self._ptr[][PrimitiveBuilder[T]]
+    def _as[T: Builder](ref self) -> ref[self._ptr[]] T:
+        debug_assert(self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype())
+        return self._ptr[][T]
+
+    def as_primitive[T: PrimitiveType](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
+        return self._as[PrimitiveBuilder[T]]()
 
     def as_null(ref self) -> ref[self._ptr[]] NullBuilder:
-        debug_assert(self._ptr[].isa[NullBuilder](), "expected null builder but holds ", self.dtype())
-        return self._ptr[][NullBuilder]
+        return self._as[NullBuilder]()
 
     def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
-        debug_assert(self._ptr[].isa[BoolBuilder](), "expected bool builder but holds ", self.dtype())
-        return self._ptr[][BoolBuilder]
+        return self._as[BoolBuilder]()
 
     def as_int8(ref self) -> ref[self._ptr[]] Int8Builder:
-        return self.as_primitive[Int8Type]()
+        return self._as[Int8Builder]()
 
     def as_int16(ref self) -> ref[self._ptr[]] Int16Builder:
-        return self.as_primitive[Int16Type]()
+        return self._as[Int16Builder]()
 
     def as_int32(ref self) -> ref[self._ptr[]] Int32Builder:
-        return self.as_primitive[Int32Type]()
+        return self._as[Int32Builder]()
 
     def as_int64(ref self) -> ref[self._ptr[]] Int64Builder:
-        return self.as_primitive[Int64Type]()
+        return self._as[Int64Builder]()
 
     def as_uint8(ref self) -> ref[self._ptr[]] UInt8Builder:
-        return self.as_primitive[UInt8Type]()
+        return self._as[UInt8Builder]()
 
     def as_uint16(ref self) -> ref[self._ptr[]] UInt16Builder:
-        return self.as_primitive[UInt16Type]()
+        return self._as[UInt16Builder]()
 
     def as_uint32(ref self) -> ref[self._ptr[]] UInt32Builder:
-        return self.as_primitive[UInt32Type]()
+        return self._as[UInt32Builder]()
 
     def as_uint64(ref self) -> ref[self._ptr[]] UInt64Builder:
-        return self.as_primitive[UInt64Type]()
+        return self._as[UInt64Builder]()
 
     def as_float16(ref self) -> ref[self._ptr[]] Float16Builder:
-        return self.as_primitive[Float16Type]()
+        return self._as[Float16Builder]()
 
     def as_float32(ref self) -> ref[self._ptr[]] Float32Builder:
-        return self.as_primitive[Float32Type]()
+        return self._as[Float32Builder]()
 
     def as_float64(ref self) -> ref[self._ptr[]] Float64Builder:
-        return self.as_primitive[Float64Type]()
+        return self._as[Float64Builder]()
 
     def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
-        debug_assert(self._ptr[].isa[StringBuilder](), "expected string builder but holds ", self.dtype())
-        return self._ptr[][StringBuilder]
+        return self._as[StringBuilder]()
 
     def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
-        debug_assert(self._ptr[].isa[ListBuilder](), "expected list builder but holds ", self.dtype())
-        return self._ptr[][ListBuilder]
+        return self._as[ListBuilder]()
 
     def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
-        debug_assert(self._ptr[].isa[FixedSizeListBuilder](), "expected fixed_size_list builder but holds ", self.dtype())
-        return self._ptr[][FixedSizeListBuilder]
+        return self._as[FixedSizeListBuilder]()
 
-    def as_fixed_size_binary(
-        ref self,
-    ) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
-        debug_assert(self._ptr[].isa[FixedSizeBinaryBuilder](), "expected fixed_size_binary builder but holds ", self.dtype())
-        return self._ptr[][FixedSizeBinaryBuilder]
+    def as_fixed_size_binary(ref self) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
+        return self._as[FixedSizeBinaryBuilder]()
 
     def as_date32(ref self) -> ref[self._ptr[]] Date32Builder:
-        return self.as_primitive[Date32Type]()
+        return self._as[Date32Builder]()
 
     def as_date64(ref self) -> ref[self._ptr[]] Date64Builder:
-        return self.as_primitive[Date64Type]()
+        return self._as[Date64Builder]()
 
     def as_time32(ref self) -> ref[self._ptr[]] Time32Builder:
-        return self.as_primitive[Time32Type]()
+        return self._as[Time32Builder]()
 
     def as_time64(ref self) -> ref[self._ptr[]] Time64Builder:
-        return self.as_primitive[Time64Type]()
+        return self._as[Time64Builder]()
 
     def as_duration(ref self) -> ref[self._ptr[]] DurationBuilder:
-        return self.as_primitive[DurationType]()
+        return self._as[DurationBuilder]()
 
     def as_timestamp(ref self) -> ref[self._ptr[]] TimestampBuilder:
-        return self.as_primitive[TimestampType]()
+        return self._as[TimestampBuilder]()
 
     def as_decimal32(ref self) -> ref[self._ptr[]] Decimal32Builder:
-        return self.as_primitive[Decimal32Type]()
+        return self._as[Decimal32Builder]()
 
     def as_decimal64(ref self) -> ref[self._ptr[]] Decimal64Builder:
-        return self.as_primitive[Decimal64Type]()
+        return self._as[Decimal64Builder]()
 
     def as_decimal128(ref self) -> ref[self._ptr[]] Decimal128Builder:
-        return self.as_primitive[Decimal128Type]()
+        return self._as[Decimal128Builder]()
 
     def as_decimal256(ref self) -> ref[self._ptr[]] Decimal256Builder:
-        return self.as_primitive[Decimal256Type]()
+        return self._as[Decimal256Builder]()
 
     def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
-        debug_assert(self._ptr[].isa[StructBuilder](), "expected struct builder but holds ", self.dtype())
-        return self._ptr[][StructBuilder]
+        return self._as[StructBuilder]()
 
 
 # ---------------------------------------------------------------------------
@@ -968,7 +957,7 @@ struct FixedSizeListBuilder(Builder, Sized):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var list_size = arr.dtype.as_fixed_size_list_type().size
+        var list_size = arr.dtype.as_fixed_size_list().size
         var child_slice = arr.values().slice(
             arr.offset * list_size, n * list_size
         )
@@ -1457,7 +1446,7 @@ def array[
     T: NumericType
 ](values: List[Scalar[T.native]], type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array from native scalars (mirrors ``pa.array``)."""
-    var b = PrimitiveBuilder[T](T(), len(values))
+    var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):
         b.unsafe_append(values[i])
     return b.finish()
@@ -1467,7 +1456,7 @@ def array[
     T: NumericType
 ](values: List[Optional[Scalar[T.native]]], type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array from optional native scalars (None → null)."""
-    var b = PrimitiveBuilder[T](T(), len(values))
+    var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):
         var v = values[i]
         if v:
@@ -1479,7 +1468,7 @@ def array[
 
 def array[T: NumericType](type: T) raises -> PrimitiveArray[T]:
     """Create an empty primitive array of the given type."""
-    var b = PrimitiveBuilder[T](T(), 0)
+    var b = PrimitiveBuilder[T](0)
     return b.finish()
 
 
@@ -1491,7 +1480,7 @@ def array[
     Accepts list literals like ``[1, None, 3]`` or ``[10, 20, 30]`` and
     converts each element to ``Scalar[T.native]``.
     """
-    var b = PrimitiveBuilder[T](T(), len(values))
+    var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):
         var v = values[i]
         if v:
@@ -1509,7 +1498,7 @@ def array[
     Accepts list literals like ``[1.5, None, 3.14]`` or ``[1.0, 2.0]`` and
     converts each element to ``Scalar[T.native]``.
     """
-    var b = PrimitiveBuilder[T](T(), len(values))
+    var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):
         var v = values[i]
         if v:
@@ -1544,7 +1533,7 @@ def nulls[T: NumericType](size: Int, type: T) raises -> PrimitiveArray[T]:
 
     Mirrors ``pa.nulls(size, type=pa.int64())``.
     """
-    var b = PrimitiveBuilder[T](T(), capacity=size)
+    var b = PrimitiveBuilder[T](capacity=size)
     b.set_length(size)
     b._null_count = size
     return b.finish()

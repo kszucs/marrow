@@ -743,14 +743,14 @@ struct _IpcEncoder(Movable):
             flds.append(_FieldOffset(0, prec_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_fixed_size_list():
-            var fsl = dtype.as_fixed_size_list_type()
+            ref fsl = dtype.as_fixed_size_list()
             var ts = self._fb.offset()
             var sz_at = self._fb.prepend_i32(Int32(fsl.size))
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, sz_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_fixed_size_binary():
-            var fsb = dtype.as_fixed_size_binary_type()
+            ref fsb = dtype.as_fixed_size_binary()
             var ts = self._fb.offset()
             var bw_at = self._fb.prepend_i32(Int32(fsb.byte_width))
             var flds = List[_FieldOffset]()
@@ -772,10 +772,10 @@ struct _IpcEncoder(Movable):
             var unit: dt.TimeUnit
             var bw: Int32
             if dtype.is_time32():
-                unit = dtype.as_time32_type().unit
+                unit = dtype.as_time32().unit
                 bw = 32
             else:
-                unit = dtype.as_time64_type().unit
+                unit = dtype.as_time64().unit
                 bw = 64
             var ipc_unit = _time_unit_to_ipc(unit)
             var ts = self._fb.offset()
@@ -786,7 +786,7 @@ struct _IpcEncoder(Movable):
             flds.append(_FieldOffset(1, bw_at))
             return self._fb.write_table(flds, ts)
         elif dtype.is_timestamp():
-            var tstype = dtype.as_timestamp_type()
+            ref tstype = dtype.as_timestamp()
             var ipc_unit = _time_unit_to_ipc(tstype.unit)
             var ts = self._fb.offset()
             var tz_at: Optional[UInt32] = None
@@ -800,7 +800,7 @@ struct _IpcEncoder(Movable):
                 flds.append(_FieldOffset(1, tz_at.value()))
             return self._fb.write_table(flds, ts)
         elif dtype.is_duration():
-            var unit = dtype.as_duration_type().unit
+            var unit = dtype.as_duration().unit
             var ipc_unit = _time_unit_to_ipc(unit)
             var ts = self._fb.offset()
             var u_at = self._fb.prepend_u16(ipc_unit)
@@ -829,16 +829,16 @@ struct _IpcEncoder(Movable):
         var dtype = f.dtype.copy()
         if dtype.is_list():
             child_positions.append(
-                self._write_field(dtype.as_list_type().value_field().copy())
+                self._write_field(dtype.as_list().value_field().copy())
             )
         elif dtype.is_fixed_size_list():
             child_positions.append(
                 self._write_field(
-                    dtype.as_fixed_size_list_type().value_field().copy()
+                    dtype.as_fixed_size_list().value_field().copy()
                 )
             )
         elif dtype.is_struct():
-            var st = dtype.as_struct_type()
+            ref st = dtype.as_struct()
             for i in range(len(st.fields)):
                 child_positions.append(self._write_field(st.fields[i]))
 

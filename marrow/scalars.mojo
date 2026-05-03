@@ -21,6 +21,7 @@ from std.utils import Variant
 from std.os import abort
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
+from std.builtin.rebind import downcast
 
 from .arrays import (
     PrimitiveArray,
@@ -187,34 +188,33 @@ struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: PrimitiveType](
-    Copyable, Equatable, Movable, Scalar, Writable
-):
+struct PrimitiveScalar[T: PrimitiveType](Copyable, Equatable, Movable, Scalar, Writable):
     """A single primitive value: holds a native Mojo scalar + type info + validity flag.
 
     `_dtype: T` carries runtime type information — zero-sized for NumericType,
     but holds unit/timezone for TemporalType and precision/scale for DecimalType.
     """
-
     comptime NativeScalar = _Scalar[Self.T.native]
 
     var _value: Self.NativeScalar
     var _dtype: Self.T
     var _is_valid: Bool
 
-
-    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: _Scalar[NT.native]):
+    def __init__(out self, value: Self.NativeScalar) where conforms_to(Self.T, Defaultable):
+        comptime DT = downcast[Self.T, Defaultable]()
+        self._dtype = DT.__init__()
         self._value = value
         self._is_valid = True
-        self._dtype = NT()
 
-    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], none: NoneType):
-        self._value = _Scalar[NT.native](0)
-        self._is_valid = False
-        self._dtype = NT()
-
-    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: Optional[_Scalar[NT.native]]):
-        self = PrimitiveScalar[NT](value, NT())
+    def __init__(out self, value: Optional[Self.NativeScalar]) where conforms_to(Self.T, Defaultable):
+        comptime DT = downcast[Self.T, Defaultable]()
+        self._dtype = DT.__init__()
+        if value:
+            self._value = value.value()
+            self._is_valid = True
+        else:
+            self._value = Self.NativeScalar(0)
+            self._is_valid = False
 
     def __init__(out self, value: Optional[Self.NativeScalar], dtype: Self.T):
         if value:
@@ -308,16 +308,16 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     var _is_valid: Bool
 
     @implicit
-    def __init__(out self, value: String) raises:
+    def __init__(out self, value: String):
         self._value = value
         self._is_valid = True
 
-    def __init__(out self, *, is_valid: Bool) raises:
+    def __init__(out self, *, is_valid: Bool):
         self._value = String()
         self._is_valid = is_valid
 
     @staticmethod
-    def null() raises -> Self:
+    def null() -> Self:
         return Self(is_valid=False)
 
     def type(self) -> AnyDataType:
@@ -506,9 +506,10 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
     def num_fields(self) -> Int:
         return len(self._value)
 
-    def field(self, index: Int) -> AnyScalar:
+    def field(self, index: Int) -> ref[self._value] AnyScalar:
         """Return the i-th field as an AnyScalar."""
-        return self._value[index].copy()
+        debug_assert(index >= 0 and index < len(self._value), "field index out of bounds")
+        return self._value[index]
 
     def to_any(deinit self) -> AnyScalar:
         return self^
@@ -602,106 +603,96 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     # --- typed downcasts ---
 
-    # TODO(kszucs): should remove references just like we do in arrays.mojo
-    def as_null(self) -> NullScalar:
-        debug_assert(self._v.isa[NullScalar](), "expected null scalar but holds ", self.type())
-        return self._v[NullScalar].copy()
+    def _as[T: Scalar](ref self) -> ref[self._v] T:
+        debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.type())
+        return self._v[T]
 
-    def as_bool(self) -> BoolScalar:
-        debug_assert(self._v.isa[BoolScalar](), "expected bool scalar but holds ", self.type())
-        return self._v[BoolScalar].copy()
+    def as_null(ref self) -> ref[self._v] NullScalar:
+        return self._as[NullScalar]()
 
-    def as_primitive[T: PrimitiveType](self) -> PrimitiveScalar[T]:
-        debug_assert(
-            self._v.isa[PrimitiveScalar[T]](), "as_primitive: wrong type, holds ", self.type()
-        )
-        return self._v[PrimitiveScalar[T]].copy()
+    def as_bool(ref self) -> ref[self._v] BoolScalar:
+        return self._as[BoolScalar]()
 
-    def as_int8(self) -> Int8Scalar:
-        return self.as_primitive[Int8Type]()
+    def as_primitive[T: PrimitiveType](ref self) -> ref[self._v] PrimitiveScalar[T]:
+        return self._as[PrimitiveScalar[T]]()
 
-    def as_int16(self) -> Int16Scalar:
-        return self.as_primitive[Int16Type]()
+    def as_int8(ref self) -> ref[self._v] Int8Scalar:
+        return self._as[Int8Scalar]()
 
-    def as_int32(self) -> Int32Scalar:
-        return self.as_primitive[Int32Type]()
+    def as_int16(ref self) -> ref[self._v] Int16Scalar:
+        return self._as[Int16Scalar]()
 
-    def as_int64(self) -> Int64Scalar:
-        return self.as_primitive[Int64Type]()
+    def as_int32(ref self) -> ref[self._v] Int32Scalar:
+        return self._as[Int32Scalar]()
 
-    def as_uint8(self) -> UInt8Scalar:
-        return self.as_primitive[UInt8Type]()
+    def as_int64(ref self) -> ref[self._v] Int64Scalar:
+        return self._as[Int64Scalar]()
 
-    def as_uint16(self) -> UInt16Scalar:
-        return self.as_primitive[UInt16Type]()
+    def as_uint8(ref self) -> ref[self._v] UInt8Scalar:
+        return self._as[UInt8Scalar]()
 
-    def as_uint32(self) -> UInt32Scalar:
-        return self.as_primitive[UInt32Type]()
+    def as_uint16(ref self) -> ref[self._v] UInt16Scalar:
+        return self._as[UInt16Scalar]()
 
-    def as_uint64(self) -> UInt64Scalar:
-        return self.as_primitive[UInt64Type]()
+    def as_uint32(ref self) -> ref[self._v] UInt32Scalar:
+        return self._as[UInt32Scalar]()
 
-    def as_float16(self) -> Float16Scalar:
-        return self.as_primitive[Float16Type]()
+    def as_uint64(ref self) -> ref[self._v] UInt64Scalar:
+        return self._as[UInt64Scalar]()
 
-    def as_float32(self) -> Float32Scalar:
-        return self.as_primitive[Float32Type]()
+    def as_float16(ref self) -> ref[self._v] Float16Scalar:
+        return self._as[Float16Scalar]()
 
-    def as_float64(self) -> Float64Scalar:
-        return self.as_primitive[Float64Type]()
+    def as_float32(ref self) -> ref[self._v] Float32Scalar:
+        return self._as[Float32Scalar]()
 
-    def as_string(self) -> StringScalar:
-        debug_assert(self._v.isa[StringScalar](), "expected string scalar but holds ", self.type())
-        return self._v[StringScalar].copy()
+    def as_float64(ref self) -> ref[self._v] Float64Scalar:
+        return self._as[Float64Scalar]()
 
-    def as_fixed_size_binary(self) -> FixedSizeBinaryScalar:
-        debug_assert(
-            self._v.isa[FixedSizeBinaryScalar](),
-            "expected fixed_size_binary scalar but holds ", self.type(),
-        )
-        return self._v[FixedSizeBinaryScalar].copy()
+    def as_string(ref self) -> ref[self._v] StringScalar:
+        return self._as[StringScalar]()
 
-    def as_date32(self) -> Date32Scalar:
-        return self.as_primitive[Date32Type]()
+    def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryScalar:
+        return self._as[FixedSizeBinaryScalar]()
 
-    def as_date64(self) -> Date64Scalar:
-        return self.as_primitive[Date64Type]()
+    def as_date32(ref self) -> ref[self._v] Date32Scalar:
+        return self._as[Date32Scalar]()
 
-    def as_time32(self) -> Time32Scalar:
-        return self.as_primitive[Time32Type]()
+    def as_date64(ref self) -> ref[self._v] Date64Scalar:
+        return self._as[Date64Scalar]()
 
-    def as_time64(self) -> Time64Scalar:
-        return self.as_primitive[Time64Type]()
+    def as_time32(ref self) -> ref[self._v] Time32Scalar:
+        return self._as[Time32Scalar]()
 
-    def as_duration(self) -> DurationScalar:
-        return self.as_primitive[DurationType]()
+    def as_time64(ref self) -> ref[self._v] Time64Scalar:
+        return self._as[Time64Scalar]()
 
-    def as_timestamp(self) -> TimestampScalar:
-        return self.as_primitive[TimestampType]()
+    def as_duration(ref self) -> ref[self._v] DurationScalar:
+        return self._as[DurationScalar]()
 
-    def as_decimal32(self) -> Decimal32Scalar:
-        return self.as_primitive[Decimal32Type]()
+    def as_timestamp(ref self) -> ref[self._v] TimestampScalar:
+        return self._as[TimestampScalar]()
 
-    def as_decimal64(self) -> Decimal64Scalar:
-        return self.as_primitive[Decimal64Type]()
+    def as_decimal32(ref self) -> ref[self._v] Decimal32Scalar:
+        return self._as[Decimal32Scalar]()
 
-    def as_decimal128(self) -> Decimal128Scalar:
-        return self.as_primitive[Decimal128Type]()
+    def as_decimal64(ref self) -> ref[self._v] Decimal64Scalar:
+        return self._as[Decimal64Scalar]()
 
-    def as_decimal256(self) -> Decimal256Scalar:
-        return self.as_primitive[Decimal256Type]()
+    def as_decimal128(ref self) -> ref[self._v] Decimal128Scalar:
+        return self._as[Decimal128Scalar]()
 
-    def as_list(self) -> ListScalar:
-        debug_assert(self._v.isa[ListScalar](), "expected list scalar but holds ", self.type())
-        return self._v[ListScalar].copy()
+    def as_decimal256(ref self) -> ref[self._v] Decimal256Scalar:
+        return self._as[Decimal256Scalar]()
 
-    def as_fixed_size_list(self) -> ListScalar:
-        debug_assert(self._v.isa[ListScalar](), "expected fixed_size_list scalar but holds ", self.type())
-        return self._v[ListScalar].copy()
+    def as_list(ref self) -> ref[self._v] ListScalar:
+        return self._as[ListScalar]()
 
-    def as_struct(self) -> StructScalar:
-        debug_assert(self._v.isa[StructScalar](), "expected struct scalar but holds ", self.type())
-        return self._v[StructScalar].copy()
+    def as_fixed_size_list(ref self) -> ref[self._v] ListScalar:
+        return self._as[ListScalar]()
+
+    def as_struct(ref self) -> ref[self._v] StructScalar:
+        return self._as[StructScalar]()
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter

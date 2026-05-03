@@ -585,14 +585,14 @@ struct HashJoin[
     def output_dtype(self, probe: StructArray, kind: UInt8) -> AnyDataType:
         """Build the output struct DataType for a join result."""
         var fields = List[Field]()
-        for ref f in self._left_dtype.as_struct_type().fields:
+        for ref f in self._left_dtype.as_struct().fields:
             fields.append(f.copy())
 
         if kind != JOIN_SEMI and kind != JOIN_ANTI:
             var left_names = List[String]()
-            for ref f in self._left_dtype.as_struct_type().fields:
+            for ref f in self._left_dtype.as_struct().fields:
                 left_names.append(f.name)
-            for ref f in probe.dtype.as_struct_type().fields:
+            for ref f in probe.dtype.as_struct().fields:
                 var name = f.name
                 var collides = False
                 for ref ln in left_names:

@@ -273,13 +273,13 @@ struct CArrowSchema(Copyable, Movable):
             # Move child value onto the heap so the pointer stays valid after
             # this stack frame is gone.
             var child0 = CArrowSchema.from_field(
-                dtype.as_list_type().value_field().copy()
+                dtype.as_list().value_field().copy()
             )
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_list():
-            var fsl = dtype.as_fixed_size_list_type()
+            ref fsl = dtype.as_fixed_size_list()
             fmt = {"+w:", fsl.size}
             n_children = 1
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
@@ -288,26 +288,26 @@ struct CArrowSchema(Copyable, Movable):
             child0_ptr.init_pointee_move(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_binary():
-            var fsb = dtype.as_fixed_size_binary_type()
+            ref fsb = dtype.as_fixed_size_binary()
             fmt = {"w:", fsb.byte_width}
         elif dtype.is_date32():
             fmt = "tdD"
         elif dtype.is_date64():
             fmt = "tdm"
         elif dtype.is_time32():
-            var u = dtype.as_time32_type().unit
+            var u = dtype.as_time32().unit
             if u == second:
                 fmt = "tts"
             else:
                 fmt = "ttm"
         elif dtype.is_time64():
-            var u = dtype.as_time64_type().unit
+            var u = dtype.as_time64().unit
             if u == microsecond:
                 fmt = "ttu"
             else:
                 fmt = "ttn"
         elif dtype.is_timestamp():
-            var ts = dtype.as_timestamp_type()
+            ref ts = dtype.as_timestamp()
             var uc: String
             if ts.unit == second:
                 uc = "s"
@@ -319,7 +319,7 @@ struct CArrowSchema(Copyable, Movable):
                 uc = "n"
             fmt = {"ts", uc, ":", ts.timezone}
         elif dtype.is_duration():
-            var u = dtype.as_duration_type().unit
+            var u = dtype.as_duration().unit
             if u == second:
                 fmt = "tDs"
             elif u == millisecond:
@@ -330,7 +330,7 @@ struct CArrowSchema(Copyable, Movable):
                 fmt = "tDn"
         elif dtype.is_struct():
             fmt = "+s"
-            var st = dtype.as_struct_type()
+            ref st = dtype.as_struct()
             n_children = Int64(len(st.fields))
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 Int(n_children)
@@ -709,7 +709,7 @@ struct CArrowArray(Copyable, Movable):
             buffers.append(offsets^)
             children.append(
                 self.children[0][].to_data(
-                    dtype.as_list_type().value_type(), owner
+                    dtype.as_list().value_type(), owner
                 )
             )
         elif dtype.is_string() or dtype.is_binary():
@@ -722,11 +722,11 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_fixed_size_list():
             children.append(
                 self.children[0][].to_data(
-                    dtype.as_fixed_size_list_type().value_type(), owner
+                    dtype.as_fixed_size_list().value_type(), owner
                 )
             )
         elif dtype.is_fixed_size_binary():
-            var bw = dtype.as_fixed_size_binary_type().byte_width
+            var bw = dtype.as_fixed_size_binary().byte_width
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1],
@@ -744,7 +744,7 @@ struct CArrowArray(Copyable, Movable):
                 )
             )
         elif dtype.is_struct():
-            var st = dtype.as_struct_type()
+            ref st = dtype.as_struct()
             for i in range(Int(self.n_children)):
                 children.append(
                     self.children[i][].to_data(st.fields[i].dtype, owner)

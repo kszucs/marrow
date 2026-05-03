@@ -1139,7 +1139,7 @@ struct FixedSizeListArray(
         return self.bitmap.value().test(self.offset + index)
 
     def unsafe_get(self, index: Int, out array_data: AnyArray) raises:
-        var list_size = self.dtype.as_fixed_size_list_type().size
+        var list_size = self.dtype.as_fixed_size_list().size
         var start = (self.offset + index) * list_size
         return self.values().slice(start, list_size)
 
@@ -1307,7 +1307,7 @@ struct FixedSizeBinaryArray(
             length=data.length,
             nulls=data.nulls,
             offset=data.offset,
-            byte_width=data.dtype.as_fixed_size_binary_type().byte_width,
+            byte_width=data.dtype.as_fixed_size_binary().byte_width,
             bitmap=data.bitmap,
             buffer=data.buffers[0],
         )
@@ -1483,7 +1483,7 @@ struct StructArray(
     def write_to[W: Writer](self, mut writer: W):
         writer.write("StructArray({")
         if len(self.children) > 0:
-            var st = self.dtype.as_struct_type()
+            ref st = self.dtype.as_struct()
             for i in range(len(st.fields)):
                 if i > 0:
                     writer.write(", ")
@@ -1503,7 +1503,7 @@ struct StructArray(
         return self.bitmap.value().test(self.offset + index)
 
     def _index_for_field_name(self, name: StringSlice) raises -> Int:
-        var fields = self.dtype.as_struct_type().fields.copy()
+        var fields = self.dtype.as_struct().fields.copy()
         for idx, ref field in enumerate(fields):
             if field.name == name:
                 return idx
@@ -1555,7 +1555,7 @@ struct StructArray(
         """
         var fields = List[Field]()
         var children = List[AnyArray]()
-        var st = self.dtype.as_struct_type()
+        ref st = self.dtype.as_struct()
         for idx in indices:
             fields.append(st.fields[idx].copy())
             children.append(self.children[idx].copy())
@@ -1910,104 +1910,96 @@ struct AnyArray(
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def as_primitive[
-        T: PrimitiveType
-    ](ref self) -> ref[self._v] PrimitiveArray[T]:
-        debug_assert(
-            self._v.isa[PrimitiveArray[T]](), "as_primitive: wrong type, holds ", self.dtype()
-        )
-        return self._v[PrimitiveArray[T]]
+    def _as[T: Array](ref self) -> ref[self._v] T:
+        debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.dtype())
+        return self._v[T]
+
+    def as_primitive[T: PrimitiveType](ref self) -> ref[self._v] PrimitiveArray[T]:
+        return self._as[PrimitiveArray[T]]()
 
     def as_null(ref self) -> ref[self._v] NullArray:
-        debug_assert(self._v.isa[NullArray](), "expected null array but holds ", self.dtype())
-        return self._v[NullArray]
+        return self._as[NullArray]()
 
     def as_bool(ref self) -> ref[self._v] BoolArray:
-        debug_assert(self._v.isa[BoolArray](), "expected bool array but holds ", self.dtype())
-        return self._v[BoolArray]
+        return self._as[BoolArray]()
 
     def as_int8(ref self) -> ref[self._v] Int8Array:
-        return self.as_primitive[Int8Type]()
+        return self._as[Int8Array]()
 
     def as_int16(ref self) -> ref[self._v] Int16Array:
-        return self.as_primitive[Int16Type]()
+        return self._as[Int16Array]()
 
     def as_int32(ref self) -> ref[self._v] Int32Array:
-        return self.as_primitive[Int32Type]()
+        return self._as[Int32Array]()
 
     def as_int64(ref self) -> ref[self._v] Int64Array:
-        return self.as_primitive[Int64Type]()
+        return self._as[Int64Array]()
 
     def as_uint8(ref self) -> ref[self._v] UInt8Array:
-        return self.as_primitive[UInt8Type]()
+        return self._as[UInt8Array]()
 
     def as_uint16(ref self) -> ref[self._v] UInt16Array:
-        return self.as_primitive[UInt16Type]()
+        return self._as[UInt16Array]()
 
     def as_uint32(ref self) -> ref[self._v] UInt32Array:
-        return self.as_primitive[UInt32Type]()
+        return self._as[UInt32Array]()
 
     def as_uint64(ref self) -> ref[self._v] UInt64Array:
-        return self.as_primitive[UInt64Type]()
+        return self._as[UInt64Array]()
 
     def as_float16(ref self) -> ref[self._v] Float16Array:
-        return self.as_primitive[Float16Type]()
+        return self._as[Float16Array]()
 
     def as_float32(ref self) -> ref[self._v] Float32Array:
-        return self.as_primitive[Float32Type]()
+        return self._as[Float32Array]()
 
     def as_float64(ref self) -> ref[self._v] Float64Array:
-        return self.as_primitive[Float64Type]()
+        return self._as[Float64Array]()
 
     def as_string(ref self) -> ref[self._v] StringArray:
-        debug_assert(self._v.isa[StringArray](), "expected string array but holds ", self.dtype())
-        return self._v[StringArray]
+        return self._as[StringArray]()
 
     def as_list(ref self) -> ref[self._v] ListArray:
-        debug_assert(self._v.isa[ListArray](), "expected list array but holds ", self.dtype())
-        return self._v[ListArray]
+        return self._as[ListArray]()
 
     def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
-        debug_assert(self._v.isa[FixedSizeListArray](), "expected fixed_size_list array but holds ", self.dtype())
-        return self._v[FixedSizeListArray]
+        return self._as[FixedSizeListArray]()
 
     def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryArray:
-        debug_assert(self._v.isa[FixedSizeBinaryArray](), "expected fixed_size_binary array but holds ", self.dtype())
-        return self._v[FixedSizeBinaryArray]
+        return self._as[FixedSizeBinaryArray]()
 
     def as_date32(ref self) -> ref[self._v] Date32Array:
-        return self.as_primitive[Date32Type]()
+        return self._as[Date32Array]()
 
     def as_date64(ref self) -> ref[self._v] Date64Array:
-        return self.as_primitive[Date64Type]()
+        return self._as[Date64Array]()
 
     def as_time32(ref self) -> ref[self._v] Time32Array:
-        return self.as_primitive[Time32Type]()
+        return self._as[Time32Array]()
 
     def as_time64(ref self) -> ref[self._v] Time64Array:
-        return self.as_primitive[Time64Type]()
+        return self._as[Time64Array]()
 
     def as_duration(ref self) -> ref[self._v] DurationArray:
-        return self.as_primitive[DurationType]()
+        return self._as[DurationArray]()
 
     def as_timestamp(ref self) -> ref[self._v] TimestampArray:
-        return self.as_primitive[TimestampType]()
+        return self._as[TimestampArray]()
 
     def as_decimal32(ref self) -> ref[self._v] Decimal32Array:
-        return self.as_primitive[Decimal32Type]()
+        return self._as[Decimal32Array]()
 
     def as_decimal64(ref self) -> ref[self._v] Decimal64Array:
-        return self.as_primitive[Decimal64Type]()
+        return self._as[Decimal64Array]()
 
     def as_decimal128(ref self) -> ref[self._v] Decimal128Array:
-        return self.as_primitive[Decimal128Type]()
+        return self._as[Decimal128Array]()
 
     def as_decimal256(ref self) -> ref[self._v] Decimal256Array:
-        return self.as_primitive[Decimal256Type]()
+        return self._as[Decimal256Array]()
 
     def as_struct(ref self) -> ref[self._v] StructArray:
-        debug_assert(self._v.isa[StructArray](), "expected struct array but holds ", self.dtype())
-        return self._v[StructArray]
+        return self._as[StructArray]()
 
     # --- factory from generic layout ---
 

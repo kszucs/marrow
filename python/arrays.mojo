@@ -787,7 +787,7 @@ struct PyListConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
         var child_builder = builder.as_list().values()
-        var child_dtype = builder.as_list().dtype().as_list_type().value_type().copy()
+        var child_dtype = builder.as_list().dtype().as_list().value_type().copy()
         self._child = PyAnyConverter(child_builder, child_dtype, True)
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -835,7 +835,7 @@ struct PyFixedSizeListConverter(PyConverter):
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
-        var fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list_type()
+        var fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list()
         var child_builder = builder.as_fixed_size_list().values()
         var child_dtype = fsl.value_type()
         self._child = PyAnyConverter(child_builder, child_dtype, True)
@@ -887,7 +887,7 @@ struct PyStructConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder) raises:
         self._builder = builder
         var dtype = builder.as_struct().dtype()
-        var st = dtype.as_struct_type()
+        var st = dtype.as_struct()
         var n = len(st.fields)
         var children = List[PyAnyConverter](capacity=n)
         var field_keys = List[PythonObject](capacity=n)
@@ -1072,7 +1072,7 @@ def _fixed_size_list_array_from_arrays(
         .downcast_value_ptr[dt.AnyDataType]()[]
         .copy()
     )
-    var list_size = dtype.as_fixed_size_list_type().size
+    var list_size = dtype.as_fixed_size_list().size
     var n = child.length() // list_size if list_size > 0 else 0
     var mask = _build_mask_array(mask_obj, n)
     return (

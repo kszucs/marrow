@@ -83,12 +83,12 @@ def test_from_c_schema() raises -> None:
     # Test first field.
     ref field_0 = s.field(index=0)
     assert_true(field_0.dtype.is_list())
-    assert_true(field_0.dtype.as_list_type().value_type().is_integer())
+    assert_true(field_0.dtype.as_list().value_type().is_integer())
 
     # Test second field.
     ref field_1 = s.field(index=1)
     assert_true(field_1.dtype.is_struct())
-    var f1_fields = field_1.dtype.as_struct_type().fields.copy()
+    var f1_fields = field_1.dtype.as_struct().fields.copy()
     assert_equal(f1_fields[0].name, "field_a")
     assert_equal(f1_fields[1].name, "field_b")
 
