@@ -59,8 +59,11 @@ from .arrays import (
 # ---------------------------------------------------------------------------
 
 
-trait Builder(ImplicitlyDestructible, Movable):
+trait Builder(ImplicitlyDestructible, Movable, Sized):
     comptime ArrayType: Array
+
+    def __len__(self) -> Int:
+        return self.length()
 
     def length(self) -> Int:
         ...
@@ -366,7 +369,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
+struct PrimitiveBuilder[T: PrimitiveType](Builder):
     """Builder for fixed-size primitive arrays (integers, floats, temporal, decimal)."""
 
     comptime ArrayType = PrimitiveArray[Self.T]
@@ -410,9 +413,6 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
             self._buffer = Buffer.alloc_zeroed[Self.T.native](capacity)
         else:
             self._buffer = Buffer.alloc_uninit[Self.T.native](capacity)
-
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -546,7 +546,7 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct StringBuilder(Builder, Sized):
+struct StringBuilder(Builder):
     """Builder for variable-length UTF-8 string arrays.
 
     _offsets — uint32 offsets
@@ -572,8 +572,6 @@ struct StringBuilder(Builder, Sized):
         self._offsets = offsets^
         self._values = Buffer.alloc_zeroed[DType.uint8](bytes_capacity)
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -725,7 +723,7 @@ struct StringBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct ListBuilder(Builder, Sized):
+struct ListBuilder(Builder):
     """Builder for variable-length list arrays.
 
     _offsets — uint32 offsets
@@ -754,8 +752,6 @@ struct ListBuilder(Builder, Sized):
         self._offsets = offsets^
         self._child = child^
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -879,7 +875,7 @@ struct ListBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeListBuilder(Builder, Sized):
+struct FixedSizeListBuilder(Builder):
     """Builder for fixed-size list arrays.
 
     _child — child element builder (AnyBuilder)
@@ -905,8 +901,6 @@ struct FixedSizeListBuilder(Builder, Sized):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._child = child^
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -1007,7 +1001,7 @@ struct FixedSizeListBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct StructBuilder(Builder, Sized):
+struct StructBuilder(Builder):
     """Builder for struct arrays.
 
     _children[i] — field builder for field i (AnyBuilder)
@@ -1033,8 +1027,6 @@ struct StructBuilder(Builder, Sized):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._children = children^
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -1141,7 +1133,7 @@ struct StructBuilder(Builder, Sized):
 # ---------------------------------------------------------------------------
 
 
-struct NullBuilder(Builder, Sized):
+struct NullBuilder(Builder):
     """Builder for NullArray — a length-only counter, no buffers."""
 
     comptime ArrayType = NullArray
@@ -1151,8 +1143,6 @@ struct NullBuilder(Builder, Sized):
     def __init__(out self, capacity: Int = 0):
         self._length = 0
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -1183,7 +1173,7 @@ struct NullBuilder(Builder, Sized):
         self._length = 0
 
 
-struct FixedSizeBinaryBuilder(Builder, Sized):
+struct FixedSizeBinaryBuilder(Builder):
     """Builder for FixedSizeBinaryArray — fixed-width binary values."""
 
     comptime ArrayType = FixedSizeBinaryArray
@@ -1203,8 +1193,6 @@ struct FixedSizeBinaryBuilder(Builder, Sized):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._buffer = Buffer.alloc_zeroed[DType.uint8](capacity * byte_width)
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
@@ -1313,7 +1301,7 @@ struct FixedSizeBinaryBuilder(Builder, Sized):
         self._null_count = 0
 
 
-struct BoolBuilder(Builder, Sized):
+struct BoolBuilder(Builder):
     """Builder for bit-packed BoolArray values."""
 
     comptime ArrayType = BoolArray
@@ -1331,8 +1319,6 @@ struct BoolBuilder(Builder, Sized):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._buffer = Bitmap.alloc_zeroed(capacity)
 
-    def __len__(self) -> Int:
-        return self._length
 
     def length(self) -> Int:
         return self._length
