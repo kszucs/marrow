@@ -203,6 +203,16 @@ struct PrimitiveScalar[T: PrimitiveType](
     var _is_valid: Bool
 
 
+    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: _Scalar[NT.native]):
+        self._value = value
+        self._is_valid = True
+        self._dtype = NT()
+
+    def __init__[NT: NumericType](out self: PrimitiveScalar[NT], none: NoneType):
+        self._value = _Scalar[NT.native](0)
+        self._is_valid = False
+        self._dtype = NT()
+
     def __init__[NT: NumericType](out self: PrimitiveScalar[NT], value: Optional[_Scalar[NT.native]]):
         self = PrimitiveScalar[NT](value, NT())
 

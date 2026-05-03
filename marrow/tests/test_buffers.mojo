@@ -114,7 +114,9 @@ def test_buffer_cpu_kind() raises:
 def test_buffer_foreign_kind() raises:
     """Foreign CPU buffers are CPU-accessible; release fires on last drop."""
     var n_released: Int = 0
-    var raw = alloc[UInt8](size_of[UnsafePointer[Int, MutAnyOrigin]]())
+    # Allocate 64 bytes with 64-byte alignment to satisfy Arrow alignment invariant.
+    # Only the first sizeof(pointer) bytes are used to store the address of n_released.
+    var raw = alloc[UInt8](64, alignment=64)
     raw.bitcast[UnsafePointer[Int, MutAnyOrigin]]()[0] = rebind[
         UnsafePointer[Int, MutAnyOrigin]
     ](UnsafePointer(to=n_released))
@@ -128,7 +130,7 @@ def test_buffer_foreign_kind() raises:
     var keeper = ArcPointer(Allocation.foreign(mut_ptr, count_and_free))
     var buf = Buffer.from_foreign(
         raw.bitcast[NoneType](),
-        size_of[UnsafePointer[Int, MutAnyOrigin]](),
+        64,
         keeper,
     )
     assert_true(buf.is_cpu())
