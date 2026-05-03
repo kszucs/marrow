@@ -87,6 +87,14 @@ def test_primitive_scalar_write_to_null() raises:
     assert_equal(String(s), "null")
 
 
+def test_primitive_scalar_eq() raises:
+    assert_true(Int32Scalar(42) == Int32Scalar(42))
+    assert_false(Int32Scalar(42) == Int32Scalar(99))
+    assert_true(Int32Scalar(None) == Int32Scalar(None))
+    assert_false(Int32Scalar(42) == Int32Scalar(None))
+    assert_false(Int32Scalar(None) == Int32Scalar(42))
+
+
 # ---------------------------------------------------------------------------
 # StringScalar
 # ---------------------------------------------------------------------------
@@ -120,6 +128,14 @@ def test_string_scalar_write_to() raises:
     assert_equal(String(s), "hi")
 
 
+def test_string_scalar_eq() raises:
+    assert_true(StringScalar("hello") == StringScalar("hello"))
+    assert_false(StringScalar("hello") == StringScalar("world"))
+    assert_true(StringScalar.null() == StringScalar.null())
+    assert_false(StringScalar("hello") == StringScalar.null())
+    assert_false(StringScalar.null() == StringScalar("hello"))
+
+
 # ---------------------------------------------------------------------------
 # Scalar (type-erased)
 # ---------------------------------------------------------------------------
@@ -141,6 +157,16 @@ def test_scalar_from_string() raises:
     assert_true(erased.type().is_string())
     ref back = erased.as_string()
     assert_equal(back.to_string(), "world")
+
+
+def test_scalar_eq() raises:
+    var a: AnyScalar = Int32Scalar(42)
+    var b: AnyScalar = Int32Scalar(42)
+    var c: AnyScalar = Int32Scalar(99)
+    var d: AnyScalar = StringScalar("hello")
+    assert_true(a == b)
+    assert_false(a == c)
+    assert_false(a == d)
 
 
 def test_scalar_null() raises:

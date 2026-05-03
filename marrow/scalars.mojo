@@ -93,7 +93,7 @@ from std.builtin.simd import Scalar as _Scalar
 # ---------------------------------------------------------------------------
 
 
-trait Scalar(Copyable, Movable, Writable):
+trait Scalar(Copyable, Equatable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
     def type(self) -> AnyDataType:
@@ -109,7 +109,7 @@ trait Scalar(Copyable, Movable, Writable):
         ...
 
 
-struct NullScalar(Copyable, Equatable, Movable, Scalar, Writable):
+struct NullScalar(Scalar):
     """A single null value — Arrow's `Null` type holds nothing but null."""
 
     def __init__(out self):
@@ -131,12 +131,6 @@ struct NullScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def to_any(deinit self) -> AnyScalar:
         return self^
 
-    def __eq__(self, other: Self) -> Bool:
-        return True
-
-    def __ne__(self, other: Self) -> Bool:
-        return False
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write("null")
 
@@ -144,10 +138,7 @@ struct NullScalar(Copyable, Equatable, Movable, Scalar, Writable):
         writer.write("null")
 
 
-# TODO(kszucs): base Scalar already inherits from copyable/movable/writable, so
-# we don't need to repeat those in each struct definition. We can just have the
-# struct definitions inherit from Scalar and then add Equatable where needed.
-struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
+struct BoolScalar(Scalar):
     """A single boolean value: holds a Bool + validity flag."""
 
     var _value: Bool
@@ -188,7 +179,7 @@ struct BoolScalar(Copyable, Equatable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct PrimitiveScalar[T: PrimitiveType](Copyable, Equatable, Movable, Scalar, Writable):
+struct PrimitiveScalar[T: PrimitiveType](Scalar):
     """A single primitive value: holds a native Mojo scalar + type info + validity flag.
 
     `_dtype: T` carries runtime type information — zero-sized for NumericType,
@@ -241,22 +232,6 @@ struct PrimitiveScalar[T: PrimitiveType](Copyable, Equatable, Movable, Scalar, W
     def to_any(deinit self) -> AnyScalar:
         return self^
 
-    def __eq__(self, other: Self) -> Bool:
-        if self.is_null() and other.is_null():
-            return True
-        if self.is_null() or other.is_null():
-            return False
-        return self._dtype == other._dtype and self._value == other._value
-
-    # TODO(kszucs): shouldn't define __ne__ since there is a default impl
-    def __ne__(self, other: Self) -> Bool:
-        return not (self == other)
-
-    # def __bool__(self) -> Bool:
-    #     if self._is_valid:
-    #         return Bool(self._value)
-    #     return False
-
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
             writer.write(self._value)
@@ -301,7 +276,7 @@ comptime Decimal256Scalar = PrimitiveScalar[Decimal256Type]
 # ---------------------------------------------------------------------------
 
 
-struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
+struct StringScalar(Scalar):
     """A single string value: holds a String + validity flag."""
 
     var _value: String
@@ -336,16 +311,6 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def to_any(deinit self) -> AnyScalar:
         return self^
 
-    def __eq__(self, other: Self) -> Bool:
-        if self.is_null() and other.is_null():
-            return True
-        if self.is_null() or other.is_null():
-            return False
-        return self._value == other._value
-
-    def __ne__(self, other: Self) -> Bool:
-        return not (self == other)
-
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
             writer.write(self._value)
@@ -366,7 +331,7 @@ struct StringScalar(Copyable, Equatable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
+struct FixedSizeBinaryScalar(Scalar):
     """A single fixed-size-binary value: holds `byte_width` bytes + validity flag.
     """
 
@@ -400,18 +365,6 @@ struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
     def to_any(deinit self) -> AnyScalar:
         return self^
 
-    def __eq__(self, other: Self) -> Bool:
-        if self.is_null() and other.is_null():
-            return True
-        if self.is_null() or other.is_null():
-            return False
-        if self._byte_width != other._byte_width:
-            return False
-        return self._value == other._value
-
-    def __ne__(self, other: Self) -> Bool:
-        return not (self == other)
-
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
             writer.write("b'")
@@ -430,7 +383,7 @@ struct FixedSizeBinaryScalar(Copyable, Equatable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct ListScalar(Copyable, Movable, Scalar, Writable):
+struct ListScalar(Scalar):
     """A single list value: holds an AnyArray of child elements + validity flag.
     """
 
@@ -472,7 +425,7 @@ struct ListScalar(Copyable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct StructScalar(Copyable, Movable, Scalar, Writable):
+struct StructScalar(Scalar):
     """A single struct value: holds one AnyScalar per field + validity flag."""
 
     var _dtype: AnyDataType
@@ -534,7 +487,7 @@ struct StructScalar(Copyable, Movable, Scalar, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
+struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     """Type-erased scalar container backed by a Variant.
 
     Wraps any typed scalar inline in a discriminated union.
@@ -693,6 +646,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Movable, Writable):
 
     def as_struct(ref self) -> ref[self._v] StructScalar:
         return self._as[StructScalar]()
+
+    def __eq__(self, other: Self) -> Bool:
+        return self._v == other._v
 
     def write_to[W: Writer](self, mut writer: W):
         @parameter
