@@ -400,11 +400,11 @@ struct StructScalar(Scalar):
         out self,
         *,
         dtype: AnyDataType,
-        value: List[AnyScalar],
+        var value: List[AnyScalar],
         is_valid: Bool,
     ):
         self._dtype = dtype.copy()
-        self._value = value.copy()
+        self._value = value^
         self._is_valid = is_valid
 
     @staticmethod
@@ -420,10 +420,10 @@ struct StructScalar(Scalar):
     def num_fields(self) -> Int:
         return len(self._value)
 
-    def field(self, index: Int) -> ref[self._value] AnyScalar:
+    def field(self, index: Int) -> AnyScalar:
         """Return the i-th field as an AnyScalar."""
         debug_assert(index >= 0 and index < len(self._value), "field index out of bounds")
-        return self._value[index]
+        return AnyScalar(copy=self._value[index])
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:

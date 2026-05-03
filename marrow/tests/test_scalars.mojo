@@ -38,6 +38,7 @@ from marrow.scalars import (
     AnyScalar,
     BoolScalar,
     Int32Scalar,
+    Int64Scalar,
     Float64Scalar,
     StringScalar,
     ListScalar,
@@ -224,39 +225,49 @@ def test_list_scalar_from_fixed_size_list_array() raises:
 # StructScalar from StructArray.__getitem__
 # ---------------------------------------------------------------------------
 
-# CRASHING
-# def test_struct_scalar_from_array() raises:
-#     var sb = StructBuilder([field("x", int32), field("y", int64)], capacity=2)
-#     # append first struct with x=1, y=10
-#     sb.field_builder(0).as_int32().append(1)
-#     sb.field_builder(1).as_int64().append(10)
-#     sb.append_valid()
-#     # append second struct with x=2, y=20
-#     sb.field_builder(0).as_int32().append(2)
-#     sb.field_builder(1).as_int64().append(20)
-#     sb.append_valid()
-#     var arr = sb.finish()
 
-#     ref s0 = arr[0]
-#     assert_true(s0.is_valid())
-#     assert_equal(s0.num_fields(), 2)
-#     ref f0 = s0.field(0)
-#     assert_equal(f0.as_int32().value(), 1)
-#     # var f1 = s0.field(1)
-#     # assert_equal(f1.as_int64().value(), 10)
+def test_struct_scalar_from_array() raises:
+    var sb = StructBuilder([field("x", int32), field("y", int64)], capacity=2)
+    # append first struct with x=1, y=10
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(1).as_int64().append(10)
+    sb.append_valid()
+    # append second struct with x=2, y=20
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(1).as_int64().append(20)
+    sb.append_valid()
+    var arr = sb.finish()
 
-# CRASHING
-# def test_struct_scalar_null_from_array() raises:
-#     var sb = StructBuilder([field("x", int32)], capacity=2)
-#     sb.field_builder(0).as_int32().append(5)
-#     sb.field_builder(0).as_int32().append(0)
-#     sb.append_valid()
-#     sb.append_null()
-#     var arr = sb.finish()
-#     var s0 = arr[0]
-#     assert_true(s0.is_valid())
-#     var s1 = arr[1]
-#     assert_false(s1.is_valid())
+    # verify raw children
+    assert_equal(len(arr.children), 2)
+    assert_equal(arr.children[0].as_int32()[0].value(), 1)
+    assert_equal(arr.children[0].as_int32()[1].value(), 2)
+    assert_equal(arr.children[1].as_int64()[0].value(), 10)
+    assert_equal(arr.children[1].as_int64()[1].value(), 20)
+
+    var s0 = arr[0]
+    assert_true(s0.is_valid())
+    assert_equal(s0.num_fields(), 2)
+    assert_equal(s0.field(0).as_int32().value(), 1)
+    assert_equal(s0.field(1).as_int64().value(), 10)
+
+    var s1 = arr[1]
+    assert_true(s1.is_valid())
+    assert_equal(s1.field(0).as_int32().value(), 2)
+    assert_equal(s1.field(1).as_int64().value(), 20)
+
+
+def test_struct_scalar_null_from_array() raises:
+    var sb = StructBuilder([field("x", int32)], capacity=2)
+    sb.field_builder(0).as_int32().append(5)
+    sb.field_builder(0).as_int32().append(0)
+    sb.append_valid()
+    sb.append_null()
+    var arr = sb.finish()
+    var s0 = arr[0]
+    assert_true(s0.is_valid())
+    var s1 = arr[1]
+    assert_false(s1.is_valid())
 
 
 # ---------------------------------------------------------------------------
@@ -317,18 +328,17 @@ def test_any_array_getitem_fixed_size_list() raises:
     assert_equal(len(list_val), 2)
 
 
-# CRASHING
-# def test_any_array_getitem_struct() raises:
-#     var sb = StructBuilder([field("n", int32)], capacity=1)
-#     sb.field_builder(0).as_int32().append(42)
-#     sb.append_valid()
-#     var arr: AnyArray = sb.finish()
-#     ref s = arr[0]
-#     assert_true(s.is_valid())
-#     ref ss = s.as_struct()
-#     assert_equal(ss.num_fields(), 1)
-#     ref f0 = ss.field(0)
-#     assert_equal(f0.as_int32().value(), 42)
+
+def test_array_getitem_struct() raises:
+    var sb = StructBuilder([field("n", int32)], capacity=1)
+    sb.field_builder(0).as_int32().append(42)
+    sb.append_valid()
+    var arr = sb.finish()
+
+    var s = arr[0]
+    assert_true(s.is_valid())
+    assert_equal(s.num_fields(), 1)
+    assert_equal(s.field(0).as_int32().value(), 42)
 
 
 def test_any_array_getitem_out_of_bounds() raises:

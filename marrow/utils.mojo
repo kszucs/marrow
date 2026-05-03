@@ -8,8 +8,8 @@ compile-time loop; the value is then reinterpreted as *Trait* through
 Three overloads are provided — distinguished by whether *func* raises and
 whether it takes its argument by value or by mutable reference:
 
-  variant_dispatch            — *func* is non-raising, argument by value
-  variant_dispatch_raises     — *func* raises,         argument by value
+  variant_dispatch            — *func* is non-raising, argument by ref
+  variant_dispatch_raises     — *func* raises,         argument by ref
   variant_dispatch_raises     — *func* raises,         argument by mut-ref
 
 Note: a single `ref[_] v` overload would unify all three, but the Mojo
@@ -99,7 +99,7 @@ def variant_dispatch_raises[
     *Ts: Movable,
     predicate: _TypePredicateGenerator[Movable] = _always_true,
     func: def[T: Trait](T) raises capturing[_] -> R,
-](v: Variant[*Ts]) raises -> R:
+](ref v: Variant[*Ts]) raises -> R:
     """Like *variant_dispatch* but *func* may raise."""
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
