@@ -73,6 +73,8 @@ trait Array(
     the type-erased handle that wraps any Array-conforming type.
     """
 
+    comptime ScalarType: ScalarTrait
+
     def __init__(out self, data: ArrayData) raises:
         ...
 
@@ -85,13 +87,17 @@ trait Array(
     def is_valid(self, index: Int) -> Bool:
         ...
 
+    def is_null(self, index: Int) -> Bool:
+        return not self.is_valid(index)
+
     def to_any(deinit self) -> AnyArray:
-        ...
+        return AnyArray(self^)
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
 
     def to_data(self) raises -> ArrayData:
         ...
-
-    comptime ScalarType: ScalarTrait
 
     def slice(self, offset: Int, length: Int) -> Self:
         ...
@@ -129,11 +135,7 @@ struct ArrayData(Copyable, Movable):
 
 
 @fieldwise_init
-struct NullArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct NullArray(Array):
     """Immutable array of nulls — Arrow's `Null` type.
 
     Holds nothing but a length: every element is null.  The Arrow spec
@@ -144,9 +146,6 @@ struct NullArray(
     comptime ScalarType = NullScalar
 
     var length: Int
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         self.length = data.length
@@ -179,12 +178,6 @@ struct NullArray(
     def __getitem__(self, index: Int) -> NullScalar:
         return NullScalar()
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
-
     def to_data(self) raises -> ArrayData:
         return ArrayData(
             dtype=null,
@@ -204,11 +197,7 @@ struct NullArray(
 
 
 @fieldwise_init
-struct BoolArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct BoolArray(Array):
     """Immutable array of boolean values, packed as bits in a Bitmap buffer.
 
     Null values are represented by a separate validity bitmap (if any), not
@@ -223,9 +212,6 @@ struct BoolArray(
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Bitmap[mut=False]
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
@@ -332,12 +318,6 @@ struct BoolArray(
             buffer=self.buffer.to_cpu(ctx),
         )
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
-
     def to_data(self) raises -> ArrayData:
         return ArrayData(
             dtype=bool_,
@@ -373,11 +353,7 @@ struct BoolArray(
 
 
 # TODO: add conditional conformance where: T.is_primitive()
-struct PrimitiveArray[T: PrimitiveType](
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct PrimitiveArray[T: PrimitiveType](Array):
     """An immutable Arrow array of fixed-size primitive values (integers, floats, etc.).
     """
 
@@ -427,9 +403,6 @@ struct PrimitiveArray[T: PrimitiveType](
             bitmap=bitmap,
             buffer=buffer,
         )
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
@@ -603,9 +576,6 @@ struct PrimitiveArray[T: PrimitiveType](
                     return False
         return True
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
@@ -639,11 +609,7 @@ comptime Float64Array = PrimitiveArray[Float64Type]
 
 
 @fieldwise_init
-struct StringArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct StringArray(Array):
     """An immutable Arrow array of variable-length UTF-8 strings."""
 
     comptime ScalarType = StringScalar
@@ -668,9 +634,6 @@ struct StringArray(
         for value in values:
             b.append(value)
         self = b.finish()
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 2:
@@ -760,9 +723,6 @@ struct StringArray(
             return StringScalar.null()
         return StringScalar(String(self.unsafe_get(UInt(index))))
 
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
-
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and string values.
         """
@@ -780,9 +740,6 @@ struct StringArray(
                 if self.unsafe_get(UInt(i)) != other.unsafe_get(UInt(i)):
                     return False
         return True
-
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
 
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
@@ -802,11 +759,7 @@ struct StringArray(
 # ---------------------------------------------------------------------------
 
 
-struct ListArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct ListArray(Array):
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
 
@@ -848,9 +801,6 @@ struct ListArray(
         self.offsets = copy.offsets
         self.child = OwnedPointer(copy.child[].copy())
 
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
-
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
             raise Error("ListArray requires exactly one buffer")
@@ -869,9 +819,6 @@ struct ListArray(
     def values(ref self) -> ref[self.child[]] AnyArray:
         """The child array containing the list elements."""
         return self.child[]
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
 
     def __len__(self) -> Int:
         return self.length
@@ -1015,9 +962,6 @@ struct ListArray(
             values=values^,
         )
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
@@ -1036,11 +980,7 @@ struct ListArray(
 # ---------------------------------------------------------------------------
 
 
-struct FixedSizeListArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct FixedSizeListArray(Array):
     """An immutable Arrow array of fixed-size lists (each element is a sub-array of the same length).
     """
 
@@ -1078,9 +1018,6 @@ struct FixedSizeListArray(
         self.bitmap = copy.bitmap
         self.child = OwnedPointer(copy.child[].copy())
 
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
-
     def __init__(out self, data: ArrayData) raises:
         if len(data.children) != 1:
             raise Error("FixedSizeListArray requires exactly one child array")
@@ -1097,9 +1034,6 @@ struct FixedSizeListArray(
         """The child array containing all list elements (length * list_size elements).
         """
         return self.child[]
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
 
     def __len__(self) -> Int:
         return self.length
@@ -1252,9 +1186,6 @@ struct FixedSizeListArray(
             values=values^,
         )
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
@@ -1274,11 +1205,7 @@ struct FixedSizeListArray(
 
 
 @fieldwise_init
-struct FixedSizeBinaryArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct FixedSizeBinaryArray(Array):
     """An immutable Arrow array of fixed-width binary values.
 
     Layout: a single contiguous data buffer of `length * byte_width` bytes,
@@ -1294,9 +1221,6 @@ struct FixedSizeBinaryArray(
     var byte_width: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Buffer[mut=False]
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         if not data.dtype.is_fixed_size_binary():
@@ -1369,12 +1293,6 @@ struct FixedSizeBinaryArray(
             bytes.append(self.buffer.unsafe_get[DType.uint8](start + i))
         return FixedSizeBinaryScalar(bytes^, self.byte_width)
 
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
-
     def to_data(self) raises -> ArrayData:
         return ArrayData(
             dtype=FixedSizeBinaryType(self.byte_width).to_any(),
@@ -1432,11 +1350,7 @@ comptime Decimal256Array = PrimitiveArray[Decimal256Type]
 
 
 @fieldwise_init
-struct StructArray(
-    Array,
-    ConvertibleFromPython,
-    ConvertibleToPython,
-):
+struct StructArray(Array):
     """An immutable Arrow array of structs (each element is a collection of named fields).
     """
 
@@ -1448,9 +1362,6 @@ struct StructArray(
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var children: List[AnyArray]
-
-    def __init__(out self, *, py: PythonObject) raises:
-        self = py.downcast_value_ptr[Self]()[].copy()
 
     def __init__(out self, data: ArrayData) raises:
         var children = List[AnyArray]()
@@ -1464,9 +1375,6 @@ struct StructArray(
             bitmap=data.bitmap,
             children=children^,
         )
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
 
     def __len__(self) -> Int:
         return self.length
@@ -1638,9 +1546,6 @@ struct StructArray(
             bitmap=bitmap^,
             children=children^,
         )
-
-    def to_any(deinit self) -> AnyArray:
-        return AnyArray(self^)
 
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
@@ -1845,6 +1750,9 @@ struct AnyArray(
             return a.is_valid(index)
 
         return variant_dispatch[Array, func=f](self._v)
+
+    def is_null(self, index: Int) -> Bool:
+        return not self.is_valid(index)
 
     def slice(self, offset: Int, length: Int = -1) raises -> AnyArray:
         """Returns a zero-copy slice starting at offset with the given length.

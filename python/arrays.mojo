@@ -835,7 +835,7 @@ struct PyFixedSizeListConverter(PyConverter):
 
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
-        var fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list()
+        ref fsl = builder.as_fixed_size_list().dtype().as_fixed_size_list()
         var child_builder = builder.as_fixed_size_list().values()
         var child_dtype = fsl.value_type()
         self._child = PyAnyConverter(child_builder, child_dtype, True)
@@ -887,7 +887,7 @@ struct PyStructConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder) raises:
         self._builder = builder
         var dtype = builder.as_struct().dtype()
-        var st = dtype.as_struct()
+        ref st = dtype.as_struct()
         var n = len(st.fields)
         var children = List[PyAnyConverter](capacity=n)
         var field_keys = List[PythonObject](capacity=n)

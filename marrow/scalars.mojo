@@ -103,10 +103,10 @@ trait Scalar(Copyable, Equatable, Movable, Writable):
         ...
 
     def is_null(self) -> Bool:
-        ...
+        return not self.is_valid()
 
     def to_any(deinit self) -> AnyScalar:
-        ...
+        return AnyScalar(self^)
 
 
 struct NullScalar(Scalar):
@@ -124,12 +124,6 @@ struct NullScalar(Scalar):
 
     def is_valid(self) -> Bool:
         return False
-
-    def is_null(self) -> Bool:
-        return True
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("null")
@@ -163,15 +157,9 @@ struct BoolScalar(Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
     def value(self) -> Bool:
         """Get the underlying boolean value. Undefined if null."""
         return self._value
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
 
 # ---------------------------------------------------------------------------
@@ -222,15 +210,9 @@ struct PrimitiveScalar[T: PrimitiveType](Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
     def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
         return self._value
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -301,15 +283,9 @@ struct StringScalar(Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
     def to_string(self) -> String:
         """Get the value as an owned String."""
         return self._value
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -359,12 +335,6 @@ struct FixedSizeBinaryScalar(Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
-
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
             writer.write("b'")
@@ -400,15 +370,9 @@ struct ListScalar(Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
     def value(self) -> AnyArray:
         """Get the child elements array."""
         return self._value.copy()
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -453,9 +417,6 @@ struct StructScalar(Scalar):
     def is_valid(self) -> Bool:
         return self._is_valid
 
-    def is_null(self) -> Bool:
-        return not self._is_valid
-
     def num_fields(self) -> Int:
         return len(self._value)
 
@@ -463,9 +424,6 @@ struct StructScalar(Scalar):
         """Return the i-th field as an AnyScalar."""
         debug_assert(index >= 0 and index < len(self._value), "field index out of bounds")
         return self._value[index]
-
-    def to_any(deinit self) -> AnyScalar:
-        return self^
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
