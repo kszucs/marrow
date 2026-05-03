@@ -79,7 +79,7 @@ struct AggregateState(Movable):
 
     @implicit
     def __init__[T: PrimitiveType](out self, var builder: PrimitiveBuilder[T]):
-        self.builder = AnyBuilder(builder^)
+        self.builder = builder^
 
     def length(self) -> Int:
         return self.builder.length()

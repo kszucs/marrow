@@ -12,7 +12,6 @@ from marrow.dtypes import *
 from marrow.arrays import AnyArray
 from marrow.builders import (
     array,
-    AnyBuilder,
     BoolBuilder,
     Int8Builder,
     Int16Builder,
@@ -172,7 +171,7 @@ def test_string_file() raises:
 def test_list_file() raises:
     """List(int32) column round-trips through the file format."""
     var ints_b = Int32Builder()
-    var lb = ListBuilder(AnyBuilder(ints_b^))
+    var lb = ListBuilder(ints_b^)
     var child_any = lb.values()
     ref child = child_any.as_int32()
     child.append(Int32(1))
@@ -193,7 +192,7 @@ def test_list_file() raises:
 def test_fixed_size_list_file() raises:
     """FixedSizeList(float32, 3) column round-trips through the file format."""
     var vals_b = Float32Builder()
-    var fslb = FixedSizeListBuilder(AnyBuilder(vals_b^), 3)
+    var fslb = FixedSizeListBuilder(vals_b^, 3)
     var child_any = fslb.values()
     ref child = child_any.as_float32()
     child.append(Float32(1.0))

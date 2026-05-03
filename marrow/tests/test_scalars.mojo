@@ -10,7 +10,6 @@ from marrow.arrays import (
 )
 from marrow.builders import (
     array,
-    AnyBuilder,
     BoolBuilder,
     StringBuilder,
     FixedSizeListBuilder,
@@ -178,7 +177,7 @@ def test_bool_scalar_from_array() raises:
 
 def test_list_scalar_from_fixed_size_list_array() raises:
     var inner = Int32Builder()
-    var fsl = FixedSizeListBuilder(AnyBuilder(inner^), 2)
+    var fsl = FixedSizeListBuilder(inner^, 2)
     fsl.values().as_int32().append(10)
     fsl.values().as_int32().append(20)
     fsl.append_valid()
@@ -278,7 +277,7 @@ def test_any_array_getitem_string() raises:
 
 def test_any_array_getitem_fixed_size_list() raises:
     var inner = Int32Builder()
-    var fsl = FixedSizeListBuilder(AnyBuilder(inner^), 2)
+    var fsl = FixedSizeListBuilder(inner^, 2)
     fsl.values().as_int32().append(7)
     fsl.values().as_int32().append(8)
     fsl.append_valid()

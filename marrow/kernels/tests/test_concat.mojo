@@ -19,7 +19,6 @@ from marrow.arrays import (
 from marrow.builders import (
     array,
     arange,
-    AnyBuilder,
     PrimitiveBuilder,
     StringBuilder,
     ListBuilder,
@@ -218,7 +217,7 @@ def test_concat_string_with_nulls() raises:
 
 def test_concat_list() raises:
     # Chunk 1: [[1, 2], [3]]
-    var lb1 = ListBuilder(AnyBuilder(Int32Builder()), capacity=2)
+    var lb1 = ListBuilder(Int32Builder(), capacity=2)
     var c1_any = lb1.values()
     ref c1 = c1_any.as_int32()
     c1.append(1)
@@ -227,7 +226,7 @@ def test_concat_list() raises:
     c1.append(3)
     lb1.append_valid()  # [3]
     # Chunk 2: [[4, 5, 6]]
-    var lb2 = ListBuilder(AnyBuilder(Int32Builder()), capacity=1)
+    var lb2 = ListBuilder(Int32Builder(), capacity=1)
     var c2_any = lb2.values()
     ref c2 = c2_any.as_int32()
     c2.append(4)
@@ -258,13 +257,13 @@ def test_concat_list() raises:
 
 
 def test_concat_list_with_nulls() raises:
-    var lb1 = ListBuilder(AnyBuilder(Int32Builder()), capacity=2)
+    var lb1 = ListBuilder(Int32Builder(), capacity=2)
     var c1_any = lb1.values()
     ref c1 = c1_any.as_int32()
     c1.append(1)
     lb1.append_valid()  # [1]
     lb1.append_null()  # null
-    var lb2 = ListBuilder(AnyBuilder(Int32Builder()), capacity=1)
+    var lb2 = ListBuilder(Int32Builder(), capacity=1)
     var c2_any = lb2.values()
     ref c2 = c2_any.as_int32()
     c2.append(2)

@@ -5,7 +5,6 @@ from marrow.builders import (
     array,
     arange,
     nulls,
-    AnyBuilder,
     BoolBuilder,
     PrimitiveBuilder,
     StringBuilder,
@@ -100,7 +99,7 @@ def test_array_from_string() raises:
 
 def test_array_from_list() raises:
     var ints_b = Int64Builder()
-    var l = ListBuilder(AnyBuilder(ints_b^))
+    var l = ListBuilder(ints_b^)
     var a: AnyArray = l.finish()
     assert_true(a.dtype().is_list())
 
@@ -340,7 +339,7 @@ def test_list_bool_array() raises:
     bool_b.append(True)
     bool_b.append_null()
     bool_b.append(True)
-    var list_b = ListBuilder(AnyBuilder(bool_b^))
+    var list_b = ListBuilder(bool_b^)
     list_b.append_valid()
     var lists = list_b.finish()
     assert_equal(len(lists), 1)
@@ -357,7 +356,7 @@ def test_list_str() raises:
     var str_b = StringBuilder()
     str_b.append("hello")
     str_b.append("world")
-    var list_b = ListBuilder(AnyBuilder(str_b^))
+    var list_b = ListBuilder(str_b^)
     list_b.append_valid()
     var lists = list_b.finish()
     assert_equal(len(lists), 1)
@@ -370,9 +369,7 @@ def test_list_str() raises:
 
 def test_list_of_list() raises:
     var top_b = ListBuilder(
-        AnyBuilder(
-            ListBuilder(AnyBuilder(Int64Builder(capacity=10)), capacity=6)
-        ),
+        ListBuilder(Int64Builder(capacity=10), capacity=6),
         capacity=3,
     )
     var middle_any = top_b.values()
@@ -421,7 +418,7 @@ def test_fixed_size_list_int_array() raises:
     ints_b.append(4)
     ints_b.append(5)
     ints_b.append(6)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=3)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=3)
     builder.append_valid()
     builder.append_valid()
     assert_equal(builder.dtype(), fixed_size_list_(int64, 3))
@@ -451,7 +448,7 @@ def test_fixed_size_list_roundtrip() raises:
     ints_b.append(20)
     ints_b.append(30)
     ints_b.append(40)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
@@ -475,7 +472,7 @@ def test_fixed_size_list_with_nulls() raises:
     ints_b.append(5)
     ints_b.append(6)
     var builder = FixedSizeListBuilder(
-        AnyBuilder(ints_b^), list_size=3, capacity=3
+        ints_b^, list_size=3, capacity=3
     )
     builder.append_valid()
     builder.append_valid()
@@ -505,7 +502,7 @@ def test_fixed_size_list_unsafe_get_dtype() raises:
     ints_b.append(20)
     ints_b.append(30)
     ints_b.append(40)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
@@ -782,7 +779,7 @@ def test_str_list_array() raises:
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     list_b.append_valid()
     var lists = list_b.finish()
     var s = String(lists)
@@ -795,7 +792,7 @@ def test_str_fixed_size_list_array() raises:
     ints_b.append(20)
     ints_b.append(30)
     ints_b.append(40)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
@@ -849,7 +846,7 @@ def test_list_array_is_valid() raises:
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     list_b.append_valid()
     list_b.append_null()
     list_b.append_valid()
@@ -911,7 +908,7 @@ def test_string_array_getitem_bounds() raises:
 
 def test_list_array_getitem() raises:
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_any = list_b.values()
     ref child = child_any.as_int64()
     child.append(10)
@@ -931,7 +928,7 @@ def test_list_array_getitem() raises:
 def test_list_array_getitem_bounds() raises:
     var ints_b = Int64Builder()
     ints_b.append(1)
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     list_b.append_valid()
     var lists = list_b.finish()
     try:
@@ -954,7 +951,7 @@ def test_fixed_size_list_getitem() raises:
     ints_b.append(4)
     ints_b.append(5)
     ints_b.append(6)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=3)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=3)
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
@@ -973,7 +970,7 @@ def test_fixed_size_list_getitem_bounds() raises:
     ints_b.append(1)
     ints_b.append(2)
     ints_b.append(3)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=3)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=3)
     builder.append_valid()
     var fsl = builder.finish()
     try:
@@ -1069,7 +1066,7 @@ def test_fixed_size_list_len_and_null_count() raises:
     ints_b.append(4)
     ints_b.append(5)
     ints_b.append(6)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_null()
     builder.append_valid()
@@ -1082,7 +1079,7 @@ def test_list_array_null_count() raises:
     var ints_b = Int64Builder()
     ints_b.append(1)
     ints_b.append(2)
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     list_b.append_valid()
     list_b.append_null()
     var lists = list_b.finish()
@@ -1126,7 +1123,7 @@ def test_string_array_slice_with_length() raises:
 
 def test_list_array_slice() raises:
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_any = list_b.values()
     ref child = child_any.as_int64()
     child.append(1)
@@ -1150,7 +1147,7 @@ def test_fixed_size_list_slice() raises:
     ints_b.append(4)
     ints_b.append(5)
     ints_b.append(6)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_valid()
     builder.append_valid()
@@ -1169,7 +1166,7 @@ def test_fixed_size_list_slice() raises:
 
 def test_list_array_flatten() raises:
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_any = list_b.values()
     ref child = child_any.as_int64()
     child.append(1)
@@ -1184,7 +1181,7 @@ def test_list_array_flatten() raises:
 
 def test_list_array_value_lengths() raises:
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_any = list_b.values()
     ref child = child_any.as_int64()
     child.append(1)
@@ -1210,7 +1207,7 @@ def test_fixed_size_list_flatten() raises:
     ints_b.append(20)
     ints_b.append(30)
     ints_b.append(40)
-    var builder = FixedSizeListBuilder(AnyBuilder(ints_b^), list_size=2)
+    var builder = FixedSizeListBuilder(ints_b^, list_size=2)
     builder.append_valid()
     builder.append_valid()
     var fsl = builder.finish()
@@ -1432,7 +1429,7 @@ def test_string_array_eq_nulls() raises:
 
 def test_list_array_eq() raises:
     var ints_a = Int64Builder()
-    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    var list_a = ListBuilder(ints_a^)
     var child_a_any = list_a.values()
     ref child_a = child_a_any.as_int64()
     child_a.append(1)
@@ -1443,7 +1440,7 @@ def test_list_array_eq() raises:
     var a = list_a.finish()
 
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_b_any = list_b.values()
     ref child_b = child_b_any.as_int64()
     child_b.append(1)
@@ -1458,7 +1455,7 @@ def test_list_array_eq() raises:
 
 def test_list_array_eq_unequal() raises:
     var ints_a = Int64Builder()
-    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    var list_a = ListBuilder(ints_a^)
     var child_a_any = list_a.values()
     ref child_a = child_a_any.as_int64()
     child_a.append(1)
@@ -1467,7 +1464,7 @@ def test_list_array_eq_unequal() raises:
     var a = list_a.finish()
 
     var ints_b = Int64Builder()
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     var child_b_any = list_b.values()
     ref child_b = child_b_any.as_int64()
     child_b.append(1)
@@ -1481,14 +1478,14 @@ def test_list_array_eq_unequal() raises:
 def test_list_array_eq_nulls() raises:
     var ints_a = Int64Builder()
     ints_a.append(1)
-    var list_a = ListBuilder(AnyBuilder(ints_a^))
+    var list_a = ListBuilder(ints_a^)
     list_a.append_valid()
     list_a.append_null()
     var a = list_a.finish()
 
     var ints_b = Int64Builder()
     ints_b.append(1)
-    var list_b = ListBuilder(AnyBuilder(ints_b^))
+    var list_b = ListBuilder(ints_b^)
     list_b.append_valid()
     list_b.append_null()
     var b = list_b.finish()
@@ -1502,7 +1499,7 @@ def test_fixed_size_list_array_eq() raises:
     a_b.append(2)
     a_b.append(3)
     a_b.append(4)
-    var builder_a = FixedSizeListBuilder(AnyBuilder(a_b^), list_size=2)
+    var builder_a = FixedSizeListBuilder(a_b^, list_size=2)
     builder_a.append_valid()
     builder_a.append_valid()
 
@@ -1511,7 +1508,7 @@ def test_fixed_size_list_array_eq() raises:
     b_b.append(2)
     b_b.append(3)
     b_b.append(4)
-    var builder_b = FixedSizeListBuilder(AnyBuilder(b_b^), list_size=2)
+    var builder_b = FixedSizeListBuilder(b_b^, list_size=2)
     builder_b.append_valid()
     builder_b.append_valid()
 
@@ -1524,7 +1521,7 @@ def test_fixed_size_list_array_eq_unequal() raises:
     a_b.append(2)
     a_b.append(3)
     a_b.append(4)
-    var builder_a = FixedSizeListBuilder(AnyBuilder(a_b^), list_size=2)
+    var builder_a = FixedSizeListBuilder(a_b^, list_size=2)
     builder_a.append_valid()
     builder_a.append_valid()
 
@@ -1533,7 +1530,7 @@ def test_fixed_size_list_array_eq_unequal() raises:
     b_b.append(2)
     b_b.append(3)
     b_b.append(99)
-    var builder_b = FixedSizeListBuilder(AnyBuilder(b_b^), list_size=2)
+    var builder_b = FixedSizeListBuilder(b_b^, list_size=2)
     builder_b.append_valid()
     builder_b.append_valid()
 
