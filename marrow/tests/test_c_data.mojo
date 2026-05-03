@@ -819,7 +819,8 @@ def test_date32_array_from_pyarrow() raises:
 
 
 def test_timestamp_array_from_pyarrow() raises:
-    """Timestamp[s, tz=UTC] array import — regression for the tss: format bug."""
+    """Timestamp[s, tz=UTC] array import — regression for the tss: format bug.
+    """
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(
@@ -851,47 +852,62 @@ def test_timestamp_array_from_pyarrow() raises:
 
 
 def test_all_temporal_array_types_from_pyarrow() raises:
-    """One representative value import per temporal base type via C Data Interface."""
+    """One representative value import per temporal base type via C Data Interface.
+    """
     var pa = Python.import_module("pyarrow")
 
     # date32
-    var ca_d32 = c_array_from_pyobj(pa.array(Python.list(100), type=pa.date32()))
+    var ca_d32 = c_array_from_pyobj(
+        pa.array(Python.list(100), type=pa.date32())
+    )
     var data_d32 = ca_d32^.to_array(date32().to_any())
     ref arr_d32 = data_d32.as_date32()
     assert_equal(arr_d32[0].value(), 100)
 
     # date64
-    var ca_d64 = c_array_from_pyobj(pa.array(Python.list(86400000), type=pa.date64()))
+    var ca_d64 = c_array_from_pyobj(
+        pa.array(Python.list(86400000), type=pa.date64())
+    )
     var data_d64 = ca_d64^.to_array(date64().to_any())
     ref arr_d64 = data_d64.as_date64()
     assert_equal(arr_d64[0].value(), 86400000)
 
     # time32[s]
-    var ca_t32s = c_array_from_pyobj(pa.array(Python.list(3600), type=pa.time32("s")))
+    var ca_t32s = c_array_from_pyobj(
+        pa.array(Python.list(3600), type=pa.time32("s"))
+    )
     var data_t32s = ca_t32s^.to_array(time32(second).to_any())
     ref arr_t32s = data_t32s.as_time32()
     assert_equal(arr_t32s[0].value(), 3600)
 
     # time32[ms]
-    var ca_t32m = c_array_from_pyobj(pa.array(Python.list(3600000), type=pa.time32("ms")))
+    var ca_t32m = c_array_from_pyobj(
+        pa.array(Python.list(3600000), type=pa.time32("ms"))
+    )
     var data_t32m = ca_t32m^.to_array(time32(millisecond).to_any())
     ref arr_t32m = data_t32m.as_time32()
     assert_equal(arr_t32m[0].value(), 3600000)
 
     # time64[us]
-    var ca_t64u = c_array_from_pyobj(pa.array(Python.list(3600000000), type=pa.time64("us")))
+    var ca_t64u = c_array_from_pyobj(
+        pa.array(Python.list(3600000000), type=pa.time64("us"))
+    )
     var data_t64u = ca_t64u^.to_array(time64(microsecond).to_any())
     ref arr_t64u = data_t64u.as_time64()
     assert_equal(arr_t64u[0].value(), 3600000000)
 
     # time64[ns]
-    var ca_t64n = c_array_from_pyobj(pa.array(Python.list(3600000000000), type=pa.time64("ns")))
+    var ca_t64n = c_array_from_pyobj(
+        pa.array(Python.list(3600000000000), type=pa.time64("ns"))
+    )
     var data_t64n = ca_t64n^.to_array(time64(nanosecond).to_any())
     ref arr_t64n = data_t64n.as_time64()
     assert_equal(arr_t64n[0].value(), 3600000000000)
 
     # timestamp[s]
-    var ca_ts_s = c_array_from_pyobj(pa.array(Python.list(1000), type=pa.timestamp("s")))
+    var ca_ts_s = c_array_from_pyobj(
+        pa.array(Python.list(1000), type=pa.timestamp("s"))
+    )
     var data_ts_s = ca_ts_s^.to_array(timestamp(second).to_any())
     ref arr_ts_s = data_ts_s.as_timestamp()
     assert_equal(arr_ts_s[0].value(), 1000)
@@ -905,7 +921,9 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     assert_equal(arr_ts_ntz[0].value(), 1000000000000)
 
     # duration[ms]
-    var ca_dur = c_array_from_pyobj(pa.array(Python.list(5000), type=pa.duration("ms")))
+    var ca_dur = c_array_from_pyobj(
+        pa.array(Python.list(5000), type=pa.duration("ms"))
+    )
     var data_dur = ca_dur^.to_array(duration(millisecond).to_any())
     ref arr_dur = data_dur.as_duration()
     assert_equal(arr_dur[0].value(), 5000)

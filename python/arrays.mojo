@@ -787,7 +787,9 @@ struct PyListConverter(PyConverter):
     def __init__(out self, builder: AnyBuilder, has_nulls: Bool = True) raises:
         self._builder = builder
         var child_builder = builder.as_list().values()
-        var child_dtype = builder.as_list().dtype().as_list().value_type().copy()
+        var child_dtype = (
+            builder.as_list().dtype().as_list().value_type().copy()
+        )
         self._child = PyAnyConverter(child_builder, child_dtype, True)
         self._has_nulls = has_nulls
         self.py = PyHelpers()
@@ -1113,7 +1115,9 @@ def _struct_array_from_arrays(
     )
 
 
-def _any_array_str(ptr: UnsafePointer[AnyArray, MutAnyOrigin]) raises -> PythonObject:
+def _any_array_str(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin]
+) raises -> PythonObject:
     return PythonObject(String.write(ptr[]))
 
 

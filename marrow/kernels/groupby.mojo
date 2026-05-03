@@ -275,16 +275,10 @@ struct AggregateFunction(Copyable, Movable):
     def create(mut self) raises:
         """Initialize state for a newly created group."""
         if self._value_dtype.is_integer() and self.name != "mean":
-            self.values.builder.as_int64().append(
-                Scalar[int64.native](0)
-            )
+            self.values.builder.as_int64().append(Scalar[int64.native](0))
         else:
-            self.values.builder.as_float64().append(
-                Scalar[float64.native](0)
-            )
-        self.counts.builder.as_int64().append(
-            Scalar[int64.native](0)
-        )
+            self.values.builder.as_float64().append(Scalar[float64.native](0))
+        self.counts.builder.as_int64().append(Scalar[int64.native](0))
 
     def add_batch(
         mut self,

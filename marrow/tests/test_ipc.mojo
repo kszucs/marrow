@@ -103,7 +103,8 @@ def _roundtrip_stream(batch: RecordBatch) raises -> RecordBatch:
 
 
 def test_primitives_file() raises:
-    """All integer and float primitive types round-trip through the file format."""
+    """All integer and float primitive types round-trip through the file format.
+    """
     var i8: AnyArray = array([-128, 0, 127], int8)
     var i16: AnyArray = array([-32768, 0, 32767], int16)
     var i32: AnyArray = array([-1, 0, 1], int32)
@@ -204,13 +205,16 @@ def test_fixed_size_list_file() raises:
     child.append(Float32(6.0))
     fslb.append_valid()
     var arr: AnyArray = fslb.finish()
-    var batch = _single_col_batch(arr^, field("vecs", fixed_size_list_(float32, 3)))
+    var batch = _single_col_batch(
+        arr^, field("vecs", fixed_size_list_(float32, 3))
+    )
     var result = _roundtrip_file(batch)
     assert_true(batch == result)
 
 
 def test_struct_file() raises:
-    """Struct(x: float64, y: float64) column round-trips through the file format."""
+    """Struct(x: float64, y: float64) column round-trips through the file format.
+    """
     var child_flds = List[Field]()
     child_flds.append(field("x", float64))
     child_flds.append(field("y", float64))

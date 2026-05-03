@@ -328,7 +328,6 @@ def test_any_array_getitem_fixed_size_list() raises:
     assert_equal(len(list_val), 2)
 
 
-
 def test_array_getitem_struct() raises:
     var sb = StructBuilder([field("n", int32)], capacity=1)
     sb.field_builder(0).as_int32().append(42)

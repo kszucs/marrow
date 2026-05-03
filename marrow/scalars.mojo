@@ -38,7 +38,6 @@ from .dtypes import *
 from std.builtin.simd import Scalar as _Scalar
 
 
-
 # ---------------------------------------------------------------------------
 # Scalar trait
 # ---------------------------------------------------------------------------
@@ -124,19 +123,24 @@ struct PrimitiveScalar[T: PrimitiveType](Scalar):
     `_dtype: T` carries runtime type information — zero-sized for NumericType,
     but holds unit/timezone for TemporalType and precision/scale for DecimalType.
     """
+
     comptime NativeScalar = _Scalar[Self.T.native]
 
     var _value: Self.NativeScalar
     var _dtype: Self.T
     var _is_valid: Bool
 
-    def __init__(out self, value: Self.NativeScalar) where conforms_to(Self.T, Defaultable):
+    def __init__(
+        out self, value: Self.NativeScalar
+    ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         self._value = value
         self._is_valid = True
 
-    def __init__(out self, value: Optional[Self.NativeScalar]) where conforms_to(Self.T, Defaultable):
+    def __init__(
+        out self, value: Optional[Self.NativeScalar]
+    ) where conforms_to(Self.T, Defaultable):
         comptime DT = downcast[Self.T, Defaultable]()
         self._dtype = DT.__init__()
         if value:
@@ -191,15 +195,15 @@ comptime Float16Scalar = PrimitiveScalar[Float16Type]
 comptime Float32Scalar = PrimitiveScalar[Float32Type]
 comptime Float64Scalar = PrimitiveScalar[Float64Type]
 
-comptime Date32Scalar    = PrimitiveScalar[Date32Type]
-comptime Date64Scalar    = PrimitiveScalar[Date64Type]
-comptime Time32Scalar    = PrimitiveScalar[Time32Type]
-comptime Time64Scalar    = PrimitiveScalar[Time64Type]
-comptime DurationScalar  = PrimitiveScalar[DurationType]
+comptime Date32Scalar = PrimitiveScalar[Date32Type]
+comptime Date64Scalar = PrimitiveScalar[Date64Type]
+comptime Time32Scalar = PrimitiveScalar[Time32Type]
+comptime Time64Scalar = PrimitiveScalar[Time64Type]
+comptime DurationScalar = PrimitiveScalar[DurationType]
 comptime TimestampScalar = PrimitiveScalar[TimestampType]
 
-comptime Decimal32Scalar  = PrimitiveScalar[Decimal32Type]
-comptime Decimal64Scalar  = PrimitiveScalar[Decimal64Type]
+comptime Decimal32Scalar = PrimitiveScalar[Decimal32Type]
+comptime Decimal64Scalar = PrimitiveScalar[Decimal64Type]
 comptime Decimal128Scalar = PrimitiveScalar[Decimal128Type]
 comptime Decimal256Scalar = PrimitiveScalar[Decimal256Type]
 
@@ -373,7 +377,9 @@ struct StructScalar(Scalar):
 
     def field(self, index: Int) -> AnyScalar:
         """Return the i-th field as an AnyScalar."""
-        debug_assert(index >= 0 and index < len(self._value), "field index out of bounds")
+        debug_assert(
+            index >= 0 and index < len(self._value), "field index out of bounds"
+        )
         return AnyScalar(copy=self._value[index])
 
     def write_to[W: Writer](self, mut writer: W):
@@ -475,7 +481,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def as_bool(ref self) -> ref[self._v] BoolScalar:
         return self._as[BoolScalar]()
 
-    def as_primitive[T: PrimitiveType](ref self) -> ref[self._v] PrimitiveScalar[T]:
+    def as_primitive[
+        T: PrimitiveType
+    ](ref self) -> ref[self._v] PrimitiveScalar[T]:
         return self._as[PrimitiveScalar[T]]()
 
     def as_int8(ref self) -> ref[self._v] Int8Scalar:

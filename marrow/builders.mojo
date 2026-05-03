@@ -273,10 +273,14 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     # --- typed downcasts (zero-cost reference borrows) ---
 
     def _as[T: Builder](ref self) -> ref[self._ptr[]] T:
-        debug_assert(self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype())
+        debug_assert(
+            self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype()
+        )
         return self._ptr[][T]
 
-    def as_primitive[T: PrimitiveType](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
+    def as_primitive[
+        T: PrimitiveType
+    ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
         return self._as[PrimitiveBuilder[T]]()
 
     def as_null(ref self) -> ref[self._ptr[]] NullBuilder:
@@ -327,7 +331,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
         return self._as[FixedSizeListBuilder]()
 
-    def as_fixed_size_binary(ref self) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
+    def as_fixed_size_binary(
+        ref self,
+    ) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
         return self._as[FixedSizeBinaryBuilder]()
 
     def as_date32(ref self) -> ref[self._ptr[]] Date32Builder:
@@ -370,7 +376,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
 
 struct PrimitiveBuilder[T: PrimitiveType](Builder):
-    """Builder for fixed-size primitive arrays (integers, floats, temporal, decimal)."""
+    """Builder for fixed-size primitive arrays (integers, floats, temporal, decimal).
+    """
 
     comptime ArrayType = PrimitiveArray[Self.T]
     comptime ScalarType = Scalar[Self.T.native]
@@ -382,7 +389,14 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
     var _bitmap: Bitmap[mut=True]
     var _buffer: Buffer[mut=True]
 
-    def __init__[NT: NumericType](out self: PrimitiveBuilder[NT], capacity: Int = 0, *, zeroed: Bool = True):
+    def __init__[
+        NT: NumericType
+    ](
+        out self: PrimitiveBuilder[NT],
+        capacity: Int = 0,
+        *,
+        zeroed: Bool = True,
+    ):
         """Create a builder for a numeric type without an explicit dtype instance.
 
         Only available for NumericType. For temporal and decimal types, use
@@ -396,7 +410,9 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
         """
         self = PrimitiveBuilder[NT](NT(), capacity, zeroed=zeroed)
 
-    def __init__(out self, dtype: Self.T, capacity: Int = 0, *, zeroed: Bool = True):
+    def __init__(
+        out self, dtype: Self.T, capacity: Int = 0, *, zeroed: Bool = True
+    ):
         """Create a builder with an explicit dtype (required for temporal and decimal).
 
         Args:
@@ -571,7 +587,6 @@ struct StringBuilder(Builder):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._offsets = offsets^
         self._values = Buffer.alloc_zeroed[DType.uint8](bytes_capacity)
-
 
     def length(self) -> Int:
         return self._length
@@ -752,7 +767,6 @@ struct ListBuilder(Builder):
         self._offsets = offsets^
         self._child = child^
 
-
     def length(self) -> Int:
         return self._length
 
@@ -901,7 +915,6 @@ struct FixedSizeListBuilder(Builder):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._child = child^
 
-
     def length(self) -> Int:
         return self._length
 
@@ -1027,7 +1040,6 @@ struct StructBuilder(Builder):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._children = children^
 
-
     def length(self) -> Int:
         return self._length
 
@@ -1143,7 +1155,6 @@ struct NullBuilder(Builder):
     def __init__(out self, capacity: Int = 0):
         self._length = 0
 
-
     def length(self) -> Int:
         return self._length
 
@@ -1193,7 +1204,6 @@ struct FixedSizeBinaryBuilder(Builder):
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._buffer = Buffer.alloc_zeroed[DType.uint8](capacity * byte_width)
 
-
     def length(self) -> Int:
         return self._length
 
@@ -1241,7 +1251,8 @@ struct FixedSizeBinaryBuilder(Builder):
     def extend(mut self, arr: AnyArray) raises:
         if not arr.dtype().is_fixed_size_binary():
             raise Error(
-                "FixedSizeBinaryBuilder.extend: expected fixed_size_binary array"
+                "FixedSizeBinaryBuilder.extend: expected fixed_size_binary"
+                " array"
             )
         self.extend(arr.as_fixed_size_binary())
 
@@ -1318,7 +1329,6 @@ struct BoolBuilder(Builder):
         self._null_count = 0
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._buffer = Bitmap.alloc_zeroed(capacity)
-
 
     def length(self) -> Int:
         return self._length
@@ -1409,15 +1419,15 @@ comptime Float16Builder = PrimitiveBuilder[Float16Type]
 comptime Float32Builder = PrimitiveBuilder[Float32Type]
 comptime Float64Builder = PrimitiveBuilder[Float64Type]
 
-comptime Date32Builder    = PrimitiveBuilder[Date32Type]
-comptime Date64Builder    = PrimitiveBuilder[Date64Type]
-comptime Time32Builder    = PrimitiveBuilder[Time32Type]
-comptime Time64Builder    = PrimitiveBuilder[Time64Type]
-comptime DurationBuilder  = PrimitiveBuilder[DurationType]
+comptime Date32Builder = PrimitiveBuilder[Date32Type]
+comptime Date64Builder = PrimitiveBuilder[Date64Type]
+comptime Time32Builder = PrimitiveBuilder[Time32Type]
+comptime Time64Builder = PrimitiveBuilder[Time64Type]
+comptime DurationBuilder = PrimitiveBuilder[DurationType]
 comptime TimestampBuilder = PrimitiveBuilder[TimestampType]
 
-comptime Decimal32Builder  = PrimitiveBuilder[Decimal32Type]
-comptime Decimal64Builder  = PrimitiveBuilder[Decimal64Type]
+comptime Decimal32Builder = PrimitiveBuilder[Decimal32Type]
+comptime Decimal64Builder = PrimitiveBuilder[Decimal64Type]
 comptime Decimal128Builder = PrimitiveBuilder[Decimal128Type]
 comptime Decimal256Builder = PrimitiveBuilder[Decimal256Type]
 
@@ -1440,7 +1450,9 @@ def array[
 
 def array[
     T: NumericType
-](values: List[Optional[Scalar[T.native]]], type: T) raises -> PrimitiveArray[T]:
+](values: List[Optional[Scalar[T.native]]], type: T) raises -> PrimitiveArray[
+    T
+]:
     """Create a primitive array from optional native scalars (None → null)."""
     var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):

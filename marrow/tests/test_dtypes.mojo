@@ -367,7 +367,9 @@ def test_temporal_dtypes_string() raises:
     assert_equal(String(AnyDataType(timestamp(millisecond))), "timestamp[ms]")
     assert_equal(String(AnyDataType(timestamp(microsecond))), "timestamp[us]")
     assert_equal(String(AnyDataType(timestamp(nanosecond))), "timestamp[ns]")
-    assert_equal(String(AnyDataType(timestamp(second, "UTC"))), "timestamp[s][tz=UTC]")
+    assert_equal(
+        String(AnyDataType(timestamp(second, "UTC"))), "timestamp[s][tz=UTC]"
+    )
     assert_equal(String(AnyDataType(duration(second))), "duration[s]")
     assert_equal(String(AnyDataType(duration(nanosecond))), "duration[ns]")
 
@@ -376,20 +378,32 @@ def test_temporal_dtypes_equality() raises:
     assert_true(AnyDataType(date32()) == AnyDataType(date32()))
     assert_false(AnyDataType(date32()) == AnyDataType(date64()))
     assert_true(AnyDataType(time32(second)) == AnyDataType(time32(second)))
-    assert_false(AnyDataType(time32(second)) == AnyDataType(time32(millisecond)))
-    assert_true(AnyDataType(timestamp(second)) == AnyDataType(timestamp(second)))
-    assert_false(AnyDataType(timestamp(second)) == AnyDataType(timestamp(millisecond)))
+    assert_false(
+        AnyDataType(time32(second)) == AnyDataType(time32(millisecond))
+    )
     assert_true(
-        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second, "UTC"))
+        AnyDataType(timestamp(second)) == AnyDataType(timestamp(second))
     )
     assert_false(
-        AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second, "US/Pacific"))
+        AnyDataType(timestamp(second)) == AnyDataType(timestamp(millisecond))
+    )
+    assert_true(
+        AnyDataType(timestamp(second, "UTC"))
+        == AnyDataType(timestamp(second, "UTC"))
+    )
+    assert_false(
+        AnyDataType(timestamp(second, "UTC"))
+        == AnyDataType(timestamp(second, "US/Pacific"))
     )
     assert_false(
         AnyDataType(timestamp(second, "UTC")) == AnyDataType(timestamp(second))
     )
-    assert_true(AnyDataType(duration(nanosecond)) == AnyDataType(duration(nanosecond)))
-    assert_false(AnyDataType(duration(second)) == AnyDataType(duration(nanosecond)))
+    assert_true(
+        AnyDataType(duration(nanosecond)) == AnyDataType(duration(nanosecond))
+    )
+    assert_false(
+        AnyDataType(duration(second)) == AnyDataType(duration(nanosecond))
+    )
     assert_false(AnyDataType(date32()) == AnyDataType(int32))
 
 

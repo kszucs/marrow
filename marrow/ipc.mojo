@@ -30,7 +30,7 @@ from .arrays import AnyArray, ArrayData
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
-import .dtypes as dt
+import . dtypes as dt
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,9 @@ struct _FlatbufWriter(Movable):
         self._prep(4, 4)
         self._head -= 4
         var stored_abs = len(self._buf) - self._head
-        _write_le[DType.uint32](self._buf, self._head, UInt32(stored_abs - Int(val)))
+        _write_le[DType.uint32](
+            self._buf, self._head, UInt32(stored_abs - Int(val))
+        )
         return self.offset()
 
     def create_string(mut self, s: String) raises -> UInt32:
@@ -308,7 +310,9 @@ struct _FlatbufWriter(Movable):
         self._prep(self._min_align, 4)
         self._head -= 4
         var table_pos_in_result = (len(self._buf) - Int(root)) - self._head
-        _write_le[DType.uint32](self._buf, self._head, UInt32(table_pos_in_result))
+        _write_le[DType.uint32](
+            self._buf, self._head, UInt32(table_pos_in_result)
+        )
         var result = List[UInt8](capacity=len(self._buf) - self._head)
         for i in range(self._head, len(self._buf)):
             result.append(self._buf[i])
@@ -353,7 +357,9 @@ struct _FlatbufWriter(Movable):
         var new_vt_offset = self.offset()
 
         var soffset = Int32(Int(new_vt_offset) - Int(table_pos))
-        _write_le[DType.int32](self._buf, len(self._buf) - Int(table_pos), soffset)
+        _write_le[DType.int32](
+            self._buf, len(self._buf) - Int(table_pos), soffset
+        )
 
         return table_pos
 
@@ -374,7 +380,9 @@ struct _FlatbufReader(Movable):
         var soffset_raw = _read_le[DType.uint32](self._buf, tp)
         var vt = Int(table_pos - soffset_raw)
         if vt < 0 or vt >= len(self._buf):
-            raise Error("flatbuffers: vtable position out of bounds: " + String(vt))
+            raise Error(
+                "flatbuffers: vtable position out of bounds: " + String(vt)
+            )
         var vt_size = Int(_read_le[DType.uint16](self._buf, vt))
         var slot_byte = 4 + slot * 2
         if slot_byte + 1 >= vt_size:
@@ -383,7 +391,9 @@ struct _FlatbufReader(Movable):
             return UInt16(0)
         return _read_le[DType.uint16](self._buf, vt + slot_byte)
 
-    def read_u8(self, tp: UInt32, slot: Int, default: UInt8 = 0) raises -> UInt8:
+    def read_u8(
+        self, tp: UInt32, slot: Int, default: UInt8 = 0
+    ) raises -> UInt8:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
             return default
@@ -440,14 +450,18 @@ struct _FlatbufReader(Movable):
     def read_vector(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
-            raise Error("flatbuffers: absent offset field at slot " + String(slot))
+            raise Error(
+                "flatbuffers: absent offset field at slot " + String(slot)
+            )
         var ref_pos = Int(tp) + Int(voff)
         return UInt32(ref_pos) + _read_le[DType.uint32](self._buf, ref_pos)
 
     def read_table(self, tp: UInt32, slot: Int) raises -> UInt32:
         var voff = self._field_voffset(tp, slot)
         if voff == 0:
-            raise Error("flatbuffers: absent offset field at slot " + String(slot))
+            raise Error(
+                "flatbuffers: absent offset field at slot " + String(slot)
+            )
         var ref_pos = Int(tp) + Int(voff)
         return UInt32(ref_pos) + _read_le[DType.uint32](self._buf, ref_pos)
 
@@ -458,7 +472,10 @@ struct _FlatbufReader(Movable):
         var vlen = self.vector_len(vec_pos)
         if i >= vlen:
             raise Error(
-                "flatbuffers: vec index " + String(i) + " >= len " + String(vlen)
+                "flatbuffers: vec index "
+                + String(i)
+                + " >= len "
+                + String(vlen)
             )
         var elem_pos = Int(vec_pos) + 4 + Int(i) * 4
         return UInt32(elem_pos) + _read_le[DType.uint32](self._buf, elem_pos)
@@ -512,7 +529,8 @@ def _ipc_to_time_unit(v: UInt16) -> dt.TimeUnit:
 
 
 struct _IpcEncoder(Movable):
-    """Encodes Arrow IPC metadata (schema, record batch, footer) into FlatBuffers."""
+    """Encodes Arrow IPC metadata (schema, record batch, footer) into FlatBuffers.
+    """
 
     var _fb: _FlatbufWriter
 
@@ -844,9 +862,14 @@ struct _IpcEncoder(Movable):
             flds.append(_FieldOffset(2, bw_at))
             return self._fb.write_table(flds, ts)
         else:
-            raise Error("_IpcEncoder: unsupported dtype for type table: " + String(dtype))
+            raise Error(
+                "_IpcEncoder: unsupported dtype for type table: "
+                + String(dtype)
+            )
 
-    def _write_kv_vec(mut self, metadata: Dict[String, String]) raises -> UInt32:
+    def _write_kv_vec(
+        mut self, metadata: Dict[String, String]
+    ) raises -> UInt32:
         var kv_positions = List[UInt32]()
         for entry in metadata.items():
             var key_pos = self._fb.create_string(entry.key)
@@ -962,7 +985,8 @@ struct _IpcEncoder(Movable):
 
 
 struct _IpcDecoder(Movable):
-    """Decodes Arrow IPC metadata (schema, record batch, footer) from FlatBuffers."""
+    """Decodes Arrow IPC metadata (schema, record batch, footer) from FlatBuffers.
+    """
 
     var _r: _FlatbufReader
 
@@ -972,7 +996,9 @@ struct _IpcDecoder(Movable):
     def peek_header(self) raises -> UInt8:
         return self._r.read_u8(self._r.root(), 1, 0)
 
-    def _read_kv_vec(self, table_pos: UInt32, slot: Int) raises -> Dict[String, String]:
+    def _read_kv_vec(
+        self, table_pos: UInt32, slot: Int
+    ) raises -> Dict[String, String]:
         var result = Dict[String, String]()
         var meta_vec = self._r.read_vector(table_pos, slot)
         var n = Int(self._r.vector_len(meta_vec))
@@ -1038,7 +1064,9 @@ struct _IpcDecoder(Movable):
             )
         return Schema(fields=fields^, metadata=metadata^)
 
-    def _decode_schema_fields(self, schema_pos: UInt32) raises -> List[dt.Field]:
+    def _decode_schema_fields(
+        self, schema_pos: UInt32
+    ) raises -> List[dt.Field]:
         var fields = List[dt.Field]()
         var fields_vec = self._r.read_vector(schema_pos, 1)
         var n = Int(self._r.vector_len(fields_vec))
@@ -1060,7 +1088,9 @@ struct _IpcDecoder(Movable):
         for i in range(nn):
             var sb = self._r.vec_struct_bytes(nodes_vec, UInt32(i), 16)
             nodes.append(
-                _FieldNode(_read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8))
+                _FieldNode(
+                    _read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8)
+                )
             )
 
         var bufs_vec = self._r.read_vector(rb_pos, 2)
@@ -1068,7 +1098,9 @@ struct _IpcDecoder(Movable):
         for i in range(nb):
             var sb = self._r.vec_struct_bytes(bufs_vec, UInt32(i), 16)
             bufs.append(
-                _BodyBuffer(_read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8))
+                _BodyBuffer(
+                    _read_le[DType.int64](sb, 0), _read_le[DType.int64](sb, 8)
+                )
             )
 
         return length
@@ -1204,8 +1236,6 @@ struct _IpcDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-
-
 struct _MessageReader(Movable):
     """Reads framed IPC messages (continuation + length + metadata + body)."""
 
@@ -1230,7 +1260,8 @@ struct _MessageReader(Movable):
         mut meta: List[UInt8],
         mut body: List[UInt8],
     ) raises -> Bool:
-        """Parse one message at the current position. Returns False at end-of-stream."""
+        """Parse one message at the current position. Returns False at end-of-stream.
+        """
         var n = len(self._bytes)
         if self._pos + 4 > n:
             return False
@@ -1241,7 +1272,9 @@ struct _MessageReader(Movable):
         if UInt32(marker) == UInt32(0xFFFFFFFF):
             if self._pos + 8 > n:
                 return False
-            metadata_len = Int(_read_le[DType.int32](self._bytes, self._pos + 4))
+            metadata_len = Int(
+                _read_le[DType.int32](self._bytes, self._pos + 4)
+            )
             meta_start = self._pos + 8
         else:
             metadata_len = Int(marker)
@@ -1258,9 +1291,7 @@ struct _MessageReader(Movable):
         var meta_end = raw_end + (8 - raw_end % 8) % 8
 
         var dec = _IpcDecoder(meta.copy())
-        var body_len = Int(
-            dec._r.read_i64(dec._r.root(), 3, 0)
-        )
+        var body_len = Int(dec._r.read_i64(dec._r.root(), 3, 0))
 
         for i in range(body_len):
             body.append(self._bytes[meta_end + i])
@@ -1282,7 +1313,8 @@ struct _EncodedBatch(Movable):
 
 
 struct _BatchEncoder(Movable):
-    """Traverses an ArrayData tree collecting _FieldNode metadata and raw buffer bytes."""
+    """Traverses an ArrayData tree collecting _FieldNode metadata and raw buffer bytes.
+    """
 
     var nodes: List[_FieldNode]
     var raw_bufs: List[List[UInt8]]
@@ -1356,7 +1388,8 @@ struct _BatchEncoder(Movable):
 
 
 struct _BatchDecoder(Movable):
-    """Reconstructs AnyArray values from a record batch body using node/buffer cursors."""
+    """Reconstructs AnyArray values from a record batch body using node/buffer cursors.
+    """
 
     var body: List[UInt8]
     var body_offset: Int
@@ -1407,7 +1440,9 @@ struct _BatchDecoder(Movable):
         if null_count > 0 and validity_buf.length > 0:
             var off = Int(validity_buf.offset) + self.body_offset
             var n_bytes = Int(validity_buf.length)
-            bitmap = Bitmap[mut=False](self._slice_body(off, n_bytes), length=length)
+            bitmap = Bitmap[mut=False](
+                self._slice_body(off, n_bytes), length=length
+            )
 
         var data_buffers = List[Buffer[mut=False]]()
         var children = List[ArrayData]()
@@ -1415,13 +1450,24 @@ struct _BatchDecoder(Movable):
         if dtype.is_string() or dtype.is_binary():
             self._consume_buffer(data_buffers)
             self._consume_buffer(data_buffers)
-        elif dtype.is_bool() or dtype.is_primitive() or dtype.is_list() or dtype.is_fixed_size_binary():
+        elif (
+            dtype.is_bool()
+            or dtype.is_primitive()
+            or dtype.is_list()
+            or dtype.is_fixed_size_binary()
+        ):
             self._consume_buffer(data_buffers)
 
         if dtype.is_list():
-            children.append(self.read_array(dtype.as_list().value_type()).to_data())
+            children.append(
+                self.read_array(dtype.as_list().value_type()).to_data()
+            )
         elif dtype.is_fixed_size_list():
-            children.append(self.read_array(dtype.as_fixed_size_list().value_type()).to_data())
+            children.append(
+                self.read_array(
+                    dtype.as_fixed_size_list().value_type()
+                ).to_data()
+            )
         elif dtype.is_struct():
             ref st = dtype.as_struct()
             for i in range(len(st.fields)):
@@ -1449,7 +1495,9 @@ struct _BatchDecoder(Movable):
         self.buf_idx += 1
         var n_bytes = Int(bb.length)
         if n_bytes > 0:
-            out.append(self._slice_body(Int(bb.offset) + self.body_offset, n_bytes))
+            out.append(
+                self._slice_body(Int(bb.offset) + self.body_offset, n_bytes)
+            )
         else:
             out.append(Buffer.alloc_zeroed[DType.uint8](0).to_immutable())
 
@@ -1494,7 +1542,9 @@ struct RecordBatchFileWriter(Movable):
         var blk_start = Int64(len(self._out))
         var eb = self._enc.encode(batch)
         self._out.extend(Span(eb.msg))
-        self._blocks.append(_Block(blk_start, eb.metadata_length, eb.body_length))
+        self._blocks.append(
+            _Block(blk_start, eb.metadata_length, eb.body_length)
+        )
 
     def close(mut self) raises:
         if self._closed:
@@ -1643,7 +1693,9 @@ struct RecordBatchStreamReader(Movable):
 # ---------------------------------------------------------------------------
 
 
-def write_ipc_file(path: String, schema: Schema, batches: List[RecordBatch]) raises:
+def write_ipc_file(
+    path: String, schema: Schema, batches: List[RecordBatch]
+) raises:
     """Write RecordBatches to an Arrow IPC file with an explicit schema."""
     var w = RecordBatchFileWriter(path, schema)
     for batch in batches:
@@ -1655,13 +1707,15 @@ def write_ipc_file(path: String, batches: List[RecordBatch]) raises:
     """Write RecordBatches to an Arrow IPC file."""
     if len(batches) == 0:
         raise Error(
-            "write_ipc_file: no batches; use write_ipc_file(path, schema, batches)"
-            " for schema-only files"
+            "write_ipc_file: no batches; use write_ipc_file(path, schema,"
+            " batches) for schema-only files"
         )
     write_ipc_file(path, batches[0].schema, batches)
 
 
-def write_ipc_stream(path: String, schema: Schema, batches: List[RecordBatch]) raises:
+def write_ipc_stream(
+    path: String, schema: Schema, batches: List[RecordBatch]
+) raises:
     """Write RecordBatches to an Arrow IPC stream with an explicit schema."""
     var w = RecordBatchStreamWriter(path, schema)
     for batch in batches:

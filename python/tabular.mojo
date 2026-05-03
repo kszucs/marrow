@@ -469,7 +469,9 @@ def _record_batch_join(
     ).to_python_object()
 
 
-def _record_batch_str(ptr: UnsafePointer[RecordBatch, MutAnyOrigin]) raises -> PythonObject:
+def _record_batch_str(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+) raises -> PythonObject:
     return PythonObject(String.write(ptr[]))
 
 

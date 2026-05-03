@@ -380,7 +380,9 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         self.bitmap = bitmap
         self.buffer = buffer
 
-    def __init__[DT: NumericType](
+    def __init__[
+        DT: NumericType
+    ](
         out self: PrimitiveArray[DT],
         *,
         length: Int,
@@ -410,8 +412,12 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             buffer=data.buffers[0],
         )
 
-    def __init__[DT: NumericType](
-        out self: PrimitiveArray[DT], var *values: Scalar[DT.native], __list_literal__: NoneType
+    def __init__[
+        DT: NumericType
+    ](
+        out self: PrimitiveArray[DT],
+        var *values: Scalar[DT.native],
+        __list_literal__: NoneType,
     ) raises:
         """Constructs a primitive array from a list literal [v1, v2, ...].
 
@@ -1322,15 +1328,15 @@ struct FixedSizeBinaryArray(Array):
         return True
 
 
-comptime Date32Array    = PrimitiveArray[Date32Type]
-comptime Date64Array    = PrimitiveArray[Date64Type]
-comptime Time32Array    = PrimitiveArray[Time32Type]
-comptime Time64Array    = PrimitiveArray[Time64Type]
-comptime DurationArray  = PrimitiveArray[DurationType]
+comptime Date32Array = PrimitiveArray[Date32Type]
+comptime Date64Array = PrimitiveArray[Date64Type]
+comptime Time32Array = PrimitiveArray[Time32Type]
+comptime Time64Array = PrimitiveArray[Time64Type]
+comptime DurationArray = PrimitiveArray[DurationType]
 comptime TimestampArray = PrimitiveArray[TimestampType]
 
-comptime Decimal32Array  = PrimitiveArray[Decimal32Type]
-comptime Decimal64Array  = PrimitiveArray[Decimal64Type]
+comptime Decimal32Array = PrimitiveArray[Decimal32Type]
+comptime Decimal64Array = PrimitiveArray[Decimal64Type]
 comptime Decimal128Array = PrimitiveArray[Decimal128Type]
 comptime Decimal256Array = PrimitiveArray[Decimal256Type]
 
@@ -1816,7 +1822,9 @@ struct AnyArray(
         debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.dtype())
         return self._v[T]
 
-    def as_primitive[T: PrimitiveType](ref self) -> ref[self._v] PrimitiveArray[T]:
+    def as_primitive[
+        T: PrimitiveType
+    ](ref self) -> ref[self._v] PrimitiveArray[T]:
         return self._as[PrimitiveArray[T]]()
 
     def as_null(ref self) -> ref[self._v] NullArray:
@@ -1995,7 +2003,9 @@ struct AnyArray(
                 )
             )
         elif dtype.is_temporal() or dtype.is_decimal():
-            var empty_buf = Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
+            var empty_buf = (
+                Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
+            )
             return AnyArray.from_data(
                 ArrayData(
                     dtype=dtype.copy(),

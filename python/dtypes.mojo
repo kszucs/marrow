@@ -97,9 +97,7 @@ def binary() raises -> PythonObject:
 
 def fixed_size_binary(byte_width: PythonObject) raises -> PythonObject:
     """Create a fixed-size binary DataType."""
-    return (
-        dt.fixed_size_binary_(Int(py=byte_width)).to_any().to_python_object()
-    )
+    return dt.fixed_size_binary_(Int(py=byte_width)).to_any().to_python_object()
 
 
 def date32() raises -> PythonObject:
@@ -122,10 +120,14 @@ def time64(unit: PythonObject) raises -> PythonObject:
     return dt.time64(_parse_time_unit(unit)).to_any().to_python_object()
 
 
-def timestamp(unit: PythonObject, tz: PythonObject = None) raises -> PythonObject:
+def timestamp(
+    unit: PythonObject, tz: PythonObject = None
+) raises -> PythonObject:
     """Create a timestamp DataType."""
     var tz_str = "" if tz is None else String(py=tz)
-    return dt.timestamp(_parse_time_unit(unit), tz_str).to_any().to_python_object()
+    return (
+        dt.timestamp(_parse_time_unit(unit), tz_str).to_any().to_python_object()
+    )
 
 
 def duration(unit: PythonObject) raises -> PythonObject:
@@ -148,8 +150,10 @@ def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
 
 
 def field(
-    name: PythonObject, type: PythonObject, nullable: PythonObject=True,
-    metadata: PythonObject = None
+    name: PythonObject,
+    type: PythonObject,
+    nullable: PythonObject = True,
+    metadata: PythonObject = None,
 ) raises -> PythonObject:
     """Create a Field with the given name, data type, and optional nullability.
 
@@ -160,7 +164,12 @@ def field(
         for item in metadata.items():
             m[String(py=item[0])] = String(py=item[1])
 
-    return dt.Field(name=String(py=name), dtype=dt.AnyDataType(py=type), nullable=Bool(py=nullable), metadata=m^).to_python_object()
+    return dt.Field(
+        name=String(py=name),
+        dtype=dt.AnyDataType(py=type),
+        nullable=Bool(py=nullable),
+        metadata=m^,
+    ).to_python_object()
 
 
 def list_(value_type: PythonObject) raises -> PythonObject:
@@ -304,11 +313,15 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[time32](
         "time32",
-        docstring="time32(unit: str, /) -> DataType\n--\n\nCreate a time32 DataType.",
+        docstring=(
+            "time32(unit: str, /) -> DataType\n--\n\nCreate a time32 DataType."
+        ),
     )
     mb.def_function[time64](
         "time64",
-        docstring="time64(unit: str, /) -> DataType\n--\n\nCreate a time64 DataType.",
+        docstring=(
+            "time64(unit: str, /) -> DataType\n--\n\nCreate a time64 DataType."
+        ),
     )
     mb.def_function[timestamp](
         "timestamp",
@@ -319,5 +332,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     )
     mb.def_function[duration](
         "duration",
-        docstring="duration(unit: str, /) -> DataType\n--\n\nCreate a duration DataType.",
+        docstring=(
+            "duration(unit: str, /) -> DataType\n--\n\nCreate a duration"
+            " DataType."
+        ),
     )

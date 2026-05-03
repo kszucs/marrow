@@ -110,7 +110,13 @@ from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
 from std.sys.info import num_physical_cores
 
-from ..arrays import PrimitiveArray, AnyArray, StructArray, Int32Array, UInt64Array
+from ..arrays import (
+    PrimitiveArray,
+    AnyArray,
+    StructArray,
+    Int32Array,
+    UInt64Array,
+)
 from ..buffers import Buffer
 from ..builders import PrimitiveBuilder, Int32Builder
 from ..dtypes import (
@@ -254,7 +260,9 @@ and can be tuned per workload."""
 
 
 struct HashJoin[
-    hasher: def(StructArray, ExecutionContext) thin raises -> UInt64Array = rapidhash
+    hasher: def(
+        StructArray, ExecutionContext
+    ) thin raises -> UInt64Array = rapidhash
 ](Join):
     """Hash join using SwissHashTable.
 

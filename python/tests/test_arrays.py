@@ -231,7 +231,9 @@ def test_array_struct_missing_key():
 
 
 def test_array_struct_explicit_type():
-    ty = ma.struct([ma.field("x", ma.int32(), True, {}), ma.field("y", ma.float64(), True, {})])
+    ty = ma.struct(
+        [ma.field("x", ma.int32(), True, {}), ma.field("y", ma.float64(), True, {})]
+    )
     arr = ma.array([{"x": 1, "y": 2.5}, {"x": 3, "y": 4.5}], type=ty)
     assert type(arr).__name__ == "Array"
     assert len(arr) == 2

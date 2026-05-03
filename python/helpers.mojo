@@ -258,5 +258,3 @@ def pyfunction[
 def marrow_module(obj: PythonObject) raises -> PythonObject:
     """Return the name of the module to implement the __module__ method."""
     return "marrow".to_python_object()
-
-

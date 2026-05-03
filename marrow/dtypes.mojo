@@ -72,17 +72,22 @@ trait PrimitiveType(DataType, ImplicitlyCopyable):
         return bit_width_of[Self.native]()
 
 
-trait NumericType(PrimitiveType, Defaultable):
-    """Integers, unsigned integers, and floats — zero-sized register-passable markers."""
+trait NumericType(Defaultable, PrimitiveType):
+    """Integers, unsigned integers, and floats — zero-sized register-passable markers.
+    """
+
     pass
+
 
 trait IntegerType(NumericType):
     """Signed and unsigned integer types."""
+
     pass
 
 
 trait FloatingType(NumericType):
     """Floating-point types (float16, float32, float64)."""
+
     pass
 
 
@@ -111,7 +116,6 @@ trait DecimalType(PrimitiveType):
 
 
 struct NullType(DataType, ImplicitlyCopyable):
-
     def __init__(out self):
         pass
 
@@ -160,7 +164,15 @@ struct _DecimalType[T: DType](DecimalType):
         self.scale = scale
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("decimal", bit_width_of[Self.native](), "[", self.precision, ", ", self.scale, "]")
+        writer.write(
+            "decimal",
+            bit_width_of[Self.native](),
+            "[",
+            self.precision,
+            ", ",
+            self.scale,
+            "]",
+        )
 
 
 comptime Int8Type = _IntegerType[DType.int8]
@@ -183,7 +195,6 @@ comptime Decimal256Type = _DecimalType[DType.int256]
 
 
 struct BinaryType(DataType, ImplicitlyCopyable):
-
     def __init__(out self):
         pass
 
@@ -192,7 +203,6 @@ struct BinaryType(DataType, ImplicitlyCopyable):
 
 
 struct StringType(DataType, ImplicitlyCopyable):
-
     def __init__(out self):
         pass
 
@@ -217,9 +227,9 @@ struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
 # ---------------------------------------------------------------------------
 
 
-
-struct TimeUnit(Equatable, Movable, Writable, ImplicitlyCopyable):
-    """Unit for time-based Arrow types (SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3)."""
+struct TimeUnit(Equatable, ImplicitlyCopyable, Movable, Writable):
+    """Unit for time-based Arrow types (SECOND=0, MILLISECOND=1, MICROSECOND=2, NANOSECOND=3).
+    """
 
     var value: Int
 
@@ -269,6 +279,7 @@ struct Date64Type(TemporalType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date64")
 
+
 struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
 
@@ -281,6 +292,7 @@ struct Time32Type(TemporalType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time32[", self.unit, "]")
+
 
 struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
@@ -297,7 +309,8 @@ struct Time64Type(TemporalType):
 
 
 struct TimestampType(TemporalType):
-    """Timestamp — int64 elapsed units since Unix epoch, with optional timezone."""
+    """Timestamp — int64 elapsed units since Unix epoch, with optional timezone.
+    """
 
     comptime native: DType = DType.int64
 
@@ -351,7 +364,11 @@ struct Field(
     var metadata: Dict[String, String]
 
     def __init__(
-        out self, name: String, var dtype: AnyDataType, nullable: Bool = True,var  metadata: Dict[String, String] = {}
+        out self,
+        name: String,
+        var dtype: AnyDataType,
+        nullable: Bool = True,
+        var metadata: Dict[String, String] = {},
     ):
         self.name = name
         self.dtype = dtype^
@@ -617,7 +634,12 @@ struct AnyDataType(
 
         Matches PyArrow's ``pa.types.is_primitive()`` semantics.
         """
-        return self.is_bool() or self.is_numeric() or self.is_temporal() or self.is_decimal()
+        return (
+            self.is_bool()
+            or self.is_numeric()
+            or self.is_temporal()
+            or self.is_decimal()
+        )
 
     def is_string(self) -> Bool:
         return self._v.isa[StringType]()
@@ -726,7 +748,8 @@ struct AnyDataType(
         return self._as[StructType]()
 
     def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryType:
-        """For fixed-size binary types, returns the inner FixedSizeBinaryType."""
+        """For fixed-size binary types, returns the inner FixedSizeBinaryType.
+        """
         return self._as[FixedSizeBinaryType]()
 
     def as_time32(ref self) -> ref[self._v] Time32Type:
@@ -804,12 +827,14 @@ def time64(unit: TimeUnit) -> Time64Type:
 
 
 def timestamp(unit: TimeUnit, timezone: String = "") -> TimestampType:
-    """Construct a timestamp type. Equivalent to PyArrow's ``pa.timestamp(unit, tz)``."""
+    """Construct a timestamp type. Equivalent to PyArrow's ``pa.timestamp(unit, tz)``.
+    """
     return TimestampType(unit, timezone)
 
 
 def duration(unit: TimeUnit) -> DurationType:
-    """Construct a duration type. Equivalent to PyArrow's ``pa.duration(unit)``."""
+    """Construct a duration type. Equivalent to PyArrow's ``pa.duration(unit)``.
+    """
     return DurationType(unit)
 
 
@@ -827,22 +852,26 @@ def struct_(var *fields: Field) -> StructType:
 
 
 def decimal32(precision: Int, scale: Int = 0) -> Decimal32Type:
-    """Construct a decimal32 type. Equivalent to PyArrow's ``pa.decimal32(precision, scale)``."""
+    """Construct a decimal32 type. Equivalent to PyArrow's ``pa.decimal32(precision, scale)``.
+    """
     return Decimal32Type(precision, scale)
 
 
 def decimal64(precision: Int, scale: Int = 0) -> Decimal64Type:
-    """Construct a decimal64 type. Equivalent to PyArrow's ``pa.decimal64(precision, scale)``."""
+    """Construct a decimal64 type. Equivalent to PyArrow's ``pa.decimal64(precision, scale)``.
+    """
     return Decimal64Type(precision, scale)
 
 
 def decimal128(precision: Int, scale: Int = 0) -> Decimal128Type:
-    """Construct a decimal128 type. Equivalent to PyArrow's ``pa.decimal128(precision, scale)``."""
+    """Construct a decimal128 type. Equivalent to PyArrow's ``pa.decimal128(precision, scale)``.
+    """
     return Decimal128Type(precision, scale)
 
 
 def decimal256(precision: Int, scale: Int = 0) -> Decimal256Type:
-    """Construct a decimal256 type. Equivalent to PyArrow's ``pa.decimal256(precision, scale)``."""
+    """Construct a decimal256 type. Equivalent to PyArrow's ``pa.decimal256(precision, scale)``.
+    """
     return Decimal256Type(precision, scale)
 
 

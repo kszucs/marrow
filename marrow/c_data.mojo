@@ -22,7 +22,8 @@ comptime ARROW_FLAG_NULLABLE = 2
 
 @always_inline
 def _null_ptr[T: AnyType]() -> UnsafePointer[T, MutAnyOrigin]:
-    """Construct an address-zero pointer for C ABI struct fields that may be null."""
+    """Construct an address-zero pointer for C ABI struct fields that may be null.
+    """
     return UnsafePointer[T, MutAnyOrigin](unsafe_from_address=0)
 
 
@@ -74,14 +75,18 @@ def _encode_c_metadata(
         var v = entry.value
         var k_len = Int32(k.byte_length())
         memcpy(
-            dest=buf + head, src=UnsafePointer(to=k_len).bitcast[UInt8](), count=4
+            dest=buf + head,
+            src=UnsafePointer(to=k_len).bitcast[UInt8](),
+            count=4,
         )
         head += 4
         memcpy(dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length())
         head += k.byte_length()
         var v_len = Int32(v.byte_length())
         memcpy(
-            dest=buf + head, src=UnsafePointer(to=v_len).bitcast[UInt8](), count=4
+            dest=buf + head,
+            src=UnsafePointer(to=v_len).bitcast[UInt8](),
+            count=4,
         )
         head += 4
         memcpy(dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length())
@@ -521,13 +526,21 @@ struct CArrowSchema(Copyable, Movable):
         elif fmt == "ttn":
             return time64(nanosecond)
         elif fmt.startswith("tss:"):
-            return timestamp(second, String(String(fmt).removeprefix("tss:"))).to_any()
+            return timestamp(
+                second, String(String(fmt).removeprefix("tss:"))
+            ).to_any()
         elif fmt.startswith("tsm:"):
-            return timestamp(millisecond, String(String(fmt).removeprefix("tsm:"))).to_any()
+            return timestamp(
+                millisecond, String(String(fmt).removeprefix("tsm:"))
+            ).to_any()
         elif fmt.startswith("tsu:"):
-            return timestamp(microsecond, String(String(fmt).removeprefix("tsu:"))).to_any()
+            return timestamp(
+                microsecond, String(String(fmt).removeprefix("tsu:"))
+            ).to_any()
         elif fmt.startswith("tsn:"):
-            return timestamp(nanosecond, String(String(fmt).removeprefix("tsn:"))).to_any()
+            return timestamp(
+                nanosecond, String(String(fmt).removeprefix("tsn:"))
+            ).to_any()
         elif fmt == "tDs":
             return duration(second)
         elif fmt == "tDm":
@@ -736,9 +749,7 @@ struct CArrowArray(Copyable, Movable):
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             buffers.append(offsets^)
             children.append(
-                self.children[0][].to_data(
-                    dtype.as_list().value_type(), owner
-                )
+                self.children[0][].to_data(dtype.as_list().value_type(), owner)
             )
         elif dtype.is_string() or dtype.is_binary():
             var size = (length + 1) * Int64(size_of[DType.int32]())
@@ -833,7 +844,9 @@ struct CArrowArray(Copyable, Movable):
         # Heap-allocate the buffers pointer array.
         # buffers[0] = validity bitmap (null pointer means all-valid).
         # buffers[1..n] = data.buffers[0..n-1] in order.
-        var buffers: UnsafePointer[OpaquePointer[MutAnyOrigin], MutAnyOrigin] = _null_ptr[OpaquePointer[MutAnyOrigin]]()
+        var buffers: UnsafePointer[
+            OpaquePointer[MutAnyOrigin], MutAnyOrigin
+        ] = _null_ptr[OpaquePointer[MutAnyOrigin]]()
         if not is_null_dtype:
             buffers = alloc[OpaquePointer[MutAnyOrigin]](Int(n_buffers))
             if data_heap[].bitmap:
@@ -1056,9 +1069,7 @@ struct _StreamPrivateData(Movable):
     var batches: List[RecordBatch]
     var index: Int
 
-    def __init__(
-        out self, var schema: Schema, var batches: List[RecordBatch]
-    ):
+    def __init__(out self, var schema: Schema, var batches: List[RecordBatch]):
         self.schema = schema^
         self.batches = batches^
         self.index = 0

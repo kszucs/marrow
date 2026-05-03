@@ -471,9 +471,7 @@ def test_fixed_size_list_with_nulls() raises:
     ints_b.append(4)
     ints_b.append(5)
     ints_b.append(6)
-    var builder = FixedSizeListBuilder(
-        ints_b^, list_size=3, capacity=3
-    )
+    var builder = FixedSizeListBuilder(ints_b^, list_size=3, capacity=3)
     builder.append_valid()
     builder.append_valid()
     builder.append_null()

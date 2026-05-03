@@ -120,7 +120,9 @@ def test_groupby_sum_int64_precision() raises:
 def test_groupby_min_int64_precision() raises:
     """Min over int64 values above 2**53 must stay exact."""
     var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
+    var vals: AnyArray = array(
+        [9_007_199_254_740_993, 9_007_199_254_740_995], int64
+    )
     var result = groupby(keys, _values(vals), _aggs("min"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
@@ -130,7 +132,9 @@ def test_groupby_min_int64_precision() raises:
 def test_groupby_max_int64_precision() raises:
     """Max over int64 values above 2**53 must stay exact."""
     var keys: AnyArray = array([1, 1], int32)
-    var vals: AnyArray = array([9_007_199_254_740_993, 9_007_199_254_740_995], int64)
+    var vals: AnyArray = array(
+        [9_007_199_254_740_993, 9_007_199_254_740_995], int64
+    )
     var result = groupby(keys, _values(vals), _aggs("max"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
@@ -150,7 +154,9 @@ def test_groupby_sum_uint64_wraps_for_large_values() raises:
     var result = groupby(keys, _values(vals), _aggs("sum"))
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref s = result.columns[1].as_int64()
-    assert_equal(s[0].value(), 150)  # uint8 values within int64 range sum correctly
+    assert_equal(
+        s[0].value(), 150
+    )  # uint8 values within int64 range sum correctly
 
 
 # ---------------------------------------------------------------------------
