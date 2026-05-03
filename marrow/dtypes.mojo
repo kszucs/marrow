@@ -600,6 +600,39 @@ struct AnyDataType(
     def is_bool(self) -> Bool:
         return self._v.isa[BoolType]()
 
+    def is_int8(self) -> Bool:
+        return self._v.isa[Int8Type]()
+
+    def is_int16(self) -> Bool:
+        return self._v.isa[Int16Type]()
+
+    def is_int32(self) -> Bool:
+        return self._v.isa[Int32Type]()
+
+    def is_int64(self) -> Bool:
+        return self._v.isa[Int64Type]()
+
+    def is_uint8(self) -> Bool:
+        return self._v.isa[UInt8Type]()
+
+    def is_uint16(self) -> Bool:
+        return self._v.isa[UInt16Type]()
+
+    def is_uint32(self) -> Bool:
+        return self._v.isa[UInt32Type]()
+
+    def is_uint64(self) -> Bool:
+        return self._v.isa[UInt64Type]()
+
+    def is_float16(self) -> Bool:
+        return self._v.isa[Float16Type]()
+
+    def is_float32(self) -> Bool:
+        return self._v.isa[Float32Type]()
+
+    def is_float64(self) -> Bool:
+        return self._v.isa[Float64Type]()
+
     def is_signed_integer(self) -> Bool:
         return (
             self._v.isa[Int8Type]()

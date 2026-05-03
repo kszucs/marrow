@@ -192,9 +192,6 @@ struct NullArray(Array):
     def __eq__(self, other: Self) -> Bool:
         return self.length == other.length
 
-    def __ne__(self, other: Self) -> Bool:
-        return self.length != other.length
-
 
 @fieldwise_init
 struct BoolArray(Array):
@@ -342,9 +339,6 @@ struct BoolArray(Array):
             if lv and self[i] != other[i]:
                 return False
         return True
-
-    def __ne__(self, other: Self) -> Bool:
-        return not Self.__eq__(self, other)
 
 
 # ---------------------------------------------------------------------------
@@ -1326,9 +1320,6 @@ struct FixedSizeBinaryArray(Array):
                     if lv != rv:
                         return False
         return True
-
-    def __ne__(self, other: Self) -> Bool:
-        return not Self.__eq__(self, other)
 
 
 comptime Date32Array    = PrimitiveArray[Date32Type]
