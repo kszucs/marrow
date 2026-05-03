@@ -344,6 +344,29 @@ def test_bitmap_resize_truncates_length() raises:
     assert_equal(len(bm), 15)
 
 
+def test_bitmap_resize_from_zero_updates_length() raises:
+    # Regression: resize() was not updating _length when growing, so set()
+    # on any index would fail the bounds check even after resize.
+    var bm = Bitmap.alloc_zeroed(0)
+    assert_equal(len(bm), 0)
+    bm.resize(16)
+    assert_equal(len(bm), 16)
+    bm.set(0)
+    bm.set(15)
+    assert_true(bm.test(0))
+    assert_true(bm.test(15))
+
+
+def test_bitmap_resize_grow_updates_length() raises:
+    var bm = Bitmap.alloc_zeroed(4)
+    bm.set(0)
+    bm.resize(16)
+    assert_equal(len(bm), 16)
+    assert_true(bm.test(0))
+    bm.set(15)
+    assert_true(bm.test(15))
+
+
 # ---------------------------------------------------------------------------
 # Bitmap — slice
 # ---------------------------------------------------------------------------

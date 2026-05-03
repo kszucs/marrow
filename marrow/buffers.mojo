@@ -1172,11 +1172,11 @@ struct Bitmap[*, mut: Bool = False](
     def resize(mut self: Bitmap[mut=True], capacity: Int) raises:
         """Resize the underlying buffer to hold `capacity` bits.
 
-        When shrinking, the logical length is truncated to `capacity`.
+        The logical length tracks the capacity: growing extends it,
+        shrinking truncates it.
         """
         self._buffer.resize(math.ceildiv(capacity, 8))
-        if capacity < self._length:
-            self._length = capacity
+        self._length = capacity
 
     def is_device(self) -> Bool:
         """Return True if the bitmap lives on a GPU device."""
