@@ -231,8 +231,8 @@ def test_execute_anti_join() raises:
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 2)  # left columns only
     ref k = result.columns[0].as_int64()
-    assert_equal(k[0], Scalar[int64.native](1))
-    assert_equal(k[1], Scalar[int64.native](3))
+    assert_equal(k[0].value(), Scalar[int64.native](1))
+    assert_equal(k[1].value(), Scalar[int64.native](3))
 
 
 # ---------------------------------------------------------------------------

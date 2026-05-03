@@ -414,10 +414,9 @@ def test_sign_with_nulls() raises:
 def test_sign_runtime_typed() raises:
     var a = array([-3, 0, 5], int32)
     var result = sign(a^)
-    ref r = result.as_int32()
-    assert_equal(r[0].value(), -1)
-    assert_equal(r[1].value(), 0)
-    assert_equal(r[2].value(), 1)
+    assert_equal(result[0].value(), -1)
+    assert_equal(result[1].value(), 0)
+    assert_equal(result[2].value(), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -450,10 +449,9 @@ def test_sqrt_with_nulls() raises:
 def test_sqrt_runtime_typed() raises:
     var a = array([1.0, 4.0, 9.0], float64)
     var result = sqrt(a^)
-    ref r = result.as_float64()
-    assert_equal(r[0].value(), 1.0)
-    assert_equal(r[1].value(), 2.0)
-    assert_equal(r[2].value(), 3.0)
+    assert_equal(result[0].value(), 1.0)
+    assert_equal(result[1].value(), 2.0)
+    assert_equal(result[2].value(), 3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -610,9 +608,8 @@ def test_pow_runtime_typed() raises:
     var a = array([2.0, 3.0], float64)
     var b = array([3.0, 2.0], float64)
     var result = pow_(a^, b^)
-    ref r = result.as_float64()
-    assert_equal(r[0].value(), 8.0)
-    assert_equal(r[1].value(), 9.0)
+    assert_equal(result[0].value(), 8.0)
+    assert_equal(result[1].value(), 9.0)
 
 
 def main() raises:

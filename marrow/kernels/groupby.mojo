@@ -723,7 +723,7 @@ def groupby(
     grouper.consume(keys, values)
 
     var key_fields = List[Field]()
-    var key_struct = keys.dtype.as_struct()
+    ref key_struct = keys.dtype.as_struct()
     for k in range(len(key_struct.fields)):
         key_fields.append(
             Field(

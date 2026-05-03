@@ -740,6 +740,9 @@ struct SwissHashTable[
 
             var start = self._get_offset(bid)
             var end = self._get_offset(bid + 1)
+            var count = end - start if not single_match else 1
+            left_out.reserve(count)
+            right_out.reserve(count)
             for j in range(start, end):
                 left_out.unsafe_append(Scalar[int32.native](self._get_row(j)))
                 right_out.unsafe_append(Scalar[int32.native](probe_row))

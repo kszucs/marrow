@@ -110,7 +110,7 @@ from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
 from std.sys.info import num_physical_cores
 
-from ..arrays import PrimitiveArray, AnyArray, StructArray, Int32Array
+from ..arrays import PrimitiveArray, AnyArray, StructArray, Int32Array, UInt64Array
 from ..buffers import Buffer
 from ..builders import PrimitiveBuilder, Int32Builder
 from ..dtypes import (
@@ -637,26 +637,6 @@ struct HashJoin[
             bitmap=None,
             children=out_cols^,
         )
-
-
-# ---------------------------------------------------------------------------
-# Future join algorithms (stubs — implement the Join trait)
-# ---------------------------------------------------------------------------
-
-# struct RadixHashJoin(Join):
-#     """Radix-partitioned hash join.
-#
-#     Partitions both sides by hash prefix bits using RadixPartitioner,
-#     then runs a standard hash join (SwissHashTable) per partition.
-#     Enables partition-parallel execution and better cache locality.
-#
-#     Uses the SAME SwissHashTable as HashJoin — only the Partitioner differs.
-#     """
-#     var _partitioner: RadixPartitioner    # from hash_table.mojo
-#     var _tables: List[SwissHashTable]      # one per partition
-#     var _build_dtype: DataType
-#     var _left_data: Optional[StructArray]
-#     var _num_rows: Int
 
 
 # struct SortMergeJoin(Join):

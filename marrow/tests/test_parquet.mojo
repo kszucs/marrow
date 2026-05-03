@@ -45,8 +45,8 @@ def test_write_read_roundtrip() raises:
 
     var tmp_col_x = batch.columns[0].copy()
     ref col_x = tmp_col_x.as_int64()
-    assert_equal(col_x[0], 1)
-    assert_equal(col_x[2], 3)
+    assert_equal(col_x[0].value(), 1)
+    assert_equal(col_x[2].value(), 3)
 
     var tmp_col_z = batch.columns[2].copy()
     ref col_z = tmp_col_z.as_string()
@@ -83,8 +83,8 @@ def test_read_pyarrow_written() raises:
 
     var tmp_col_a = batch.columns[0].copy()
     ref col_a = tmp_col_a.as_int64()
-    assert_equal(col_a[0], 10)
-    assert_equal(col_a[1], 20)
+    assert_equal(col_a[0].value(), 10)
+    assert_equal(col_a[1].value(), 20)
 
     var tmp_col_b = batch.columns[1].copy()
     ref col_b = tmp_col_b.as_string()
