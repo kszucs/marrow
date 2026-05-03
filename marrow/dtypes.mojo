@@ -53,7 +53,7 @@ from .utils import _always_true, variant_dispatch, variant_dispatch_raises
 
 trait DataType(Copyable, Equatable, Movable, Writable):
     def to_any(deinit self) -> AnyDataType:
-        ...
+        return AnyDataType(self^)
 
 
 trait PrimitiveType(DataType, ImplicitlyCopyable):
@@ -118,9 +118,6 @@ struct NullType(DataType, ImplicitlyCopyable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("null")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
 
 struct BoolType(DataType, ImplicitlyCopyable):
     comptime native: DType = DType.bool
@@ -130,9 +127,6 @@ struct BoolType(DataType, ImplicitlyCopyable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("bool")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 struct _IntegerType[T: DType](IntegerType):
@@ -144,9 +138,6 @@ struct _IntegerType[T: DType](IntegerType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.T)
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
 
 struct _FloatingType[T: DType](FloatingType):
     comptime native = Self.T
@@ -156,9 +147,6 @@ struct _FloatingType[T: DType](FloatingType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.T)
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 struct _DecimalType[T: DType](DecimalType):
@@ -173,9 +161,6 @@ struct _DecimalType[T: DType](DecimalType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("decimal", bit_width_of[Self.native](), "[", self.precision, ", ", self.scale, "]")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 comptime Int8Type = _IntegerType[DType.int8]
@@ -205,9 +190,6 @@ struct BinaryType(DataType, ImplicitlyCopyable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("binary")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
 
 struct StringType(DataType, ImplicitlyCopyable):
 
@@ -216,9 +198,6 @@ struct StringType(DataType, ImplicitlyCopyable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("string")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
@@ -231,9 +210,6 @@ struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_binary[", self.byte_width, "]")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +257,6 @@ struct Date32Type(TemporalType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date32")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
 
 struct Date64Type(TemporalType):
     """Date64 — milliseconds since Unix epoch (int64)."""
@@ -295,9 +268,6 @@ struct Date64Type(TemporalType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("date64")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
@@ -312,9 +282,6 @@ struct Time32Type(TemporalType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time32[", self.unit, "]")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
-
 struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
 
@@ -327,9 +294,6 @@ struct Time64Type(TemporalType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("time64[", self.unit, "]")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 struct TimestampType(TemporalType):
@@ -353,9 +317,6 @@ struct TimestampType(TemporalType):
         if self.timezone:
             writer.write("[tz=", self.timezone, "]")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
-
 
 struct DurationType(TemporalType):
     """Duration — elapsed int64 units, no epoch reference."""
@@ -369,9 +330,6 @@ struct DurationType(TemporalType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("duration[", self.unit, "]")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self)
 
 
 # ---------------------------------------------------------------------------
@@ -449,9 +407,6 @@ struct ListType(DataType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("list<", self.item[].dtype, ">")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
-
 
 struct FixedSizeListType(DataType):
     var item: OwnedPointer[Field]
@@ -477,9 +432,6 @@ struct FixedSizeListType(DataType):
     def write_to[W: Writer](self, mut writer: W):
         writer.write("fixed_size_list<", self.item[], ">")
 
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
-
 
 struct StructType(DataType):
     var fields: List[Field]
@@ -500,9 +452,6 @@ struct StructType(DataType):
                 writer.write(", ")
             writer.write(self.fields[i])
         writer.write(">")
-
-    def to_any(deinit self) -> AnyDataType:
-        return AnyDataType(self^)
 
 
 # ---------------------------------------------------------------------------
