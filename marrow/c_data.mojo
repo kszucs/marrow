@@ -735,7 +735,7 @@ struct CArrowArray(Copyable, Movable):
                 )
             )
         elif dtype.is_temporal():
-            var byte_width = dtype.temporal_bit_width() // 8
+            var byte_width = dtype.byte_width()
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1],

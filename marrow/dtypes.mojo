@@ -372,6 +372,7 @@ struct Field(
             self.name == other.name
             and self.dtype == other.dtype
             and self.nullable == other.nullable
+            and self.metadata == other.metadata
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -667,13 +668,6 @@ struct AnyDataType(
             or self.is_duration()
         )
 
-    def temporal_bit_width(self) -> Int:
-        """Physical bit width of the temporal type's integer storage."""
-        if self.is_date32() or self.is_time32():
-            return 32
-        else:
-            return 64
-
     def is_decimal32(self) -> Bool:
         return self._v.isa[Decimal32Type]()
 
@@ -712,35 +706,6 @@ struct AnyDataType(
 
     def __is__(self, other: Self) -> Bool:
         return self == other
-
-    # --- structural layout (Arrow IPC buffer model) ---
-
-    def n_data_buffers(self) -> Int:
-        """Number of flat data buffers for this type (excludes validity bitmap)."""
-        if self.is_string() or self.is_binary():
-            return 2
-        elif (
-            self.is_bool()
-            or self.is_primitive()
-            or self.is_list()
-            or self.is_fixed_size_binary()
-        ):
-            return 1
-        else:
-            return 0
-
-    def child_dtypes(self) -> List[AnyDataType]:
-        """Ordered list of child types (for list, fixed-size-list, and struct)."""
-        var result = List[AnyDataType]()
-        if self.is_list():
-            result.append(self.as_list().value_type().copy())
-        elif self.is_fixed_size_list():
-            result.append(self.as_fixed_size_list().value_type())
-        elif self.is_struct():
-            ref st = self.as_struct()
-            for i in range(len(st.fields)):
-                result.append(st.fields[i].dtype.copy())
-        return result^
 
     # --- compound type accessors ---
 

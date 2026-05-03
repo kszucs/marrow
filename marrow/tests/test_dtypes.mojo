@@ -356,18 +356,6 @@ def test_temporal_dtypes_predicates() raises:
     assert_false(AnyDataType(duration(second)).is_timestamp())
 
 
-def test_temporal_dtypes_bit_width() raises:
-    assert_equal(AnyDataType(date32()).temporal_bit_width(), 32)
-    assert_equal(AnyDataType(date64()).temporal_bit_width(), 64)
-    assert_equal(AnyDataType(time32(second)).temporal_bit_width(), 32)
-    assert_equal(AnyDataType(time32(millisecond)).temporal_bit_width(), 32)
-    assert_equal(AnyDataType(time64(microsecond)).temporal_bit_width(), 64)
-    assert_equal(AnyDataType(time64(nanosecond)).temporal_bit_width(), 64)
-    assert_equal(AnyDataType(timestamp(second)).temporal_bit_width(), 64)
-    assert_equal(AnyDataType(timestamp(nanosecond, "UTC")).temporal_bit_width(), 64)
-    assert_equal(AnyDataType(duration(millisecond)).temporal_bit_width(), 64)
-
-
 def test_temporal_dtypes_string() raises:
     assert_equal(String(AnyDataType(date32())), "date32")
     assert_equal(String(AnyDataType(date64())), "date64")

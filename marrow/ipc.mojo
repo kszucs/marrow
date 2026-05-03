@@ -1363,10 +1363,20 @@ struct _BatchDecoder(Movable):
         var data_buffers = List[Buffer[mut=False]]()
         var children = List[ArrayData]()
 
-        for _ in range(dtype.n_data_buffers()):
+        if dtype.is_string() or dtype.is_binary():
             self._consume_buffer(data_buffers)
-        for child_dtype in dtype.child_dtypes():
-            children.append(self.read_array(child_dtype).to_data())
+            self._consume_buffer(data_buffers)
+        elif dtype.is_bool() or dtype.is_primitive() or dtype.is_list() or dtype.is_fixed_size_binary():
+            self._consume_buffer(data_buffers)
+
+        if dtype.is_list():
+            children.append(self.read_array(dtype.as_list().value_type()).to_data())
+        elif dtype.is_fixed_size_list():
+            children.append(self.read_array(dtype.as_fixed_size_list().value_type()).to_data())
+        elif dtype.is_struct():
+            ref st = dtype.as_struct()
+            for i in range(len(st.fields)):
+                children.append(self.read_array(st.fields[i].dtype).to_data())
 
         var ad = ArrayData(
             dtype=dtype.copy(),
