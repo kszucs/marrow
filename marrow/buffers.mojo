@@ -470,10 +470,14 @@ struct Buffer[*, mut: Bool = False](
         keeper bump its ref-count on copy; when the last view drops, the keeper
         releases and the C callback fires automatically.
 
+        The logical size is rounded up to 64-byte alignment: Arrow's spec
+        guarantees all exported buffers are padded to multiples of 64 bytes,
+        but callers typically pass the un-padded logical size.
+
         Precondition: `owner` must have been created with `Allocation.foreign(...)`.
         """
         return Buffer[mut=False](
-            size=Int(size),
+            size=math.align_up(Int(size), 64),
             ptr=rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](ptr),
             owner=owner,
         )

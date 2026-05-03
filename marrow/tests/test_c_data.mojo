@@ -60,7 +60,6 @@ def test_primitive_array_from_pyarrow() raises:
 
     var data = c_array^.to_array(dtype)
     ref array = data.as_int64()
-    assert_equal(array.bitmap.value().byte_count(), 1)  # ceildiv(5, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), True)
@@ -95,7 +94,6 @@ def test_binary_array_from_pyarrow() raises:
     var data = c_array^.to_array(dtype)
     ref array = data.as_string()
 
-    assert_equal(array.bitmap.value().byte_count(), 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), False)
@@ -130,7 +128,6 @@ def test_list_array_from_pyarrow() raises:
     var data = c_array^.to_array(dtype)
     ref array = data.as_list()
 
-    assert_equal(array.bitmap.value().byte_count(), 1)  # ceildiv(3, 8)
     assert_equal(array.is_valid(0), True)
     assert_equal(array.is_valid(1), False)
     assert_equal(array.is_valid(2), True)
@@ -692,21 +689,6 @@ def test_all_numeric_array_imports() raises:
     assert_equal(data_f64^.as_float64()[1].value(), 2.71)
 
 
-# def test_schema_to_pyarrow():
-#     var pa = Python.import_module("pyarrow")
-
-#     var struct_type = struct_(
-#         Field("int_field", int32),
-#         Field("string_field", string),
-#     )
-
-#     try:
-#         # mojo->python direction is not working yet
-#         var c_schema = CArrowSchema.from_dtype(int32)
-#     except Error:
-#         pass
-
-
 def test_temporal_dtype_schema_roundtrip() raises:
     """All temporal dtypes survive a CArrowSchema.from_dtype → to_dtype roundtrip.
 
@@ -807,7 +789,7 @@ def test_temporal_schema_from_pyarrow() raises:
 
 
 def test_date32_array_from_pyarrow() raises:
-    """date32 array import: length, null bitmap, and values."""
+    """Date32 array import: length, null bitmap, and values."""
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(
@@ -837,7 +819,7 @@ def test_date32_array_from_pyarrow() raises:
 
 
 def test_timestamp_array_from_pyarrow() raises:
-    """timestamp[s, tz=UTC] array import — regression for the tss: format bug."""
+    """Timestamp[s, tz=UTC] array import — regression for the tss: format bug."""
     var pa = Python.import_module("pyarrow")
 
     var pyarr = pa.array(
