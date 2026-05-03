@@ -4,7 +4,7 @@ from std.python import Python, PythonObject
 from std.memory import alloc
 from marrow.c_data import *
 from marrow.tabular import Table
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray, TemporalArray
+from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.builders import PrimitiveBuilder, StringBuilder, BoolBuilder
 from marrow.dtypes import *
 
@@ -66,10 +66,10 @@ def test_primitive_array_from_pyarrow() raises:
     assert_equal(array.is_valid(2), True)
     assert_equal(array.is_valid(3), True)
     assert_equal(array.is_valid(4), False)
-    assert_equal(array[0], 1)
-    assert_equal(array[1], 2)
-    assert_equal(array[2], 3)
-    assert_equal(array[3], 4)
+    assert_equal(array[0].value(), 1)
+    assert_equal(array[1].value(), 2)
+    assert_equal(array[2].value(), 3)
+    assert_equal(array[3].value(), 4)
 
 
 def test_binary_array_from_pyarrow() raises:
@@ -100,8 +100,8 @@ def test_binary_array_from_pyarrow() raises:
     assert_equal(array.is_valid(1), True)
     assert_equal(array.is_valid(2), False)
 
-    assert_equal(array[0], "foo")
-    assert_equal(array[1], "bar")
+    assert_equal(array[0].to_string(), "foo")
+    assert_equal(array[1].to_string(), "bar")
 
 
 def test_list_array_from_pyarrow() raises:
@@ -211,12 +211,12 @@ def test_arrow_array_stream() raises:
 
     var batch = batches[0].copy()
     ref col1_array = batch.columns[0].as_int64()
-    assert_equal(col1_array[0], 1)
-    assert_equal(col1_array[4], 5)
+    assert_equal(col1_array[0].value(), 1)
+    assert_equal(col1_array[4].value(), 5)
 
     ref col2_array = batch.columns[1].as_string()
-    assert_equal(col2_array[0], "a")
-    assert_equal(col2_array[4], "e")
+    assert_equal(col2_array[0].to_string(), "a")
+    assert_equal(col2_array[4].to_string(), "e")
 
 
 def test_struct_dtype_conversion() raises:
@@ -293,15 +293,15 @@ def test_fixed_size_list_from_pyarrow() raises:
 
     # First list: [1, 2, 3]
     ref first = fsl[0].value().as_int32()
-    assert_equal(first[0], 1)
-    assert_equal(first[1], 2)
-    assert_equal(first[2], 3)
+    assert_equal(first[0].value(), 1)
+    assert_equal(first[1].value(), 2)
+    assert_equal(first[2].value(), 3)
 
     # Second list: [4, 5, 6]
     ref second = fsl[1].value().as_int32()
-    assert_equal(second[0], 4)
-    assert_equal(second[1], 5)
-    assert_equal(second[2], 6)
+    assert_equal(second[0].value(), 4)
+    assert_equal(second[1].value(), 5)
+    assert_equal(second[2].value(), 6)
 
 
 def test_numeric_dtypes() raises:
@@ -387,9 +387,9 @@ def test_primitive_array_no_nulls() raises:
     assert_true(arr.is_valid(0))
     assert_true(arr.is_valid(1))
     assert_true(arr.is_valid(2))
-    assert_equal(arr[0], 10)
-    assert_equal(arr[1], 20)
-    assert_equal(arr[2], 30)
+    assert_equal(arr[0].value(), 10)
+    assert_equal(arr[1].value(), 20)
+    assert_equal(arr[2].value(), 30)
 
 
 def test_primitive_array_with_offset() raises:
@@ -411,9 +411,9 @@ def test_primitive_array_with_offset() raises:
     assert_equal(arr.length, 3)
     assert_equal(arr.offset, 1)
     # Values at logical positions 0..2 correspond to physical positions 1..3
-    assert_equal(arr[0], 20)
-    assert_equal(arr[1], 30)
-    assert_equal(arr[2], 40)
+    assert_equal(arr[0].value(), 20)
+    assert_equal(arr[1].value(), 30)
+    assert_equal(arr[2].value(), 40)
 
 
 def test_string_array_with_offset() raises:
@@ -512,9 +512,9 @@ def test_struct_array_values_from_pyarrow() raises:
     assert_equal(len(data_struct.children), 2)
 
     ref xs = data_struct.children[0].as_int32()
-    assert_equal(xs[0], 1)
-    assert_equal(xs[1], 2)
-    assert_equal(xs[2], 3)
+    assert_equal(xs[0].value(), 1)
+    assert_equal(xs[1].value(), 2)
+    assert_equal(xs[2].value(), 3)
 
     ref ys = data_struct.children[1].as_string()
     assert_equal(String(ys[0]), "a")
@@ -550,9 +550,9 @@ def test_fixed_size_list_with_nulls() raises:
     assert_false(fsl.is_valid(1))
 
     ref first = fsl[0].value().as_int32()
-    assert_equal(first[0], 1)
-    assert_equal(first[1], 2)
-    assert_equal(first[2], 3)
+    assert_equal(first[0].value(), 1)
+    assert_equal(first[1].value(), 2)
+    assert_equal(first[2].value(), 3)
 
 
 def test_schema_from_dtype_all_types() raises:
@@ -626,70 +626,70 @@ def test_all_numeric_array_imports() raises:
         pa.array(Python.list(1, 2, 3), type=pa.int8())
     )
     var data_i8 = arr_i8^.to_array(int8)
-    assert_equal(data_i8^.as_int8()[0], 1)
+    assert_equal(data_i8^.as_int8()[0].value(), 1)
 
     # uint8
     var arr_u8 = c_array_from_pyobj(
         pa.array(Python.list(10, 20, 30), type=pa.uint8())
     )
     var data_u8 = arr_u8^.to_array(uint8)
-    assert_equal(data_u8^.as_uint8()[1], 20)
+    assert_equal(data_u8^.as_uint8()[1].value(), 20)
 
     # int16
     var arr_i16 = c_array_from_pyobj(
         pa.array(Python.list(100, 200), type=pa.int16())
     )
     var data_i16 = arr_i16^.to_array(int16)
-    assert_equal(data_i16^.as_int16()[0], 100)
+    assert_equal(data_i16^.as_int16()[0].value(), 100)
 
     # uint16
     var arr_u16 = c_array_from_pyobj(
         pa.array(Python.list(300, 400), type=pa.uint16())
     )
     var data_u16 = arr_u16^.to_array(uint16)
-    assert_equal(data_u16^.as_uint16()[1], 400)
+    assert_equal(data_u16^.as_uint16()[1].value(), 400)
 
     # int32
     var arr_i32 = c_array_from_pyobj(
         pa.array(Python.list(-1, 0, 1), type=pa.int32())
     )
     var data_i32 = arr_i32^.to_array(int32)
-    assert_equal(data_i32^.as_int32()[0], -1)
+    assert_equal(data_i32^.as_int32()[0].value(), -1)
 
     # uint32
     var arr_u32 = c_array_from_pyobj(
         pa.array(Python.list(0, 4294967295), type=pa.uint32())
     )
     var data_u32 = arr_u32^.to_array(uint32)
-    assert_equal(data_u32^.as_uint32()[1], 4294967295)
+    assert_equal(data_u32^.as_uint32()[1].value(), 4294967295)
 
     # int64 (already covered by test_primitive_array_from_pyarrow, include for completeness)
     var arr_i64 = c_array_from_pyobj(
         pa.array(Python.list(9999999999), type=pa.int64())
     )
     var data_i64 = arr_i64^.to_array(int64)
-    assert_equal(data_i64^.as_int64()[0], 9999999999)
+    assert_equal(data_i64^.as_int64()[0].value(), 9999999999)
 
     # uint64
     var arr_u64 = c_array_from_pyobj(
         pa.array(Python.list(0, 1), type=pa.uint64())
     )
     var data_u64 = arr_u64^.to_array(uint64)
-    assert_equal(data_u64^.as_uint64()[0], 0)
+    assert_equal(data_u64^.as_uint64()[0].value(), 0)
 
     # float32
     var arr_f32 = c_array_from_pyobj(
         pa.array(Python.list(1.5, 2.5), type=pa.float32())
     )
     var data_f32 = arr_f32^.to_array(float32)
-    assert_equal(data_f32^.as_float32()[0], 1.5)
+    assert_equal(data_f32^.as_float32()[0].value(), 1.5)
 
     # float64
     var arr_f64 = c_array_from_pyobj(
         pa.array(Python.list(3.14, 2.71), type=pa.float64())
     )
     var data_f64 = arr_f64^.to_array(float64)
-    assert_equal(data_f64^.as_float64()[1], 2.71)
+    assert_equal(data_f64^.as_float64()[1].value(), 2.71)
 
 
 # def test_schema_to_pyarrow():

@@ -180,6 +180,7 @@ def _concat_int32(
         write += n
 
     return Int32Array(
+        dtype=int32,
         length=total,
         nulls=0,
         offset=0,

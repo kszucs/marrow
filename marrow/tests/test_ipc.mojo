@@ -59,8 +59,8 @@ def _tmp_path(suffix: String = ".arrow") raises -> String:
 
 def _mk_batch() raises -> RecordBatch:
     """Two-column batch: int32 + float64."""
-    var a: AnyArray = array[Int32Type]([1, 2, 3, 4, 5])
-    var b: AnyArray = array[Float64Type]([1.1, 2.2, 3.3, 4.4, 5.5])
+    var a: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var b: AnyArray = array([1.1, 2.2, 3.3, 4.4, 5.5], float64)
     var fields = List[Field]()
     fields.append(field("a", int32))
     fields.append(field("b", float64))
@@ -105,16 +105,16 @@ def _roundtrip_stream(batch: RecordBatch) raises -> RecordBatch:
 
 def test_primitives_file() raises:
     """All integer and float primitive types round-trip through the file format."""
-    var i8: AnyArray = array[Int8Type]([-128, 0, 127])
-    var i16: AnyArray = array[Int16Type]([-32768, 0, 32767])
-    var i32: AnyArray = array[Int32Type]([-1, 0, 1])
-    var i64: AnyArray = array[Int64Type]([-9999999999, 0, 9999999999])
-    var u8: AnyArray = array[UInt8Type]([0, 128, 255])
-    var u16: AnyArray = array[UInt16Type]([0, 1000, 65535])
-    var u32: AnyArray = array[UInt32Type]([0, 1, 4294967295])
-    var u64: AnyArray = array[UInt64Type]([0, 1, 18446744073709551615])
-    var f32: AnyArray = array[Float32Type]([-1.5, 0.0, 1.5])
-    var f64: AnyArray = array[Float64Type]([-1.5, 0.0, 1.5])
+    var i8: AnyArray = array([-128, 0, 127], int8)
+    var i16: AnyArray = array([-32768, 0, 32767], int16)
+    var i32: AnyArray = array([-1, 0, 1], int32)
+    var i64: AnyArray = array([-9999999999, 0, 9999999999], int64)
+    var u8: AnyArray = array([0, 128, 255], uint8)
+    var u16: AnyArray = array([0, 1000, 65535], uint16)
+    var u32: AnyArray = array([0, 1, 4294967295], uint32)
+    var u64: AnyArray = array([0, 1, 18446744073709551615], uint64)
+    var f32: AnyArray = array([-1.5, 0.0, 1.5], float32)
+    var f64: AnyArray = array([-1.5, 0.0, 1.5], float64)
 
     var fields = List[Field]()
     fields.append(field("i8", int8))

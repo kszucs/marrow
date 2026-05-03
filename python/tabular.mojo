@@ -15,10 +15,11 @@ from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
 from marrow.arrays import AnyArray, ChunkedArray
 from marrow.dtypes import Field
-from std.memory import ArcPointer
+from std.memory import ArcPointer, UnsafePointer
+from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
-from helpers import pymethod, def_display
+from helpers import pymethod, marrow_module
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +469,14 @@ def _record_batch_join(
     ).to_python_object()
 
 
+def _record_batch_str(ptr: UnsafePointer[RecordBatch, MutAnyOrigin]) raises -> PythonObject:
+    return PythonObject(String.write(ptr[]))
+
+
+def _table_str(ptr: UnsafePointer[Table, MutAnyOrigin]) raises -> PythonObject:
+    return PythonObject(String.write(ptr[]))
+
+
 # ---------------------------------------------------------------------------
 # Module registration
 # ---------------------------------------------------------------------------
@@ -500,7 +509,11 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
         .def_method[_record_batch_join]("join")
     )
-    _ = def_display[RecordBatch](rb_py)
+    _ = (
+        rb_py.def_method[_record_batch_str]("__str__")
+        .def_method[_record_batch_str]("__repr__")
+        .def_method[marrow_module]("__module__")
+    )
     var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
     _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
@@ -531,7 +544,11 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_table_arrow_c_stream]("__arrow_c_stream__")
         .def_method[_table_arrow_c_schema]("__arrow_c_schema__")
     )
-    _ = def_display[Table](t_py)
+    _ = (
+        t_py.def_method[_table_str]("__str__")
+        .def_method[_table_str]("__repr__")
+        .def_method[marrow_module]("__module__")
+    )
     var t_tp = TypeProtocolBuilder[Table](t_py)
     _ = t_tp.def_richcompare[_table_rich_compare]()
 

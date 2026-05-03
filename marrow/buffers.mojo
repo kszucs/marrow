@@ -183,8 +183,8 @@ struct Allocation(Movable):
     than the raw `__init__`.
     """
 
-    var ptr: UnsafePointer[UInt8, MutAnyOrigin]
-    """Raw CPU pointer.  Non-null for CPU and FOREIGN; null (default) for HOST/DEVICE."""
+    var ptr: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    """Raw CPU pointer.  Some for CPU and FOREIGN; None for HOST/DEVICE."""
 
     var release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
@@ -198,7 +198,7 @@ struct Allocation(Movable):
 
     def __init__(
         out self,
-        ptr: UnsafePointer[UInt8, MutAnyOrigin],
+        ptr: Optional[UnsafePointer[UInt8, MutAnyOrigin]],
         release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
@@ -211,7 +211,7 @@ struct Allocation(Movable):
     @staticmethod
     def cpu(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> Allocation:
         """Create an owned CPU allocation.  `__del__` calls `ptr.free()`."""
-        return Allocation(ptr, None, None, None)
+        return Allocation(Optional(ptr), None, None, None)
 
     @staticmethod
     def foreign(
@@ -219,23 +219,19 @@ struct Allocation(Movable):
         release: def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None,
     ) -> Allocation:
         """Create a foreign CPU allocation with a custom release callback."""
-        return Allocation(ptr, release, None, None)
+        return Allocation(Optional(ptr), release, None, None)
 
     @staticmethod
     def host(host_buf: HostBuffer[DType.uint8]) -> Allocation:
         """Create a HOST (pinned) allocation.  HostBuffer.__del__ handles release.
         """
-        return Allocation(
-            UnsafePointer[UInt8, MutAnyOrigin](), None, host_buf, None
-        )
+        return Allocation(None, None, host_buf, None)
 
     @staticmethod
     def device(dev_buf: DeviceBuffer[DType.uint8]) -> Allocation:
         """Create a DEVICE (GPU) allocation.  DeviceBuffer.__del__ handles release.
         """
-        return Allocation(
-            UnsafePointer[UInt8, MutAnyOrigin](), None, None, dev_buf
-        )
+        return Allocation(None, None, None, dev_buf)
 
     def device_type(self) raises -> Int32:
         """Return the Arrow C Device Data Interface DeviceType value.
@@ -288,12 +284,12 @@ struct Allocation(Movable):
     def __del__(deinit self):
         if self.release:
             # FOREIGN: invoke the producer's C release callback.
-            self.release.value()(self.ptr)
+            self.release.value()(self.ptr.value())
         elif self.ptr:
             # CPU: free the Mojo heap allocation directly.
-            # HOST and DEVICE have a null ptr, so this branch is CPU-only.
-            self.ptr.free()
-        # HOST/DEVICE: null ptr; Optional field destructors cascade to AsyncRT release.
+            # HOST and DEVICE have ptr=None, so this branch is CPU-only.
+            self.ptr.value().free()
+        # HOST/DEVICE: ptr=None; Optional field destructors cascade to AsyncRT release.
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +633,7 @@ struct Buffer[*, mut: Bool = False](
     @always_inline
     def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         debug_assert(
-            self._ptr.__bool__(),
+            self.is_cpu(),
             "cannot read device buffer, call to_cpu() first",
         )
         comptime output = Scalar[T]

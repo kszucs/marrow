@@ -82,17 +82,17 @@ def _right_on() -> List[Int]:
 
 def test_take_primitive_basic() raises:
     """Gather elements from a primitive array at given indices."""
-    var a: AnyArray = array[Int32Type]([10, 20, 30, 40])
-    var result = take(a.copy(), array[Int32Type]([2, 0, 3]))
+    var a: AnyArray = array([10, 20, 30, 40], int32)
+    var result = take(a.copy(), array([2, 0, 3], int32))
     ref r = result.as_int32()
-    assert_equal(r[0], Scalar[int32.native](30))
-    assert_equal(r[1], Scalar[int32.native](10))
-    assert_equal(r[2], Scalar[int32.native](40))
+    assert_equal(r[0].value(), Scalar[int32.native](30))
+    assert_equal(r[1].value(), Scalar[int32.native](10))
+    assert_equal(r[2].value(), Scalar[int32.native](40))
 
 
 def test_take_null_index_produces_null() raises:
     """Null index in take produces a null output element."""
-    var a: AnyArray = array[Int32Type]([10, 20, 30])
+    var a: AnyArray = array([10, 20, 30], int32)
     var idx = Int32Builder(capacity=2)
     idx.append_null()
     idx.append(Scalar[int32.native](1))
@@ -348,7 +348,7 @@ def test_semi_join_basic() raises:
     assert_equal(len(result), 1)
     assert_equal(len(result.children), 2)  # left columns only
     ref k = result.children[0].as_int32()
-    assert_equal(k[0], Scalar[int32.native](2))
+    assert_equal(k[0].value(), Scalar[int32.native](2))
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +381,8 @@ def test_anti_join_basic() raises:
     assert_equal(len(result), 2)
     assert_equal(len(result.children), 2)  # left columns only
     ref k = result.children[0].as_int32()
-    assert_equal(k[0], Scalar[int32.native](1))
-    assert_equal(k[1], Scalar[int32.native](3))
+    assert_equal(k[0].value(), Scalar[int32.native](1))
+    assert_equal(k[1].value(), Scalar[int32.native](3))
 
 
 # ---------------------------------------------------------------------------

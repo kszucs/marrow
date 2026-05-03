@@ -14,7 +14,8 @@ from std.python._cpython import (
     PyTypeObjectPtr,
 )
 from std.ffi import c_char, c_int, c_ssize_t, _CPointer
-from std.memory import ArcPointer, alloc
+from std.memory import ArcPointer, alloc, UnsafePointer
+from std.builtin.type_aliases import MutAnyOrigin
 from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
@@ -44,7 +45,7 @@ from marrow.scalars import AnyScalar
 import marrow.dtypes as dt
 
 from pontoneer import SequenceProtocolBuilder
-from helpers import pymethod, def_display
+from helpers import pymethod, marrow_module
 
 
 # int PyBytes_AsStringAndSize(PyObject *obj, char **buffer, Py_ssize_t *length)
@@ -1112,6 +1113,10 @@ def _struct_array_from_arrays(
     )
 
 
+def _any_array_str(ptr: UnsafePointer[AnyArray, MutAnyOrigin]) raises -> PythonObject:
+    return PythonObject(String.write(ptr[]))
+
+
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
@@ -1125,7 +1130,11 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )
-    _ = def_display[AnyArray](array_py)
+    _ = (
+        array_py.def_method[_any_array_str]("__str__")
+        .def_method[_any_array_str]("__repr__")
+        .def_method[marrow_module]("__module__")
+    )
     var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
     _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 

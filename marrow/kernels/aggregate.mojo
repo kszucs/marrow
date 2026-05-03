@@ -165,7 +165,7 @@ def sum_[
     T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)))
+    return PrimitiveScalar[T](_reduce[T, "sum"](array, Scalar[T.native](0)), array.dtype.copy())
 
 
 def sum_(array: AnyArray) raises -> AnyScalar:
@@ -205,7 +205,7 @@ def product[
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
-    return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)))
+    return PrimitiveScalar[T](_reduce[T, "product"](array, Scalar[T.native](1)), array.dtype.copy())
 
 
 def product(array: AnyArray) raises -> AnyScalar:
@@ -248,7 +248,7 @@ def min_[
     Returns MAX_FINITE if empty or all null.
     """
     return PrimitiveScalar[T](
-        _reduce[T, "min"](array, Scalar[T.native].MAX_FINITE)
+        _reduce[T, "min"](array, Scalar[T.native].MAX_FINITE), array.dtype.copy()
     )
 
 
@@ -292,7 +292,7 @@ def max_[
     Returns MIN_FINITE if empty or all null.
     """
     return PrimitiveScalar[T](
-        _reduce[T, "max"](array, Scalar[T.native].MIN_FINITE)
+        _reduce[T, "max"](array, Scalar[T.native].MIN_FINITE), array.dtype.copy()
     )
 
 

@@ -11,8 +11,8 @@ from marrow.kernels.arithmetic import add
 def test_add_gpu() raises:
     """Element-wise add on GPU with small int32 arrays."""
     var ctx = DeviceContext()
-    var a = array[Int32Type]([1, 2, 3, 4]).to_device(ctx)
-    var b = array[Int32Type]([10, 20, 30, 40]).to_device(ctx)
+    var a = array([1, 2, 3, 4], int32).to_device(ctx)
+    var b = array([10, 20, 30, 40], int32).to_device(ctx)
     var result = add[Int32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_equal(result.unsafe_get(0), 11)
@@ -36,8 +36,8 @@ def test_add_gpu_large() raises:
 def test_add_gpu_float32() raises:
     """GPU add with float32 arrays."""
     var ctx = DeviceContext()
-    var a = array[Float32Type]([1, 2, 3, 4]).to_device(ctx)
-    var b = array[Float32Type]([10, 20, 30, 40]).to_device(ctx)
+    var a = array([1, 2, 3, 4], float32).to_device(ctx)
+    var b = array([10, 20, 30, 40], float32).to_device(ctx)
     var result = add[Float32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_true(result.unsafe_get(0) == 11)

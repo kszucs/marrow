@@ -5,13 +5,14 @@ by auto-converting arguments via ConvertibleFromPython and return values via
 ConvertibleToPython.
 """
 
+from std.builtin.type_aliases import MutAnyOrigin
+from std.memory import UnsafePointer
 from std.python import (
     PythonObject,
     Python,
     ConvertibleToPython,
     ConvertibleFromPython,
 )
-from std.python.bindings import PythonTypeBuilder
 
 # ---------------------------------------------------------------------------
 # pymethod — wrap a Mojo instance method as a Python-callable method
@@ -19,7 +20,7 @@ from std.python.bindings import PythonTypeBuilder
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     R: ConvertibleToPython,
     //,
     method: def(T) raises thin -> R,
@@ -33,7 +34,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
@@ -52,7 +53,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     R: ConvertibleToPython,
@@ -74,7 +75,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
@@ -100,7 +101,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     E: ConvertibleToPython & Copyable,
     //,
     method: def(T) raises thin -> List[E],
@@ -119,7 +120,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
@@ -143,7 +144,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
@@ -170,7 +171,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
@@ -194,7 +195,7 @@ def pymethod[
 
 
 def pymethod[
-    T: ImplicitlyDestructible,
+    T: AnyType,
     A0: ConvertibleFromPython,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
@@ -259,17 +260,3 @@ def marrow_module(obj: PythonObject) raises -> PythonObject:
     return "marrow".to_python_object()
 
 
-def def_display[
-    T: Writable & ImplicitlyDestructible
-](mut type_builder: PythonTypeBuilder) -> ref[type_builder] PythonTypeBuilder:
-    """Define Python methods that are used to display instances of the type or the type itself.
-    """
-
-    def __str__(t: T) -> String:
-        return String.write(t)
-
-    return (
-        type_builder.def_method[pymethod[__str__]()]("__str__")
-        .def_method[pymethod[__str__]()]("__repr__")
-        .def_method[marrow_module]("__module__")
-    )

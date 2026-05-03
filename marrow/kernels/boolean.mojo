@@ -150,7 +150,7 @@ def select[
     var length = len(then_)
     if len(mask) != length or len(else_) != length:
         raise Error("select: input arrays must have equal length")
-    var builder = PrimitiveBuilder[T](length)
+    var builder = PrimitiveBuilder[T](then_.dtype, length)
     var data_bv = mask.values()
     for i in range(length):
         if data_bv.test(mask.offset + i):

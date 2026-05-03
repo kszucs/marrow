@@ -1466,12 +1466,36 @@ def array[
     return b.finish()
 
 
+def array[T: NumericType](type: T) raises -> PrimitiveArray[T]:
+    """Create an empty primitive array of the given type."""
+    var b = PrimitiveBuilder[T](T(), 0)
+    return b.finish()
+
+
 def array[
     T: NumericType
 ](values: List[Optional[Int]], type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array from integer literals, with optional nulls.
 
     Accepts list literals like ``[1, None, 3]`` or ``[10, 20, 30]`` and
+    converts each element to ``Scalar[T.native]``.
+    """
+    var b = PrimitiveBuilder[T](T(), len(values))
+    for i in range(len(values)):
+        var v = values[i]
+        if v:
+            b.unsafe_append(Scalar[T.native](v.value()))
+        else:
+            b.append_null()
+    return b.finish()
+
+
+def array[
+    T: NumericType
+](values: List[Optional[Float64]], type: T) raises -> PrimitiveArray[T]:
+    """Create a primitive array from float literals, with optional nulls.
+
+    Accepts list literals like ``[1.5, None, 3.14]`` or ``[1.0, 2.0]`` and
     converts each element to ``Scalar[T.native]``.
     """
     var b = PrimitiveBuilder[T](T(), len(values))

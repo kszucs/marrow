@@ -26,7 +26,7 @@ unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
 from std.memory import ArcPointer
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import AnyDataType, PrimitiveType
+from marrow.dtypes import AnyDataType, PrimitiveType, NumericType
 from marrow.schema import Schema
 
 
@@ -521,9 +521,9 @@ struct Cast(Value):
 # ---------------------------------------------------------------------------
 
 
-def _make_literal[T: PrimitiveType](value: Scalar[T.native]) raises -> AnyValue:
+def _make_literal[T: NumericType](value: Scalar[T.native]) raises -> AnyValue:
     """Create a Literal expression from a typed scalar value."""
-    var builder = PrimitiveBuilder[T](1)
+    var builder = PrimitiveBuilder[T](T(), 1)
     builder.unsafe_append(value)
     return Literal(value=builder.finish().to_any())
 
@@ -544,7 +544,7 @@ def col(var name: String) -> AnyValue:
     return Column(index=-1, name=name^, dtype_=None)
 
 
-def lit[T: PrimitiveType](value: Scalar[T.native]) raises -> AnyValue:
+def lit[T: NumericType](value: Scalar[T.native]) raises -> AnyValue:
     """A scalar constant broadcast to the length of the first input."""
     return _make_literal[T](value)
 

@@ -56,14 +56,14 @@ from marrow.scalars import (
 
 
 def test_primitive_scalar_int32() raises:
-    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](42))
+    var s = PrimitiveScalar[Int32Type](42)
     assert_true(s.is_valid())
     assert_false(s.is_null())
     assert_equal(s.value(), 42)
 
 
 def test_primitive_scalar_float64() raises:
-    var s = PrimitiveScalar[Float64Type](Scalar[float64.native](3.14))
+    var s = PrimitiveScalar[Float64Type](3.14)
     assert_true(s.is_valid())
     assert_equal(s.value(), 3.14)
 
@@ -83,7 +83,7 @@ def test_primitive_scalar_from_array() raises:
 
 
 def test_primitive_scalar_write_to() raises:
-    var s = PrimitiveScalar[Int32Type](Scalar[int32.native](42))
+    var s = PrimitiveScalar[Int32Type](42)
     assert_equal(String(s), "42")
 
 
@@ -131,7 +131,7 @@ def test_string_scalar_write_to() raises:
 
 
 def test_scalar_from_primitive() raises:
-    var typed = PrimitiveScalar[Int32Type](Scalar[int32.native](99))
+    var typed = PrimitiveScalar[Int32Type](99)
     var erased = AnyScalar(typed^)
     assert_true(erased.is_valid())
     assert_equal(erased.type(), int32)
@@ -216,8 +216,10 @@ def test_struct_scalar_from_array() raises:
     var s0 = arr[0]
     assert_true(s0.is_valid())
     assert_equal(s0.num_fields(), 2)
-    assert_equal(s0.field(0).as_primitive[Int32Type]().value(), 1)
-    assert_equal(s0.field(1).as_primitive[Int64Type]().value(), 10)
+    var f0 = s0.field(0)
+    assert_equal(f0.as_primitive[Int32Type]().value(), 1)
+    var f1 = s0.field(1)
+    assert_equal(f1.as_primitive[Int64Type]().value(), 10)
 
 
 def test_struct_scalar_null_from_array() raises:
@@ -227,8 +229,10 @@ def test_struct_scalar_null_from_array() raises:
     sb.append_valid()
     sb.append_null()
     var arr = sb.finish()
-    assert_true(arr[0].is_valid())
-    assert_false(arr[1].is_valid())
+    var s0 = arr[0]
+    assert_true(s0.is_valid())
+    var s1 = arr[1]
+    assert_false(s1.is_valid())
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +289,8 @@ def test_any_array_getitem_fixed_size_list() raises:
     var arr: AnyArray = fsl.finish()
     var s = arr[0]
     assert_true(s.is_valid())
-    assert_equal(len(s.as_list().value()), 2)
+    var list_val = s.as_list().value()
+    assert_equal(len(list_val), 2)
 
 
 def test_any_array_getitem_struct() raises:
@@ -295,8 +300,10 @@ def test_any_array_getitem_struct() raises:
     var arr: AnyArray = sb.finish()
     var s = arr[0]
     assert_true(s.is_valid())
-    assert_equal(s.as_struct().num_fields(), 1)
-    assert_equal(s.as_struct().field(0).as_primitive[Int32Type]().value(), 42)
+    var ss = s.as_struct()
+    assert_equal(ss.num_fields(), 1)
+    var f0 = ss.field(0)
+    assert_equal(f0.as_primitive[Int32Type]().value(), 42)
 
 
 def test_any_array_getitem_out_of_bounds() raises:

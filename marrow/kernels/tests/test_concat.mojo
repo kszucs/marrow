@@ -39,26 +39,26 @@ from marrow.kernels.concat import concat
 
 def test_concat_primitive() raises:
     var arrs: List[AnyArray] = [
-        array[Int32Type]([1, 2]),
-        array[Int32Type]([3, 4, 5]),
+        array([1, 2], int32),
+        array([3, 4, 5], int32),
     ]
     var tmp = concat(arrs)
     ref result = tmp.as_int32()
     assert_equal(result.length, 5)
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 2)
-    assert_equal(result[2], 3)
-    assert_equal(result[3], 4)
-    assert_equal(result[4], 5)
+    assert_equal(result[0].value(), 1)
+    assert_equal(result[1].value(), 2)
+    assert_equal(result[2].value(), 3)
+    assert_equal(result[3].value(), 4)
+    assert_equal(result[4].value(), 5)
 
 
 def test_concat_single() raises:
-    var arrs: List[AnyArray] = [array[Int32Type]([10, 20, 30])]
+    var arrs: List[AnyArray] = [array([10, 20, 30], int32)]
     var tmp = concat(arrs)
     ref result = tmp.as_int32()
     assert_equal(result.length, 3)
-    assert_equal(result[0], 10)
-    assert_equal(result[2], 30)
+    assert_equal(result[0].value(), 10)
+    assert_equal(result[2].value(), 30)
 
 
 def test_concat_empty_list_raises() raises:
@@ -88,9 +88,9 @@ def test_concat_with_nulls() raises:
     assert_true(result.is_valid(2))
     assert_true(result.is_valid(3))
     assert_false(result.is_valid(4))
-    assert_equal(result[0], 1)
-    assert_equal(result[2], 3)
-    assert_equal(result[3], 4)
+    assert_equal(result[0].value(), 1)
+    assert_equal(result[2].value(), 3)
+    assert_equal(result[3].value(), 4)
 
 
 def test_concat_with_offset() raises:
@@ -102,10 +102,10 @@ def test_concat_with_offset() raises:
     var tmp_offset = concat(arrs)
     ref result = tmp_offset.as_int32()
     assert_equal(result.length, 4)
-    assert_equal(result[0], 1)
-    assert_equal(result[1], 2)
-    assert_equal(result[2], 3)
-    assert_equal(result[3], 4)
+    assert_equal(result[0].value(), 1)
+    assert_equal(result[1].value(), 2)
+    assert_equal(result[2].value(), 3)
+    assert_equal(result[3].value(), 4)
 
 
 def test_concat_with_offset_and_nulls() raises:
@@ -117,7 +117,7 @@ def test_concat_with_offset_and_nulls() raises:
     var sliced = b.finish().slice(1, 2)  # [null, 3], offset=1
     var arrs: List[AnyArray] = [
         (sliced^).to_any(),
-        AnyArray(array[Int32Type]([4])),
+        AnyArray(array([4], int32)),
     ]
     var tmp_offset_nulls = concat(arrs)
     ref result = tmp_offset_nulls.as_int32()
@@ -126,8 +126,8 @@ def test_concat_with_offset_and_nulls() raises:
     assert_false(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_true(result.is_valid(2))
-    assert_equal(result[1], 3)
-    assert_equal(result[2], 4)
+    assert_equal(result[1].value(), 3)
+    assert_equal(result[2].value(), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -182,9 +182,9 @@ def test_concat_string() raises:
     var tmp_str = concat(arrs)
     ref result = tmp_str.as_string()
     assert_equal(result.length, 3)
-    assert_equal(result[0], "hello")
-    assert_equal(result[1], "world")
-    assert_equal(result[2], "foo")
+    assert_equal(result[0].to_string(), "hello")
+    assert_equal(result[1].to_string(), "world")
+    assert_equal(result[2].to_string(), "foo")
 
 
 def test_concat_string_with_nulls() raises:
@@ -206,9 +206,9 @@ def test_concat_string_with_nulls() raises:
     assert_false(result.is_valid(1))
     assert_true(result.is_valid(2))
     assert_true(result.is_valid(3))
-    assert_equal(result[0], "a")
-    assert_equal(result[2], "b")
-    assert_equal(result[3], "c")
+    assert_equal(result[0].to_string(), "a")
+    assert_equal(result[2].to_string(), "b")
+    assert_equal(result[3].to_string(), "c")
 
 
 # ---------------------------------------------------------------------------
@@ -244,17 +244,17 @@ def test_concat_list() raises:
     var raw_elem0 = result[0].value()
     ref elem0 = raw_elem0.as_int32()
     assert_equal(elem0.length, 2)
-    assert_equal(elem0[0], 1)
-    assert_equal(elem0[1], 2)
+    assert_equal(elem0[0].value(), 1)
+    assert_equal(elem0[1].value(), 2)
     var raw_elem1 = result[1].value()
     ref elem1 = raw_elem1.as_int32()
     assert_equal(elem1.length, 1)
-    assert_equal(elem1[0], 3)
+    assert_equal(elem1[0].value(), 3)
     var raw_elem2 = result[2].value()
     ref elem2 = raw_elem2.as_int32()
     assert_equal(elem2.length, 3)
-    assert_equal(elem2[0], 4)
-    assert_equal(elem2[2], 6)
+    assert_equal(elem2[0].value(), 4)
+    assert_equal(elem2[2].value(), 6)
 
 
 def test_concat_list_with_nulls() raises:
@@ -283,7 +283,7 @@ def test_concat_list_with_nulls() raises:
     assert_true(result.is_valid(2))
     var raw_elem0 = result[0].value()
     ref elem0 = raw_elem0.as_int32()
-    assert_equal(elem0[0], 1)
+    assert_equal(elem0[0].value(), 1)
     var raw_elem2 = result[2].value()
     ref elem2 = raw_elem2.as_int32()
     assert_equal(elem2.length, 2)
@@ -319,15 +319,15 @@ def test_concat_fixed_size_list() raises:
     assert_equal(result.length, 3)
     var raw_fsl_elem0 = result[0].value()
     ref elem0 = raw_fsl_elem0.as_float32()
-    assert_equal(elem0[0], 1.0)
-    assert_equal(elem0[1], 2.0)
+    assert_equal(elem0[0].value(), 1.0)
+    assert_equal(elem0[1].value(), 2.0)
     var raw_fsl_elem1 = result[1].value()
     ref elem1 = raw_fsl_elem1.as_float32()
-    assert_equal(elem1[0], 3.0)
+    assert_equal(elem1[0].value(), 3.0)
     var raw_fsl_elem2 = result[2].value()
     ref elem2 = raw_fsl_elem2.as_float32()
-    assert_equal(elem2[0], 5.0)
-    assert_equal(elem2[1], 6.0)
+    assert_equal(elem2[0].value(), 5.0)
+    assert_equal(elem2[1].value(), 6.0)
 
 
 def test_concat_fixed_size_list_with_offset() raises:
@@ -358,15 +358,15 @@ def test_concat_fixed_size_list_with_offset() raises:
     assert_equal(result.length, 3)
     var raw_fsl_off_elem0 = result[0].value()
     ref elem0 = raw_fsl_off_elem0.as_float32()
-    assert_equal(elem0[0], 3.0)
-    assert_equal(elem0[1], 4.0)
+    assert_equal(elem0[0].value(), 3.0)
+    assert_equal(elem0[1].value(), 4.0)
     var raw_fsl_off_elem1 = result[1].value()
     ref elem1 = raw_fsl_off_elem1.as_float32()
-    assert_equal(elem1[0], 5.0)
+    assert_equal(elem1[0].value(), 5.0)
     var raw_fsl_off_elem2 = result[2].value()
     ref elem2 = raw_fsl_off_elem2.as_float32()
-    assert_equal(elem2[0], 7.0)
-    assert_equal(elem2[1], 8.0)
+    assert_equal(elem2[0].value(), 7.0)
+    assert_equal(elem2[1].value(), 8.0)
 
 
 # ---------------------------------------------------------------------------
@@ -397,13 +397,13 @@ def test_concat_struct() raises:
     assert_equal(result.length, 3)
     ref id_data = result.unsafe_get("id")
     ref id_arr = id_data.as_int32()
-    assert_equal(id_arr[0], 1)
-    assert_equal(id_arr[1], 2)
-    assert_equal(id_arr[2], 3)
+    assert_equal(id_arr[0].value(), 1)
+    assert_equal(id_arr[1].value(), 2)
+    assert_equal(id_arr[2].value(), 3)
     ref score_data = result.unsafe_get("score")
     ref score_arr = score_data.as_float32()
-    assert_equal(score_arr[0], 0.5)
-    assert_equal(score_arr[2], 0.7)
+    assert_equal(score_arr[0].value(), 0.5)
+    assert_equal(score_arr[2].value(), 0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -413,19 +413,19 @@ def test_concat_struct() raises:
 
 def test_combine_chunks_delegates() raises:
     var chunks: List[AnyArray] = [
-        array[Int32Type]([10, 20]),
-        array[Int32Type]([30]),
-        array[Int32Type]([40, 50]),
+        array([10, 20], int32),
+        array([30], int32),
+        array([40, 50], int32),
     ]
     var ca = ChunkedArray(int32, chunks^)
     var combined = ca^.combine_chunks()
     ref result = combined.as_int32()
     assert_equal(result.length, 5)
-    assert_equal(result[0], 10)
-    assert_equal(result[1], 20)
-    assert_equal(result[2], 30)
-    assert_equal(result[3], 40)
-    assert_equal(result[4], 50)
+    assert_equal(result[0].value(), 10)
+    assert_equal(result[1].value(), 20)
+    assert_equal(result[2].value(), 30)
+    assert_equal(result[3].value(), 40)
+    assert_equal(result[4].value(), 50)
 
 
 def main() raises:

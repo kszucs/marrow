@@ -36,11 +36,11 @@ from marrow.builders import arange
 
 def test_sequential_fallback() raises:
     """When batch fits in a single morsel, evaluation works correctly."""
-    var a = array[Int64Type]([1, 2, 3, 4, 5])
-    var b = array[Int64Type]([10, 20, 30, 40, 50])
+    var a = array([1, 2, 3, 4, 5], int64)
+    var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == array[Int64Type]([11, 22, 33, 44, 55]).to_any())
+    assert_true(result == array([11, 22, 33, 44, 55], int64).to_any())
 
 
 def test_large_add() raises:
@@ -52,7 +52,7 @@ def test_large_add() raises:
     var tmp_large_add = Planner().build(col(0) + col(1)).eval(batch)
     ref result = tmp_large_add.as_int64()
     for i in range(n):
-        assert_equal(result[i], Scalar[int64.native](i * 2))
+        assert_equal(result[i].value(), Scalar[int64.native](i * 2))
 
 
 def test_large_mul() raises:
@@ -64,7 +64,7 @@ def test_large_mul() raises:
     var tmp_large_mul = Planner().build(col(0) * col(1)).eval(batch)
     ref result = tmp_large_mul.as_int64()
     for i in range(n):
-        assert_equal(result[i], Scalar[int64.native]((i + 1) * i))
+        assert_equal(result[i].value(), Int64((i + 1) * i))
 
 
 def test_chunk_boundary_values() raises:
@@ -76,7 +76,7 @@ def test_chunk_boundary_values() raises:
     )
     ref result = tmp_chunk_boundary.as_int64()
     for i in range(128):
-        assert_equal(result[i], Scalar[int64.native](i + 1))
+        assert_equal(result[i].value(), Scalar[int64.native](i + 1))
 
 
 def test_non_aligned_length() raises:
@@ -86,16 +86,16 @@ def test_non_aligned_length() raises:
     var tmp_non_aligned = Planner().build(-col(0)).eval(batch)
     ref result = tmp_non_aligned.as_int64()
     for i in range(100):
-        assert_equal(result[i], Scalar[int64.native](-i))
+        assert_equal(result[i].value(), Scalar[int64.native](-i))
 
 
 def test_single_element() raises:
     """Single-element array works correctly."""
-    var a = array[Int64Type]([42])
-    var b = array[Int64Type]([8])
+    var a = array([42], int64)
+    var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = Planner().build(col(0) + col(1)).eval(batch)
-    assert_true(result == array[Int64Type]([50]).to_any())
+    assert_true(result == array([50], int64).to_any())
 
 
 def test_predicate() raises:
@@ -123,20 +123,20 @@ def test_chained_expression() raises:
     ref result = tmp_chained.as_int64()
     for i in range(256):
         var expected = (i + (i + 1)) * (i - (i + 1))
-        assert_equal(result[i], Scalar[int64.native](expected))
+        assert_equal(result[i].value(), Scalar[int64.native](expected))
 
 
 def test_dispatch_cpu_hint() raises:
     """DISPATCH_CPU hint keeps execution on CPU."""
-    var a = array[Int64Type]([1, 2, 3, 4, 5])
-    var b = array[Int64Type]([5, 4, 3, 2, 1])
+    var a = array([1, 2, 3, 4, 5], int64)
+    var b = array([5, 4, 3, 2, 1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = (
         Planner()
         .build((col(0) + col(1)).with_dispatch(DISPATCH_CPU))
         .eval(batch)
     )
-    assert_true(result == array[Int64Type]([6, 6, 6, 6, 6]).to_any())
+    assert_true(result == array([6, 6, 6, 6, 6], int64).to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +146,8 @@ def test_dispatch_cpu_hint() raises:
 
 def test_in_memory_table_identity() raises:
     """Executing without any operations returns the original batch."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
     )
@@ -162,8 +162,8 @@ def test_in_memory_table_identity() raises:
 
 def test_select_single_column() raises:
     """Selecting a single column returns a 1-column batch."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).select("x")
     )
@@ -171,14 +171,14 @@ def test_select_single_column() raises:
     assert_equal(result.num_rows(), 5)
     assert_equal(result.schema.fields[0].name, "x")
     ref col_x = result.columns[0].as_int64()
-    assert_equal(col_x[0], 1)
-    assert_equal(col_x[4], 5)
+    assert_equal(col_x[0].value(), 1)
+    assert_equal(col_x[4].value(), 5)
 
 
 def test_select_multiple_columns() raises:
     """Selecting multiple columns preserves order."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).select(
             "y", "x"
@@ -188,21 +188,21 @@ def test_select_multiple_columns() raises:
     assert_equal(result.schema.fields[0].name, "y")
     assert_equal(result.schema.fields[1].name, "x")
     ref col_y = result.columns[0].as_int64()
-    assert_equal(col_y[0], 10)
+    assert_equal(col_y[0].value(), 10)
     ref col_x = result.columns[1].as_int64()
-    assert_equal(col_x[0], 1)
+    assert_equal(col_x[0].value(), 1)
 
 
 def test_select_preserves_values() raises:
     """All values are preserved through select."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).select("x")
     )
     ref col_x = result.columns[0].as_int64()
     for i in range(5):
-        assert_equal(col_x[i], Scalar[int64.native](i + 1))
+        assert_equal(col_x[i].value(), Scalar[int64.native](i + 1))
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +212,8 @@ def test_select_preserves_values() raises:
 
 def test_filter_greater_than() raises:
     """Filter col("x") > lit(3) keeps rows [4, 5]."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
             col("x") > lit[Int64Type](3)
@@ -221,14 +221,14 @@ def test_filter_greater_than() raises:
     )
     assert_equal(result.num_rows(), 2)
     ref col_x = result.columns[0].as_int64()
-    assert_equal(col_x[0], 4)
-    assert_equal(col_x[1], 5)
+    assert_equal(col_x[0].value(), 4)
+    assert_equal(col_x[1].value(), 5)
 
 
 def test_filter_equality() raises:
     """Filter col("x") == lit(3) keeps one row."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
             col("x") == lit[Int64Type](3)
@@ -236,15 +236,15 @@ def test_filter_equality() raises:
     )
     assert_equal(result.num_rows(), 1)
     ref col_x = result.columns[0].as_int64()
-    assert_equal(col_x[0], 3)
+    assert_equal(col_x[0].value(), 3)
     ref col_y = result.columns[1].as_int64()
-    assert_equal(col_y[0], 30)
+    assert_equal(col_y[0].value(), 30)
 
 
 def test_filter_no_match() raises:
     """Filter that matches no rows returns empty batch."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
             col("x") > lit[Int64Type](100)
@@ -260,8 +260,8 @@ def test_filter_no_match() raises:
 
 def test_select_then_filter() raises:
     """Select followed by filter works correctly."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
         .select("x", "y")
@@ -270,15 +270,15 @@ def test_select_then_filter() raises:
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 2)
     ref col_x = result.columns[0].as_int64()
-    assert_equal(col_x[0], 3)
-    assert_equal(col_x[1], 4)
-    assert_equal(col_x[2], 5)
+    assert_equal(col_x[0].value(), 3)
+    assert_equal(col_x[1].value(), 4)
+    assert_equal(col_x[2].value(), 5)
 
 
 def test_filter_then_select() raises:
     """Filter followed by select works correctly."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
         .filter(col("x") > lit[Int64Type](3))
@@ -288,8 +288,8 @@ def test_filter_then_select() raises:
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
     ref col_y = result.columns[0].as_int64()
-    assert_equal(col_y[0], 40)
-    assert_equal(col_y[1], 50)
+    assert_equal(col_y[0].value(), 40)
+    assert_equal(col_y[1].value(), 50)
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +300,8 @@ def test_filter_then_select() raises:
 def test_streaming_morsel_boundaries() raises:
     """Small morsel_size produces multiple batches that together contain all rows.
     """
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
@@ -317,8 +317,8 @@ def test_streaming_morsel_boundaries() raises:
 
 def test_streaming_read_all_matches_execute() raises:
     """``read_all()`` produces the same result as execute()."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var rel = in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
         col("x") > lit[Int64Type](2)
     )
@@ -333,8 +333,8 @@ def test_streaming_read_all_matches_execute() raises:
 
 def test_streaming_filter_skips_empty() raises:
     """Filter that eliminates entire morsels yields no empty batches."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
@@ -346,13 +346,13 @@ def test_streaming_filter_skips_empty() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 1)
     ref col_x = batches[0].columns[0].as_int64()
-    assert_equal(col_x[0], 5)
+    assert_equal(col_x[0].value(), 5)
 
 
 def test_streaming_chained_filter_project() raises:
     """Chained filter + project via streaming produces correct values."""
-    var x = array[Int64Type]([1, 2, 3, 4, 5])
-    var y = array[Int64Type]([10, 20, 30, 40, 50])
+    var x = array([1, 2, 3, 4, 5], int64)
+    var y = array([10, 20, 30, 40, 50], int64)
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
@@ -365,9 +365,9 @@ def test_streaming_chained_filter_project() raises:
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "y")
     ref col_y = result.columns[0].as_int64()
-    assert_equal(col_y[0], 30)
-    assert_equal(col_y[1], 40)
-    assert_equal(col_y[2], 50)
+    assert_equal(col_y[0].value(), 30)
+    assert_equal(col_y[1].value(), 40)
+    assert_equal(col_y[2].value(), 50)
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +397,8 @@ def test_parquet_scan_execute() raises:
     assert_equal(result.num_rows(), 5)
     assert_equal(result.num_columns(), 2)
     ref ids = result.columns[0].as_int64()
-    assert_equal(ids[0], 1)
-    assert_equal(ids[4], 5)
+    assert_equal(ids[0].value(), 1)
+    assert_equal(ids[4].value(), 5)
     remove(path)
 
 
@@ -411,8 +411,8 @@ def test_parquet_scan_filter() raises:
     )
     assert_equal(result.num_rows(), 2)
     ref ids = result.columns[0].as_int64()
-    assert_equal(ids[0], 4)
-    assert_equal(ids[1], 5)
+    assert_equal(ids[0].value(), 4)
+    assert_equal(ids[1].value(), 5)
     remove(path)
 
 
@@ -438,8 +438,8 @@ def test_parquet_scan_filter_select() raises:
     assert_equal(result.num_columns(), 1)
     assert_equal(result.schema.fields[0].name, "id")
     ref ids = result.columns[0].as_int64()
-    assert_equal(ids[0], 4)
-    assert_equal(ids[1], 5)
+    assert_equal(ids[0].value(), 4)
+    assert_equal(ids[1].value(), 5)
     remove(path)
 
 
@@ -451,8 +451,8 @@ def test_parquet_scan_filter_select() raises:
 def test_aggregate_sum() raises:
     """Grouped sum via the expression system."""
     var cols = List[AnyArray]()
-    cols.append(array[Int64Type]([1, 2, 1, 2, 1]).to_any())
-    cols.append(array[Int64Type]([10, 20, 30, 40, 50]).to_any())
+    cols.append(array([1, 2, 1, 2, 1], int64).to_any())
+    cols.append(array([10, 20, 30, 40, 50], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -464,20 +464,20 @@ def test_aggregate_sum() raises:
 
     # Key column.
     ref k = result.columns[0].as_int64()
-    assert_equal(k[0], 1)
-    assert_equal(k[1], 2)
+    assert_equal(k[0].value(), 1)
+    assert_equal(k[1].value(), 2)
 
     # Sum column (int64 — integer input produces integer output).
     ref s = result.columns[1].as_int64()
-    assert_equal(s[0], 90)  # 10 + 30 + 50
-    assert_equal(s[1], 60)  # 20 + 40
+    assert_equal(s[0].value(), 90)  # 10 + 30 + 50
+    assert_equal(s[1].value(), 60)  # 20 + 40
 
 
 def test_aggregate_count() raises:
     """Grouped count via the expression system."""
     var cols = List[AnyArray]()
-    cols.append(array[Int64Type]([1, 2, 1, 2, 1]).to_any())
-    cols.append(array[Int64Type]([10, 20, 30, 40, 50]).to_any())
+    cols.append(array([1, 2, 1, 2, 1], int64).to_any())
+    cols.append(array([10, 20, 30, 40, 50], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -486,16 +486,16 @@ def test_aggregate_count() raises:
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     ref c = result.columns[1].as_int64()
-    assert_equal(c[0], 3)  # key=1: 3 rows
-    assert_equal(c[1], 2)  # key=2: 2 rows
+    assert_equal(c[0].value(), 3)  # key=1: 3 rows
+    assert_equal(c[1].value(), 2)  # key=2: 2 rows
 
 
 def test_aggregate_sum_int64_precision() raises:
     """Grouped int64 sum via the expression system must stay exact above 2**53.
     """
     var cols = List[AnyArray]()
-    cols.append(array[Int64Type]([1, 1]).to_any())
-    cols.append(array[Int64Type]([9_007_199_254_740_993, 1]).to_any())
+    cols.append(array([1, 1], int64).to_any())
+    cols.append(array([9_007_199_254_740_993, 1], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -505,14 +505,14 @@ def test_aggregate_sum_int64_precision() raises:
     assert_equal(result.num_rows(), 1)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref s = result.columns[1].as_int64()
-    assert_equal(s[0], 9_007_199_254_740_994)
+    assert_equal(s[0].value(), 9_007_199_254_740_994)
 
 
 def test_aggregate_small_morsel() raises:
     """Aggregate with small morsel size forces multiple pulls."""
     var cols = List[AnyArray]()
-    cols.append(array[Int64Type]([1, 2, 1, 2, 1, 2]).to_any())
-    cols.append(array[Int64Type]([10, 20, 30, 40, 50, 60]).to_any())
+    cols.append(array([1, 2, 1, 2, 1, 2], int64).to_any())
+    cols.append(array([10, 20, 30, 40, 50, 60], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
@@ -523,8 +523,8 @@ def test_aggregate_small_morsel() raises:
     var result = execute(plan, ctx)
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()
-    assert_equal(s[0], 90)  # key=1: 10+30+50
-    assert_equal(s[1], 120)  # key=2: 20+40+60
+    assert_equal(s[0].value(), 90)  # key=1: 10+30+50
+    assert_equal(s[1].value(), 120)  # key=2: 20+40+60
 
 
 def main() raises:

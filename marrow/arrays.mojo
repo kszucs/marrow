@@ -373,7 +373,6 @@ struct BoolArray(
 
 
 # TODO: add conditional conformance where: T.is_primitive()
-@fieldwise_init
 struct PrimitiveArray[T: PrimitiveType](
     Array,
     ConvertibleFromPython,
@@ -393,6 +392,41 @@ struct PrimitiveArray[T: PrimitiveType](
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Buffer[mut=False]
+
+    def __init__(
+        out self,
+        dtype: Self.T,
+        *,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        bitmap: Optional[Bitmap[mut=False]],
+        buffer: Buffer[mut=False],
+    ):
+        self.dtype = dtype
+        self.length = length
+        self.nulls = nulls
+        self.offset = offset
+        self.bitmap = bitmap
+        self.buffer = buffer
+
+    def __init__[DT: NumericType](
+        out self: PrimitiveArray[DT],
+        *,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        bitmap: Optional[Bitmap[mut=False]],
+        buffer: Buffer[mut=False],
+    ):
+        self = PrimitiveArray[DT](
+            DT(),
+            length=length,
+            nulls=nulls,
+            offset=offset,
+            bitmap=bitmap,
+            buffer=buffer,
+        )
 
     def __init__(out self, *, py: PythonObject) raises:
         self = py.downcast_value_ptr[Self]()[].copy()
