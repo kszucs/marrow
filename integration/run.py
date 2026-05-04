@@ -28,6 +28,7 @@ import sys
 
 from archery.integration import datagen as _datagen
 from archery.integration.runner import run_all_tests
+from archery.integration.util import SKIP_C_ARRAY, SKIP_C_SCHEMA
 from integration.reporter import Tee, report
 from integration.tester import MarrowTester
 
@@ -48,6 +49,14 @@ _UNSUPPORTED = {
     'run_end_encoded',
 }
 
+# PyArrow cannot construct empty arrays for nested-dictionary types
+# (ArrowNotImplementedError), so C Data schema/array tests are skipped for
+# Mojo.  IPC tests are unaffected: other implementations (Rust, C++, Go)
+# validate directly without going through PyArrow.
+_SKIP_C_DATA = {
+    'nested_dictionary',
+}
+
 _orig_get_generated = _datagen.get_generated_json_files
 
 
@@ -56,6 +65,9 @@ def _patched_get_generated_json_files(tempdir=None):
     for f in files:
         if f.name in _UNSUPPORTED:
             f.skip_tester('Mojo')
+        if f.name in _SKIP_C_DATA:
+            f.skip_format(SKIP_C_SCHEMA, 'Mojo')
+            f.skip_format(SKIP_C_ARRAY, 'Mojo')
     return files
 
 

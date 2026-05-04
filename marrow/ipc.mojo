@@ -26,7 +26,7 @@ from std.memory import Span
 from std.pathlib import Path
 from std.sys import size_of
 from std.sys.info import is_big_endian
-from .arrays import AnyArray, ArrayData, DictionaryArray
+from .arrays import AnyArray, ArrayData, DictionaryArray, NullArray
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
@@ -127,7 +127,9 @@ struct _DictLookup(Movable):
     var value_ipc_info: _FieldIpcInfo
 
     def __init__(
-        out self, var value_type: dt.AnyDataType, var value_ipc_info: _FieldIpcInfo
+        out self,
+        var value_type: dt.AnyDataType,
+        var value_ipc_info: _FieldIpcInfo,
     ):
         self.value_type = value_type^
         self.value_ipc_info = value_ipc_info^
@@ -188,7 +190,8 @@ struct _FieldIpcInfo(Copyable, Movable):
             for i in range(len(st.fields)):
                 if i < len(ipc_info.children):
                     var found = _FieldIpcInfo.find(
-                        st.fields[i].dtype.copy(), ipc_info.children[i].copy(),
+                        st.fields[i].dtype.copy(),
+                        ipc_info.children[i].copy(),
                         target_id,
                     )
                     if found:
@@ -201,7 +204,8 @@ struct _FieldIpcInfo(Copyable, Movable):
         ipc_infos: List[_FieldIpcInfo],
         target_id: Int,
     ) raises -> Optional[_DictLookup]:
-        """Search schema fields and their IPC shadow tree for the given dict_id."""
+        """Search schema fields and their IPC shadow tree for the given dict_id.
+        """
         for i in range(len(fields)):
             if i < len(ipc_infos):
                 var found = _FieldIpcInfo.find(
@@ -614,28 +618,6 @@ struct _FlatbufReader(Movable):
 # ---------------------------------------------------------------------------
 
 
-def _time_unit_to_ipc(unit: dt.TimeUnit) -> UInt16:
-    if unit == dt.second:
-        return _TIME_UNIT_SECOND
-    elif unit == dt.millisecond:
-        return _TIME_UNIT_MILLISECOND
-    elif unit == dt.microsecond:
-        return _TIME_UNIT_MICROSECOND
-    else:
-        return _TIME_UNIT_NANOSECOND
-
-
-def _ipc_to_time_unit(v: UInt16) -> dt.TimeUnit:
-    if v == _TIME_UNIT_SECOND:
-        return dt.second
-    elif v == _TIME_UNIT_MILLISECOND:
-        return dt.millisecond
-    elif v == _TIME_UNIT_MICROSECOND:
-        return dt.microsecond
-    else:
-        return dt.nanosecond
-
-
 struct _IpcEncoder(Movable):
     """Encodes Arrow IPC metadata (schema, record batch, footer) into FlatBuffers.
     """
@@ -644,6 +626,17 @@ struct _IpcEncoder(Movable):
 
     def __init__(out self, capacity: Int = 512):
         self._fb = _FlatbufWriter(capacity)
+
+    @staticmethod
+    def _time_unit_to_wire(unit: dt.TimeUnit) -> UInt16:
+        if unit == dt.second:
+            return _TIME_UNIT_SECOND
+        elif unit == dt.millisecond:
+            return _TIME_UNIT_MILLISECOND
+        elif unit == dt.microsecond:
+            return _TIME_UNIT_MICROSECOND
+        else:
+            return _TIME_UNIT_NANOSECOND
 
     @staticmethod
     def encode_schema(schema: Schema) raises -> List[UInt8]:
@@ -692,7 +685,9 @@ struct _IpcEncoder(Movable):
         var schema_pos = enc._write_schema_table(schema)
         var dicts_vec = enc._write_blocks_vec(dict_blocks)
         var blocks_vec = enc._write_blocks_vec(blocks)
-        var footer_pos = enc._write_footer_table(schema_pos, dicts_vec, blocks_vec)
+        var footer_pos = enc._write_footer_table(
+            schema_pos, dicts_vec, blocks_vec
+        )
         return enc._finish(footer_pos)
 
     @staticmethod
@@ -910,7 +905,7 @@ struct _IpcEncoder(Movable):
             else:
                 unit = dtype.as_time64().unit
                 bw = 64
-            var ipc_unit = _time_unit_to_ipc(unit)
+            var ipc_unit = _IpcEncoder._time_unit_to_wire(unit)
             var ts = self._fb.offset()
             var bw_at = self._fb.prepend_i32(bw)
             var u_at = self._fb.prepend_u16(ipc_unit)
@@ -920,7 +915,7 @@ struct _IpcEncoder(Movable):
             return self._fb.write_table(flds, ts)
         elif dtype.is_timestamp():
             ref tstype = dtype.as_timestamp()
-            var ipc_unit = _time_unit_to_ipc(tstype.unit)
+            var ipc_unit = _IpcEncoder._time_unit_to_wire(tstype.unit)
             var ts = self._fb.offset()
             var tz_at: Optional[UInt32] = None
             if tstype.timezone:
@@ -934,7 +929,7 @@ struct _IpcEncoder(Movable):
             return self._fb.write_table(flds, ts)
         elif dtype.is_duration():
             var unit = dtype.as_duration().unit
-            var ipc_unit = _time_unit_to_ipc(unit)
+            var ipc_unit = _IpcEncoder._time_unit_to_wire(unit)
             var ts = self._fb.offset()
             var u_at = self._fb.prepend_u16(ipc_unit)
             var flds = List[_FieldOffset]()
@@ -1039,27 +1034,38 @@ struct _IpcEncoder(Movable):
 
         if dtype.is_list():
             child_positions.append(
-                self._write_field(dtype.as_list().value_field().copy(), next_dict_id)
+                self._write_field(
+                    dtype.as_list().value_field().copy(), next_dict_id
+                )
             )
         elif dtype.is_fixed_size_list():
             child_positions.append(
-                self._write_field(dtype.as_fixed_size_list().value_field().copy(), next_dict_id)
+                self._write_field(
+                    dtype.as_fixed_size_list().value_field().copy(),
+                    next_dict_id,
+                )
             )
         elif dtype.is_struct():
             ref st = dtype.as_struct()
             for i in range(len(st.fields)):
-                child_positions.append(self._write_field(st.fields[i], next_dict_id))
+                child_positions.append(
+                    self._write_field(st.fields[i], next_dict_id)
+                )
         elif dtype.is_dictionary():
             # Write children of the VALUE TYPE first (inner dicts before outer).
             var val_type = dtype.as_dictionary().value_type().copy()
             if val_type.is_list():
                 child_positions.append(
-                    self._write_field(val_type.as_list().value_field().copy(), next_dict_id)
+                    self._write_field(
+                        val_type.as_list().value_field().copy(), next_dict_id
+                    )
                 )
             elif val_type.is_struct():
                 ref st = val_type.as_struct()
                 for i in range(len(st.fields)):
-                    child_positions.append(self._write_field(st.fields[i], next_dict_id))
+                    child_positions.append(
+                        self._write_field(st.fields[i], next_dict_id)
+                    )
             # Assign this dictionary's own id AFTER all nested children.
             own_dict_id = next_dict_id
             next_dict_id += 1
@@ -1171,6 +1177,27 @@ struct _IpcDecoder(Movable):
     def peek_header(self) raises -> UInt8:
         return self._r.read_u8(self._r.root(), 1, 0)
 
+    def body_length(self) raises -> Int64:
+        """Body length in bytes from the Message table (slot 3)."""
+        return self._r.read_i64(self._r.root(), 3, 0)
+
+    def peek_dict_id(self) raises -> Int:
+        """Dict id from a DictionaryBatch message header."""
+        var msg_tp = self._r.root()
+        var db_pos = self._r.read_table(msg_tp, 2)
+        return Int(self._r.read_i64(db_pos, 0, 0))
+
+    @staticmethod
+    def _wire_to_time_unit(v: UInt16) -> dt.TimeUnit:
+        if v == _TIME_UNIT_SECOND:
+            return dt.second
+        elif v == _TIME_UNIT_MILLISECOND:
+            return dt.millisecond
+        elif v == _TIME_UNIT_MICROSECOND:
+            return dt.microsecond
+        else:
+            return dt.nanosecond
+
     def _read_kv_vec(
         self, table_pos: UInt32, slot: Int
     ) raises -> Dict[String, String]:
@@ -1184,9 +1211,7 @@ struct _IpcDecoder(Movable):
             result[key] = val
         return result^
 
-    def decode_schema(
-        self, mut out_ipc: List[_FieldIpcInfo]
-    ) raises -> Schema:
+    def decode_schema(self, mut out_ipc: List[_FieldIpcInfo]) raises -> Schema:
         var msg_pos = self._r.root()
         var schema_pos = self._r.read_table(msg_pos, 2)
         var fields = self._decode_schema_fields(schema_pos, out_ipc)
@@ -1234,7 +1259,9 @@ struct _IpcDecoder(Movable):
         var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
         var columns = List[AnyArray]()
         for i in range(len(schema.fields)):
-            var ipc = ipc_infos[i].copy() if i < len(ipc_infos) else _FieldIpcInfo()
+            var ipc = (
+                ipc_infos[i].copy() if i < len(ipc_infos) else _FieldIpcInfo()
+            )
             columns.append(batch_dec.read_array(schema.fields[i].dtype, ipc))
         return RecordBatch(schema=schema, columns=columns^)
 
@@ -1421,7 +1448,7 @@ struct _IpcDecoder(Movable):
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
             var bw = Int(self._r.read_i32(tp, 1, 32))
-            var unit = _ipc_to_time_unit(unit_v)
+            var unit = _IpcDecoder._wire_to_time_unit(unit_v)
             if bw == 32:
                 dtype = dt.time32(unit)
             else:
@@ -1430,11 +1457,13 @@ struct _IpcDecoder(Movable):
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_SECOND)
             var tz = self._r.read_string(tp, 1)
-            dtype = dt.timestamp(_ipc_to_time_unit(unit_v), tz).to_any()
+            dtype = dt.timestamp(
+                _IpcDecoder._wire_to_time_unit(unit_v), tz
+            ).to_any()
         elif type_type == _TYPE_DURATION:
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
-            dtype = dt.duration(_ipc_to_time_unit(unit_v)).to_any()
+            dtype = dt.duration(_IpcDecoder._wire_to_time_unit(unit_v)).to_any()
         elif type_type == _TYPE_STRUCT:
             dtype = dt.struct_(children^)
         else:
@@ -1539,7 +1568,7 @@ struct _MessageReader(Movable):
         var meta_end = raw_end + (8 - raw_end % 8) % 8
 
         var dec = _IpcDecoder(meta.copy())
-        var body_len = Int(dec._r.read_i64(dec._r.root(), 3, 0))
+        var body_len = Int(dec.body_length())
 
         for i in range(body_len):
             body.append(self._bytes[meta_end + i])
@@ -1614,22 +1643,30 @@ struct _BatchEncoder(Movable):
     def collect_dict_pairs(
         data: ArrayData, mut pairs: List[_DictPair], mut next_id: Int
     ) raises:
-        """DFS inner-first: append (dict_id, values) for every dict array in the tree."""
+        """DFS inner-first: append (dict_id, values) for every dict array in the tree.
+        """
         if data.dtype.is_dictionary():
             _BatchEncoder.collect_dict_pairs(data.children[0], pairs, next_id)
-            pairs.append(_DictPair(next_id, AnyArray.from_data(data.children[0])))
+            pairs.append(
+                _DictPair(next_id, AnyArray.from_data(data.children[0]))
+            )
             next_id += 1
         elif data.dtype.is_list():
             if len(data.children) > 0:
-                _BatchEncoder.collect_dict_pairs(data.children[0], pairs, next_id)
+                _BatchEncoder.collect_dict_pairs(
+                    data.children[0], pairs, next_id
+                )
         elif data.dtype.is_struct():
             for i in range(len(data.children)):
-                _BatchEncoder.collect_dict_pairs(data.children[i], pairs, next_id)
+                _BatchEncoder.collect_dict_pairs(
+                    data.children[i], pairs, next_id
+                )
 
     def _build_body(
         mut self, mut buf_meta: List[_BodyBuffer], mut body: List[UInt8]
     ):
-        """Assemble raw buffers into a padded body, populating buf_meta offsets."""
+        """Assemble raw buffers into a padded body, populating buf_meta offsets.
+        """
         for buf in self.raw_bufs:
             _pad_to(body, 8)
             buf_meta.append(_BodyBuffer(Int64(len(body)), Int64(len(buf))))
@@ -1736,16 +1773,7 @@ struct _BatchDecoder(Movable):
         # Null type: FieldNode is consumed but no body buffers — neither validity
         # nor data — per Arrow spec.
         if dtype.is_null():
-            var ad = ArrayData(
-                dtype=dt.null,
-                length=length,
-                nulls=null_count,
-                offset=0,
-                bitmap=None,
-                buffers=List[Buffer[mut=False]](),
-                children=List[ArrayData](),
-            )
-            return AnyArray.from_data(ad)
+            return NullArray(length)
 
         var validity_buf = self.bufs[self.buf_idx]
         self.buf_idx += 1
@@ -1766,24 +1794,17 @@ struct _BatchDecoder(Movable):
         # system remains free of IPC metadata.
         if dtype.is_dictionary():
             ref d = dtype.as_dictionary()
-            self._consume_buffer(data_buffers)
             var dict_id = ipc_info.dict_id
             if dict_id < 0 or dict_id >= len(self.dict_values):
                 raise Error(
                     "_BatchDecoder: no values for dict_id " + String(dict_id)
                 )
-            var values = self.dict_values[dict_id].copy()
-            var indices_ad = ArrayData(
-                dtype=d.index_type().copy(),
-                length=length,
-                nulls=null_count,
-                offset=0,
-                bitmap=bitmap,
-                buffers=data_buffers^,
-                children=List[ArrayData](),
+            var indices = self._consume_primitive_array(
+                d.index_type().copy(), length, null_count, bitmap^
             )
+            var values = self.dict_values[dict_id].copy()
             return DictionaryArray.from_arrays(
-                AnyArray.from_data(indices_ad), values^, d.ordered
+                indices^, values^, d.ordered
             ).to_any()
 
         if dtype.is_string() or dtype.is_binary():
@@ -1798,12 +1819,20 @@ struct _BatchDecoder(Movable):
             self._consume_buffer(data_buffers)
 
         if dtype.is_list():
-            var child_ipc = ipc_info.children[0].copy() if len(ipc_info.children) > 0 else _FieldIpcInfo()
+            var child_ipc = (
+                ipc_info.children[0].copy() if len(ipc_info.children)
+                > 0 else _FieldIpcInfo()
+            )
             children.append(
-                self.read_array(dtype.as_list().value_type(), child_ipc).to_data()
+                self.read_array(
+                    dtype.as_list().value_type(), child_ipc
+                ).to_data()
             )
         elif dtype.is_fixed_size_list():
-            var child_ipc = ipc_info.children[0].copy() if len(ipc_info.children) > 0 else _FieldIpcInfo()
+            var child_ipc = (
+                ipc_info.children[0].copy() if len(ipc_info.children)
+                > 0 else _FieldIpcInfo()
+            )
             children.append(
                 self.read_array(
                     dtype.as_fixed_size_list().value_type(), child_ipc
@@ -1812,8 +1841,13 @@ struct _BatchDecoder(Movable):
         elif dtype.is_struct():
             ref st = dtype.as_struct()
             for i in range(len(st.fields)):
-                var child_ipc = ipc_info.children[i].copy() if i < len(ipc_info.children) else _FieldIpcInfo()
-                children.append(self.read_array(st.fields[i].dtype, child_ipc).to_data())
+                var child_ipc = (
+                    ipc_info.children[i].copy() if i
+                    < len(ipc_info.children) else _FieldIpcInfo()
+                )
+                children.append(
+                    self.read_array(st.fields[i].dtype, child_ipc).to_data()
+                )
 
         var ad = ArrayData(
             dtype=dtype.copy(),
@@ -1842,6 +1876,29 @@ struct _BatchDecoder(Movable):
             )
         else:
             out.append(Buffer.alloc_zeroed[DType.uint8](0).to_immutable())
+
+    def _consume_primitive_array(
+        mut self,
+        dtype: dt.AnyDataType,
+        length: Int,
+        nulls: Int,
+        var bitmap: Optional[Bitmap[mut=False]],
+    ) raises -> AnyArray:
+        """Read the next body buffer and build a primitive AnyArray of the given dtype.
+        """
+        var bufs = List[Buffer[mut=False]]()
+        self._consume_buffer(bufs)
+        return AnyArray.from_data(
+            ArrayData(
+                dtype=dtype.copy(),
+                length=length,
+                nulls=nulls,
+                offset=0,
+                bitmap=bitmap,
+                buffers=bufs^,
+                children=List[ArrayData](),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2029,23 +2086,20 @@ struct RecordBatchFileReader(Movable):
             var body = List[UInt8]()
             if not self._msg_reader.read_next(meta, body):
                 break
-            var db_peek = _IpcDecoder(meta.copy())
-            var msg_tp = db_peek._r.root()
-            var db_pos = db_peek._r.read_table(msg_tp, 2)
-            var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
-            var lkup = _FieldIpcInfo.find_in_schema(self.schema.fields, self._ipc_infos, dict_id)
+            var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
+            var lkup = _FieldIpcInfo.find_in_schema(
+                self.schema.fields, self._ipc_infos, dict_id
+            )
             if lkup:
-                var full_dec = _IpcDecoder(meta^)
-                var values = full_dec.decode_dict_batch(
-                    lkup.value().value_type, lkup.value().value_ipc_info, body^,
+                var dec = _IpcDecoder(meta^)
+                var values = dec.decode_dict_batch(
+                    lkup.value().value_type,
+                    lkup.value().value_ipc_info,
+                    body^,
                     self._dict_values,
                 )
-                # Store at index dict_id; grow list with empty placeholders if needed.
                 while len(self._dict_values) <= dict_id:
-                    self._dict_values.append(AnyArray.from_data(
-                        ArrayData(dt.null, 0, 0, 0, None,
-                                  List[Buffer[mut=False]](), List[ArrayData]())
-                    ))
+                    self._dict_values.append(NullArray(0))
                 self._dict_values[dict_id] = values^
 
     def num_record_batches(self) -> Int:
@@ -2103,24 +2157,20 @@ struct RecordBatchStreamReader(Movable):
             var peek = _IpcDecoder(meta.copy())
             header_type = peek.peek_header()
             if Int(header_type) == Int(_HEADER_DICTIONARY_BATCH):
-                var db_peek = _IpcDecoder(meta.copy())
-                var msg_tp = db_peek._r.root()
-                var db_pos = db_peek._r.read_table(msg_tp, 2)
-                var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
+                var dict_id = _IpcDecoder(meta.copy()).peek_dict_id()
                 var lkup = _FieldIpcInfo.find_in_schema(
                     self.schema.fields, self._ipc_infos, dict_id
                 )
                 if lkup:
-                    var full_dec = _IpcDecoder(meta^)
-                    var values = full_dec.decode_dict_batch(
-                        lkup.value().value_type, lkup.value().value_ipc_info,
-                        body^, dict_values,
+                    var dec = _IpcDecoder(meta^)
+                    var values = dec.decode_dict_batch(
+                        lkup.value().value_type,
+                        lkup.value().value_ipc_info,
+                        body^,
+                        dict_values,
                     )
                     while len(dict_values) <= dict_id:
-                        dict_values.append(AnyArray.from_data(
-                            ArrayData(dt.null, 0, 0, 0, None,
-                                      List[Buffer[mut=False]](), List[ArrayData]())
-                        ))
+                        dict_values.append(NullArray(0))
                     dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):
                 var dec = _IpcDecoder(meta^)
