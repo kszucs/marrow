@@ -23,7 +23,7 @@ Concrete zero-size type structs (one per Arrow type):
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     Float16Type, Float32Type, Float64Type,
     BinaryType, StringType,
-    ListType, FixedSizeListType, FixedSizeBinaryType, StructType,
+    ListType, FixedSizeListType, FixedSizeBinaryType, StructType, DictionaryType,
     Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type
 
@@ -472,6 +472,63 @@ struct StructType(DataType):
         writer.write(">")
 
 
+struct DictionaryType(DataType):
+    """Dictionary-encoded type — indices into a separate dictionary array.
+
+    Equivalent to PyArrow's ``pa.dictionary(index_type, value_type, ordered)``.
+    The index type must be an integer type (int8/16/32/64, uint8/16/32/64).
+    The value type (the dictionary) can be any Arrow type.
+    """
+
+    var _index_type: OwnedPointer[AnyDataType]
+    var _value_type: OwnedPointer[AnyDataType]
+    var ordered: Bool
+
+    def __init__(
+        out self,
+        var index_type: AnyDataType,
+        var value_type: AnyDataType,
+        ordered: Bool = False,
+    ) raises:
+        if not index_type.is_integer():
+            raise Error(
+                "DictionaryType: index_type must be an integer type, got: ",
+                index_type,
+            )
+        self._index_type = OwnedPointer(index_type^)
+        self._value_type = OwnedPointer(value_type^)
+        self.ordered = ordered
+
+    def __init__(out self, *, copy: Self):
+        self._index_type = OwnedPointer(copy._index_type[].copy())
+        self._value_type = OwnedPointer(copy._value_type[].copy())
+        self.ordered = copy.ordered
+
+    def index_type(ref self) -> ref[self._index_type] AnyDataType:
+        return self._index_type[]
+
+    def value_type(ref self) -> ref[self._value_type] AnyDataType:
+        return self._value_type[]
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._index_type[] == other._index_type[]
+            and self._value_type[] == other._value_type[]
+            and self.ordered == other.ordered
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "dictionary<values=",
+            self._value_type[],
+            ", indices=",
+            self._index_type[],
+            ", ordered=",
+            Int(self.ordered),
+            ">",
+        )
+
+
 # ---------------------------------------------------------------------------
 # AnyDataType — Variant-based type-erased handle
 # ---------------------------------------------------------------------------
@@ -505,6 +562,7 @@ struct AnyDataType(
         FixedSizeListType,
         FixedSizeBinaryType,
         StructType,
+        DictionaryType,
         Date32Type,
         Date64Type,
         Time32Type,
@@ -662,6 +720,9 @@ struct AnyDataType(
     def is_struct(self) -> Bool:
         return self._v.isa[StructType]()
 
+    def is_dictionary(self) -> Bool:
+        return self._v.isa[DictionaryType]()
+
     def is_date32(self) -> Bool:
         return self._v.isa[Date32Type]()
 
@@ -746,6 +807,10 @@ struct AnyDataType(
     def as_struct(ref self) -> ref[self._v] StructType:
         """For struct types, returns the inner StructType."""
         return self._as[StructType]()
+
+    def as_dictionary(ref self) -> ref[self._v] DictionaryType:
+        """For dictionary types, returns the inner DictionaryType."""
+        return self._as[DictionaryType]()
 
     def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryType:
         """For fixed-size binary types, returns the inner FixedSizeBinaryType.
@@ -841,6 +906,16 @@ def duration(unit: TimeUnit) -> DurationType:
 def struct_(var fields: List[Field]) -> StructType:
     """Construct a struct type from a list of fields."""
     return StructType(fields^)
+
+
+def dictionary(
+    var index_type: AnyDataType, var value_type: AnyDataType, ordered: Bool = False
+) raises -> DictionaryType:
+    """Construct a dictionary type. Equivalent to PyArrow's ``pa.dictionary()``.
+
+    The index type must be an integer type (int8/16/32/64, uint8/16/32/64).
+    """
+    return DictionaryType(index_type^, value_type^, ordered)
 
 
 def struct_(var *fields: Field) -> StructType:

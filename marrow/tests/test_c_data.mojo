@@ -929,5 +929,87 @@ def test_all_temporal_array_types_from_pyarrow() raises:
     assert_equal(arr_dur[0].value(), 5000)
 
 
+def test_dictionary_dtype_schema_roundtrip() raises:
+    """CArrowSchema round-trip for dictionary(int32, string)."""
+    var dt = dictionary(AnyDataType(int32), AnyDataType(string)).to_any()
+    var c_schema = CArrowSchema.from_dtype(dt)
+    var rt = c_schema.to_dtype()
+    assert_true(rt.is_dictionary())
+    ref dd = rt.as_dictionary()
+    assert_true(dd.index_type() == AnyDataType(int32))
+    assert_true(dd.value_type() == AnyDataType(string))
+    assert_false(dd.ordered)
+
+
+def test_dictionary_ordered_roundtrip() raises:
+    """ARROW_FLAG_DICT_ORDERED is preserved in the schema round-trip."""
+    var dt = dictionary(AnyDataType(int8), AnyDataType(int32), ordered=True).to_any()
+    var c_schema = CArrowSchema.from_dtype(dt)
+    var rt = c_schema.to_dtype()
+    assert_true(rt.is_dictionary())
+    assert_true(rt.as_dictionary().ordered)
+
+
+def test_dictionary_from_pyarrow() raises:
+    """Import a PyArrow dictionary array via C Data Interface."""
+    var pa = Python.import_module("pyarrow")
+
+    var pa_vals = pa.array(Python.list("cat", "dog", "fish"))
+    var pa_idx = pa.array(Python.list(0, 1, 2, 0, 1), type=pa.int8())
+    var pa_dict = pa.DictionaryArray.from_arrays(pa_idx, pa_vals)
+
+    var c_schema = c_schema_from_pyobj(pa_dict.type)
+    var dtype = c_schema.to_dtype()
+    assert_true(dtype.is_dictionary())
+
+    var c_array = c_array_from_pyobj(pa_dict)
+    var data = c_array^.to_array(dtype)
+    ref da = data.as_dictionary()
+    assert_equal(len(da), 5)
+    assert_equal(da[0].value().as_string().to_string(), "cat")
+    assert_equal(da[1].value().as_string().to_string(), "dog")
+    assert_equal(da[2].value().as_string().to_string(), "fish")
+    assert_equal(da[3].value().as_string().to_string(), "cat")
+    assert_equal(da[4].value().as_string().to_string(), "dog")
+
+
+def test_dictionary_to_pyarrow() raises:
+    """Export a Mojo dictionary array to PyArrow via C Data Interface."""
+    from marrow.arrays import DictionaryArray
+    from marrow.builders import Int32Builder, StringBuilder
+
+    var pa = Python.import_module("pyarrow")
+
+    var vb = StringBuilder()
+    vb.append("red")
+    vb.append("green")
+    var values: AnyArray = vb.finish()
+
+    var ib = Int32Builder()
+    ib.append(0)
+    ib.append(1)
+    ib.append(0)
+    var indices: AnyArray = ib.finish()
+    var arr: AnyArray = DictionaryArray.from_arrays(indices^, values^)
+
+    # Verify CArrowSchema structure: format = "i" (int32 index), dictionary != null
+    var c_schema = CArrowSchema.from_dtype(arr.dtype())
+    var fmt = String(StringSlice(unsafe_from_utf8_ptr=c_schema.format))
+    assert_equal(fmt, "i")  # int32 index type format
+    # dictionary schema pointer must be non-null
+    assert_true(
+        UnsafePointer(to=c_schema.dictionary).bitcast[UInt64]()[0] != 0
+    )
+
+    # Round-trip the array back through CArrow and check values
+    var c_array = CArrowArray.from_array(arr)
+    var data = c_array^.to_array(arr.dtype())
+    ref da = data.as_dictionary()
+    assert_equal(len(da), 3)
+    assert_equal(da[0].value().as_string().to_string(), "red")
+    assert_equal(da[1].value().as_string().to_string(), "green")
+    assert_equal(da[2].value().as_string().to_string(), "red")
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

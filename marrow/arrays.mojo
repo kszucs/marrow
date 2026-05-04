@@ -53,6 +53,7 @@ from .scalars import (
     StringScalar,
     ListScalar,
     StructScalar,
+    DictionaryScalar,
     Scalar as ScalarTrait,
 )
 
@@ -1564,6 +1565,204 @@ struct StructArray(Array):
 
 
 # ---------------------------------------------------------------------------
+# DictionaryArray
+# ---------------------------------------------------------------------------
+
+
+struct DictionaryArray(Array):
+    """An Arrow dictionary-encoded array.
+
+    Stores integer indices into a separate dictionary (values) array.
+    Equivalent to PyArrow's ``pyarrow.DictionaryArray``.
+
+    Memory layout matches the Arrow spec: the raw indices buffer is stored in
+    ``buffers[0]``; the dictionary values array is stored in ``children[0]``
+    when round-tripping through ``ArrayData`` / C Data Interface.
+    """
+
+    comptime ScalarType = DictionaryScalar
+
+    var _dtype: AnyDataType
+    var _length: Int
+    var _nulls: Int
+    var _offset: Int    # extra logical offset into _indices (on top of _indices' own offset)
+    var _indices: OwnedPointer[AnyArray]
+    var _values: OwnedPointer[AnyArray]
+
+    def __init__(
+        out self,
+        *,
+        dtype: AnyDataType,
+        length: Int,
+        nulls: Int,
+        offset: Int,
+        var indices: AnyArray,
+        var values: AnyArray,
+    ):
+        self._dtype = dtype.copy()
+        self._length = length
+        self._nulls = nulls
+        self._offset = offset
+        self._indices = OwnedPointer(indices^)
+        self._values = OwnedPointer(values^)
+
+    def __init__(out self, *, copy: Self):
+        self._dtype = copy._dtype.copy()
+        self._length = copy._length
+        self._nulls = copy._nulls
+        self._offset = copy._offset
+        self._indices = OwnedPointer(copy._indices[].copy())
+        self._values = OwnedPointer(copy._values[].copy())
+
+    def __init__(out self, data: ArrayData) raises:
+        ref dt = data.dtype.as_dictionary()
+        var indices_data = ArrayData(
+            dtype=dt.index_type().copy(),
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            bitmap=data.bitmap,
+            buffers=data.buffers.copy(),
+            children=[],
+        )
+        self._dtype = data.dtype.copy()
+        self._length = data.length
+        self._nulls = data.nulls
+        self._offset = 0  # offset is now embedded in the reconstructed _indices
+        self._indices = OwnedPointer(AnyArray.from_data(indices_data))
+        self._values = OwnedPointer(AnyArray.from_data(data.children[0]))
+
+    @staticmethod
+    def from_arrays(
+        var indices: AnyArray, var values: AnyArray, ordered: Bool = False
+    ) raises -> Self:
+        """Construct from existing indices and dictionary arrays.
+
+        Matches PyArrow's ``DictionaryArray.from_arrays(indices, dictionary)`` API.
+        """
+        if not indices.dtype().is_integer():
+            raise Error(
+                "DictionaryArray: indices must have an integer dtype, got: ",
+                indices.dtype(),
+            )
+        var n = indices.length()
+        return Self(
+            dtype=dictionary(indices.dtype(), values.dtype(), ordered),
+            length=n,
+            nulls=indices.null_count(),
+            offset=0,
+            indices=indices^,
+            values=values^,
+        )
+
+    def __len__(self) -> Int:
+        return self._length
+
+    def __str__(self) -> String:
+        return String.write(self)
+
+    def type(self) -> AnyDataType:
+        return self._dtype.copy()
+
+    def null_count(self) -> Int:
+        return self._nulls
+
+    def is_valid(self, index: Int) -> Bool:
+        return self._indices[].is_valid(self._offset + index)
+
+    def indices(self) -> AnyArray:
+        """Return the indices array. Matches PyArrow's DictionaryArray.indices."""
+        return self._indices[].copy()
+
+    def dictionary(self) -> AnyArray:
+        """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary."""
+        return self._values[].copy()
+
+    def __getitem__(self, index: Int) raises -> DictionaryScalar:
+        if index < 0 or index >= self._length:
+            raise Error(
+                t"index {index} out of bounds for length {self._length}"
+            )
+        var adj = self._offset + index
+        if not self._indices[].is_valid(adj):
+            return DictionaryScalar.null(self._dtype.copy())
+        var idx_scalar = self._indices[][adj]
+        ref index_type = self._dtype.as_dictionary().index_type()
+        var dict_idx: Int
+        if index_type.is_int8():
+            dict_idx = Int(idx_scalar.as_int8().value())
+        elif index_type.is_int16():
+            dict_idx = Int(idx_scalar.as_int16().value())
+        elif index_type.is_int32():
+            dict_idx = Int(idx_scalar.as_int32().value())
+        elif index_type.is_int64():
+            dict_idx = Int(idx_scalar.as_int64().value())
+        elif index_type.is_uint8():
+            dict_idx = Int(idx_scalar.as_uint8().value())
+        elif index_type.is_uint16():
+            dict_idx = Int(idx_scalar.as_uint16().value())
+        elif index_type.is_uint32():
+            dict_idx = Int(idx_scalar.as_uint32().value())
+        elif index_type.is_uint64():
+            dict_idx = Int(idx_scalar.as_uint64().value())
+        else:
+            raise Error("DictionaryArray: unexpected index type: ", index_type)
+        var decoded = self._values[][dict_idx]
+        return DictionaryScalar(dtype=self._dtype.copy(), decoded=decoded^)
+
+    def slice(self, offset: Int, length: Int) -> Self:
+        """Zero-copy slice: adjusts logical offset, shares indices and values."""
+        return Self(
+            dtype=self._dtype.copy(),
+            length=length,
+            nulls=self._nulls,
+            offset=self._offset + offset,
+            indices=self._indices[].copy(),
+            values=self._values[].copy(),
+        )
+
+    def to_any(deinit self) -> AnyArray:
+        return AnyArray(self^)
+
+    def to_data(self) raises -> ArrayData:
+        """Extract generic ArrayData layout for C Data Interface interop.
+
+        The dictionary values array is stored as ``children[0]``.
+        """
+        var indices_data = self._indices[].to_data()
+        var values_data = self._values[].to_data()
+        return ArrayData(
+            dtype=self._dtype.copy(),
+            length=self._length,
+            nulls=self._nulls,
+            offset=self._offset + indices_data.offset,
+            bitmap=indices_data.bitmap,
+            buffers=indices_data.buffers.copy(),
+            children=[values_data^],
+        )
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._dtype == other._dtype
+            and self._length == other._length
+            and self._indices[] == other._indices[]
+            and self._values[] == other._values[]
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            "DictionaryArray(values=",
+            self._values[],
+            ", indices=",
+            self._indices[],
+            ")",
+        )
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+# ---------------------------------------------------------------------------
 # ChunkedArray
 # ---------------------------------------------------------------------------
 
@@ -1687,6 +1886,7 @@ struct AnyArray(
         FixedSizeListArray,
         FixedSizeBinaryArray,
         StructArray,
+        DictionaryArray,
     ]
 
     var _v: Self.VariantType
@@ -1911,6 +2111,9 @@ struct AnyArray(
     def as_struct(ref self) -> ref[self._v] StructArray:
         return self._as[StructArray]()
 
+    def as_dictionary(ref self) -> ref[self._v] DictionaryArray:
+        return self._as[DictionaryArray]()
+
     # --- factory from generic layout ---
 
     @staticmethod
@@ -1978,6 +2181,8 @@ struct AnyArray(
             return AnyArray(Decimal256Array(data))
         elif dt.is_struct():
             return AnyArray(StructArray(data))
+        elif dt.is_dictionary():
+            return AnyArray(DictionaryArray(data))
         raise Error("from_data: unsupported dtype")
 
     @staticmethod

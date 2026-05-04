@@ -6,7 +6,7 @@ from marrow.dtypes import *
 
 def test_bool_type() raises:
     assert_true(dt.bool_ == dt.bool_)
-    assert_false(dt.bool_ == dt.int64)
+    assert_false(AnyDataType(dt.bool_) == AnyDataType(dt.int64))
 
     var t = AnyDataType(dt.bool_)
     assert_true(t.is_bool())
@@ -128,17 +128,17 @@ def test_byte_width() raises:
 
 
 def test_eq() raises:
-    var a = UInt64Type()
-    var b = UInt64Type()
-    var c = Int32Type()
+    var a = AnyDataType(UInt64Type())
+    var b = AnyDataType(UInt64Type())
+    var c = AnyDataType(Int32Type())
     assert_true(a == b)
     assert_false(a == c)
     assert_false(a != b)
     assert_true(a != c)
     assert_true(NullType() == NullType())
-    assert_false(NullType() == BoolType())
+    assert_false(AnyDataType(NullType()) == AnyDataType(BoolType()))
     assert_true(Float32Type() == Float32Type())
-    assert_false(Float32Type() == Float64Type())
+    assert_false(AnyDataType(Float32Type()) == AnyDataType(Float64Type()))
 
 
 def test_copy() raises:
@@ -322,7 +322,7 @@ def test_temporal_dtypes_string() raises:
 
 def test_temporal_dtypes_equality() raises:
     assert_true(date32() == date32())
-    assert_false(date32() == date64())
+    assert_false(AnyDataType(date32()) == AnyDataType(date64()))
     assert_true(time32(second) == time32(second))
     assert_false(time32(second) == time32(millisecond))
     assert_true(timestamp(second) == timestamp(second))
@@ -332,11 +332,77 @@ def test_temporal_dtypes_equality() raises:
     assert_false(timestamp(second, "UTC") == timestamp(second))
     assert_true(duration(nanosecond) == duration(nanosecond))
     assert_false(duration(second) == duration(nanosecond))
-    assert_false(date32() == int32)
+    assert_false(AnyDataType(date32()) == AnyDataType(int32))
     assert_false(date32() != date32())
-    assert_true(date32() != date64())
+    assert_true(AnyDataType(date32()) != AnyDataType(date64()))
     assert_true(time32(second) != time32(millisecond))
     assert_true(timestamp(second, "UTC") != timestamp(second, "US/Pacific"))
+
+
+def test_dictionary_dtype() raises:
+    # Basic construction and predicates
+    var dt_d = dictionary(AnyDataType(int32), AnyDataType(string))
+    var at: AnyDataType = dt_d.copy().to_any()
+    assert_true(at.is_dictionary())
+    assert_false(at.is_list())
+    assert_false(at.is_primitive())
+    assert_false(at.is_struct())
+
+    # Field access via as_dictionary()
+    ref dd = at.as_dictionary()
+    assert_true(dd.index_type() == AnyDataType(int32))
+    assert_true(dd.value_type() == AnyDataType(string))
+    assert_false(dd.ordered)
+
+    # Ordered variant
+    var dt_ord = dictionary(AnyDataType(int8), AnyDataType(int32), ordered=True)
+    var at_ord: AnyDataType = dt_ord.copy().to_any()
+    ref dd_ord = at_ord.as_dictionary()
+    assert_true(dd_ord.ordered)
+    assert_true(dd_ord.index_type() == AnyDataType(int8))
+
+    # Equality
+    var d1 = dictionary(AnyDataType(int32), AnyDataType(string)).copy().to_any()
+    var d2 = dictionary(AnyDataType(int32), AnyDataType(string)).copy().to_any()
+    var d3 = dictionary(AnyDataType(int64), AnyDataType(string)).copy().to_any()
+    var d4 = dictionary(AnyDataType(int32), AnyDataType(string), ordered=True).copy().to_any()
+    assert_true(d1 == d2)
+    assert_false(d1 == d3)  # different index type
+    assert_false(d1 == d4)  # ordered differs
+
+    # String representation
+    assert_equal(
+        String(dictionary(AnyDataType(int32), AnyDataType(string))),
+        "dictionary<values=string, indices=int32, ordered=0>",
+    )
+    assert_equal(
+        String(dictionary(AnyDataType(int8), AnyDataType(int32), ordered=True)),
+        "dictionary<values=int32, indices=int8, ordered=1>",
+    )
+
+    # All valid integer index types
+    assert_true(dictionary(AnyDataType(int8), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(int16), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(int64), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(uint8), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(uint16), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(uint32), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(dictionary(AnyDataType(uint64), AnyDataType(string)).copy().to_any().is_dictionary())
+
+    # Non-integer index type must raise
+    var raised = False
+    try:
+        _ = dictionary(AnyDataType(float32), AnyDataType(string))
+    except:
+        raised = True
+    assert_true(raised)
+
+    # Nested value type
+    var nested = dictionary(AnyDataType(int32), AnyDataType(list_(AnyDataType(int64))))
+    assert_equal(
+        String(nested),
+        "dictionary<values=list<int64>, indices=int32, ordered=0>",
+    )
 
 
 def test_time_unit_string() raises:

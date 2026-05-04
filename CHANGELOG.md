@@ -4,6 +4,18 @@
 
 ### Features
 
+- **Dictionary-encoded Arrow type** (`marrow/{dtypes,scalars,arrays,builders,
+  c_data}.mojo`): added `DictionaryType` (index type + value type + ordered
+  flag), `DictionaryScalar`, `DictionaryArray`, and `DictionaryBuilder`.
+  `DictionaryArray.from_arrays(indices, values)` constructs from an integer
+  indices array and an arbitrary values array; `__getitem__` decodes to the
+  underlying value scalar; `slice()` is zero-copy. The C Data Interface emits
+  the index type's format string and stores the value schema in the `dictionary`
+  field of `CArrowSchema`, with `ARROW_FLAG_DICT_ORDERED = 1` when ordered;
+  import detects a non-null `dictionary` field and reconstructs the type.
+  Enables zero-copy exchange of PyArrow `DictionaryArray` via the Arrow C Data
+  Interface (`__arrow_c_array__` / `__arrow_c_schema__` protocol).
+
 - **Custom metadata round-trip via the C Data Interface**
   (`marrow/c_data.mojo`): `CArrowSchema.from_field` / `from_schema` now
   encode `Field.metadata` and `Schema.metadata` into the spec-defined

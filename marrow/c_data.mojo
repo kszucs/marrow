@@ -18,6 +18,7 @@ from .schema import Schema
 from .tabular import RecordBatch, Table
 
 comptime ARROW_FLAG_NULLABLE = 2
+comptime ARROW_FLAG_DICT_ORDERED: Int64 = 1
 
 
 @always_inline
@@ -240,6 +241,8 @@ struct CArrowSchema(Copyable, Movable):
         var children: UnsafePointer[
             UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
         ] = _null_ptr[UnsafePointer[CArrowSchema, MutAnyOrigin]]()
+        var flags: Int64 = 0
+        var dictionary_ptr = _null_ptr[CArrowSchema]()
 
         if dtype == null:
             fmt = "n"
@@ -357,6 +360,36 @@ struct CArrowSchema(Copyable, Movable):
                 var child_ptr = alloc[CArrowSchema](1)
                 child_ptr.init_pointee_move(child^)
                 children[i] = child_ptr
+        elif dtype.is_dictionary():
+            ref dt = dtype.as_dictionary()
+            ref idx = dt.index_type()
+            if idx == int8:
+                fmt = "c"
+            elif idx == int16:
+                fmt = "s"
+            elif idx == int32:
+                fmt = "i"
+            elif idx == int64:
+                fmt = "l"
+            elif idx == uint8:
+                fmt = "C"
+            elif idx == uint16:
+                fmt = "S"
+            elif idx == uint32:
+                fmt = "I"
+            elif idx == uint64:
+                fmt = "L"
+            else:
+                raise Error(
+                    "CArrowSchema.from_dtype: unsupported dictionary index type: ",
+                    idx,
+                )
+            var dict_schema = CArrowSchema.from_dtype(dt.value_type())
+            var dict_schema_ptr = alloc[CArrowSchema](1)
+            dict_schema_ptr.init_pointee_move(dict_schema^)
+            dictionary_ptr = dict_schema_ptr
+            if dt.ordered:
+                flags = ARROW_FLAG_DICT_ORDERED
         else:
             raise Error(
                 "CArrowSchema.from_dtype: unsupported dtype: {}".format(dtype)
@@ -366,10 +399,10 @@ struct CArrowSchema(Copyable, Movable):
             format=_alloc_c_string(fmt),
             name=_null_ptr[c_char](),
             metadata=_null_ptr[c_char](),
-            flags=0,
+            flags=flags,
             n_children=n_children,
             children=children,
-            dictionary=_null_ptr[CArrowSchema](),
+            dictionary=dictionary_ptr,
             release=_release_exported_schema,
             private_data=_null_ptr[NoneType](),
         )
@@ -470,6 +503,35 @@ struct CArrowSchema(Copyable, Movable):
 
     def to_dtype(self) raises -> AnyDataType:
         var fmt = StringSlice(unsafe_from_utf8_ptr=self.format)
+        # Dictionary type: non-null `dictionary` field signals dictionary encoding.
+        # The format string is the index type's format (e.g. "i" for int32).
+        # Must be checked before the regular format string dispatch.
+        if UnsafePointer(to=self.dictionary).bitcast[UInt64]()[0] != 0:
+            var index_type: AnyDataType
+            if fmt == "c":
+                index_type = int8
+            elif fmt == "s":
+                index_type = int16
+            elif fmt == "i":
+                index_type = int32
+            elif fmt == "l":
+                index_type = int64
+            elif fmt == "C":
+                index_type = uint8
+            elif fmt == "S":
+                index_type = uint16
+            elif fmt == "I":
+                index_type = uint32
+            elif fmt == "L":
+                index_type = uint64
+            else:
+                raise Error(
+                    "CArrowSchema.to_dtype: unknown dictionary index format: ",
+                    fmt,
+                )
+            var value_type = self.dictionary[].to_dtype()
+            var ordered = Bool(self.flags & ARROW_FLAG_DICT_ORDERED)
+            return dictionary(index_type^, value_type^, ordered).to_any()
         # TODO(kszucs): not the nicest, but dictionary literals are not supported yet
         if fmt == "n":
             return null
@@ -788,6 +850,19 @@ struct CArrowArray(Copyable, Movable):
                 children.append(
                     self.children[i][].to_data(st.fields[i].dtype, owner)
                 )
+        elif dtype.is_dictionary():
+            ref dt = dtype.as_dictionary()
+            var index_bw = dt.index_type().byte_width()
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    Int(length) * index_bw,
+                    owner,
+                )
+            )
+            children.append(
+                self.dictionary[].to_data(dt.value_type(), owner)
+            )
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
 
@@ -830,12 +905,14 @@ struct CArrowArray(Copyable, Movable):
         # Null arrays carry no buffers at all (not even validity).  Every other
         # type has a leading validity slot followed by `data.buffers`.
         var is_null_dtype = data.dtype.is_null()
+        var is_dictionary = data.dtype.is_dictionary()
         var n_buffers: Int64
         if is_null_dtype:
             n_buffers = 0
         else:
             n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
-        var n_children = Int64(len(data.children))
+        # Dictionary arrays expose values via the `dictionary` field, not children.
+        var n_children = Int64(0) if is_dictionary else Int64(len(data.children))
 
         # Heap-allocate ArrayData to keep ArcPointer ref-counts alive.
         var data_heap = alloc[ArrayData](1)
@@ -881,6 +958,15 @@ struct CArrowArray(Copyable, Movable):
                 child_ptr.init_pointee_move(child^)
                 children_ptr[i] = child_ptr
 
+        # For dictionary arrays, children[0] holds the values array; expose it
+        # as the C dictionary field.
+        var dict_ptr = _null_ptr[CArrowArray]()
+        if is_dictionary and len(data_heap[].children) > 0:
+            var dict_c = CArrowArray.from_data(data_heap[].children[0].copy())
+            var dp = alloc[CArrowArray](1)
+            dp.init_pointee_move(dict_c^)
+            dict_ptr = dp
+
         return CArrowArray(
             length=Int64(data_heap[].length),
             null_count=Int64(data_heap[].nulls),
@@ -889,7 +975,7 @@ struct CArrowArray(Copyable, Movable):
             n_children=n_children,
             buffers=buffers,
             children=children_ptr,
-            dictionary=_null_ptr[CArrowArray](),
+            dictionary=dict_ptr,
             release=_release_exported_array,
             # private_data keeps data_heap alive; freed by _release_exported_array.
             private_data=data_heap.bitcast[NoneType](),

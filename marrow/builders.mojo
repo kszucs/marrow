@@ -51,6 +51,7 @@ from .arrays import (
     FixedSizeListArray,
     FixedSizeBinaryArray,
     StructArray,
+    DictionaryArray,
 )
 
 
@@ -136,6 +137,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         FixedSizeListBuilder,
         FixedSizeBinaryBuilder,
         StructBuilder,
+        DictionaryBuilder,
     ]
 
     var _ptr: ArcPointer[Self.VariantType]
@@ -211,6 +213,10 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = Decimal256Builder(dtype.as_decimal256(), capacity)
         elif dtype.is_struct():
             self = StructBuilder(dtype.as_struct().fields.copy(), capacity)
+        elif dtype.is_dictionary():
+            ref dt = dtype.as_dictionary()
+            var idx_builder = AnyBuilder(dt.index_type(), capacity)
+            self = DictionaryBuilder(idx_builder^, AnyArray.empty(dt.value_type()), dt.ordered)
         else:
             raise Error("unsupported type: ", dtype)
 
@@ -368,6 +374,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
         return self._as[StructBuilder]()
+
+    def as_dictionary(ref self) -> ref[self._ptr[]] DictionaryBuilder:
+        return self._as[DictionaryBuilder]()
 
 
 # ---------------------------------------------------------------------------
@@ -1138,6 +1147,101 @@ struct StructBuilder(Builder):
         self._length = 0
         self._capacity = 0
         self._null_count = 0
+
+
+# ---------------------------------------------------------------------------
+# DictionaryBuilder — builds dictionary-encoded arrays
+# ---------------------------------------------------------------------------
+
+
+struct DictionaryBuilder(Builder):
+    """Builder for dictionary-encoded arrays.
+
+    Wraps an indices builder (for any integer type) and a fixed dictionary
+    values array. Call ``append(index)`` to add index values; call ``finish()``
+    to produce a ``DictionaryArray``.
+
+    Equivalent to PyArrow's pattern of maintaining a pre-built dictionary and
+    appending integer indices.
+    """
+
+    comptime ArrayType = DictionaryArray
+
+    var _dtype: AnyDataType
+    var _indices: AnyBuilder
+    var _values: AnyArray
+
+    def __init__(
+        out self,
+        var indices_builder: AnyBuilder,
+        var values: AnyArray,
+        ordered: Bool = False,
+    ) raises:
+        self._dtype = dictionary(
+            indices_builder.dtype(), values.dtype(), ordered
+        )
+        self._indices = indices_builder^
+        self._values = values^
+
+    def length(self) -> Int:
+        return self._indices.length()
+
+    def null_count(self) -> Int:
+        return self._indices.null_count()
+
+    def dtype(self) -> AnyDataType:
+        return self._dtype.copy()
+
+    def reserve(mut self, additional: Int) raises:
+        self._indices.reserve(additional)
+
+    def append_null(mut self) raises:
+        self._indices.append_null()
+
+    def append(mut self, index: Int) raises:
+        """Append an integer index into the dictionary."""
+        ref index_type = self._dtype.as_dictionary().index_type()
+        if index_type.is_int8():
+            self._indices.as_int8().append(Int8(index))
+        elif index_type.is_int16():
+            self._indices.as_int16().append(Int16(index))
+        elif index_type.is_int32():
+            self._indices.as_int32().append(Int32(index))
+        elif index_type.is_int64():
+            self._indices.as_int64().append(Int64(index))
+        elif index_type.is_uint8():
+            self._indices.as_uint8().append(UInt8(index))
+        elif index_type.is_uint16():
+            self._indices.as_uint16().append(UInt16(index))
+        elif index_type.is_uint32():
+            self._indices.as_uint32().append(UInt32(index))
+        elif index_type.is_uint64():
+            self._indices.as_uint64().append(UInt64(index))
+        else:
+            raise Error(
+                "DictionaryBuilder.append: unexpected index type: ",
+                index_type,
+            )
+
+    def extend(mut self, arr: AnyArray) raises:
+        if not arr.dtype().is_dictionary():
+            raise Error(
+                "DictionaryBuilder.extend: expected DictionaryArray, got: ",
+                arr.dtype(),
+            )
+        self._indices.extend(arr.as_dictionary().indices())
+
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> DictionaryArray:
+        var indices = self._indices.finish()
+        return DictionaryArray.from_arrays(indices^, self._values.copy())
+
+    def reset(mut self):
+        try:
+            self._indices.reset()
+        except:
+            pass
 
 
 # ---------------------------------------------------------------------------

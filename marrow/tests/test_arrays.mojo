@@ -11,6 +11,7 @@ from marrow.builders import (
     ListBuilder,
     FixedSizeListBuilder,
     StructBuilder,
+    DictionaryBuilder,
     Int8Builder,
     Int32Builder,
     Int64Builder,
@@ -1825,6 +1826,168 @@ def test_temporal_array_index_out_of_bounds() raises:
             children=[],
         )
     )
+    var raised = False
+    try:
+        _ = arr[5]
+    except:
+        raised = True
+    assert_true(raised)
+
+
+def test_dictionary_array() raises:
+    # Build values: ["cat", "dog", "fish"]
+    var vb = StringBuilder()
+    vb.append("cat")
+    vb.append("dog")
+    vb.append("fish")
+    var values: AnyArray = vb.finish()
+
+    # Build indices: [0, 1, 2, 0, 1]
+    var ib = Int8Builder()
+    ib.append(0)
+    ib.append(1)
+    ib.append(2)
+    ib.append(0)
+    ib.append(1)
+    var indices: AnyArray = ib.finish()
+
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+    assert_equal(len(arr), 5)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.type().is_dictionary())
+
+    # Decoded values match
+    assert_equal(arr[0].value().as_string().to_string(), "cat")
+    assert_equal(arr[1].value().as_string().to_string(), "dog")
+    assert_equal(arr[2].value().as_string().to_string(), "fish")
+    assert_equal(arr[3].value().as_string().to_string(), "cat")
+    assert_equal(arr[4].value().as_string().to_string(), "dog")
+
+    # All entries valid
+    assert_true(arr[0].is_valid())
+    assert_true(arr[4].is_valid())
+
+    # indices() and dictionary() accessors
+    assert_equal(arr.indices().length(), 5)
+    assert_equal(arr.dictionary().length(), 3)
+
+
+def test_dictionary_array_null() raises:
+    var vb = StringBuilder()
+    vb.append("cat")
+    vb.append("dog")
+    var values: AnyArray = vb.finish()
+
+    # indices: [0, null, 1]
+    var ib = Int32Builder()
+    ib.append(0)
+    ib.append_null()
+    ib.append(1)
+    var indices: AnyArray = ib.finish()
+
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+    assert_equal(len(arr), 3)
+    assert_equal(arr.null_count(), 1)
+
+    assert_true(arr[0].is_valid())
+    assert_equal(arr[0].value().as_string().to_string(), "cat")
+    assert_false(arr[1].is_valid())
+    assert_true(arr[2].is_valid())
+    assert_equal(arr[2].value().as_string().to_string(), "dog")
+
+
+def test_dictionary_array_slice() raises:
+    var vb = StringBuilder()
+    vb.append("a")
+    vb.append("b")
+    vb.append("c")
+    var values: AnyArray = vb.finish()
+
+    var ib = Int32Builder()
+    for i in range(3):
+        ib.append(i)
+    var indices: AnyArray = ib.finish()
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+
+    # Slice [1:3] -> ["b", "c"]
+    var sliced = arr.slice(1, 2)
+    assert_equal(len(sliced), 2)
+    assert_equal(sliced[0].value().as_string().to_string(), "b")
+    assert_equal(sliced[1].value().as_string().to_string(), "c")
+
+    # Slice [0:1] -> ["a"]
+    var head = arr.slice(0, 1)
+    assert_equal(len(head), 1)
+    assert_equal(head[0].value().as_string().to_string(), "a")
+
+
+def test_dictionary_array_data_roundtrip() raises:
+    var vb = StringBuilder()
+    vb.append("x")
+    vb.append("y")
+    var values: AnyArray = vb.finish()
+
+    var ib = Int32Builder()
+    ib.append(0)
+    ib.append(1)
+    ib.append(0)
+    var indices: AnyArray = ib.finish()
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+
+    # to_data round-trip
+    var data = arr.to_data()
+    assert_true(data.dtype.is_dictionary())
+    assert_equal(data.length, 3)
+    assert_equal(len(data.children), 1)
+
+    # Reconstruct from ArrayData
+    var arr2 = DictionaryArray(data)
+    assert_equal(len(arr2), 3)
+    assert_equal(arr2[0].value().as_string().to_string(), "x")
+    assert_equal(arr2[1].value().as_string().to_string(), "y")
+    assert_equal(arr2[2].value().as_string().to_string(), "x")
+
+    # AnyArray.from_data dispatch
+    var any2 = AnyArray.from_data(data)
+    assert_true(any2.dtype().is_dictionary())
+    ref da = any2.as_dictionary()
+    assert_equal(da[0].value().as_string().to_string(), "x")
+
+
+def test_dictionary_builder() raises:
+    var vb = StringBuilder()
+    vb.append("red")
+    vb.append("green")
+    vb.append("blue")
+    var values: AnyArray = vb.finish()
+
+    var builder = DictionaryBuilder(Int8Builder(), values^)
+    builder.append(0)   # "red"
+    builder.append(1)   # "green"
+    builder.append(2)   # "blue"
+    builder.append_null()
+    builder.append(0)   # "red"
+
+    var arr = builder.finish()
+    assert_equal(len(arr), 5)
+    assert_equal(arr.null_count(), 1)
+    assert_equal(arr[0].value().as_string().to_string(), "red")
+    assert_equal(arr[1].value().as_string().to_string(), "green")
+    assert_equal(arr[2].value().as_string().to_string(), "blue")
+    assert_false(arr[3].is_valid())
+    assert_equal(arr[4].value().as_string().to_string(), "red")
+
+
+def test_dictionary_out_of_bounds() raises:
+    var vb = StringBuilder()
+    vb.append("only")
+    var values: AnyArray = vb.finish()
+
+    var ib = Int32Builder()
+    ib.append(0)
+    var indices: AnyArray = ib.finish()
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+
     var raised = False
     try:
         _ = arr[5]

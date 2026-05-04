@@ -4,10 +4,11 @@ Following Arrow C++'s design: scalars hold native values directly, not
 length-1 arrays.
 
 Typed scalars:
-  PrimitiveScalar[T] — holds _Scalar[T.native] (built-in Scalar) + Bool validity
-  StringScalar       — holds String value + Bool validity
-  ListScalar         — holds AnyArray (child values) + Bool validity
-  StructScalar       — holds List[AnyArray] (one per field) + DataType + Bool validity
+  PrimitiveScalar[T]  — holds _Scalar[T.native] (built-in Scalar) + Bool validity
+  StringScalar        — holds String value + Bool validity
+  ListScalar          — holds AnyArray (child values) + Bool validity
+  StructScalar        — holds List[AnyArray] (one per field) + DataType + Bool validity
+  DictionaryScalar    — holds integer index + decoded AnyScalar value + DataType + Bool validity
 
 Type-erased container:
   AnyScalar          — wraps any typed scalar via @implicit conversion;
@@ -22,6 +23,7 @@ from std.os import abort
 from std.python import PythonObject
 from std.python.conversions import ConvertibleToPython
 from std.builtin.rebind import downcast
+from std.memory import OwnedPointer
 
 from .arrays import (
     PrimitiveArray,
@@ -392,6 +394,58 @@ struct StructScalar(Scalar):
             writer.write("}")
         else:
             writer.write("null")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)
+
+
+# ---------------------------------------------------------------------------
+# DictionaryScalar
+# ---------------------------------------------------------------------------
+
+
+struct DictionaryScalar(Scalar):
+    """A single dictionary-encoded value: holds the integer index + decoded value.
+
+    Equivalent to PyArrow's ``pyarrow.DictionaryScalar``.
+    """
+
+    var _dtype: AnyDataType
+    var _decoded: AnyScalar    # decoded (looked-up) value; NullScalar when invalid
+
+    def __init__(
+        out self,
+        *,
+        dtype: AnyDataType,
+        var decoded: AnyScalar,
+    ):
+        self._dtype = dtype.copy()
+        self._decoded = decoded^
+
+    def __init__(out self, *, copy: Self):
+        self._dtype = copy._dtype.copy()
+        self._decoded = AnyScalar(copy=copy._decoded)
+
+    @staticmethod
+    def null(dtype: AnyDataType) -> Self:
+        return Self(dtype=dtype, decoded=NullScalar())
+
+    def type(self) -> AnyDataType:
+        return self._dtype.copy()
+
+    def is_valid(self) -> Bool:
+        return not self._decoded.is_null()
+
+    def value(self) -> AnyScalar:
+        """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py()."""
+        return AnyScalar(copy=self._decoded)
+
+    # Override to_any: DictionaryScalar is NOT in AnyScalar.Variant; return decoded value.
+    def to_any(deinit self) -> AnyScalar:
+        return self._decoded^
+
+    def write_to[W: Writer](self, mut writer: W):
+        self._decoded.write_to(writer)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
