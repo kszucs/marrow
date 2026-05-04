@@ -1585,7 +1585,7 @@ struct DictionaryArray(Array):
     var _dtype: AnyDataType
     var _length: Int
     var _nulls: Int
-    var _offset: Int    # extra logical offset into _indices (on top of _indices' own offset)
+    var _offset: Int  # extra logical offset into _indices (on top of _indices' own offset)
     var _indices: OwnedPointer[AnyArray]
     var _values: OwnedPointer[AnyArray]
 
@@ -1671,11 +1671,13 @@ struct DictionaryArray(Array):
         return self._indices[].is_valid(self._offset + index)
 
     def indices(self) -> AnyArray:
-        """Return the indices array. Matches PyArrow's DictionaryArray.indices."""
+        """Return the indices array. Matches PyArrow's DictionaryArray.indices.
+        """
         return self._indices[].copy()
 
     def dictionary(self) -> AnyArray:
-        """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary."""
+        """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary.
+        """
         return self._values[].copy()
 
     def __getitem__(self, index: Int) raises -> DictionaryScalar:
@@ -1711,7 +1713,8 @@ struct DictionaryArray(Array):
         return DictionaryScalar(dtype=self._dtype.copy(), decoded=decoded^)
 
     def slice(self, offset: Int, length: Int) -> Self:
-        """Zero-copy slice: adjusts logical offset, shares indices and values."""
+        """Zero-copy slice: adjusts logical offset, shares indices and values.
+        """
         return Self(
             dtype=self._dtype.copy(),
             length=length,

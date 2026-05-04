@@ -943,7 +943,9 @@ def test_dictionary_dtype_schema_roundtrip() raises:
 
 def test_dictionary_ordered_roundtrip() raises:
     """ARROW_FLAG_DICT_ORDERED is preserved in the schema round-trip."""
-    var dt = dictionary(AnyDataType(int8), AnyDataType(int32), ordered=True).to_any()
+    var dt = dictionary(
+        AnyDataType(int8), AnyDataType(int32), ordered=True
+    ).to_any()
     var c_schema = CArrowSchema.from_dtype(dt)
     var rt = c_schema.to_dtype()
     assert_true(rt.is_dictionary())
@@ -997,9 +999,7 @@ def test_dictionary_to_pyarrow() raises:
     var fmt = String(StringSlice(unsafe_from_utf8_ptr=c_schema.format))
     assert_equal(fmt, "i")  # int32 index type format
     # dictionary schema pointer must be non-null
-    assert_true(
-        UnsafePointer(to=c_schema.dictionary).bitcast[UInt64]()[0] != 0
-    )
+    assert_true(UnsafePointer(to=c_schema.dictionary).bitcast[UInt64]()[0] != 0)
 
     # Round-trip the array back through CArrow and check values
     var c_array = CArrowArray.from_array(arr)

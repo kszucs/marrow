@@ -365,7 +365,11 @@ def test_dictionary_dtype() raises:
     var d1 = dictionary(AnyDataType(int32), AnyDataType(string)).copy().to_any()
     var d2 = dictionary(AnyDataType(int32), AnyDataType(string)).copy().to_any()
     var d3 = dictionary(AnyDataType(int64), AnyDataType(string)).copy().to_any()
-    var d4 = dictionary(AnyDataType(int32), AnyDataType(string), ordered=True).copy().to_any()
+    var d4 = (
+        dictionary(AnyDataType(int32), AnyDataType(string), ordered=True)
+        .copy()
+        .to_any()
+    )
     assert_true(d1 == d2)
     assert_false(d1 == d3)  # different index type
     assert_false(d1 == d4)  # ordered differs
@@ -381,13 +385,48 @@ def test_dictionary_dtype() raises:
     )
 
     # All valid integer index types
-    assert_true(dictionary(AnyDataType(int8), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(int16), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(int64), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(uint8), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(uint16), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(uint32), AnyDataType(string)).copy().to_any().is_dictionary())
-    assert_true(dictionary(AnyDataType(uint64), AnyDataType(string)).copy().to_any().is_dictionary())
+    assert_true(
+        dictionary(AnyDataType(int8), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(int16), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(int64), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(uint8), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(uint16), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(uint32), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
+    assert_true(
+        dictionary(AnyDataType(uint64), AnyDataType(string))
+        .copy()
+        .to_any()
+        .is_dictionary()
+    )
 
     # Non-integer index type must raise
     var raised = False
@@ -398,7 +437,9 @@ def test_dictionary_dtype() raises:
     assert_true(raised)
 
     # Nested value type
-    var nested = dictionary(AnyDataType(int32), AnyDataType(list_(AnyDataType(int64))))
+    var nested = dictionary(
+        AnyDataType(int32), AnyDataType(list_(AnyDataType(int64)))
+    )
     assert_equal(
         String(nested),
         "dictionary<values=list<int64>, indices=int32, ordered=0>",

@@ -1962,11 +1962,11 @@ def test_dictionary_builder() raises:
     var values: AnyArray = vb.finish()
 
     var builder = DictionaryBuilder(Int8Builder(), values^)
-    builder.append(0)   # "red"
-    builder.append(1)   # "green"
-    builder.append(2)   # "blue"
+    builder.append(0)  # "red"
+    builder.append(1)  # "green"
+    builder.append(2)  # "blue"
     builder.append_null()
-    builder.append(0)   # "red"
+    builder.append(0)  # "red"
 
     var arr = builder.finish()
     assert_equal(len(arr), 5)

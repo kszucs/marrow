@@ -45,8 +45,14 @@ def test_datatype_from_pyarrow():
 def test_datatype_dictionary_roundtrip():
     """dictionary(index, value) type round-trips through PyArrow schema."""
     for index_pa_type in [
-        pa.int8(), pa.int16(), pa.int32(), pa.int64(),
-        pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64(),
+        pa.int8(),
+        pa.int16(),
+        pa.int32(),
+        pa.int64(),
+        pa.uint8(),
+        pa.uint16(),
+        pa.uint32(),
+        pa.uint64(),
     ]:
         pa_type = pa.dictionary(index_pa_type, pa.string())
         ma_schema = ma.schema(pa.schema([pa.field("d", pa_type)]))
@@ -273,8 +279,14 @@ def test_array_roundtrip_dictionary_ordered():
 @pytest.mark.parametrize(
     "index_pa_type",
     [
-        pa.int8(), pa.int16(), pa.int32(), pa.int64(),
-        pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64(),
+        pa.int8(),
+        pa.int16(),
+        pa.int32(),
+        pa.int64(),
+        pa.uint8(),
+        pa.uint16(),
+        pa.uint32(),
+        pa.uint64(),
     ],
 )
 def test_array_roundtrip_dictionary_index_types(index_pa_type):
@@ -353,9 +365,7 @@ def test_record_batch_with_list_column():
 
 
 def test_record_batch_with_dictionary_column():
-    pa_rb = pa.record_batch(
-        {"cat": pa.array(["x", "y", "x", "z"]).dictionary_encode()}
-    )
+    pa_rb = pa.record_batch({"cat": pa.array(["x", "y", "x", "z"]).dictionary_encode()})
     ma_rb = ma.record_batch(pa_rb)
     assert ma_rb.num_rows() == 4
     assert pa.record_batch(ma_rb).column("cat").equals(pa_rb.column("cat"))

@@ -708,7 +708,9 @@ def test_marrow_reads_pyarrow_dictionary() raises:
         )
     ).dictionary_encode()
     var pa_schema = pa.schema(Python.list(pa.field("d", pa_arr.type)))
-    var pa_batch = pa.RecordBatch.from_arrays(Python.list(pa_arr), schema=pa_schema)
+    var pa_batch = pa.RecordBatch.from_arrays(
+        Python.list(pa_arr), schema=pa_schema
+    )
     var writer = pa.ipc.new_file(path, pa_schema)
     writer.write(pa_batch)
     writer.close()

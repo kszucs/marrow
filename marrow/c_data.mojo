@@ -381,7 +381,10 @@ struct CArrowSchema(Copyable, Movable):
                 fmt = "L"
             else:
                 raise Error(
-                    "CArrowSchema.from_dtype: unsupported dictionary index type: ",
+                    (
+                        "CArrowSchema.from_dtype: unsupported dictionary index"
+                        " type: "
+                    ),
                     idx,
                 )
             var dict_schema = CArrowSchema.from_dtype(dt.value_type())
@@ -860,9 +863,7 @@ struct CArrowArray(Copyable, Movable):
                     owner,
                 )
             )
-            children.append(
-                self.dictionary[].to_data(dt.value_type(), owner)
-            )
+            children.append(self.dictionary[].to_data(dt.value_type(), owner))
         else:
             raise Error("to_data: unsupported dtype: ", dtype)
 
@@ -912,7 +913,9 @@ struct CArrowArray(Copyable, Movable):
         else:
             n_buffers = Int64(1 + len(data.buffers))  # 1 = validity bitmap slot
         # Dictionary arrays expose values via the `dictionary` field, not children.
-        var n_children = Int64(0) if is_dictionary else Int64(len(data.children))
+        var n_children = Int64(0) if is_dictionary else Int64(
+            len(data.children)
+        )
 
         # Heap-allocate ArrayData to keep ArcPointer ref-counts alive.
         var data_heap = alloc[ArrayData](1)

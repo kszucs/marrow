@@ -216,7 +216,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
             var idx_builder = AnyBuilder(dt.index_type(), capacity)
-            self = DictionaryBuilder(idx_builder^, AnyArray.empty(dt.value_type()), dt.ordered)
+            self = DictionaryBuilder(
+                idx_builder^, AnyArray.empty(dt.value_type()), dt.ordered
+            )
         else:
             raise Error("unsupported type: ", dtype)
 

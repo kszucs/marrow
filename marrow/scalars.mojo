@@ -411,7 +411,7 @@ struct DictionaryScalar(Scalar):
     """
 
     var _dtype: AnyDataType
-    var _decoded: AnyScalar    # decoded (looked-up) value; NullScalar when invalid
+    var _decoded: AnyScalar  # decoded (looked-up) value; NullScalar when invalid
 
     def __init__(
         out self,
@@ -437,7 +437,8 @@ struct DictionaryScalar(Scalar):
         return not self._decoded.is_null()
 
     def value(self) -> AnyScalar:
-        """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py()."""
+        """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py().
+        """
         return AnyScalar(copy=self._decoded)
 
     # Override to_any: DictionaryScalar is NOT in AnyScalar.Variant; return decoded value.
