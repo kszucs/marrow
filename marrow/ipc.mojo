@@ -107,6 +107,7 @@ struct _Block(ImplicitlyCopyable, Movable):
 
 struct _DictPair(Copyable, Movable):
     """A (dict_id, values) pair collected from an ArrayData tree."""
+
     var dict_id: Int
     var values: AnyArray
 
@@ -114,16 +115,22 @@ struct _DictPair(Copyable, Movable):
         self.dict_id = dict_id
         self.values = values^
 
-    def __copyinit__(out self, existing: Self):
-        self.dict_id = existing.dict_id
-        self.values = existing.values.copy()
+    def __init__(out self, *, copy: Self):
+        self.dict_id = copy.dict_id
+        self.values = copy.values.copy()
 
 
-@fieldwise_init
-struct _DictBatch(Movable):
-    """Holds the decoded result of a DictionaryBatch IPC message."""
-    var dict_id: Int
-    var values: AnyArray
+struct _DictLookup(Movable):
+    """Result of searching a (_dtype, _FieldIpcInfo) tree for a dict_id."""
+
+    var value_type: dt.AnyDataType
+    var value_ipc_info: _FieldIpcInfo
+
+    def __init__(
+        out self, var value_type: dt.AnyDataType, var value_ipc_info: _FieldIpcInfo
+    ):
+        self.value_type = value_type^
+        self.value_ipc_info = value_ipc_info^
 
 
 struct _FieldIpcInfo(Copyable, Movable):
@@ -131,10 +138,9 @@ struct _FieldIpcInfo(Copyable, Movable):
 
     Mirrors the Arrow type tree but carries only IPC serialization metadata
     (dict_ids assigned during schema write/read), decoupled from the logical
-    type system.  For dictionary fields, `children` corresponds to the IPC
-    infos of the VALUE TYPE's children; for non-dict fields it corresponds to
-    the direct type children (list child, struct children).  `dict_id == -1`
-    means the field has no DictionaryEncoding.
+    type system.  For dictionary fields, `children` holds the IPC infos of the
+    VALUE TYPE's children; for non-dict fields it holds the direct type children
+    (list child, struct children).  `dict_id == -1` means no DictionaryEncoding.
     """
 
     var dict_id: Int
@@ -148,22 +154,62 @@ struct _FieldIpcInfo(Copyable, Movable):
         self.dict_id = dict_id
         self.children = children^
 
-    def __copyinit__(out self, existing: Self):
-        self.dict_id = existing.dict_id
-        self.children = existing.children.copy()
+    def __init__(out self, *, copy: Self):
+        self.dict_id = copy.dict_id
+        self.children = copy.children.copy()
 
+    @staticmethod
+    def find(
+        dtype: dt.AnyDataType, ipc_info: _FieldIpcInfo, target_id: Int
+    ) raises -> Optional[_DictLookup]:
+        """Search the (dtype, ipc_info) shadow tree for dict_id == target_id.
 
-struct _DictLookup(Movable):
-    """Result of searching the (_dtype, _FieldIpcInfo) tree for a dict_id."""
+        Returns a `_DictLookup` whose `value_ipc_info` has `dict_id=-1` with
+        the matched node's children, so that nested dicts inside the value type
+        can still be resolved during decoding.
+        """
+        if ipc_info.dict_id == target_id:
+            ref d = dtype.as_dictionary()
+            var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
+            return _DictLookup(d.value_type().copy(), vt_ipc^)
+        if dtype.is_dictionary():
+            ref d = dtype.as_dictionary()
+            var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
+            return _FieldIpcInfo.find(d.value_type().copy(), vt_ipc^, target_id)
+        elif dtype.is_list():
+            if len(ipc_info.children) > 0:
+                return _FieldIpcInfo.find(
+                    dtype.as_list().value_type().copy(),
+                    ipc_info.children[0].copy(),
+                    target_id,
+                )
+        elif dtype.is_struct():
+            ref st = dtype.as_struct()
+            for i in range(len(st.fields)):
+                if i < len(ipc_info.children):
+                    var found = _FieldIpcInfo.find(
+                        st.fields[i].dtype.copy(), ipc_info.children[i].copy(),
+                        target_id,
+                    )
+                    if found:
+                        return found^
+        return None
 
-    var value_type: dt.AnyDataType
-    var value_ipc_info: _FieldIpcInfo
-
-    def __init__(
-        out self, var value_type: dt.AnyDataType, var value_ipc_info: _FieldIpcInfo
-    ):
-        self.value_type = value_type^
-        self.value_ipc_info = value_ipc_info^
+    @staticmethod
+    def find_in_schema(
+        fields: List[dt.Field],
+        ipc_infos: List[_FieldIpcInfo],
+        target_id: Int,
+    ) raises -> Optional[_DictLookup]:
+        """Search schema fields and their IPC shadow tree for the given dict_id."""
+        for i in range(len(fields)):
+            if i < len(ipc_infos):
+                var found = _FieldIpcInfo.find(
+                    fields[i].dtype.copy(), ipc_infos[i].copy(), target_id
+                )
+                if found:
+                    return found^
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1564,16 +1610,38 @@ struct _BatchEncoder(Movable):
                 for i in range(len(data.children) - 1, -1, -1):
                     stack.append(data.children[i].copy())
 
-    def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
-        for col in batch.columns:
-            self.write_array(col.to_data())
-        var buf_meta = List[_BodyBuffer]()
-        var body = List[UInt8]()
+    @staticmethod
+    def collect_dict_pairs(
+        data: ArrayData, mut pairs: List[_DictPair], mut next_id: Int
+    ) raises:
+        """DFS inner-first: append (dict_id, values) for every dict array in the tree."""
+        if data.dtype.is_dictionary():
+            _BatchEncoder.collect_dict_pairs(data.children[0], pairs, next_id)
+            pairs.append(_DictPair(next_id, AnyArray.from_data(data.children[0])))
+            next_id += 1
+        elif data.dtype.is_list():
+            if len(data.children) > 0:
+                _BatchEncoder.collect_dict_pairs(data.children[0], pairs, next_id)
+        elif data.dtype.is_struct():
+            for i in range(len(data.children)):
+                _BatchEncoder.collect_dict_pairs(data.children[i], pairs, next_id)
+
+    def _build_body(
+        mut self, mut buf_meta: List[_BodyBuffer], mut body: List[UInt8]
+    ):
+        """Assemble raw buffers into a padded body, populating buf_meta offsets."""
         for buf in self.raw_bufs:
             _pad_to(body, 8)
             buf_meta.append(_BodyBuffer(Int64(len(body)), Int64(len(buf))))
             body.extend(Span(buf))
         _pad_to(body, 8)
+
+    def encode(mut self, batch: RecordBatch) raises -> _EncodedBatch:
+        for col in batch.columns:
+            self.write_array(col.to_data())
+        var buf_meta = List[_BodyBuffer]()
+        var body = List[UInt8]()
+        self._build_body(buf_meta, body)
         var rb_meta = _IpcEncoder.encode_record_batch(
             Int64(batch.num_rows()), self.nodes, buf_meta
         )
@@ -1595,11 +1663,7 @@ struct _BatchEncoder(Movable):
         benc.write_array(values.to_data())
         var buf_meta = List[_BodyBuffer]()
         var body = List[UInt8]()
-        for buf in benc.raw_bufs:
-            _pad_to(body, 8)
-            buf_meta.append(_BodyBuffer(Int64(len(body)), Int64(len(buf))))
-            body.extend(Span(buf))
-        _pad_to(body, 8)
+        benc._build_body(buf_meta, body)
 
         var enc = _IpcEncoder(512)
         var nodes_vec = enc._write_field_nodes_vec(benc.nodes)
@@ -1785,79 +1849,6 @@ struct _BatchDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-def _collect_dict_values(
-    data: ArrayData,
-    mut pairs: List[_DictPair],
-    mut next_id: Int,
-) raises:
-    """DFS inner-first: append (dict_id, values) for every dict array in the tree."""
-    if data.dtype.is_dictionary():
-        _collect_dict_values(data.children[0], pairs, next_id)
-        pairs.append(_DictPair(next_id, AnyArray.from_data(data.children[0])))
-        next_id += 1
-    elif data.dtype.is_list():
-        if len(data.children) > 0:
-            _collect_dict_values(data.children[0], pairs, next_id)
-    elif data.dtype.is_struct():
-        for i in range(len(data.children)):
-            _collect_dict_values(data.children[i], pairs, next_id)
-
-
-def _find_in_ipc_tree(
-    dtype: dt.AnyDataType,
-    ipc_info: _FieldIpcInfo,
-    target_id: Int,
-) raises -> Optional[_DictLookup]:
-    """Search the (dtype, ipc_info) shadow tree for dict_id == target_id.
-
-    Returns a `_DictLookup` with the value type and the `_FieldIpcInfo` to use
-    when decoding the values array.  The ipc_info for values uses dict_id=-1
-    with the outer dict's children as its own children, so that nested dicts
-    within the value type can still be resolved.
-    """
-    if ipc_info.dict_id == target_id:
-        ref d = dtype.as_dictionary()
-        var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
-        return _DictLookup(d.value_type().copy(), vt_ipc^)
-    if dtype.is_dictionary():
-        ref d = dtype.as_dictionary()
-        var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
-        return _find_in_ipc_tree(d.value_type().copy(), vt_ipc^, target_id)
-    elif dtype.is_list():
-        if len(ipc_info.children) > 0:
-            return _find_in_ipc_tree(
-                dtype.as_list().value_type().copy(),
-                ipc_info.children[0].copy(),
-                target_id,
-            )
-    elif dtype.is_struct():
-        ref st = dtype.as_struct()
-        for i in range(len(st.fields)):
-            if i < len(ipc_info.children):
-                var found = _find_in_ipc_tree(
-                    st.fields[i].dtype.copy(), ipc_info.children[i].copy(), target_id
-                )
-                if found:
-                    return found^
-    return None
-
-
-def _find_for_dict_id(
-    fields: List[dt.Field],
-    ipc_infos: List[_FieldIpcInfo],
-    target_id: Int,
-) raises -> Optional[_DictLookup]:
-    """Search schema fields and their IPC shadow tree for the given dict_id."""
-    for i in range(len(fields)):
-        if i < len(ipc_infos):
-            var found = _find_in_ipc_tree(
-                fields[i].dtype.copy(), ipc_infos[i].copy(), target_id
-            )
-            if found:
-                return found^
-    return None
-
-
 struct RecordBatchFileWriter(Movable):
     """Incremental writer for the Arrow IPC file format.
 
@@ -1899,7 +1890,7 @@ struct RecordBatchFileWriter(Movable):
         var pairs = List[_DictPair]()
         var next_id = 0
         for col in batch.columns:
-            _collect_dict_values(col.to_data(), pairs, next_id)
+            _BatchEncoder.collect_dict_pairs(col.to_data(), pairs, next_id)
         for j in range(len(pairs)):
             var did = pairs[j].dict_id
             while len(self._dicts_written) <= did:
@@ -1969,7 +1960,7 @@ struct RecordBatchStreamWriter(Movable):
         var pairs = List[_DictPair]()
         var next_id = 0
         for col in batch.columns:
-            _collect_dict_values(col.to_data(), pairs, next_id)
+            _BatchEncoder.collect_dict_pairs(col.to_data(), pairs, next_id)
         for j in range(len(pairs)):
             var eb = _BatchEncoder.encode_dict_message(
                 Int64(pairs[j].dict_id), pairs[j].values
@@ -2042,7 +2033,7 @@ struct RecordBatchFileReader(Movable):
             var msg_tp = db_peek._r.root()
             var db_pos = db_peek._r.read_table(msg_tp, 2)
             var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
-            var lkup = _find_for_dict_id(self.schema.fields, self._ipc_infos, dict_id)
+            var lkup = _FieldIpcInfo.find_in_schema(self.schema.fields, self._ipc_infos, dict_id)
             if lkup:
                 var full_dec = _IpcDecoder(meta^)
                 var values = full_dec.decode_dict_batch(
@@ -2116,7 +2107,7 @@ struct RecordBatchStreamReader(Movable):
                 var msg_tp = db_peek._r.root()
                 var db_pos = db_peek._r.read_table(msg_tp, 2)
                 var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
-                var lkup = _find_for_dict_id(
+                var lkup = _FieldIpcInfo.find_in_schema(
                     self.schema.fields, self._ipc_infos, dict_id
                 )
                 if lkup:
