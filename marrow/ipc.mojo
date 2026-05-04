@@ -105,11 +105,18 @@ struct _Block(ImplicitlyCopyable, Movable):
     var body_length: Int64
 
 
-@fieldwise_init
-struct _DictFieldInfo(Copyable, Movable):
-    """Tracks a dictionary-encoded top-level schema field for IPC I/O."""
-    var field_index: Int
+struct _DictPair(Copyable, Movable):
+    """A (dict_id, values) pair collected from an ArrayData tree."""
     var dict_id: Int
+    var values: AnyArray
+
+    def __init__(out self, dict_id: Int, var values: AnyArray):
+        self.dict_id = dict_id
+        self.values = values^
+
+    def __copyinit__(out self, existing: Self):
+        self.dict_id = existing.dict_id
+        self.values = existing.values.copy()
 
 
 @fieldwise_init
@@ -117,6 +124,46 @@ struct _DictBatch(Movable):
     """Holds the decoded result of a DictionaryBatch IPC message."""
     var dict_id: Int
     var values: AnyArray
+
+
+struct _FieldIpcInfo(Copyable, Movable):
+    """IPC-only metadata shadow for a field: dict_id and value-type children.
+
+    Mirrors the Arrow type tree but carries only IPC serialization metadata
+    (dict_ids assigned during schema write/read), decoupled from the logical
+    type system.  For dictionary fields, `children` corresponds to the IPC
+    infos of the VALUE TYPE's children; for non-dict fields it corresponds to
+    the direct type children (list child, struct children).  `dict_id == -1`
+    means the field has no DictionaryEncoding.
+    """
+
+    var dict_id: Int
+    var children: List[_FieldIpcInfo]
+
+    def __init__(out self, dict_id: Int = -1):
+        self.dict_id = dict_id
+        self.children = List[_FieldIpcInfo]()
+
+    def __init__(out self, dict_id: Int, var children: List[_FieldIpcInfo]):
+        self.dict_id = dict_id
+        self.children = children^
+
+    def __copyinit__(out self, existing: Self):
+        self.dict_id = existing.dict_id
+        self.children = existing.children.copy()
+
+
+struct _DictLookup(Movable):
+    """Result of searching the (_dtype, _FieldIpcInfo) tree for a dict_id."""
+
+    var value_type: dt.AnyDataType
+    var value_ipc_info: _FieldIpcInfo
+
+    def __init__(
+        out self, var value_type: dt.AnyDataType, var value_ipc_info: _FieldIpcInfo
+    ):
+        self.value_type = value_type^
+        self.value_ipc_info = value_ipc_info^
 
 
 # ---------------------------------------------------------------------------
@@ -931,24 +978,45 @@ struct _IpcEncoder(Movable):
             kv_positions.append(self._fb.write_table(kv_flds, ts))
         return self._fb.create_vector_offsets(kv_positions)
 
-    def _write_field(mut self, f: dt.Field, dict_id: Int = -1) raises -> UInt32:
+    def _write_field(
+        mut self, f: dt.Field, mut next_dict_id: Int
+    ) raises -> UInt32:
+        """Write a Field FlatBuffer table. Returns the table offset.
+
+        Dict_ids are assigned in DFS inner-first order: `next_dict_id` is
+        mutated in-place so nested (child) dictionaries receive lower ids
+        than their enclosing parent dictionaries.
+        """
         var child_positions = List[UInt32]()
         var dtype = f.dtype.copy()
+        var own_dict_id = -1
+
         if dtype.is_list():
             child_positions.append(
-                self._write_field(dtype.as_list().value_field().copy())
+                self._write_field(dtype.as_list().value_field().copy(), next_dict_id)
             )
         elif dtype.is_fixed_size_list():
             child_positions.append(
-                self._write_field(
-                    dtype.as_fixed_size_list().value_field().copy()
-                )
+                self._write_field(dtype.as_fixed_size_list().value_field().copy(), next_dict_id)
             )
         elif dtype.is_struct():
             ref st = dtype.as_struct()
             for i in range(len(st.fields)):
-                child_positions.append(self._write_field(st.fields[i]))
-        # dictionary: no children in schema — values go into DictionaryBatch messages
+                child_positions.append(self._write_field(st.fields[i], next_dict_id))
+        elif dtype.is_dictionary():
+            # Write children of the VALUE TYPE first (inner dicts before outer).
+            var val_type = dtype.as_dictionary().value_type().copy()
+            if val_type.is_list():
+                child_positions.append(
+                    self._write_field(val_type.as_list().value_field().copy(), next_dict_id)
+                )
+            elif val_type.is_struct():
+                ref st = val_type.as_struct()
+                for i in range(len(st.fields)):
+                    child_positions.append(self._write_field(st.fields[i], next_dict_id))
+            # Assign this dictionary's own id AFTER all nested children.
+            own_dict_id = next_dict_id
+            next_dict_id += 1
 
         var type_code = self._type_code(dtype)
         var type_pos = self._write_type_table(dtype)
@@ -963,10 +1031,10 @@ struct _IpcEncoder(Movable):
             meta_vec_pos = self._write_kv_vec(f.metadata)
 
         var dict_enc_pos: Optional[UInt32] = None
-        if dict_id >= 0:
+        if own_dict_id >= 0:
             ref d = dtype.as_dictionary()
             dict_enc_pos = self._write_dictionary_encoding_table(
-                Int64(dict_id), d.index_type().copy(), d.ordered
+                Int64(own_dict_id), d.index_type().copy(), d.ordered
             )
 
         var ts = self._fb.offset()
@@ -999,13 +1067,9 @@ struct _IpcEncoder(Movable):
 
     def _write_schema_table(mut self, schema: Schema) raises -> UInt32:
         var field_positions = List[UInt32]()
-        var dict_id = 0
+        var next_dict_id = 0
         for f in schema.fields:
-            var did = -1
-            if f.dtype.is_dictionary():
-                did = dict_id
-                dict_id += 1
-            field_positions.append(self._write_field(f, did))
+            field_positions.append(self._write_field(f, next_dict_id))
         var fields_vec = self._fb.create_vector_offsets(field_positions)
 
         var meta_vec_pos: Optional[UInt32] = None
@@ -1074,10 +1138,12 @@ struct _IpcDecoder(Movable):
             result[key] = val
         return result^
 
-    def decode_schema(self) raises -> Schema:
+    def decode_schema(
+        self, mut out_ipc: List[_FieldIpcInfo]
+    ) raises -> Schema:
         var msg_pos = self._r.root()
         var schema_pos = self._r.read_table(msg_pos, 2)
-        var fields = self._decode_schema_fields(schema_pos)
+        var fields = self._decode_schema_fields(schema_pos, out_ipc)
         var metadata = Dict[String, String]()
         try:
             metadata = self._read_kv_vec(schema_pos, 2)
@@ -1086,7 +1152,11 @@ struct _IpcDecoder(Movable):
         return Schema(fields=fields^, metadata=metadata^)
 
     def decode_dict_batch(
-        mut self, value_dtype: dt.AnyDataType, var body: List[UInt8]
+        mut self,
+        value_dtype: dt.AnyDataType,
+        values_ipc_info: _FieldIpcInfo,
+        var body: List[UInt8],
+        dict_values: List[AnyArray] = List[AnyArray](),
     ) raises -> AnyArray:
         var msg_tp = self._r.root()
         var db_pos = self._r.read_table(msg_tp, 2)
@@ -1094,14 +1164,14 @@ struct _IpcDecoder(Movable):
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
         var _l = self._read_record_batch_meta(rb_pos, nodes, bufs)
-        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^)
-        return batch_dec.read_array(value_dtype)
+        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
+        return batch_dec.read_array(value_dtype, values_ipc_info)
 
     def decode_record_batch(
         mut self,
         schema: Schema,
+        ipc_infos: List[_FieldIpcInfo],
         var body: List[UInt8],
-        dict_infos: List[_DictFieldInfo] = List[_DictFieldInfo](),
         dict_values: List[AnyArray] = List[AnyArray](),
     ) raises -> RecordBatch:
         var msg_tp = self._r.root()
@@ -1115,41 +1185,22 @@ struct _IpcDecoder(Movable):
         var nodes = List[_FieldNode]()
         var bufs = List[_BodyBuffer]()
         var _l = self._read_record_batch_meta(rb_pos, nodes, bufs)
-        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^)
+        var batch_dec = _BatchDecoder(body^, 0, nodes^, bufs^, dict_values)
         var columns = List[AnyArray]()
-        var field_idx = 0
-        for f in schema.fields:
-            if f.dtype.is_dictionary():
-                var field_dict_id = -1
-                for j in range(len(dict_infos)):
-                    if dict_infos[j].field_index == field_idx:
-                        field_dict_id = dict_infos[j].dict_id
-                        break
-                ref d = f.dtype.as_dictionary()
-                var indices = batch_dec.read_array(d.index_type().copy())
-                if field_dict_id >= 0 and field_dict_id < len(dict_values):
-                    var values = dict_values[field_dict_id].copy()
-                    columns.append(
-                        DictionaryArray.from_arrays(indices^, values^, d.ordered).to_any()
-                    )
-                else:
-                    raise Error(
-                        "_IpcDecoder: no dictionary values for field "
-                        + String(field_idx)
-                    )
-            else:
-                columns.append(batch_dec.read_array(f.dtype))
-            field_idx += 1
+        for i in range(len(schema.fields)):
+            var ipc = ipc_infos[i].copy() if i < len(ipc_infos) else _FieldIpcInfo()
+            columns.append(batch_dec.read_array(schema.fields[i].dtype, ipc))
         return RecordBatch(schema=schema, columns=columns^)
 
     def read_footer(
         self,
         mut dict_blocks: List[_Block],
         mut blocks: List[_Block],
+        mut out_ipc: List[_FieldIpcInfo],
     ) raises -> Schema:
         var footer_pos = self._r.root()
         var schema_pos = self._r.read_table(footer_pos, 1)
-        var fields = self._decode_schema_fields(schema_pos)
+        var fields = self._decode_schema_fields(schema_pos, out_ipc)
         var metadata = Dict[String, String]()
         try:
             metadata = self._read_kv_vec(schema_pos, 2)
@@ -1180,14 +1231,14 @@ struct _IpcDecoder(Movable):
         return Schema(fields=fields^, metadata=metadata^)
 
     def _decode_schema_fields(
-        self, schema_pos: UInt32
+        self, schema_pos: UInt32, mut out_ipc: List[_FieldIpcInfo]
     ) raises -> List[dt.Field]:
         var fields = List[dt.Field]()
         var fields_vec = self._r.read_vector(schema_pos, 1)
         var n = Int(self._r.vector_len(fields_vec))
         for i in range(n):
             var fp = self._r.vec_offset(fields_vec, UInt32(i))
-            fields.append(self._read_field(fp))
+            fields.append(self._read_field(fp, out_ipc))
         return fields^
 
     def _read_record_batch_meta(
@@ -1220,18 +1271,21 @@ struct _IpcDecoder(Movable):
 
         return length
 
-    def _read_field(self, fp: UInt32) raises -> dt.Field:
+    def _read_field(
+        self, fp: UInt32, mut out_ipc: List[_FieldIpcInfo]
+    ) raises -> dt.Field:
         var name = self._r.read_string(fp, 0)
         var nullable = self._r.read_bool(fp, 1, False)
         var type_type = self._r.read_u8(fp, 2, 0)
 
         var children = List[dt.Field]()
+        var child_ipc = List[_FieldIpcInfo]()
         try:
             var children_vec = self._r.read_vector(fp, 5)
             var n = Int(self._r.vector_len(children_vec))
             for i in range(n):
                 var child_pos = self._r.vec_offset(children_vec, UInt32(i))
-                children.append(self._read_field(child_pos))
+                children.append(self._read_field(child_pos, child_ipc))
         except:
             pass  # absent children vector is normal for leaf types
 
@@ -1337,15 +1391,17 @@ struct _IpcDecoder(Movable):
             dtype = dt.duration(_ipc_to_time_unit(unit_v)).to_any()
         elif type_type == _TYPE_STRUCT:
             dtype = dt.struct_(children^)
-            return dt.Field(name, dtype^, nullable, metadata^)
         else:
             raise Error(
                 "_IpcDecoder: unsupported type_type: " + String(Int(type_type))
             )
 
         # Check for DictionaryEncoding at slot 4 — wraps the value type in DictionaryType.
+        # The dict_id is stored in _FieldIpcInfo rather than on the type itself.
+        var own_dict_id = -1
         try:
             var de_pos = self._r.read_table(fp, 4)
+            own_dict_id = Int(self._r.read_i64(de_pos, 0, 0))
             var idx_tp = self._r.read_table(de_pos, 1)
             var idx_bw = Int(self._r.read_i32(idx_tp, 0, 32))
             var idx_signed = self._r.read_bool(idx_tp, 1, False)
@@ -1373,6 +1429,7 @@ struct _IpcDecoder(Movable):
         except:
             pass  # no DictionaryEncoding at slot 4
 
+        out_ipc.append(_FieldIpcInfo(own_dict_id, child_ipc^))
         return dt.Field(name, dtype^, nullable, metadata^)
 
 
@@ -1585,6 +1642,7 @@ struct _BatchDecoder(Movable):
     var bufs: List[_BodyBuffer]
     var node_idx: Int
     var buf_idx: Int
+    var dict_values: List[AnyArray]
 
     def __init__(
         out self,
@@ -1592,6 +1650,7 @@ struct _BatchDecoder(Movable):
         body_offset: Int,
         var nodes: List[_FieldNode],
         var bufs: List[_BodyBuffer],
+        dict_values: List[AnyArray] = List[AnyArray](),
     ):
         self.body = body^
         self.body_offset = body_offset
@@ -1599,8 +1658,11 @@ struct _BatchDecoder(Movable):
         self.bufs = bufs^
         self.node_idx = 0
         self.buf_idx = 0
+        self.dict_values = dict_values.copy()
 
-    def read_array(mut self, dtype: dt.AnyDataType) raises -> AnyArray:
+    def read_array(
+        mut self, dtype: dt.AnyDataType, ipc_info: _FieldIpcInfo
+    ) raises -> AnyArray:
         var node = self.nodes[self.node_idx]
         self.node_idx += 1
 
@@ -1635,6 +1697,31 @@ struct _BatchDecoder(Movable):
         var data_buffers = List[Buffer[mut=False]]()
         var children = List[ArrayData]()
 
+        # Dictionary: consume index buffer then reconstruct from dict_values lookup.
+        # The dict_id comes from ipc_info (not the logical type) so that the type
+        # system remains free of IPC metadata.
+        if dtype.is_dictionary():
+            ref d = dtype.as_dictionary()
+            self._consume_buffer(data_buffers)
+            var dict_id = ipc_info.dict_id
+            if dict_id < 0 or dict_id >= len(self.dict_values):
+                raise Error(
+                    "_BatchDecoder: no values for dict_id " + String(dict_id)
+                )
+            var values = self.dict_values[dict_id].copy()
+            var indices_ad = ArrayData(
+                dtype=d.index_type().copy(),
+                length=length,
+                nulls=null_count,
+                offset=0,
+                bitmap=bitmap,
+                buffers=data_buffers^,
+                children=List[ArrayData](),
+            )
+            return DictionaryArray.from_arrays(
+                AnyArray.from_data(indices_ad), values^, d.ordered
+            ).to_any()
+
         if dtype.is_string() or dtype.is_binary():
             self._consume_buffer(data_buffers)
             self._consume_buffer(data_buffers)
@@ -1647,19 +1734,22 @@ struct _BatchDecoder(Movable):
             self._consume_buffer(data_buffers)
 
         if dtype.is_list():
+            var child_ipc = ipc_info.children[0].copy() if len(ipc_info.children) > 0 else _FieldIpcInfo()
             children.append(
-                self.read_array(dtype.as_list().value_type()).to_data()
+                self.read_array(dtype.as_list().value_type(), child_ipc).to_data()
             )
         elif dtype.is_fixed_size_list():
+            var child_ipc = ipc_info.children[0].copy() if len(ipc_info.children) > 0 else _FieldIpcInfo()
             children.append(
                 self.read_array(
-                    dtype.as_fixed_size_list().value_type()
+                    dtype.as_fixed_size_list().value_type(), child_ipc
                 ).to_data()
             )
         elif dtype.is_struct():
             ref st = dtype.as_struct()
             for i in range(len(st.fields)):
-                children.append(self.read_array(st.fields[i].dtype).to_data())
+                var child_ipc = ipc_info.children[i].copy() if i < len(ipc_info.children) else _FieldIpcInfo()
+                children.append(self.read_array(st.fields[i].dtype, child_ipc).to_data())
 
         var ad = ArrayData(
             dtype=dtype.copy(),
@@ -1695,15 +1785,77 @@ struct _BatchDecoder(Movable):
 # ---------------------------------------------------------------------------
 
 
-def _compute_dict_infos(schema: Schema) -> List[_DictFieldInfo]:
-    """Return (field_index, dict_id) pairs for each dictionary-encoded field."""
-    var infos = List[_DictFieldInfo]()
-    var did = 0
-    for i in range(len(schema.fields)):
-        if schema.fields[i].dtype.is_dictionary():
-            infos.append(_DictFieldInfo(i, did))
-            did += 1
-    return infos^
+def _collect_dict_values(
+    data: ArrayData,
+    mut pairs: List[_DictPair],
+    mut next_id: Int,
+) raises:
+    """DFS inner-first: append (dict_id, values) for every dict array in the tree."""
+    if data.dtype.is_dictionary():
+        _collect_dict_values(data.children[0], pairs, next_id)
+        pairs.append(_DictPair(next_id, AnyArray.from_data(data.children[0])))
+        next_id += 1
+    elif data.dtype.is_list():
+        if len(data.children) > 0:
+            _collect_dict_values(data.children[0], pairs, next_id)
+    elif data.dtype.is_struct():
+        for i in range(len(data.children)):
+            _collect_dict_values(data.children[i], pairs, next_id)
+
+
+def _find_in_ipc_tree(
+    dtype: dt.AnyDataType,
+    ipc_info: _FieldIpcInfo,
+    target_id: Int,
+) raises -> Optional[_DictLookup]:
+    """Search the (dtype, ipc_info) shadow tree for dict_id == target_id.
+
+    Returns a `_DictLookup` with the value type and the `_FieldIpcInfo` to use
+    when decoding the values array.  The ipc_info for values uses dict_id=-1
+    with the outer dict's children as its own children, so that nested dicts
+    within the value type can still be resolved.
+    """
+    if ipc_info.dict_id == target_id:
+        ref d = dtype.as_dictionary()
+        var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
+        return _DictLookup(d.value_type().copy(), vt_ipc^)
+    if dtype.is_dictionary():
+        ref d = dtype.as_dictionary()
+        var vt_ipc = _FieldIpcInfo(-1, ipc_info.children.copy())
+        return _find_in_ipc_tree(d.value_type().copy(), vt_ipc^, target_id)
+    elif dtype.is_list():
+        if len(ipc_info.children) > 0:
+            return _find_in_ipc_tree(
+                dtype.as_list().value_type().copy(),
+                ipc_info.children[0].copy(),
+                target_id,
+            )
+    elif dtype.is_struct():
+        ref st = dtype.as_struct()
+        for i in range(len(st.fields)):
+            if i < len(ipc_info.children):
+                var found = _find_in_ipc_tree(
+                    st.fields[i].dtype.copy(), ipc_info.children[i].copy(), target_id
+                )
+                if found:
+                    return found^
+    return None
+
+
+def _find_for_dict_id(
+    fields: List[dt.Field],
+    ipc_infos: List[_FieldIpcInfo],
+    target_id: Int,
+) raises -> Optional[_DictLookup]:
+    """Search schema fields and their IPC shadow tree for the given dict_id."""
+    for i in range(len(fields)):
+        if i < len(ipc_infos):
+            var found = _find_in_ipc_tree(
+                fields[i].dtype.copy(), ipc_infos[i].copy(), target_id
+            )
+            if found:
+                return found^
+    return None
 
 
 struct RecordBatchFileWriter(Movable):
@@ -1719,7 +1871,6 @@ struct RecordBatchFileWriter(Movable):
     var _dict_blocks: List[_Block]
     var _blocks: List[_Block]
     var _enc: _BatchEncoder
-    var _dict_infos: List[_DictFieldInfo]
     var _dicts_written: List[Bool]
     var _closed: Bool
 
@@ -1730,10 +1881,7 @@ struct RecordBatchFileWriter(Movable):
         self._dict_blocks = List[_Block]()
         self._blocks = List[_Block]()
         self._enc = _BatchEncoder()
-        self._dict_infos = _compute_dict_infos(schema)
         self._dicts_written = List[Bool]()
-        for _ in range(len(self._dict_infos)):
-            self._dicts_written.append(False)
         self._closed = False
 
         for b in _magic():
@@ -1746,22 +1894,27 @@ struct RecordBatchFileWriter(Movable):
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
             raise Error("RecordBatchFileWriter: writer is closed")
-        # In FILE format each dictionary is written exactly once before its first
-        # RecordBatch use.  Subsequent batches share the same dictionary.
-        for j in range(len(self._dict_infos)):
-            if self._dicts_written[j]:
+        # Collect all (dict_id, values) pairs in DFS inner-first order.
+        # In FILE format each dict_id is written exactly once.
+        var pairs = List[_DictPair]()
+        var next_id = 0
+        for col in batch.columns:
+            _collect_dict_values(col.to_data(), pairs, next_id)
+        for j in range(len(pairs)):
+            var did = pairs[j].dict_id
+            while len(self._dicts_written) <= did:
+                self._dicts_written.append(False)
+            if self._dicts_written[did]:
                 continue
-            var col_data = batch.columns[self._dict_infos[j].field_index].to_data()
-            var values = AnyArray.from_data(col_data.children[0])
             var dict_blk_start = Int64(len(self._out))
             var eb = _BatchEncoder.encode_dict_message(
-                Int64(self._dict_infos[j].dict_id), values
+                Int64(did), pairs[j].values
             )
             self._out.extend(Span(eb.msg))
             self._dict_blocks.append(
                 _Block(dict_blk_start, eb.metadata_length, eb.body_length)
             )
-            self._dicts_written[j] = True
+            self._dicts_written[did] = True
         var blk_start = Int64(len(self._out))
         var eb = self._enc.encode(batch)
         self._out.extend(Span(eb.msg))
@@ -1795,14 +1948,12 @@ struct RecordBatchStreamWriter(Movable):
     var _out: List[UInt8]
     var _path: String
     var _enc: _BatchEncoder
-    var _dict_infos: List[_DictFieldInfo]
     var _closed: Bool
 
     def __init__(out self, path: String, schema: Schema) raises:
         self._out = List[UInt8]()
         self._path = path
         self._enc = _BatchEncoder()
-        self._dict_infos = _compute_dict_infos(schema)
         self._closed = False
 
         var schema_msg = _IpcEncoder.frame_message(
@@ -1814,11 +1965,14 @@ struct RecordBatchStreamWriter(Movable):
     def write_batch(mut self, batch: RecordBatch) raises:
         if self._closed:
             raise Error("RecordBatchStreamWriter: writer is closed")
-        for j in range(len(self._dict_infos)):
-            var col_data = batch.columns[self._dict_infos[j].field_index].to_data()
-            var values = AnyArray.from_data(col_data.children[0])
+        # Stream format sends all dicts before each record batch.
+        var pairs = List[_DictPair]()
+        var next_id = 0
+        for col in batch.columns:
+            _collect_dict_values(col.to_data(), pairs, next_id)
+        for j in range(len(pairs)):
             var eb = _BatchEncoder.encode_dict_message(
-                Int64(self._dict_infos[j].dict_id), values
+                Int64(pairs[j].dict_id), pairs[j].values
             )
             self._out.extend(Span(eb.msg))
         self._out.extend(Span(self._enc.encode(batch).msg))
@@ -1841,9 +1995,9 @@ struct RecordBatchFileReader(Movable):
     """Reader for the Arrow IPC file format with random-access batch reads."""
 
     var schema: Schema
+    var _ipc_infos: List[_FieldIpcInfo]
     var _blocks: List[_Block]
     var _msg_reader: _MessageReader
-    var _dict_infos: List[_DictFieldInfo]
     var _dict_values: List[AnyArray]
 
     def __init__(out self, path: String) raises:
@@ -1868,38 +2022,40 @@ struct RecordBatchFileReader(Movable):
         var dec = _IpcDecoder(footer_bytes^)
         var dict_blocks = List[_Block]()
         var blocks = List[_Block]()
-        self.schema = dec.read_footer(dict_blocks, blocks)
+        var ipc_infos = List[_FieldIpcInfo]()
+        self.schema = dec.read_footer(dict_blocks, blocks, ipc_infos)
+        self._ipc_infos = ipc_infos^
         self._blocks = blocks^
         self._msg_reader = _MessageReader(file_bytes^)
-        self._dict_infos = _compute_dict_infos(self.schema)
         self._dict_values = List[AnyArray]()
 
         # Load dictionary values from their footer-registered blocks.
+        # dict_values is indexed by dict_id; pass partial list to decode_dict_batch
+        # so that nested dicts (already loaded at lower ids) can be resolved.
         for di in range(len(dict_blocks)):
             self._msg_reader.seek(Int(dict_blocks[di].offset))
             var meta = List[UInt8]()
             var body = List[UInt8]()
             if not self._msg_reader.read_next(meta, body):
                 break
-            # Extract dict_id from the DictionaryBatch header.
             var db_peek = _IpcDecoder(meta.copy())
             var msg_tp = db_peek._r.root()
             var db_pos = db_peek._r.read_table(msg_tp, 2)
             var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
-            # Find value type for this dict_id.
-            var found_idx = -1
-            for j in range(len(self._dict_infos)):
-                if self._dict_infos[j].dict_id == dict_id:
-                    found_idx = j
-                    break
-            if found_idx >= 0:
-                ref field = self.schema.fields[
-                    self._dict_infos[found_idx].field_index
-                ]
-                var value_type = field.dtype.as_dictionary().value_type().copy()
+            var lkup = _find_for_dict_id(self.schema.fields, self._ipc_infos, dict_id)
+            if lkup:
                 var full_dec = _IpcDecoder(meta^)
-                var values = full_dec.decode_dict_batch(value_type, body^)
-                self._dict_values.append(values^)
+                var values = full_dec.decode_dict_batch(
+                    lkup.value().value_type, lkup.value().value_ipc_info, body^,
+                    self._dict_values,
+                )
+                # Store at index dict_id; grow list with empty placeholders if needed.
+                while len(self._dict_values) <= dict_id:
+                    self._dict_values.append(AnyArray.from_data(
+                        ArrayData(dt.null, 0, 0, 0, None,
+                                  List[Buffer[mut=False]](), List[ArrayData]())
+                    ))
+                self._dict_values[dict_id] = values^
 
     def num_record_batches(self) -> Int:
         return len(self._blocks)
@@ -1913,7 +2069,7 @@ struct RecordBatchFileReader(Movable):
         var _ok = self._msg_reader.read_next(meta, body)
         var dec = _IpcDecoder(meta^)
         return dec.decode_record_batch(
-            self.schema, body^, self._dict_infos, self._dict_values
+            self.schema, self._ipc_infos, body^, self._dict_values
         )
 
     def read_all(mut self) raises -> List[RecordBatch]:
@@ -1928,8 +2084,8 @@ struct RecordBatchStreamReader(Movable):
     """Reader for the Arrow IPC stream format."""
 
     var schema: Schema
+    var _ipc_infos: List[_FieldIpcInfo]
     var _msg_reader: _MessageReader
-    var _dict_infos: List[_DictFieldInfo]
 
     def __init__(out self, path: String) raises:
         var file_bytes = Path(path).read_bytes()
@@ -1938,10 +2094,11 @@ struct RecordBatchStreamReader(Movable):
         var body = List[UInt8]()
         if not msg_reader.read_next(meta, body):
             raise Error("RecordBatchStreamReader: missing schema message")
+        var ipc_infos = List[_FieldIpcInfo]()
         var dec = _IpcDecoder(meta^)
-        self.schema = dec.decode_schema()
+        self.schema = dec.decode_schema(ipc_infos)
+        self._ipc_infos = ipc_infos^
         self._msg_reader = msg_reader^
-        self._dict_infos = _compute_dict_infos(self.schema)
 
     def read_all(mut self) raises -> List[RecordBatch]:
         var dict_values = List[AnyArray]()
@@ -1959,24 +2116,26 @@ struct RecordBatchStreamReader(Movable):
                 var msg_tp = db_peek._r.root()
                 var db_pos = db_peek._r.read_table(msg_tp, 2)
                 var dict_id = Int(db_peek._r.read_i64(db_pos, 0, 0))
-                var found_idx = -1
-                for j in range(len(self._dict_infos)):
-                    if self._dict_infos[j].dict_id == dict_id:
-                        found_idx = j
-                        break
-                if found_idx >= 0:
-                    ref field = self.schema.fields[
-                        self._dict_infos[found_idx].field_index
-                    ]
-                    var value_type = field.dtype.as_dictionary().value_type().copy()
+                var lkup = _find_for_dict_id(
+                    self.schema.fields, self._ipc_infos, dict_id
+                )
+                if lkup:
                     var full_dec = _IpcDecoder(meta^)
-                    var values = full_dec.decode_dict_batch(value_type, body^)
-                    dict_values.append(values^)
+                    var values = full_dec.decode_dict_batch(
+                        lkup.value().value_type, lkup.value().value_ipc_info,
+                        body^, dict_values,
+                    )
+                    while len(dict_values) <= dict_id:
+                        dict_values.append(AnyArray.from_data(
+                            ArrayData(dt.null, 0, 0, 0, None,
+                                      List[Buffer[mut=False]](), List[ArrayData]())
+                        ))
+                    dict_values[dict_id] = values^
             elif Int(header_type) == Int(_HEADER_RECORD_BATCH):
                 var dec = _IpcDecoder(meta^)
                 batches.append(
                     dec.decode_record_batch(
-                        self.schema, body^, self._dict_infos, dict_values
+                        self.schema, self._ipc_infos, body^, dict_values
                     )
                 )
         return batches^

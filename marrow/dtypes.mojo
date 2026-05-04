@@ -909,7 +909,9 @@ def struct_(var fields: List[Field]) -> StructType:
 
 
 def dictionary(
-    var index_type: AnyDataType, var value_type: AnyDataType, ordered: Bool = False
+    var index_type: AnyDataType,
+    var value_type: AnyDataType,
+    ordered: Bool = False,
 ) raises -> DictionaryType:
     """Construct a dictionary type. Equivalent to PyArrow's ``pa.dictionary()``.
 

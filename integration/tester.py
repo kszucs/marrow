@@ -129,7 +129,23 @@ def _json_field_to_pa(field_obj: dict) -> pa.Field | None:
     )
 
 
-def _json_col_to_pa(col_obj: dict, pa_type: pa.DataType) -> pa.Array:
+def _find_field_for_dict_id(json_fields: list, dict_id: int) -> dict | None:
+    """Recursively search schema fields for the one referencing the given dict_id."""
+    for f in json_fields:
+        if (di := f.get("dictionary")) is not None and di["id"] == dict_id:
+            return f
+        found = _find_field_for_dict_id(f.get("children") or [], dict_id)
+        if found is not None:
+            return found
+    return None
+
+
+def _json_col_to_pa(
+    col_obj: dict,
+    pa_type: pa.DataType,
+    dict_cache: dict | None = None,
+    json_field: dict | None = None,
+) -> pa.Array:
     """Convert an Arrow JSON column to a pyarrow Array.
 
     Encoding quirks:
@@ -189,23 +205,42 @@ def _json_col_to_pa(col_obj: dict, pa_type: pa.DataType) -> pa.Array:
 
     if pa.types.is_list(pa_type) and not pa.types.is_fixed_size_list(pa_type):
         offsets = col_obj.get("OFFSET", [])
-        child_arr = _json_col_to_pa(col_obj["children"][0], pa_type.value_type)
+        child_jf = (json_field["children"][0] if json_field and json_field.get("children") else None)
+        child_arr = _json_col_to_pa(col_obj["children"][0], pa_type.value_type, dict_cache, child_jf)
         return pa.ListArray.from_arrays(offsets, child_arr, mask=mask_pa)
 
     if pa.types.is_fixed_size_list(pa_type):
-        child_arr = _json_col_to_pa(col_obj["children"][0], pa_type.value_type)
+        child_jf = (json_field["children"][0] if json_field and json_field.get("children") else None)
+        child_arr = _json_col_to_pa(col_obj["children"][0], pa_type.value_type, dict_cache, child_jf)
         return pa.FixedSizeListArray.from_arrays(
             child_arr, pa_type.list_size, mask=mask_pa
         )
 
     if pa.types.is_struct(pa_type):
-        field_arrs = [
-            _json_col_to_pa(col_obj["children"][i], pa_type.field(i).type)
-            for i in range(pa_type.num_fields)
-        ]
+        field_arrs = []
+        for i in range(pa_type.num_fields):
+            child_jf = (
+                json_field["children"][i]
+                if json_field and json_field.get("children") and i < len(json_field["children"])
+                else None
+            )
+            field_arrs.append(
+                _json_col_to_pa(col_obj["children"][i], pa_type.field(i).type, dict_cache, child_jf)
+            )
         return pa.StructArray.from_arrays(
             field_arrs, fields=list(pa_type), mask=mask_pa
         )
+
+    if pa.types.is_dictionary(pa_type):
+        if dict_cache is None or json_field is None:
+            raise ValueError("dict_cache and json_field required for dictionary columns")
+        dict_id = json_field["dictionary"]["id"]
+        indices = pa.array(
+            [int(v) for v in col_obj.get("DATA", [])],
+            type=pa_type.index_type,
+            mask=mask_np,
+        )
+        return pa.DictionaryArray.from_arrays(indices, dict_cache[dict_id])
 
     raise ValueError(f"Unsupported pa type in JSON converter: {pa_type}")
 
@@ -237,9 +272,13 @@ def _json_to_pa_schema(json_dict: dict) -> pa.Schema | None:
 
 def _empty_ma_batch(pa_schema: pa.Schema):
     """Build an empty marrow RecordBatch matching the given pa.Schema."""
-    pa_batch = pa.record_batch(
-        [pa.array([], type=f.type) for f in pa_schema], schema=pa_schema
-    )
+    arrays = []
+    for f in pa_schema:
+        try:
+            arrays.append(pa.array([], type=f.type))
+        except Exception:
+            arrays.append(pa.nulls(0, type=f.type))
+    pa_batch = pa.record_batch(arrays, schema=pa_schema)
     return ma.record_batch(pa_batch)
 
 
@@ -254,20 +293,18 @@ def _json_to_ma_batch(json_dict: dict, num_batch: int):
     pa_schema = _json_to_pa_schema(json_dict)
     assert pa_schema is not None, "no supported fields"
     batch_obj = json_dict["batches"][num_batch]
-    # Build a dict_id → pa.Array of values cache from the top-level dictionaries.
+    # Build dict_cache sorted by id so inner (lower-id) dicts are ready when
+    # outer dict values reference them (nested dictionary case).
     dict_cache: dict[int, pa.Array] = {}
-    for d in json_dict.get("dictionaries", []):
+    for d in sorted(json_dict.get("dictionaries", []), key=lambda x: x["id"]):
         d_id = d["id"]
-        # Find the schema field that references this dict_id to get value_type.
-        for jf in json_dict["schema"]["fields"]:
-            di = jf.get("dictionary")
-            if di is not None and di["id"] == d_id:
-                value_type = _json_type_to_pa(jf["type"], jf.get("children") or [])
-                if value_type is not None:
-                    dict_cache[d_id] = _json_col_to_pa(
-                        d["data"]["columns"][0], value_type
-                    )
-                break
+        dict_field = _find_field_for_dict_id(json_dict["schema"]["fields"], d_id)
+        if dict_field is not None:
+            value_type = _json_type_to_pa(dict_field["type"], dict_field.get("children") or [])
+            if value_type is not None:
+                dict_cache[d_id] = _json_col_to_pa(
+                    d["data"]["columns"][0], value_type, dict_cache, dict_field
+                )
     # Pair each surviving (supported) JSON field with its column at the same
     # index in the original schema, preserving order across drops.
     json_fields = json_dict["schema"]["fields"]
@@ -278,22 +315,7 @@ def _json_to_ma_batch(json_dict: dict, num_batch: int):
         if _json_field_to_pa(jf) is None:
             continue
         pa_field = next(pa_field_iter)
-        dict_info = jf.get("dictionary")
-        if dict_info is not None:
-            dict_id = dict_info["id"]
-            validity = jc.get("VALIDITY")
-            mask_np = None if validity is None else ~np.array(validity, dtype=bool)
-            index_type = pa_field.type.index_type
-            indices = pa.array(
-                [int(v) for v in jc.get("DATA", [])],
-                type=index_type,
-                mask=mask_np,
-            )
-            arrays.append(
-                pa.DictionaryArray.from_arrays(indices, dict_cache[dict_id])
-            )
-        else:
-            arrays.append(_json_col_to_pa(jc, pa_field.type))
+        arrays.append(_json_col_to_pa(jc, pa_field.type, dict_cache, jf))
     pa_batch = pa.record_batch(arrays, schema=pa_schema)
     return ma.record_batch(pa_batch)
 
