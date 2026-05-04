@@ -100,16 +100,27 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
 
 def _json_field_to_pa(field_obj: dict) -> pa.Field | None:
     """Convert an Arrow JSON field to a pyarrow Field (None if unsupported)."""
-    if "dictionary" in field_obj:
-        return None
-    pa_type = _json_type_to_pa(
-        field_obj["type"], field_obj.get("children") or []
-    )
-    if pa_type is None:
-        return None
     metadata = {
         kv["key"]: kv["value"] for kv in field_obj.get("metadata") or []
     }
+    dict_info = field_obj.get("dictionary")
+    if dict_info is not None:
+        value_type = _json_type_to_pa(
+            field_obj["type"], field_obj.get("children") or []
+        )
+        if value_type is None:
+            return None
+        idx = dict_info["indexType"]
+        bw = idx["bitWidth"]
+        index_type = getattr(pa, ("int" if idx["isSigned"] else "uint") + str(bw))()
+        ordered = dict_info.get("isOrdered", False)
+        pa_type = pa.dictionary(index_type, value_type, ordered=ordered)
+    else:
+        pa_type = _json_type_to_pa(
+            field_obj["type"], field_obj.get("children") or []
+        )
+        if pa_type is None:
+            return None
     return pa.field(
         field_obj["name"],
         pa_type,
@@ -243,6 +254,20 @@ def _json_to_ma_batch(json_dict: dict, num_batch: int):
     pa_schema = _json_to_pa_schema(json_dict)
     assert pa_schema is not None, "no supported fields"
     batch_obj = json_dict["batches"][num_batch]
+    # Build a dict_id → pa.Array of values cache from the top-level dictionaries.
+    dict_cache: dict[int, pa.Array] = {}
+    for d in json_dict.get("dictionaries", []):
+        d_id = d["id"]
+        # Find the schema field that references this dict_id to get value_type.
+        for jf in json_dict["schema"]["fields"]:
+            di = jf.get("dictionary")
+            if di is not None and di["id"] == d_id:
+                value_type = _json_type_to_pa(jf["type"], jf.get("children") or [])
+                if value_type is not None:
+                    dict_cache[d_id] = _json_col_to_pa(
+                        d["data"]["columns"][0], value_type
+                    )
+                break
     # Pair each surviving (supported) JSON field with its column at the same
     # index in the original schema, preserving order across drops.
     json_fields = json_dict["schema"]["fields"]
@@ -253,7 +278,22 @@ def _json_to_ma_batch(json_dict: dict, num_batch: int):
         if _json_field_to_pa(jf) is None:
             continue
         pa_field = next(pa_field_iter)
-        arrays.append(_json_col_to_pa(jc, pa_field.type))
+        dict_info = jf.get("dictionary")
+        if dict_info is not None:
+            dict_id = dict_info["id"]
+            validity = jc.get("VALIDITY")
+            mask_np = None if validity is None else ~np.array(validity, dtype=bool)
+            index_type = pa_field.type.index_type
+            indices = pa.array(
+                [int(v) for v in jc.get("DATA", [])],
+                type=index_type,
+                mask=mask_np,
+            )
+            arrays.append(
+                pa.DictionaryArray.from_arrays(indices, dict_cache[dict_id])
+            )
+        else:
+            arrays.append(_json_col_to_pa(jc, pa_field.type))
     pa_batch = pa.record_batch(arrays, schema=pa_schema)
     return ma.record_batch(pa_batch)
 

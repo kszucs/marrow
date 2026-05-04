@@ -42,9 +42,6 @@ _UNSUPPORTED = {
     'map_non_canonical',
     'nested_large_offsets',   # large list
     'union',
-    'dictionary',
-    'dictionary_unsigned',
-    'nested_dictionary',
     'binary_view',
     'list_view',
     'extension',

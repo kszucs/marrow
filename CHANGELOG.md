@@ -4,6 +4,19 @@
 
 ### Features
 
+- **IPC support for dictionary-encoded columns** (`marrow/ipc.mojo`): the IPC
+  file and stream writer now emits a `DictionaryBatch` message (header type 2)
+  for each dictionary column before its first `RecordBatch`, encoding the
+  column's value array as a separate body. The `RecordBatch` body carries only
+  the integer indices. Dictionary blocks are registered in the IPC file footer so
+  C++ / Rust / Go readers can locate them. The IPC reader detects
+  `DictionaryEncoding` at schema-field slot 4, reconstructs `DictionaryType`
+  (index type + value type + ordered flag), loads `DictionaryBatch` messages via
+  footer-registered block offsets, and wires the decoded values back into
+  `DictionaryArray` instances when reading record batches. Validated across all
+  Arrow implementations (`dictionary` and `dictionary_unsigned` pass 14/14
+  integration phases with C++, Rust, and Go).
+
 - **Dictionary-encoded Arrow type** (`marrow/{dtypes,scalars,arrays,builders,
   c_data}.mojo`): added `DictionaryType` (index type + value type + ordered
   flag), `DictionaryScalar`, `DictionaryArray`, and `DictionaryBuilder`.

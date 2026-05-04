@@ -42,6 +42,18 @@ def test_datatype_from_pyarrow():
         assert roundtripped.field("x").type == pa_type
 
 
+def test_datatype_dictionary_roundtrip():
+    """dictionary(index, value) type round-trips through PyArrow schema."""
+    for index_pa_type in [
+        pa.int8(), pa.int16(), pa.int32(), pa.int64(),
+        pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64(),
+    ]:
+        pa_type = pa.dictionary(index_pa_type, pa.string())
+        ma_schema = ma.schema(pa.schema([pa.field("d", pa_type)]))
+        roundtripped = pa.schema(ma_schema)
+        assert roundtripped.field("d").type == pa_type
+
+
 def test_datatype_nested_roundtrip():
     """Nested types (list, struct) roundtrip through PyArrow."""
     pa_schema = pa.schema(
@@ -230,6 +242,49 @@ def test_array_from_pyarrow_struct():
     assert roundtripped.equals(pa_arr)
 
 
+def test_array_from_pyarrow_dictionary():
+    """Import PyArrow dictionary array → Marrow → back to PyArrow."""
+    pa_arr = pa.array(["cat", "dog", "cat", "fish", "dog"]).dictionary_encode()
+    ma_arr = ma.array(pa_arr)
+    assert len(ma_arr) == 5
+    assert pa.array(ma_arr).equals(pa_arr)
+
+
+def test_array_roundtrip_dictionary_with_nulls():
+    pa_arr = pa.array(["cat", None, "cat", "fish", None]).dictionary_encode()
+    ma_arr = ma.array(pa_arr)
+    assert len(ma_arr) == 5
+    assert ma_arr.null_count() == 2
+    assert pa.array(ma_arr).equals(pa_arr)
+
+
+def test_array_roundtrip_dictionary_ordered():
+    pa_arr = pa.DictionaryArray.from_arrays(
+        pa.array([0, 1, 0, 2], type=pa.int8()),
+        pa.array(["a", "b", "c"]),
+        ordered=True,
+    )
+    ma_arr = ma.array(pa_arr)
+    roundtripped = pa.array(ma_arr)
+    assert roundtripped.equals(pa_arr)
+    assert roundtripped.type.ordered
+
+
+@pytest.mark.parametrize(
+    "index_pa_type",
+    [
+        pa.int8(), pa.int16(), pa.int32(), pa.int64(),
+        pa.uint8(), pa.uint16(), pa.uint32(), pa.uint64(),
+    ],
+)
+def test_array_roundtrip_dictionary_index_types(index_pa_type):
+    pa_arr = pa.DictionaryArray.from_arrays(
+        pa.array([0, 1, 2, 0], type=index_pa_type),
+        pa.array(["x", "y", "z"]),
+    )
+    assert pa.array(ma.array(pa_arr)).equals(pa_arr)
+
+
 # ===========================================================================
 # RecordBatch roundtrips
 # ===========================================================================
@@ -295,6 +350,15 @@ def test_record_batch_with_list_column():
     assert ma_rb.num_rows() == 2
     pa_rb2 = pa.record_batch(ma_rb)
     assert pa_rb2.column("vals").equals(pa_rb.column("vals"))
+
+
+def test_record_batch_with_dictionary_column():
+    pa_rb = pa.record_batch(
+        {"cat": pa.array(["x", "y", "x", "z"]).dictionary_encode()}
+    )
+    ma_rb = ma.record_batch(pa_rb)
+    assert ma_rb.num_rows() == 4
+    assert pa.record_batch(ma_rb).column("cat").equals(pa_rb.column("cat"))
 
 
 def test_record_batch_arrow_c_schema():

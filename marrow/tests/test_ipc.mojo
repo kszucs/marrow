@@ -9,7 +9,7 @@ from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from marrow.testing import TestSuite
 from marrow.dtypes import *
-from marrow.arrays import AnyArray
+from marrow.arrays import AnyArray, DictionaryArray
 from marrow.builders import (
     array,
     BoolBuilder,
@@ -644,6 +644,79 @@ def test_marrow_reads_pyarrow_nullable() raises:
     assert_equal(len(batches), 1)
     assert_equal(batches[0].num_rows(), 4)
     assert_equal(Int(batches[0].columns[0].to_data().nulls), 2)
+
+
+def _mk_dict_batch() raises -> RecordBatch:
+    """Single-column batch: dictionary<int32, string> with 4 elements."""
+    var indices: AnyArray = array([0, 1, 0, 2], int32)
+    var sb = StringBuilder(3)
+    sb.append("cat")
+    sb.append("dog")
+    sb.append("fish")
+    var values: AnyArray = sb.finish()
+    var dict_arr: AnyArray = DictionaryArray.from_arrays(indices^, values^)
+    var fields = List[Field]()
+    fields.append(field("d", dictionary(int32, string)))
+    var cols = List[AnyArray]()
+    cols.append(dict_arr^)
+    return RecordBatch(schema=Schema(fields=fields^), columns=cols^)
+
+
+def test_file_dictionary_roundtrip() raises:
+    """IPC file round-trip preserves a dictionary<int32, string> column."""
+    var path = _tmp_path()
+    var batch = _mk_dict_batch()
+    var expected = DictionaryArray(batch.columns[0].to_data())
+    var batches_in = List[RecordBatch]()
+    batches_in.append(batch^)
+    write_ipc_file(path, batches_in)
+    var read_back = read_ipc_file(path)
+    assert_equal(len(read_back), 1)
+    assert_equal(read_back[0].num_rows(), 4)
+    assert_true(read_back[0].schema.fields[0].dtype.is_dictionary())
+    var got = DictionaryArray(read_back[0].columns[0].to_data())
+    assert_true(got == expected)
+
+
+def test_stream_dictionary_roundtrip() raises:
+    """IPC stream round-trip preserves a dictionary<int32, string> column."""
+    var path = _tmp_path(".arrows")
+    var batch = _mk_dict_batch()
+    var expected = DictionaryArray(batch.columns[0].to_data())
+    var batches_in = List[RecordBatch]()
+    batches_in.append(batch^)
+    write_ipc_stream(path, batches_in)
+    var read_back = read_ipc_stream(path)
+    assert_equal(len(read_back), 1)
+    assert_equal(read_back[0].num_rows(), 4)
+    assert_true(read_back[0].schema.fields[0].dtype.is_dictionary())
+    var got = DictionaryArray(read_back[0].columns[0].to_data())
+    assert_true(got == expected)
+
+
+def test_marrow_reads_pyarrow_dictionary() raises:
+    """marrow correctly reads a dictionary column written by PyArrow."""
+    var pa = Python.import_module("pyarrow")
+    var path = _tmp_path()
+
+    var pa_arr = pa.array(
+        Python.list(
+            PythonObject("cat"),
+            PythonObject("dog"),
+            PythonObject("cat"),
+            PythonObject("fish"),
+        )
+    ).dictionary_encode()
+    var pa_schema = pa.schema(Python.list(pa.field("d", pa_arr.type)))
+    var pa_batch = pa.RecordBatch.from_arrays(Python.list(pa_arr), schema=pa_schema)
+    var writer = pa.ipc.new_file(path, pa_schema)
+    writer.write(pa_batch)
+    writer.close()
+
+    var batches = read_ipc_file(path)
+    assert_equal(len(batches), 1)
+    assert_equal(batches[0].num_rows(), 4)
+    assert_true(batches[0].schema.fields[0].dtype.is_dictionary())
 
 
 def main() raises:

@@ -35,7 +35,6 @@ ARROW_TESTING_DIR = os.environ.get("ARROW_TESTING_DIR", "")
 
 # Test-case names (datagen file names) to skip entirely — no supported columns
 UNSUPPORTED_CASE_PATTERNS = [
-    "dictionary",
     "union",
     "map",
     "decimal",
@@ -85,6 +84,8 @@ def _type_supported(t: pa.DataType) -> bool:
         return _type_supported(t.value_type)
     if pa.types.is_struct(t):
         return all(_type_supported(t.field(i).type) for i in range(t.num_fields))
+    if pa.types.is_dictionary(t):
+        return _type_supported(t.value_type)
     return False
 
 
@@ -202,21 +203,75 @@ def _json_dict_to_pa_batches(json_dict: dict) -> list[pa.RecordBatch]:
 
     Silently drops fields whose types are unsupported (converter returns None).
     Returns [] if no supported fields remain.
+
+    Dictionary-encoded fields are handled by reading dictionary values from the
+    top-level "dictionaries" section and indices from each batch's column data.
     """
     schema_fields = json_dict["schema"]["fields"]
-    supported = [
-        (i, _json_field_to_pa(f))
-        for i, f in enumerate(schema_fields)
-        if _json_field_to_pa(f) is not None
-    ]
+
+    # dict_id → pa.Array of decoded values (populated on demand)
+    dict_cache: dict[int, pa.Array] = {}
+
+    def _get_dict_values(dict_id: int, value_type: pa.DataType) -> pa.Array | None:
+        if dict_id in dict_cache:
+            return dict_cache[dict_id]
+        for d in json_dict.get("dictionaries", []):
+            if d["id"] == dict_id:
+                arr = _json_col_to_pa(d["data"]["columns"][0], value_type)
+                dict_cache[dict_id] = arr
+                return arr
+        return None
+
+    # Each entry is (col_index, pa.Field, dict_id_or_None)
+    supported: list[tuple[int, pa.Field, int | None]] = []
+    for i, field_obj in enumerate(schema_fields):
+        dict_info = field_obj.get("dictionary")
+        if dict_info is not None:
+            value_type = _json_type_to_pa(
+                field_obj["type"], field_obj.get("children") or []
+            )
+            if value_type is None:
+                continue
+            idx = dict_info["indexType"]
+            bw = idx["bitWidth"]
+            index_type = getattr(pa, ("int" if idx["isSigned"] else "uint") + str(bw))()
+            ordered = dict_info.get("isOrdered", False)
+            dict_id = dict_info["id"]
+            if _get_dict_values(dict_id, value_type) is None:
+                continue
+            pa_field = pa.field(
+                field_obj["name"],
+                pa.dictionary(index_type, value_type, ordered=ordered),
+                nullable=field_obj.get("nullable", True),
+            )
+            supported.append((i, pa_field, dict_id))
+        else:
+            pf = _json_field_to_pa(field_obj)
+            if pf is not None:
+                supported.append((i, pf, None))
+
     if not supported:
         return []
-    pa_schema = pa.schema([pf for _, pf in supported])
+
+    pa_schema = pa.schema([pf for _, pf, _ in supported])
     batches = []
     for batch_obj in json_dict.get("batches", []):
-        arrays = [
-            _json_col_to_pa(batch_obj["columns"][i], pf.type) for i, pf in supported
-        ]
+        arrays = []
+        for i, pf, dict_id in supported:
+            col_data = batch_obj["columns"][i]
+            if dict_id is not None:
+                validity = col_data.get("VALIDITY")
+                mask_np = None if validity is None else ~np.array(validity, dtype=bool)
+                indices = pa.array(
+                    [int(v) for v in col_data.get("DATA", [])],
+                    type=pf.type.index_type,
+                    mask=mask_np,
+                )
+                arrays.append(
+                    pa.DictionaryArray.from_arrays(indices, dict_cache[dict_id])
+                )
+            else:
+                arrays.append(_json_col_to_pa(col_data, pf.type))
         batches.append(pa.record_batch(arrays, schema=pa_schema))
     return batches
 
@@ -461,3 +516,10 @@ class TestIPCRoundtrip:
             result_batches = marrow.read_ipc_stream(f.name)
         assert len(result_batches) == 1
         assert batch.equals(pa.record_batch(result_batches[0]))
+
+    def test_file_dictionary_column(self):
+        """Dictionary-encoded column survives an IPC file round-trip."""
+        batch = pa.record_batch(
+            {"cat": pa.array(["x", "y", "x", "z"]).dictionary_encode()}
+        )
+        assert batch.equals(self._roundtrip_file(batch))
