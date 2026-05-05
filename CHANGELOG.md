@@ -4,6 +4,15 @@
 
 ### Features
 
+- **Large binary, string, and list types** (`marrow/{dtypes,arrays,builders,ipc,c_data}.mojo`):
+  added `LargeBinaryType`, `LargeStringType`, `LargeListType` (64-bit offsets);
+  `BinaryLikeType` trait with `comptime offset: DType` and `StringLikeType` sub-trait
+  for UTF-8 kernels; unified `BinaryArray[T: BinaryLikeType]` and
+  `BinaryBuilder[T: BinaryLikeType]` with aliases `StringArray`, `LargeBinaryArray`,
+  `LargeStringArray`, `StringBuilder`, `LargeBinaryBuilder`, `LargeStringBuilder`;
+  IPC type codes 19/20/21 for large binary/utf8/list; C Data format codes `Z`/`U`/`+L`.
+  `large_binary` and `nested_large_offsets` integration test cases now pass 14/14.
+
 - **IPC support for dictionary-encoded columns** (`marrow/ipc.mojo`): the IPC
   file and stream writer now emits a `DictionaryBatch` message (header type 2)
   for each dictionary column before its first `RecordBatch`, encoding the
