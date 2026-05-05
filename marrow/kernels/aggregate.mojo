@@ -54,9 +54,9 @@ def _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
 
 def _reduce[
     T: PrimitiveType,
-    combine: def[W: Int](
-        SIMD[T.native, W], SIMD[T.native, W]
-    ) thin -> SIMD[T.native, W],
+    combine: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
+        T.native, W
+    ],
 ](
     array: PrimitiveArray[T],
     identity: Scalar[T.native],
@@ -94,7 +94,9 @@ def sum_[
     )
 
 
-def sum_(array: AnyArray, ctx: Optional[DeviceContext] = None) raises -> AnyScalar:
+def sum_(
+    array: AnyArray, ctx: Optional[DeviceContext] = None
+) raises -> AnyScalar:
     """Runtime-typed sum."""
     return unary_scalar_dispatch["sum_", sum_[_]](array, ctx)
 
@@ -109,7 +111,8 @@ def product[
 ](
     array: PrimitiveArray[T], ctx: Optional[DeviceContext] = None
 ) raises -> PrimitiveScalar[T]:
-    """Multiply all valid (non-null) elements. Returns 1 if empty or all null."""
+    """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
+    """
     return PrimitiveScalar[T](
         _reduce[T, _mul[T.native, _]](array, Scalar[T.native](1), ctx),
         array.dtype.copy(),
@@ -143,7 +146,9 @@ def min_[
     )
 
 
-def min_(array: AnyArray, ctx: Optional[DeviceContext] = None) raises -> AnyScalar:
+def min_(
+    array: AnyArray, ctx: Optional[DeviceContext] = None
+) raises -> AnyScalar:
     """Runtime-typed min."""
     return unary_scalar_dispatch["min_", min_[_]](array, ctx)
 
@@ -168,7 +173,9 @@ def max_[
     )
 
 
-def max_(array: AnyArray, ctx: Optional[DeviceContext] = None) raises -> AnyScalar:
+def max_(
+    array: AnyArray, ctx: Optional[DeviceContext] = None
+) raises -> AnyScalar:
     """Runtime-typed max."""
     return unary_scalar_dispatch["max_", max_[_]](array, ctx)
 

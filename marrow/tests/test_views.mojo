@@ -1,8 +1,10 @@
+import std.math as math
+
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
 from marrow.buffers import Buffer, Bitmap
-from marrow.views import BufferView, BitmapView
+from marrow.views import BufferView, BitmapView, reduce
 
 
 @always_inline
@@ -710,6 +712,94 @@ def test_bitmapview_write_to() raises:
     assert_true("BitmapView" in s)
     assert_true("2" in s)
     assert_true("4" in s)
+
+
+# ---------------------------------------------------------------------------
+# reduce — combine helpers
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _add_i32[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+    return a + b
+
+
+@always_inline
+def _max_i32[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+    return math.max(a, b)
+
+
+# ---------------------------------------------------------------------------
+# reduce — plain BufferView (no bitmap)
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_sum_plain() raises:
+    """`reduce` sums all elements when there is no validity bitmap."""
+    var buf = Buffer.alloc_zeroed[DType.int32](5)
+    for i in range(5):
+        buf.unsafe_set[DType.int32](i, Int32(i + 1))  # [1,2,3,4,5]
+    var view = buf.view[DType.int32]()
+    var result = reduce[DType.int32, _add_i32](view, Int32(0))
+    assert_equal(result, Int32(15))
+
+
+def test_reduce_max_plain() raises:
+    """`reduce` finds the maximum element."""
+    var buf = Buffer.alloc_zeroed[DType.int32](4)
+    buf.unsafe_set[DType.int32](0, Int32(3))
+    buf.unsafe_set[DType.int32](1, Int32(7))
+    buf.unsafe_set[DType.int32](2, Int32(1))
+    buf.unsafe_set[DType.int32](3, Int32(5))
+    var view = buf.view[DType.int32]()
+    var result = reduce[DType.int32, _max_i32](view, Int32.MIN_FINITE)
+    assert_equal(result, Int32(7))
+
+
+def test_reduce_empty_returns_identity() raises:
+    """`reduce` on an empty view returns the identity value."""
+    var buf = Buffer.alloc_zeroed[DType.int32](0)
+    var view = buf.view[DType.int32](0, 0)
+    var result = reduce[DType.int32, _add_i32](view, Int32(42))
+    assert_equal(result, Int32(42))
+
+
+# ---------------------------------------------------------------------------
+# reduce — bitmap-masked BufferView
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_sum_with_bitmap() raises:
+    """`reduce` with a bitmap skips null (False) positions."""
+    var buf = Buffer.alloc_zeroed[DType.int32](4)
+    buf.unsafe_set[DType.int32](0, Int32(10))
+    buf.unsafe_set[DType.int32](1, Int32(20))  # null
+    buf.unsafe_set[DType.int32](2, Int32(30))
+    buf.unsafe_set[DType.int32](3, Int32(40))  # null
+    var bm = Bitmap.alloc_zeroed(4)
+    bm.set(0)
+    bm.set(2)
+    var result = reduce[DType.int32, _add_i32](
+        buf.view[DType.int32](), bm.view(), Int32(0)
+    )
+    assert_equal(result, Int32(40))
+
+
+def test_reduce_all_null_returns_identity() raises:
+    """`reduce` with all-null bitmap returns the identity value."""
+    var buf = Buffer.alloc_zeroed[DType.int32](3)
+    buf.unsafe_set[DType.int32](0, Int32(99))
+    buf.unsafe_set[DType.int32](1, Int32(99))
+    buf.unsafe_set[DType.int32](2, Int32(99))
+    var bm = Bitmap.alloc_zeroed(3)  # all bits clear = all null
+    var result = reduce[DType.int32, _add_i32](
+        buf.view[DType.int32](), bm.view(), Int32(0)
+    )
+    assert_equal(result, Int32(0))
 
 
 def main() raises:

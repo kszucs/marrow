@@ -1395,18 +1395,18 @@ def apply[
 
 def _reduce_dispatch[
     T: DType,
-    input_fn: def[W: Int, rank: Int](IndexList[rank]) capturing[_] -> SIMD[T, W],
+    input_fn: def[W: Int, rank: Int](IndexList[rank]) capturing[_] -> SIMD[
+        T, W
+    ],
     combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
 ](length: Int, identity: Scalar[T], ctx: ExecutionContext) raises -> Scalar[T]:
     """Dispatch a scalar reduction to CPU or GPU using ``_reduce_generator_wrapper``.
 
-    CPU: blocking single-thread via ``_reduce_generator_wrapper[target="cpu"]``.
-    GPU: allocates a 1-element device buffer, runs the reduction, syncs via
-    ``Buffer.to_cpu`` (which calls ``ctx.synchronize()``), then reads back.
-
-    ``combine`` is wrapped in a ``@parameter`` closure so the thin (no-capture)
-    function satisfies the ``capturing[_]`` requirement of
-    ``_reduce_generator_wrapper``.
+    ``combine`` is wrapped in a capturing closure so the thin (no-capture)
+    function satisfies ``_reduce_generator_wrapper``'s ``capturing[_]`` requirement.
+    GPU path allocates a 1-element device buffer and reads back via ``Buffer.to_cpu``
+    (which enqueues a DMA copy and synchronizes).  CPU path writes directly to a
+    local ``Scalar``.
     """
 
     @always_inline
@@ -1416,43 +1416,53 @@ def _reduce_dispatch[
 
     if length == 0:
         return identity
+
     if ctx.is_gpu():
         # float16 triggers an internal f32→f16 rebind failure in the GPU
         # reduction backend (_reduce_generator_wrapper uses f32 accumulators
         # for f16 and cannot rebind back); exclude it until the stdlib fixes it.
         comptime if has_accelerator_support[T]() and T != DType.float16:
-            var out_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
-            var out_view = out_buf.view[T](0, 1)
+            var dev_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
+            var dev_view = dev_buf.device_view[T]()
 
             @always_inline
+            @__copy_capture(dev_view)
             @parameter
-            def output_fn_gpu[W: Int, rank: Int](
-                idx: IndexList[rank], val: SIMD[T, W]
-            ):
-                out_view.store[1](0, val[0])
+            def output_fn_gpu[
+                W: Int, rank: Int
+            ](idx: IndexList[rank], val: SIMD[T, W]):
+                dev_view.store[1](0, val[0])
 
             _reduce_generator_wrapper[
                 T, input_fn, output_fn_gpu, combine_capturing, target="gpu"
             ](IndexList[1](length), identity, 0, ctx.device.value())
-            return out_buf.to_immutable().to_cpu(ctx.device.value()).view[T]()[0]
+            return (
+                dev_buf.to_immutable()
+                .to_cpu(ctx.device.value())
+                .view[T]()
+                .load[1](0)
+            )
         else:
             raise Error("reduce: no GPU accelerator available")
-    var out_buf_cpu = Buffer.alloc_zeroed[T](1)
-    out_buf_cpu.view[T]().store[1](0, identity)
-    var out_view_cpu = out_buf_cpu.view[T](0, 1)
+    else:
+        var out_buf = Buffer.alloc_zeroed[T](1)
+        var out_view = out_buf.view[T]()
 
-    @always_inline
-    @parameter
-    def output_fn_cpu[W: Int, rank: Int](
-        idx: IndexList[rank], val: SIMD[T, W]
-    ):
-        out_view_cpu.store[1](0, val[0])
+        @always_inline
+        @parameter
+        def output_fn_cpu[
+            W: Int, rank: Int
+        ](idx: IndexList[rank], val: SIMD[T, W]):
+            out_view.store[1](0, val[0])
 
-    _reduce_generator_wrapper[
-        T, input_fn, output_fn_cpu, combine_capturing, single_thread_blocking_override=True
-    ](IndexList[1](length), identity, 0)
-    var result = out_view_cpu.load[1](0)[0]
-    return result
+        _reduce_generator_wrapper[
+            T,
+            input_fn,
+            output_fn_cpu,
+            combine_capturing,
+            single_thread_blocking_override=True,
+        ](IndexList[1](length), identity, 0)
+        return out_view.load[1](0)
 
 
 def reduce[

@@ -14,7 +14,8 @@ from marrow.testing import TestSuite
 from std.utils.index import IndexList
 
 from marrow.buffers import Bitmap, Buffer
-from marrow.views import apply, BitmapView, BufferView
+from marrow.kernels.execution import ExecutionContext
+from marrow.views import apply, reduce, BitmapView, BufferView
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +271,7 @@ def test_bitmapview_gpu_with_offset() raises:
 
 
 def test_apply_unary_bufferview_gpu() raises:
-    """apply[UnaryFn] doubles each int32 element via GPU dispatch."""
+    """`apply[UnaryFn]` doubles each int32 element via GPU dispatch."""
     var ctx = DeviceContext()
 
     var cpu_src = Buffer.alloc_zeroed[DType.int32](4)
@@ -284,7 +285,7 @@ def test_apply_unary_bufferview_gpu() raises:
     apply[DType.int32, DType.int32, _double_i32](
         dev_src.device_view[DType.int32](),
         dev_dst.view[DType.int32](),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -300,7 +301,7 @@ def test_apply_unary_bufferview_gpu() raises:
 
 
 def test_apply_binary_bufferview_gpu() raises:
-    """apply[BinaryFn] adds two int32 BufferViews element-wise via GPU."""
+    """`apply[BinaryFn]` adds two int32 BufferViews element-wise via GPU."""
     var ctx = DeviceContext()
 
     var cpu_lhs = Buffer.alloc_zeroed[DType.int32](4)
@@ -322,7 +323,7 @@ def test_apply_binary_bufferview_gpu() raises:
         dev_lhs.device_view[DType.int32](),
         dev_rhs.device_view[DType.int32](),
         dev_dst.view[DType.int32](),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -338,7 +339,8 @@ def test_apply_binary_bufferview_gpu() raises:
 
 
 def test_apply_bitmap_to_buffer_gpu() raises:
-    """apply[UnaryFn[bool, Out]] expands bitmap bits to uint8 values via GPU."""
+    """`apply[UnaryFn[bool, Out]]` expands bitmap bits to uint8 values via GPU.
+    """
     var ctx = DeviceContext()
 
     # Bits 0,2,4,5 set → expected uint8 output: [1,0,1,0,1,1,0,0]
@@ -353,7 +355,7 @@ def test_apply_bitmap_to_buffer_gpu() raises:
     apply[DType.uint8, _bool_to_u8](
         dev_bm.view(),
         dev_dst.view[DType.uint8](),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -373,7 +375,7 @@ def test_apply_bitmap_to_buffer_gpu() raises:
 
 
 def test_apply_masked_bufferview_gpu() raises:
-    """apply[MaskedFn] zeroes invalid elements in a BufferView via GPU."""
+    """`apply[MaskedFn]` zeroes invalid elements in a BufferView via GPU."""
     var ctx = DeviceContext()
 
     # src=[10,20,30,40], validity bits 0,2 set → [10,0,30,0]
@@ -394,7 +396,7 @@ def test_apply_masked_bufferview_gpu() raises:
         dev_src.device_view[DType.int32](),
         dev_validity.view(),
         dev_dst.view[DType.int32](),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -410,7 +412,7 @@ def test_apply_masked_bufferview_gpu() raises:
 
 
 def test_apply_masked_bitmapview_gpu() raises:
-    """apply[MaskedFn[bool, Out]] ANDs src bits with validity mask into uint8 via GPU.
+    """`apply[MaskedFn[bool, Out]]` ANDs src bits with validity mask into uint8 via GPU.
     """
     var ctx = DeviceContext()
 
@@ -435,7 +437,7 @@ def test_apply_masked_bitmapview_gpu() raises:
         dev_src_bm.view(),
         dev_val_bm.view(),
         dev_dst.view[DType.uint8](),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result = dev_dst^.to_immutable().to_cpu(ctx)
@@ -467,14 +469,14 @@ def _eq_i32[
 
 
 def test_apply_comparison_to_bitmap_gpu() raises:
-    """apply[BinaryFn → bool] bit-packs comparison results into a bitmap via GPU.
+    """`apply[BinaryFn → bool]` bit-packs comparison results into a bitmap via GPU.
 
     This exercises BitmapView.store with SIMD[bool, W] on Metal, which
     requires the portable _pack_bools (iota + shift + OR-reduce) instead
     of std.memory.pack_bits (x86 pmovmskb).
     """
     var ctx = DeviceContext()
-    alias N = 16  # two full 8-bool groups to exercise the unrolled loop
+    comptime N = 16  # two full 8-bool groups to exercise the unrolled loop
 
     # lhs = [0,1,2,3,4,5,6,7, 8,9,10,11,12,13,14,15]
     var cpu_lhs = Buffer.alloc_zeroed[DType.int32](N)
@@ -494,7 +496,7 @@ def test_apply_comparison_to_bitmap_gpu() raises:
         dev_lhs.device_view[DType.int32](),
         dev_rhs.device_view[DType.int32](),
         dev_bm.view(),
-        ctx,
+        ExecutionContext.gpu(ctx),
     )
 
     var result_bm = dev_bm^.to_immutable().to_cpu(ctx)
@@ -506,6 +508,92 @@ def test_apply_comparison_to_bitmap_gpu() raises:
             assert_true(bv.test(i), String("expected bit {} set").format(i))
         else:
             assert_false(bv.test(i), String("expected bit {} clear").format(i))
+
+
+# ---------------------------------------------------------------------------
+# reduce combine helpers
+# ---------------------------------------------------------------------------
+
+
+@always_inline
+def _add_i32_gpu[
+    W: Int
+](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+    return a + b
+
+
+@always_inline
+def _add_f32_gpu[
+    W: Int
+](a: SIMD[DType.float32, W], b: SIMD[DType.float32, W]) -> SIMD[
+    DType.float32, W
+]:
+    return a + b
+
+
+# ---------------------------------------------------------------------------
+# reduce — GPU dispatch (plain BufferView)
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_sum_int32_gpu() raises:
+    """`reduce` sums int32 elements via GPU dispatch."""
+    var ctx = DeviceContext()
+    var cpu_buf = Buffer.alloc_zeroed[DType.int32](5)
+    for i in range(5):
+        cpu_buf.unsafe_set[DType.int32](i, Int32(i + 1))  # [1,2,3,4,5]
+    var dev_buf = cpu_buf^.to_immutable().to_device(ctx)
+    var result = reduce[DType.int32, _add_i32_gpu](
+        dev_buf.device_view[DType.int32](), Int32(0), ExecutionContext.gpu(ctx)
+    )
+    assert_equal(result, Int32(15))
+
+
+def test_reduce_sum_float32_gpu() raises:
+    """`reduce` sums float32 elements via GPU dispatch."""
+    var ctx = DeviceContext()
+    var cpu_buf = Buffer.alloc_zeroed[DType.float32](4)
+    cpu_buf.unsafe_set[DType.float32](0, Float32(1.0))
+    cpu_buf.unsafe_set[DType.float32](1, Float32(2.0))
+    cpu_buf.unsafe_set[DType.float32](2, Float32(3.0))
+    cpu_buf.unsafe_set[DType.float32](3, Float32(4.0))
+    var dev_buf = cpu_buf^.to_immutable().to_device(ctx)
+    var result = reduce[DType.float32, _add_f32_gpu](
+        dev_buf.device_view[DType.float32](),
+        Float32(0.0),
+        ExecutionContext.gpu(ctx),
+    )
+    assert_equal(result, Float32(10.0))
+
+
+# ---------------------------------------------------------------------------
+# reduce — GPU dispatch (bitmap-masked BufferView)
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_sum_with_bitmap_gpu() raises:
+    """`reduce` with bitmap skips null positions via GPU dispatch."""
+    var ctx = DeviceContext()
+    # values [10, 20, 30, 40] with bits 0,2 set → valid = [10, 30] → sum = 40
+    var cpu_buf = Buffer.alloc_zeroed[DType.int32](4)
+    cpu_buf.unsafe_set[DType.int32](0, Int32(10))
+    cpu_buf.unsafe_set[DType.int32](1, Int32(20))
+    cpu_buf.unsafe_set[DType.int32](2, Int32(30))
+    cpu_buf.unsafe_set[DType.int32](3, Int32(40))
+    var dev_buf = cpu_buf^.to_immutable().to_device(ctx)
+
+    var bm = Bitmap.alloc_zeroed(4)
+    bm.set(0)
+    bm.set(2)
+    var dev_bm = bm^.to_immutable().to_device(ctx)
+
+    var result = reduce[DType.int32, _add_i32_gpu](
+        dev_buf.device_view[DType.int32](),
+        dev_bm.view(),
+        Int32(0),
+        ExecutionContext.gpu(ctx),
+    )
+    assert_equal(result, Int32(40))
 
 
 def main() raises:
