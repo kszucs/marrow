@@ -1,26 +1,98 @@
-"""Aggregate (reduction) kernels using std.algorithm reductions.
+"""Aggregate (reduction) kernels.
 
 Each reduction has:
   - A typed overload: ``def[T](PrimitiveArray[T]) -> PrimitiveScalar[T]``
   - A runtime-typed overload: ``def(AnyArray) -> AnyScalar``
 
-Bitmap-aware loading is fused into the stdlib's `input_fn` callback:
-null elements are replaced with the reduction's identity value so they
-contribute nothing to the result (0 for sum, 1 for product, MAX for min, etc.).
+The typed overloads all delegate to ``_reduce[T, combine]``, which is generic
+over a thin SIMD combine function — the same pattern as ``_binary[T, func]`` in
+``arithmetic.mojo`` and ``apply[op]`` in ``views.mojo``.
+
+To add a new aggregate kernel:
+  1. Define a thin SIMD combine:
+     ``def _op[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]``
+  2. Add a typed overload calling ``_reduce[T, _op[T.native, _]](array, identity)``
+  3. Add an AnyArray overload using ``unary_scalar_dispatch``
 """
 
-from std.algorithm.reduction import (
-    sum as algo_sum,
-    product as algo_product,
-    min as algo_min,
-    max as algo_max,
-)
-from std.utils.index import Index, IndexList
+import std.math as math
+from std.sys.info import simd_width_of
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from . import unary_scalar_dispatch
+
+
+# ---------------------------------------------------------------------------
+# SIMD combine functions — thin helpers passed as parameters to _reduce
+# ---------------------------------------------------------------------------
+
+
+def _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+    return a + b
+
+
+def _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+    return a * b
+
+
+def _min[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+    return math.min(a, b)
+
+
+def _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+    return math.max(a, b)
+
+
+# ---------------------------------------------------------------------------
+# Generic reduction helper
+# ---------------------------------------------------------------------------
+
+
+def _reduce[
+    T: PrimitiveType,
+    combine: def[W: Int](
+        SIMD[T.native, W], SIMD[T.native, W]
+    ) thin -> SIMD[T.native, W],
+](array: PrimitiveArray[T], identity: Scalar[T.native]) raises -> Scalar[
+    T.native
+]:
+    """Vectorized reduction over a PrimitiveArray with a SIMD combine function.
+
+    Bitmap-aware: null elements are replaced with `identity` so they
+    contribute nothing to the result.
+    """
+    comptime native = T.native
+    comptime W = simd_width_of[native]()
+    var length = len(array)
+    var vals = array.values()
+    var acc = SIMD[native, W](identity)
+    var i = 0
+
+    if array.bitmap:
+        var bm = array.validity().value()
+        while i + W <= length:
+            var data = vals.load[W](i)
+            acc = combine[W](
+                acc, bm.mask[W](i).select(data, SIMD[native, W](identity))
+            )
+            i += W
+    else:
+        while i + W <= length:
+            acc = combine[W](acc, vals.load[W](i))
+            i += W
+
+    var out: Scalar[native] = acc[0]
+    comptime for lane in range(1, W):
+        out = combine[1](out, acc[lane])
+
+    while i < length:
+        if (not array.bitmap) or array.validity().value().test(i):
+            out = combine[1](out, vals[i])
+        i += 1
+
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -32,39 +104,10 @@ def sum_[
     T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    comptime native = T.native
-    var length = len(array)
-    var vals = array.values()
-    var out = Scalar[native](0)
-
-    @always_inline
-    @parameter
-    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
-        out = val[0]
-
-    if array.bitmap:
-        var bm = array.validity().value()
-
-        @always_inline
-        @parameter
-        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            var i = idx[0]
-            var data = vals.load[w](i)
-            return bm.mask[w](i).select(data, SIMD[native, w](0))
-
-        algo_sum[native, input_fn_nulls, output_fn, True](
-            Index(length), reduce_dim=0
-        )
-    else:
-
-        @always_inline
-        @parameter
-        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            return vals.load[w](idx[0])
-
-        algo_sum[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
-
-    return PrimitiveScalar[T](out, array.dtype.copy())
+    return PrimitiveScalar[T](
+        _reduce[T, _add[T.native, _]](array, Scalar[T.native](0)),
+        array.dtype.copy(),
+    )
 
 
 def sum_(array: AnyArray) raises -> AnyScalar:
@@ -81,41 +124,10 @@ def product[
     T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null."""
-    comptime native = T.native
-    var length = len(array)
-    var vals = array.values()
-    var out = Scalar[native](1)
-
-    @always_inline
-    @parameter
-    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
-        out = val[0]
-
-    if array.bitmap:
-        var bm = array.validity().value()
-
-        @always_inline
-        @parameter
-        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            var i = idx[0]
-            var data = vals.load[w](i)
-            return bm.mask[w](i).select(data, SIMD[native, w](1))
-
-        algo_product[native, input_fn_nulls, output_fn, True](
-            Index(length), reduce_dim=0
-        )
-    else:
-
-        @always_inline
-        @parameter
-        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            return vals.load[w](idx[0])
-
-        algo_product[native, input_fn, output_fn, True](
-            Index(length), reduce_dim=0
-        )
-
-    return PrimitiveScalar[T](out, array.dtype.copy())
+    return PrimitiveScalar[T](
+        _reduce[T, _mul[T.native, _]](array, Scalar[T.native](1)),
+        array.dtype.copy(),
+    )
 
 
 def product(array: AnyArray) raises -> AnyScalar:
@@ -135,40 +147,10 @@ def min_[
 
     Returns MAX_FINITE if empty or all null.
     """
-    comptime native = T.native
-    comptime identity = Scalar[native].MAX_FINITE
-    var length = len(array)
-    var vals = array.values()
-    var out = identity
-
-    @always_inline
-    @parameter
-    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
-        out = val[0]
-
-    if array.bitmap:
-        var bm = array.validity().value()
-
-        @always_inline
-        @parameter
-        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            var i = idx[0]
-            var data = vals.load[w](i)
-            return bm.mask[w](i).select(data, SIMD[native, w](identity))
-
-        algo_min[native, input_fn_nulls, output_fn, True](
-            Index(length), reduce_dim=0
-        )
-    else:
-
-        @always_inline
-        @parameter
-        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            return vals.load[w](idx[0])
-
-        algo_min[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
-
-    return PrimitiveScalar[T](out, array.dtype.copy())
+    return PrimitiveScalar[T](
+        _reduce[T, _min[T.native, _]](array, Scalar[T.native].MAX_FINITE),
+        array.dtype.copy(),
+    )
 
 
 def min_(array: AnyArray) raises -> AnyScalar:
@@ -188,40 +170,10 @@ def max_[
 
     Returns MIN_FINITE if empty or all null.
     """
-    comptime native = T.native
-    comptime identity = Scalar[native].MIN_FINITE
-    var length = len(array)
-    var vals = array.values()
-    var out = identity
-
-    @always_inline
-    @parameter
-    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
-        out = val[0]
-
-    if array.bitmap:
-        var bm = array.validity().value()
-
-        @always_inline
-        @parameter
-        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            var i = idx[0]
-            var data = vals.load[w](i)
-            return bm.mask[w](i).select(data, SIMD[native, w](identity))
-
-        algo_max[native, input_fn_nulls, output_fn, True](
-            Index(length), reduce_dim=0
-        )
-    else:
-
-        @always_inline
-        @parameter
-        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
-            return vals.load[w](idx[0])
-
-        algo_max[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
-
-    return PrimitiveScalar[T](out, array.dtype.copy())
+    return PrimitiveScalar[T](
+        _reduce[T, _max[T.native, _]](array, Scalar[T.native].MIN_FINITE),
+        array.dtype.copy(),
+    )
 
 
 def max_(array: AnyArray) raises -> AnyScalar:
