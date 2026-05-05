@@ -26,6 +26,7 @@ from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
 from std.algorithm.functional import elementwise
+from std.algorithm.reduction import _reduce_generator_wrapper
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
@@ -1385,3 +1386,112 @@ def apply[
             (src_b + byte_start_b + bulk + 1).load[width=1]() << ls_b
         )
     dst.store[DType.uint8, 1](bulk, op[1](result_a, result_b))
+
+
+# ---------------------------------------------------------------------------
+# reduce — vectorized scalar reduction over a BufferView
+# ---------------------------------------------------------------------------
+
+
+def _reduce_dispatch[
+    T: DType,
+    input_fn: def[W: Int, rank: Int](IndexList[rank]) capturing[_] -> SIMD[T, W],
+    combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
+](length: Int, identity: Scalar[T], ctx: ExecutionContext) raises -> Scalar[T]:
+    """Dispatch a scalar reduction to CPU or GPU using ``_reduce_generator_wrapper``.
+
+    CPU: blocking single-thread via ``_reduce_generator_wrapper[target="cpu"]``.
+    GPU: allocates a 1-element device buffer, runs the reduction, syncs via
+    ``Buffer.to_cpu`` (which calls ``ctx.synchronize()``), then reads back.
+
+    ``combine`` is wrapped in a ``@parameter`` closure so the thin (no-capture)
+    function satisfies the ``capturing[_]`` requirement of
+    ``_reduce_generator_wrapper``.
+    """
+
+    @always_inline
+    @parameter
+    def combine_capturing[W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return combine[W](a, b)
+
+    if length == 0:
+        return identity
+    if ctx.is_gpu():
+        # float16 triggers an internal f32→f16 rebind failure in the GPU
+        # reduction backend (_reduce_generator_wrapper uses f32 accumulators
+        # for f16 and cannot rebind back); exclude it until the stdlib fixes it.
+        comptime if has_accelerator_support[T]() and T != DType.float16:
+            var out_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
+            var out_view = out_buf.view[T](0, 1)
+
+            @always_inline
+            @parameter
+            def output_fn_gpu[W: Int, rank: Int](
+                idx: IndexList[rank], val: SIMD[T, W]
+            ):
+                out_view.store[1](0, val[0])
+
+            _reduce_generator_wrapper[
+                T, input_fn, output_fn_gpu, combine_capturing, target="gpu"
+            ](IndexList[1](length), identity, 0, ctx.device.value())
+            return out_buf.to_immutable().to_cpu(ctx.device.value()).view[T]()[0]
+        else:
+            raise Error("reduce: no GPU accelerator available")
+    var out_buf_cpu = Buffer.alloc_zeroed[T](1)
+    out_buf_cpu.view[T]().store[1](0, identity)
+    var out_view_cpu = out_buf_cpu.view[T](0, 1)
+
+    @always_inline
+    @parameter
+    def output_fn_cpu[W: Int, rank: Int](
+        idx: IndexList[rank], val: SIMD[T, W]
+    ):
+        out_view_cpu.store[1](0, val[0])
+
+    _reduce_generator_wrapper[
+        T, input_fn, output_fn_cpu, combine_capturing, single_thread_blocking_override=True
+    ](IndexList[1](length), identity, 0)
+    var result = out_view_cpu.load[1](0)[0]
+    return result
+
+
+def reduce[
+    T: DType,
+    combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
+](
+    src: BufferView[T, _],
+    bitmap: BitmapView[_],
+    identity: Scalar[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Scalar[T]:
+    """Reduce ``src`` to a scalar, replacing null positions with ``identity``.
+
+    Null positions are indicated by False bits in ``bitmap``; they contribute
+    ``identity`` to the result so they have no effect on the outcome.
+    """
+
+    @always_inline
+    @parameter
+    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[T, W]:
+        var i = idx[0]
+        return bitmap.mask[W](i).select(src.load[W](i), SIMD[T, W](identity))
+
+    return _reduce_dispatch[T, input_fn, combine](len(src), identity, ctx)
+
+
+def reduce[
+    T: DType,
+    combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
+](
+    src: BufferView[T, _],
+    identity: Scalar[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Scalar[T]:
+    """Reduce ``src`` to a scalar using a SIMD combine function."""
+
+    @always_inline
+    @parameter
+    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[T, W]:
+        return src.load[W](idx[0])
+
+    return _reduce_dispatch[T, input_fn, combine](len(src), identity, ctx)

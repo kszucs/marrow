@@ -7,7 +7,13 @@ back to typed arrays and call the appropriate kernel.
 from std.python import PythonObject, Python
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import AnyArray
-from marrow.kernels.aggregate import sum_, product, min_, max_
+from marrow.scalars import AnyScalar
+from marrow.kernels.aggregate import (
+    sum_ as _sum_agg,
+    product as _product_agg,
+    min_ as _min_agg,
+    max_ as _max_agg,
+)
 from marrow.kernels.arithmetic import add, sub, mul, div
 from marrow.kernels.compare import (
     equal,
@@ -42,6 +48,22 @@ def all_(array: AnyArray) raises -> Bool:
 
 def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
     return equal(left, right)
+
+
+def sum_(array: AnyArray) raises -> AnyScalar:
+    return _sum_agg(array)
+
+
+def product(array: AnyArray) raises -> AnyScalar:
+    return _product_agg(array)
+
+
+def min_(array: AnyArray) raises -> AnyScalar:
+    return _min_agg(array)
+
+
+def max_(array: AnyArray) raises -> AnyScalar:
+    return _max_agg(array)
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

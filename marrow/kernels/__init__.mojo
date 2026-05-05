@@ -338,9 +338,9 @@ def unary_float_dispatch[
 def unary_scalar_dispatch[
     name: StringLiteral,
     func: def[T: PrimitiveType](
-        PrimitiveArray[T]
+        PrimitiveArray[T], Optional[DeviceContext]
     ) thin raises -> PrimitiveScalar[T],
-](array: AnyArray) raises -> AnyScalar:
+](array: AnyArray, ctx: Optional[DeviceContext] = None) raises -> AnyScalar:
     """Runtime-typed unary dispatch returning a scalar (e.g. reductions).
 
     Parameters:
@@ -349,30 +349,31 @@ def unary_scalar_dispatch[
 
     Args:
         array: Input array (runtime-typed).
+        ctx: Optional GPU device context; forwarded to the typed kernel.
 
     Returns:
         A scalar result wrapped in AnyScalar.
     """
     if array.dtype() == int8:
-        return func(array.as_int8())
+        return func(array.as_int8(), ctx)
     elif array.dtype() == int16:
-        return func(array.as_int16())
+        return func(array.as_int16(), ctx)
     elif array.dtype() == int32:
-        return func(array.as_int32())
+        return func(array.as_int32(), ctx)
     elif array.dtype() == int64:
-        return func(array.as_int64())
+        return func(array.as_int64(), ctx)
     elif array.dtype() == uint8:
-        return func(array.as_uint8())
+        return func(array.as_uint8(), ctx)
     elif array.dtype() == uint16:
-        return func(array.as_uint16())
+        return func(array.as_uint16(), ctx)
     elif array.dtype() == uint32:
-        return func(array.as_uint32())
+        return func(array.as_uint32(), ctx)
     elif array.dtype() == uint64:
-        return func(array.as_uint64())
+        return func(array.as_uint64(), ctx)
     elif array.dtype() == float16:
-        return func(array.as_float16())
+        return func(array.as_float16(), ctx)
     elif array.dtype() == float32:
-        return func(array.as_float32())
+        return func(array.as_float32(), ctx)
     elif array.dtype() == float64:
-        return func(array.as_float64())
+        return func(array.as_float64(), ctx)
     raise Error(t"{name}: unsupported dtype {array.dtype()}")
