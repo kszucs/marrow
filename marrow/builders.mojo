@@ -46,10 +46,12 @@ from .arrays import (
     Decimal64Array,
     Decimal128Array,
     Decimal256Array,
+    BinaryLikeArray,
     BinaryArray,
     LargeBinaryArray,
     StringArray,
     LargeStringArray,
+    ListLikeArray,
     ListArray,
     FixedSizeListArray,
     FixedSizeBinaryArray,
@@ -135,11 +137,11 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         Decimal64Builder,
         Decimal128Builder,
         Decimal256Builder,
-        BinaryBuilder[BinaryType],
+        BinaryBuilder,
         LargeBinaryBuilder,
         StringBuilder,
         LargeStringBuilder,
-        ListBuilder[Int32Type],
+        ListBuilder,
         LargeListBuilder,
         FixedSizeListBuilder,
         FixedSizeBinaryBuilder,
@@ -349,8 +351,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
         return self._as[StringBuilder]()
 
-    def as_binary(ref self) -> ref[self._ptr[]] BinaryBuilder[BinaryType]:
-        return self._as[BinaryBuilder[BinaryType]]()
+    def as_binary(ref self) -> ref[self._ptr[]] BinaryBuilder:
+        return self._as[BinaryBuilder]()
 
     def as_large_string(ref self) -> ref[self._ptr[]] LargeStringBuilder:
         return self._as[LargeStringBuilder]()
@@ -358,8 +360,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_large_binary(ref self) -> ref[self._ptr[]] LargeBinaryBuilder:
         return self._as[LargeBinaryBuilder]()
 
-    def as_list(ref self) -> ref[self._ptr[]] ListBuilder[Int32Type]:
-        return self._as[ListBuilder[Int32Type]]()
+    def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
+        return self._as[ListBuilder]()
 
     def as_large_list(ref self) -> ref[self._ptr[]] LargeListBuilder:
         return self._as[LargeListBuilder]()
@@ -601,10 +603,10 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
 # ---------------------------------------------------------------------------
 
 
-struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
+struct BinaryLikeBuilder[T: BinaryLikeType](Builder):
     """Builder for variable-length UTF-8 string or binary arrays."""
 
-    comptime ArrayType = BinaryArray[Self.T]
+    comptime ArrayType = BinaryLikeArray[Self.T]
 
     var _length: Int
     var _capacity: Int
@@ -662,8 +664,8 @@ struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
         else:
             self.extend(arr.as_large_string())
 
-    def extend[U: BinaryLikeType](mut self, arr: BinaryArray[U]) raises:
-        """Bulk-append all elements from an existing BinaryArray."""
+    def extend[U: BinaryLikeType](mut self, arr: BinaryLikeArray[U]) raises:
+        """Bulk-append all elements from an existing BinaryLikeArray."""
         var n = arr.length
         var chunk_start = Int(arr.offsets.unsafe_get[U.offset](arr.offset))
         var chunk_end = Int(arr.offsets.unsafe_get[U.offset](arr.offset + n))
@@ -738,7 +740,7 @@ struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
 
     def finish(
         mut self, *, shrink_to_fit: Bool = True
-    ) raises -> BinaryArray[Self.T]:
+    ) raises -> BinaryLikeArray[Self.T]:
         if shrink_to_fit:
             self._offsets.resize[Self.T.offset](self._length + 1)
             var used = Int(
@@ -757,7 +759,7 @@ struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
         var values = self._values^.to_immutable()
         self._values = Buffer.alloc_zeroed(0)
         # construct the immutable result array
-        var result = BinaryArray[Self.T](
+        var result = BinaryLikeArray[Self.T](
             length=self._length,
             nulls=null_count,
             offset=0,
@@ -775,9 +777,10 @@ struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
         self._null_count = 0
 
 
-comptime LargeBinaryBuilder = BinaryBuilder[LargeBinaryType]
-comptime StringBuilder = BinaryBuilder[StringType]
-comptime LargeStringBuilder = BinaryBuilder[LargeStringType]
+comptime BinaryBuilder = BinaryLikeBuilder[BinaryType]
+comptime LargeBinaryBuilder = BinaryLikeBuilder[LargeBinaryType]
+comptime StringBuilder = BinaryLikeBuilder[StringType]
+comptime LargeStringBuilder = BinaryLikeBuilder[LargeStringType]
 
 
 # ---------------------------------------------------------------------------
@@ -785,10 +788,10 @@ comptime LargeStringBuilder = BinaryBuilder[LargeStringType]
 # ---------------------------------------------------------------------------
 
 
-struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
+struct ListLikeBuilder[T: ListLikeType](Builder):
     """Builder for variable-length list arrays."""
 
-    comptime ArrayType = ListArray[Self.OffsetType]
+    comptime ArrayType = ListLikeArray[Self.T]
 
     var _dtype: AnyDataType
     var _length: Int
@@ -799,11 +802,11 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
     var _child: AnyBuilder
 
     def __init__(out self, var child: AnyBuilder, capacity: Int = 0):
-        var offsets = Buffer.alloc_zeroed[Self.OffsetType.native](capacity + 1)
-        offsets.unsafe_set[Self.OffsetType.native](0, 0)
+        var offsets = Buffer.alloc_zeroed[Self.T.offset](capacity + 1)
+        offsets.unsafe_set[Self.T.offset](0, 0)
         var child_dtype = child.dtype().copy()
         var list_dtype: AnyDataType
-        comptime if Self.OffsetType.native == DType.int32:
+        comptime if Self.T.offset == DType.int32:
             list_dtype = list_(child_dtype^)
         else:
             list_dtype = large_list_(child_dtype^)
@@ -841,8 +844,8 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
         self._bitmap.clear(self._length)
         self._null_count += 1
         var child_length = self._child.length()
-        self._offsets.unsafe_set[Self.OffsetType.native](
-            self._length + 1, Scalar[Self.OffsetType.native](child_length)
+        self._offsets.unsafe_set[Self.T.offset](
+            self._length + 1, Scalar[Self.T.offset](child_length)
         )
         self._length += 1
 
@@ -851,19 +854,19 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
         """Append valid without capacity check. Caller must ensure capacity."""
         self._bitmap.set(self._length)
         var child_length = self._child.length()
-        self._offsets.unsafe_set[Self.OffsetType.native](
-            self._length + 1, Scalar[Self.OffsetType.native](child_length)
+        self._offsets.unsafe_set[Self.T.offset](
+            self._length + 1, Scalar[Self.T.offset](child_length)
         )
         self._length += 1
 
     def extend(mut self, arr: AnyArray) raises:
-        comptime if Self.OffsetType.native == DType.int32:
+        comptime if Self.T.offset == DType.int32:
             self.extend(arr.as_list())
         else:
             self.extend(arr.as_large_list())
 
-    def extend[O: IntegerType](mut self, arr: ListArray[O]) raises:
-        """Bulk-append all elements from an existing ListArray."""
+    def extend[U: ListLikeType](mut self, arr: ListLikeArray[U]) raises:
+        """Bulk-append all elements from an existing ListLikeArray."""
         var n = arr.length
         self.reserve(n)
         if arr.nulls == 0:
@@ -875,22 +878,18 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var child_start = Int(arr.offsets.unsafe_get[O.native](arr.offset))
-        var child_end = Int(arr.offsets.unsafe_get[O.native](arr.offset + n))
+        var child_start = Int(arr.offsets.unsafe_get[U.offset](arr.offset))
+        var child_end = Int(arr.offsets.unsafe_get[U.offset](arr.offset + n))
         var cur_child_len = self._child.length()
         for i in range(n):
-            var orig = Int(arr.offsets.unsafe_get[O.native](arr.offset + i))
-            self._offsets.unsafe_set[Self.OffsetType.native](
+            var orig = Int(arr.offsets.unsafe_get[U.offset](arr.offset + i))
+            self._offsets.unsafe_set[Self.T.offset](
                 self._length + i,
-                Scalar[Self.OffsetType.native](
-                    cur_child_len + orig - child_start
-                ),
+                Scalar[Self.T.offset](cur_child_len + orig - child_start),
             )
-        self._offsets.unsafe_set[Self.OffsetType.native](
+        self._offsets.unsafe_set[Self.T.offset](
             self._length + n,
-            Scalar[Self.OffsetType.native](
-                cur_child_len + child_end - child_start
-            ),
+            Scalar[Self.T.offset](cur_child_len + child_end - child_start),
         )
         var child_slice = arr.values().slice(
             child_start, child_end - child_start
@@ -903,14 +902,14 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
         if needed > self._capacity:
             var new_cap = max(self._capacity * 2, needed)
             self._bitmap.resize(new_cap)
-            self._offsets.resize[Self.OffsetType.native](new_cap + 1)
+            self._offsets.resize[Self.T.offset](new_cap + 1)
             self._capacity = new_cap
 
     def finish(
         mut self, *, shrink_to_fit: Bool = True
-    ) raises -> ListArray[Self.OffsetType]:
+    ) raises -> ListLikeArray[Self.T]:
         if shrink_to_fit:
-            self._offsets.resize[Self.OffsetType.native](self._length + 1)
+            self._offsets.resize[Self.T.offset](self._length + 1)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
@@ -919,10 +918,10 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets^.to_immutable()
-        self._offsets = Buffer.alloc_zeroed[Self.OffsetType.native](0)
+        self._offsets = Buffer.alloc_zeroed[Self.T.offset](0)
         var values = self._child.finish()
         # construct the immutable result array
-        var result = ListArray[Self.OffsetType](
+        var result = ListLikeArray[Self.T](
             dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
@@ -941,7 +940,8 @@ struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
         self._null_count = 0
 
 
-comptime LargeListBuilder = ListBuilder[Int64Type]
+comptime ListBuilder = ListLikeBuilder[ListType]
+comptime LargeListBuilder = ListLikeBuilder[LargeListType]
 
 
 # ---------------------------------------------------------------------------

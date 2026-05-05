@@ -800,7 +800,7 @@ struct PyListConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[]] ListBuilder[dt.Int32Type]:
+    ) -> ref[self._builder._ptr[]] ListBuilder:
         return self._builder.as_list()
 
     def extend(mut self, values: PyObjectPtr) raises:

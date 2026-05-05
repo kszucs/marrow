@@ -106,6 +106,16 @@ trait StringLikeType(BinaryLikeType):
     pass
 
 
+trait ListLikeType:
+    """Variable-length list types (list, large_list).
+
+    Provides `comptime offset: DType` — the physical integer type of the
+    offset buffer (int32 for standard list, int64 for large_list).
+    """
+
+    comptime offset: DType
+
+
 trait FloatingType(NumericType):
     """Floating-point types (float16, float32, float64)."""
 
@@ -449,8 +459,8 @@ struct Field(
         return PythonObject(alloc=self^)
 
 
-struct ListType(DataType):
-    comptime OffsetType = Int32Type
+struct ListType(DataType, ListLikeType):
+    comptime offset: DType = DType.int32
 
     var item: OwnedPointer[Field]
 
@@ -473,8 +483,8 @@ struct ListType(DataType):
         writer.write("list<", self.item[].dtype, ">")
 
 
-struct LargeListType(DataType):
-    comptime OffsetType = Int64Type
+struct LargeListType(DataType, ListLikeType):
+    comptime offset: DType = DType.int64
 
     var item: OwnedPointer[Field]
 

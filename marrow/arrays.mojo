@@ -43,7 +43,7 @@ from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
-from .builders import AnyBuilder, PrimitiveBuilder, BinaryBuilder
+from .builders import AnyBuilder, PrimitiveBuilder, BinaryLikeBuilder
 from .scalars import (
     AnyScalar,
     NullScalar,
@@ -610,7 +610,7 @@ comptime Float64Array = PrimitiveArray[Float64Type]
 
 
 @fieldwise_init
-struct BinaryArray[T: BinaryLikeType = BinaryType](Array):
+struct BinaryLikeArray[T: BinaryLikeType](Array):
     """An immutable Arrow array of variable-length bytes (binary or string).
 
     The semantic type (binary, large_binary, string, large_string) is carried
@@ -635,7 +635,7 @@ struct BinaryArray[T: BinaryLikeType = BinaryType](Array):
             values: The string values to populate the array with.
             __list_literal__: Tells Mojo to use this method for list literal syntax.
         """
-        var b = BinaryBuilder[Self.T](capacity=len(values))
+        var b = BinaryLikeBuilder[Self.T](capacity=len(values))
         for value in values:
             b.append(value)
         self = b.finish()
@@ -767,9 +767,10 @@ struct BinaryArray[T: BinaryLikeType = BinaryType](Array):
         )
 
 
-comptime LargeBinaryArray = BinaryArray[LargeBinaryType]
-comptime StringArray = BinaryArray[StringType]
-comptime LargeStringArray = BinaryArray[LargeStringType]
+comptime BinaryArray = BinaryLikeArray[BinaryType]
+comptime LargeBinaryArray = BinaryLikeArray[LargeBinaryType]
+comptime StringArray = BinaryLikeArray[StringType]
+comptime LargeStringArray = BinaryLikeArray[LargeStringType]
 
 
 # ---------------------------------------------------------------------------
@@ -777,7 +778,7 @@ comptime LargeStringArray = BinaryArray[LargeStringType]
 # ---------------------------------------------------------------------------
 
 
-struct ListArray[OffsetType: IntegerType = Int32Type](Array):
+struct ListLikeArray[T: ListLikeType](Array):
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
 
@@ -851,7 +852,10 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("ListArray([")
+        if self.dtype.is_large_list():
+            writer.write("LargeListArray([")
+        else:
+            writer.write("ListArray([")
         for i in range(self.length):
             if i > 0:
                 writer.write(", ")
@@ -878,12 +882,10 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
     def unsafe_get(self, index: Int) raises -> AnyArray:
         """Return a view of the child array for the list at the given index."""
         var start = Int(
-            self.offsets.unsafe_get[Self.OffsetType.native](self.offset + index)
+            self.offsets.unsafe_get[Self.T.offset](self.offset + index)
         )
         var end = Int(
-            self.offsets.unsafe_get[Self.OffsetType.native](
-                self.offset + index + 1
-            )
+            self.offsets.unsafe_get[Self.T.offset](self.offset + index + 1)
         )
         return self.values().slice(start, end - start)
 
@@ -915,10 +917,8 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
         """Return an array of list lengths for each element."""
         var buf = Buffer.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
-            var start = self.offsets.unsafe_get[Self.OffsetType.native](
-                self.offset + i
-            )
-            var end = self.offsets.unsafe_get[Self.OffsetType.native](
+            var start = self.offsets.unsafe_get[Self.T.offset](self.offset + i)
+            var end = self.offsets.unsafe_get[Self.T.offset](
                 self.offset + i + 1
             )
             buf.unsafe_set[DType.int32](i, Int32(end - start))
@@ -955,8 +955,10 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
         return True
 
     @staticmethod
-    def from_arrays(
-        offsets: PrimitiveArray[Self.OffsetType],
+    def from_arrays[
+        O: IntegerType
+    ](
+        offsets: PrimitiveArray[O],
         var values: AnyArray,
         var mask: Optional[BoolArray] = None,
     ) -> Self:
@@ -977,7 +979,7 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
                     bm.set(i)
             bitmap = bm^.to_immutable(length=n)
         var list_dtype: AnyDataType
-        comptime if Self.OffsetType.native == DType.int32:
+        comptime if Self.T.offset == DType.int32:
             list_dtype = list_(values.dtype())
         else:
             list_dtype = large_list_(values.dtype())
@@ -1004,7 +1006,8 @@ struct ListArray[OffsetType: IntegerType = Int32Type](Array):
         )
 
 
-comptime LargeListArray = ListArray[Int64Type]
+comptime ListArray = ListLikeArray[ListType]
+comptime LargeListArray = ListLikeArray[LargeListType]
 
 
 # ---------------------------------------------------------------------------
@@ -1915,11 +1918,11 @@ struct AnyArray(
         Decimal64Array,
         Decimal128Array,
         Decimal256Array,
-        BinaryArray[BinaryType],
+        BinaryArray,
         LargeBinaryArray,
         StringArray,
         LargeStringArray,
-        ListArray[Int32Type],
+        ListArray,
         LargeListArray,
         FixedSizeListArray,
         FixedSizeBinaryArray,
@@ -2107,8 +2110,8 @@ struct AnyArray(
     def as_string(ref self) -> ref[self._v] StringArray:
         return self._as[StringArray]()
 
-    def as_binary(ref self) -> ref[self._v] BinaryArray[BinaryType]:
-        return self._as[BinaryArray[BinaryType]]()
+    def as_binary(ref self) -> ref[self._v] BinaryArray:
+        return self._as[BinaryArray]()
 
     def as_large_string(ref self) -> ref[self._v] LargeStringArray:
         return self._as[LargeStringArray]()
@@ -2116,8 +2119,8 @@ struct AnyArray(
     def as_large_binary(ref self) -> ref[self._v] LargeBinaryArray:
         return self._as[LargeBinaryArray]()
 
-    def as_list(ref self) -> ref[self._v] ListArray[Int32Type]:
-        return self._as[ListArray[Int32Type]]()
+    def as_list(ref self) -> ref[self._v] ListArray:
+        return self._as[ListArray]()
 
     def as_large_list(ref self) -> ref[self._v] LargeListArray:
         return self._as[LargeListArray]()
@@ -2204,7 +2207,7 @@ struct AnyArray(
         if dt.is_string():
             return AnyArray(StringArray(data))
         elif dt.is_binary():
-            return AnyArray(BinaryArray[BinaryType](data))
+            return AnyArray(BinaryArray(data))
         elif dt.is_large_string():
             return AnyArray(LargeStringArray(data))
         elif dt.is_large_binary():
