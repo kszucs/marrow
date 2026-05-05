@@ -2178,72 +2178,71 @@ struct AnyArray(
         """
         var dt = data.dtype.copy()
         if dt.is_null():
-            # TODO(kszucs): typed arrays can be implicitly converted to anyarray so we shouldn't need to explicitly construct anyarray
-            return AnyArray(NullArray(data))
+            return NullArray(data)
         elif dt == bool_:
-            return AnyArray(BoolArray(data))
+            return BoolArray(data)
         elif dt == int8:
-            return AnyArray(Int8Array(data))
+            return Int8Array(data)
         elif dt == int16:
-            return AnyArray(Int16Array(data))
+            return Int16Array(data)
         elif dt == int32:
-            return AnyArray(Int32Array(data))
+            return Int32Array(data)
         elif dt == int64:
-            return AnyArray(Int64Array(data))
+            return Int64Array(data)
         elif dt == uint8:
-            return AnyArray(UInt8Array(data))
+            return UInt8Array(data)
         elif dt == uint16:
-            return AnyArray(UInt16Array(data))
+            return UInt16Array(data)
         elif dt == uint32:
-            return AnyArray(UInt32Array(data))
+            return UInt32Array(data)
         elif dt == uint64:
-            return AnyArray(UInt64Array(data))
+            return UInt64Array(data)
         elif dt == float16:
-            return AnyArray(Float16Array(data))
+            return Float16Array(data)
         elif dt == float32:
-            return AnyArray(Float32Array(data))
+            return Float32Array(data)
         elif dt == float64:
-            return AnyArray(Float64Array(data))
+            return Float64Array(data)
         if dt.is_string():
-            return AnyArray(StringArray(data))
+            return StringArray(data)
         elif dt.is_binary():
-            return AnyArray(BinaryArray(data))
+            return BinaryArray(data)
         elif dt.is_large_string():
-            return AnyArray(LargeStringArray(data))
+            return LargeStringArray(data)
         elif dt.is_large_binary():
-            return AnyArray(LargeBinaryArray(data))
+            return LargeBinaryArray(data)
         elif dt.is_list():
-            return AnyArray(ListArray(data))
+            return ListArray(data)
         elif dt.is_large_list():
-            return AnyArray(LargeListArray(data))
+            return LargeListArray(data)
         elif dt.is_fixed_size_list():
-            return AnyArray(FixedSizeListArray(data))
+            return FixedSizeListArray(data)
         elif dt.is_fixed_size_binary():
-            return AnyArray(FixedSizeBinaryArray(data))
+            return FixedSizeBinaryArray(data)
         elif dt.is_date32():
-            return AnyArray(Date32Array(data))
+            return Date32Array(data)
         elif dt.is_date64():
-            return AnyArray(Date64Array(data))
+            return Date64Array(data)
         elif dt.is_time32():
-            return AnyArray(Time32Array(data))
+            return Time32Array(data)
         elif dt.is_time64():
-            return AnyArray(Time64Array(data))
+            return Time64Array(data)
         elif dt.is_timestamp():
-            return AnyArray(TimestampArray(data))
+            return TimestampArray(data)
         elif dt.is_duration():
-            return AnyArray(DurationArray(data))
+            return DurationArray(data)
         elif dt.is_decimal32():
-            return AnyArray(Decimal32Array(data))
+            return Decimal32Array(data)
         elif dt.is_decimal64():
-            return AnyArray(Decimal64Array(data))
+            return Decimal64Array(data)
         elif dt.is_decimal128():
-            return AnyArray(Decimal128Array(data))
+            return Decimal128Array(data)
         elif dt.is_decimal256():
-            return AnyArray(Decimal256Array(data))
+            return Decimal256Array(data)
         elif dt.is_struct():
-            return AnyArray(StructArray(data))
+            return StructArray(data)
         elif dt.is_dictionary():
-            return AnyArray(DictionaryArray(data))
+            return DictionaryArray(data)
         raise Error("from_data: unsupported dtype")
 
     @staticmethod

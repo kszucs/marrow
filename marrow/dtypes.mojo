@@ -798,11 +798,22 @@ struct AnyDataType(
     def is_large_binary(self) -> Bool:
         return self._v.isa[LargeBinaryType]()
 
+    def is_binary_like(self) -> Bool:
+        return (
+            self.is_binary()
+            or self.is_large_binary()
+            or self.is_string()
+            or self.is_large_string()
+        )
+
     def is_list(self) -> Bool:
         return self._v.isa[ListType]()
 
     def is_large_list(self) -> Bool:
         return self._v.isa[LargeListType]()
+
+    def is_list_like(self) -> Bool:
+        return self.is_list() or self.is_large_list()
 
     def is_fixed_size_list(self) -> Bool:
         return self._v.isa[FixedSizeListType]()

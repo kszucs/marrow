@@ -816,71 +816,69 @@ struct CArrowArray(Copyable, Movable):
         elif dtype.is_bool():
             buffers.append(
                 Buffer.from_foreign(
-                    self.buffers[1],
-                    math.ceildiv(Int(length), 8),
-                    owner,
+                    self.buffers[1], math.ceildiv(Int(length), 8), owner
                 )
             )
         elif dtype.is_primitive():
             buffers.append(
                 Buffer.from_foreign(
+                    self.buffers[1], Int(length) * dtype.byte_width(), owner
+                )
+            )
+        elif dtype.is_string() or dtype.is_binary():
+            var offsets = Buffer.from_foreign(
+                self.buffers[1],
+                (Int(length) + 1) * size_of[DType.int32](),
+                owner,
+            )
+            var n = Int(offsets.unsafe_get[DType.int32](Int(length)))
+            buffers.append(offsets^)
+            buffers.append(Buffer.from_foreign(self.buffers[2], n, owner))
+        elif dtype.is_large_string() or dtype.is_large_binary():
+            var offsets = Buffer.from_foreign(
+                self.buffers[1],
+                (Int(length) + 1) * size_of[DType.int64](),
+                owner,
+            )
+            var n = Int(offsets.unsafe_get[DType.int64](Int(length)))
+            buffers.append(offsets^)
+            buffers.append(Buffer.from_foreign(self.buffers[2], n, owner))
+        elif dtype.is_list():
+            buffers.append(
+                Buffer.from_foreign(
                     self.buffers[1],
-                    Int(length) * dtype.byte_width(),
+                    (Int(length) + 1) * size_of[DType.int32](),
                     owner,
                 )
             )
-        elif dtype.is_list():
-            var size = (length + 1) * Int64(size_of[DType.int32]())
-            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
-            buffers.append(offsets^)
             children.append(
                 self.children[0][].to_data(dtype.as_list().value_type(), owner)
             )
         elif dtype.is_large_list():
-            var size = (length + 1) * Int64(size_of[DType.int64]())
-            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
-            buffers.append(offsets^)
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    (Int(length) + 1) * size_of[DType.int64](),
+                    owner,
+                )
+            )
             children.append(
                 self.children[0][].to_data(
                     dtype.as_large_list().value_type(), owner
                 )
             )
-        elif dtype.is_string() or dtype.is_binary():
-            var size = (length + 1) * Int64(size_of[DType.int32]())
-            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
-            var data_len = offsets.unsafe_get[DType.int32](Int(length))
-            var values = Buffer.from_foreign(self.buffers[2], data_len, owner)
-            buffers.append(offsets^)
-            buffers.append(values^)
-        elif dtype.is_large_string() or dtype.is_large_binary():
-            var size = (length + 1) * Int64(size_of[DType.int64]())
-            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
-            var data_len = offsets.unsafe_get[DType.int64](Int(length))
-            var values = Buffer.from_foreign(self.buffers[2], data_len, owner)
-            buffers.append(offsets^)
-            buffers.append(values^)
+        elif dtype.is_fixed_size_binary():
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    Int(length) * dtype.as_fixed_size_binary().byte_width,
+                    owner,
+                )
+            )
         elif dtype.is_fixed_size_list():
             children.append(
                 self.children[0][].to_data(
                     dtype.as_fixed_size_list().value_type(), owner
-                )
-            )
-        elif dtype.is_fixed_size_binary():
-            var bw = dtype.as_fixed_size_binary().byte_width
-            buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[1],
-                    Int(length) * bw,
-                    owner,
-                )
-            )
-        elif dtype.is_temporal():
-            var byte_width = dtype.byte_width()
-            buffers.append(
-                Buffer.from_foreign(
-                    self.buffers[1],
-                    Int(length) * byte_width,
-                    owner,
                 )
             )
         elif dtype.is_struct():
@@ -891,11 +889,10 @@ struct CArrowArray(Copyable, Movable):
                 )
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
-            var index_bw = dt.index_type().byte_width()
             buffers.append(
                 Buffer.from_foreign(
                     self.buffers[1],
-                    Int(length) * index_bw,
+                    Int(length) * dt.index_type().byte_width(),
                     owner,
                 )
             )
