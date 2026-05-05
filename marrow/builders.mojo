@@ -4,7 +4,7 @@
 the type-erased container that dispatches to the concrete builder at runtime
 via function-pointer trampolines.
 
-Typed builders (`PrimitiveBuilder[T]`, `StringBuilder`, `ListBuilder`,
+Typed builders (`PrimitiveBuilder[T]`, `BinaryBuilder`, `ListBuilder`,
 `FixedSizeListBuilder`, `StructBuilder`) each own their data directly and
 conform to the `Builder` trait.
 
@@ -46,7 +46,10 @@ from .arrays import (
     Decimal64Array,
     Decimal128Array,
     Decimal256Array,
+    BinaryArray,
+    LargeBinaryArray,
     StringArray,
+    LargeStringArray,
     ListArray,
     FixedSizeListArray,
     FixedSizeBinaryArray,
@@ -132,8 +135,12 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         Decimal64Builder,
         Decimal128Builder,
         Decimal256Builder,
+        BinaryBuilder[BinaryType],
+        LargeBinaryBuilder,
         StringBuilder,
-        ListBuilder,
+        LargeStringBuilder,
+        ListBuilder[Int32Type],
+        LargeListBuilder,
         FixedSizeListBuilder,
         FixedSizeBinaryBuilder,
         StructBuilder,
@@ -178,11 +185,20 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = Float32Builder(capacity)
         elif dtype == float64:
             self = Float64Builder(capacity)
-        elif dtype.is_string() or dtype.is_binary():
+        elif dtype.is_string():
             self = StringBuilder(capacity)
+        elif dtype.is_binary():
+            self = BinaryBuilder(capacity)
+        elif dtype.is_large_string():
+            self = LargeStringBuilder(capacity)
+        elif dtype.is_large_binary():
+            self = LargeBinaryBuilder(capacity)
         elif dtype.is_list():
             var child = AnyBuilder(dtype.as_list().value_type())
             self = ListBuilder(child^, capacity)
+        elif dtype.is_large_list():
+            var child = AnyBuilder(dtype.as_large_list().value_type())
+            self = LargeListBuilder(child^, capacity)
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
             var child = AnyBuilder(fsl.value_type())
@@ -333,8 +349,20 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
         return self._as[StringBuilder]()
 
-    def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
-        return self._as[ListBuilder]()
+    def as_binary(ref self) -> ref[self._ptr[]] BinaryBuilder[BinaryType]:
+        return self._as[BinaryBuilder[BinaryType]]()
+
+    def as_large_string(ref self) -> ref[self._ptr[]] LargeStringBuilder:
+        return self._as[LargeStringBuilder]()
+
+    def as_large_binary(ref self) -> ref[self._ptr[]] LargeBinaryBuilder:
+        return self._as[LargeBinaryBuilder]()
+
+    def as_list(ref self) -> ref[self._ptr[]] ListBuilder[Int32Type]:
+        return self._as[ListBuilder[Int32Type]]()
+
+    def as_large_list(ref self) -> ref[self._ptr[]] LargeListBuilder:
+        return self._as[LargeListBuilder]()
 
     def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
         return self._as[FixedSizeListBuilder]()
@@ -569,18 +597,14 @@ struct PrimitiveBuilder[T: PrimitiveType](Builder):
 
 
 # ---------------------------------------------------------------------------
-# StringBuilder
+# BinaryBuilder
 # ---------------------------------------------------------------------------
 
 
-struct StringBuilder(Builder):
-    """Builder for variable-length UTF-8 string arrays.
+struct BinaryBuilder[T: BinaryLikeType = BinaryType](Builder):
+    """Builder for variable-length UTF-8 string or binary arrays."""
 
-    _offsets — uint32 offsets
-    _values  — utf-8 byte data (grown on demand)
-    """
-
-    comptime ArrayType = StringArray
+    comptime ArrayType = BinaryArray[Self.T]
 
     var _length: Int
     var _capacity: Int
@@ -590,8 +614,8 @@ struct StringBuilder(Builder):
     var _values: Buffer[mut=True]
 
     def __init__(out self, capacity: Int = 0, bytes_capacity: Int = 0):
-        var offsets = Buffer.alloc_zeroed[DType.uint32](capacity + 1)
-        offsets.unsafe_set[DType.uint32](0, 0)
+        var offsets = Buffer.alloc_zeroed[Self.T.offset](capacity + 1)
+        offsets.unsafe_set[Self.T.offset](0, 0)
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
@@ -606,7 +630,7 @@ struct StringBuilder(Builder):
         return self._null_count
 
     def dtype(self) -> AnyDataType:
-        return string
+        return Self.T().to_any()
 
     def append(mut self, value: String) raises:
         self.append(StringSlice(value))
@@ -619,11 +643,11 @@ struct StringBuilder(Builder):
     def append_null(mut self) raises:
         self.reserve(1)
         var index = self._length
-        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
+        var last_offset = self._offsets.unsafe_get[Self.T.offset](index)
         self._bitmap.clear(index)
         self._null_count += 1
         self._length += 1
-        self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
+        self._offsets.unsafe_set[Self.T.offset](index + 1, last_offset)
 
     def extend(mut self, values: List[String], valid: List[Bool]) raises:
         for i in range(len(values)):
@@ -633,15 +657,16 @@ struct StringBuilder(Builder):
                 self.append_null()
 
     def extend(mut self, arr: AnyArray) raises:
-        self.extend(arr.as_string())
+        comptime if Self.T.offset == DType.int32:
+            self.extend(arr.as_string())
+        else:
+            self.extend(arr.as_large_string())
 
-    def extend(mut self, arr: StringArray) raises:
-        """Bulk-append all elements from an existing StringArray."""
+    def extend[U: BinaryLikeType](mut self, arr: BinaryArray[U]) raises:
+        """Bulk-append all elements from an existing BinaryArray."""
         var n = arr.length
-        var chunk_start = Int(arr.offsets.unsafe_get[DType.uint32](arr.offset))
-        var chunk_end = Int(
-            arr.offsets.unsafe_get[DType.uint32](arr.offset + n)
-        )
+        var chunk_start = Int(arr.offsets.unsafe_get[U.offset](arr.offset))
+        var chunk_end = Int(arr.offsets.unsafe_get[U.offset](arr.offset + n))
         var chunk_bytes = chunk_end - chunk_start
         self.reserve(n)
         self.reserve_bytes(chunk_bytes)
@@ -655,15 +680,17 @@ struct StringBuilder(Builder):
             else:
                 self._bitmap.set_range(self._length, n, True)
         var cur_bytes = Int(
-            self._offsets.unsafe_get[DType.uint32](self._length)
+            self._offsets.unsafe_get[Self.T.offset](self._length)
         )
         for i in range(n):
-            var orig = Int(arr.offsets.unsafe_get[DType.uint32](arr.offset + i))
-            self._offsets.unsafe_set[DType.uint32](
-                self._length + i, UInt32(cur_bytes + orig - chunk_start)
+            var orig = Int(arr.offsets.unsafe_get[U.offset](arr.offset + i))
+            self._offsets.unsafe_set[Self.T.offset](
+                self._length + i,
+                Scalar[Self.T.offset](cur_bytes + orig - chunk_start),
             )
-        self._offsets.unsafe_set[DType.uint32](
-            self._length + n, UInt32(cur_bytes + chunk_bytes)
+        self._offsets.unsafe_set[Self.T.offset](
+            self._length + n,
+            Scalar[Self.T.offset](cur_bytes + chunk_bytes),
         )
         self._values.view[DType.uint8](cur_bytes).copy_from(
             arr.values.view[DType.uint8](chunk_start), chunk_bytes
@@ -675,12 +702,12 @@ struct StringBuilder(Builder):
         if needed > self._capacity:
             var new_cap = max(self._capacity * 2, needed)
             self._bitmap.resize(new_cap)
-            self._offsets.resize[DType.uint32](new_cap + 1)
+            self._offsets.resize[Self.T.offset](new_cap + 1)
             self._capacity = new_cap
 
     def reserve_bytes(mut self, additional: Int) raises:
         """Pre-allocate space in the byte data buffer."""
-        var used = Int(self._offsets.unsafe_get[DType.uint32](self._length))
+        var used = Int(self._offsets.unsafe_get[Self.T.offset](self._length))
         var needed = used + additional
         if needed > len(self._values):
             var new_cap = max(len(self._values) * 2, needed)
@@ -692,10 +719,10 @@ struct StringBuilder(Builder):
         """
         var length = s.byte_length()
         var index = self._length
-        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
-        var next_offset = last_offset + UInt32(length)
+        var last_offset = self._offsets.unsafe_get[Self.T.offset](index)
+        var next_offset = last_offset + Scalar[Self.T.offset](length)
         self._bitmap.set(index)
-        self._offsets.unsafe_set[DType.uint32](index + 1, next_offset)
+        self._offsets.unsafe_set[Self.T.offset](index + 1, next_offset)
         self._values.view[DType.uint8](Int(last_offset)).copy_from(s)
         self._length += 1
 
@@ -703,16 +730,20 @@ struct StringBuilder(Builder):
     def unsafe_append_null(mut self):
         """Append null without capacity checks. Caller must ensure capacity."""
         var index = self._length
-        var last_offset = self._offsets.unsafe_get[DType.uint32](index)
+        var last_offset = self._offsets.unsafe_get[Self.T.offset](index)
         self._bitmap.clear(index)
         self._null_count += 1
-        self._offsets.unsafe_set[DType.uint32](index + 1, last_offset)
+        self._offsets.unsafe_set[Self.T.offset](index + 1, last_offset)
         self._length += 1
 
-    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> StringArray:
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> BinaryArray[Self.T]:
         if shrink_to_fit:
-            self._offsets.resize[DType.uint32](self._length + 1)
-            var used = Int(self._offsets.unsafe_get[DType.uint32](self._length))
+            self._offsets.resize[Self.T.offset](self._length + 1)
+            var used = Int(
+                self._offsets.unsafe_get[Self.T.offset](self._length)
+            )
             self._values.resize[DType.uint8](used)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
@@ -722,11 +753,11 @@ struct StringBuilder(Builder):
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets and byte data buffers into immutable Buffers
         var offsets = self._offsets^.to_immutable()
-        self._offsets = Buffer.alloc_zeroed[DType.uint32](0)
+        self._offsets = Buffer.alloc_zeroed[Self.T.offset](0)
         var values = self._values^.to_immutable()
         self._values = Buffer.alloc_zeroed(0)
         # construct the immutable result array
-        var result = StringArray(
+        var result = BinaryArray[Self.T](
             length=self._length,
             nulls=null_count,
             offset=0,
@@ -744,19 +775,20 @@ struct StringBuilder(Builder):
         self._null_count = 0
 
 
+comptime LargeBinaryBuilder = BinaryBuilder[LargeBinaryType]
+comptime StringBuilder = BinaryBuilder[StringType]
+comptime LargeStringBuilder = BinaryBuilder[LargeStringType]
+
+
 # ---------------------------------------------------------------------------
 # ListBuilder
 # ---------------------------------------------------------------------------
 
 
-struct ListBuilder(Builder):
-    """Builder for variable-length list arrays.
+struct ListBuilder[OffsetType: IntegerType = Int32Type](Builder):
+    """Builder for variable-length list arrays."""
 
-    _offsets — uint32 offsets
-    _child   — child element builder (AnyBuilder)
-    """
-
-    comptime ArrayType = ListArray
+    comptime ArrayType = ListArray[Self.OffsetType]
 
     var _dtype: AnyDataType
     var _length: Int
@@ -767,10 +799,15 @@ struct ListBuilder(Builder):
     var _child: AnyBuilder
 
     def __init__(out self, var child: AnyBuilder, capacity: Int = 0):
-        var offsets = Buffer.alloc_zeroed[DType.uint32](capacity + 1)
-        offsets.unsafe_set[DType.uint32](0, 0)
+        var offsets = Buffer.alloc_zeroed[Self.OffsetType.native](capacity + 1)
+        offsets.unsafe_set[Self.OffsetType.native](0, 0)
         var child_dtype = child.dtype().copy()
-        self._dtype = list_(child_dtype^)
+        var list_dtype: AnyDataType
+        comptime if Self.OffsetType.native == DType.int32:
+            list_dtype = list_(child_dtype^)
+        else:
+            list_dtype = large_list_(child_dtype^)
+        self._dtype = list_dtype^
         self._length = 0
         self._capacity = capacity
         self._null_count = 0
@@ -804,8 +841,8 @@ struct ListBuilder(Builder):
         self._bitmap.clear(self._length)
         self._null_count += 1
         var child_length = self._child.length()
-        self._offsets.unsafe_set[DType.uint32](
-            self._length + 1, UInt32(child_length)
+        self._offsets.unsafe_set[Self.OffsetType.native](
+            self._length + 1, Scalar[Self.OffsetType.native](child_length)
         )
         self._length += 1
 
@@ -814,15 +851,18 @@ struct ListBuilder(Builder):
         """Append valid without capacity check. Caller must ensure capacity."""
         self._bitmap.set(self._length)
         var child_length = self._child.length()
-        self._offsets.unsafe_set[DType.uint32](
-            self._length + 1, UInt32(child_length)
+        self._offsets.unsafe_set[Self.OffsetType.native](
+            self._length + 1, Scalar[Self.OffsetType.native](child_length)
         )
         self._length += 1
 
     def extend(mut self, arr: AnyArray) raises:
-        self.extend(arr.as_list())
+        comptime if Self.OffsetType.native == DType.int32:
+            self.extend(arr.as_list())
+        else:
+            self.extend(arr.as_large_list())
 
-    def extend(mut self, arr: ListArray) raises:
+    def extend[O: IntegerType](mut self, arr: ListArray[O]) raises:
         """Bulk-append all elements from an existing ListArray."""
         var n = arr.length
         self.reserve(n)
@@ -835,18 +875,22 @@ struct ListBuilder(Builder):
                 self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
-        var child_start = Int(arr.offsets.unsafe_get[DType.int32](arr.offset))
-        var child_end = Int(arr.offsets.unsafe_get[DType.int32](arr.offset + n))
+        var child_start = Int(arr.offsets.unsafe_get[O.native](arr.offset))
+        var child_end = Int(arr.offsets.unsafe_get[O.native](arr.offset + n))
         var cur_child_len = self._child.length()
         for i in range(n):
-            var orig = Int(arr.offsets.unsafe_get[DType.int32](arr.offset + i))
-            self._offsets.unsafe_set[DType.uint32](
+            var orig = Int(arr.offsets.unsafe_get[O.native](arr.offset + i))
+            self._offsets.unsafe_set[Self.OffsetType.native](
                 self._length + i,
-                UInt32(cur_child_len + orig - child_start),
+                Scalar[Self.OffsetType.native](
+                    cur_child_len + orig - child_start
+                ),
             )
-        self._offsets.unsafe_set[DType.uint32](
+        self._offsets.unsafe_set[Self.OffsetType.native](
             self._length + n,
-            UInt32(cur_child_len + child_end - child_start),
+            Scalar[Self.OffsetType.native](
+                cur_child_len + child_end - child_start
+            ),
         )
         var child_slice = arr.values().slice(
             child_start, child_end - child_start
@@ -859,12 +903,14 @@ struct ListBuilder(Builder):
         if needed > self._capacity:
             var new_cap = max(self._capacity * 2, needed)
             self._bitmap.resize(new_cap)
-            self._offsets.resize[DType.uint32](new_cap + 1)
+            self._offsets.resize[Self.OffsetType.native](new_cap + 1)
             self._capacity = new_cap
 
-    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> ListArray:
+    def finish(
+        mut self, *, shrink_to_fit: Bool = True
+    ) raises -> ListArray[Self.OffsetType]:
         if shrink_to_fit:
-            self._offsets.resize[DType.uint32](self._length + 1)
+            self._offsets.resize[Self.OffsetType.native](self._length + 1)
         # only materialise the validity bitmap when there are nulls
         var null_count = self._null_count
         var bm: Optional[Bitmap[]] = None
@@ -873,10 +919,10 @@ struct ListBuilder(Builder):
             self._bitmap = Bitmap.alloc_zeroed(0)
         # freeze offsets buffer and recursively finish the child builder
         var offsets = self._offsets^.to_immutable()
-        self._offsets = Buffer.alloc_zeroed[DType.uint32](0)
+        self._offsets = Buffer.alloc_zeroed[Self.OffsetType.native](0)
         var values = self._child.finish()
         # construct the immutable result array
-        var result = ListArray(
+        var result = ListArray[Self.OffsetType](
             dtype=self._dtype.copy(),
             length=self._length,
             nulls=null_count,
@@ -893,6 +939,9 @@ struct ListBuilder(Builder):
         self._length = 0
         self._capacity = 0
         self._null_count = 0
+
+
+comptime LargeListBuilder = ListBuilder[Int64Type]
 
 
 # ---------------------------------------------------------------------------

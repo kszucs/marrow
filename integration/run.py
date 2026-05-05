@@ -36,12 +36,10 @@ from integration.tester import MarrowTester
 # failing.  We monkey-patch datagen so archery marks them as skipped without
 # modifying the upstream archery source.
 _UNSUPPORTED = {
-    'large_binary',       # largebinary / largeutf8
     'interval',
     'interval_mdn',       # month_day_nano_interval
     'map',
     'map_non_canonical',
-    'nested_large_offsets',   # large list
     'union',
     'binary_view',
     'list_view',

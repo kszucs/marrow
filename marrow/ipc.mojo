@@ -47,6 +47,9 @@ comptime _TYPE_INT: UInt8 = 2
 comptime _TYPE_FLOATING_POINT: UInt8 = 3
 comptime _TYPE_BINARY: UInt8 = 4
 comptime _TYPE_UTF8: UInt8 = 5
+comptime _TYPE_LARGE_BINARY: UInt8 = 19
+comptime _TYPE_LARGE_UTF8: UInt8 = 20
+comptime _TYPE_LARGE_LIST: UInt8 = 21
 comptime _TYPE_BOOL: UInt8 = 6
 comptime _TYPE_DECIMAL: UInt8 = 7
 comptime _TYPE_DATE: UInt8 = 8
@@ -786,10 +789,16 @@ struct _IpcEncoder(Movable):
             return _TYPE_FLOATING_POINT
         elif dtype.is_binary():
             return _TYPE_BINARY
+        elif dtype.is_large_binary():
+            return _TYPE_LARGE_BINARY
         elif dtype.is_string():
             return _TYPE_UTF8
+        elif dtype.is_large_string():
+            return _TYPE_LARGE_UTF8
         elif dtype.is_list():
             return _TYPE_LIST
+        elif dtype.is_large_list():
+            return _TYPE_LARGE_LIST
         elif dtype.is_fixed_size_list():
             return _TYPE_FIXED_SIZE_LIST
         elif dtype.is_fixed_size_binary():
@@ -817,8 +826,11 @@ struct _IpcEncoder(Movable):
             dtype.is_null()
             or dtype.is_bool()
             or dtype.is_binary()
+            or dtype.is_large_binary()
             or dtype.is_string()
+            or dtype.is_large_string()
             or dtype.is_list()
+            or dtype.is_large_list()
             or dtype.is_struct()
         ):
             var ts = self._fb.offset()
@@ -1036,6 +1048,12 @@ struct _IpcEncoder(Movable):
             child_positions.append(
                 self._write_field(
                     dtype.as_list().value_field().copy(), next_dict_id
+                )
+            )
+        elif dtype.is_large_list():
+            child_positions.append(
+                self._write_field(
+                    dtype.as_large_list().value_field().copy(), next_dict_id
                 )
             )
         elif dtype.is_fixed_size_list():
@@ -1419,14 +1437,22 @@ struct _IpcDecoder(Movable):
                 dtype = dt.float64
         elif type_type == _TYPE_BINARY:
             dtype = dt.binary
+        elif type_type == _TYPE_LARGE_BINARY:
+            dtype = dt.large_binary
         elif type_type == _TYPE_UTF8:
             dtype = dt.string
+        elif type_type == _TYPE_LARGE_UTF8:
+            dtype = dt.large_string
         elif type_type == _TYPE_LIST:
             if len(children) == 0:
                 raise Error("list Field must have 1 child, got 0")
             # Preserve the child Field as-is (its name may not be the default
             # "item" — e.g. arrow-rs uses "inner_list" for nested lists).
             dtype = dt.ListType(children[0].copy()).to_any()
+        elif type_type == _TYPE_LARGE_LIST:
+            if len(children) == 0:
+                raise Error("large_list Field must have 1 child, got 0")
+            dtype = dt.LargeListType(children[0].copy()).to_any()
         elif type_type == _TYPE_FIXED_SIZE_LIST:
             var tp = self._r.read_table(fp, 3)
             var list_size = Int(self._r.read_i32(tp, 0, 0))
@@ -1807,13 +1833,19 @@ struct _BatchDecoder(Movable):
                 indices^, values^, d.ordered
             ).to_any()
 
-        if dtype.is_string() or dtype.is_binary():
+        if (
+            dtype.is_string()
+            or dtype.is_binary()
+            or dtype.is_large_string()
+            or dtype.is_large_binary()
+        ):
             self._consume_buffer(data_buffers)
             self._consume_buffer(data_buffers)
         elif (
             dtype.is_bool()
             or dtype.is_primitive()
             or dtype.is_list()
+            or dtype.is_large_list()
             or dtype.is_fixed_size_binary()
         ):
             self._consume_buffer(data_buffers)
@@ -1826,6 +1858,16 @@ struct _BatchDecoder(Movable):
             children.append(
                 self.read_array(
                     dtype.as_list().value_type(), child_ipc
+                ).to_data()
+            )
+        elif dtype.is_large_list():
+            var child_ipc = (
+                ipc_info.children[0].copy() if len(ipc_info.children)
+                > 0 else _FieldIpcInfo()
+            )
+            children.append(
+                self.read_array(
+                    dtype.as_large_list().value_type(), child_ipc
                 ).to_data()
             )
         elif dtype.is_fixed_size_list():

@@ -272,8 +272,12 @@ struct CArrowSchema(Copyable, Movable):
             fmt = "g"
         elif dtype == binary:
             fmt = "z"
+        elif dtype.is_large_binary():
+            fmt = "Z"
         elif dtype.is_string():
             fmt = "u"
+        elif dtype.is_large_string():
+            fmt = "U"
         elif dtype.is_list():
             fmt = "+l"
             n_children = 1
@@ -282,6 +286,16 @@ struct CArrowSchema(Copyable, Movable):
             # this stack frame is gone.
             var child0 = CArrowSchema.from_field(
                 dtype.as_list().value_field().copy()
+            )
+            var child0_ptr = alloc[CArrowSchema](1)
+            child0_ptr.init_pointee_move(child0^)
+            children[0] = child0_ptr
+        elif dtype.is_large_list():
+            fmt = "+L"
+            n_children = 1
+            children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](1)
+            var child0 = CArrowSchema.from_field(
+                dtype.as_large_list().value_field().copy()
             )
             var child0_ptr = alloc[CArrowSchema](1)
             child0_ptr.init_pointee_move(child0^)
@@ -564,12 +578,18 @@ struct CArrowSchema(Copyable, Movable):
             return float64
         elif fmt == "z":
             return binary
+        elif fmt == "Z":
+            return large_binary
         elif fmt == "u":
             return string
+        elif fmt == "U":
+            return large_string
         elif fmt == "+l":
             # Preserve the child Field as-is (its name may not be the default
             # "item" when constructed by other Arrow implementations).
             return ListType(self.children[0][].to_field()).to_any()
+        elif fmt == "+L":
+            return LargeListType(self.children[0][].to_field()).to_any()
         elif fmt.startswith("+w:"):
             var size = Int(String(fmt).removeprefix("+w:"))
             return FixedSizeListType(
@@ -816,10 +836,26 @@ struct CArrowArray(Copyable, Movable):
             children.append(
                 self.children[0][].to_data(dtype.as_list().value_type(), owner)
             )
+        elif dtype.is_large_list():
+            var size = (length + 1) * Int64(size_of[DType.int64]())
+            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
+            buffers.append(offsets^)
+            children.append(
+                self.children[0][].to_data(
+                    dtype.as_large_list().value_type(), owner
+                )
+            )
         elif dtype.is_string() or dtype.is_binary():
             var size = (length + 1) * Int64(size_of[DType.int32]())
             var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
             var data_len = offsets.unsafe_get[DType.int32](Int(length))
+            var values = Buffer.from_foreign(self.buffers[2], data_len, owner)
+            buffers.append(offsets^)
+            buffers.append(values^)
+        elif dtype.is_large_string() or dtype.is_large_binary():
+            var size = (length + 1) * Int64(size_of[DType.int64]())
+            var offsets = Buffer.from_foreign(self.buffers[1], size, owner)
+            var data_len = offsets.unsafe_get[DType.int64](Int(length))
             var values = Buffer.from_foreign(self.buffers[2], data_len, owner)
             buffers.append(offsets^)
             buffers.append(values^)

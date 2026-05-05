@@ -1,6 +1,6 @@
 """Arrow columnar arrays — always immutable.
 
-Every typed array (`PrimitiveArray`, `StringArray`, `ListArray`, `StructArray`)
+Every typed array (`PrimitiveArray`, `BinaryArray`, `ListArray`, `StructArray`)
 is immutable.  To *build* an array incrementally, use the corresponding builder
 from `marrow.builders` and call `finish()`.
 
@@ -43,7 +43,7 @@ from std.os import abort
 from .buffers import Buffer, Bitmap
 from .views import BufferView, BitmapView
 from .dtypes import *
-from .builders import AnyBuilder, PrimitiveBuilder, StringBuilder
+from .builders import AnyBuilder, PrimitiveBuilder, BinaryBuilder
 from .scalars import (
     AnyScalar,
     NullScalar,
@@ -69,7 +69,7 @@ trait Array(
 ):
     """Common interface for all typed Arrow arrays.
 
-    All concrete array types (PrimitiveArray, StringArray, ListArray,
+    All concrete array types (PrimitiveArray, BinaryArray, ListArray,
     FixedSizeListArray, StructArray) implement this trait.  AnyArray is
     the type-erased handle that wraps any Array-conforming type.
     """
@@ -605,13 +605,17 @@ comptime Float64Array = PrimitiveArray[Float64Type]
 
 
 # ---------------------------------------------------------------------------
-# StringArray
+# BinaryArray
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct StringArray(Array):
-    """An immutable Arrow array of variable-length UTF-8 strings."""
+struct BinaryArray[T: BinaryLikeType = BinaryType](Array):
+    """An immutable Arrow array of variable-length bytes (binary or string).
+
+    The semantic type (binary, large_binary, string, large_string) is carried
+    by the type parameter T; T.offset determines the physical offset DType.
+    """
 
     comptime ScalarType = StringScalar
 
@@ -631,14 +635,14 @@ struct StringArray(Array):
             values: The string values to populate the array with.
             __list_literal__: Tells Mojo to use this method for list literal syntax.
         """
-        var b = StringBuilder(capacity=len(values))
+        var b = BinaryBuilder[Self.T](capacity=len(values))
         for value in values:
             b.append(value)
         self = b.finish()
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 2:
-            raise Error("StringArray requires exactly two buffers")
+            raise Error("BinaryArray requires exactly two buffers")
         self = Self(
             length=data.length,
             nulls=data.nulls,
@@ -659,7 +663,7 @@ struct StringArray(Array):
         return self.nulls
 
     def type(self) -> AnyDataType:
-        return string
+        return Self.T().to_any()
 
     def slice(self, offset: Int = 0, length: Int = -1) -> Self:
         """Zero-copy slice of this array.
@@ -677,7 +681,15 @@ struct StringArray(Array):
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("StringArray([")
+        var dtype = Self.T().to_any()
+        if dtype.is_string():
+            writer.write("StringArray([")
+        elif dtype.is_large_string():
+            writer.write("LargeStringArray([")
+        elif dtype.is_large_binary():
+            writer.write("LargeBinaryArray([")
+        else:
+            writer.write("BinaryArray([")
         for i in range(self.length):
             if i > 0:
                 writer.write(", ")
@@ -705,8 +717,8 @@ struct StringArray(Array):
         """Return a StringSlice for the element at the given index without bounds checking.
         """
         var offset_idx = Int(index) + self.offset
-        var start_offset = self.offsets.unsafe_get[DType.uint32](offset_idx)
-        var end_offset = self.offsets.unsafe_get[DType.uint32](offset_idx + 1)
+        var start_offset = self.offsets.unsafe_get[Self.T.offset](offset_idx)
+        var end_offset = self.offsets.unsafe_get[Self.T.offset](offset_idx + 1)
         var length = end_offset - start_offset
         return self.values.slice(
             Int(start_offset), Int(length)
@@ -745,7 +757,7 @@ struct StringArray(Array):
     def to_data(self) -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
-            dtype=string,
+            dtype=Self.T().to_any(),
             length=self.length,
             nulls=self.nulls,
             offset=self.offset,
@@ -755,12 +767,17 @@ struct StringArray(Array):
         )
 
 
+comptime LargeBinaryArray = BinaryArray[LargeBinaryType]
+comptime StringArray = BinaryArray[StringType]
+comptime LargeStringArray = BinaryArray[LargeStringType]
+
+
 # ---------------------------------------------------------------------------
-# ListArray
+# ListArray / LargeListArray
 # ---------------------------------------------------------------------------
 
 
-struct ListArray(Array):
+struct ListArray[OffsetType: IntegerType = Int32Type](Array):
     """An immutable Arrow array of variable-length lists (each element is a sub-array).
     """
 
@@ -861,10 +878,12 @@ struct ListArray(Array):
     def unsafe_get(self, index: Int) raises -> AnyArray:
         """Return a view of the child array for the list at the given index."""
         var start = Int(
-            self.offsets.unsafe_get[DType.int32](self.offset + index)
+            self.offsets.unsafe_get[Self.OffsetType.native](self.offset + index)
         )
         var end = Int(
-            self.offsets.unsafe_get[DType.int32](self.offset + index + 1)
+            self.offsets.unsafe_get[Self.OffsetType.native](
+                self.offset + index + 1
+            )
         )
         return self.values().slice(start, end - start)
 
@@ -896,9 +915,13 @@ struct ListArray(Array):
         """Return an array of list lengths for each element."""
         var buf = Buffer.alloc_zeroed[DType.int32](self.length)
         for i in range(self.length):
-            var start = self.offsets.unsafe_get[DType.int32](self.offset + i)
-            var end = self.offsets.unsafe_get[DType.int32](self.offset + i + 1)
-            buf.unsafe_set[DType.int32](i, end - start)
+            var start = self.offsets.unsafe_get[Self.OffsetType.native](
+                self.offset + i
+            )
+            var end = self.offsets.unsafe_get[Self.OffsetType.native](
+                self.offset + i + 1
+            )
+            buf.unsafe_set[DType.int32](i, Int32(end - start))
         return Int32Array(
             dtype=Int32Type(),
             length=self.length,
@@ -933,7 +956,7 @@ struct ListArray(Array):
 
     @staticmethod
     def from_arrays(
-        offsets: Int32Array,
+        offsets: PrimitiveArray[Self.OffsetType],
         var values: AnyArray,
         var mask: Optional[BoolArray] = None,
     ) -> Self:
@@ -953,8 +976,13 @@ struct ListArray(Array):
                 else:
                     bm.set(i)
             bitmap = bm^.to_immutable(length=n)
+        var list_dtype: AnyDataType
+        comptime if Self.OffsetType.native == DType.int32:
+            list_dtype = list_(values.dtype())
+        else:
+            list_dtype = large_list_(values.dtype())
         return Self(
-            dtype=list_(values.dtype()),
+            dtype=list_dtype^,
             length=n,
             nulls=null_count,
             offset=0,
@@ -974,6 +1002,9 @@ struct ListArray(Array):
             buffers=[self.offsets],
             children=[self.values().to_data()],
         )
+
+
+comptime LargeListArray = ListArray[Int64Type]
 
 
 # ---------------------------------------------------------------------------
@@ -1884,8 +1915,12 @@ struct AnyArray(
         Decimal64Array,
         Decimal128Array,
         Decimal256Array,
+        BinaryArray[BinaryType],
+        LargeBinaryArray,
         StringArray,
-        ListArray,
+        LargeStringArray,
+        ListArray[Int32Type],
+        LargeListArray,
         FixedSizeListArray,
         FixedSizeBinaryArray,
         StructArray,
@@ -2072,8 +2107,20 @@ struct AnyArray(
     def as_string(ref self) -> ref[self._v] StringArray:
         return self._as[StringArray]()
 
-    def as_list(ref self) -> ref[self._v] ListArray:
-        return self._as[ListArray]()
+    def as_binary(ref self) -> ref[self._v] BinaryArray[BinaryType]:
+        return self._as[BinaryArray[BinaryType]]()
+
+    def as_large_string(ref self) -> ref[self._v] LargeStringArray:
+        return self._as[LargeStringArray]()
+
+    def as_large_binary(ref self) -> ref[self._v] LargeBinaryArray:
+        return self._as[LargeBinaryArray]()
+
+    def as_list(ref self) -> ref[self._v] ListArray[Int32Type]:
+        return self._as[ListArray[Int32Type]]()
+
+    def as_large_list(ref self) -> ref[self._v] LargeListArray:
+        return self._as[LargeListArray]()
 
     def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
         return self._as[FixedSizeListArray]()
@@ -2154,10 +2201,18 @@ struct AnyArray(
             return AnyArray(Float32Array(data))
         elif dt == float64:
             return AnyArray(Float64Array(data))
-        if dt.is_string() or dt.is_binary():
+        if dt.is_string():
             return AnyArray(StringArray(data))
+        elif dt.is_binary():
+            return AnyArray(BinaryArray[BinaryType](data))
+        elif dt.is_large_string():
+            return AnyArray(LargeStringArray(data))
+        elif dt.is_large_binary():
+            return AnyArray(LargeBinaryArray(data))
         elif dt.is_list():
             return AnyArray(ListArray(data))
+        elif dt.is_large_list():
+            return AnyArray(LargeListArray(data))
         elif dt.is_fixed_size_list():
             return AnyArray(FixedSizeListArray(data))
         elif dt.is_fixed_size_binary():

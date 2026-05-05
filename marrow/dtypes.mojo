@@ -22,7 +22,7 @@ Concrete zero-size type structs (one per Arrow type):
     Int8Type, Int16Type, Int32Type, Int64Type,
     UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     Float16Type, Float32Type, Float64Type,
-    BinaryType, StringType,
+    BinaryLikeType (trait), StringLikeType (trait), BinaryType, LargeBinaryType, StringType, LargeStringType,
     ListType, FixedSizeListType, FixedSizeBinaryType, StructType, DictionaryType,
     Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type
@@ -81,6 +81,27 @@ trait NumericType(Defaultable, PrimitiveType):
 
 trait IntegerType(NumericType):
     """Signed and unsigned integer types."""
+
+    pass
+
+
+trait BinaryLikeType(DataType, Defaultable, ImplicitlyCopyable):
+    """Variable-width binary-like types: binary, large_binary, string, large_string.
+
+    Provides `comptime offset: DType` — the physical integer type of the
+    offset buffer (int32 for standard variants, int64 for large variants).
+    """
+
+    comptime offset: DType
+
+
+trait StringLikeType(BinaryLikeType):
+    """Sub-trait of BinaryLikeType for UTF-8 text types (string, large_string).
+
+    Kernels that require valid UTF-8 (e.g. to_lowercase, regex) constrain on
+    StringLikeType; byte-level operations constrain on BinaryLikeType and
+    accept all four variants.
+    """
 
     pass
 
@@ -194,7 +215,9 @@ comptime Decimal128Type = _DecimalType[DType.int128]
 comptime Decimal256Type = _DecimalType[DType.int256]
 
 
-struct BinaryType(DataType, ImplicitlyCopyable):
+struct BinaryType(BinaryLikeType):
+    comptime offset: DType = DType.int32
+
     def __init__(out self):
         pass
 
@@ -202,12 +225,34 @@ struct BinaryType(DataType, ImplicitlyCopyable):
         writer.write("binary")
 
 
-struct StringType(DataType, ImplicitlyCopyable):
+struct LargeBinaryType(BinaryLikeType):
+    comptime offset: DType = DType.int64
+
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("large_binary")
+
+
+struct StringType(StringLikeType):
+    comptime offset: DType = DType.int32
+
     def __init__(out self):
         pass
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("string")
+
+
+struct LargeStringType(StringLikeType):
+    comptime offset: DType = DType.int64
+
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("large_string")
 
 
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
@@ -405,6 +450,8 @@ struct Field(
 
 
 struct ListType(DataType):
+    comptime OffsetType = Int32Type
+
     var item: OwnedPointer[Field]
 
     def __init__(out self, var item: Field):
@@ -424,6 +471,30 @@ struct ListType(DataType):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("list<", self.item[].dtype, ">")
+
+
+struct LargeListType(DataType):
+    comptime OffsetType = Int64Type
+
+    var item: OwnedPointer[Field]
+
+    def __init__(out self, var item: Field):
+        self.item = OwnedPointer(item^)
+
+    def __init__(out self, *, copy: Self):
+        self.item = OwnedPointer(copy.item[].copy())
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.item[] == other.item[]
+
+    def value_field(ref self) -> ref[self.item] Field:
+        return self.item[]
+
+    def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
+        return self.item[].dtype
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("large_list<", self.item[].dtype, ">")
 
 
 struct FixedSizeListType(DataType):
@@ -557,8 +628,11 @@ struct AnyDataType(
         Float32Type,
         Float64Type,
         BinaryType,
+        LargeBinaryType,
         StringType,
+        LargeStringType,
         ListType,
+        LargeListType,
         FixedSizeListType,
         FixedSizeBinaryType,
         StructType,
@@ -702,14 +776,23 @@ struct AnyDataType(
     def is_string(self) -> Bool:
         return self._v.isa[StringType]()
 
+    def is_large_string(self) -> Bool:
+        return self._v.isa[LargeStringType]()
+
     def is_null(self) -> Bool:
         return self._v.isa[NullType]()
 
     def is_binary(self) -> Bool:
         return self._v.isa[BinaryType]()
 
+    def is_large_binary(self) -> Bool:
+        return self._v.isa[LargeBinaryType]()
+
     def is_list(self) -> Bool:
         return self._v.isa[ListType]()
+
+    def is_large_list(self) -> Bool:
+        return self._v.isa[LargeListType]()
 
     def is_fixed_size_list(self) -> Bool:
         return self._v.isa[FixedSizeListType]()
@@ -800,6 +883,10 @@ struct AnyDataType(
         """For list types, returns the inner ListType."""
         return self._as[ListType]()
 
+    def as_large_list(ref self) -> ref[self._v] LargeListType:
+        """For large_list types, returns the inner LargeListType."""
+        return self._as[LargeListType]()
+
     def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListType:
         """For fixed-size list types, returns the inner FixedSizeListType."""
         return self._as[FixedSizeListType]()
@@ -855,6 +942,12 @@ def field(name: String, var dtype: AnyDataType, nullable: Bool = True) -> Field:
 def list_(var value_type: AnyDataType) -> ListType:
     """Construct a list type. Equivalent to PyArrow's ``pa.list_()``."""
     return ListType(field("item", value_type^))
+
+
+def large_list_(var value_type: AnyDataType) -> LargeListType:
+    """Construct a large_list type. Equivalent to PyArrow's ``pa.large_list()``.
+    """
+    return LargeListType(field("item", value_type^))
 
 
 def fixed_size_list_(
@@ -971,4 +1064,6 @@ comptime float16 = Float16Type()
 comptime float32 = Float32Type()
 comptime float64 = Float64Type()
 comptime binary = BinaryType()
+comptime large_binary = LargeBinaryType()
 comptime string = StringType()
+comptime large_string = LargeStringType()

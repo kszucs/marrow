@@ -680,7 +680,9 @@ struct PyStringConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] StringBuilder:
+    def builder(
+        ref self,
+    ) -> ref[self._builder._ptr[]] StringBuilder:
         return self._builder.as_string()
 
     @always_inline
@@ -735,7 +737,9 @@ struct PyBinaryConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] StringBuilder:
+    def builder(
+        ref self,
+    ) -> ref[self._builder._ptr[]] StringBuilder:
         return self._builder.as_string()
 
     @always_inline
@@ -794,7 +798,9 @@ struct PyListConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] ListBuilder:
+    def builder(
+        ref self,
+    ) -> ref[self._builder._ptr[]] ListBuilder[dt.Int32Type]:
         return self._builder.as_list()
 
     def extend(mut self, values: PyObjectPtr) raises:

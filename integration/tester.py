@@ -49,6 +49,13 @@ def _json_type_to_pa(type_obj: dict, children_fields: list) -> pa.DataType | Non
         return pa.binary(type_obj["byteWidth"])
     if name == "utf8":
         return pa.utf8()
+    if name == "largebinary":
+        return pa.large_binary()
+    if name == "largeutf8":
+        return pa.large_utf8()
+    if name == "largelist":
+        child = _json_field_to_pa(children_fields[0])
+        return None if child is None else pa.large_list(child)
     if name == "date":
         return pa.date32() if type_obj.get("unit") == "DAY" else pa.date64()
     if name == "time":
@@ -172,7 +179,7 @@ def _json_col_to_pa(
     if pa.types.is_floating(pa_type):
         return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
 
-    if pa.types.is_binary(pa_type):
+    if pa.types.is_binary(pa_type) or pa.types.is_large_binary(pa_type):
         data = [bytes.fromhex(v) if v else b"" for v in col_obj.get("DATA", [])]
         return pa.array(data, type=pa_type, mask=mask_np)
 
@@ -189,7 +196,7 @@ def _json_col_to_pa(
         data = [int(v) if isinstance(v, str) else v for v in col_obj.get("DATA", [])]
         return pa.array(data, type=pa_type, mask=mask_np)
 
-    if pa.types.is_string(pa_type):
+    if pa.types.is_string(pa_type) or pa.types.is_large_string(pa_type):
         return pa.array(col_obj.get("DATA", []), type=pa_type, mask=mask_np)
 
     if pa.types.is_decimal(pa_type):
@@ -202,6 +209,12 @@ def _json_col_to_pa(
             for v in col_obj.get("DATA", [])
         ]
         return pa.array(data, type=pa_type, mask=mask_np)
+
+    if pa.types.is_large_list(pa_type):
+        offsets = [int(v) for v in col_obj.get("OFFSET", [])]
+        child_jf = (json_field["children"][0] if json_field and json_field.get("children") else None)
+        child_arr = _json_col_to_pa(col_obj["children"][0], pa_type.value_type, dict_cache, child_jf)
+        return pa.LargeListArray.from_arrays(offsets, child_arr, mask=mask_pa)
 
     if pa.types.is_list(pa_type) and not pa.types.is_fixed_size_list(pa_type):
         offsets = col_obj.get("OFFSET", [])
