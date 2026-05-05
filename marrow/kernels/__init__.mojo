@@ -5,6 +5,7 @@ Provides:
   - `binary_array_dispatch` — runtime-typed dispatch over numeric dtypes.
   - `unary_numeric_dispatch` — runtime-typed unary dispatch over numeric dtypes.
   - `unary_float_dispatch` — runtime-typed unary dispatch over float dtypes.
+  - `unary_scalar_dispatch` — runtime-typed unary dispatch returning a scalar.
 
 Kernel implementations live in their respective modules:
   - `arithmetic.mojo` — binary arithmetic, unary math, GPU dispatch via ``elementwise``
@@ -19,6 +20,7 @@ from std.gpu.host import DeviceContext
 
 from marrow.arrays import BoolArray, PrimitiveArray, AnyArray
 from marrow.buffers import Bitmap
+from marrow.scalars import PrimitiveScalar, AnyScalar
 from marrow.views import BitmapView
 from marrow.dtypes import (
     PrimitiveType,
@@ -331,3 +333,46 @@ def unary_float_dispatch[
     raise Error(
         t"{name}: unsupported dtype {array.dtype()}, expected float type"
     )
+
+
+def unary_scalar_dispatch[
+    name: StringLiteral,
+    func: def[T: PrimitiveType](
+        PrimitiveArray[T]
+    ) thin raises -> PrimitiveScalar[T],
+](array: AnyArray) raises -> AnyScalar:
+    """Runtime-typed unary dispatch returning a scalar (e.g. reductions).
+
+    Parameters:
+        name: Operation name used in error messages.
+        func: The typed reduction kernel to dispatch to.
+
+    Args:
+        array: Input array (runtime-typed).
+
+    Returns:
+        A scalar result wrapped in AnyScalar.
+    """
+    if array.dtype() == int8:
+        return func(array.as_int8())
+    elif array.dtype() == int16:
+        return func(array.as_int16())
+    elif array.dtype() == int32:
+        return func(array.as_int32())
+    elif array.dtype() == int64:
+        return func(array.as_int64())
+    elif array.dtype() == uint8:
+        return func(array.as_uint8())
+    elif array.dtype() == uint16:
+        return func(array.as_uint16())
+    elif array.dtype() == uint32:
+        return func(array.as_uint32())
+    elif array.dtype() == uint64:
+        return func(array.as_uint64())
+    elif array.dtype() == float16:
+        return func(array.as_float16())
+    elif array.dtype() == float32:
+        return func(array.as_float32())
+    elif array.dtype() == float64:
+        return func(array.as_float64())
+    raise Error(t"{name}: unsupported dtype {array.dtype()}")

@@ -18,142 +18,9 @@ from std.algorithm.reduction import (
 from std.utils.index import Index, IndexList
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
-from ..dtypes import (
-    PrimitiveType,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-    bool_ as bool_dt,
-)
+from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
-
-
-# ---------------------------------------------------------------------------
-# Generic reduction helper (internal — returns Mojo Scalar for SIMD compat)
-# ---------------------------------------------------------------------------
-
-
-def _reduce[
-    T: PrimitiveType, op: StringLiteral
-](array: PrimitiveArray[T], identity: Scalar[T.native]) raises -> Scalar[
-    T.native
-]:
-    """Reduce a primitive array using one of sum/product/min/max.
-
-    Bitmap-aware: null elements are replaced with `identity` so they
-    contribute nothing. The `op` parameter selects the stdlib reduction
-    at compile time.
-    """
-    comptime native = T.native
-    var length = len(array)
-    var vals = array.values()
-    var out = identity
-
-    @always_inline
-    @parameter
-    def output_fn[
-        width: Int, rank: Int
-    ](idx: IndexList[rank], val: SIMD[native, width]):
-        out = val[0]
-
-    if array.bitmap:
-        var bm = array.validity().value()
-
-        @always_inline
-        @parameter
-        def input_fn_nulls[
-            width: Int, rank: Int
-        ](idx: IndexList[rank]) -> SIMD[native, width]:
-            var i = idx[0]
-            var data = vals.load[width](i)
-            return bm.mask[width](i).select(data, SIMD[native, width](identity))
-
-        comptime if op == "sum":
-            algo_sum[
-                native,
-                input_fn_nulls,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "product":
-            algo_product[
-                native,
-                input_fn_nulls,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "min":
-            algo_min[
-                native,
-                input_fn_nulls,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "max":
-            algo_max[
-                native,
-                input_fn_nulls,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-    else:
-
-        @always_inline
-        @parameter
-        def input_fn[
-            width: Int, rank: Int
-        ](idx: IndexList[rank]) -> SIMD[native, width]:
-            return vals.load[width](idx[0])
-
-        comptime if op == "sum":
-            algo_sum[
-                native,
-                input_fn,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "product":
-            algo_product[
-                native,
-                input_fn,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "min":
-            algo_min[
-                native,
-                input_fn,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-        elif op == "max":
-            algo_max[
-                native,
-                input_fn,
-                output_fn,
-                single_thread_blocking_override=True,
-            ](Index(length), reduce_dim=0)
-
-    return out
+from . import unary_scalar_dispatch
 
 
 # ---------------------------------------------------------------------------
@@ -165,36 +32,44 @@ def sum_[
     T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    return PrimitiveScalar[T](
-        _reduce[T, "sum"](array, Scalar[T.native](0)), array.dtype.copy()
-    )
+    comptime native = T.native
+    var length = len(array)
+    var vals = array.values()
+    var out = Scalar[native](0)
+
+    @always_inline
+    @parameter
+    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
+        out = val[0]
+
+    if array.bitmap:
+        var bm = array.validity().value()
+
+        @always_inline
+        @parameter
+        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            var i = idx[0]
+            var data = vals.load[w](i)
+            return bm.mask[w](i).select(data, SIMD[native, w](0))
+
+        algo_sum[native, input_fn_nulls, output_fn, True](
+            Index(length), reduce_dim=0
+        )
+    else:
+
+        @always_inline
+        @parameter
+        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            return vals.load[w](idx[0])
+
+        algo_sum[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
+
+    return PrimitiveScalar[T](out, array.dtype.copy())
 
 
 def sum_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed sum."""
-    if array.dtype() == int8:
-        return sum_(array.as_int8())
-    elif array.dtype() == int16:
-        return sum_(array.as_int16())
-    elif array.dtype() == int32:
-        return sum_(array.as_int32())
-    elif array.dtype() == int64:
-        return sum_(array.as_int64())
-    elif array.dtype() == uint8:
-        return sum_(array.as_uint8())
-    elif array.dtype() == uint16:
-        return sum_(array.as_uint16())
-    elif array.dtype() == uint32:
-        return sum_(array.as_uint32())
-    elif array.dtype() == uint64:
-        return sum_(array.as_uint64())
-    elif array.dtype() == float16:
-        return sum_(array.as_float16())
-    elif array.dtype() == float32:
-        return sum_(array.as_float32())
-    elif array.dtype() == float64:
-        return sum_(array.as_float64())
-    raise Error("sum: unsupported dtype ", array.dtype())
+    return unary_scalar_dispatch["sum_", sum_[_]](array)
 
 
 # ---------------------------------------------------------------------------
@@ -205,38 +80,47 @@ def sum_(array: AnyArray) raises -> AnyScalar:
 def product[
     T: PrimitiveType
 ](array: PrimitiveArray[T]) raises -> PrimitiveScalar[T]:
-    """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
-    """
-    return PrimitiveScalar[T](
-        _reduce[T, "product"](array, Scalar[T.native](1)), array.dtype.copy()
-    )
+    """Multiply all valid (non-null) elements. Returns 1 if empty or all null."""
+    comptime native = T.native
+    var length = len(array)
+    var vals = array.values()
+    var out = Scalar[native](1)
+
+    @always_inline
+    @parameter
+    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
+        out = val[0]
+
+    if array.bitmap:
+        var bm = array.validity().value()
+
+        @always_inline
+        @parameter
+        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            var i = idx[0]
+            var data = vals.load[w](i)
+            return bm.mask[w](i).select(data, SIMD[native, w](1))
+
+        algo_product[native, input_fn_nulls, output_fn, True](
+            Index(length), reduce_dim=0
+        )
+    else:
+
+        @always_inline
+        @parameter
+        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            return vals.load[w](idx[0])
+
+        algo_product[native, input_fn, output_fn, True](
+            Index(length), reduce_dim=0
+        )
+
+    return PrimitiveScalar[T](out, array.dtype.copy())
 
 
 def product(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed product."""
-    if array.dtype() == int8:
-        return product(array.as_int8())
-    elif array.dtype() == int16:
-        return product(array.as_int16())
-    elif array.dtype() == int32:
-        return product(array.as_int32())
-    elif array.dtype() == int64:
-        return product(array.as_int64())
-    elif array.dtype() == uint8:
-        return product(array.as_uint8())
-    elif array.dtype() == uint16:
-        return product(array.as_uint16())
-    elif array.dtype() == uint32:
-        return product(array.as_uint32())
-    elif array.dtype() == uint64:
-        return product(array.as_uint64())
-    elif array.dtype() == float16:
-        return product(array.as_float16())
-    elif array.dtype() == float32:
-        return product(array.as_float32())
-    elif array.dtype() == float64:
-        return product(array.as_float64())
-    raise Error("product: unsupported dtype ", array.dtype())
+    return unary_scalar_dispatch["product", product[_]](array)
 
 
 # ---------------------------------------------------------------------------
@@ -251,37 +135,45 @@ def min_[
 
     Returns MAX_FINITE if empty or all null.
     """
-    return PrimitiveScalar[T](
-        _reduce[T, "min"](array, Scalar[T.native].MAX_FINITE),
-        array.dtype.copy(),
-    )
+    comptime native = T.native
+    comptime identity = Scalar[native].MAX_FINITE
+    var length = len(array)
+    var vals = array.values()
+    var out = identity
+
+    @always_inline
+    @parameter
+    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
+        out = val[0]
+
+    if array.bitmap:
+        var bm = array.validity().value()
+
+        @always_inline
+        @parameter
+        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            var i = idx[0]
+            var data = vals.load[w](i)
+            return bm.mask[w](i).select(data, SIMD[native, w](identity))
+
+        algo_min[native, input_fn_nulls, output_fn, True](
+            Index(length), reduce_dim=0
+        )
+    else:
+
+        @always_inline
+        @parameter
+        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            return vals.load[w](idx[0])
+
+        algo_min[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
+
+    return PrimitiveScalar[T](out, array.dtype.copy())
 
 
 def min_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed min."""
-    if array.dtype() == int8:
-        return min_(array.as_int8())
-    elif array.dtype() == int16:
-        return min_(array.as_int16())
-    elif array.dtype() == int32:
-        return min_(array.as_int32())
-    elif array.dtype() == int64:
-        return min_(array.as_int64())
-    elif array.dtype() == uint8:
-        return min_(array.as_uint8())
-    elif array.dtype() == uint16:
-        return min_(array.as_uint16())
-    elif array.dtype() == uint32:
-        return min_(array.as_uint32())
-    elif array.dtype() == uint64:
-        return min_(array.as_uint64())
-    elif array.dtype() == float16:
-        return min_(array.as_float16())
-    elif array.dtype() == float32:
-        return min_(array.as_float32())
-    elif array.dtype() == float64:
-        return min_(array.as_float64())
-    raise Error("min_: unsupported dtype ", array.dtype())
+    return unary_scalar_dispatch["min_", min_[_]](array)
 
 
 # ---------------------------------------------------------------------------
@@ -296,37 +188,45 @@ def max_[
 
     Returns MIN_FINITE if empty or all null.
     """
-    return PrimitiveScalar[T](
-        _reduce[T, "max"](array, Scalar[T.native].MIN_FINITE),
-        array.dtype.copy(),
-    )
+    comptime native = T.native
+    comptime identity = Scalar[native].MIN_FINITE
+    var length = len(array)
+    var vals = array.values()
+    var out = identity
+
+    @always_inline
+    @parameter
+    def output_fn[w: Int, r: Int](idx: IndexList[r], val: SIMD[native, w]):
+        out = val[0]
+
+    if array.bitmap:
+        var bm = array.validity().value()
+
+        @always_inline
+        @parameter
+        def input_fn_nulls[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            var i = idx[0]
+            var data = vals.load[w](i)
+            return bm.mask[w](i).select(data, SIMD[native, w](identity))
+
+        algo_max[native, input_fn_nulls, output_fn, True](
+            Index(length), reduce_dim=0
+        )
+    else:
+
+        @always_inline
+        @parameter
+        def input_fn[w: Int, r: Int](idx: IndexList[r]) -> SIMD[native, w]:
+            return vals.load[w](idx[0])
+
+        algo_max[native, input_fn, output_fn, True](Index(length), reduce_dim=0)
+
+    return PrimitiveScalar[T](out, array.dtype.copy())
 
 
 def max_(array: AnyArray) raises -> AnyScalar:
     """Runtime-typed max."""
-    if array.dtype() == int8:
-        return max_(array.as_int8())
-    elif array.dtype() == int16:
-        return max_(array.as_int16())
-    elif array.dtype() == int32:
-        return max_(array.as_int32())
-    elif array.dtype() == int64:
-        return max_(array.as_int64())
-    elif array.dtype() == uint8:
-        return max_(array.as_uint8())
-    elif array.dtype() == uint16:
-        return max_(array.as_uint16())
-    elif array.dtype() == uint32:
-        return max_(array.as_uint32())
-    elif array.dtype() == uint64:
-        return max_(array.as_uint64())
-    elif array.dtype() == float16:
-        return max_(array.as_float16())
-    elif array.dtype() == float32:
-        return max_(array.as_float32())
-    elif array.dtype() == float64:
-        return max_(array.as_float64())
-    raise Error("max_: unsupported dtype ", array.dtype())
+    return unary_scalar_dispatch["max_", max_[_]](array)
 
 
 # ---------------------------------------------------------------------------
