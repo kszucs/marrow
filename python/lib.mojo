@@ -3,7 +3,6 @@
 from std.os import abort
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from device import add_to_module as add_device
 from dtypes import add_to_module as add_dtypes
 from arrays import add_to_module as add_arrays
 from scalars import add_to_module as add_scalars
@@ -17,7 +16,6 @@ from ipc import add_to_module as add_ipc
 def PyInit_marrow() -> PythonObject:
     try:
         var m = PythonModuleBuilder("marrow")
-        add_device(m)
         add_dtypes(m)
         add_scalars(m)
         add_arrays(m)

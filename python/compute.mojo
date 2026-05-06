@@ -3,10 +3,11 @@
 These use runtime type dispatch via class name to convert PythonObject
 back to typed arrays and call the appropriate kernel.
 
-All GPU-capable functions accept a ``Device`` as their last positional argument.
-Pass ``None`` for CPU execution; pass a ``ma.Device()`` instance for GPU execution.
+All GPU-capable functions accept an ``ExecutionContext`` as their last positional argument.
+Pass ``None`` for CPU execution; pass a ``ma.ExecutionContext()`` instance for GPU execution.
 """
 
+from std.gpu.host import DeviceContext
 from std.python import PythonObject, Python
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import AnyArray
@@ -28,15 +29,18 @@ from marrow.kernels.compare import (
     greater_equal,
 )
 from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls
-from device import Device
 from helpers import pyfunction
 
 
+def _ctx_init_gpu(out self: ExecutionContext) raises:
+    self = ExecutionContext.gpu(DeviceContext())
+
+
 def _opt_ctx(device_py: PythonObject) raises -> ExecutionContext:
-    """Extract ExecutionContext from a Python Device or None."""
+    """Extract ExecutionContext from a Python ExecutionContext or None."""
     if device_py.__is__(PythonObject(None)):
         return ExecutionContext.serial()
-    return Device(py=device_py).ctx.copy()
+    return ExecutionContext(py=device_py)
 
 
 # TODO: use explicit AnyArray types in the helper functions below
@@ -63,7 +67,7 @@ def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
 
 
 # ---------------------------------------------------------------------------
-# Device-aware wrappers — device is the last PythonObject arg; None → CPU
+# ExecutionContext-aware wrappers — device is the last PythonObject arg; None → CPU
 # ---------------------------------------------------------------------------
 
 
@@ -164,39 +168,45 @@ def _max_(a0: PythonObject, a1: PythonObject) raises -> PythonObject:
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
+    _ = mb.add_type[ExecutionContext]("ExecutionContext").def_method[
+        _ctx_init_gpu
+    ]("__init__")
     mb.def_function[_add](
         "add",
         docstring=(
             "add(left, right, device, /) -> Array\n--\n\nAdd two arrays"
-            " element-wise. Pass None for CPU, a Device for GPU."
+            " element-wise. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_sum_](
         "sum_",
         docstring=(
             "sum_(array, device, /) -> Scalar\n--\n\nSum all valid elements,"
-            " skipping nulls. Pass None for CPU, a Device for GPU."
+            " skipping nulls. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_product](
         "product",
         docstring=(
             "product(array, device, /) -> Scalar\n--\n\nProduct of all valid"
-            " elements, skipping nulls. Pass None for CPU, a Device for GPU."
+            " elements, skipping nulls. Pass None for CPU, an ExecutionContext"
+            " for GPU."
         ),
     )
     mb.def_function[_min_](
         "min_",
         docstring=(
             "min_(array, device, /) -> Scalar\n--\n\nMinimum of all valid"
-            " elements, skipping nulls. Pass None for CPU, a Device for GPU."
+            " elements, skipping nulls. Pass None for CPU, an ExecutionContext"
+            " for GPU."
         ),
     )
     mb.def_function[_max_](
         "max_",
         docstring=(
             "max_(array, device, /) -> Scalar\n--\n\nMaximum of all valid"
-            " elements, skipping nulls. Pass None for CPU, a Device for GPU."
+            " elements, skipping nulls. Pass None for CPU, an ExecutionContext"
+            " for GPU."
         ),
     )
     mb.def_function[pyfunction[any_]()](
@@ -216,22 +226,22 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_sub](
         "sub",
         docstring=(
-            "sub(left, right, device, /) -> Array\n--\n\nSubtract two"
-            " arrays element-wise. Pass None for CPU, a Device for GPU."
+            "sub(left, right, device, /) -> Array\n--\n\nSubtract two arrays"
+            " element-wise. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_mul](
         "mul",
         docstring=(
-            "mul(left, right, device, /) -> Array\n--\n\nMultiply two"
-            " arrays element-wise. Pass None for CPU, a Device for GPU."
+            "mul(left, right, device, /) -> Array\n--\n\nMultiply two arrays"
+            " element-wise. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_div](
         "div",
         docstring=(
-            "div(left, right, device, /) -> Array\n--\n\nDivide two"
-            " arrays element-wise. Pass None for CPU, a Device for GPU."
+            "div(left, right, device, /) -> Array\n--\n\nDivide two arrays"
+            " element-wise. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[pyfunction[filter_]()](
@@ -252,41 +262,41 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         "equal",
         docstring=(
             "equal(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " equality. Pass None for CPU, a Device for GPU."
+            " equality. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_not_equal](
         "not_equal",
         docstring=(
             "not_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " inequality. Pass None for CPU, a Device for GPU."
+            " inequality. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_less](
         "less",
         docstring=(
             "less(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " less-than. Pass None for CPU, a Device for GPU."
+            " less-than. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_less_equal](
         "less_equal",
         docstring=(
             "less_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " less-or-equal. Pass None for CPU, a Device for GPU."
+            " less-or-equal. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_greater](
         "greater",
         docstring=(
             "greater(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " greater-than. Pass None for CPU, a Device for GPU."
+            " greater-than. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )
     mb.def_function[_greater_equal](
         "greater_equal",
         docstring=(
             "greater_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
-            " greater-or-equal. Pass None for CPU, a Device for GPU."
+            " greater-or-equal. Pass None for CPU, an ExecutionContext for GPU."
         ),
     )

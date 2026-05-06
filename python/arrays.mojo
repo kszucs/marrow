@@ -20,7 +20,7 @@ from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
-from device import Device
+from marrow.kernels.execution import ExecutionContext
 from marrow.arrays import (
     AnyArray,
     ArrayData,
@@ -1128,12 +1128,12 @@ def _any_array_str(
     return PythonObject(String.write(ptr[]))
 
 
-def _array_to_device(self: AnyArray, device: Device) raises -> AnyArray:
-    return self.to_device(device.ctx.device.value())
+def _array_to_device(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
+    return self.to_device(ctx.device.value())
 
 
-def _array_to_cpu(self: AnyArray, device: Device) raises -> AnyArray:
-    return self.to_cpu(device.ctx.device.value())
+def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
+    return self.to_cpu(ctx.device.value())
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:

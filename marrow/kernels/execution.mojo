@@ -21,10 +21,14 @@ call sites working without source changes.
 """
 
 from std.gpu.host import DeviceContext
+from std.python import PythonObject
+from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.info import num_physical_cores
 
 
-struct ExecutionContext(Copyable, Movable, Writable):
+struct ExecutionContext(
+    ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable
+):
     """How a kernel should dispatch its work.
 
     See the module docstring for the full contract. Construct via one of
@@ -120,3 +124,11 @@ struct ExecutionContext(Copyable, Movable, Writable):
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
+
+    # --- ConvertibleFromPython / ConvertibleToPython --------------------------
+
+    def __init__(out self, *, py: PythonObject) raises:
+        self = py.downcast_value_ptr[ExecutionContext]()[].copy()
+
+    def to_python_object(var self) raises -> PythonObject:
+        return PythonObject(alloc=self^)
