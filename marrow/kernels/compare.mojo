@@ -287,4 +287,6 @@ def greater_equal(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed greater_equal."""
-    return bool_array_dispatch["greater_equal", greater_equal[_]](left, right, ctx)
+    return bool_array_dispatch["greater_equal", greater_equal[_]](
+        left, right, ctx
+    )

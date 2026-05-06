@@ -339,7 +339,9 @@ def unary_scalar_dispatch[
     func: def[T: PrimitiveType](
         PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveScalar[T],
-](array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()) raises -> AnyScalar:
+](
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyScalar:
     """Runtime-typed unary dispatch returning a scalar (e.g. reductions).
 
     Parameters:

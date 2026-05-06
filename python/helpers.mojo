@@ -262,7 +262,9 @@ def pyfunction[
     R: ConvertibleToPython,
     //,
     func: def(A0, A1, A2) raises thin -> R,
-]() -> def(PythonObject, PythonObject, PythonObject) raises thin -> PythonObject:
+]() -> def(
+    PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
     """Wrap a three-arg function returning ConvertibleToPython."""
 
     def wrapper(

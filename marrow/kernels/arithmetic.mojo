@@ -484,28 +484,36 @@ def cos[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
 
 
 def add(
-    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed add."""
     return binary_array_dispatch["add", add[_]](left, right, ctx)
 
 
 def sub(
-    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed sub."""
     return binary_array_dispatch["sub", sub[_]](left, right, ctx)
 
 
 def mul(
-    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed mul."""
     return binary_array_dispatch["mul", mul[_]](left, right, ctx)
 
 
 def div(
-    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed div."""
     return binary_array_dispatch["div", div[_]](left, right, ctx)

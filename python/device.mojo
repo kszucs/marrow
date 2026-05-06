@@ -11,7 +11,9 @@ from std.python.bindings import PythonModuleBuilder
 from marrow.kernels.execution import ExecutionContext
 
 
-struct Device(ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable):
+struct Device(
+    ConvertibleFromPython, ConvertibleToPython, Copyable, Movable, Writable
+):
     """GPU device context handle.
 
     Wraps ``ExecutionContext`` for use from Python.  Construct with no arguments

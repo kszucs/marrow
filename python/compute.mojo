@@ -70,25 +70,33 @@ def equal_(left: AnyArray, right: AnyArray) raises -> AnyArray:
 def _add(
     a0: PythonObject, a1: PythonObject, a2: PythonObject
 ) raises -> PythonObject:
-    return add(AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)).to_python_object()
+    return add(
+        AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)
+    ).to_python_object()
 
 
 def _sub(
     a0: PythonObject, a1: PythonObject, a2: PythonObject
 ) raises -> PythonObject:
-    return sub(AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)).to_python_object()
+    return sub(
+        AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)
+    ).to_python_object()
 
 
 def _mul(
     a0: PythonObject, a1: PythonObject, a2: PythonObject
 ) raises -> PythonObject:
-    return mul(AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)).to_python_object()
+    return mul(
+        AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)
+    ).to_python_object()
 
 
 def _div(
     a0: PythonObject, a1: PythonObject, a2: PythonObject
 ) raises -> PythonObject:
-    return div(AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)).to_python_object()
+    return div(
+        AnyArray(py=a0), AnyArray(py=a1), _opt_ctx(a2)
+    ).to_python_object()
 
 
 def _equal(
@@ -250,8 +258,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_not_equal](
         "not_equal",
         docstring=(
-            "not_equal(left, right, device, /) ->"
-            " Array\n--\n\nElement-wise inequality. Pass None for CPU, a Device for GPU."
+            "not_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
+            " inequality. Pass None for CPU, a Device for GPU."
         ),
     )
     mb.def_function[_less](
@@ -264,8 +272,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_less_equal](
         "less_equal",
         docstring=(
-            "less_equal(left, right, device, /) ->"
-            " Array\n--\n\nElement-wise less-or-equal. Pass None for CPU, a Device for GPU."
+            "less_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
+            " less-or-equal. Pass None for CPU, a Device for GPU."
         ),
     )
     mb.def_function[_greater](
@@ -278,7 +286,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[_greater_equal](
         "greater_equal",
         docstring=(
-            "greater_equal(left, right, device, /) ->"
-            " Array\n--\n\nElement-wise greater-or-equal. Pass None for CPU, a Device for GPU."
+            "greater_equal(left, right, device, /) -> Array\n--\n\nElement-wise"
+            " greater-or-equal. Pass None for CPU, a Device for GPU."
         ),
     )

@@ -57,6 +57,7 @@ from .scalars import (
     Scalar as ScalarTrait,
 )
 
+
 trait Array(
     Copyable,
     Equatable,
@@ -2261,4 +2262,3 @@ struct AnyArray(
             return DictionaryArray(data)
         else:
             raise Error("from_data: unsupported dtype")
-
