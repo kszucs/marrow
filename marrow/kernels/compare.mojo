@@ -22,8 +22,6 @@ and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
 ``binary_array_dispatch``.
 """
 
-from std.gpu.host import DeviceContext
-
 from ..arrays import (
     BoolArray,
     PrimitiveArray,
@@ -35,6 +33,7 @@ from ..buffers import Bitmap
 from ..views import apply
 from ..dtypes import PrimitiveType, bool_ as bool_dt
 from . import bitmap_and, bool_array_dispatch
+from .execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +50,7 @@ def _binary_cmp[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Binary comparison kernel — compare + bit-pack via apply."""
     if len(left) != len(right):
@@ -67,8 +66,8 @@ def _binary_cmp[
     ) else Optional[Bitmap[]]()
 
     var result = Bitmap.alloc_device(
-        ctx.value(), length
-    ) if ctx else Bitmap.alloc_uninit(length)
+        ctx.device.value(), length
+    ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
     apply[native, func](left.values(), right.values(), result.view(), ctx)
     return BoolArray(
         length=length,
@@ -118,7 +117,7 @@ def equal[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise equality: result[i] = left[i] == right[i]."""
     return _binary_cmp[T, _eq[T.native, _], "equal"](left, right, ctx)
@@ -129,7 +128,7 @@ def not_equal[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
     return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right, ctx)
@@ -140,7 +139,7 @@ def less[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
     return _binary_cmp[T, _lt[T.native, _], "less"](left, right, ctx)
@@ -151,7 +150,7 @@ def less_equal[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
     return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right, ctx)
@@ -162,7 +161,7 @@ def greater[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
     return _binary_cmp[T, _gt[T.native, _], "greater"](left, right, ctx)
@@ -173,7 +172,7 @@ def greater_equal[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
     return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right, ctx)
@@ -211,11 +210,15 @@ def equal(left: StringArray, right: StringArray) raises -> BoolArray:
 # ---------------------------------------------------------------------------
 
 
-def equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def equal(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed equal."""
     if left.dtype().is_string():
         return equal(left.as_string(), right.as_string()).to_any()
-    return bool_array_dispatch["equal", equal[_]](left, right)
+    return bool_array_dispatch["equal", equal[_]](left, right, ctx)
 
 
 def equal(left: StructArray, right: StructArray) raises -> BoolArray:
@@ -242,26 +245,46 @@ def equal(left: StructArray, right: StructArray) raises -> BoolArray:
     return mask^
 
 
-def not_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def not_equal(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed not_equal."""
-    return bool_array_dispatch["not_equal", not_equal[_]](left, right)
+    return bool_array_dispatch["not_equal", not_equal[_]](left, right, ctx)
 
 
-def less(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def less(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed less."""
-    return bool_array_dispatch["less", less[_]](left, right)
+    return bool_array_dispatch["less", less[_]](left, right, ctx)
 
 
-def less_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def less_equal(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed less_equal."""
-    return bool_array_dispatch["less_equal", less_equal[_]](left, right)
+    return bool_array_dispatch["less_equal", less_equal[_]](left, right, ctx)
 
 
-def greater(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def greater(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed greater."""
-    return bool_array_dispatch["greater", greater[_]](left, right)
+    return bool_array_dispatch["greater", greater[_]](left, right, ctx)
 
 
-def greater_equal(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def greater_equal(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed greater_equal."""
-    return bool_array_dispatch["greater_equal", greater_equal[_]](left, right)
+    return bool_array_dispatch["greater_equal", greater_equal[_]](left, right, ctx)

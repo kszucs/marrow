@@ -2020,6 +2020,70 @@ struct AnyArray(
 
         return variant_dispatch_raises[Array, func=f](self._v)
 
+    def to_device(self, ctx: DeviceContext) raises -> AnyArray:
+        """Upload this array to the GPU device.
+
+        Supported types: bool, all primitive numeric types, fixed-size list.
+        Raises for string, list, struct, and other non-primitive types.
+        """
+        if self.dtype() == bool_:
+            return self.as_bool().to_device(ctx)
+        if self.dtype() == int8:
+            return self.as_int8().to_device(ctx)
+        if self.dtype() == int16:
+            return self.as_int16().to_device(ctx)
+        if self.dtype() == int32:
+            return self.as_int32().to_device(ctx)
+        if self.dtype() == int64:
+            return self.as_int64().to_device(ctx)
+        if self.dtype() == uint8:
+            return self.as_uint8().to_device(ctx)
+        if self.dtype() == uint16:
+            return self.as_uint16().to_device(ctx)
+        if self.dtype() == uint32:
+            return self.as_uint32().to_device(ctx)
+        if self.dtype() == uint64:
+            return self.as_uint64().to_device(ctx)
+        if self.dtype() == float16:
+            return self.as_float16().to_device(ctx)
+        if self.dtype() == float32:
+            return self.as_float32().to_device(ctx)
+        if self.dtype() == float64:
+            return self.as_float64().to_device(ctx)
+        raise Error(t"to_device: unsupported array type {self.dtype()}")
+
+    def to_cpu(self, ctx: DeviceContext) raises -> AnyArray:
+        """Download this array from the GPU device to CPU memory.
+
+        Supported types: bool, all primitive numeric types, fixed-size list.
+        Raises for string, list, struct, and other non-primitive types.
+        """
+        if self.dtype() == bool_:
+            return self.as_bool().to_cpu(ctx)
+        if self.dtype() == int8:
+            return self.as_int8().to_cpu(ctx)
+        if self.dtype() == int16:
+            return self.as_int16().to_cpu(ctx)
+        if self.dtype() == int32:
+            return self.as_int32().to_cpu(ctx)
+        if self.dtype() == int64:
+            return self.as_int64().to_cpu(ctx)
+        if self.dtype() == uint8:
+            return self.as_uint8().to_cpu(ctx)
+        if self.dtype() == uint16:
+            return self.as_uint16().to_cpu(ctx)
+        if self.dtype() == uint32:
+            return self.as_uint32().to_cpu(ctx)
+        if self.dtype() == uint64:
+            return self.as_uint64().to_cpu(ctx)
+        if self.dtype() == float16:
+            return self.as_float16().to_cpu(ctx)
+        if self.dtype() == float32:
+            return self.as_float32().to_cpu(ctx)
+        if self.dtype() == float64:
+            return self.as_float64().to_cpu(ctx)
+        raise Error(t"to_cpu: unsupported array type {self.dtype()}")
+
     def to_any(deinit self) -> AnyArray:
         """Returns this array as AnyArray, transferring ownership."""
         return self^

@@ -20,6 +20,7 @@ from std.utils import Variant
 from std.builtin.variadics import Variadic
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
+from device import Device
 from marrow.arrays import (
     AnyArray,
     ArrayData,
@@ -1127,6 +1128,14 @@ def _any_array_str(
     return PythonObject(String.write(ptr[]))
 
 
+def _array_to_device(self: AnyArray, device: Device) raises -> AnyArray:
+    return self.to_device(device.ctx.device.value())
+
+
+def _array_to_cpu(self: AnyArray, device: Device) raises -> AnyArray:
+    return self.to_cpu(device.ctx.device.value())
+
+
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
@@ -1137,6 +1146,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[AnyArray.dtype]()]("type")
         .def_method[pymethod[AnyArray.is_valid]()]("is_valid")
         .def_method[pymethod[AnyArray.slice]()]("slice")
+        .def_method[pymethod[_array_to_device]()]("to_device")
+        .def_method[pymethod[_array_to_cpu]()]("to_cpu")
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )

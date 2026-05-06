@@ -255,6 +255,24 @@ def pyfunction[
     return wrapper
 
 
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    A2: ConvertibleFromPython,
+    R: ConvertibleToPython,
+    //,
+    func: def(A0, A1, A2) raises thin -> R,
+]() -> def(PythonObject, PythonObject, PythonObject) raises thin -> PythonObject:
+    """Wrap a three-arg function returning ConvertibleToPython."""
+
+    def wrapper(
+        arg0: PythonObject, arg1: PythonObject, arg2: PythonObject
+    ) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1), A2(py=arg2)).to_python_object()
+
+    return wrapper
+
+
 def marrow_module(obj: PythonObject) raises -> PythonObject:
     """Return the name of the module to implement the __module__ method."""
     return "marrow".to_python_object()

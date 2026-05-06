@@ -16,12 +16,11 @@ Kernel implementations live in their respective modules:
   - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, AnyArray
 """
 
-from std.gpu.host import DeviceContext
-
 from marrow.arrays import BoolArray, PrimitiveArray, AnyArray
 from marrow.buffers import Bitmap
 from marrow.scalars import PrimitiveScalar, AnyScalar
 from marrow.views import BitmapView
+from .execution import ExecutionContext
 from marrow.dtypes import (
     PrimitiveType,
     Int8Type,
@@ -87,12 +86,12 @@ def bitmap_and(
 def binary_array_dispatch[
     name: StringLiteral,
     func: def[T: PrimitiveType](
-        PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
+        PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[T],
 ](
     left: AnyArray,
     right: AnyArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed binary dispatch: checks dtype match, loops over numeric types.
 
@@ -142,12 +141,12 @@ def binary_array_dispatch[
     name: StringLiteral,
     OutT: PrimitiveType,
     func: def[T: PrimitiveType](
-        PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
+        PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[OutT],
 ](
     left: AnyArray,
     right: AnyArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed binary dispatch with a fixed output type (e.g. comparisons).
 
@@ -197,12 +196,12 @@ def binary_array_dispatch[
 def bool_array_dispatch[
     name: StringLiteral,
     func: def[T: PrimitiveType](
-        PrimitiveArray[T], PrimitiveArray[T], Optional[DeviceContext]
+        PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> BoolArray,
 ](
     left: AnyArray,
     right: AnyArray,
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed binary dispatch producing a BoolArray result (e.g. comparisons).
 
@@ -338,9 +337,9 @@ def unary_float_dispatch[
 def unary_scalar_dispatch[
     name: StringLiteral,
     func: def[T: PrimitiveType](
-        PrimitiveArray[T], Optional[DeviceContext]
+        PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveScalar[T],
-](array: AnyArray, ctx: Optional[DeviceContext] = None) raises -> AnyScalar:
+](array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()) raises -> AnyScalar:
     """Runtime-typed unary dispatch returning a scalar (e.g. reductions).
 
     Parameters:

@@ -24,7 +24,7 @@ from std.gpu.host import DeviceContext
 from std.sys.info import num_physical_cores
 
 
-struct ExecutionContext(Copyable, Movable):
+struct ExecutionContext(Copyable, Movable, Writable):
     """How a kernel should dispatch its work.
 
     See the module docstring for the full contract. Construct via one of
@@ -109,3 +109,14 @@ struct ExecutionContext(Copyable, Movable):
         if self.is_gpu():
             return False
         return self.resolved_num_threads() > 1 and n >= min_parallel_size
+
+    # --- Writable ---------------------------------------------------------
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self.is_gpu():
+            writer.write("ExecutionContext(gpu)")
+        else:
+            writer.write("ExecutionContext(cpu)")
+
+    def write_repr_to[W: Writer](self, mut writer: W):
+        self.write_to(writer)

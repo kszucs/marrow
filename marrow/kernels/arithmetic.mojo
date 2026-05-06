@@ -6,7 +6,6 @@ Each public function dispatches based on the optional `ctx` argument:
 """
 
 import std.math as math
-from std.gpu.host import DeviceContext
 
 from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
@@ -19,6 +18,7 @@ from . import (
     unary_numeric_dispatch,
     unary_float_dispatch,
 )
+from .execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -31,14 +31,14 @@ def _unary[
     func: def[W: Int](SIMD[T.native, W]) thin -> SIMD[T.native, W],
 ](
     array: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Unary kernel: allocates output, resolves views, calls elementwise."""
     comptime native = T.native
     var length = len(array)
     var buf: Buffer[mut=True]
-    if ctx:
-        buf = Buffer.alloc_device[native](ctx.value(), length)
+    if ctx.is_gpu():
+        buf = Buffer.alloc_device[native](ctx.device.value(), length)
     else:
         buf = Buffer.alloc_zeroed[native](length)
     apply[native, native, func](
@@ -64,7 +64,7 @@ def _binary[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Binary kernel: allocates output, resolves views, calls elementwise."""
     if len(left) != len(right):
@@ -78,8 +78,8 @@ def _binary[
     var bm = bitmap_and(left.bitmap, right.bitmap)
 
     var buf: Buffer[mut=True]
-    if ctx:
-        buf = Buffer.alloc_device[native](ctx.value(), length)
+    if ctx.is_gpu():
+        buf = Buffer.alloc_device[native](ctx.device.value(), length)
     else:
         buf = Buffer.alloc_zeroed[native](length)
     apply[native, native, func](
@@ -244,7 +244,7 @@ def add[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise addition."""
     return _binary[T, func=_add[T.native, _], name="add"](left, right, ctx)
@@ -255,7 +255,7 @@ def sub[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise subtraction."""
     return _binary[T, func=_sub[T.native, _], name="sub"](left, right, ctx)
@@ -266,7 +266,7 @@ def mul[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise multiplication."""
     return _binary[T, func=_mul[T.native, _], name="mul"](left, right, ctx)
@@ -277,7 +277,7 @@ def div[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise true division."""
     return _binary[T, func=_div[T.native, _], name="div"](left, right, ctx)
@@ -288,7 +288,7 @@ def floordiv[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise floor division."""
     return _binary[T, func=_floordiv[T.native, _], name="floordiv"](
@@ -301,7 +301,7 @@ def mod[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise modulo."""
     return _binary[T, func=_mod[T.native, _], name="mod"](left, right, ctx)
@@ -312,7 +312,7 @@ def min_[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise minimum."""
     return _binary[T, func=_min[T.native, _], name="min_"](left, right, ctx)
@@ -323,7 +323,7 @@ def max_[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise maximum."""
     return _binary[T, func=_max[T.native, _], name="max_"](left, right, ctx)
@@ -483,24 +483,32 @@ def cos[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
 # ---------------------------------------------------------------------------
 
 
-def add(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def add(
+    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
     """Runtime-typed add."""
-    return binary_array_dispatch["add", add[_]](left, right)
+    return binary_array_dispatch["add", add[_]](left, right, ctx)
 
 
-def sub(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def sub(
+    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
     """Runtime-typed sub."""
-    return binary_array_dispatch["sub", sub[_]](left, right)
+    return binary_array_dispatch["sub", sub[_]](left, right, ctx)
 
 
-def mul(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def mul(
+    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
     """Runtime-typed mul."""
-    return binary_array_dispatch["mul", mul[_]](left, right)
+    return binary_array_dispatch["mul", mul[_]](left, right, ctx)
 
 
-def div(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def div(
+    left: AnyArray, right: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
     """Runtime-typed div."""
-    return binary_array_dispatch["div", div[_]](left, right)
+    return binary_array_dispatch["div", div[_]](left, right, ctx)
 
 
 def floordiv(left: AnyArray, right: AnyArray) raises -> AnyArray:

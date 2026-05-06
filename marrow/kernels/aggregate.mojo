@@ -17,13 +17,13 @@ To add a new aggregate kernel:
 """
 
 import std.math as math
-from std.gpu.host import DeviceContext
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
 from . import unary_scalar_dispatch
+from .execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def _reduce[
 ](
     array: PrimitiveArray[T],
     identity: Scalar[T.native],
-    ctx: Optional[DeviceContext] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Scalar[T.native]:
     """Reduce a PrimitiveArray to a scalar using a SIMD combine function.
 
@@ -85,7 +85,7 @@ def _reduce[
 def sum_[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], ctx: Optional[DeviceContext] = None
+    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
     return PrimitiveScalar[T](
@@ -95,7 +95,7 @@ def sum_[
 
 
 def sum_(
-    array: AnyArray, ctx: Optional[DeviceContext] = None
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed sum."""
     return unary_scalar_dispatch["sum_", sum_[_]](array, ctx)
@@ -109,7 +109,7 @@ def sum_(
 def product[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], ctx: Optional[DeviceContext] = None
+    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
@@ -120,7 +120,7 @@ def product[
 
 
 def product(
-    array: AnyArray, ctx: Optional[DeviceContext] = None
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed product."""
     return unary_scalar_dispatch["product", product[_]](array, ctx)
@@ -134,7 +134,7 @@ def product(
 def min_[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], ctx: Optional[DeviceContext] = None
+    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
     """Minimum of all valid (non-null) elements.
 
@@ -147,7 +147,7 @@ def min_[
 
 
 def min_(
-    array: AnyArray, ctx: Optional[DeviceContext] = None
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed min."""
     return unary_scalar_dispatch["min_", min_[_]](array, ctx)
@@ -161,7 +161,7 @@ def min_(
 def max_[
     T: PrimitiveType
 ](
-    array: PrimitiveArray[T], ctx: Optional[DeviceContext] = None
+    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
     """Maximum of all valid (non-null) elements.
 
@@ -174,7 +174,7 @@ def max_[
 
 
 def max_(
-    array: AnyArray, ctx: Optional[DeviceContext] = None
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed max."""
     return unary_scalar_dispatch["max_", max_[_]](array, ctx)
