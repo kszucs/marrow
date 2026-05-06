@@ -11,6 +11,7 @@ from std.memory import ArcPointer
 from std.python import Python, PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from .arrays import AnyArray, ChunkedArray, StructArray
+from .builders import array
 from .schema import Schema
 from .dtypes import struct_, Field
 
@@ -83,7 +84,7 @@ struct RecordBatch(
         """Create a 0-row RecordBatch for the given schema."""
         var cols = List[AnyArray]()
         for f in schema.fields:
-            cols.append(AnyArray.empty(f.dtype))
+            cols.append(array(f.dtype))
         return RecordBatch(schema=schema, columns=cols^)
 
     def column(self, index: Int) -> ref[self.columns] AnyArray:

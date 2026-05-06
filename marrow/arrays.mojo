@@ -57,9 +57,7 @@ from .scalars import (
     Scalar as ScalarTrait,
 )
 
-
 trait Array(
-    ConvertibleToPython,
     Copyable,
     Equatable,
     ImplicitlyDestructible,
@@ -99,9 +97,6 @@ trait Array(
 
     def to_cpu(self, ctx: DeviceContext) raises -> Self:
         raise Error("to_cpu: not supported for this array type")
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
 
     def to_data(self) raises -> ArrayData:
         ...
@@ -554,9 +549,6 @@ struct PrimitiveArray[T: PrimitiveType](Array):
             bitmap=bm^,
             buffer=self.buffer.to_cpu(ctx),
         )
-
-    def to_python_object(var self) raises -> PythonObject:
-        return PythonObject(alloc=self^)
 
     def __eq__(self, other: Self) -> Bool:
         """Return True if both arrays have the same length, null pattern, and values.
@@ -2267,44 +2259,6 @@ struct AnyArray(
             return StructArray(data)
         elif dt.is_dictionary():
             return DictionaryArray(data)
-        raise Error("from_data: unsupported dtype")
+        else:
+            raise Error("from_data: unsupported dtype")
 
-    @staticmethod
-    def empty(dtype: AnyDataType) raises -> AnyArray:
-        """Create a 0-length array for the given dtype."""
-        if dtype.is_binary():
-            # AnyBuilder doesn't support binary yet — construct ArrayData directly.
-            var offsets = Buffer[mut=True].alloc_zeroed[DType.uint8](4)
-            var bufs = List[Buffer[mut=False]]()
-            bufs.append(offsets.to_immutable())
-            bufs.append(
-                Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
-            )
-            return AnyArray.from_data(
-                ArrayData(
-                    dtype=dtype.copy(),
-                    length=0,
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    buffers=bufs^,
-                    children=List[ArrayData](),
-                )
-            )
-        elif dtype.is_temporal() or dtype.is_decimal():
-            var empty_buf = (
-                Buffer[mut=True].alloc_zeroed[DType.uint8](0).to_immutable()
-            )
-            return AnyArray.from_data(
-                ArrayData(
-                    dtype=dtype.copy(),
-                    length=0,
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    buffers=[empty_buf],
-                    children=List[ArrayData](),
-                )
-            )
-        var b = AnyBuilder(dtype)
-        return b.finish()

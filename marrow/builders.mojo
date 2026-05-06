@@ -235,7 +235,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             ref dt = dtype.as_dictionary()
             var idx_builder = AnyBuilder(dt.index_type(), capacity)
             self = DictionaryBuilder(
-                idx_builder^, AnyArray.empty(dt.value_type()), dt.ordered
+                idx_builder^, array(dt.value_type()), dt.ordered
             )
         else:
             raise Error("unsupported type: ", dtype)
@@ -1700,4 +1700,10 @@ def arange[T: NumericType](start: Int, end: Int) raises -> PrimitiveArray[T]:
     var b = PrimitiveBuilder[T](T(), end - start)
     for i in range(start, end):
         b.append(Scalar[T.native](i))
+    return b.finish()
+
+
+def array(dtype: AnyDataType) raises -> AnyArray:
+    """Create a zero-length empty array for the given dtype."""
+    var b = AnyBuilder(dtype)
     return b.finish()

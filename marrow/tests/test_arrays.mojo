@@ -1996,5 +1996,103 @@ def test_dictionary_out_of_bounds() raises:
     assert_true(raised)
 
 
+def test_empty_null() raises:
+    var arr = array(null.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_null())
+
+
+def test_empty_bool() raises:
+    var arr = array(bool_.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_bool())
+
+
+def test_empty_int32() raises:
+    var arr = array(int32.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype() == int32)
+
+
+def test_empty_float64() raises:
+    var arr = array(float64.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype() == float64)
+
+
+def test_empty_string() raises:
+    var arr = array(string.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_string())
+
+
+def test_empty_large_string() raises:
+    var arr = array(large_string.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_large_string())
+
+
+def test_empty_binary() raises:
+    var arr = array(binary.to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_binary())
+
+
+def test_empty_list() raises:
+    var arr = array(list_(int32).to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_list())
+    assert_equal(len(arr.as_list().values()), 0)
+
+
+def test_empty_large_list() raises:
+    var arr = array(large_list_(float64).to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_large_list())
+
+
+def test_empty_fixed_size_list() raises:
+    var arr = array(fixed_size_list_(int32, 4).to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_fixed_size_list())
+    assert_equal(len(arr.as_fixed_size_list().values()), 0)
+
+
+def test_empty_struct() raises:
+    var arr = array(struct_(Field("x", int32), Field("y", float64)).to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_struct())
+    ref sa = arr.as_struct()
+    assert_equal(len(sa.children), 2)
+    assert_equal(len(sa.children[0]), 0)
+    assert_equal(len(sa.children[1]), 0)
+
+
+def test_empty_dictionary() raises:
+    var arr = array(dictionary(int32, string).to_any())
+    assert_equal(len(arr), 0)
+    assert_equal(arr.null_count(), 0)
+    assert_true(arr.dtype().is_dictionary())
+
+
+def test_empty_nested_list() raises:
+    var arr = array(list_(list_(int32)).to_any())
+    assert_equal(len(arr), 0)
+    assert_true(arr.dtype().is_list())
+    assert_equal(len(arr.as_list().values()), 0)
+    assert_true(arr.as_list().values().dtype().is_list())
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
