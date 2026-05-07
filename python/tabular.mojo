@@ -19,6 +19,8 @@ from std.memory import ArcPointer, UnsafePointer
 from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
+from marrow.kernels.sort import sort as _sort_kernel
+from marrow.arrays import Int32Array
 from helpers import pymethod, marrow_module
 
 
@@ -469,6 +471,64 @@ def _record_batch_join(
     ).to_python_object()
 
 
+def _record_batch_sort_by(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    by: PythonObject,
+    null_placement: PythonObject,
+) raises -> PythonObject:
+    """Sort a RecordBatch by one or more columns.
+
+    Args:
+        by: Column name (str), or list of (name, "ascending"/"descending")
+            tuples.  A bare string sorts ascending.
+        null_placement: ``"at_start"`` (default) or ``"at_end"``.
+    """
+    var nulls_first = True
+    if not null_placement.__is__(PythonObject(None)):
+        nulls_first = (String(py=null_placement) != "at_end")
+
+    var builtins = Python.import_module("builtins")
+    var key_indices = List[Int]()
+    var ascending = List[Bool]()
+
+    if builtins.isinstance(by, builtins.str):
+        var name = String(py=by)
+        var idx = ptr[].schema.get_field_index(name)
+        if idx == -1:
+            raise Error(t"sort_by: column '{name}' not found")
+        key_indices.append(idx)
+        ascending.append(True)
+    else:
+        for i in range(Int(by.__len__())):
+            var entry = by[i]
+            if builtins.isinstance(entry, builtins.str):
+                var name = String(py=entry)
+                var idx = ptr[].schema.get_field_index(name)
+                if idx == -1:
+                    raise Error(t"sort_by: column '{name}' not found")
+                key_indices.append(idx)
+                ascending.append(True)
+            else:
+                var name = String(py=entry[0])
+                var asc = String(py=entry[1]) != "descending"
+                var idx = ptr[].schema.get_field_index(name)
+                if idx == -1:
+                    raise Error(t"sort_by: column '{name}' not found")
+                key_indices.append(idx)
+                ascending.append(asc)
+
+    var result_sa = _sort_kernel(
+        ptr[].to_struct_array(), key_indices, ascending, nulls_first
+    )
+    var out_fields = List[Field]()
+    for ref f in result_sa.dtype.as_struct().fields:
+        out_fields.append(f.copy())
+    return RecordBatch(
+        schema=Schema(fields=out_fields^),
+        columns=result_sa.children.copy(),
+    ).to_python_object()
+
+
 def _record_batch_str(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
 ) raises -> PythonObject:
@@ -509,6 +569,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_array]("__arrow_c_array__")
         .def_method[_record_batch_arrow_c_array]("__arrow_c_record_batch__")
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
+        .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
     )
     _ = (

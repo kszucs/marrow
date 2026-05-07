@@ -21,6 +21,8 @@ from std.builtin.variadics import Variadic
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.kernels.execution import ExecutionContext
+from marrow.kernels.sort import argsort as _argsort_kernel
+from marrow.kernels.filter import take as _take_kernel
 from marrow.arrays import (
     AnyArray,
     ArrayData,
@@ -1136,6 +1138,47 @@ def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
     return self.to_cpu(ctx.device.value())
 
 
+def _null_placement_to_bool(py: PythonObject) raises -> Bool:
+    """Convert null_placement kwarg ('at_start'/'at_end' or None) to nulls_first."""
+    if py.__is__(PythonObject(None)):
+        return True
+    return String(py=py) != "at_end"
+
+
+def _any_array_argsort(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    ascending: PythonObject,
+    null_placement: PythonObject,
+) raises -> PythonObject:
+    var asc = True if ascending.__is__(PythonObject(None)) else Bool(py=ascending)
+    var nulls_first = _null_placement_to_bool(null_placement)
+    var idx: AnyArray = _argsort_kernel(
+        ptr[], asc, nulls_first, ctx=ExecutionContext.parallel()
+    )
+    return idx^.to_python_object()
+
+
+def _any_array_sort(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    ascending: PythonObject,
+    null_placement: PythonObject,
+) raises -> PythonObject:
+    var asc = True if ascending.__is__(PythonObject(None)) else Bool(py=ascending)
+    var nulls_first = _null_placement_to_bool(null_placement)
+    var ctx = ExecutionContext.parallel()
+    var indices = _argsort_kernel(ptr[], asc, nulls_first, ctx=ctx)
+    return _take_kernel(ptr[], indices).to_python_object()
+
+
+def _any_array_take(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    indices: PythonObject,
+) raises -> PythonObject:
+    return _take_kernel(
+        ptr[], AnyArray(py=indices).as_int32().copy()
+    ).to_python_object()
+
+
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
@@ -1148,6 +1191,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[pymethod[AnyArray.slice]()]("slice")
         .def_method[pymethod[_array_to_device]()]("to_device")
         .def_method[pymethod[_array_to_cpu]()]("to_cpu")
+        .def_method[_any_array_argsort]("argsort")
+        .def_method[_any_array_sort]("sort")
+        .def_method[_any_array_take]("take")
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )

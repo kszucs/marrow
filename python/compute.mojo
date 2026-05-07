@@ -7,7 +7,6 @@ All GPU-capable functions accept an ``ExecutionContext`` as their last positiona
 Pass ``None`` for CPU execution; pass a ``ma.ExecutionContext()`` instance for GPU execution.
 """
 
-from std.gpu.host import DeviceContext
 from std.python import PythonObject, Python
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import AnyArray
@@ -28,12 +27,10 @@ from marrow.kernels.compare import (
     greater,
     greater_equal,
 )
-from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls
+from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls, take as _take_kernel
+from marrow.kernels.sort import argsort as _argsort_kernel
+from std.collections import OwnedKwargsDict
 from helpers import pyfunction
-
-
-def _ctx_init_gpu(out self: ExecutionContext) raises:
-    self = ExecutionContext.gpu(DeviceContext())
 
 
 def _opt_ctx(device_py: PythonObject) raises -> ExecutionContext:
@@ -167,10 +164,40 @@ def _max_(a0: PythonObject, a1: PythonObject) raises -> PythonObject:
     return _max_agg(AnyArray(py=a0), _opt_ctx(a1)).to_python_object()
 
 
+def _null_placement_kwarg(kwargs: OwnedKwargsDict[PythonObject]) raises -> Bool:
+    if opt := kwargs.find("null_placement"):
+        return String(py=opt.value()) != "at_end"
+    return True
+
+
+def _argsort_fn(
+    array: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+) raises -> PythonObject:
+    var asc = True
+    if opt := kwargs.find("ascending"):
+        asc = Bool(py=opt.value())
+    var nulls_first = _null_placement_kwarg(kwargs)
+    var idx: AnyArray = _argsort_kernel(
+        AnyArray(py=array), asc, nulls_first, ctx=ExecutionContext.parallel()
+    )
+    return idx^.to_python_object()
+
+
+def _sort_fn(
+    array: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+) raises -> PythonObject:
+    var asc = True
+    if opt := kwargs.find("ascending"):
+        asc = Bool(py=opt.value())
+    var nulls_first = _null_placement_kwarg(kwargs)
+    var arr = AnyArray(py=array)
+    var ctx = ExecutionContext.parallel()
+    var indices = _argsort_kernel(arr, asc, nulls_first, ctx=ctx)
+    return _take_kernel(arr, indices).to_python_object()
+
+
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
-    _ = mb.add_type[ExecutionContext]("ExecutionContext").def_method[
-        _ctx_init_gpu
-    ]("__init__")
+    mb.add_type[ExecutionContext]("ExecutionContext")
     mb.def_function[_add](
         "add",
         docstring=(
@@ -249,6 +276,23 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         docstring=(
             "filter_(array, selection, /) -> Array\n--\n\nFilter"
             " an array with a boolean mask."
+        ),
+    )
+    mb.def_function[_argsort_fn](
+        "argsort",
+        docstring=(
+            "argsort(array, /, *, ascending=True, null_placement='at_start')"
+            " -> Array\n--\n\nReturn the indices that would sort ``array``."
+            " ascending=True (default) sorts smallest first."
+            " null_placement='at_start' (default) places nulls before valid"
+            " values; 'at_end' places them after."
+        ),
+    )
+    mb.def_function[_sort_fn](
+        "sort",
+        docstring=(
+            "sort(array, /, *, ascending=True, null_placement='at_start')"
+            " -> Array\n--\n\nReturn a sorted copy of ``array``."
         ),
     )
     mb.def_function[pyfunction[drop_nulls]()](

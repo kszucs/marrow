@@ -4,6 +4,16 @@
 
 ### Features
 
+- **Sort kernel — `argsort` and `sort`** (`marrow/kernels/sort.mojo`): Phase 1
+  single-column sort. Primitive arrays use LSD radix sort (O(N), 8-bit passes,
+  UInt64-encoded keys, float NaN/sign-bit transform) with parallel histogram +
+  scatter (mirroring `RadixPartitioner`) for N ≥ 65 536; insertion sort fallback
+  for N < 32. `BoolArray` uses O(N) counting sort; `StringArray` uses the Mojo
+  stdlib comparison sort. Null partitioning (pre-sort bitmap scan) with
+  `nulls_first/last` placement. `sort(StructArray, key_indices, ascending)`
+  wraps `argsort` + `take`. Benchmarks in `marrow/kernels/tests/bench_sort.mojo`;
+  27 correctness tests in `marrow/tests/test_sort.mojo`.
+
 - **Large binary, string, and list types** (`marrow/{dtypes,arrays,builders,ipc,c_data}.mojo`):
   added `LargeBinaryType`, `LargeStringType`, `LargeListType` (64-bit offsets);
   `BinaryLikeType` trait with `comptime offset: DType` and `StringLikeType` sub-trait
