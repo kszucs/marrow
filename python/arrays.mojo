@@ -1167,7 +1167,7 @@ def _any_array_sort(
     var nulls_first = _null_placement_to_bool(null_placement)
     var ctx = ExecutionContext.parallel()
     var indices = _argsort_kernel(ptr[], asc, nulls_first, ctx=ctx)
-    return _take_kernel(ptr[], indices).to_python_object()
+    return _take_kernel(ptr[], indices, ctx).to_python_object()
 
 
 def _any_array_take(

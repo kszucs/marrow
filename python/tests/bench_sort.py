@@ -90,6 +90,13 @@ def test_marrow_argsort_int64(benchmark, int64_arrays, n):
 
 
 @pytest.mark.benchmark(group="sort_int64")
+def test_marrow_argsort_int64_serial(benchmark, int64_arrays, n):
+    benchmark.extra_info.update(lib="marrow_serial", n=n)
+    arr = int64_arrays["ma"]
+    benchmark(ma.argsort, arr, serial=True)
+
+
+@pytest.mark.benchmark(group="sort_int64")
 def test_marrow_sort_int64(benchmark, int64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = int64_arrays["ma"]
@@ -135,6 +142,13 @@ def test_marrow_argsort_float64(benchmark, float64_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n)
     arr = float64_arrays["ma"]
     benchmark(ma.argsort, arr)
+
+
+@pytest.mark.benchmark(group="sort_float64")
+def test_marrow_argsort_float64_serial(benchmark, float64_arrays, n):
+    benchmark.extra_info.update(lib="marrow_serial", n=n)
+    arr = float64_arrays["ma"]
+    benchmark(ma.argsort, arr, serial=True)
 
 
 @pytest.mark.benchmark(group="sort_float64")

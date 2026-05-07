@@ -170,6 +170,14 @@ def _null_placement_kwarg(kwargs: OwnedKwargsDict[PythonObject]) raises -> Bool:
     return True
 
 
+def _ctx_kwarg(kwargs: OwnedKwargsDict[PythonObject]) raises -> ExecutionContext:
+    """Return serial or parallel ExecutionContext based on `serial` kwarg."""
+    if opt := kwargs.find("serial"):
+        if Bool(py=opt.value()):
+            return ExecutionContext.serial()
+    return ExecutionContext.parallel()
+
+
 def _argsort_fn(
     array: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
 ) raises -> PythonObject:
@@ -177,8 +185,9 @@ def _argsort_fn(
     if opt := kwargs.find("ascending"):
         asc = Bool(py=opt.value())
     var nulls_first = _null_placement_kwarg(kwargs)
+    var ctx = _ctx_kwarg(kwargs)
     var idx: AnyArray = _argsort_kernel(
-        AnyArray(py=array), asc, nulls_first, ctx=ExecutionContext.parallel()
+        AnyArray(py=array), asc, nulls_first, ctx=ctx
     )
     return idx^.to_python_object()
 
@@ -191,9 +200,9 @@ def _sort_fn(
         asc = Bool(py=opt.value())
     var nulls_first = _null_placement_kwarg(kwargs)
     var arr = AnyArray(py=array)
-    var ctx = ExecutionContext.parallel()
+    var ctx = _ctx_kwarg(kwargs)
     var indices = _argsort_kernel(arr, asc, nulls_first, ctx=ctx)
-    return _take_kernel(arr, indices).to_python_object()
+    return _take_kernel(arr, indices, ctx).to_python_object()
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
