@@ -98,9 +98,9 @@ class MojoRunner:
     def build_cmd(config, fspath, test_names=None):
         """Return the command to run a Mojo source file with optional test filtering.
 
-        Normally uses `mojo run` so the Mojo compiler handles build caching.
-        Under ASAN, `mojo run` cannot resolve sanitizer symbols, so we compile to a
-        binary first with `mojo build` and return the path to that binary.
+        Always compiles to a binary with `mojo build` so that crashes produce
+        symbolicated stack traces.  Binaries are content-hash-cached under
+        .test_runners/ so repeated runs skip recompilation.
         When *test_names* is provided, appends `--only name1 name2 ...` so that
         TestSuite skips unselected tests.
         """
@@ -110,29 +110,32 @@ class MojoRunner:
         asan = MojoRunner.asan_flags(config)
         src = Path(fspath)
 
-        if asan:
-            # `mojo run` cannot resolve ASAN sanitizer symbols at runtime, so
-            # build a real binary instead.  Use a content-hash of the source
-            # file so each unique source gets its own cached binary.
-            runners_dir = Path(config.rootpath) / ".test_runners"
-            runners_dir.mkdir(exist_ok=True)
-            src_hash = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
-            binary = runners_dir / f"test_runner_{src_hash}"
-            if not binary.exists():
-                build_cmd = (
-                    ["mojo", "build", opt, "-g1", "-I", "."] + assert_flag + asan + [str(src), "-o", str(binary)]
-                )
-                result = subprocess.run(
-                    build_cmd, cwd=config.rootpath, capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
-            cmd = [str(binary)]
-        else:
-            # Use `mojo run` so Mojo's own build cache avoids recompilation.
-            # Pass -g1 (line-table debug info) so crashes produce symbolicated
-            # stack traces without needing a separate build step.
-            cmd = ["mojo", "run", opt, "-g1", "-I", "."] + assert_flag + [str(src)]
+        # Always build a binary so crashes produce symbolicated stack traces.
+        # ASAN requires a binary because `mojo run` cannot resolve sanitizer
+        # symbols at runtime; for non-ASAN runs a binary is also needed because
+        # `mojo run` does not honour -g1 for crash symbolication in practice.
+        # Binaries are content-hash-cached in .test_runners/ so re-running the
+        # same source+flags combination skips recompilation (~1 s vs ~5 s cold).
+        runners_dir = Path(config.rootpath) / ".test_runners"
+        runners_dir.mkdir(exist_ok=True)
+        # Include the flags that affect the binary in the hash so ASAN and
+        # non-ASAN builds of the same source don't collide.
+        flags_key = f"{opt}{'_asan' if asan else ''}{'_assert' if assert_flag else ''}"
+        src_hash = hashlib.sha256(src.read_bytes() + flags_key.encode()).hexdigest()[:16]
+        binary = runners_dir / f"test_runner_{src_hash}"
+        if not binary.exists():
+            # -lm: mojo build on Linux doesn't auto-link libm (needed for
+            # log10f etc.); harmless on macOS where libm is part of libSystem.
+            lm = [] if sys.platform == "darwin" else ["-Xlinker", "-lm"]
+            build_cmd = (
+                ["mojo", "build", opt, "-g1", "-I", "."] + assert_flag + asan + lm + [str(src), "-o", str(binary)]
+            )
+            result = subprocess.run(
+                build_cmd, cwd=config.rootpath, capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"mojo build failed for {src}:\n{result.stderr}")
+        cmd = [str(binary)]
 
         if test_names:
             cmd += ["--only"] + list(test_names)

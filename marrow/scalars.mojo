@@ -7,7 +7,7 @@ Typed scalars:
   PrimitiveScalar[T]  — holds _Scalar[T.native] (built-in Scalar) + Bool validity
   StringScalar        — holds String value + Bool validity
   ListScalar          — holds AnyArray (child values) + Bool validity
-  StructScalar        — holds List[AnyArray] (one per field) + DataType + Bool validity
+  StructScalar        — holds List[AnyScalar] (one per field) + DataType + Bool validity
   DictionaryScalar    — holds integer index + decoded AnyScalar value + DataType + Bool validity
 
 Type-erased container:
