@@ -112,9 +112,9 @@ Structs group multiple named fields into a single array. Use `ma.field()` and `m
 
 ```{python}
 schema = ma.struct([
-    ma.field("name",  ma.string()),
-    ma.field("score", ma.float64()),
-    ma.field("rank",  ma.int32()),
+    ma.field("name",  ma.string(), True, None),
+    ma.field("score", ma.float64(), True, None),
+    ma.field("rank",  ma.int32(), True, None),
 ])
 print(schema)
 ```
