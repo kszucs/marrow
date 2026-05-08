@@ -9,7 +9,14 @@ from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType, NumericType
+from marrow.dtypes import (
+    int64,
+    float64,
+    Int64Type,
+    Float64Type,
+    PrimitiveType,
+    NumericType,
+)
 from marrow.kernels.aggregate import sum_, product, min_, max_
 from marrow.testing import BenchSuite, Benchmark
 
