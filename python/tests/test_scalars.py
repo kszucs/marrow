@@ -14,7 +14,7 @@ import marrow as ma
 
 
 def test_scalar_from_sum():
-    s = ma.sum_(ma.array([1, 2, 3, 4]))
+    s = ma.sum_(ma.array([1, 2, 3, 4]), None)
     assert type(s).__name__ == "Scalar"
     assert s == 10
     assert s == 10.0
@@ -23,19 +23,19 @@ def test_scalar_from_sum():
 
 
 def test_scalar_from_product():
-    s = ma.product(ma.array([2, 3, 4]))
+    s = ma.product(ma.array([2, 3, 4]), None)
     assert s == 24
     assert s.as_py() == 24
 
 
 def test_scalar_from_min():
-    s = ma.min_(ma.array([5, 1, 3]))
+    s = ma.min_(ma.array([5, 1, 3]), None)
     assert s == 1
     assert s.as_py() == 1
 
 
 def test_scalar_from_max():
-    s = ma.max_(ma.array([5, 1, 3]))
+    s = ma.max_(ma.array([5, 1, 3]), None)
     assert s == 5
     assert s.as_py() == 5
 
@@ -76,12 +76,12 @@ def test_scalar_from_string_getitem():
 
 
 def test_scalar_str():
-    s = ma.sum_(ma.array([1, 2, 3]))
+    s = ma.sum_(ma.array([1, 2, 3]), None)
     assert str(s) == "6"
 
 
 def test_scalar_repr():
-    s = ma.sum_(ma.array([1, 2, 3]))
+    s = ma.sum_(ma.array([1, 2, 3]), None)
     assert "6" in repr(s)
 
 
@@ -92,7 +92,7 @@ def test_scalar_is_valid():
 
 
 def test_scalar_type():
-    s = ma.sum_(ma.array([1, 2, 3], type=ma.int64()))
+    s = ma.sum_(ma.array([1, 2, 3], type=ma.int64()), None)
     assert str(s.type()) == "int64"
 
 
@@ -100,7 +100,7 @@ def test_scalar_type():
 
 
 def test_scalar_eq_ne():
-    s = ma.sum_(ma.array([1, 2, 3, 4]))
+    s = ma.sum_(ma.array([1, 2, 3, 4]), None)
     assert s == 10
     assert s != 5
     assert not (s == 5)
@@ -108,7 +108,7 @@ def test_scalar_eq_ne():
 
 
 def test_scalar_lt_le_gt_ge():
-    s = ma.sum_(ma.array([1, 2, 3, 4]))
+    s = ma.sum_(ma.array([1, 2, 3, 4]), None)
     assert s > 5
     assert s >= 10
     assert s < 20
@@ -119,6 +119,6 @@ def test_scalar_lt_le_gt_ge():
 
 def test_scalar_cross_type_comparison():
     """int scalar == float value and vice versa."""
-    s = ma.sum_(ma.array([1, 2, 3, 4]))
+    s = ma.sum_(ma.array([1, 2, 3, 4]), None)
     assert s == 10.0
     assert s != 10.1
