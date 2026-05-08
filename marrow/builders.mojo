@@ -1376,7 +1376,7 @@ struct FixedSizeBinaryBuilder(Builder):
             self._buffer.resize[DType.uint8](new_cap * self._byte_width)
             self._capacity = new_cap
 
-    def append(mut self, bytes: Span[UInt8]) raises:
+    def append(mut self, bytes: Span[UInt8, _]) raises:
         if len(bytes) != self._byte_width:
             raise Error(
                 "FixedSizeBinaryBuilder.append: expected ",
