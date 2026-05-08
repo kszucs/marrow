@@ -38,6 +38,7 @@ from marrow.buffers import Buffer, Bitmap
 from marrow.builders import (
     AnyBuilder,
     BoolBuilder,
+    BinaryBuilder,
     Int32Builder,
     PrimitiveBuilder,
     StringBuilder,
@@ -742,8 +743,8 @@ struct PyBinaryConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[]] StringBuilder:
-        return self._builder.as_string()
+    ) -> ref[self._builder._ptr[]] BinaryBuilder:
+        return self._builder.as_binary()
 
     @always_inline
     def _count_bytes(mut self, values: PyObjectPtr, n: Int) raises -> Int:
