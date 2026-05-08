@@ -515,10 +515,8 @@ def pytest_sessionstart(session):
     print("building python/marrow.so ...", flush=True)
     benchmark = config.getoption("--benchmark")
     opt = "-O3" if benchmark else "-O1"
-    assert_flag = [] if benchmark else ["-D", "ASSERT=all"]
     cmd = (
         ["mojo", "build", opt, "-I", "."]
-        + assert_flag
         + MojoRunner.asan_flags(config)
         + ["python/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow.so"]
     )
