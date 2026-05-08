@@ -50,10 +50,8 @@ jobs:
         pixi run -e dev test_parallel --no-gpu
         pixi run package
 
-  # TODO: re-enable once x86_64 ASAN compilation is fast enough
   asan-linux-x86_64:
     name: asan (linux, x86_64)
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
