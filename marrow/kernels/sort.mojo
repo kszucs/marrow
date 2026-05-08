@@ -52,6 +52,7 @@ from ..dtypes import (
     string,
     Int32Type,
 )
+from ..builders import array as _primitive_array
 from .execution import ExecutionContext
 from .filter import take as _take
 
@@ -92,10 +93,9 @@ fits in L1 per thread; wider passes would thrash the 512 KB L2 shared cache.
 # ---------------------------------------------------------------------------
 
 
-def _encode_sort_key[T: PrimitiveType](
-    val: Scalar[T.native],
-    ascending: Bool,
-) -> UInt64:
+def _encode_sort_key[
+    T: PrimitiveType
+](val: Scalar[T.native], ascending: Bool,) -> UInt64:
     """Encode val as UInt64 that sorts correctly in unsigned ascending order.
 
     Float transform: positive → XOR sign bit; negative → XOR all bits
@@ -146,6 +146,7 @@ def _encode_sort_key[T: PrimitiveType](
 
 struct _SortPair(Copyable, Movable, TrivialRegisterPassable):
     """(encoded_key, original_row_index) pair for comparison sort."""
+
     var key: UInt64
     var idx: Int32
 
@@ -154,7 +155,9 @@ struct _SortPair(Copyable, Movable, TrivialRegisterPassable):
         self.idx = idx
 
 
-def _comparison_sort_indices[T: PrimitiveType](
+def _comparison_sort_indices[
+    T: PrimitiveType
+](
     src: PrimitiveArray[T],
     var idx_buf: Buffer[mut=True],
     n: Int,
@@ -162,38 +165,38 @@ def _comparison_sort_indices[T: PrimitiveType](
 ) raises -> Buffer[]:
     """Sort idx_buf via Mojo stdlib PDQsort.
 
-    Integer types: sort 4-byte indices directly using `values[a] < values[b]`.
-    No encoding, no extra struct. The idx_list (n×4 B) fits in L1 at the
-    32K threshold (128KB), and the values array (n×elemsize) fits in L2.
-    Comparator is two direct value loads — same footprint as Polars.
+    Non-float types: sort 4-byte indices directly using `values[a] < values[b]`.
+    No encoding, no extra struct. Covers integers, temporal, and decimal types.
 
     Float types: encoded (key, idx) pairs for NaN-safe total order.
     NaN → uint_max via bit-flip, sorts last (ascending) / first (descending).
-    Pair sort is used because `NaN < x` is always false in IEEE 754 (no total
-    order), which would corrupt PDQsort if used directly.
+    Direct float comparison is not used because `NaN < x` is always false in
+    IEEE 754, which would corrupt PDQsort's invariants.
     """
     var values = src.values()
     var v = idx_buf.view[DType.int32](0, n)
 
     comptime if not T.native.is_floating_point():
-        # Integer fast path: copy indices into a List, sort by value.
         var idx_list = List[Int32](capacity=n)
         for i in range(n):
             idx_list.append(v.unsafe_get(i))
         if ascending:
+
             @parameter
             def cmp_asc(a: Int32, b: Int32) -> Bool:
                 return values.unsafe_get(Int(a)) < values.unsafe_get(Int(b))
+
             _sort_impl[cmp_asc](idx_list)
         else:
+
             @parameter
             def cmp_desc(a: Int32, b: Int32) -> Bool:
                 return values.unsafe_get(Int(a)) > values.unsafe_get(Int(b))
+
             _sort_impl[cmp_desc](idx_list)
         for i in range(n):
             v.unsafe_set(i, idx_list[i])
     else:
-        # Float path: encoded pairs keep NaN in a defined position.
         var pairs = List[_SortPair](capacity=n)
         for i in range(n):
             var orig = v.unsafe_get(i)
@@ -222,7 +225,9 @@ def _comparison_sort_indices[T: PrimitiveType](
 # ---------------------------------------------------------------------------
 
 
-def _radix_sort_indices[T: PrimitiveType](
+def _radix_sort_indices[
+    T: PrimitiveType
+](
     src: PrimitiveArray[T],
     var idx_buf: Buffer[mut=True],
     n: Int,
@@ -276,7 +281,9 @@ def _radix_sort_indices[T: PrimitiveType](
     for pass_ in range(num_passes):
         var shift = UInt64(pass_ * _BITS_PER_PASS)
         # Last pass may cover fewer than _BITS_PER_PASS bits.
-        var bits_this_pass = min(n_bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS)
+        var bits_this_pass = min(
+            n_bits - pass_ * _BITS_PER_PASS, _BITS_PER_PASS
+        )
         var mask = UInt64((1 << bits_this_pass) - 1)
 
         # [~0.9 ms parallel per pass at N=10M] Per-thread histogram.
@@ -291,7 +298,9 @@ def _radix_sort_indices[T: PrimitiveType](
             var end = min(start + chunk, n)
             var base = t * bucket_count
             for i in range(start, end):
-                histograms[base + Int((ka_h.unsafe_get(i) >> shift) & mask)] += 1
+                histograms[
+                    base + Int((ka_h.unsafe_get(i) >> shift) & mask)
+                ] += 1
 
         sync_parallelize[hist_worker](nt)
 
@@ -349,12 +358,7 @@ def _radix_sort_indices[T: PrimitiveType](
     return idx_buf^.to_immutable()
 
 
-# ---------------------------------------------------------------------------
-# _assemble_output — combine sorted valid + null index lists into Int32Array
-# ---------------------------------------------------------------------------
-
-
-def _assemble_output(
+def array(
     sorted_valid: Buffer[],
     n_valid: Int,
     null_list: List[Int32],
@@ -381,30 +385,21 @@ def _assemble_output(
     )
 
 
-# ---------------------------------------------------------------------------
-# Typed argsort implementations
-# ---------------------------------------------------------------------------
-
-
-def _argsort_primitive[T: PrimitiveType](
-    array: PrimitiveArray[T],
+def argsort[
+    T: PrimitiveType
+](
+    arr: PrimitiveArray[T],
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """Argsort a typed primitive array. Returns sorted row indices."""
-    var n = len(array)
+    var n = len(arr)
     if n == 0:
-        return Int32Array(
-            length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=Buffer.alloc_uninit[DType.int32](1).to_immutable(),
-        )
+        return _primitive_array(int32)
 
-    var n_null = array.null_count()
+    var n_null = arr.null_count()
     var n_valid = n - n_null
 
     # Partition: collect valid and null original row indices in one scan.
@@ -413,7 +408,7 @@ def _argsort_primitive[T: PrimitiveType](
     var vv = valid_buf.view[DType.int32](0, n_valid)
     var vi = 0
     for i in range(n):
-        if array.is_valid(i):
+        if arr.is_valid(i):
             vv.unsafe_set(vi, Int32(i))
             vi += 1
         else:
@@ -425,17 +420,17 @@ def _argsort_primitive[T: PrimitiveType](
         sorted_valid = valid_buf^.to_immutable()
     elif n_valid < _RADIX_THRESHOLD:
         sorted_valid = _comparison_sort_indices[T](
-            array, valid_buf^, n_valid, ascending
+            arr, valid_buf^, n_valid, ascending
         )
     else:
         sorted_valid = _radix_sort_indices[T](
-            array, valid_buf^, n_valid, ascending, ctx
+            arr, valid_buf^, n_valid, ascending, ctx
         )
 
-    return _assemble_output(sorted_valid, n_valid, null_list, n, nulls_first)
+    return array(sorted_valid, n_valid, null_list, n, nulls_first)
 
 
-def _argsort_bool(
+def argsort(
     array: BoolArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
@@ -447,13 +442,7 @@ def _argsort_bool(
     """
     var n = len(array)
     if n == 0:
-        return Int32Array(
-            length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=Buffer.alloc_uninit[DType.int32](1).to_immutable(),
-        )
+        return _primitive_array(int32)
 
     var null_list = List[Int32]()
     var false_list = List[Int32]()
@@ -502,7 +491,7 @@ def _argsort_bool(
     )
 
 
-def _argsort_string(
+def argsort(
     array: StringArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
@@ -511,13 +500,7 @@ def _argsort_string(
     """Comparison sort for string arrays using the Mojo stdlib sort."""
     var n = len(array)
     if n == 0:
-        return Int32Array(
-            length=0,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=Buffer.alloc_uninit[DType.int32](1).to_immutable(),
-        )
+        return _primitive_array(int32)
 
     var n_null = array.null_count()
     var n_valid = n - n_null
@@ -531,35 +514,24 @@ def _argsort_string(
             null_list.append(Int32(i))
 
     if n_valid > 1:
+
+        @parameter
+        def cmp_asc(a: Int32, b: Int32) -> Bool:
+            return array.unsafe_get(UInt(a)) < array.unsafe_get(UInt(b))
+
+        @parameter
+        def cmp_desc(a: Int32, b: Int32) -> Bool:
+            return array.unsafe_get(UInt(b)) < array.unsafe_get(UInt(a))
+
         if ascending:
             if stable:
-
-                @parameter
-                def cmp_asc_s(a: Int32, b: Int32) -> Bool:
-                    return array.unsafe_get(UInt(a)) < array.unsafe_get(UInt(b))
-
-                _sort_impl[cmp_asc_s, stable=True](valid_list)
+                _sort_impl[cmp_asc, stable=True](valid_list)
             else:
-
-                @parameter
-                def cmp_asc(a: Int32, b: Int32) -> Bool:
-                    return array.unsafe_get(UInt(a)) < array.unsafe_get(UInt(b))
-
                 _sort_impl[cmp_asc](valid_list)
         else:
             if stable:
-
-                @parameter
-                def cmp_desc_s(a: Int32, b: Int32) -> Bool:
-                    return array.unsafe_get(UInt(b)) < array.unsafe_get(UInt(a))
-
-                _sort_impl[cmp_desc_s, stable=True](valid_list)
+                _sort_impl[cmp_desc, stable=True](valid_list)
             else:
-
-                @parameter
-                def cmp_desc(a: Int32, b: Int32) -> Bool:
-                    return array.unsafe_get(UInt(b)) < array.unsafe_get(UInt(a))
-
                 _sort_impl[cmp_desc](valid_list)
 
     var out = Buffer.alloc_uninit[DType.int32](n)
@@ -579,11 +551,6 @@ def _argsort_string(
         bitmap=None,
         buffer=out^.to_immutable(),
     )
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def argsort(
@@ -612,55 +579,37 @@ def argsort(
     var result: Int32Array
 
     if array.dtype() == bool_dt:
-        result = _argsort_bool(array.as_bool().copy(), ascending, nulls_first)
+        result = argsort(array.as_bool().copy(), ascending, nulls_first)
     elif array.dtype() == int8:
-        result = _argsort_primitive(
-            array.as_int8(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_int8(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == int16:
-        result = _argsort_primitive(
-            array.as_int16(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_int16(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == int32:
-        result = _argsort_primitive(
-            array.as_int32(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_int32(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == int64:
-        result = _argsort_primitive(
-            array.as_int64(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_int64(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == uint8:
-        result = _argsort_primitive(
-            array.as_uint8(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_uint8(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == uint16:
-        result = _argsort_primitive(
-            array.as_uint16(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_uint16(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == uint32:
-        result = _argsort_primitive(
-            array.as_uint32(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_uint32(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == uint64:
-        result = _argsort_primitive(
-            array.as_uint64(), ascending, nulls_first, stable, ctx
-        )
+        result = argsort(array.as_uint64(), ascending, nulls_first, stable, ctx)
     elif array.dtype() == float16:
-        result = _argsort_primitive(
+        result = argsort(
             array.as_float16(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype() == float32:
-        result = _argsort_primitive(
+        result = argsort(
             array.as_float32(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype() == float64:
-        result = _argsort_primitive(
+        result = argsort(
             array.as_float64(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype().is_string():
-        result = _argsort_string(
-            array.as_string(), ascending, nulls_first, stable
-        )
+        result = argsort(array.as_string(), ascending, nulls_first, stable)
     else:
         raise Error(t"argsort: unsupported dtype {array.dtype()}")
 

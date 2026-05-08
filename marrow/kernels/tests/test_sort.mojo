@@ -1,0 +1,904 @@
+"""Correctness tests for the sort kernel."""
+
+from std.testing import assert_true, assert_equal
+from marrow.testing import TestSuite
+
+from marrow.arrays import (
+    AnyArray,
+    BoolArray,
+    Int32Array,
+    PrimitiveArray,
+    StringArray,
+    StructArray,
+)
+from marrow.builders import (
+    array,
+    BoolBuilder,
+    Int8Builder,
+    Int16Builder,
+    Int32Builder,
+    Int64Builder,
+    UInt8Builder,
+    UInt16Builder,
+    UInt32Builder,
+    UInt64Builder,
+    Float16Builder,
+    Float32Builder,
+    Float64Builder,
+    StringBuilder,
+)
+from marrow.dtypes import (
+    PrimitiveType,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+    bool_ as _bool_dtype,
+    string as _string_dtype,
+    Field,
+)
+from marrow.tabular import record_batch
+from marrow.kernels.sort import argsort, sort
+from marrow.kernels.filter import take as _take
+from marrow.kernels.execution import ExecutionContext
+from std.utils.numerics import nan, inf, neg_inf
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _idx(indices: Int32Array, i: Int) -> Int:
+    return Int(indices.unsafe_get(i))
+
+
+def _make_struct(col0: List[Int], col1: List[Int]) raises -> StructArray:
+    var a = Int32Builder(capacity=len(col0))
+    var b = Int32Builder(capacity=len(col1))
+    for v in col0:
+        a.append(Scalar[int32.native](v))
+    for v in col1:
+        b.append(Scalar[int32.native](v))
+    var cols = List[AnyArray]()
+    cols.append(a.finish().to_any())
+    cols.append(b.finish().to_any())
+    return record_batch(cols^, names=["k", "v"]).to_struct_array()
+
+
+# Verify sort order for every consecutive pair among valid elements, plus null
+# placement.  Works for all numeric dtypes, bool, and string.
+def _check_order[
+    T: PrimitiveType
+](arr: PrimitiveArray[T], start: Int, end: Int, ascending: Bool) raises:
+    for i in range(start, end - 1):
+        var vi = arr.unsafe_get(i)
+        var vj = arr.unsafe_get(i + 1)
+        if ascending:
+            assert_true(
+                vi <= vj, "ascending order violated at position " + String(i)
+            )
+        else:
+            assert_true(
+                vi >= vj, "descending order violated at position " + String(i)
+            )
+
+
+def _check_order_float[
+    T: PrimitiveType
+](arr: PrimitiveArray[T], start: Int, end: Int, ascending: Bool) raises:
+    for i in range(start, end - 1):
+        var vi = arr.unsafe_get(i)
+        var vj = arr.unsafe_get(i + 1)
+        var vi_nan = vi != vi  # IEEE 754: NaN != NaN is True
+        var vj_nan = vj != vj
+        if ascending:
+            # NaN sorts last — NaN followed by a finite value is wrong.
+            assert_true(
+                not vi_nan or vj_nan,
+                "NaN before finite at position " + String(i),
+            )
+            if not vi_nan and not vj_nan:
+                assert_true(
+                    vi <= vj,
+                    "ascending order violated at position " + String(i),
+                )
+        else:
+            # NaN sorts first — a finite value followed by NaN is wrong.
+            assert_true(
+                not vj_nan or vi_nan,
+                "finite before NaN at position " + String(i),
+            )
+            if not vi_nan and not vj_nan:
+                assert_true(
+                    vi >= vj,
+                    "descending order violated at position " + String(i),
+                )
+
+
+def _check_order_bool(
+    arr: BoolArray, start: Int, end: Int, ascending: Bool
+) raises:
+    for i in range(start, end - 1):
+        var vi = arr[i].value()
+        var vj = arr[i + 1].value()
+        if ascending:
+            # False < True — True followed by False is wrong.
+            assert_true(
+                not vi or vj, "bool ascending violated at position " + String(i)
+            )
+        else:
+            assert_true(
+                vi or not vj,
+                "bool descending violated at position " + String(i),
+            )
+
+
+def _check_order_string(
+    arr: StringArray, start: Int, end: Int, ascending: Bool
+) raises:
+    for i in range(start, end - 1):
+        var vi = arr[i].to_string()
+        var vj = arr[i + 1].to_string()
+        if ascending:
+            assert_true(
+                vi <= vj, "string ascending violated at position " + String(i)
+            )
+        else:
+            assert_true(
+                vi >= vj, "string descending violated at position " + String(i)
+            )
+
+
+def _assert_sorted(
+    a: AnyArray,
+    idx: Int32Array,
+    ascending: Bool = True,
+    nulls_first: Bool = True,
+) raises:
+    """Assert idx is a correct sort permutation for a (full order check)."""
+    var n = len(a)
+    assert_equal(len(idx), n)
+    if n <= 1:
+        return
+    var null_count = a.null_count()
+    for i in range(null_count):
+        var pos = i if nulls_first else n - null_count + i
+        assert_true(
+            not a.is_valid(_idx(idx, pos)),
+            "expected null at sorted position " + String(pos),
+        )
+    var vs = null_count if nulls_first else 0
+    var ve = n if nulls_first else n - null_count
+    if ve - vs <= 1:
+        return
+    var s = _take(a, idx, ExecutionContext.serial())
+    var dt = a.dtype()
+    if dt == int8:
+        _check_order(s.as_int8(), vs, ve, ascending)
+    elif dt == int16:
+        _check_order(s.as_int16(), vs, ve, ascending)
+    elif dt == int32:
+        _check_order(s.as_int32(), vs, ve, ascending)
+    elif dt == int64:
+        _check_order(s.as_int64(), vs, ve, ascending)
+    elif dt == uint8:
+        _check_order(s.as_uint8(), vs, ve, ascending)
+    elif dt == uint16:
+        _check_order(s.as_uint16(), vs, ve, ascending)
+    elif dt == uint32:
+        _check_order(s.as_uint32(), vs, ve, ascending)
+    elif dt == uint64:
+        _check_order(s.as_uint64(), vs, ve, ascending)
+    elif dt == float16:
+        _check_order_float(s.as_float16(), vs, ve, ascending)
+    elif dt == float32:
+        _check_order_float(s.as_float32(), vs, ve, ascending)
+    elif dt == float64:
+        _check_order_float(s.as_float64(), vs, ve, ascending)
+    elif dt == _bool_dtype:
+        _check_order_bool(s.as_bool(), vs, ve, ascending)
+    elif dt == _string_dtype:
+        _check_order_string(s.as_string(), vs, ve, ascending)
+    else:
+        raise Error("_assert_sorted: unsupported dtype")
+
+
+def _assert_values_sorted(
+    a: AnyArray, ascending: Bool = True, nulls_first: Bool = True
+) raises:
+    """Assert that the array's values are already in sorted order."""
+    var n = len(a)
+    var b = Int32Builder(capacity=n)
+    for i in range(n):
+        b.append(Int32(i))
+    _assert_sorted(a, b.finish(), ascending, nulls_first)
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_empty() raises:
+    var a: AnyArray = array(int32)
+    var idx = argsort(a)
+    assert_equal(len(idx), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_single_element() raises:
+    var a: AnyArray = array([42], int32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_two_elements_asc() raises:
+    var a: AnyArray = array([5, 3], int32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_all_equal() raises:
+    var a: AnyArray = array([7, 7, 7], int32)
+    var idx = argsort(a)
+    assert_equal(len(idx), 3)
+    var seen: List[Bool] = [False, False, False]
+    for i in range(3):
+        seen[_idx(idx, i)] = True
+    assert_true(seen[0] and seen[1] and seen[2])
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# int32
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_int32_ascending() raises:
+    var a: AnyArray = array([3, 1, 4, 1, 5], int32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 2), 0)  # value 3
+    assert_equal(_idx(idx, 3), 2)  # value 4
+    assert_equal(_idx(idx, 4), 4)  # value 5
+    var p0 = _idx(idx, 0)
+    var p1 = _idx(idx, 1)
+    assert_true((p0 == 1 or p0 == 3) and (p1 == 1 or p1 == 3) and p0 != p1)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int32_descending() raises:
+    var a: AnyArray = array([3, 1, 4, 1, 5], int32)
+    var idx = argsort(a, ascending=False)
+    assert_equal(_idx(idx, 0), 4)  # 5
+    assert_equal(_idx(idx, 1), 2)  # 4
+    assert_equal(_idx(idx, 2), 0)  # 3
+    _assert_sorted(a, idx, ascending=False)
+
+
+def test_argsort_int32_already_sorted() raises:
+    var a: AnyArray = array([1, 2, 3, 4, 5], int32)
+    var idx = argsort(a)
+    for i in range(5):
+        assert_equal(_idx(idx, i), i)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int32_reverse_sorted() raises:
+    var a: AnyArray = array([5, 4, 3, 2, 1], int32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 4)
+    assert_equal(_idx(idx, 1), 3)
+    assert_equal(_idx(idx, 2), 2)
+    assert_equal(_idx(idx, 3), 1)
+    assert_equal(_idx(idx, 4), 0)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# int64 — sign-bit encoding, PDQsort path, and radix path
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_int64_ascending() raises:
+    var a: AnyArray = array([300, 100, 200], int64)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int64_descending() raises:
+    var a: AnyArray = array([300, 100, 200], int64)
+    var idx = argsort(a, ascending=False)
+    assert_equal(_idx(idx, 0), 0)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 1)
+    _assert_sorted(a, idx, ascending=False)
+
+
+def test_argsort_int64_negative() raises:
+    # INT64_MIN and INT64_MAX must be encoded correctly (sign-bit XOR).
+    var b = Int64Builder(capacity=4)
+    b.append(Int64(0))
+    b.append(Int64(-9223372036854775808))  # INT64_MIN
+    b.append(Int64(9223372036854775807))  # INT64_MAX
+    b.append(Int64(-1))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)  # INT64_MIN
+    assert_equal(_idx(idx, 1), 3)  # -1
+    assert_equal(_idx(idx, 2), 0)  # 0
+    assert_equal(_idx(idx, 3), 2)  # INT64_MAX
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int64_radix() raises:
+    # N > _RADIX_THRESHOLD = 32768 — exercises the LSD radix path.
+    comptime N = 40_000
+    var b = Int64Builder(capacity=N)
+    for i in range(N):
+        b.append(Int64(N - 1 - i))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(len(idx), N)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Signed integer edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_int8_negative() raises:
+    var b = Int8Builder(capacity=4)
+    b.append(Int8(-128))
+    b.append(Int8(-1))
+    b.append(Int8(0))
+    b.append(Int8(127))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 0)
+    assert_equal(_idx(idx, 1), 1)
+    assert_equal(_idx(idx, 2), 2)
+    assert_equal(_idx(idx, 3), 3)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int16_mixed() raises:
+    var a: AnyArray = array([-100, 0, -1, 100], int16)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 0)  # -100
+    assert_equal(_idx(idx, 1), 2)  # -1
+    assert_equal(_idx(idx, 2), 1)  # 0
+    assert_equal(_idx(idx, 3), 3)  # 100
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Unsigned integer types
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_uint8() raises:
+    var a: AnyArray = array([200, 100, 50, 150], uint8)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 2)
+    assert_equal(_idx(idx, 1), 1)
+    assert_equal(_idx(idx, 2), 3)
+    assert_equal(_idx(idx, 3), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_uint16() raises:
+    var a: AnyArray = array([65535, 0, 1000, 255], uint16)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)  # 0
+    assert_equal(_idx(idx, 1), 3)  # 255
+    assert_equal(_idx(idx, 2), 2)  # 1000
+    assert_equal(_idx(idx, 3), 0)  # 65535
+    _assert_sorted(a, idx)
+
+
+def test_argsort_uint32() raises:
+    var a: AnyArray = array([3, 1, 2], uint32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_uint64() raises:
+    var b = UInt64Builder(capacity=3)
+    b.append(UInt64(18446744073709551615))  # UINT64_MAX
+    b.append(UInt64(0))
+    b.append(UInt64(1000))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)  # 0
+    assert_equal(_idx(idx, 1), 2)  # 1000
+    assert_equal(_idx(idx, 2), 0)  # UINT64_MAX
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Float types — NaN, infinity, sign-bit encoding
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_float16() raises:
+    var b = Float16Builder(capacity=3)
+    b.append(Float16(3.0))
+    b.append(Float16(1.0))
+    b.append(Float16(-2.0))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 2)  # -2.0
+    assert_equal(_idx(idx, 1), 1)  # 1.0
+    assert_equal(_idx(idx, 2), 0)  # 3.0
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float32_ascending() raises:
+    var a: AnyArray = array([3.0, 1.0, 2.0], float32)
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 0)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float32_nan_ascending() raises:
+    # NaN sorts last in ascending order.
+    var b = Float32Builder(capacity=4)
+    b.append(Float32(1.0))
+    b.append(Float32(3.0e38))
+    b.append(nan[float32.native]())
+    b.append(Float32(-1.0))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 3)  # -1.0
+    assert_equal(_idx(idx, 1), 0)  # 1.0
+    assert_equal(_idx(idx, 2), 1)  # 3e38
+    assert_equal(_idx(idx, 3), 2)  # NaN last
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float32_nan_descending() raises:
+    # NaN sorts first in descending order (complement of uint_max = 0).
+    var b = Float32Builder(capacity=4)
+    b.append(Float32(1.0))
+    b.append(Float32(3.0e38))
+    b.append(nan[float32.native]())
+    b.append(Float32(-1.0))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, ascending=False)
+    assert_equal(_idx(idx, 0), 2)  # NaN first
+    assert_equal(_idx(idx, 1), 1)  # 3e38
+    assert_equal(_idx(idx, 2), 0)  # 1.0
+    assert_equal(_idx(idx, 3), 3)  # -1.0
+    _assert_sorted(a, idx, ascending=False)
+
+
+def test_argsort_float64_inf() raises:
+    var b = Float64Builder(capacity=4)
+    b.append(Float64(0.0))
+    b.append(neg_inf[float64.native]())
+    b.append(Float64(1.0))
+    b.append(inf[float64.native]())
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)  # -inf
+    assert_equal(_idx(idx, 1), 0)  # 0.0
+    assert_equal(_idx(idx, 2), 2)  # 1.0
+    assert_equal(_idx(idx, 3), 3)  # +inf
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float64_nan() raises:
+    var b = Float64Builder(capacity=3)
+    b.append(Float64(1.0))
+    b.append(nan[float64.native]())
+    b.append(Float64(-1.0))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 2)  # -1.0
+    assert_equal(_idx(idx, 1), 0)  # 1.0
+    assert_equal(_idx(idx, 2), 1)  # NaN last
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float64_negative() raises:
+    # Negative floats must sort correctly (sign-bit encoding for all-bits XOR).
+    var b = Float64Builder(capacity=4)
+    b.append(Float64(-1.5))
+    b.append(Float64(-0.5))
+    b.append(Float64(0.5))
+    b.append(Float64(1.5))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 0)
+    assert_equal(_idx(idx, 1), 1)
+    assert_equal(_idx(idx, 2), 2)
+    assert_equal(_idx(idx, 3), 3)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Null handling
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_nulls_first() raises:
+    var b = Int32Builder(capacity=5)
+    b.append(Int32(3))
+    b.append_null()
+    b.append(Int32(1))
+    b.append_null()
+    b.append(Int32(5))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=True)
+    var i0 = _idx(idx, 0)
+    var i1 = _idx(idx, 1)
+    assert_true((i0 == 1 or i0 == 3) and (i1 == 1 or i1 == 3) and i0 != i1)
+    assert_equal(_idx(idx, 2), 2)  # 1
+    assert_equal(_idx(idx, 3), 0)  # 3
+    assert_equal(_idx(idx, 4), 4)  # 5
+    _assert_sorted(a, idx, nulls_first=True)
+
+
+def test_argsort_nulls_last() raises:
+    var b = Int32Builder(capacity=5)
+    b.append(Int32(3))
+    b.append_null()
+    b.append(Int32(1))
+    b.append_null()
+    b.append(Int32(5))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=False)
+    assert_equal(_idx(idx, 0), 2)  # 1
+    assert_equal(_idx(idx, 1), 0)  # 3
+    assert_equal(_idx(idx, 2), 4)  # 5
+    var i3 = _idx(idx, 3)
+    var i4 = _idx(idx, 4)
+    assert_true((i3 == 1 or i3 == 3) and (i4 == 1 or i4 == 3) and i3 != i4)
+    _assert_sorted(a, idx, nulls_first=False)
+
+
+def test_argsort_all_null() raises:
+    var b = Int32Builder(capacity=3)
+    b.append_null()
+    b.append_null()
+    b.append_null()
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(len(idx), 3)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_float64_null() raises:
+    var b = Float64Builder(capacity=4)
+    b.append(Float64(2.0))
+    b.append_null()
+    b.append(Float64(1.0))
+    b.append_null()
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=False)
+    assert_equal(_idx(idx, 0), 2)  # 1.0
+    assert_equal(_idx(idx, 1), 0)  # 2.0
+    var i2 = _idx(idx, 2)
+    var i3 = _idx(idx, 3)
+    assert_true((i2 == 1 or i2 == 3) and (i3 == 1 or i3 == 3) and i2 != i3)
+    _assert_sorted(a, idx, nulls_first=False)
+
+
+# ---------------------------------------------------------------------------
+# BoolArray — counting sort
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_bool_ascending() raises:
+    var b = BoolBuilder(capacity=4)
+    b.append(True)
+    b.append(False)
+    b.append(True)
+    b.append(False)
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 3)
+    assert_equal(_idx(idx, 2), 0)
+    assert_equal(_idx(idx, 3), 2)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_bool_descending() raises:
+    var b = BoolBuilder(capacity=4)
+    b.append(True)
+    b.append(False)
+    b.append(True)
+    b.append(False)
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, ascending=False)
+    assert_equal(_idx(idx, 0), 0)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 1)
+    assert_equal(_idx(idx, 3), 3)
+    _assert_sorted(a, idx, ascending=False)
+
+
+def test_argsort_bool_nulls_first() raises:
+    var b = BoolBuilder(capacity=4)
+    b.append(True)
+    b.append_null()
+    b.append(False)
+    b.append(True)
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=True)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 0)
+    assert_equal(_idx(idx, 3), 3)
+    _assert_sorted(a, idx, nulls_first=True)
+
+
+def test_argsort_bool_nulls_last() raises:
+    var b = BoolBuilder(capacity=4)
+    b.append(True)
+    b.append_null()
+    b.append(False)
+    b.append(True)
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=False)
+    assert_equal(_idx(idx, 0), 2)  # False
+    assert_equal(_idx(idx, 1), 0)  # True
+    assert_equal(_idx(idx, 2), 3)  # True
+    assert_equal(_idx(idx, 3), 1)  # null
+    _assert_sorted(a, idx, nulls_first=False)
+
+
+# ---------------------------------------------------------------------------
+# StringArray
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_string_ascending() raises:
+    var b = StringBuilder(capacity=4)
+    b.append("banana")
+    b.append("apple")
+    b.append("cherry")
+    b.append("apricot")
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 3)
+    assert_equal(_idx(idx, 2), 0)
+    assert_equal(_idx(idx, 3), 2)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_string_descending() raises:
+    var b = StringBuilder(capacity=3)
+    b.append("a")
+    b.append("c")
+    b.append("b")
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, ascending=False)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 2)
+    assert_equal(_idx(idx, 2), 0)
+    _assert_sorted(a, idx, ascending=False)
+
+
+def test_argsort_string_nulls_first() raises:
+    var b = StringBuilder(capacity=4)
+    b.append("b")
+    b.append_null()
+    b.append("a")
+    b.append_null()
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=True)
+    var i0 = _idx(idx, 0)
+    var i1 = _idx(idx, 1)
+    assert_true((i0 == 1 or i0 == 3) and (i1 == 1 or i1 == 3) and i0 != i1)
+    assert_equal(_idx(idx, 2), 2)  # "a"
+    assert_equal(_idx(idx, 3), 0)  # "b"
+    _assert_sorted(a, idx, nulls_first=True)
+
+
+def test_argsort_string_nulls_last() raises:
+    var b = StringBuilder(capacity=4)
+    b.append("b")
+    b.append_null()
+    b.append("a")
+    b.append_null()
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, nulls_first=False)
+    assert_equal(_idx(idx, 0), 2)  # "a"
+    assert_equal(_idx(idx, 1), 0)  # "b"
+    var i2 = _idx(idx, 2)
+    var i3 = _idx(idx, 3)
+    assert_true((i2 == 1 or i2 == 3) and (i3 == 1 or i3 == 3) and i2 != i3)
+    _assert_sorted(a, idx, nulls_first=False)
+
+
+# ---------------------------------------------------------------------------
+# Stable sort — equal elements preserve original relative order
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_stable_int32() raises:
+    # [2, 1, 2, 1, 3] — stable asc: 1@1, 1@3, 2@0, 2@2, 3@4
+    var b = Int32Builder(capacity=5)
+    b.append(Int32(2))
+    b.append(Int32(1))
+    b.append(Int32(2))
+    b.append(Int32(1))
+    b.append(Int32(3))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, stable=True)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 3)
+    assert_equal(_idx(idx, 2), 0)
+    assert_equal(_idx(idx, 3), 2)
+    assert_equal(_idx(idx, 4), 4)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_stable_string() raises:
+    # ["b", "a", "b", "a"] — stable asc: a@1, a@3, b@0, b@2
+    var b = StringBuilder(capacity=4)
+    b.append("b")
+    b.append("a")
+    b.append("b")
+    b.append("a")
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, stable=True)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 3)
+    assert_equal(_idx(idx, 2), 0)
+    assert_equal(_idx(idx, 3), 2)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# limit (top-K)
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_limit() raises:
+    var a: AnyArray = array([5, 3, 1, 4, 2], int32)
+    var idx = argsort(a, limit=3)
+    assert_equal(len(idx), 3)
+    assert_equal(_idx(idx, 0), 2)  # 1
+    assert_equal(_idx(idx, 1), 4)  # 2
+    assert_equal(_idx(idx, 2), 1)  # 3
+    # Verify the 3 selected values are in sorted order (indices refer into full a).
+    var taken = _take(a, idx, ExecutionContext.serial())
+    _assert_values_sorted(taken)
+
+
+def test_argsort_limit_exceeds_length() raises:
+    var a: AnyArray = array([2, 1], int32)
+    var idx = argsort(a, limit=100)
+    assert_equal(len(idx), 2)
+    assert_equal(_idx(idx, 0), 1)
+    assert_equal(_idx(idx, 1), 0)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# Large arrays — PDQsort path (N < 32768) and radix path (N >= 32768)
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_int32_large_pdqsort() raises:
+    comptime N = 10_000
+    var b = Int32Builder(capacity=N)
+    for i in range(N // 2):
+        b.append(Int32(N - 1 - i))
+        b.append(Int32(i))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(len(idx), N)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_int64_large_radix() raises:
+    comptime N = 40_000
+    var b = Int64Builder(capacity=N)
+    for i in range(N):
+        b.append(Int64(N - 1 - i))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a)
+    assert_equal(len(idx), N)
+    _assert_sorted(a, idx)
+
+
+# ---------------------------------------------------------------------------
+# sort(StructArray) — key ordering and value-column integrity
+# ---------------------------------------------------------------------------
+
+
+def test_sort_struct_ascending() raises:
+    var sa = _make_struct([3, 1, 4, 1, 5], [30, 10, 40, 10, 50])
+    var result = sort(sa, [0], [True])
+    var k = result.field(0)
+    assert_equal(k[0].as_int32().value(), Int32(1))
+    assert_equal(k[1].as_int32().value(), Int32(1))
+    assert_equal(k[2].as_int32().value(), Int32(3))
+    assert_equal(k[3].as_int32().value(), Int32(4))
+    assert_equal(k[4].as_int32().value(), Int32(5))
+    _assert_values_sorted(k)
+
+
+def test_sort_struct_descending() raises:
+    var sa = _make_struct([3, 1, 4], [30, 10, 40])
+    var result = sort(sa, [0], [False])
+    var k = result.field(0)
+    assert_equal(k[0].as_int32().value(), Int32(4))
+    assert_equal(k[1].as_int32().value(), Int32(3))
+    assert_equal(k[2].as_int32().value(), Int32(1))
+    _assert_values_sorted(k, ascending=False)
+
+
+def test_sort_struct_value_integrity() raises:
+    # The non-key column must be permuted consistently with the key column.
+    var sa = _make_struct([30, 10, 20], [300, 100, 200])
+    var result = sort(sa, [0], [True])
+    var k = result.field(0)
+    var v = result.field(1)
+    assert_equal(k[0].as_int32().value(), Int32(10))
+    assert_equal(v[0].as_int32().value(), Int32(100))
+    assert_equal(k[1].as_int32().value(), Int32(20))
+    assert_equal(v[1].as_int32().value(), Int32(200))
+    assert_equal(k[2].as_int32().value(), Int32(30))
+    assert_equal(v[2].as_int32().value(), Int32(300))
+    _assert_values_sorted(k)
+    _assert_values_sorted(v)
+
+
+# ---------------------------------------------------------------------------
+# ExecutionContext — use N > _PARALLEL_THRESHOLD (524_288) to exercise the
+# parallel radix path; verify endpoints and midpoint of a reverse-sorted array.
+# ---------------------------------------------------------------------------
+
+
+def test_argsort_serial_context() raises:
+    # N > _RADIX_THRESHOLD but < _PARALLEL_THRESHOLD — serial radix path.
+    comptime N = 100_000
+    var b = Int64Builder(capacity=N)
+    for i in range(N):
+        b.append(Int64(N - 1 - i))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, ctx=ExecutionContext.serial())
+    assert_equal(len(idx), N)
+    _assert_sorted(a, idx)
+
+
+def test_argsort_parallel_context() raises:
+    # N > _PARALLEL_THRESHOLD (524_288) — exercises the parallel radix path.
+    comptime N = 600_000
+    var b = Int64Builder(capacity=N)
+    for i in range(N):
+        b.append(Int64(N - 1 - i))
+    var a: AnyArray = b.finish().to_any()
+    var idx = argsort(a, ctx=ExecutionContext.parallel())
+    assert_equal(len(idx), N)
+    _assert_sorted(a, idx)
+
+
+def main() raises:
+    TestSuite.run[__functions_in_module()]()

@@ -91,9 +91,9 @@ def _throughput(n: Int, avg_ns: UInt) -> Float64:
 # ---------------------------------------------------------------------------
 
 
-def _bench_argsort[T: PrimitiveType](
-    data: PrimitiveArray[T], iters: Int
-) raises:
+def _bench_argsort[
+    T: PrimitiveType
+](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
     var arr: AnyArray = data.copy()
 
@@ -109,16 +109,19 @@ def _bench_argsort[T: PrimitiveType](
     var avg = elapsed // UInt(iters)
     print(
         "  argsort   ",
-        _ns_to_ms(avg), "ms avg",
-        " |", _throughput(n, avg), "M rows/s",
-        " | total:", _ns_to_ms(elapsed), "ms",
+        _ns_to_ms(avg),
+        "ms avg",
+        " |",
+        _throughput(n, avg),
+        "M rows/s",
+        " | total:",
+        _ns_to_ms(elapsed),
+        "ms",
     )
     keep(arr)
 
 
-def _bench_sort[T: PrimitiveType](
-    data: PrimitiveArray[T], iters: Int
-) raises:
+def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
     """argsort + take — the full sort pipeline."""
     var n = len(data)
     var arr: AnyArray = data.copy()
@@ -138,16 +141,21 @@ def _bench_sort[T: PrimitiveType](
     var avg = elapsed // UInt(iters)
     print(
         "  sort      ",
-        _ns_to_ms(avg), "ms avg",
-        " |", _throughput(n, avg), "M rows/s",
-        " | total:", _ns_to_ms(elapsed), "ms",
+        _ns_to_ms(avg),
+        "ms avg",
+        " |",
+        _throughput(n, avg),
+        "M rows/s",
+        " | total:",
+        _ns_to_ms(elapsed),
+        "ms",
     )
     keep(arr)
 
 
-def _bench_argsort_desc[T: PrimitiveType](
-    data: PrimitiveArray[T], iters: Int
-) raises:
+def _bench_argsort_desc[
+    T: PrimitiveType
+](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
     var arr: AnyArray = data.copy()
 
@@ -162,8 +170,11 @@ def _bench_argsort_desc[T: PrimitiveType](
     var avg = elapsed // UInt(iters)
     print(
         "  argsort↓  ",
-        _ns_to_ms(avg), "ms avg",
-        " |", _throughput(n, avg), "M rows/s",
+        _ns_to_ms(avg),
+        "ms avg",
+        " |",
+        _throughput(n, avg),
+        "M rows/s",
     )
     keep(arr)
 

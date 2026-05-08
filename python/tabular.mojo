@@ -485,7 +485,7 @@ def _record_batch_sort_by(
     """
     var nulls_first = True
     if not null_placement.__is__(PythonObject(None)):
-        nulls_first = (String(py=null_placement) != "at_end")
+        nulls_first = String(py=null_placement) != "at_end"
 
     var builtins = Python.import_module("builtins")
     var key_indices = List[Int]()

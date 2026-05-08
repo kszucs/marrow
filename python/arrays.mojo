@@ -1139,7 +1139,8 @@ def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
 
 
 def _null_placement_to_bool(py: PythonObject) raises -> Bool:
-    """Convert null_placement kwarg ('at_start'/'at_end' or None) to nulls_first."""
+    """Convert null_placement kwarg ('at_start'/'at_end' or None) to nulls_first.
+    """
     if py.__is__(PythonObject(None)):
         return True
     return String(py=py) != "at_end"
@@ -1150,7 +1151,9 @@ def _any_array_argsort(
     ascending: PythonObject,
     null_placement: PythonObject,
 ) raises -> PythonObject:
-    var asc = True if ascending.__is__(PythonObject(None)) else Bool(py=ascending)
+    var asc = True if ascending.__is__(PythonObject(None)) else Bool(
+        py=ascending
+    )
     var nulls_first = _null_placement_to_bool(null_placement)
     var idx: AnyArray = _argsort_kernel(
         ptr[], asc, nulls_first, ctx=ExecutionContext.parallel()
@@ -1163,7 +1166,9 @@ def _any_array_sort(
     ascending: PythonObject,
     null_placement: PythonObject,
 ) raises -> PythonObject:
-    var asc = True if ascending.__is__(PythonObject(None)) else Bool(py=ascending)
+    var asc = True if ascending.__is__(PythonObject(None)) else Bool(
+        py=ascending
+    )
     var nulls_first = _null_placement_to_bool(null_placement)
     var ctx = ExecutionContext.parallel()
     var indices = _argsort_kernel(ptr[], asc, nulls_first, ctx=ctx)

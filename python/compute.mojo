@@ -27,7 +27,11 @@ from marrow.kernels.compare import (
     greater,
     greater_equal,
 )
-from marrow.kernels.filter import filter_ as _filter_overloaded, drop_nulls, take as _take_kernel
+from marrow.kernels.filter import (
+    filter_ as _filter_overloaded,
+    drop_nulls,
+    take as _take_kernel,
+)
 from marrow.kernels.sort import argsort as _argsort_kernel
 from std.collections import OwnedKwargsDict
 from helpers import pyfunction
@@ -170,7 +174,9 @@ def _null_placement_kwarg(kwargs: OwnedKwargsDict[PythonObject]) raises -> Bool:
     return True
 
 
-def _ctx_kwarg(kwargs: OwnedKwargsDict[PythonObject]) raises -> ExecutionContext:
+def _ctx_kwarg(
+    kwargs: OwnedKwargsDict[PythonObject],
+) raises -> ExecutionContext:
     """Return serial or parallel ExecutionContext based on `serial` kwarg."""
     if opt := kwargs.find("serial"):
         if Bool(py=opt.value()):
