@@ -212,7 +212,7 @@ def _sort_fn(
 
 
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
-    mb.add_type[ExecutionContext]("ExecutionContext")
+    _ = mb.add_type[ExecutionContext]("ExecutionContext")
     mb.def_function[_add](
         "add",
         docstring=(
