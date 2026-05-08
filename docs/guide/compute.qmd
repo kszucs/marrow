@@ -19,10 +19,10 @@ Element-wise binary operations: `add`, `sub`, `mul`, `div`.
 a = ma.array([1, 2, 3, 4, 5], type=ma.int64())
 b = ma.array([10, 20, 30, 40, 50], type=ma.int64())
 
-print("add:", ma.add(a, b))
-print("sub:", ma.sub(b, a))
-print("mul:", ma.mul(a, b))
-print("div:", ma.div(b, a))
+print("add:", ma.add(a, b, None))
+print("sub:", ma.sub(b, a, None))
+print("mul:", ma.mul(a, b, None))
+print("div:", ma.div(b, a, None))
 ```
 
 Floats work the same way:
@@ -30,8 +30,8 @@ Floats work the same way:
 ```{python}
 x = ma.array([1.0, 2.0, 3.0])
 y = ma.array([0.5, 1.5, 2.5])
-print("add:", ma.add(x, y))
-print("div:", ma.div(x, y))
+print("add:", ma.add(x, y, None))
+print("div:", ma.div(x, y, None))
 ```
 
 ### Null propagation
@@ -42,7 +42,7 @@ If **either** operand at a position is null, the result at that position is null
 a = ma.array([1, None, 3, None])
 b = ma.array([10, 20, 30, 40])
 
-result = ma.add(a, b)
+result = ma.add(a, b, None)
 print(result)    # index 1 and 3 are null
 print("null count:", result.null_count())
 ```
@@ -52,7 +52,7 @@ print("null count:", result.null_count())
 a = ma.array([None, 2, 3, None])
 b = ma.array([10, None, 30, None])
 
-print(ma.add(a, b))   # null at 0, 1, and 3
+print(ma.add(a, b, None))   # null at 0, 1, and 3
 ```
 
 ## Aggregates
@@ -64,17 +64,17 @@ Aggregates reduce an array to a single scalar. They **skip null values** by defa
 ```{python}
 arr = ma.array([1, None, 3, None, 5])
 
-print("sum:    ", ma.sum_(arr))     # 1+3+5 = 9
-print("product:", ma.product(arr))  # 1*3*5 = 15
-print("min:    ", ma.min_(arr))
-print("max:    ", ma.max_(arr))
+print("sum:    ", ma.sum_(arr, None))     # 1+3+5 = 9
+print("product:", ma.product(arr, None))  # 1*3*5 = 15
+print("min:    ", ma.min_(arr, None))
+print("max:    ", ma.max_(arr, None))
 ```
 
 Aggregates always return `float64` regardless of input type:
 
 ```{python}
 ints = ma.array([10, 20, 30], type=ma.int32())
-result = ma.sum_(ints)
+result = ma.sum_(ints, None)
 print(result, type(result))
 ```
 
@@ -84,11 +84,11 @@ print(result, type(result))
 empty    = ma.array([], type=ma.int64())
 all_null = ma.array([None, None], type=ma.int64())
 
-print("sum of empty:      ", ma.sum_(empty))      # 0.0
-print("sum of all-null:   ", ma.sum_(all_null))    # 0.0
-print("product of empty:  ", ma.product(empty))    # 1.0
-print("min of empty:      ", ma.min_(empty))       # inf
-print("max of empty:      ", ma.max_(empty))       # -inf
+print("sum of empty:      ", ma.sum_(empty, None))      # 0.0
+print("sum of all-null:   ", ma.sum_(all_null, None))    # 0.0
+print("product of empty:  ", ma.product(empty, None))    # 1.0
+print("min of empty:      ", ma.min_(empty, None))       # inf
+print("max of empty:      ", ma.max_(empty, None))       # -inf
 ```
 
 ### Boolean aggregates
@@ -165,18 +165,18 @@ Element-wise comparison kernels return a boolean array. Nulls propagate: if eith
 a = ma.array([1, 2, 3, None, 5])
 b = ma.array([1, 3, 2, 4,    5])
 
-print("equal:        ", ma.equal(a, b))
-print("not_equal:    ", ma.not_equal(a, b))
-print("less:         ", ma.less(a, b))
-print("less_equal:   ", ma.less_equal(a, b))
-print("greater:      ", ma.greater(a, b))
-print("greater_equal:", ma.greater_equal(a, b))
+print("equal:        ", ma.equal(a, b, None))
+print("not_equal:    ", ma.not_equal(a, b, None))
+print("less:         ", ma.less(a, b, None))
+print("less_equal:   ", ma.less_equal(a, b, None))
+print("greater:      ", ma.greater(a, b, None))
+print("greater_equal:", ma.greater_equal(a, b, None))
 ```
 
 The null at index 3 propagates to all output arrays:
 
 ```{python}
-result = ma.equal(a, b)
+result = ma.equal(a, b, None)
 print("null count:", result.null_count())   # 1
 print("is_valid(3):", result.is_valid(3))   # False
 ```

@@ -37,7 +37,7 @@ Any Marrow compute function that accepts and returns Arrow arrays can be wrapped
 
 ```{python}
 def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-    return pa.array(ma.add(ma.array(a), ma.array(b)))
+    return pa.array(ma.add(ma.array(a, None), ma.array(b)))
 
 add_udf = udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")
 ```
@@ -89,7 +89,7 @@ Each call to `mojo_add` inside a DataFusion query goes through these steps:
 
 1. DataFusion evaluates the query plan and produces a `pyarrow.Array` chunk for each argument column.
 2. `ma.array(a)` imports the array into Marrow via `__arrow_c_array__` — a pointer exchange, no copy.
-3. `ma.add(...)` runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.
+3. `ma.add(..., None)` runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.
 4. `pa.array(result)` exports the result back to PyArrow via `__arrow_c_array__` — again, no copy.
 
 The data layout is identical in both libraries, so steps 2 and 4 are O(1) pointer operations regardless of array length.

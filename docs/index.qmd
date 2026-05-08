@@ -51,12 +51,12 @@ print(scores)
 Null values propagate through element-wise operations — if either input is null, the output is null.
 
 ```{python}
-result = ma.add(a, b)
+result = ma.add(a, b, None)
 print(result)   # index 3 is null because a[3] is null
 ```
 
 ```{python}
-print(ma.mul(a, b))
+print(ma.mul(a, b, None))
 ```
 
 ### Aggregates
@@ -64,10 +64,10 @@ print(ma.mul(a, b))
 Aggregates skip null values.
 
 ```{python}
-print("sum:    ", ma.sum_(a))    # 1+2+3+5 = 11, null skipped
-print("min:    ", ma.min_(a))
-print("max:    ", ma.max_(a))
-print("product:", ma.product(a))
+print("sum:    ", ma.sum_(a, None))    # 1+2+3+5 = 11, null skipped
+print("min:    ", ma.min_(a, None))
+print("max:    ", ma.max_(a, None))
+print("product:", ma.product(a, None))
 ```
 
 ### Filter and drop nulls
