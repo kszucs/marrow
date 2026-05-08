@@ -19,28 +19,6 @@ jobs:
       - name: Checkout marrow
         uses: actions/checkout@v4
 
-      # Clone the three reference implementations into the layout that
-      # integration_arrow_build.sh and integration/run.py expect.
-      # Must happen before `setup-pixi` so that the archery path dep
-      # (integration/arrow/dev/archery) exists when pixi installs the
-      # integration environment.
-      - name: Clone apache/arrow
-        run: git clone --depth 1 https://github.com/apache/arrow.git integration/arrow
-
-      - name: Clone apache/arrow-rs
-        run: git clone --depth 1 https://github.com/apache/arrow-rs.git integration/arrow/rust
-
-      - name: Clone apache/arrow-go
-        run: git clone --depth 1 https://github.com/apache/arrow-go.git integration/arrow/go
-
-      # Capture HEAD SHAs for cache keys (depth-1 clone has no tags, so use rev-parse).
-      - name: Record repo SHAs for cache keys
-        id: shas
-        run: |
-          echo "arrow=$(git -C integration/arrow rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "arrow_rs=$(git -C integration/arrow/rust rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "arrow_go=$(git -C integration/arrow/go rev-parse HEAD)" >> $GITHUB_OUTPUT
-
       - name: Set up pixi
         uses: prefix-dev/setup-pixi@v0.9.4
         with:
@@ -56,16 +34,29 @@ jobs:
           key: mojo-cache-integration-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
           restore-keys: mojo-cache-integration-${{ runner.os }}-
 
+      # Arrow reference implementation builds are slow (~30 min); cache by the
+      # HEAD SHAs of the three repos so rebuilds only happen on upstream changes.
+      # The clone + SHA capture must happen before the cache restore so the key
+      # is always known — the clone tasks are idempotent (test -d guard).
+      - name: Clone reference implementations
+        run: |
+          pixi run -e integration clone_arrow
+          pixi run -e integration clone_arrow_rs
+          pixi run -e integration clone_arrow_go
+
+      - name: Record repo SHAs for cache key
+        id: shas
+        run: |
+          echo "arrow=$(git -C integration/arrow rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "arrow_rs=$(git -C integration/arrow/rust rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "arrow_go=$(git -C integration/arrow/go rev-parse HEAD)" >> $GITHUB_OUTPUT
+
       - name: Cache Arrow reference implementation builds
         id: arrow-build-cache
         uses: actions/cache@v4
         with:
           path: integration/arrow/build
           key: arrow-build-${{ runner.os }}-${{ steps.shas.outputs.arrow }}-${{ steps.shas.outputs.arrow_rs }}-${{ steps.shas.outputs.arrow_go }}
-
-      - name: Build Arrow reference implementations
-        if: steps.arrow-build-cache.outputs.cache-hit != 'true'
-        run: pixi run -e integration build_arrow
 
       - name: Run integration tests
         run: pixi run -e integration integration

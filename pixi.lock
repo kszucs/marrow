@@ -1288,7 +1288,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/zstd-1.5.7-hb78ec9c_6.conda
       - pypi: https://files.pythonhosted.org/packages/98/7c/21252050676612625449b4807d6b695b9ce8a7c9e1c197ee6216c8a65c7c/numpy-2.4.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
-      - pypi: ./integration/arrow/dev/archery
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_go_select-2.3.0-cgo.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/_openmp_mutex-4.5-7_kmp_llvm.conda
@@ -1410,7 +1409,6 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
-      - pypi: ./integration/arrow/dev/archery
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_go_select-2.3.0-cgo.tar.bz2
   sha256: d86836d4f3094b4ac149dcdc55f1f12be6e84ed1206a4234404a024e49769832
@@ -1494,57 +1492,6 @@ packages:
   - pkg:pypi/appnope?source=hash-mapping
   size: 10076
   timestamp: 1733332433806
-- pypi: ./integration/arrow/dev/archery
-  name: archery
-  version: 0.1.0
-  sha256: 75064c060d72830bcf2696abfc7095b052ce4150120727ef4ceda7e968d7c382
-  requires_dist:
-  - click>=7
-  - pandas ; extra == 'benchmark'
-  - github3-py ; extra == 'crossbow'
-  - jinja2>=2.11 ; extra == 'crossbow'
-  - pygit2>=1.14.0 ; extra == 'crossbow'
-  - requests ; extra == 'crossbow'
-  - ruamel-yaml ; extra == 'crossbow'
-  - setuptools-scm>=8.0.0 ; extra == 'crossbow'
-  - github3-py ; extra == 'crossbow-upload'
-  - jinja2>=2.11 ; extra == 'crossbow-upload'
-  - ruamel-yaml ; extra == 'crossbow-upload'
-  - setuptools-scm ; extra == 'crossbow-upload'
-  - ruamel-yaml ; extra == 'docker'
-  - python-dotenv ; extra == 'docker'
-  - cffi ; extra == 'integration'
-  - numpy ; extra == 'integration'
-  - jpype1 ; extra == 'integration-java'
-  - numpydoc==1.1.0 ; extra == 'numpydoc'
-  - pygithub<2.9.0 ; extra == 'release'
-  - jinja2>=2.11 ; extra == 'release'
-  - semver ; extra == 'release'
-  - gitpython ; extra == 'release'
-  - github3-py ; extra == 'bot'
-  - jinja2>=2.11 ; extra == 'bot'
-  - pygit2>=1.14.0 ; extra == 'bot'
-  - requests ; extra == 'bot'
-  - ruamel-yaml ; extra == 'bot'
-  - setuptools-scm>=8.0.0 ; extra == 'bot'
-  - pygithub<2.9.0 ; extra == 'bot'
-  - jpype1 ; extra == 'all'
-  - gitpython ; extra == 'all'
-  - requests ; extra == 'all'
-  - jinja2>=2.11 ; extra == 'all'
-  - github3-py ; extra == 'all'
-  - numpy ; extra == 'all'
-  - pandas ; extra == 'all'
-  - pygithub<2.9.0 ; extra == 'all'
-  - setuptools-scm>=8.0.0 ; extra == 'all'
-  - setuptools-scm ; extra == 'all'
-  - python-dotenv ; extra == 'all'
-  - cffi ; extra == 'all'
-  - numpydoc==1.1.0 ; extra == 'all'
-  - semver ; extra == 'all'
-  - ruamel-yaml ; extra == 'all'
-  - pygit2>=1.14.0 ; extra == 'all'
-  requires_python: '>=3.10'
 - conda: https://conda.anaconda.org/conda-forge/noarch/argon2-cffi-25.1.0-pyhd8ed1ab_0.conda
   sha256: bea62005badcb98b1ae1796ec5d70ea0fc9539e7d59708ac4e7d41e2f4bb0bad
   md5: 8ac12aff0860280ee0cff7fa2cf63f3b

@@ -73,18 +73,15 @@ flatbuffers = "*"
 xsimd = "*"
 rapidjson = "*"
 
-[feature.integration.pypi-dependencies]
-# archery lives in the cloned apache/arrow tree (see clone_arrow); reusing it
-# avoids a redundant git fetch and keeps the version in sync with the rest of
-# the integration scripts we invoke.
-archery = { path = "integration/arrow/dev/archery", editable = true }
-
 [feature.integration.tasks]
 # Clone reference implementations directly into the apache/arrow tree layout
 # the orchestrator scripts (rust_build.sh, integration_arrow_build.sh) expect.
 clone_arrow = { cmd = "test -d integration/arrow || git clone --depth 1 https://github.com/apache/arrow.git integration/arrow" }
 clone_arrow_rs = { cmd = "test -d integration/arrow/rust || git clone --depth 1 https://github.com/apache/arrow-rs.git integration/arrow/rust", depends-on = ["clone_arrow"] }
 clone_arrow_go = { cmd = "test -d integration/arrow/go || git clone --depth 1 https://github.com/apache/arrow-go.git integration/arrow/go", depends-on = ["clone_arrow"] }
+# archery is not on PyPI; install from the cloned apache/arrow tree into the
+# active pixi env.  Must run after clone_arrow so the source tree exists.
+install_archery = { cmd = "pip install -q -e integration/arrow/dev/archery[integration]", depends-on = ["clone_arrow"] }
 
 # Build all reference implementations via apache/arrow's official orchestrator.
 # Env mirrors ci/docker/conda-integration.dockerfile, minus features we don't need.
@@ -100,6 +97,8 @@ build_arrow = { cmd = "CONDA_PREFIX= integration/arrow/ci/scripts/integration_ar
 # --- run all integration tests ---
 integration = { cmd = "python -m integration.run --run-ipc --run-c-data --with-rust --with-go --with-cpp", depends-on = [
   "build_python",
+  "install_archery",
+  "build_arrow",
 ], env = { PYTHONPATH = "python", ARROW_ROOT = "$PIXI_PROJECT_ROOT/integration/arrow", ARROW_RUST_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/rust/debug", ARROW_CPP_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", DYLD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", LD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release" } }
 
 # Asan — ASAN runtime needed for --asan test runs.
