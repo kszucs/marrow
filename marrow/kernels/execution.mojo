@@ -56,6 +56,12 @@ struct ExecutionContext(
         self.device = device.copy() if device else None
 
     @implicit
+    def __init__(out self, device: DeviceContext):
+        """Implicit conversion from ``DeviceContext``."""
+        self.num_threads = 1
+        self.device = Optional[DeviceContext](device)
+
+    @implicit
     def __init__(out self, device: Optional[DeviceContext]):
         """Implicit conversion from ``Optional[DeviceContext]``.
 
