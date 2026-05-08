@@ -25,6 +25,11 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `FixedSizeListArray` — fixed-size nested arrays (embedding vectors, coordinates)
 - `StructArray` — named-field structs
 - `ChunkedArray` — array split across multiple chunks
+- `DictionaryArray` — dictionary-encoded arrays (integer indices + arbitrary values array)
+- `NullArray` — all-null arrays
+- `FixedSizeBinaryArray` — fixed-width opaque byte blobs
+- `LargeBinaryArray`, `LargeStringArray`, `LargeListArray` — 64-bit offset variants
+- Temporal arrays: `Date32Array`, `Date64Array`, `Time32Array`, `Time64Array`, `TimestampArray`, `DurationArray`
 - `AnyArray` — type-erased immutable array container (O(1) copy via `ArcPointer`)
 - `RecordBatch` — schema + column arrays, with slice, select, rename, add/remove/set column operations
 - `Table` — schema + chunked columns; `from_batches()`, `to_batches()`, `combine_chunks()`
@@ -46,6 +51,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Group-by: `groupby(keys, values, aggregations)` — fused hash+aggregate, returns `RecordBatch`
 - Hashing: `hash_` for primitive, string, and struct arrays
 - Selection: `filter_`, `drop_nulls`
+- Sort: `argsort` (returns index array), `sort` (stable sort); LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `sort(StructArray, key_indices, ascending)`
 - Strings: `string_lengths`
 - Similarity: `cosine_similarity` (batch N-vectors vs 1 query, CPU SIMD + GPU)
 
@@ -62,6 +68,13 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `array(values, type=None)` — create any array type from Python lists with type inference
 - All compute kernels exposed as free functions
 - Full null handling, type coercion, nested structure support
+
+**Arrow IPC** (`marrow/ipc`)
+- `read_ipc_file(path)` / `write_ipc_file(path, schema, batches)` — IPC file format
+- `read_ipc_stream(bytes)` / `write_ipc_stream(schema, batches)` — IPC stream format
+- `RecordBatchFileReader`, `RecordBatchStreamReader` — streaming readers
+- `RecordBatchFileWriter`, `RecordBatchStreamWriter` — streaming writers
+- Full round-trip for all implemented types including nested, dictionary, temporal, and null columns
 
 **Interoperability**
 - Arrow C Data Interface — zero-copy exchange with PyArrow
@@ -334,7 +347,7 @@ var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
 
 2. **Testing**: Conformance against the Arrow specification is verified through PyArrow since Mojo has no JSON library yet. Full integration testing requires a Mojo JSON reader.
 
-3. **Type coverage**: Only boolean, numeric, string, list, fixed-size list, and struct types are implemented. Date/time, dictionary, union, decimal, and binary types are not yet supported.
+3. **Type coverage**: Boolean, numeric, string, binary, fixed-size binary, list, fixed-size list, large binary/string/list, struct, dictionary, null, temporal (date32/64, time32/64, timestamp, duration), and decimal (32/64/128/256) types are implemented. Union types are not yet supported.
 
 4. **Parquet I/O**: Parquet support currently bridges through PyArrow. Native Mojo Parquet reading is planned for a future release.
 
