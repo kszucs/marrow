@@ -81,7 +81,7 @@ clone_arrow_rs = { cmd = "test -d integration/arrow/rust || git clone --depth 1 
 clone_arrow_go = { cmd = "test -d integration/arrow/go || git clone --depth 1 https://github.com/apache/arrow-go.git integration/arrow/go", depends-on = ["clone_arrow"] }
 # archery is not on PyPI; install from the cloned apache/arrow tree into the
 # active pixi env.  Must run after clone_arrow so the source tree exists.
-install_archery = { cmd = "pip install -q -e integration/arrow/dev/archery[integration]", depends-on = ["clone_arrow"] }
+install_archery = { cmd = "test -d integration/arrow/dev/archery", depends-on = ["clone_arrow"] }
 
 # Build all reference implementations via apache/arrow's official orchestrator.
 # Env mirrors ci/docker/conda-integration.dockerfile, minus features we don't need.
@@ -99,7 +99,7 @@ integration = { cmd = "python -m integration.run --run-ipc --run-c-data --with-r
   "build_python",
   "install_archery",
   "build_arrow",
-], env = { PYTHONPATH = "python", ARROW_ROOT = "$PIXI_PROJECT_ROOT/integration/arrow", ARROW_RUST_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/rust/debug", ARROW_CPP_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", DYLD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", LD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release" } }
+], env = { PYTHONPATH = "python:integration/arrow/dev/archery", ARROW_ROOT = "$PIXI_PROJECT_ROOT/integration/arrow", ARROW_RUST_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/rust/debug", ARROW_CPP_EXE_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", GOBIN = "$PIXI_PROJECT_ROOT/integration/arrow/go/bin", DYLD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release", LD_LIBRARY_PATH = "$PIXI_PROJECT_ROOT/integration/arrow/build/cpp/release" } }
 
 # Asan — ASAN runtime needed for --asan test runs.
 [feature.asan.dependencies]
