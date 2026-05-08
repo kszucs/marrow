@@ -27,12 +27,19 @@ jobs:
           frozen: true
           environments: integration
 
+      - name: Detect CPU feature level
+        id: cpu
+        run: |
+          if grep -q avx512f /proc/cpuinfo; then echo "level=v4" >> $GITHUB_OUTPUT
+          elif grep -q avx2 /proc/cpuinfo; then echo "level=v3" >> $GITHUB_OUTPUT
+          elif grep -q avx /proc/cpuinfo; then echo "level=v2" >> $GITHUB_OUTPUT
+          else echo "level=v1" >> $GITHUB_OUTPUT; fi
       - name: Cache Mojo build artifacts
         uses: actions/cache@v4
         with:
           path: .pixi/envs/integration/**/.mojo_cache
-          key: mojo-cache-integration-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
-          restore-keys: mojo-cache-integration-${{ runner.os }}-
+          key: mojo-cache-integration-${{ runner.os }}-${{ steps.cpu.outputs.level }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+          restore-keys: mojo-cache-integration-${{ runner.os }}-${{ steps.cpu.outputs.level }}-
 
       # Arrow reference implementation builds are slow (~30 min); cache by the
       # HEAD SHAs of the three repos so rebuilds only happen on upstream changes.

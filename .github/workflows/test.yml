@@ -24,11 +24,18 @@ jobs:
         cache-write: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
         frozen: true
         environments: dev
+    - name: Detect CPU feature level
+      id: cpu
+      run: |
+        if grep -q avx512f /proc/cpuinfo; then echo "level=v4" >> $GITHUB_OUTPUT
+        elif grep -q avx2 /proc/cpuinfo; then echo "level=v3" >> $GITHUB_OUTPUT
+        elif grep -q avx /proc/cpuinfo; then echo "level=v2" >> $GITHUB_OUTPUT
+        else echo "level=v1" >> $GITHUB_OUTPUT; fi
     - uses: actions/cache@v5
       with:
         path: .pixi/envs/dev/**/.mojo_cache
-        key: mojo-cache-dev-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
-        restore-keys: mojo-cache-dev-${{ runner.os }}-
+        key: mojo-cache-dev-${{ runner.os }}-${{ steps.cpu.outputs.level }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
+        restore-keys: mojo-cache-dev-${{ runner.os }}-${{ steps.cpu.outputs.level }}-
     - name: tests
       run: |
         pixi run -e dev test_parallel --no-gpu
