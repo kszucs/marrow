@@ -164,7 +164,7 @@ bench = { features = ["dev", "bench"], solve-group = "default" }
 format = { features = ["format"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
-integration = { features = ["dev", "integration"], solve-group = "default" }
+integration = { features = ["dev", "integration"], solve-group = "integration" }
 
 [dependencies]
 mojo = ">=1.0.0b2.dev2026050805,<2"
