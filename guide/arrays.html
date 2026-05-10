@@ -2,13 +2,16 @@
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
 
 <meta charset="utf-8">
-<meta name="generator" content="quarto-1.8.27">
+<meta name="generator" content="quarto-1.9.37">
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
 <title>Arrays – Marrow</title>
 <style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
 div.columns{display: flex; gap: min(4vw, 1.5em);}
@@ -67,15 +70,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <meta name="quarto:offset" content="../">
 <script src="../site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="../site_libs/quarto-html/axe/axe-check.js" type="module"></script>
 <script src="../site_libs/quarto-html/popper.min.js"></script>
 <script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
 <script src="../site_libs/quarto-html/anchor.min.js"></script>
 <link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-8b4baf804e461d9b72633f0de59a0cac.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-7aa4c7b3796345b174ec3606a54e4e58.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<link href="../site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -239,7 +241,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="primitive-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="primitive-arrays">Primitive arrays</h2>
 <p>Primitive arrays hold fixed-size scalar values: booleans, integers, and floats.</p>
-<div id="d0ab9937" class="cell" data-execution_count="2">
+<div id="0bf66be7" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb1"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Integer arrays</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>i64 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>])</span>
 <span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>i32 <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
@@ -254,7 +256,7 @@ PrimitiveArray[int32]([1, 2, 3, 4, 5])
 PrimitiveArray[uint8]([0, 127, 255])</code></pre>
 </div>
 </div>
-<div id="7b418bc1" class="cell" data-execution_count="3">
+<div id="4bbc0d3d" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Floating point</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>f32 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>], <span class="bu">type</span><span class="op">=</span>ma.float32())</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>f64 <span class="op">=</span> ma.array([<span class="fl">1.0</span>, <span class="fl">2.5</span>, <span class="fl">3.14</span>])   <span class="co"># float64 inferred</span></span>
@@ -265,7 +267,7 @@ PrimitiveArray[uint8]([0, 127, 255])</code></pre>
 PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 </div>
 </div>
-<div id="473fd8ff" class="cell" data-execution_count="4">
+<div id="fc6ef05d" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Boolean</span></span>
 <span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>])</span>
 <span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(b)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -276,7 +278,7 @@ PrimitiveArray[float64]([1.0, 2.5, 3.14])</code></pre>
 <section id="null-values" class="level3">
 <h3 class="anchored" data-anchor-id="null-values">Null values</h3>
 <p>Pass <code>None</code> to mark a position as null. The validity bitmap tracks which positions are valid.</p>
-<div id="f97158a9" class="cell" data-execution_count="5">
+<div id="bcff6113" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb7"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(arr)</span>
 <span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, arr.null_count())</span>
@@ -305,7 +307,7 @@ Note
 </section>
 <section id="inspecting-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="inspecting-arrays">Inspecting arrays</h3>
-<div id="91d4a618" class="cell" data-execution_count="6">
+<div id="b36daaf1" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb9"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>], <span class="bu">type</span><span class="op">=</span>ma.int32())</span>
 <span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, <span class="bu">len</span>(arr))</span>
@@ -322,7 +324,7 @@ type:       int32</code></pre>
 <section id="string-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="string-arrays">String arrays</h2>
 <p>String arrays store variable-length UTF-8 strings.</p>
-<div id="f2c8fd06" class="cell" data-execution_count="7">
+<div id="203669d4" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb11"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"hello"</span>, <span class="va">None</span>, <span class="st">"world"</span>, <span class="st">"mañana"</span>])</span>
 <span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s)</span>
 <span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, s.null_count())</span>
@@ -337,7 +339,7 @@ is_valid(1): False</code></pre>
 <section id="list-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="list-arrays">List arrays</h2>
 <p>List arrays store variable-length sequences. Each element is itself a list.</p>
-<div id="0bb75a2d" class="cell" data-execution_count="8">
+<div id="68b61ada" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb13"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>nested <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>], [<span class="dv">6</span>]])</span>
 <span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(nested)</span>
 <span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:"</span>, nested.<span class="bu">type</span>())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -348,7 +350,7 @@ type: list&lt;int64&gt;</code></pre>
 </div>
 <section id="nulls-in-list-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="nulls-in-list-arrays">Nulls in list arrays</h3>
-<div id="bb785fc6" class="cell" data-execution_count="9">
+<div id="a7687225" class="cell" data-execution_count="9">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a>with_null <span class="op">=</span> ma.array([[<span class="dv">1</span>, <span class="dv">2</span>], <span class="va">None</span>, [<span class="dv">3</span>, <span class="dv">4</span>, <span class="dv">5</span>]])</span>
 <span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(with_null)</span>
 <span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, with_null.null_count())</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -362,7 +364,7 @@ null count: 1</code></pre>
 <section id="struct-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="struct-arrays">Struct arrays</h2>
 <p>Struct arrays store rows of named fields — like a table with one row per element.</p>
-<div id="ec1b1040" class="cell" data-execution_count="10">
+<div id="4685ff5b" class="cell" data-execution_count="10">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb17"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>people <span class="op">=</span> ma.array([</span>
 <span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Alice"</span>, <span class="st">"age"</span>: <span class="dv">30</span>},</span>
 <span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>    {<span class="st">"name"</span>: <span class="st">"Bob"</span>,   <span class="st">"age"</span>: <span class="dv">25</span>},</span>
@@ -379,7 +381,7 @@ type: struct&lt;name: string, age: int64&gt;</code></pre>
 <section id="slicing" class="level2">
 <h2 class="anchored" data-anchor-id="slicing">Slicing</h2>
 <p><code>slice(offset, length)</code> returns a zero-copy view of a sub-range. No data is copied.</p>
-<div id="f7ea816b" class="cell" data-execution_count="11">
+<div id="b2dd9746" class="cell" data-execution_count="11">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb19"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>arr <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="va">None</span>, <span class="dv">50</span>, <span class="dv">60</span>])</span>
 <span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"original: "</span>, arr)</span>
 <span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"slice(2, 3):"</span>, arr.<span class="bu">slice</span>(<span class="dv">2</span>, <span class="dv">3</span>))   <span class="co"># [30, NULL, 50]</span></span>
@@ -391,7 +393,7 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 </div>
 </div>
 <p>Slicing works on all array types:</p>
-<div id="81e0403d" class="cell" data-execution_count="12">
+<div id="473551a0" class="cell" data-execution_count="12">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>s <span class="op">=</span> ma.array([<span class="st">"a"</span>, <span class="st">"b"</span>, <span class="st">"c"</span>, <span class="st">"d"</span>, <span class="st">"e"</span>])</span>
 <span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(s.<span class="bu">slice</span>(<span class="dv">1</span>, <span class="dv">3</span>))   <span class="co"># ["b", "c", "d"]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
@@ -402,7 +404,7 @@ slice(0, 4): PrimitiveArray[int64]([10, 20, 30, NULL])</code></pre>
 <section id="fixedsizelist-arrays" class="level2">
 <h2 class="anchored" data-anchor-id="fixedsizelist-arrays">FixedSizeList arrays</h2>
 <p>FixedSizeList arrays store sequences of a fixed length per element — useful for embedding vectors or coordinates.</p>
-<div id="053164c2" class="cell" data-execution_count="13">
+<div id="b57e5e96" class="cell" data-execution_count="13">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co"># 2D coordinates: each element has exactly 2 values</span></span>
 <span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a>coords <span class="op">=</span> ma.array([[<span class="fl">1.0</span>, <span class="fl">2.0</span>], [<span class="fl">3.0</span>, <span class="fl">4.0</span>], [<span class="fl">5.0</span>, <span class="fl">6.0</span>]])</span>
 <span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(coords)</span>
