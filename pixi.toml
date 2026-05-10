@@ -17,14 +17,14 @@ version = "0.1.0"
 backend = { name = "pixi-build-mojo", version = "0.1.*" }
 
 [package.build-dependencies]
-mojo-compiler = "==1.0.0b2.dev2026050306"
+mojo-compiler = "==1.0.0b2.dev2026051006"
 
 [package.host-dependencies]
-mojo = "==1.0.0b2.dev2026050306"
+mojo = "==1.0.0b2.dev2026051006"
 
 [package.run-dependencies]
-mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+mojo = "==1.0.0b2.dev2026051006"
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"
@@ -115,8 +115,8 @@ docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 
 [dependencies]
-mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+mojo = "==1.0.0b2.dev2026051006"
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"
