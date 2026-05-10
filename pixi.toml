@@ -24,9 +24,10 @@ mojo = "==1.0.0b2.dev2026050306"
 
 [package.run-dependencies]
 mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "3b30e6327b7b7543f3093e3295f67be174fba7e1" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo/pontoneer when upgrading.
+# update this bound together with mojo when upgrading.
+# pontoneer rev is a commit SHA; update it independently of the mojo version.
 python = ">=3.14,<3.15"
 
 [tasks]
@@ -116,9 +117,10 @@ examples = { features = ["examples"], solve-group = "default" }
 
 [dependencies]
 mojo = "==1.0.0b2.dev2026050306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026050306" }
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "3b30e6327b7b7543f3093e3295f67be174fba7e1" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo/pontoneer when upgrading.
+# update this bound together with mojo when upgrading.
+# pontoneer rev is a commit SHA; update it independently of the mojo version.
 python = ">=3.14,<3.15"
 # The mojo-community channel ships a zlib 0.1.0 stub that satisfies no real
 # version constraint; pin to the real conda-forge zlib so that pyarrow's

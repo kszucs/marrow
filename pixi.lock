@@ -53,7 +53,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -113,7 +113,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -195,7 +195,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/polars-1.40.0-pyh58ad624_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/polars-runtime-32-1.40.0-py310hffdcd12_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -261,7 +261,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/polars-1.40.0-pyh58ad624_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/polars-runtime-32-1.40.0-py310h216a1ac_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -340,7 +340,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -400,7 +400,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -478,7 +478,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -538,7 +538,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pluggy-1.6.0-pyhf9edf01_1.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/py-cpuinfo-9.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pygments-2.20.0-pyhd8ed1ab_0.conda
@@ -685,7 +685,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pexpect-4.9.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/prometheus_client-0.25.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/prompt-toolkit-3.0.52-pyha770c72_0.conda
@@ -850,7 +850,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pexpect-4.9.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/noarch/prometheus_client-0.25.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/prompt-toolkit-3.0.52-pyha770c72_0.conda
@@ -958,7 +958,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.1-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.4-habeac84_100_cp314.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
@@ -1007,7 +1007,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.1-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
@@ -1072,7 +1072,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.1-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: hb0f4dca_0
       - conda: https://conda.anaconda.org/conda-forge/linux-64/python-3.14.4-habeac84_100_cp314.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
@@ -1120,7 +1120,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.1-pyhc364b38_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.0-pyhd8ed1ab_0.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-      - conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+      - conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
         build: h60d57d3_0
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
@@ -3163,7 +3163,7 @@ packages:
   - pkg:pypi/polars-runtime-32?source=hash-mapping
   size: 35948230
   timestamp: 1776563261192
-- conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+- conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
   name: pontoneer
   version: 0.6.6.dev2026050306
   build: h60d57d3_0
@@ -3175,7 +3175,7 @@ packages:
   - python >=3.14.2,<3.15
   channel: null
   license: Apache-2.0 WITH LLVM-exception
-- conda: git+https://github.com/winding-lines/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026050306#3b30e6327b7b7543f3093e3295f67be174fba7e1
+- conda: git+https://github.com/winding-lines/pontoneer?rev=3b30e6327b7b7543f3093e3295f67be174fba7e1#3b30e6327b7b7543f3093e3295f67be174fba7e1
   name: pontoneer
   version: 0.6.6.dev2026050306
   build: hb0f4dca_0
