@@ -21,7 +21,7 @@ packages = []
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
-before-build = "pip install mojo-compiler && mojo build -O3 -g0 -I . python/lib.mojo --emit shared-lib -o python/libmarrow.so"
+before-build = "pip install mojo-compiler"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
