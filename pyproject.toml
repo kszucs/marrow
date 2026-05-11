@@ -34,6 +34,7 @@ repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_34"
 before-all = [
     "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
     "pixi install --frozen",
