@@ -40,7 +40,7 @@ def _to_pydict(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
         var values = builtins.list()
         for j in range(col_len):
             values.append(col_obj[j])
-        result[schema.fields[i].name.to_python_object()] = values
+        result[PythonObject(schema.fields[i].name)] = values
     return result
 
 
@@ -57,7 +57,7 @@ def _to_pylist(schema: Schema, columns: List[AnyArray]) raises -> PythonObject:
     for j in range(n_rows):
         var row = builtins.dict()
         for i in range(n_cols):
-            row[col_names[i].to_python_object()] = col_objs[i][j]
+            row[PythonObject(col_names[i])] = col_objs[i][j]
         result.append(row)
     return result
 
@@ -134,6 +134,16 @@ def _record_batch_columns(
     var result = builtins.list()
     for i in range(len(ptr[].columns)):
         result.append(ptr[].columns[i].copy().to_python_object())
+    return result
+
+
+def _record_batch_column_names(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    var result = builtins.list()
+    for name in ptr[].column_names():
+        result.append(PythonObject(name))
     return result
 
 
@@ -274,6 +284,16 @@ def _table_columns(
     var result = builtins.list()
     for i in range(len(rb.columns)):
         result.append(rb.columns[i].copy().to_python_object())
+    return result
+
+
+def _table_column_names(
+    ptr: UnsafePointer[Table, MutAnyOrigin]
+) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    var result = builtins.list()
+    for name in ptr[].column_names():
+        result.append(PythonObject(name))
     return result
 
 
@@ -553,7 +573,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_shape]("shape")
         .def_method[pymethod[RecordBatch.num_rows]()]("num_rows")
         .def_method[pymethod[RecordBatch.num_columns]()]("num_columns")
-        .def_method[pymethod[RecordBatch.column_names]()]("column_names")
+        .def_method[_record_batch_column_names]("column_names")
         .def_method[_record_batch_column]("column")
         .def_method[_record_batch_slice]("slice")
         .def_method[_record_batch_equals]("equals")
@@ -597,7 +617,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_table_shape]("shape")
         .def_method[pymethod[Table.num_rows]()]("num_rows")
         .def_method[pymethod[Table.num_columns]()]("num_columns")
-        .def_method[pymethod[Table.column_names]()]("column_names")
+        .def_method[_table_column_names]("column_names")
         .def_method[_table_column]("column")
         .def_method[pymethod[Table.to_batches]()]("to_batches")
         .def_method[_table_equals]("equals")

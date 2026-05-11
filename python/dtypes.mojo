@@ -11,7 +11,7 @@ from helpers import marrow_module
 def _field_name(
     ptr: UnsafePointer[dt.Field, MutAnyOrigin]
 ) raises -> PythonObject:
-    return ptr[].name.to_python_object()
+    return PythonObject(ptr[].name)
 
 
 def _field_type(
