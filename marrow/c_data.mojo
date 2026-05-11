@@ -146,7 +146,7 @@ struct CArrowSchema(Copyable, Movable):
         var n_children: Int64 = 0
         var children = UnsafePointer[
             UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
-        ]()
+        ](_unsafe_null=())
 
         if dtype == null:
             fmt = "n"
@@ -218,14 +218,14 @@ struct CArrowSchema(Copyable, Movable):
 
         return CArrowSchema(
             format=_alloc_c_string(fmt),
-            name=UnsafePointer[c_char, MutAnyOrigin](),
-            metadata=UnsafePointer[c_char, MutAnyOrigin](),
+            name=UnsafePointer[c_char, MutAnyOrigin](_unsafe_null=()),
+            metadata=UnsafePointer[c_char, MutAnyOrigin](_unsafe_null=()),
             flags=0,
             n_children=n_children,
             children=children,
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
+            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](_unsafe_null=()),
             release=_release_exported_schema,
-            private_data=OpaquePointer[MutAnyOrigin](),
+            private_data=OpaquePointer[MutAnyOrigin](_unsafe_null=()),
         )
 
     @staticmethod
@@ -256,7 +256,7 @@ struct CArrowSchema(Copyable, Movable):
         var n_fields = len(fields)
         var children = UnsafePointer[
             UnsafePointer[CArrowSchema, MutAnyOrigin], MutAnyOrigin
-        ]()
+        ](_unsafe_null=())
         if n_fields > 0:
             children = alloc[UnsafePointer[CArrowSchema, MutAnyOrigin]](
                 n_fields
@@ -270,14 +270,14 @@ struct CArrowSchema(Copyable, Movable):
 
         return CArrowSchema(
             format=_alloc_c_string("+s"),
-            name=UnsafePointer[c_char, MutAnyOrigin](),
-            metadata=UnsafePointer[c_char, MutAnyOrigin](),
+            name=UnsafePointer[c_char, MutAnyOrigin](_unsafe_null=()),
+            metadata=UnsafePointer[c_char, MutAnyOrigin](_unsafe_null=()),
             flags=0,
             n_children=Int64(n_fields),
             children=children,
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](),
+            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](_unsafe_null=()),
             release=_release_exported_schema,
-            private_data=OpaquePointer[MutAnyOrigin](),
+            private_data=OpaquePointer[MutAnyOrigin](_unsafe_null=()),
         )
 
     @staticmethod
@@ -623,7 +623,7 @@ struct CArrowArray(Copyable, Movable):
                 )
             )
         else:
-            buffers[0] = OpaquePointer[MutAnyOrigin]()
+            buffers[0] = OpaquePointer[MutAnyOrigin](_unsafe_null=())
         for i in range(len(data_heap[].buffers)):
             buffers[1 + i] = OpaquePointer[MutAnyOrigin](
                 unsafe_from_address=Int(
@@ -635,7 +635,7 @@ struct CArrowArray(Copyable, Movable):
         # pointer in children_ptr remains valid after this stack frame exits.
         var children_ptr = UnsafePointer[
             UnsafePointer[CArrowArray, MutAnyOrigin], MutAnyOrigin
-        ]()
+        ](_unsafe_null=())
         if n_children > 0:
             children_ptr = alloc[UnsafePointer[CArrowArray, MutAnyOrigin]](
                 Int(n_children)
@@ -656,7 +656,7 @@ struct CArrowArray(Copyable, Movable):
             n_children=n_children,
             buffers=buffers,
             children=children_ptr,
-            dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](),
+            dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](_unsafe_null=()),
             release=_release_exported_array,
             # private_data keeps data_heap alive; freed by _release_exported_array.
             private_data=data_heap.bitcast[NoneType](),
@@ -881,7 +881,7 @@ def _stream_get_last_error(
     stream_ptr: UnsafePointer[CArrowArrayStream, MutAnyOrigin],
 ) -> UnsafePointer[UInt8, MutAnyOrigin]:
     """Stream callback: return null (no detailed error tracking)."""
-    return UnsafePointer[UInt8, MutAnyOrigin]()
+    return UnsafePointer[UInt8, MutAnyOrigin](_unsafe_null=())
 
 
 def _stream_release(
