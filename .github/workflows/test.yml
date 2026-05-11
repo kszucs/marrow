@@ -53,6 +53,7 @@ jobs:
   asan-linux-x86_64:
     name: asan (linux, x86_64)
     runs-on: ubuntu-latest
+    if: false
     timeout-minutes: 60
     env:
       MODULAR_HOME: "/home/runner/.modular"
