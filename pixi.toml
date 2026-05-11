@@ -19,7 +19,7 @@ backend = { name = "pixi-build-mojo", version = "0.1.*" }
 [package.build-dependencies]
 mojo-compiler = "==1.0.0b2.dev2026051106"
 mojo = "==1.0.0b2.dev2026051106"
-pontoneer = { git = "https://github.com/kszucs/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026051106" }
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 
 [package.run-dependencies]
 # Mojo nightly builds are compiled against a specific CPython minor version;
@@ -173,7 +173,7 @@ docker = { features = ["docker"], no-default-feature = true }
 
 [dependencies]
 mojo = ">=1.0.0b2.dev2026051106,<2"
-pontoneer = { git = "https://github.com/kszucs/pontoneer", tag = "v0.6.6+mojo1.0.0b2.dev2026051106" }
+pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"

@@ -77,7 +77,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/98/7c/21252050676612625449b4807d6b695b9ce8a7c9e1c197ee6216c8a65c7c/numpy-2.4.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
@@ -139,7 +139,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
   bench:
@@ -222,7 +222,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/98/7c/21252050676612625449b4807d6b695b9ce8a7c9e1c197ee6216c8a65c7c/numpy-2.4.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
@@ -290,7 +290,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
   default:
@@ -367,7 +367,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/98/7c/21252050676612625449b4807d6b695b9ce8a7c9e1c197ee6216c8a65c7c/numpy-2.4.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
@@ -429,7 +429,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
   dev:
@@ -506,7 +506,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/98/7c/21252050676612625449b4807d6b695b9ce8a7c9e1c197ee6216c8a65c7c/numpy-2.4.4-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       osx-arm64:
@@ -568,7 +568,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
   docker:
@@ -753,7 +753,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/anyio-4.13.0-pyhcf101f3_0.conda
@@ -919,7 +919,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
   examples:
     channels:
     - url: https://prefix.dev/mojo-community/
@@ -980,7 +980,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/34/80/b9f4889209af02f8d14bccb0e6f0519c329b072bc4d2595025a1303f144c/datafusion-53.0.0-cp310-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       osx-arm64:
@@ -1028,7 +1028,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/6e/59/beabe5301df3338d8206446cd624079e43bdad46e20377a6336017fb6ccf/datafusion-53.0.0-cp310-abi3-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/1b/6da9a89583ce7b23ac611f183ae4843cd3a6cf54f079549b0e8c14031e73/pyarrow-23.0.1-cp314-cp314-macosx_12_0_arm64.whl
   format:
@@ -1090,7 +1090,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
@@ -1137,7 +1137,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
   integration:
     channels:
     - url: https://prefix.dev/mojo-community/
@@ -1255,7 +1255,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/36/2e/c0f017c405fcdc252dbccafbe05e36b0d0eb1ea9a958f081e01c6972927f/pyarrow-23.0.1-cp314-cp314-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/47/d9/d83e293854571c877a92da46fdec39158f8d7e68da75bf73581225d28e90/cffi-2.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
@@ -1375,7 +1375,7 @@ environments:
       - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
       - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-      - conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
+      - conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
       - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/4c/39/8a320264a84404c74cc7e79715de85d6130fa07a0898f67fb5cd5bd79908/numpy-2.4.4-cp314-cp314-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/59/dd/27e9fa567a23931c838c6b02d0764611c62290062a6d4e8ff7863daf9730/cffi-2.0.0-cp314-cp314-macosx_11_0_arm64.whl
@@ -5854,87 +5854,14 @@ packages:
   run_exports: {}
   size: 67735948
   timestamp: 1778481228575
-- conda_source: pontoneer[3691a284] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
-  version: 0.6.6.dev2026051106
-  build: h60d57d3_0
-  subdir: osx-arm64
-  variants:
-    target_platform: osx-arm64
-  depends:
-  - mojo ==1.0.0b2.dev2026051106
-  - python >=3.14.2,<3.15
-  license: Apache-2.0 WITH LLVM-exception
-  build_packages:
-  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-8_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.0-hf6b4638_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.1-h1b79a29_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-h1d4f5a5_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.2-hd24854e_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h46df422_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-h010d191_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-  host_packages:
-  - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/click-8.3.3-pyhc90fa1f_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/cpython-3.14.4-py314hd8ed1ab_100.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/jupyter_client-8.6.3-pyhd8ed1ab_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/jupyter_core-5.9.1-pyhc90fa1f_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/mypy_extensions-1.1.0-pyha770c72_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.2-pyhc364b38_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.1-pyhd8ed1ab_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python-gil-3.14.4-h4df99d1_100.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-8_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/tomli-2.4.1-pyhcf101f3_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/traitlets-5.15.0-pyhcf101f3_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.1-pyhcf101f3_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/krb5-1.22.2-h385eeb1_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libcxx-22.1.5-h55c6f16_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libedit-3.1.20250104-pl5321hafb1f1b_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.0-hf6b4638_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_1.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsodium-1.0.21-h1a92334_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.1-h1b79a29_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-h1d4f5a5_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.2-hd24854e_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyzmq-27.1.0-py312h022ad19_2.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h46df422_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-h010d191_3.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tornado-6.5.5-py314h6c2aa35_0.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zeromq-4.3.5-h4818236_10.conda
-  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
-  - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
-  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
-  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
-  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
-- conda_source: pontoneer[5b29cbda] @ git+https://github.com/kszucs/pontoneer?tag=v0.6.6%2Bmojo1.0.0b2.dev2026051106#5566353d3d32e9af59d2a8b5ad62941ae98d35d5
-  version: 0.6.6.dev2026051106
+- conda_source: pontoneer[15d19163] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
+  version: 0.6.7
   build: hb0f4dca_0
   subdir: linux-64
   variants:
     target_platform: linux-64
   depends:
-  - mojo ==1.0.0b2.dev2026051106
+  - mojo >=1.0.0b2.dev2026051006
   - python >=3.14.2,<3.15
   license: Apache-2.0 WITH LLVM-exception
   build_packages:
@@ -6011,6 +5938,79 @@ packages:
   - conda: https://conda.modular.com/max-nightly/linux-64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
   - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
   - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
+- conda_source: pontoneer[d9967e12] @ git+https://github.com/winding-lines/pontoneer?rev=4001fdc44dc78424803d952395fcae0fb8562a3b#4001fdc44dc78424803d952395fcae0fb8562a3b
+  version: 0.6.7
+  build: h60d57d3_0
+  subdir: osx-arm64
+  variants:
+    target_platform: osx-arm64
+  depends:
+  - mojo >=1.0.0b2.dev2026051006
+  - python >=3.14.2,<3.15
+  license: Apache-2.0 WITH LLVM-exception
+  build_packages:
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-8_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.0-hf6b4638_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.1-h1b79a29_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-h1d4f5a5_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.2-hd24854e_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h46df422_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-h010d191_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
+  host_packages:
+  - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2026.4.22-hbd8a1cb_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/click-8.3.3-pyhc90fa1f_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/cpython-3.14.4-py314hd8ed1ab_100.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/importlib-metadata-8.8.0-pyhcf101f3_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/jupyter_client-8.6.3-pyhd8ed1ab_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/jupyter_core-5.9.1-pyhc90fa1f_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/mypy_extensions-1.1.0-pyha770c72_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/packaging-26.2-pyhc364b38_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/pathspec-1.1.1-pyhd8ed1ab_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/platformdirs-4.9.6-pyhcf101f3_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python-gil-3.14.4-h4df99d1_100.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/python_abi-3.14-8_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/six-1.17.0-pyhe01879c_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tomli-2.4.1-pyhcf101f3_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/traitlets-5.15.0-pyhcf101f3_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/tzdata-2025c-hc9c84f9_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-3.23.1-pyhcf101f3_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-hd037594_9.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/krb5-1.22.2-h385eeb1_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libcxx-22.1.5-h55c6f16_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libedit-3.1.20250104-pl5321hafb1f1b_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libexpat-2.8.0-hf6b4638_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libffi-3.5.2-hcf2aa1b_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/liblzma-5.8.3-h8088a28_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libmpdec-4.0.0-h84a0fba_1.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsodium-1.0.21-h1a92334_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libsqlite-3.53.1-h1b79a29_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/libzlib-1.3.2-h8088a28_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/ncurses-6.6-h1d4f5a5_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.2-hd24854e_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/python-3.14.4-h4c637c5_100_cp314.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/pyzmq-27.1.0-py312h022ad19_2.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/readline-8.3-h46df422_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tk-8.6.13-h010d191_3.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/tornado-6.5.5-py314h6c2aa35_0.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zeromq-4.3.5-h4818236_10.conda
+  - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mblack-26.4.0.dev2026051106-release.conda
+  - conda: https://conda.modular.com/max-nightly/noarch/mojo-python-1.0.0b2.dev2026051106-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-1.0.0b2.dev2026051106-release.conda
+  - conda: https://conda.modular.com/max-nightly/osx-arm64/mojo-compiler-1.0.0b2.dev2026051106-release.conda
 - pypi: https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl
   name: pycparser
   version: '3.0'
