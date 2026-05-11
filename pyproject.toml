@@ -18,22 +18,24 @@ path = "hatch_build.py"
 packages = []
 
 [tool.cibuildwheel]
-# Only CPython 3.14 — Mojo's Python bindings are tied to 3.14.
 build = "cp314-*"
 skip = "*-musllinux*"
 
-# Runs natively on macOS runner; runs inside manylinux container on Linux.
-# Installs pixi to /usr/local/bin (works in both environments).
-before-build = [
-    "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
-    "pixi install --frozen",
-    "pixi run build_python",
-]
-
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
+before-all = [
+    "pip install delocate",
+    "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
+    "pixi install --frozen",
+]
+before-build = "pixi run build_python"
 repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
-repair-wheel-command = "auditwheel repair -w {dest_dir} --plat manylinux_2_28_x86_64 {wheel}"
+before-all = [
+    "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
+    "pixi install --frozen",
+]
+before-build = "pixi run build_python"
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"

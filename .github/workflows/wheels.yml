@@ -23,22 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/cache@v4
-        with:
-          path: .pixi/envs/default/**/.mojo_cache
-          key: mojo-wheel-${{ runner.os }}-${{ hashFiles('pixi.lock', '**/*.mojo') }}
-          restore-keys: mojo-wheel-${{ runner.os }}-
-
-      - name: Install cibuildwheel
-        run: pip install cibuildwheel==2.22.0
-
       - name: Build wheels
-        run: python -m cibuildwheel --output-dir dist
+        uses: pypa/cibuildwheel@v3.0.0
 
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: dist/*.whl
+          path: ./wheelhouse/*.whl
 
   publish:
     needs: build-wheels
