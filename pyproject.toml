@@ -21,7 +21,7 @@ packages = []
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
-before-build = "pip install mojo-compiler"
+before-build = "pip install --pre 'mojo-compiler==1.0.0b2.dev2026051106' --extra-index-url https://whl.modular.com/nightly/simple/"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
@@ -30,4 +30,5 @@ repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_34"
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
