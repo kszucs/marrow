@@ -314,26 +314,36 @@ struct ListScalar(Scalar):
     """A single list value: holds an AnyArray of child elements + validity flag.
     """
 
-    var _value: AnyArray
+    var _value: OwnedPointer[AnyArray]
     var _is_valid: Bool
 
-    def __init__(out self, *, value: AnyArray, is_valid: Bool):
-        self._value = value.copy()
+    def __init__(out self, *, var value: AnyArray, is_valid: Bool):
+        self._value = OwnedPointer(value^)
         self._is_valid = is_valid
 
+    def __init__(out self, *, copy: Self):
+        self._value = OwnedPointer(copy._value[].copy())
+        self._is_valid = copy._is_valid
+
     def type(self) -> AnyDataType:
-        return list_(self._value.dtype())
+        return list_(self._value[].dtype())
 
     def is_valid(self) -> Bool:
         return self._is_valid
 
     def value(self) -> AnyArray:
         """Get the child elements array."""
-        return self._value.copy()
+        return self._value[].copy()
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._is_valid == other._is_valid
+            and self._value[] == other._value[]
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
-            self._value.write_to(writer)
+            self._value[].write_to(writer)
         else:
             writer.write("null")
 
@@ -382,7 +392,7 @@ struct StructScalar(Scalar):
         debug_assert(
             index >= 0 and index < len(self._value), "field index out of bounds"
         )
-        return AnyScalar(copy=self._value[index])
+        return self._value[index].copy()
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -411,42 +421,55 @@ struct DictionaryScalar(Scalar):
     """
 
     var _dtype: AnyDataType
-    var _decoded: AnyScalar  # decoded (looked-up) value; NullScalar when invalid
+    var _index: Int  # integer index into the dictionary; -1 when null
+    var _decoded: OwnedPointer[
+        AnyScalar
+    ]  # decoded (looked-up) value; NullScalar when invalid
 
     def __init__(
         out self,
         *,
         dtype: AnyDataType,
+        index: Int,
         var decoded: AnyScalar,
     ):
         self._dtype = dtype.copy()
-        self._decoded = decoded^
+        self._index = index
+        self._decoded = OwnedPointer(decoded^)
 
     def __init__(out self, *, copy: Self):
         self._dtype = copy._dtype.copy()
-        self._decoded = AnyScalar(copy=copy._decoded)
+        self._index = copy._index
+        self._decoded = OwnedPointer(copy._decoded[].copy())
 
     @staticmethod
     def null(dtype: AnyDataType) -> Self:
-        return Self(dtype=dtype, decoded=NullScalar())
+        return Self(dtype=dtype, index=-1, decoded=NullScalar())
 
     def type(self) -> AnyDataType:
         return self._dtype.copy()
 
     def is_valid(self) -> Bool:
-        return not self._decoded.is_null()
+        return not self._decoded[].is_null()
+
+    def index(self) -> Int:
+        """The integer index into the dictionary. -1 when null."""
+        return self._index
 
     def value(self) -> AnyScalar:
         """The decoded dictionary value. Matches PyArrow's DictionaryScalar.as_py().
         """
-        return AnyScalar(copy=self._decoded)
+        return self._decoded[].copy()
 
-    # Override to_any: DictionaryScalar is NOT in AnyScalar.Variant; return decoded value.
-    def to_any(deinit self) -> AnyScalar:
-        return self._decoded^
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self._dtype == other._dtype
+            and self._index == other._index
+            and self._decoded[] == other._decoded[]
+        )
 
     def write_to[W: Writer](self, mut writer: W):
-        self._decoded.write_to(writer)
+        self._decoded[].write_to(writer)
 
     def write_repr_to[W: Writer](self, mut writer: W):
         self.write_to(writer)
@@ -492,6 +515,7 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         FixedSizeBinaryScalar,
         ListScalar,
         StructScalar,
+        DictionaryScalar,
     ]
 
     var _v: Self.VariantType
@@ -618,6 +642,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def as_struct(ref self) -> ref[self._v] StructScalar:
         return self._as[StructScalar]()
+
+    def as_dictionary(ref self) -> ref[self._v] DictionaryScalar:
+        return self._as[DictionaryScalar]()
 
     def __eq__(self, other: Self) -> Bool:
         return self._v == other._v

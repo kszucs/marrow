@@ -1743,7 +1743,9 @@ struct DictionaryArray(Array):
         else:
             raise Error("DictionaryArray: unexpected index type: ", index_type)
         var decoded = self._values[][dict_idx]
-        return DictionaryScalar(dtype=self._dtype.copy(), decoded=decoded^)
+        return DictionaryScalar(
+            dtype=self._dtype.copy(), index=dict_idx, decoded=decoded^
+        )
 
     def slice(self, offset: Int, length: Int) -> Self:
         """Zero-copy slice: adjusts logical offset, shares indices and values.
