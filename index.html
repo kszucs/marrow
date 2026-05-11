@@ -246,14 +246,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="minute-example" class="level2">
 <h2 class="anchored" data-anchor-id="minute-example">5-minute example</h2>
-<div id="1a831bb7" class="cell" data-execution_count="1">
+<div id="d7dfb292" class="cell" data-execution_count="1">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> sys</span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>sys.path.insert(<span class="dv">0</span>, <span class="st">"../python"</span>)</span>
 <span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <section id="create-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="create-arrays">Create arrays</h3>
-<div id="ad3bd10e" class="cell" data-execution_count="2">
+<div id="152ba365" class="cell" data-execution_count="2">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Primitive arrays — type is inferred from the Python data</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>a <span class="op">=</span> ma.array([<span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">3</span>, <span class="va">None</span>, <span class="dv">5</span>])</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>b <span class="op">=</span> ma.array([<span class="dv">10</span>, <span class="dv">20</span>, <span class="dv">30</span>, <span class="dv">40</span>, <span class="dv">50</span>])</span>
@@ -265,7 +265,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 PrimitiveArray[int64]([10, 20, 30, 40, 50])</code></pre>
 </div>
 </div>
-<div id="e4445b68" class="cell" data-execution_count="3">
+<div id="25c6c847" class="cell" data-execution_count="3">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb6"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Strings and nested structures work too</span></span>
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>names  <span class="op">=</span> ma.array([<span class="st">"Alice"</span>, <span class="st">"Bob"</span>, <span class="va">None</span>, <span class="st">"Dana"</span>])</span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>scores <span class="op">=</span> ma.array([<span class="fl">9.5</span>, <span class="fl">8.2</span>, <span class="fl">7.8</span>, <span class="va">None</span>])</span>
@@ -280,14 +280,14 @@ PrimitiveArray[float64]([9.5, 8.2, 7.8, NULL])</code></pre>
 <section id="arithmetic" class="level3">
 <h3 class="anchored" data-anchor-id="arithmetic">Arithmetic</h3>
 <p>Null values propagate through element-wise operations — if either input is null, the output is null.</p>
-<div id="c279a44c" class="cell" data-execution_count="4">
+<div id="c4974118" class="cell" data-execution_count="4">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb8"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> ma.add(a, b, <span class="va">None</span>)</span>
 <span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(result)   <span class="co"># index 3 is null because a[3] is null</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([11, 22, 33, NULL, 55])</code></pre>
 </div>
 </div>
-<div id="b42b86ee" class="cell" data-execution_count="5">
+<div id="2611e14c" class="cell" data-execution_count="5">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb10"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(ma.mul(a, b, <span class="va">None</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <div class="cell-output cell-output-stdout">
 <pre><code>PrimitiveArray[int64]([10, 40, 90, NULL, 250])</code></pre>
@@ -297,7 +297,7 @@ PrimitiveArray[float64]([9.5, 8.2, 7.8, NULL])</code></pre>
 <section id="aggregates" class="level3">
 <h3 class="anchored" data-anchor-id="aggregates">Aggregates</h3>
 <p>Aggregates skip null values.</p>
-<div id="056b06e8" class="cell" data-execution_count="6">
+<div id="ebcc7338" class="cell" data-execution_count="6">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb12"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"sum:    "</span>, ma.sum_(a, <span class="va">None</span>))    <span class="co"># 1+2+3+5 = 11, null skipped</span></span>
 <span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"min:    "</span>, ma.min_(a, <span class="va">None</span>))</span>
 <span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"max:    "</span>, ma.max_(a, <span class="va">None</span>))</span>
@@ -312,7 +312,7 @@ product: 30</code></pre>
 </section>
 <section id="filter-and-drop-nulls" class="level3">
 <h3 class="anchored" data-anchor-id="filter-and-drop-nulls">Filter and drop nulls</h3>
-<div id="97f2388e" class="cell" data-execution_count="7">
+<div id="275d540f" class="cell" data-execution_count="7">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb14"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>mask <span class="op">=</span> ma.array([<span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>, <span class="va">False</span>, <span class="va">True</span>])</span>
 <span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"filter:"</span>, ma.filter_(a, mask))</span>
 <span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"drop nulls:"</span>, ma.drop_nulls(a))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
@@ -324,7 +324,7 @@ drop nulls: PrimitiveArray[int64]([1, 2, 3, 5])</code></pre>
 </section>
 <section id="inspect-arrays" class="level3">
 <h3 class="anchored" data-anchor-id="inspect-arrays">Inspect arrays</h3>
-<div id="280bbbfa" class="cell" data-execution_count="8">
+<div id="6292757b" class="cell" data-execution_count="8">
 <div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb16"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"length:    "</span>, a.<span class="fu">__len__</span>())</span>
 <span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"null count:"</span>, a.null_count())</span>
 <span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a><span class="bu">print</span>(<span class="st">"type:      "</span>, a.<span class="bu">type</span>())</span>
