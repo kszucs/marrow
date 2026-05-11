@@ -106,14 +106,14 @@ def main():
             env = None
         elif script.suffix == ".py":
             # Build the shared lib with debug info for Python workloads
-            so = ROOT / "python" / "marrow.so"
+            so = ROOT / "python" / "libmarrow.so"
             build_cmd = [
                 str(MOJO), "build", "-I", ".",
                 "python/lib.mojo", "--emit", "shared-lib",
                 "-g", "--debug-info-language", "C",
                 "-O1", "-o", str(so),
             ]
-            print("Building marrow.so (-g, C debug info)...")
+            print("Building libmarrow.so (-g, C debug info)...")
             result = subprocess.run(build_cmd, cwd=ROOT, capture_output=True, text=True)
             if result.returncode != 0:
                 print(result.stderr, file=sys.stderr)

@@ -316,13 +316,13 @@ def test_drop_nulls_float64():
 
 @pytest.mark.gpu
 def test_device_construct():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     assert device is not None
 
 
 @pytest.mark.gpu
 def test_array_to_device_and_back():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     a_gpu = a.to_device(device)
     a_cpu = a_gpu.to_cpu(device)
@@ -332,7 +332,7 @@ def test_array_to_device_and_back():
 
 @pytest.mark.gpu
 def test_add_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     b = ma.array([10, 20, 30], type=ma.int32())
     result = ma.add(a.to_device(device), b.to_device(device), device).to_cpu(device)
@@ -342,7 +342,7 @@ def test_add_gpu():
 
 @pytest.mark.gpu
 def test_sub_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([10, 20, 30], type=ma.int32())
     b = ma.array([1, 2, 3], type=ma.int32())
     result = ma.sub(a.to_device(device), b.to_device(device), device).to_cpu(device)
@@ -352,7 +352,7 @@ def test_sub_gpu():
 
 @pytest.mark.gpu
 def test_mul_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([2, 3, 4], type=ma.int32())
     b = ma.array([5, 6, 7], type=ma.int32())
     result = ma.mul(a.to_device(device), b.to_device(device), device).to_cpu(device)
@@ -362,7 +362,7 @@ def test_mul_gpu():
 
 @pytest.mark.gpu
 def test_sum_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([1.0, 2.0, 3.0], type=ma.float32())
     result = ma.sum_(a.to_device(device), device)
     assert float(result) == 6.0
@@ -370,7 +370,7 @@ def test_sum_gpu():
 
 @pytest.mark.gpu
 def test_min_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([3, 1, 4, 1, 5], type=ma.int32())
     result = ma.min_(a.to_device(device), device)
     assert float(result) == 1.0
@@ -378,7 +378,7 @@ def test_min_gpu():
 
 @pytest.mark.gpu
 def test_max_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([3, 1, 4, 1, 5], type=ma.int32())
     result = ma.max_(a.to_device(device), device)
     assert float(result) == 5.0
@@ -386,7 +386,7 @@ def test_max_gpu():
 
 @pytest.mark.gpu
 def test_equal_gpu():
-    device = ma.Device()
+    device = ma.ExecutionContext.parallel()
     a = ma.array([1, 2, 3], type=ma.int32())
     b = ma.array([1, 0, 3], type=ma.int32())
     result = ma.equal(a.to_device(device), b.to_device(device), device).to_cpu(device)

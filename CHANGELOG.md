@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Build Infrastructure
+
+- PyPI wheel packaging via cibuildwheel and hatchling; Mojo runtime dylibs bundled
+  with delocate (macOS) / auditwheel (Linux). Local build: `pixi run -e wheel build_wheel`.
+- `python/__init__.py` added; `marrow.so` renamed to `libmarrow.so` to distinguish
+  the internal Mojo extension from the `marrow` Python package.
+- `build_python` now explicitly passes `-O3 -g0` to `mojo build`.
+
 ### Features
 
 - **Sort kernel — `argsort` and `sort`** (`marrow/kernels/sort.mojo`):
