@@ -155,6 +155,11 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
   "build_python",
 ], env = { PYTHONPATH = "python" } }
 
+# Docker — x86_64 Linux container for reproducing CI failures locally.
+[feature.docker.tasks]
+build = { cmd = "docker compose build x86" }
+test = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build"] }
+
 [environments]
 default = { features = ["dev", "format"], solve-group = "default" }
 dev = { features = ["dev", "format"], solve-group = "default" }
@@ -164,6 +169,7 @@ format = { features = ["format"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 integration = { features = ["dev", "integration"], solve-group = "integration" }
+docker = { features = ["docker"], no-default-feature = true }
 
 [dependencies]
 mojo = ">=1.0.0b2.dev2026051006,<2"

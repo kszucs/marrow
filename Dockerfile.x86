@@ -1,0 +1,33 @@
+# x86_64 Linux dev container for running tests locally.
+# Build:   pixi run -e dev docker_build_x86
+# Test:    pixi run -e dev test_x86 marrow/tests/test_scalars.mojo::test_foo
+
+FROM --platform=linux/amd64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV FORCE_COLOR=1
+ENV PYTEST_ADDOPTS=--color=yes
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://pixi.sh/install.sh | bash
+ENV PATH="/root/.pixi/bin:$PATH"
+
+WORKDIR /marrow
+
+# Install deps — cached unless pixi.toml / pixi.lock change.
+COPY pixi.toml pixi.lock ./
+RUN pixi install --frozen -e dev
+
+# Stash the env so the entrypoint can seed the volume on first use.
+RUN cp -r .pixi /pixi-env-seed
+
+# On first run the named volume at /marrow/.pixi is empty; copy the seed in.
+# Source is bind-mounted at runtime — no COPY . . here.
+RUN printf '#!/bin/sh\n[ -d /marrow/.pixi/envs ] || cp -r /pixi-env-seed/. /marrow/.pixi/\nexec "$@"\n' \
+    > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["pixi", "run", "-e", "dev", "test"]

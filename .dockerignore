@@ -1,5 +1,15 @@
+.git/
 .pixi/
 .test_runners/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
+__pycache__/
+integration/
+profile_*.trace/
 python/marrow.so
 package/
 output/
+results/
+presentation/
+docs/

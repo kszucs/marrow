@@ -1,0 +1,12 @@
+services:
+  x86:
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.x86
+    volumes:
+      - .:/marrow          # source bind-mount
+      - pixi_x86:/marrow/.pixi  # x86 pixi env persisted across runs
+
+volumes:
+  pixi_x86:
