@@ -10,13 +10,13 @@ from std.benchmark import BenchMetric, keep
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
-from marrow.dtypes import Int32Type, Float64Type, PrimitiveType
+from marrow.dtypes import Int32Type, Float64Type, NumericType
 from marrow.kernels.arithmetic import add
 from marrow.testing import BenchSuite, Benchmark
 
 
 def _make_array_with_nulls[
-    T: PrimitiveType
+    T: NumericType
 ](size: Int) raises -> PrimitiveArray[T]:
     """Build an array with 10% nulls (every 10th element is null)."""
     var b = PrimitiveBuilder[T](size)
