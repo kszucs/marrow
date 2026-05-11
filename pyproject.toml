@@ -21,23 +21,13 @@ packages = []
 build = "cp314-*"
 skip = "*-musllinux*"
 enable = ["cpython-prerelease"]
+before-build = "pip install mojo-compiler && mojo build -O3 -g0 -I . python/lib.mojo --emit shared-lib -o python/libmarrow.so"
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
-before-all = [
-    "pip install delocate",
-    "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
-    "pixi install --frozen",
-]
-before-build = "pixi run build_python"
+before-all = "pip install delocate"
 repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64"]
-manylinux-x86_64-image = "manylinux_2_34"
-before-all = [
-    "curl -fsSL https://pixi.sh/install.sh | PIXI_HOME=/usr/local bash",
-    "pixi install --frozen",
-]
-before-build = "pixi run build_python"
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
