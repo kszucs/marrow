@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>DataFusion UDFs – Marrow</title>
+<title>decimal-type-design – Marrow</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,61 +23,26 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
-}
 </style>
 
 
-<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="../site_libs/quarto-nav/headroom.min.js"></script>
-<script src="../site_libs/clipboard/clipboard.min.js"></script>
-<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
-<script src="../site_libs/quarto-search/fuse.min.js"></script>
-<script src="../site_libs/quarto-search/quarto-search.js"></script>
-<meta name="quarto:offset" content="../">
-<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
-<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="../site_libs/quarto-html/popper.min.js"></script>
-<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
-<script src="../site_libs/quarto-html/anchor.min.js"></script>
-<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="../site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
-<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
-<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="../site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -116,11 +81,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
-    <a href="../index.html" class="navbar-brand navbar-brand-logo">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo light-content">
-    <img src="../../logo.png" alt="marrow" class="navbar-logo dark-content">
+    <a href="./index.html" class="navbar-brand navbar-brand-logo">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo dark-content">
     </a>
-    <a class="navbar-brand" href="../index.html">
+    <a class="navbar-brand" href="./index.html">
     <span class="navbar-title">Marrow</span>
     </a>
   </div>
@@ -131,7 +96,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
           <div class="collapse navbar-collapse" id="navbarCollapse">
             <ul class="navbar-nav navbar-nav-scroll me-auto">
   <li class="nav-item">
-    <a class="nav-link" href="../index.html"> 
+    <a class="nav-link" href="./index.html"> 
 <span class="menu-text">Quickstart</span></a>
   </li>  
   <li class="nav-item dropdown ">
@@ -140,23 +105,23 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </a>
     <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
         <li>
-    <a class="dropdown-item" href="../guide/arrays.html">
+    <a class="dropdown-item" href="./guide/arrays.html">
  <span class="dropdown-text">Arrays</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="../guide/compute.html">
+    <a class="dropdown-item" href="./guide/compute.html">
  <span class="dropdown-text">Compute</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="../guide/expressions.html">
+    <a class="dropdown-item" href="./guide/expressions.html">
  <span class="dropdown-text">Expressions</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="../guide/types.html">
+    <a class="dropdown-item" href="./guide/types.html">
  <span class="dropdown-text">Type System</span></a>
   </li>  
         <li>
-    <a class="dropdown-item" href="../guide/interop.html">
+    <a class="dropdown-item" href="./guide/interop.html">
  <span class="dropdown-text">PyArrow Interop</span></a>
   </li>  
     </ul>
@@ -167,7 +132,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </a>
     <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
         <li>
-    <a class="dropdown-item" href="../examples/datafusion.html">
+    <a class="dropdown-item" href="./examples/datafusion.html">
  <span class="dropdown-text">DataFusion UDFs</span></a>
   </li>  
     </ul>
@@ -175,7 +140,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </ul>
             <ul class="navbar-nav navbar-nav-scroll ms-auto">
   <li class="nav-item">
-    <a class="nav-link" href="../benchmarks/"> 
+    <a class="nav-link" href="./benchmarks/"> 
 <span class="menu-text">Benchmarks</span></a>
   </li>  
   <li class="nav-item compact">
@@ -199,108 +164,228 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#setup" id="toc-setup" class="nav-link active" data-scroll-target="#setup">Setup</a></li>
-  <li><a href="#register-a-mojo-kernel-as-a-udf" id="toc-register-a-mojo-kernel-as-a-udf" class="nav-link" data-scroll-target="#register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</a></li>
-  <li><a href="#query-a-table" id="toc-query-a-table" class="nav-link" data-scroll-target="#query-a-table">Query a table</a></li>
-  <li><a href="#null-propagation" id="toc-null-propagation" class="nav-link" data-scroll-target="#null-propagation">Null propagation</a></li>
-  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#decimal-type-and-unified-primitive-array-design" id="toc-decimal-type-and-unified-primitive-array-design" class="nav-link active" data-scroll-target="#decimal-type-and-unified-primitive-array-design">Decimal Type and Unified Primitive Array Design</a>
+  <ul class="collapse">
+  <li><a href="#motivation" id="toc-motivation" class="nav-link" data-scroll-target="#motivation">Motivation</a></li>
+  <li><a href="#trait-hierarchy" id="toc-trait-hierarchy" class="nav-link" data-scroll-target="#trait-hierarchy">Trait Hierarchy</a>
+  <ul class="collapse">
+  <li><a href="#primitivetype" id="toc-primitivetype" class="nav-link" data-scroll-target="#primitivetype"><code>PrimitiveType</code></a></li>
+  <li><a href="#numerictype" id="toc-numerictype" class="nav-link" data-scroll-target="#numerictype"><code>NumericType</code></a></li>
+  <li><a href="#temporaltype" id="toc-temporaltype" class="nav-link" data-scroll-target="#temporaltype"><code>TemporalType</code></a></li>
+  <li><a href="#decimaltype" id="toc-decimaltype" class="nav-link" data-scroll-target="#decimaltype"><code>DecimalType</code></a></li>
+  </ul></li>
+  <li><a href="#unified-primitivearrayt-primitivetype" id="toc-unified-primitivearrayt-primitivetype" class="nav-link" data-scroll-target="#unified-primitivearrayt-primitivetype">Unified <code>PrimitiveArray[T: PrimitiveType]</code></a>
+  <ul class="collapse">
+  <li><a href="#type-aliases" id="toc-type-aliases" class="nav-link" data-scroll-target="#type-aliases">Type aliases</a></li>
+  </ul></li>
+  <li><a href="#effect-on-arithmetic-kernels" id="toc-effect-on-arithmetic-kernels" class="nav-link" data-scroll-target="#effect-on-arithmetic-kernels">Effect on Arithmetic Kernels</a>
+  <ul class="collapse">
+  <li><a href="#existing-numeric-kernels-minimal-change" id="toc-existing-numeric-kernels-minimal-change" class="nav-link" data-scroll-target="#existing-numeric-kernels-minimal-change">Existing numeric kernels — minimal change</a></li>
+  <li><a href="#decimal-arithmetic-custom-overloads" id="toc-decimal-arithmetic-custom-overloads" class="nav-link" data-scroll-target="#decimal-arithmetic-custom-overloads">Decimal arithmetic — custom overloads</a></li>
+  </ul></li>
+  <li><a href="#physical-storage-of-decimal-values" id="toc-physical-storage-of-decimal-values" class="nav-link" data-scroll-target="#physical-storage-of-decimal-values">Physical Storage of Decimal Values</a></li>
+  <li><a href="#migration-notes" id="toc-migration-notes" class="nav-link" data-scroll-target="#migration-notes">Migration Notes</a></li>
+  <li><a href="#prior-art" id="toc-prior-art" class="nav-link" data-scroll-target="#prior-art">Prior Art</a></li>
+  </ul></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
-<main class="content" id="quarto-document-content">
-
-<header id="title-block-header" class="quarto-title-block default">
-<div class="quarto-title">
-<h1 class="title">DataFusion UDFs</h1>
-</div>
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
 
 
 
-<div class="quarto-title-meta">
 
-    
-  
-    
-  </div>
-  
-
-
-</header>
-
-
-<p><a href="https://datafusion.apache.org">Apache Arrow DataFusion</a> is an embeddable SQL query engine built on Arrow. Because Marrow and DataFusion share the same Arrow columnar memory format, Mojo compute functions can be registered as DataFusion UDFs with zero data copies — DataFusion passes Arrow arrays directly into the Mojo kernel via the C Data Interface.</p>
-<section id="setup" class="level2">
-<h2 class="anchored" data-anchor-id="setup">Setup</h2>
-<p>DataFusion is an optional dependency in the <code>examples</code> pixi feature. Install it with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pixi</span> run <span class="at">-e</span> examples datafusion_udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Or add it to an existing environment:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> marrow <span class="im">as</span> ma</span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> pyarrow <span class="im">as</span> pa</span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="im">from</span> datafusion <span class="im">import</span> SessionContext, udf</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="decimal-type-and-unified-primitive-array-design" class="level1">
+<h1>Decimal Type and Unified Primitive Array Design</h1>
+<section id="motivation" class="level2">
+<h2 class="anchored" data-anchor-id="motivation">Motivation</h2>
+<p>The current codebase has two parallel array structs for fixed-width physical storage:</p>
+<ul>
+<li><code>PrimitiveArray[T: PrimitiveType]</code> — numeric and boolean types</li>
+<li><code>TemporalArray[T: TemporalType]</code> — date, time, duration, timestamp types</li>
+</ul>
+<p><code>TemporalArray</code> was introduced because temporal types carry runtime logical information (time unit, timezone) that isn’t captured by the Mojo type parameter alone. Adding decimal support would require a third struct (<code>DecimalArray</code>) for the same reason (runtime precision and scale). This is redundant — all three structs hold the same fields: <code>dtype</code>, <code>length</code>, <code>nulls</code>, <code>offset</code>, <code>bitmap</code>, <code>buffer</code>.</p>
+<p>The refactor unifies them into a single <code>PrimitiveArray[T: PrimitiveType]</code> parameterised on a richer trait hierarchy, and uses sub-trait bounds to keep arithmetic kernels restricted to numeric types only.</p>
 </section>
-<section id="register-a-mojo-kernel-as-a-udf" class="level2">
-<h2 class="anchored" data-anchor-id="register-a-mojo-kernel-as-a-udf">Register a Mojo kernel as a UDF</h2>
-<p>Any Marrow compute function that accepts and returns Arrow arrays can be wrapped as a DataFusion UDF. The wrapper converts PyArrow arrays to Marrow via the C Data Interface, calls the kernel, and converts back.</p>
-<div id="39b5b41b" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb3"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> mojo_add(a: pa.Array, b: pa.Array) <span class="op">-&gt;</span> pa.Array:</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a>    <span class="cf">return</span> pa.array(ma.add(ma.array(a, <span class="va">None</span>), ma.array(b)))</span>
-<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a>add_udf <span class="op">=</span> udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), <span class="st">"immutable"</span>, name<span class="op">=</span><span class="st">"mojo_add"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
+<section id="trait-hierarchy" class="level2">
+<h2 class="anchored" data-anchor-id="trait-hierarchy">Trait Hierarchy</h2>
+<pre><code>DataType
+└── PrimitiveType(DataType)          comptime native: DType
+    ├── NumericType(PrimitiveType)   + TrivialRegisterPassable, Defaultable
+    ├── TemporalType(PrimitiveType)
+    └── DecimalType(PrimitiveType)</code></pre>
+<section id="primitivetype" class="level3">
+<h3 class="anchored" data-anchor-id="primitivetype"><code>PrimitiveType</code></h3>
+<p>The root trait for all fixed-width, buffer-backed types. Provides a single compile-time requirement: <code>comptime native: DType</code> — the physical storage type used for buffer reads and SIMD operations. Does <strong>not</strong> require <code>TrivialRegisterPassable</code> or <code>Defaultable</code>, because some sub-types (e.g.&nbsp;temporal types with timezone strings, decimal types with runtime precision/scale) cannot satisfy those constraints.</p>
+<pre class="mojo"><code>trait PrimitiveType(DataType):
+    comptime native: DType</code></pre>
 </section>
-<section id="query-a-table" class="level2">
-<h2 class="anchored" data-anchor-id="query-a-table">Query a table</h2>
-<div id="1b731615" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb4"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>ctx <span class="op">=</span> SessionContext()</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>ctx.register_udf(add_udf)</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>batch <span class="op">=</span> pa.record_batch(</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"price"</span>:    pa.array([<span class="dv">100</span>, <span class="dv">200</span>, <span class="dv">300</span>, <span class="dv">400</span>, <span class="dv">500</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"quantity"</span>: pa.array([<span class="dv">3</span>,   <span class="dv">1</span>,   <span class="dv">4</span>,   <span class="dv">1</span>,   <span class="dv">5</span>  ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>ctx.register_record_batches(<span class="st">"orders"</span>, [[batch]])</span>
-<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>result <span class="op">=</span> pa.Table.from_batches(</span>
-<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>    ctx.sql(<span class="st">"SELECT price, quantity, mojo_add(price, quantity) AS total FROM orders"</span>).collect()</span>
-<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>result</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
+<section id="numerictype" class="level3">
+<h3 class="anchored" data-anchor-id="numerictype"><code>NumericType</code></h3>
+<p>Integers, unsigned integers, floats, and bool. These are zero-sized marker structs with no runtime state, so they can satisfy the stricter register-passable constraint. This is the bound used by existing arithmetic kernels.</p>
+<pre class="mojo"><code>trait NumericType(PrimitiveType, TrivialRegisterPassable, Defaultable):
+    pass</code></pre>
+<p>Concrete types: <code>Int8Type</code>, <code>Int16Type</code>, <code>Int32Type</code>, <code>Int64Type</code>, <code>UInt8Type</code>, <code>UInt16Type</code>, <code>UInt32Type</code>, <code>UInt64Type</code>, <code>Float16Type</code>, <code>Float32Type</code>, <code>Float64Type</code>, <code>BoolType</code>.</p>
 </section>
-<section id="null-propagation" class="level2">
-<h2 class="anchored" data-anchor-id="null-propagation">Null propagation</h2>
-<p>Marrow kernels propagate nulls according to the Arrow specification. Rows where either operand is null produce a null result — DataFusion preserves this behaviour transparently.</p>
-<div id="a66cc0b8" class="cell">
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb5"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>ctx2 <span class="op">=</span> SessionContext()</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>ctx2.register_udf(add_udf)</span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>batch2 <span class="op">=</span> pa.record_batch(</span>
-<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    {</span>
-<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="st">"a"</span>: pa.array([<span class="dv">1</span>, <span class="va">None</span>, <span class="dv">3</span>, <span class="dv">4</span>   ], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>        <span class="st">"b"</span>: pa.array([<span class="dv">10</span>, <span class="dv">20</span>,  <span class="va">None</span>, <span class="dv">40</span>], <span class="bu">type</span><span class="op">=</span>pa.int64()),</span>
-<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    }</span>
-<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>)</span>
-<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>ctx2.register_record_batches(<span class="st">"t"</span>, [[batch2]])</span>
-<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>pa.Table.from_batches(</span>
-<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    ctx2.sql(<span class="st">"SELECT a, b, mojo_add(a, b) AS result FROM t"</span>).collect()</span>
-<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</div>
+<section id="temporaltype" class="level3">
+<h3 class="anchored" data-anchor-id="temporaltype"><code>TemporalType</code></h3>
+<p>Date, time, duration, and timestamp types. The physical storage is int32 or int64, but the logical type carries a time unit and (for timestamps) an optional timezone string — both runtime values stored in <code>array.dtype</code>.</p>
+<pre class="mojo"><code>trait TemporalType(PrimitiveType):
+    pass</code></pre>
+<p>Concrete types: <code>Date32Type</code>, <code>Date64Type</code>, <code>Time32Type</code>, <code>Time64Type</code>, <code>DurationType</code>, <code>TimestampType</code>.</p>
 </section>
-<section id="how-it-works" class="level2">
-<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
-<p>Each call to <code>mojo_add</code> inside a DataFusion query goes through these steps:</p>
+<section id="decimaltype" class="level3">
+<h3 class="anchored" data-anchor-id="decimaltype"><code>DecimalType</code></h3>
+<p>Fixed-point decimal types backed by int32, int64, int128, or int256. The logical type carries precision and scale — runtime values stored in <code>array.dtype</code>.</p>
+<pre class="mojo"><code>trait DecimalType(PrimitiveType):
+    pass</code></pre>
+<p>Concrete types: <code>Decimal32Type</code>, <code>Decimal64Type</code>, <code>Decimal128Type</code>, <code>Decimal256Type</code>.</p>
+</section>
+</section>
+<section id="unified-primitivearrayt-primitivetype" class="level2">
+<h2 class="anchored" data-anchor-id="unified-primitivearrayt-primitivetype">Unified <code>PrimitiveArray[T: PrimitiveType]</code></h2>
+<p>A single array struct replaces both <code>PrimitiveArray</code> and <code>TemporalArray</code>:</p>
+<pre class="mojo"><code>struct PrimitiveArray[T: PrimitiveType]:
+    var dtype: AnyDataType          # full logical type at runtime
+    var length: Int
+    var nulls: Int
+    var offset: Int
+    var bitmap: Optional[Bitmap[mut=False]]
+    var buffer: Buffer[mut=False]</code></pre>
+<p>The <code>dtype</code> field is the key addition:</p>
+<ul>
+<li>For <code>NumericType</code> arrays it is always derivable from <code>T</code> (e.g.&nbsp;<code>Int32Type</code> → <code>AnyDataType(Int32Type())</code>), so it is slightly redundant but keeps the struct uniform.</li>
+<li>For <code>TemporalType</code> arrays it carries the time unit and timezone.</li>
+<li>For <code>DecimalType</code> arrays it carries precision and scale.</li>
+</ul>
+<p><code>T.native</code> gives the physical <code>DType</code> for all buffer reads and SIMD operations, regardless of which sub-trait <code>T</code> belongs to.</p>
+<section id="type-aliases" class="level3">
+<h3 class="anchored" data-anchor-id="type-aliases">Type aliases</h3>
+<pre class="mojo"><code># Numeric (unchanged names, now all PrimitiveArray)
+comptime Int8Array    = PrimitiveArray[Int8Type]
+comptime Int32Array   = PrimitiveArray[Int32Type]
+# ... etc.
+
+# Temporal (drop TemporalArray, same names)
+comptime Date32Array    = PrimitiveArray[Date32Type]
+comptime TimestampArray = PrimitiveArray[TimestampType]
+# ... etc.
+
+# Decimal (new)
+comptime Decimal32Array  = PrimitiveArray[Decimal32Type]
+comptime Decimal64Array  = PrimitiveArray[Decimal64Type]
+comptime Decimal128Array = PrimitiveArray[Decimal128Type]
+comptime Decimal256Array = PrimitiveArray[Decimal256Type]</code></pre>
+</section>
+</section>
+<section id="effect-on-arithmetic-kernels" class="level2">
+<h2 class="anchored" data-anchor-id="effect-on-arithmetic-kernels">Effect on Arithmetic Kernels</h2>
+<section id="existing-numeric-kernels-minimal-change" class="level3">
+<h3 class="anchored" data-anchor-id="existing-numeric-kernels-minimal-change">Existing numeric kernels — minimal change</h3>
+<p>Change the trait bound from <code>PrimitiveType</code> to <code>NumericType</code>. Everything else is identical.</p>
+<pre class="mojo"><code># Before
+def _binary[T: PrimitiveType, func: ...](
+    left: PrimitiveArray[T], right: PrimitiveArray[T], ...
+) raises -&gt; PrimitiveArray[T]:
+
+# After
+def _binary[T: NumericType, func: ...](
+    left: PrimitiveArray[T], right: PrimitiveArray[T], ...
+) raises -&gt; PrimitiveArray[T]:</code></pre>
+<p>Decimal and temporal arrays are excluded at compile time by the <code>NumericType</code> bound. No runtime check needed.</p>
+</section>
+<section id="decimal-arithmetic-custom-overloads" class="level3">
+<h3 class="anchored" data-anchor-id="decimal-arithmetic-custom-overloads">Decimal arithmetic — custom overloads</h3>
+<p>Decimal addition is fundamentally different from numeric addition:</p>
 <ol type="1">
-<li>DataFusion evaluates the query plan and produces a <code>pyarrow.Array</code> chunk for each argument column.</li>
-<li><code>ma.array(a)</code> imports the array into Marrow via <code>__arrow_c_array__</code> — a pointer exchange, no copy.</li>
-<li><code>ma.add(..., None)</code> runs the SIMD-vectorised Mojo kernel over the raw Arrow buffer.</li>
-<li><code>pa.array(result)</code> exports the result back to PyArrow via <code>__arrow_c_array__</code> — again, no copy.</li>
+<li><p><strong>Scale alignment</strong> — the lower-scale operand must be multiplied by <code>10^(scale_diff)</code> before adding. This is a runtime value, so it cannot be expressed as a compile-time SIMD <code>func</code> parameter.</p></li>
+<li><p><strong>Result type changes</strong> — the output precision and scale are derived from the inputs:</p>
+<pre><code>result_scale     = max(s1, s2)
+result_precision = max(p1-s1, p2-s2) + result_scale + 1</code></pre>
+<p>The result carries a different <code>dtype</code> than either input.</p></li>
+<li><p><strong>Overflow promotion</strong> — Decimal128 arithmetic requires 256-bit intermediates to prevent overflow during scale alignment. There are no 128-bit SIMD lanes, so the <code>vectorize</code>/<code>elementwise</code> path does not apply. The kernel uses a scalar element-wise loop instead.</p></li>
 </ol>
-<p>The data layout is identical in both libraries, so steps 2 and 4 are O(1) pointer operations regardless of array length.</p>
+<p>Decimal kernels take a <code>DecimalType</code> bound and read precision/scale from <code>array.dtype</code>:</p>
+<pre class="mojo"><code>def add[T: DecimalType](
+    left: PrimitiveArray[T],
+    right: PrimitiveArray[T],
+) raises -&gt; PrimitiveArray[T]:
+    var left_type  = left.dtype.as_decimal()
+    var right_type = right.dtype.as_decimal()
+    var s1 = left_type.scale()
+    var s2 = right_type.scale()
+    var result_scale     = max(s1, s2)
+    var result_precision = max(left_type.precision()  - s1,
+                               right_type.precision() - s2) + result_scale + 1
+    var result_dtype = AnyDataType(decimal128(result_precision, result_scale))
+    # scalar loop: promote each pair to wider type, align, add, check overflow
+    ...
+    return PrimitiveArray[T](dtype=result_dtype^, ...)</code></pre>
+<p>Multiplication, division, and other decimal operations follow the same pattern with their own result-type formulas per the SQL standard.</p>
+</section>
+</section>
+<section id="physical-storage-of-decimal-values" class="level2">
+<h2 class="anchored" data-anchor-id="physical-storage-of-decimal-values">Physical Storage of Decimal Values</h2>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Type</th>
+<th><code>native</code> DType</th>
+<th>Bytes</th>
+<th>Max precision</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>Decimal32Type</code></td>
+<td><code>DType.int32</code></td>
+<td>4</td>
+<td>9</td>
+</tr>
+<tr class="even">
+<td><code>Decimal64Type</code></td>
+<td><code>DType.int64</code></td>
+<td>8</td>
+<td>18</td>
+</tr>
+<tr class="odd">
+<td><code>Decimal128Type</code></td>
+<td><code>DType.int128</code></td>
+<td>16</td>
+<td>38</td>
+</tr>
+<tr class="even">
+<td><code>Decimal256Type</code></td>
+<td><code>DType.int256</code></td>
+<td>32</td>
+<td>76</td>
+</tr>
+</tbody>
+</table>
+<p>Values are stored as two’s complement scaled integers: the logical value is <code>stored_integer * 10^(-scale)</code>. Negative scale is valid (e.g.&nbsp;scale=-2 means the unit is hundreds).</p>
+<p>For Decimal256, Mojo has no native <code>DType.int256</code>, so a custom <code>Int256</code> struct is needed (matching Arrow Rust’s <code>i256 { low: UInt128, high: Int128 }</code>).</p>
+</section>
+<section id="migration-notes" class="level2">
+<h2 class="anchored" data-anchor-id="migration-notes">Migration Notes</h2>
+<ul>
+<li><code>TemporalArray[T]</code> is removed. Rename to <code>PrimitiveArray[T]</code> throughout. Type aliases (<code>TimestampArray</code> etc.) preserve the public names.</li>
+<li><code>AnyArray.VariantType</code> gains decimal entries; <code>as_decimal32()</code>, <code>as_decimal64()</code>, <code>as_decimal128()</code>, <code>as_decimal256()</code> shorthand accessors are added alongside the existing temporal shorthands.</li>
+<li><code>binary_array_dispatch</code> gains a decimal branch that routes to decimal-specific overloads rather than forwarding to the generic <code>add[T]</code> numeric overload.</li>
+<li><code>TrivialRegisterPassable</code> and <code>Defaultable</code> move from <code>PrimitiveType</code> to <code>NumericType</code>. Any site that had <code>T: PrimitiveType</code> and relied on those constraints should be updated to <code>T: NumericType</code>.</li>
+</ul>
+</section>
+<section id="prior-art" class="level2">
+<h2 class="anchored" data-anchor-id="prior-art">Prior Art</h2>
+<p>This design mirrors Arrow Rust’s approach:</p>
+<ul>
+<li><code>DataType::Decimal128(precision, scale)</code> carries runtime logical info in the enum variant, while <code>Decimal128Type {}</code> is a zero-sized marker implementing <code>ArrowPrimitiveType</code> with <code>type Native = i128</code>.</li>
+<li><code>Decimal128Array = PrimitiveArray&lt;Decimal128Type&gt;</code> — a type alias, not a new struct.</li>
+<li>Arithmetic kernels in <code>arrow-arith</code> use separate <code>decimal::*</code> modules that operate on the runtime precision/scale rather than reusing the numeric kernel infrastructure.</li>
+</ul>
 
 
+</section>
 </section>
 
 </main> <!-- /main -->

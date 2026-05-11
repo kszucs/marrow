@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.9.37">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>sort-design – Marrow</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: min(4vw, 1.5em);}
+div.column{flex: auto; overflow-x: auto;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-acf12a64177840b8d86f2d4f01b2e9fb.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-3802eb58874adc8d310cd233d50b5c6f.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+
+
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a href="./index.html" class="navbar-brand navbar-brand-logo">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo light-content">
+    <img src="./../logo.png" alt="marrow" class="navbar-logo dark-content">
+    </a>
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Marrow</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Quickstart</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-guides" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Guides</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-guides">    
+        <li>
+    <a class="dropdown-item" href="./guide/arrays.html">
+ <span class="dropdown-text">Arrays</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/compute.html">
+ <span class="dropdown-text">Compute</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/expressions.html">
+ <span class="dropdown-text">Expressions</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/types.html">
+ <span class="dropdown-text">Type System</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./guide/interop.html">
+ <span class="dropdown-text">PyArrow Interop</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-examples" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Examples</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-examples">    
+        <li>
+    <a class="dropdown-item" href="./examples/datafusion.html">
+ <span class="dropdown-text">DataFusion UDFs</span></a>
+  </li>  
+    </ul>
+  </li>
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./benchmarks/"> 
+<span class="menu-text">Benchmarks</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/kszucs/marrow"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#sort-kernel-design-for-marrow" id="toc-sort-kernel-design-for-marrow" class="nav-link active" data-scroll-target="#sort-kernel-design-for-marrow">Sort Kernel Design for Marrow</a>
+  <ul class="collapse">
+  <li><a href="#context" id="toc-context" class="nav-link" data-scroll-target="#context">Context</a></li>
+  <li><a href="#prior-art" id="toc-prior-art" class="nav-link" data-scroll-target="#prior-art">Prior Art</a>
+  <ul class="collapse">
+  <li><a href="#clickhouse-permutation-first-columnar-hybrid-radixpdq" id="toc-clickhouse-permutation-first-columnar-hybrid-radixpdq" class="nav-link" data-scroll-target="#clickhouse-permutation-first-columnar-hybrid-radixpdq">ClickHouse — Permutation-First, Columnar, Hybrid Radix+PDQ</a></li>
+  <li><a href="#duckdb-row-normalised-keys-merge-path-parallelism" id="toc-duckdb-row-normalised-keys-merge-path-parallelism" class="nav-link" data-scroll-target="#duckdb-row-normalised-keys-merge-path-parallelism">DuckDB — Row-Normalised Keys + Merge-Path Parallelism</a></li>
+  <li><a href="#polars-permutation-refinement-rayon-parallel-sort" id="toc-polars-permutation-refinement-rayon-parallel-sort" class="nav-link" data-scroll-target="#polars-permutation-refinement-rayon-parallel-sort">Polars — Permutation Refinement + Rayon Parallel Sort</a></li>
+  <li><a href="#datafusion-arrow-rs-rowconverter-loser-tree-merge" id="toc-datafusion-arrow-rs-rowconverter-loser-tree-merge" class="nav-link" data-scroll-target="#datafusion-arrow-rs-rowconverter-loser-tree-merge">DataFusion / Arrow-RS — RowConverter + Loser Tree Merge</a></li>
+  <li><a href="#mojo-standard-library-stdbuiltinsort.mojo" id="toc-mojo-standard-library-stdbuiltinsort.mojo" class="nav-link" data-scroll-target="#mojo-standard-library-stdbuiltinsort.mojo">Mojo Standard Library (<code>std/builtin/sort.mojo</code>)</a></li>
+  <li><a href="#parallel-approach-comparison" id="toc-parallel-approach-comparison" class="nav-link" data-scroll-target="#parallel-approach-comparison">Parallel Approach Comparison</a></li>
+  </ul></li>
+  <li><a href="#marrow-design" id="toc-marrow-design" class="nav-link" data-scroll-target="#marrow-design">Marrow Design</a>
+  <ul class="collapse">
+  <li><a href="#allocation-model" id="toc-allocation-model" class="nav-link" data-scroll-target="#allocation-model">Allocation Model</a></li>
+  <li><a href="#public-api" id="toc-public-api" class="nav-link" data-scroll-target="#public-api">Public API</a></li>
+  <li><a href="#sorter-catalog" id="toc-sorter-catalog" class="nav-link" data-scroll-target="#sorter-catalog">Sorter Catalog</a></li>
+  <li><a href="#null-handling" id="toc-null-handling" class="nav-link" data-scroll-target="#null-handling">Null Handling</a></li>
+  <li><a href="#nan-float-handling" id="toc-nan-float-handling" class="nav-link" data-scroll-target="#nan-float-handling">NaN / Float Handling</a></li>
+  <li><a href="#stable-sort" id="toc-stable-sort" class="nav-link" data-scroll-target="#stable-sort">Stable Sort</a></li>
+  <li><a href="#vectorization-strategy" id="toc-vectorization-strategy" class="nav-link" data-scroll-target="#vectorization-strategy">Vectorization Strategy</a></li>
+  <li><a href="#parallelisation" id="toc-parallelisation" class="nav-link" data-scroll-target="#parallelisation">Parallelisation</a></li>
+  <li><a href="#algorithm-selection" id="toc-algorithm-selection" class="nav-link" data-scroll-target="#algorithm-selection">Algorithm Selection</a></li>
+  <li><a href="#python-bindings" id="toc-python-bindings" class="nav-link" data-scroll-target="#python-bindings">Python Bindings</a></li>
+  <li><a href="#relation-node" id="toc-relation-node" class="nav-link" data-scroll-target="#relation-node">Relation Node</a></li>
+  </ul></li>
+  <li><a href="#implementation-phases" id="toc-implementation-phases" class="nav-link" data-scroll-target="#implementation-phases">Implementation Phases</a>
+  <ul class="collapse">
+  <li><a href="#phase-1-single-column-argsort-radix-cpu-parallel-comparison" id="toc-phase-1-single-column-argsort-radix-cpu-parallel-comparison" class="nav-link" data-scroll-target="#phase-1-single-column-argsort-radix-cpu-parallel-comparison">Phase 1 — Single-column argsort: radix (CPU parallel) + comparison</a></li>
+  <li><a href="#phase-2-multi-column-argsort-via-permutation-refinement" id="toc-phase-2-multi-column-argsort-via-permutation-refinement" class="nav-link" data-scroll-target="#phase-2-multi-column-argsort-via-permutation-refinement">Phase 2 — Multi-column argsort via Permutation Refinement</a></li>
+  <li><a href="#phase-3-top-k-gpu-relation-node-python-bindings" id="toc-phase-3-top-k-gpu-relation-node-python-bindings" class="nav-link" data-scroll-target="#phase-3-top-k-gpu-relation-node-python-bindings">Phase 3 — Top-K, GPU, Relation Node, Python Bindings</a></li>
+  </ul></li>
+  <li><a href="#key-files" id="toc-key-files" class="nav-link" data-scroll-target="#key-files">Key Files</a>
+  <ul class="collapse">
+  <li><a href="#reused-utilities" id="toc-reused-utilities" class="nav-link" data-scroll-target="#reused-utilities">Reused Utilities</a></li>
+  </ul></li>
+  </ul></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+
+
+
+
+<section id="sort-kernel-design-for-marrow" class="level1">
+<h1>Sort Kernel Design for Marrow</h1>
+<section id="context" class="level2">
+<h2 class="anchored" data-anchor-id="context">Context</h2>
+<p>Marrow needs a sort kernel — a prerequisite for Sort-Merge Join, ASOF Join, inequality joins, and ORDER BY in query plans. The joins-design.md sketches the public API; this document fills in the algorithmic details gathered from ClickHouse, DuckDB, Polars, and DataFusion/Arrow-RS, cross-checked against Marrow’s existing kernel patterns and the Mojo standard library.</p>
+<p><strong>Key findings from prior art research:</strong> - Mojo stdlib has no radix sort — must be implemented. It <em>does</em> have <code>sort[cmp_fn](span, stable)</code> (quicksort + merge sort) and <code>partition[cmp_fn](span, k)</code> (quickselect for top-K), which save significant implementation work. - The fastest systems (ClickHouse, DuckDB) use a <em>permutation-first</em> approach: always sort an index array, never reorder column data until the final materialisation step. - Row-based key normalisation (DuckDB, Polars row encoding, Arrow RowConverter) is faster for multi-column comparison-based sorts but conflicts with Marrow’s columnar architecture. ClickHouse’s permutation refinement avoids row conversion entirely at the cost of one sequential scan per additional sort key. - <code>Buffer[mut=True].to_immutable()</code> is a zero-cost type rebind — radix sort can allocate uninitialised buffers and freeze results with no copy. - The existing <code>take()</code> / <code>_gather()</code> in <code>filter.mojo</code> already takes an optimal fast path for full permutations (no <code>-1</code> indices, no source nulls) — no separate <code>permute()</code> function is needed.</p>
+<hr>
+</section>
+<section id="prior-art" class="level2">
+<h2 class="anchored" data-anchor-id="prior-art">Prior Art</h2>
+<section id="clickhouse-permutation-first-columnar-hybrid-radixpdq" class="level3">
+<h3 class="anchored" data-anchor-id="clickhouse-permutation-first-columnar-hybrid-radixpdq">ClickHouse — Permutation-First, Columnar, Hybrid Radix+PDQ</h3>
+<p><strong>Algorithm selection</strong> (<code>src/Columns/ColumnVector.cpp</code>, <code>src/Common/RadixSort.h</code>, <code>base/base/sort.h</code>):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Input type</th>
+<th>N ≥ 64</th>
+<th>N &lt; 64</th>
+<th>Top-K (limit set)</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Fixed-width numeric</td>
+<td>LSB Radix (stable, 8-bit passes)</td>
+<td>Insertion sort</td>
+<td>MSB Radix (partial) or FloydRivest</td>
+</tr>
+<tr class="even">
+<td>String / complex</td>
+<td>PDQSort (<code>::pdqsort_try_sort</code>)</td>
+<td>PDQSort</td>
+<td>PDQSort + FloydRivest</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Permutation approach</strong> (key insight): Always sort an index array; never reorder column data. <code>iota(0..N)</code> initialises the permutation; all algorithms sort the index array; <code>column-&gt;permute(perm, limit)</code> materialises at the very end. Multi-column: <code>getPermutation()</code> on col[0] → <code>updatePermutation()</code> on col[1..N-1] within equal ranges tracked by <code>EqualRanges</code>. Column data is never touched until the final permute call.</p>
+<p><strong>Null handling</strong>: Two-pointer O(N) scan moves nulls to the requested end <em>after</em> sorting valid indices. For stable sort: extra <code>::sort()</code> call on the null range preserves insertion order.</p>
+<p><strong>NaN / float</strong>: Bit-flip transform (positive: XOR <code>1&lt;&lt;31</code>; negative: XOR <code>0xFFFFFFFF</code>) maps IEEE 754 bit patterns to uint32/uint64 that sort correctly as unsigned integers — NaN maps to uint max → sorts last for ascending.</p>
+<p><strong>Parallelism</strong>: Pipeline-level (PartialSortingTransform → MergeSortingTransform → MergingSortedTransform). No intra-block parallel sort. Priority-queue K-way merge across blocks. Radix sort itself is sequential per block.</p>
+<p><strong>SIMD</strong>: Radix histogram loop unrolled with <code>UNROLL_DISTANCE</code>; <code>__builtin_prefetch</code> inside scatter loop; SSE2 identity-permutation fast-exit check.</p>
+<p><strong>External sort</strong>: MergeSortingTransform spills blocks to disk (NativeFormat) when memory exceeds threshold; remerge strategy when savings justify it.</p>
+<hr>
+</section>
+<section id="duckdb-row-normalised-keys-merge-path-parallelism" class="level3">
+<h3 class="anchored" data-anchor-id="duckdb-row-normalised-keys-merge-path-parallelism">DuckDB — Row-Normalised Keys + Merge-Path Parallelism</h3>
+<p><strong>Row normalisation</strong> (<code>src/include/duckdb/common/sorting/sort_key.hpp</code>, <code>src/function/scalar/create_sort_key.cpp</code>): - All sort columns encoded into a single byte-comparable key via <code>create_sort_key</code> expression. 9 <code>SortKeyType</code> variants by total width (<code>NO_PAYLOAD_FIXED_{8,16,24,32}</code>, <code>PAYLOAD_*</code>, <code>*_VARIABLE_32</code>). - Null bytes: <code>0x01</code> = NULLS FIRST, <code>0x02</code> = NULLS LAST. Signed int: big-endian XOR 0x80 on MSB. Strings: each byte +1, null-terminated. <code>sort_skippable_bytes</code> lets the radix pass skip all-zero byte positions.</p>
+<p><strong>Algorithm selection</strong> (<code>src/common/sort/sorted_run.cpp</code>): - <strong>Vergesort</strong> (primary): detects natural sorted/reverse-sorted runs; quicksort for small (&lt; 80 elements) or non-run data. - <strong>SKA sort</strong> (byte-at-a-time radix, fallback): extracts uint64 from sort key, skips skippable bytes. - <strong>PDQSort branchless</strong>: used during merge operations.</p>
+<p><strong>Parallel K-way merge</strong> (<code>src/common/sort/sorted_run_merger.cpp</code>): Thread-local sort in sink phase → lock-free merge-path boundary computation; each merge partition processed by one thread.</p>
+<p><strong>External sort</strong>: <code>TupleDataPinProperties::UNPIN_AFTER_DONE</code> during reorder; <code>TemporaryMemoryManager</code> doubles reservation until it fits; <code>external = true</code> flag switches to spill mode.</p>
+<hr>
+</section>
+<section id="polars-permutation-refinement-rayon-parallel-sort" class="level3">
+<h3 class="anchored" data-anchor-id="polars-permutation-refinement-rayon-parallel-sort">Polars — Permutation Refinement + Rayon Parallel Sort</h3>
+<p><strong>Algorithms</strong> (<code>crates/polars-core/src/chunked_array/ops/sort/</code>): - <code>sort_unstable_by()</code> (Rust std introsort) for single column. - <code>select_nth_unstable_by()</code> (quickselect) for top-K — partitions at K-th element then sorts the lower K. - <code>par_sort_unstable_by()</code> / <code>par_sort_by()</code> via Rayon for parallel path.</p>
+<p><strong>Multi-column routing</strong> (<code>mod.rs:823-863</code>): Row-encoded path (polars-row) for nested/complex types or <code>all(nulls_last)</code>; columnar comparison cascade otherwise. Polars prefers row encoding; Marrow will use permutation refinement instead.</p>
+<p><strong>Null handling</strong>: Validity bitmap scan partitions nulls <em>before</em> sorting; nulls reinserted at correct end afterward (Strategy A).</p>
+<p><strong>Fast paths</strong>: Already-sorted → clone; already-reverse-sorted → <code>reverse_stable_no_nulls()</code> O(N) reverse; <code>bottom_k_impl</code> for <code>df.sort().slice(0, K)</code> (quickselect).</p>
+<p><strong>Row encoding</strong> (polars-row): Null = <code>0x00</code>; valid unsigned: <code>0x01</code> + big-endian bytes; valid signed: <code>0x01</code> + big-endian with MSB XOR’d; valid float: sortable int representation. 32-byte block scheme + <code>0xFF</code> sentinel for strings enables unescaped <code>memcmp</code>. Designed for AVX-256.</p>
+<hr>
+</section>
+<section id="datafusion-arrow-rs-rowconverter-loser-tree-merge" class="level3">
+<h3 class="anchored" data-anchor-id="datafusion-arrow-rs-rowconverter-loser-tree-merge">DataFusion / Arrow-RS — RowConverter + Loser Tree Merge</h3>
+<p><strong>Arrow sort</strong> (<code>arrow-rs/arrow-ord/src/sort.rs</code>): - <code>sort_to_indices(array, options, limit)</code>: single column, type-dispatched; <code>partial_sort</code> when <code>limit &lt; N</code>. - <code>lexsort_to_indices(columns)</code>: multi-column; specialised <code>LexicographicalComparator</code> with compile-time specialisations for N=2..5. - All paths unstable.</p>
+<p><strong>Row format</strong> (<code>arrow-rs/arrow-row/</code>): <code>RowConverter::new(SortField[])</code> encodes columns to normalised byte sequences; <code>memcmp</code> gives correct total order. Fixed encoding: sign-bit toggle + big-endian; complement for DESC.</p>
+<p><strong>TopK</strong> (<code>datafusion/physical-plan/src/topk/mod.rs</code>): <code>TopKHeap</code> — max-heap of K rows; dynamic filter pushdown prunes upstream rows once K items are collected. Partial sort operator for inputs already partially sorted by a prefix.</p>
+<p><strong>Merge</strong>: Loser tree (tournament tree) — O(log K) per element across K sorted streams. Round-robin tiebreaker for stability.</p>
+<p><strong>External sort</strong>: Buffer batches → Arrow IPC spill when memory exhausted → streaming merge. Configurable compression via <code>SpillCompression</code>.</p>
+<p><strong>String prefix optimisation</strong>: Extract first 4 bytes as <code>UInt32</code>; compare as integer before full string comparison — skips most full string compares on typical data.</p>
+<hr>
+</section>
+<section id="mojo-standard-library-stdbuiltinsort.mojo" class="level3">
+<h3 class="anchored" data-anchor-id="mojo-standard-library-stdbuiltinsort.mojo">Mojo Standard Library (<code>std/builtin/sort.mojo</code>)</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Primitive</th>
+<th>Signature</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>sort[T, cmp_fn]</code></td>
+<td><code>(span, stable=False) -&gt; None</code></td>
+<td>Unstable: iterative quicksort, median-of-3, insertion sort fallback at 32</td>
+</tr>
+<tr class="even">
+<td><code>sort[T, cmp_fn]</code></td>
+<td><code>(span, stable=True) -&gt; None</code></td>
+<td>Stable: merge sort, allocates temp buffer internally</td>
+</tr>
+<tr class="odd">
+<td><code>partition[cmp_fn]</code></td>
+<td><code>(span, k) -&gt; None</code></td>
+<td>Quickselect — O(N) average; elements [0,k) are k smallest</td>
+</tr>
+<tr class="even">
+<td><code>_small_sort[n, T, cmp_fn]</code></td>
+<td>compile-time n=2..5</td>
+<td>Optimal sort networks, minimal comparator count</td>
+</tr>
+<tr class="odd">
+<td><code>vectorize[func, W]</code></td>
+<td>SIMD loop with scalar remainder</td>
+<td>Fundamental vectorization building block</td>
+</tr>
+<tr class="even">
+<td><code>prefetch[dtype]</code></td>
+<td><code>(addr, options)</code></td>
+<td>READ/WRITE, locality 0-3</td>
+</tr>
+<tr class="odd">
+<td><code>Span.unsafe_swap_elements</code></td>
+<td><code>(a, b) -&gt; None</code></td>
+<td>Branchless element swap</td>
+</tr>
+</tbody>
+</table>
+<p>Mojo stdlib has <strong>no radix sort</strong> — must implement.</p>
+<hr>
+</section>
+<section id="parallel-approach-comparison" class="level3">
+<h3 class="anchored" data-anchor-id="parallel-approach-comparison">Parallel Approach Comparison</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+<col style="width: 20%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Aspect</th>
+<th>ClickHouse</th>
+<th>DuckDB</th>
+<th>Polars</th>
+<th>DataFusion</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Sort algorithm</strong></td>
+<td>LSB Radix + PDQSort</td>
+<td>Vergesort + SKA radix</td>
+<td>std introsort</td>
+<td>std unstable</td>
+</tr>
+<tr class="even">
+<td><strong>Multi-column</strong></td>
+<td>Permutation refinement</td>
+<td>Row-normalised key</td>
+<td>Row encoding</td>
+<td>Row converter</td>
+</tr>
+<tr class="odd">
+<td><strong>Top-K</strong></td>
+<td>FloydRivest + MSB radix</td>
+<td>MergeSortTree</td>
+<td>quickselect</td>
+<td>partial_sort + TopKHeap</td>
+</tr>
+<tr class="even">
+<td><strong>Parallelism</strong></td>
+<td>Pipeline (block-level)</td>
+<td>Merge-path K-way</td>
+<td>Rayon par_sort</td>
+<td>Loser tree merge</td>
+</tr>
+<tr class="odd">
+<td><strong>Null placement</strong></td>
+<td>Two-pointer post-sort</td>
+<td>Encoded in key byte</td>
+<td>Partition pre-sort</td>
+<td>Partition pre-sort</td>
+</tr>
+<tr class="even">
+<td><strong>External sort</strong></td>
+<td>MergeSorting + spill</td>
+<td>TupleData unpin</td>
+<td>—</td>
+<td>Arrow IPC spill</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommendation for Marrow</strong>: Adopt ClickHouse’s permutation-first approach (stays columnar, zero row conversion) combined with Polars’ pre-sort null partitioning (cleaner comparators, faster sort body). Parallelism from Phase 1 using the same <code>sync_parallelize</code> / <code>wants_parallel</code> pattern as <code>join.mojo</code>.</p>
+<hr>
+</section>
+</section>
+<section id="marrow-design" class="level2">
+<h2 class="anchored" data-anchor-id="marrow-design">Marrow Design</h2>
+<section id="allocation-model" class="level3">
+<h3 class="anchored" data-anchor-id="allocation-model">Allocation Model</h3>
+<p>From <code>marrow/buffers.mojo</code>: - <code>Buffer.alloc_uninit[T](n)</code> — O(1), no memset. Use whenever every element will be written before being read. - <code>Buffer.alloc_zeroed[T](n)</code> — O(n), calls <code>memset_zero</code>. Only needed for sparse output. - <code>buffer.to_immutable()</code> — <strong>zero-cost type rebind</strong>. <code>ArcPointer[Allocation]</code> already created at allocation time; conversion is purely a compile-time origin change, no copy. - <code>Buffer[mut=True]</code> / <code>BufferView[mut=True]</code> support in-place mutation via <code>unsafe_set()</code> and SIMD <code>store[W]()</code>.</p>
+<p><strong>Radix sort allocation budget</strong> (two-buffer LSD scheme): - Two <code>alloc_uninit</code> buffers S and D, each N × <code>sizeof((encoded_key, orig_index))</code>. - Histogram: <code>InlineArray[Int32, 256]</code> on the stack — no heap allocation. - After the final pass, <code>winner.to_immutable()</code> → <code>Int32Array</code>. Zero extra copies. - <strong>Total heap</strong>: 2 × N × pair size. Nothing else.</p>
+<p><strong><code>take()</code> for full permutations</strong>: The existing <code>take()</code> / <code>_gather()</code> in <code>filter.mojo</code> already hits the optimal fast path for full permutations (no <code>-1</code> null indices, no source nulls) — SIMD gather via <code>src.gather[W](offsets)</code> with no bitmap overhead. The sort kernel always produces full permutations, so it will always take this path.</p>
+<hr>
+</section>
+<section id="public-api" class="level3">
+<h3 class="anchored" data-anchor-id="public-api">Public API</h3>
+<p>The API mirrors the join API: <code>StructArray</code> is the table/batch container; sort key columns are identified by positional index. Single-column sort is the degenerate case of a one-field StructArray with <code>key_indices=[0]</code>.</p>
+<pre class="mojo"><code># ---- Primary API (follows join pattern) ----
+
+# Returns sorted permutation indices. Apply with take().
+def argsort(
+    array: StructArray,
+    key_indices: List[Int],             # sort keys in priority order
+    ascending: List[Bool],              # per-key direction
+    nulls_first: Bool = True,
+    stable: Bool = False,
+    limit: Optional[Int] = None,        # top-K: return only first `limit` indices
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -&gt; Int32Array
+
+# Convenience: single-column argsort on AnyArray.
+def argsort(
+    array: AnyArray,
+    ascending: Bool = True,
+    nulls_first: Bool = True,
+    stable: Bool = False,
+    limit: Optional[Int] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -&gt; Int32Array
+
+# Apply a permutation to materialise sorted output. Reuses _gather() from join.mojo.
+def take(array: AnyArray, indices: Int32Array, ctx: ExecutionContext = ...) raises -&gt; AnyArray
+def take(array: StructArray, indices: Int32Array, ctx: ExecutionContext = ...) raises -&gt; StructArray
+
+# Convenience: sort StructArray and return sorted copy.
+def sort(
+    array: StructArray,
+    key_indices: List[Int],
+    ascending: List[Bool],
+    nulls_first: Bool = True,
+    stable: Bool = False,
+    limit: Optional[Int] = None,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -&gt; StructArray</code></pre>
+<p><strong><code>SortOptions</code></strong> companion struct (for future per-column <code>nulls_first</code> extension):</p>
+<pre class="mojo"><code>struct SortOptions:
+    var ascending: Bool
+    var nulls_first: Bool</code></pre>
+<hr>
+</section>
+<section id="sorter-catalog" class="level3">
+<h3 class="anchored" data-anchor-id="sorter-catalog">Sorter Catalog</h3>
+<section id="radixsortprimitivet-on-for-fixed-width-numerics" class="level4">
+<h4 class="anchored" data-anchor-id="radixsortprimitivet-on-for-fixed-width-numerics">1. RadixSortPrimitive[T] — O(N) for fixed-width numerics</h4>
+<p><strong>Inspired by</strong>: ClickHouse LSB radix, DuckDB SKA sort <strong>When</strong>: Single primitive column (<code>int8</code>..<code>int64</code>, <code>uint8</code>..<code>uint64</code>, <code>float32</code>, <code>float64</code>), N ≥ 64.</p>
+<p><strong>Sort key encoding</strong> (in-place into pair buffer before radix passes):</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Source type</th>
+<th>Encoding</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Unsigned</td>
+<td>Value as-is (already unsigned order)</td>
+</tr>
+<tr class="even">
+<td>Signed int</td>
+<td>XOR <code>1 &lt;&lt; (bits-1)</code> — flips sign bit → unsigned order</td>
+</tr>
+<tr class="odd">
+<td>Float32</td>
+<td>Positive: XOR <code>0x80000000</code>; Negative: XOR <code>0xFFFFFFFF</code>. NaN → uint max → sorts last</td>
+</tr>
+<tr class="even">
+<td>Float64</td>
+<td>Same pattern with 64-bit masks</td>
+</tr>
+<tr class="odd">
+<td>Descending</td>
+<td>Complement all encoded bits (XOR <code>0xFF..FF</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>Null indices: already removed by null partitioning (see below); radix never sees nulls.</p>
+<p><strong>LSD radix (zero-copy)</strong>: 1. Allocate pair buffers S and D: <code>alloc_uninit[(encoded_key, UInt32)](N)</code> each. Fill S. 2. For each byte pass (2 passes for 16-bit, 4 for 32-bit, 8 for 64-bit): - <strong>Histogram</strong>: <code>vectorize[hist_fn, W]</code> over S; accumulate <code>InlineArray[Int32, 256]</code> (stack). - <strong>Prefix sum</strong>: 256-element serial pass → output offsets. - <strong>Scatter</strong> with prefetch: read S[i], <code>prefetch(S_ptr + i + 16)</code>, write to D[offset[byte]++]. - Swap S ↔︎ D pointers. 3. <code>winner.to_immutable()</code> → zero-cost freeze → extract <code>Int32Array</code> of <code>orig_index</code> values.</p>
+<p><strong>Insertion sort fallback</strong>: N &lt; 64 → Mojo stdlib <code>sort[cmp_fn](span)</code> on an index span; no pair buffers needed.</p>
+<p><strong>Stable</strong>: LSB radix preserves relative input order for equal keys — inherently stable. No extra work for <code>stable=True</code>.</p>
+<p><strong>CPU parallelism</strong> (active from Phase 1, enabled when <code>ctx.wants_parallel(N)</code> and N ≥ 65_536): 1. <strong>Parallel histogram</strong>: <code>sync_parallelize[worker](nt)</code> — each worker fills a thread-local <code>InlineArray[Int32, 256]</code>; serial reduce → global histogram → prefix sum → per-thread output offsets. 2. <strong>Parallel scatter</strong>: each worker reads its stripe and writes to pre-computed disjoint output slots. No atomics, no contention.</p>
+<p>Factor <code>_parallel_radix_histogram</code> as a shared utility callable from both <code>sort.mojo</code> and <code>join.mojo</code>’s <code>RadixPartitioner</code>.</p>
+<p><strong>GPU path</strong>:</p>
+<pre class="mojo"><code>if ctx.is_gpu():
+    var s = Buffer.alloc_device[pair](ctx.device.value(), n)
+    var d = Buffer.alloc_device[pair](ctx.device.value(), n)
+    # encode + histogram via elementwise[encode_hist_fn, W, target="gpu"](n, ctx.device.value())
+    # scatter via elementwise[scatter_fn, W, target="gpu"] with GPU atomics on histogram
+    # winner.to_immutable() → Int32Array (device)</code></pre>
+<p>GPU histogram uses per-warp local histograms or atomic adds on the 256-bucket array — standard GPU radix pattern. Phase 1 raises <code>Error("RadixSort: GPU not yet implemented")</code>.</p>
+<hr>
+</section>
+<section id="comparisonsort-mojo-stdlib-for-strings-bools-small-arrays" class="level4">
+<h4 class="anchored" data-anchor-id="comparisonsort-mojo-stdlib-for-strings-bools-small-arrays">2. ComparisonSort — Mojo stdlib for strings, bools, small arrays</h4>
+<p><strong>Inspired by</strong>: ClickHouse PDQSort, Mojo stdlib <code>sort[cmp_fn]</code> <strong>When</strong>: <code>StringArray</code>, <code>BoolArray</code>, primitives with N &lt; 64, or when <code>stable=True</code> for primitives.</p>
+<p><strong>How</strong>: 1. Allocate <code>alloc_uninit[int32](N)</code> index buffer; fill with <code>iota(0..N)</code> via <code>vectorize</code>. 2. Define <code>cmp_fn(a: Int32, b: Int32) -&gt; Bool</code> closure: <code>array[a] &lt; array[b]</code> with null semantics already handled by pre-partitioning. 3. Call Mojo stdlib <code>sort[cmp_fn](span, stable=stable)</code>: - <code>stable=False</code> → iterative quicksort + insertion sort (threshold=32). O(N log N). - <code>stable=True</code> → merge sort. Stdlib allocates its own temp buffer internally; freed on return. 4. <code>buf.to_immutable()</code> → <code>Int32Array</code>. Zero-copy.</p>
+<p><strong>Allocation budget</strong>: one <code>alloc_uninit[int32](N)</code>. Stdlib merge sort’s internal buffer is temporary.</p>
+<p><strong>Top-K</strong>: <code>partition[cmp_fn](span, limit)</code> → quickselect O(N); then <code>sort[cmp_fn](span[:limit])</code> → O(K log K). Equivalent to ClickHouse’s FloydRivest + partial_sort.</p>
+<p><strong>String comparison</strong>: <code>StringArray[a] &lt; StringArray[b]</code> via <code>StringSlice.__lt__</code>. <strong>4-byte prefix optimisation</strong> (DataFusion approach): extract first 4 bytes as <code>UInt32</code>, compare as integer; fall through to full string compare only when equal. Avoids most full compares on real data.</p>
+<p><strong>BoolArray fast path</strong>: one <code>vectorize</code> pass counting <code>false/true/null</code> → directly construct index array in three memcpy-like fills. O(N), zero comparisons, no sort call.</p>
+<p><strong>GPU</strong>: ComparisonSort requires sequential pivoting — not amenable to GPU. Phase 1 strings: sort CPU-side, copy result to device.</p>
+<hr>
+</section>
+<section id="permutation-refinement-multi-column-columnar-sort" class="level4">
+<h4 class="anchored" data-anchor-id="permutation-refinement-multi-column-columnar-sort">3. Permutation Refinement — Multi-column columnar sort</h4>
+<p><strong>Inspired by</strong>: ClickHouse <code>getPermutation</code> + <code>updatePermutation</code> + EqualRanges <strong>When</strong>: <code>argsort(StructArray, key_indices, ...)</code> with <code>len(key_indices) &gt; 1</code>.</p>
+<p><strong>How</strong>: 1. Sort by <code>col[key_indices[0]]</code> → permutation P (using RadixSortPrimitive or ComparisonSort). 2. <strong>Find equal ranges</strong>: one O(N) scan under P — where <code>col[P[i]] == col[P[i-1]]</code>, extend the current equal range. Build <code>List[(start, end)]</code>. 3. For each subsequent key column <code>col[key_indices[k]]</code>: - For each equal range <code>(s, e)</code>: sort sub-span <code>P[s..e]</code> by <code>col[key_indices[k]]</code>. - Update equal ranges within each processed range. - Stop when no equal ranges remain or all key columns consumed. 4. P is the final multi-column sort permutation.</p>
+<p><strong>Equal range scan — vectorizable</strong>:</p>
+<pre class="mojo"><code>@parameter
+def detect_fn[W: Int](idx: Int):
+    var a = col_view.load[W](idx)
+    var b = col_view.load[W](idx + 1)   # shifted read
+    var eq = a.eq(b)                     # SIMD bool mask
+    # record boundary positions from eq mask
+vectorize[detect_fn, W](n - 1)</code></pre>
+<p><strong>Within-range parallelism</strong>: per-range sorts are typically tiny (real data has few exact ties across columns). For pathological data (many equal keys in col[0]), dispatch range list via <code>sync_parallelize</code> over ranges.</p>
+<p><strong>Advantages over row encoding</strong>: no temporary byte buffer; no encoding / decoding overhead; stays fully columnar; SIMD through comparison and gather paths unchanged; allocation budget is just the permutation array itself.</p>
+<hr>
+</section>
+<section id="top-k-partial-sort" class="level4">
+<h4 class="anchored" data-anchor-id="top-k-partial-sort">4. Top-K / Partial Sort</h4>
+<p><strong>Inspired by</strong>: ClickHouse FloydRivest, Polars quickselect, DataFusion TopKHeap <strong>When</strong>: <code>limit</code> is set and <code>limit &lt; N / 2</code>.</p>
+<p><strong>Full-array case</strong> (limit known upfront): - <code>partition[cmp_fn](index_span, limit)</code> — Mojo stdlib quickselect, O(N) average. - <code>sort[cmp_fn](index_span[:limit])</code> — sort the lower K elements, O(K log K). - Total: O(N + K log K). For small K this dominates over O(N log N) full sort.</p>
+<p><strong>Multi-column top-K</strong>: same pattern applied to the permutation span in step 1 of Permutation Refinement.</p>
+<p><strong>Streaming top-K</strong> (future, ORDER BY LIMIT on unbounded input): - <code>TopKHeap</code>: max-heap of K rows. Push each row; when full, pop if incoming row is smaller. O(N log K). - Requires a row comparator over <code>StructArray</code>.</p>
+<hr>
+</section>
+</section>
+<section id="null-handling" class="level3">
+<h3 class="anchored" data-anchor-id="null-handling">Null Handling</h3>
+<p><strong>Strategy A — Partition pre-sort</strong> (all paths):</p>
+<pre><code>1. Scan validity bitmap → valid_indices[], null_indices[]
+2. Sort valid_indices[] (radix / comparison / refinement)
+3. nulls_first: output = concat(null_indices, sorted_valid_indices)
+   nulls_last:  output = concat(sorted_valid_indices, null_indices)</code></pre>
+<p>Pre-partitioning means the sort algorithm never sees nulls — no null checks in comparators or encoding transforms, no special-casing inside radix passes.</p>
+<p><strong>Bitmap scan</strong>: <code>BitmapView</code> from <code>views.mojo</code>. Future: vectorize with <code>vectorize[scan_fn, W]</code> loading W validity bits at a time via SIMD bitmasking.</p>
+<p><strong>Multi-column</strong>: null partitioning applied per-column per-range during refinement steps. Null placement is consistent: <code>nulls_first</code> applies uniformly to all key columns.</p>
+<hr>
+</section>
+<section id="nan-float-handling" class="level3">
+<h3 class="anchored" data-anchor-id="nan-float-handling">NaN / Float Handling</h3>
+<p>Bit-flip transform applied in RadixSortPrimitive during pair construction:</p>
+<pre><code>positive float:  bit_cast&lt;uint&gt;(f) XOR 0x80000000   (flip sign bit only)
+negative float:  bit_cast&lt;uint&gt;(f) XOR 0xFFFFFFFF   (flip all bits)
+NaN:             bit_cast&lt;uint&gt;(NaN) XOR 0xFFFFFFFF → uint max → sorts last (ascending)
+-0.0 == +0.0:   both map to same uint after transform ✓
++Inf &gt; any:     bit pattern after transform preserves this ✓
+-Inf &lt; any:     bit pattern after transform preserves this ✓</code></pre>
+<p>For ComparisonSort: <code>Float.is_nan()</code> → treat as greater than any finite value (consistent with PyArrow default).</p>
+<hr>
+</section>
+<section id="stable-sort" class="level3">
+<h3 class="anchored" data-anchor-id="stable-sort">Stable Sort</h3>
+<p>Default: <strong>unstable</strong> — matches NumPy/PyArrow <code>argsort</code> default; faster.</p>
+<p><code>stable=True</code>: - <strong>RadixSortPrimitive</strong>: already stable (LSB radix preserves input order for equal keys). No code change. - <strong>ComparisonSort</strong>: pass <code>stable=True</code> to Mojo stdlib → merge sort path. - <strong>PermutationRefinement</strong>: each sub-sort within an equal range uses <code>stable=True</code>.</p>
+<hr>
+</section>
+<section id="vectorization-strategy" class="level3">
+<h3 class="anchored" data-anchor-id="vectorization-strategy">Vectorization Strategy</h3>
+<p>All vectorization follows the existing <code>apply[]</code> / <code>vectorize[]</code> / <code>elementwise[]</code> patterns from <code>views.mojo</code> and <code>kernels/</code>.</p>
+<p><strong>Null partitioning (bitmap scan)</strong>:</p>
+<pre class="mojo"><code>var valid_indices = List[Int32](capacity=n)
+var null_indices  = List[Int32]()
+if bitmap:
+    for i in range(n):
+        if bitmap.is_valid(i): valid_indices.append(i)
+        else:                  null_indices.append(i)</code></pre>
+<p>Future: load W validity bits at a time via SIMD, extract set/unset positions.</p>
+<p><strong>Radix histogram (SIMD load, scalar scatter)</strong>:</p>
+<pre class="mojo"><code>var hist = InlineArray[Int32, 256](fill=0)
+@parameter
+def hist_fn[W: Int](idx: Int):
+    var keys = src_view.load[W](idx)
+    for lane in range(W):                        # scalar scatter to 256 buckets
+        hist[Int(keys[lane] &amp; 0xFF)] += 1
+vectorize[hist_fn, simd_width_of[T.native]()](n)</code></pre>
+<p>Inner scatter stays scalar — gather/scatter SIMD for 256 buckets requires careful offset handling that doesn’t pay off at this bucket count.</p>
+<p><strong>Radix scatter (with prefetch)</strong>:</p>
+<pre class="mojo"><code>for i in range(n):
+    prefetch[DType.uint8](pairs_ptr + i + 16)    # ClickHouse's PREFETCH_DISTANCE
+    var byte = Int(pairs_s[i].key &gt;&gt; (pass_idx * 8)) &amp; 0xFF
+    pairs_d[offsets[byte]] = pairs_s[i]
+    offsets[byte] += 1</code></pre>
+<p><strong>Iota (index initialisation)</strong>:</p>
+<pre class="mojo"><code>@parameter
+def iota_fn[W: Int](idx: Int):
+    var v = SIMD[DType.int32, W]()
+    for lane in range(W): v[lane] = idx + lane
+    dst.store[W](idx, v)
+vectorize[iota_fn, simd_width_of[DType.int32]()](n)</code></pre>
+<p><strong>Permutation application</strong>: reuse <code>take()</code> from <code>join.mojo</code> — SIMD gather via <code>src.gather[W](offsets)</code> in the no-null fast path.</p>
+<p><strong>Equal-range detection</strong>:</p>
+<pre class="mojo"><code>@parameter
+def detect_fn[W: Int](idx: Int):
+    var a = col_view.load[W](idx)
+    var b = col_view.load[W](idx + 1)
+    var eq = a.eq(b)                             # SIMD bool mask
+    # extract boundary indices from eq mask
+vectorize[detect_fn, simd_width_of[T.native]()](n - 1)</code></pre>
+<hr>
+</section>
+<section id="parallelisation" class="level3">
+<h3 class="anchored" data-anchor-id="parallelisation">Parallelisation</h3>
+<p>Parallelism is a first-class design axis, active from Phase 1. All parallel paths use <code>sync_parallelize</code> / <code>ctx.wants_parallel</code> as in <code>join.mojo</code> and <code>hashing.mojo</code>.</p>
+<p><strong>Parallel RadixSortPrimitive</strong> (N ≥ 65_536, <code>ctx.wants_parallel(N)</code>):</p>
+<pre><code>1. sync_parallelize[worker](nt):
+       each worker fills thread-local InlineArray[Int32, 256] over its stripe
+2. Serial reduce: sum thread histograms → global histogram
+3. Prefix sum → per-thread output offsets
+4. sync_parallelize[scatter_worker](nt):
+       each worker scatters its stripe to pre-computed disjoint output slots</code></pre>
+<p>No atomics. No contention. Identical pattern to <code>build_parallel</code> in <code>join.mojo</code>. Shared utility <code>_parallel_radix_histogram</code> extracted from <code>RadixPartitioner</code>.</p>
+<p><strong>Parallel ComparisonSort</strong> (large N): - Split index span into T halves; <code>sync_parallelize</code> sorts each independently. - Serial merge-sort T sorted halves. O(N log T) merge cost amortised by parallel sort.</p>
+<p><strong>Permutation Refinement parallelism</strong>: - First-column sort is already parallel via RadixSortPrimitive. - Sub-range sorts (col[1..]) are typically tiny — serial. - For pathological equal-key data: <code>sync_parallelize</code> over the range list.</p>
+<p><strong>GPU parallelism</strong>:</p>
+<pre class="mojo"><code>if ctx.is_gpu():
+    var s = Buffer.alloc_device[pair](ctx.device.value(), n)
+    var d = Buffer.alloc_device[pair](ctx.device.value(), n)
+    elementwise[encode_fn, gpu_width, target="gpu"](n, ctx.device.value())
+    # ... GPU histogram + scatter passes ...
+    return result.to_immutable()</code></pre>
+<p><code>elementwise[target="gpu"]</code> handles thread/warp scheduling. No explicit warp management at the Mojo level.</p>
+<p><strong>Batch-level parallelism</strong> (ORDER BY with streaming batches): - Each batch sorted independently via <code>sync_parallelize</code> over batch list. - Final K-way merge via priority queue (loser tree, Phase 3).</p>
+<hr>
+</section>
+<section id="algorithm-selection" class="level3">
+<h3 class="anchored" data-anchor-id="algorithm-selection">Algorithm Selection</h3>
+<pre><code>argsort(AnyArray, ...)
+  │
+  ├── BoolArray                → BoolSorter (count pass, O(N), zero comparisons)
+  │
+  ├── PrimitiveArray[T]
+  │     ├── N &lt; 64             → ComparisonSort (stdlib sort, no pair buffers)
+  │     └── N ≥ 64             → RadixSortPrimitive[T] (LSD, parallel when N ≥ 65k)
+  │
+  └── StringArray              → ComparisonSort (stdlib sort + 4-byte prefix opt)
+
+argsort(StructArray, key_indices, ...)
+  │
+  ├── len(key_indices) == 1    → argsort(AnyArray) on that column
+  │
+  └── len(key_indices) &gt; 1     → PermutationRefinement
+          Sort by key[0] (dispatch to above)
+          → find equal ranges
+          → refine by key[1], key[2], ...
+
+limit set and limit &lt; N / 2   → Top-K: partition[cmp_fn](span, limit) + sort lower K</code></pre>
+<hr>
+</section>
+<section id="python-bindings" class="level3">
+<h3 class="anchored" data-anchor-id="python-bindings">Python Bindings</h3>
+<p>Following PyArrow API naming:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb15"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Array:</span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> sort(<span class="va">self</span>, ascending<span class="op">=</span><span class="va">True</span>, null_placement<span class="op">=</span><span class="st">"at_start"</span>) <span class="op">-&gt;</span> Array</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> argsort(<span class="va">self</span>, ascending<span class="op">=</span><span class="va">True</span>, null_placement<span class="op">=</span><span class="st">"at_start"</span>) <span class="op">-&gt;</span> Array  <span class="co"># → Int32Array</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> RecordBatch:</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a>    <span class="kw">def</span> sort_by(</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>        <span class="va">self</span>,</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>        by: <span class="bu">list</span>[<span class="bu">str</span> <span class="op">|</span> <span class="bu">tuple</span>[<span class="bu">str</span>, <span class="bu">str</span>]],   <span class="co"># name or (name, "ascending"/"descending")</span></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>        null_placement: <span class="bu">str</span> <span class="op">=</span> <span class="st">"at_start"</span>,</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>    ) <span class="op">-&gt;</span> RecordBatch</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Matches PyArrow’s <code>Array.sort()</code>, <code>Array.argsort()</code>, <code>RecordBatch.sort_by()</code>.</p>
+<hr>
+</section>
+<section id="relation-node" class="level3">
+<h3 class="anchored" data-anchor-id="relation-node">Relation Node</h3>
+<pre class="mojo"><code>comptime SORT_NODE: UInt8 = 7
+
+struct Sort(Relation):
+    var input: AnyRelation
+    var keys: List[AnyValue]           # column exprs resolved to input schema
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var limit: Optional[Int]
+    var schema_: Schema                # same schema as input</code></pre>
+<p><code>SortProcessor.pull()</code>: collect all input batches → concat → <code>argsort()</code> → <code>take()</code> → emit one batch.</p>
+<hr>
+</section>
+</section>
+<section id="implementation-phases" class="level2">
+<h2 class="anchored" data-anchor-id="implementation-phases">Implementation Phases</h2>
+<p>Each phase ships with tests <strong>and</strong> benchmarks.</p>
+<section id="phase-1-single-column-argsort-radix-cpu-parallel-comparison" class="level3">
+<h3 class="anchored" data-anchor-id="phase-1-single-column-argsort-radix-cpu-parallel-comparison">Phase 1 — Single-column argsort: radix (CPU parallel) + comparison</h3>
+<p><strong>New files</strong>: - <code>marrow/kernels/sort.mojo</code> - <code>marrow/tests/test_sort.mojo</code> - <code>marrow/kernels/tests/bench_sort.mojo</code></p>
+<ol type="1">
+<li><strong>Null partitioning helper</strong> (<code>_partition_nulls</code>): bitmap scan → <code>valid_indices[]</code>, <code>null_indices[]</code>.</li>
+<li><strong><code>_argsort_primitive[T](values, ascending, nulls_first, stable, limit, ctx)</code></strong>: two <code>alloc_uninit</code> pair-buffers; encoding transform; LSD radix with serial + parallel branches (<code>ctx.wants_parallel</code>); insertion sort fallback for N &lt; 64.</li>
+<li><strong><code>_argsort_string(array, ascending, nulls_first, stable, limit, ctx)</code></strong>: <code>alloc_uninit</code> index buffer + iota; stdlib <code>sort[cmp_fn]</code> with 4-byte prefix optimisation. CPU only (Phase 1).</li>
+<li><strong><code>_argsort_bool(array, ascending, nulls_first)</code></strong>: count pass, direct index construction. O(N).</li>
+<li><strong><code>argsort(AnyArray, ...)</code></strong>: type-dispatch via <code>ArrayVisitor</code>.</li>
+<li><strong><code>take(AnyArray, Int32Array, ctx)</code></strong>: thin wrapper over <code>_gather()</code> from <code>join.mojo</code>. Full permutations always hit the no-null fast path.</li>
+<li><strong><code>sort(StructArray, key_indices, ascending, ...)</code></strong>: <code>argsort</code> → <code>take</code> per child column → new StructArray (following join’s <code>_assemble</code> pattern).</li>
+</ol>
+<p><strong>Tests</strong> (<code>marrow/tests/test_sort.mojo</code>): correctness vs PyArrow <code>sort_to_indices</code> / <code>RecordBatch.sort_by</code> as oracle. Cases: ascending/descending, nulls_first/last, stable/unstable, floats with NaN/±Inf/−0.0, BoolArray, empty array, single element, already-sorted input (fast-path validation).</p>
+<p><strong>Benchmarks</strong> (<code>marrow/kernels/tests/bench_sort.mojo</code>):</p>
+<pre class="mojo"><code>def bench_sort_int64_1m(mut b: Benchmark) raises:    _bench_sort(b, int64,   1_000_000)
+def bench_sort_float64_1m(mut b: Benchmark) raises:  _bench_sort(b, float64, 1_000_000)
+def bench_sort_string_100k(mut b: Benchmark) raises: _bench_sort_string(b,   100_000)</code></pre>
+<p>Use <code>--competition</code> flag to compare vs Polars, PyArrow, DuckDB.</p>
+<hr>
+</section>
+<section id="phase-2-multi-column-argsort-via-permutation-refinement" class="level3">
+<h3 class="anchored" data-anchor-id="phase-2-multi-column-argsort-via-permutation-refinement">Phase 2 — Multi-column argsort via Permutation Refinement</h3>
+<ol type="1">
+<li><strong><code>_equal_ranges(col: AnyArray, perm: Int32Array)</code></strong>: vectorized adjacent-element comparison → <code>List[(Int, Int)]</code> equal-value ranges.</li>
+<li><strong><code>_refine_ranges(perm, ranges, col, ascending, cmp_fn)</code></strong>: per-range sub-span sort using same <code>_argsort_primitive</code> / <code>_argsort_string</code> dispatch.</li>
+<li><strong><code>argsort(StructArray, key_indices, ascending, nulls_first, stable, limit, ctx)</code></strong>: permutation refinement loop.</li>
+<li>Per-column null partitioning within ranges.</li>
+<li>Multi-column <code>take</code> in <code>sort(StructArray, ...)</code>: <code>take()</code> per child column → new StructArray.</li>
+</ol>
+<p><strong>Tests</strong>: multi-column sorts against PyArrow <code>lexsort_to_indices</code> and <code>RecordBatch.sort_by</code>. Include: mixed types, large equal-key groups, descending sub-keys, 3-column sorts.</p>
+<p><strong>Benchmarks</strong>: <code>bench_sort_multi_2col_1m</code>, <code>bench_sort_multi_3col_1m</code>. Compare vs Polars <code>df.sort(by=[...])</code>.</p>
+<hr>
+</section>
+<section id="phase-3-top-k-gpu-relation-node-python-bindings" class="level3">
+<h3 class="anchored" data-anchor-id="phase-3-top-k-gpu-relation-node-python-bindings">Phase 3 — Top-K, GPU, Relation Node, Python Bindings</h3>
+<ol type="1">
+<li><strong><code>_nth_element(perm_span, k, cmp_fn)</code></strong>: Mojo stdlib <code>partition[cmp_fn](span, k)</code> wrapper.</li>
+<li><strong><code>argsort(..., limit=K)</code></strong>: nth_element + sort lower K slice; wired into both radix and comparison paths.</li>
+<li><strong>GPU radix sort</strong>: <code>elementwise[encode_fn, W, target="gpu"]</code> for pair encoding + per-warp histogram; GPU scatter; <code>Buffer.alloc_device</code> for S and D pair buffers.</li>
+<li><strong><code>Sort</code> relation node</strong> + <strong><code>SortProcessor</code></strong> in <code>marrow/expr/relations.mojo</code> + executor.</li>
+<li><strong><code>SortMergeJoinProcessor</code></strong>: <code>argsort</code> + two-pointer merge algorithm (joins-design.md Phase 3).</li>
+<li><strong>Python bindings</strong>: <code>Array.sort()</code>, <code>Array.argsort()</code>, <code>RecordBatch.sort_by()</code>.</li>
+<li><strong>ASAN tests</strong>: <code>pixi run -e asan test_mojo_asan</code> on sort tests — catches use-after-free in pair buffers.</li>
+</ol>
+<p><strong>Benchmarks</strong>: <code>bench_sort_topk_100_of_1m</code>, <code>bench_sort_gpu_float32_1m</code> (GPU baseline), <code>bench_sort_gpu_preloaded_float32_1m</code> (data already on device).</p>
+<hr>
+</section>
+</section>
+<section id="key-files" class="level2">
+<h2 class="anchored" data-anchor-id="key-files">Key Files</h2>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>marrow/kernels/sort.mojo</code></td>
+<td>New — all sort primitives</td>
+</tr>
+<tr class="even">
+<td><code>marrow/kernels/join.mojo</code></td>
+<td><code>_gather()</code> reused for <code>take()</code></td>
+</tr>
+<tr class="odd">
+<td><code>marrow/kernels/hashing.mojo</code></td>
+<td>Parallel histogram pattern reference</td>
+</tr>
+<tr class="even">
+<td><code>marrow/views.mojo</code></td>
+<td><code>apply[]</code>, <code>vectorize[]</code>, <code>BitmapView</code> for null scan</td>
+</tr>
+<tr class="odd">
+<td><code>marrow/arrays.mojo</code></td>
+<td><code>StructArray.select()</code>, child iteration</td>
+</tr>
+<tr class="even">
+<td><code>marrow/expr/relations.mojo</code></td>
+<td><code>Sort</code> relation node (Phase 3)</td>
+</tr>
+<tr class="odd">
+<td><code>marrow/tests/test_sort.mojo</code></td>
+<td>Correctness tests vs PyArrow</td>
+</tr>
+<tr class="even">
+<td><code>marrow/kernels/tests/bench_sort.mojo</code></td>
+<td>Benchmarks and GPU tests</td>
+</tr>
+<tr class="odd">
+<td><code>docs/sort-design.md</code></td>
+<td>This document</td>
+</tr>
+</tbody>
+</table>
+<section id="reused-utilities" class="level3">
+<h3 class="anchored" data-anchor-id="reused-utilities">Reused Utilities</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Utility</th>
+<th>Source</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>_gather(array, indices)</code></td>
+<td><code>join.mojo</code></td>
+<td>Implements <code>take()</code> for free; full-permutation fast path</td>
+</tr>
+<tr class="even">
+<td><code>BitmapView</code></td>
+<td><code>views.mojo</code></td>
+<td>Null partitioning (validity bitmap scan)</td>
+</tr>
+<tr class="odd">
+<td><code>ExecutionContext</code></td>
+<td><code>execution.mojo</code></td>
+<td>Thread count + GPU device dispatch</td>
+</tr>
+<tr class="even">
+<td><code>sync_parallelize</code></td>
+<td>Mojo stdlib</td>
+<td>Parallel radix histogram + scatter</td>
+</tr>
+<tr class="odd">
+<td><code>sort[cmp_fn](span, stable)</code></td>
+<td>Mojo stdlib</td>
+<td>ComparisonSort for strings / small arrays</td>
+</tr>
+<tr class="even">
+<td><code>partition[cmp_fn](span, k)</code></td>
+<td>Mojo stdlib</td>
+<td>Top-K quickselect</td>
+</tr>
+<tr class="odd">
+<td><code>vectorize[fn, W]</code></td>
+<td>Mojo stdlib</td>
+<td>SIMD loops (iota, histogram, equal-range scan)</td>
+</tr>
+<tr class="even">
+<td><code>prefetch[dtype](addr)</code></td>
+<td>Mojo stdlib</td>
+<td>Radix scatter prefetch</td>
+</tr>
+<tr class="odd">
+<td><code>StructArray.select(indices)</code></td>
+<td><code>arrays.mojo</code></td>
+<td>Zero-copy key column extraction</td>
+</tr>
+<tr class="even">
+<td><code>RadixPartitioner</code> histogram</td>
+<td><code>join.mojo</code></td>
+<td>Factor into shared <code>_parallel_radix_histogram</code></td>
+</tr>
+</tbody>
+</table>
+
+
+</section>
+</section>
+</section>
+
+</main> <!-- /main -->
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp('/' + window.location.host + '/');
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        // Attach click handler to the DT
+        const annoteDls = window.document.querySelectorAll('dt[data-target-cell]');
+        for (const annoteDlNode of annoteDls) {
+          annoteDlNode.addEventListener('click', (event) => {
+            const clickedEl = event.target;
+            if (clickedEl !== selectedAnnoteEl) {
+              unselectCodeLines();
+              const activeEl = window.document.querySelector('dt[data-target-cell].code-annotation-active');
+              if (activeEl) {
+                activeEl.classList.remove('code-annotation-active');
+              }
+              selectCodeLines(clickedEl);
+              clickedEl.classList.add('code-annotation-active');
+            } else {
+              // Unselect the line
+              unselectCodeLines();
+              clickedEl.classList.remove('code-annotation-active');
+            }
+          });
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+
+
+
+
+</body></html>
