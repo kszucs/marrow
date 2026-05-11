@@ -223,7 +223,9 @@ struct CArrowSchema(Copyable, Movable):
             flags=0,
             n_children=n_children,
             children=children,
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](_unsafe_null=()),
+            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](
+                _unsafe_null=()
+            ),
             release=_release_exported_schema,
             private_data=OpaquePointer[MutAnyOrigin](_unsafe_null=()),
         )
@@ -275,7 +277,9 @@ struct CArrowSchema(Copyable, Movable):
             flags=0,
             n_children=Int64(n_fields),
             children=children,
-            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](_unsafe_null=()),
+            dictionary=UnsafePointer[CArrowSchema, MutAnyOrigin](
+                _unsafe_null=()
+            ),
             release=_release_exported_schema,
             private_data=OpaquePointer[MutAnyOrigin](_unsafe_null=()),
         )
@@ -656,7 +660,9 @@ struct CArrowArray(Copyable, Movable):
             n_children=n_children,
             buffers=buffers,
             children=children_ptr,
-            dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](_unsafe_null=()),
+            dictionary=UnsafePointer[CArrowArray, MutAnyOrigin](
+                _unsafe_null=()
+            ),
             release=_release_exported_array,
             # private_data keeps data_heap alive; freed by _release_exported_array.
             private_data=data_heap.bitcast[NoneType](),

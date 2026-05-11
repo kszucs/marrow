@@ -226,7 +226,10 @@ struct Allocation(Movable):
         """Create a HOST (pinned) allocation.  HostBuffer.__del__ handles release.
         """
         return Allocation(
-            UnsafePointer[UInt8, MutAnyOrigin](_unsafe_null=()), None, host_buf, None
+            UnsafePointer[UInt8, MutAnyOrigin](_unsafe_null=()),
+            None,
+            host_buf,
+            None,
         )
 
     @staticmethod
@@ -234,7 +237,10 @@ struct Allocation(Movable):
         """Create a DEVICE (GPU) allocation.  DeviceBuffer.__del__ handles release.
         """
         return Allocation(
-            UnsafePointer[UInt8, MutAnyOrigin](_unsafe_null=()), None, None, dev_buf
+            UnsafePointer[UInt8, MutAnyOrigin](_unsafe_null=()),
+            None,
+            None,
+            dev_buf,
         )
 
     def device_type(self) raises -> Int32:
