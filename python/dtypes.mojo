@@ -135,6 +135,21 @@ def duration(unit: PythonObject) raises -> PythonObject:
     return dt.duration(_parse_time_unit(unit)).to_any().to_python_object()
 
 
+def year_month_interval() raises -> PythonObject:
+    """Create a year_month_interval DataType."""
+    return dt.year_month_interval().to_any().to_python_object()
+
+
+def day_time_interval() raises -> PythonObject:
+    """Create a day_time_interval DataType."""
+    return dt.day_time_interval().to_any().to_python_object()
+
+
+def month_day_nano_interval() raises -> PythonObject:
+    """Create a month_day_nano_interval DataType."""
+    return dt.month_day_nano_interval().to_any().to_python_object()
+
+
 def _parse_time_unit(unit: PythonObject) raises -> dt.TimeUnit:
     var s = String(py=unit)
     if s == "s":
@@ -335,5 +350,26 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         docstring=(
             "duration(unit: str, /) -> DataType\n--\n\nCreate a duration"
             " DataType."
+        ),
+    )
+    mb.def_function[year_month_interval](
+        "year_month_interval",
+        docstring=(
+            "year_month_interval() -> DataType\n--\n\nCreate a"
+            " year_month_interval DataType."
+        ),
+    )
+    mb.def_function[day_time_interval](
+        "day_time_interval",
+        docstring=(
+            "day_time_interval() -> DataType\n--\n\nCreate a day_time_interval"
+            " DataType."
+        ),
+    )
+    mb.def_function[month_day_nano_interval](
+        "month_day_nano_interval",
+        docstring=(
+            "month_day_nano_interval() -> DataType\n--\n\nCreate a"
+            " month_day_nano_interval DataType."
         ),
     )

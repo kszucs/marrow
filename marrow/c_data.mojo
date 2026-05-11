@@ -350,6 +350,12 @@ struct CArrowSchema(Copyable, Movable):
                 fmt = "tDu"
             else:
                 fmt = "tDn"
+        elif dtype.is_year_month_interval():
+            fmt = "tiM"
+        elif dtype.is_day_time_interval():
+            fmt = "tiD"
+        elif dtype.is_month_day_nano_interval():
+            fmt = "tin"
         elif dtype.is_decimal32():
             ref d = dtype.as_decimal32()
             fmt = {"d:", d.precision, ",", d.scale, ",32"}
@@ -634,6 +640,12 @@ struct CArrowSchema(Copyable, Movable):
             return duration(microsecond)
         elif fmt == "tDn":
             return duration(nanosecond)
+        elif fmt == "tiM":
+            return year_month_interval()
+        elif fmt == "tiD":
+            return day_time_interval()
+        elif fmt == "tin":
+            return month_day_nano_interval()
         elif fmt == "+s":
             var fields = List[Field](capacity=Int(self.n_children))
             for i in range(self.n_children):

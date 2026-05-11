@@ -35,6 +35,17 @@
   Arrow implementations (`dictionary` and `dictionary_unsigned` pass 14/14
   integration phases with C++, Rust, and Go).
 
+- **Arrow interval types** (`marrow/{dtypes,scalars,arrays,builders,ipc,c_data}.mojo`, `python/`):
+  added `IntervalType` trait and three concrete types — `YearMonthIntervalType` (int32, months),
+  `DayTimeIntervalType` (int64, days+millis), `MonthDayNanoIntervalType` (int128, months+days+nanos).
+  `AnyDataType` gains `is_interval()`, `is_year_month_interval()`, `is_day_time_interval()`,
+  `is_month_day_nano_interval()` predicates and matching `as_*` accessors. Array, builder, and
+  scalar aliases (`YearMonthIntervalArray/Builder/Scalar`, etc.) are fully wired into the
+  `AnyArray`, `AnyBuilder`, and `AnyScalar` type-erased containers. C Data Interface uses
+  format codes `tiM`, `tiD`, `tin`; IPC uses the `Interval` flatbuffer type with unit field.
+  Python bindings expose `year_month_interval()`, `day_time_interval()`,
+  `month_day_nano_interval()` factory functions.
+
 - **Dictionary-encoded Arrow type** (`marrow/{dtypes,scalars,arrays,builders,
   c_data}.mojo`): added `DictionaryType` (index type + value type + ordered
   flag), `DictionaryScalar`, `DictionaryArray`, and `DictionaryBuilder`.

@@ -339,6 +339,50 @@ def test_temporal_dtypes_equality() raises:
     assert_true(timestamp(second, "UTC") != timestamp(second, "US/Pacific"))
 
 
+def test_interval_dtypes_predicates() raises:
+    assert_true(AnyDataType(year_month_interval()).is_year_month_interval())
+    assert_true(AnyDataType(year_month_interval()).is_interval())
+    assert_true(AnyDataType(year_month_interval()).is_primitive())
+    assert_false(AnyDataType(year_month_interval()).is_temporal())
+    assert_false(AnyDataType(year_month_interval()).is_day_time_interval())
+
+    assert_true(AnyDataType(day_time_interval()).is_day_time_interval())
+    assert_true(AnyDataType(day_time_interval()).is_interval())
+    assert_true(AnyDataType(day_time_interval()).is_primitive())
+    assert_false(AnyDataType(day_time_interval()).is_year_month_interval())
+
+    assert_true(
+        AnyDataType(month_day_nano_interval()).is_month_day_nano_interval()
+    )
+    assert_true(AnyDataType(month_day_nano_interval()).is_interval())
+    assert_true(AnyDataType(month_day_nano_interval()).is_primitive())
+    assert_false(
+        AnyDataType(month_day_nano_interval()).is_year_month_interval()
+    )
+
+
+def test_interval_dtypes_string() raises:
+    assert_equal(String(AnyDataType(year_month_interval())), "month_interval")
+    assert_equal(String(AnyDataType(day_time_interval())), "day_time_interval")
+    assert_equal(
+        String(AnyDataType(month_day_nano_interval())),
+        "month_day_nano_interval",
+    )
+
+
+def test_interval_dtypes_equality() raises:
+    assert_true(year_month_interval() == year_month_interval())
+    assert_true(day_time_interval() == day_time_interval())
+    assert_true(month_day_nano_interval() == month_day_nano_interval())
+    assert_false(
+        AnyDataType(year_month_interval()) == AnyDataType(day_time_interval())
+    )
+    assert_false(
+        AnyDataType(day_time_interval())
+        == AnyDataType(month_day_nano_interval())
+    )
+
+
 def test_dictionary_dtype() raises:
     # Basic construction and predicates
     var dt_d = dictionary(AnyDataType(int32), AnyDataType(string))

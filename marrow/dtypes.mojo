@@ -12,6 +12,7 @@ Trait hierarchy:
         │   ├── IntegerType(NumericType)
         │   └── FloatingType(NumericType)
         ├── TemporalType(PrimitiveType)
+        ├── IntervalType(PrimitiveType)
         └── DecimalType(PrimitiveType)
 
 `AnyDataType` is the type-erased runtime container backed by a `Variant` — no
@@ -25,6 +26,7 @@ Concrete zero-size type structs (one per Arrow type):
     BinaryLikeType (trait), StringLikeType (trait), BinaryType, LargeBinaryType, StringType, LargeStringType,
     ListType, FixedSizeListType, FixedSizeBinaryType, StructType, DictionaryType,
     Date32Type, Date64Type, Time32Type, Time64Type, TimestampType, DurationType,
+    YearMonthIntervalType, DayTimeIntervalType, MonthDayNanoIntervalType,
     Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type
 
 Comptime singletons (same names as before):
@@ -127,6 +129,15 @@ trait TemporalType(PrimitiveType):
 
     Physical storage is int32 or int64. Logical type carries a time unit and
     (for timestamps) an optional timezone — runtime values in `array.dtype`.
+    """
+
+    pass
+
+
+trait IntervalType(Defaultable, PrimitiveType):
+    """Arrow interval types (year-month, day-time, month-day-nano).
+
+    Physical storage is int32, int64, or int128 depending on the variant.
     """
 
     pass
@@ -400,6 +411,44 @@ struct DurationType(TemporalType):
         writer.write("duration[", self.unit, "]")
 
 
+struct YearMonthIntervalType(IntervalType):
+    """Year/month interval — number of months as int32."""
+
+    comptime native: DType = DType.int32
+
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("month_interval")
+
+
+struct DayTimeIntervalType(IntervalType):
+    """Day/time interval — {days: int32, milliseconds: int32} packed into int64.
+    """
+
+    comptime native: DType = DType.int64
+
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("day_time_interval")
+
+
+struct MonthDayNanoIntervalType(IntervalType):
+    """Month/day/nanosecond interval — {months: int32, days: int32, nanos: int64} in 16 bytes.
+    """
+
+    comptime native: DType = DType.int128
+
+    def __init__(out self):
+        pass
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("month_day_nano_interval")
+
+
 # ---------------------------------------------------------------------------
 # Field and nested compound types
 # ---------------------------------------------------------------------------
@@ -653,6 +702,9 @@ struct AnyDataType(
         Time64Type,
         TimestampType,
         DurationType,
+        YearMonthIntervalType,
+        DayTimeIntervalType,
+        MonthDayNanoIntervalType,
         Decimal32Type,
         Decimal64Type,
         Decimal128Type,
@@ -772,7 +824,7 @@ struct AnyDataType(
         return self.is_integer() or self.is_floating_point()
 
     def is_primitive(self) -> Bool:
-        """True for all fixed-width, buffer-backed types (numeric, temporal, decimal).
+        """True for all fixed-width, buffer-backed types (numeric, temporal, interval, decimal).
 
         Matches PyArrow's ``pa.types.is_primitive()`` semantics.
         """
@@ -780,6 +832,7 @@ struct AnyDataType(
             self.is_bool()
             or self.is_numeric()
             or self.is_temporal()
+            or self.is_interval()
             or self.is_decimal()
         )
 
@@ -853,6 +906,22 @@ struct AnyDataType(
             or self.is_time64()
             or self.is_timestamp()
             or self.is_duration()
+        )
+
+    def is_year_month_interval(self) -> Bool:
+        return self._v.isa[YearMonthIntervalType]()
+
+    def is_day_time_interval(self) -> Bool:
+        return self._v.isa[DayTimeIntervalType]()
+
+    def is_month_day_nano_interval(self) -> Bool:
+        return self._v.isa[MonthDayNanoIntervalType]()
+
+    def is_interval(self) -> Bool:
+        return (
+            self.is_year_month_interval()
+            or self.is_day_time_interval()
+            or self.is_month_day_nano_interval()
         )
 
     def is_decimal32(self) -> Bool:
@@ -937,6 +1006,17 @@ struct AnyDataType(
     def as_duration(ref self) -> ref[self._v] DurationType:
         return self._as[DurationType]()
 
+    def as_year_month_interval(ref self) -> ref[self._v] YearMonthIntervalType:
+        return self._as[YearMonthIntervalType]()
+
+    def as_day_time_interval(ref self) -> ref[self._v] DayTimeIntervalType:
+        return self._as[DayTimeIntervalType]()
+
+    def as_month_day_nano_interval(
+        ref self,
+    ) -> ref[self._v] MonthDayNanoIntervalType:
+        return self._as[MonthDayNanoIntervalType]()
+
     def as_decimal32(ref self) -> ref[self._v] Decimal32Type:
         return self._as[Decimal32Type]()
 
@@ -1015,6 +1095,24 @@ def duration(unit: TimeUnit) -> DurationType:
     """Construct a duration type. Equivalent to PyArrow's ``pa.duration(unit)``.
     """
     return DurationType(unit)
+
+
+def year_month_interval() -> YearMonthIntervalType:
+    """Construct a year-month interval type. Equivalent to PyArrow's ``pa.month_interval()``.
+    """
+    return YearMonthIntervalType()
+
+
+def day_time_interval() -> DayTimeIntervalType:
+    """Construct a day-time interval type. Equivalent to PyArrow's ``pa.day_time_interval()``.
+    """
+    return DayTimeIntervalType()
+
+
+def month_day_nano_interval() -> MonthDayNanoIntervalType:
+    """Construct a month-day-nanosecond interval type. Equivalent to PyArrow's ``pa.month_day_nano_interval()``.
+    """
+    return MonthDayNanoIntervalType()
 
 
 def struct_(var fields: List[Field]) -> StructType:

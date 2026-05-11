@@ -51,9 +51,21 @@ _UNSUPPORTED = {
 # (ArrowNotImplementedError), so C Data schema/array tests are skipped for
 # Mojo.  IPC tests are unaffected: other implementations (Rust, C++, Go)
 # validate directly without going through PyArrow.
+# Result: nested_dictionary shows 7/14 (IPC passes, C Data skipped).
 _SKIP_C_DATA = {
     'nested_dictionary',
 }
+
+# Expected partial coverage — not Marrow bugs:
+#
+# decimal32 / decimal64 (6/14): Rust and Go don't implement these types in
+# either IPC or C Data, so 4 IPC phases (Rust↔Mojo, Go↔Mojo) and 4 C Data
+# phases (Rust↔Mojo, Go↔Mojo) are skipped by those implementations.
+#
+# binary_no_batches / primitive_no_batches (7/14): These files contain 0
+# record batches.  IPC phases (7) pass because the schema is still exchanged.
+# C Data array phases (7) iterate over batches — with 0 batches the loop
+# produces 0 results, which archery counts as 0 passes rather than 1.
 
 _orig_get_generated = _datagen.get_generated_json_files
 

@@ -29,6 +29,9 @@ from marrow.dtypes import (
     time64,
     timestamp,
     duration,
+    year_month_interval,
+    day_time_interval,
+    month_day_nano_interval,
     second,
     millisecond,
     microsecond,
@@ -43,6 +46,9 @@ from marrow.scalars import (
     StringScalar,
     ListScalar,
     StructScalar,
+    YearMonthIntervalScalar,
+    DayTimeIntervalScalar,
+    MonthDayNanoIntervalScalar,
 )
 
 
@@ -348,6 +354,37 @@ def test_any_array_getitem_out_of_bounds() raises:
     except:
         raised = True
     assert_true(raised)
+
+
+def test_interval_scalar_year_month() raises:
+    var s = YearMonthIntervalScalar(Int32(12))
+    assert_true(s.is_valid())
+    assert_false(s.is_null())
+    assert_equal(s.value(), 12)
+    assert_true(s.type() == year_month_interval().to_any())
+    var erased: AnyScalar = s^
+    assert_true(erased.type().is_year_month_interval())
+    assert_equal(erased.as_year_month_interval().value(), 12)
+
+
+def test_interval_scalar_day_time() raises:
+    var s = DayTimeIntervalScalar(Int64(86400000))
+    assert_true(s.is_valid())
+    assert_equal(s.value(), 86400000)
+    assert_true(s.type() == day_time_interval().to_any())
+    var erased: AnyScalar = s^
+    assert_true(erased.type().is_day_time_interval())
+    assert_equal(erased.as_day_time_interval().value(), 86400000)
+
+
+def test_interval_scalar_month_day_nano() raises:
+    var s = MonthDayNanoIntervalScalar(SIMD[DType.int128, 1](42))
+    assert_true(s.is_valid())
+    assert_equal(s.value(), 42)
+    assert_true(s.type() == month_day_nano_interval().to_any())
+    var erased: AnyScalar = s^
+    assert_true(erased.type().is_month_day_nano_interval())
+    assert_equal(erased.as_month_day_nano_interval().value(), 42)
 
 
 # def test_temporal_scalar_valid() raises:

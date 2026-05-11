@@ -204,6 +204,10 @@ comptime Time64Scalar = PrimitiveScalar[Time64Type]
 comptime DurationScalar = PrimitiveScalar[DurationType]
 comptime TimestampScalar = PrimitiveScalar[TimestampType]
 
+comptime YearMonthIntervalScalar = PrimitiveScalar[YearMonthIntervalType]
+comptime DayTimeIntervalScalar = PrimitiveScalar[DayTimeIntervalType]
+comptime MonthDayNanoIntervalScalar = PrimitiveScalar[MonthDayNanoIntervalType]
+
 comptime Decimal32Scalar = PrimitiveScalar[Decimal32Type]
 comptime Decimal64Scalar = PrimitiveScalar[Decimal64Type]
 comptime Decimal128Scalar = PrimitiveScalar[Decimal128Type]
@@ -507,6 +511,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
         Time64Scalar,
         DurationScalar,
         TimestampScalar,
+        YearMonthIntervalScalar,
+        DayTimeIntervalScalar,
+        MonthDayNanoIntervalScalar,
         Decimal32Scalar,
         Decimal64Scalar,
         Decimal128Scalar,
@@ -621,6 +628,19 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     def as_timestamp(ref self) -> ref[self._v] TimestampScalar:
         return self._as[TimestampScalar]()
+
+    def as_year_month_interval(
+        ref self,
+    ) -> ref[self._v] YearMonthIntervalScalar:
+        return self._as[YearMonthIntervalScalar]()
+
+    def as_day_time_interval(ref self) -> ref[self._v] DayTimeIntervalScalar:
+        return self._as[DayTimeIntervalScalar]()
+
+    def as_month_day_nano_interval(
+        ref self,
+    ) -> ref[self._v] MonthDayNanoIntervalScalar:
+        return self._as[MonthDayNanoIntervalScalar]()
 
     def as_decimal32(ref self) -> ref[self._v] Decimal32Scalar:
         return self._as[Decimal32Scalar]()

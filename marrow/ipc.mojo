@@ -50,6 +50,11 @@ comptime _TYPE_UTF8: UInt8 = 5
 comptime _TYPE_LARGE_BINARY: UInt8 = 19
 comptime _TYPE_LARGE_UTF8: UInt8 = 20
 comptime _TYPE_LARGE_LIST: UInt8 = 21
+comptime _TYPE_INTERVAL: UInt8 = 11
+comptime _INTERVAL_UNIT_YEAR_MONTH: UInt16 = 0
+comptime _INTERVAL_UNIT_DAY_TIME: UInt16 = 1
+comptime _INTERVAL_UNIT_MONTH_DAY_NANO: UInt16 = 2
+
 comptime _TYPE_BOOL: UInt8 = 6
 comptime _TYPE_DECIMAL: UInt8 = 7
 comptime _TYPE_DATE: UInt8 = 8
@@ -811,6 +816,8 @@ struct _IpcEncoder(Movable):
             return _TYPE_TIMESTAMP
         elif dtype.is_duration():
             return _TYPE_DURATION
+        elif dtype.is_interval():
+            return _TYPE_INTERVAL
         elif dtype.is_decimal():
             return _TYPE_DECIMAL
         elif dtype.is_struct():
@@ -944,6 +951,19 @@ struct _IpcEncoder(Movable):
             var ipc_unit = _IpcEncoder._time_unit_to_wire(unit)
             var ts = self._fb.offset()
             var u_at = self._fb.prepend_u16(ipc_unit)
+            var flds = List[_FieldOffset]()
+            flds.append(_FieldOffset(0, u_at))
+            return self._fb.write_table(flds, ts)
+        elif dtype.is_interval():
+            var unit: UInt16
+            if dtype.is_year_month_interval():
+                unit = _INTERVAL_UNIT_YEAR_MONTH
+            elif dtype.is_day_time_interval():
+                unit = _INTERVAL_UNIT_DAY_TIME
+            else:
+                unit = _INTERVAL_UNIT_MONTH_DAY_NANO
+            var ts = self._fb.offset()
+            var u_at = self._fb.prepend_u16(unit)
             var flds = List[_FieldOffset]()
             flds.append(_FieldOffset(0, u_at))
             return self._fb.write_table(flds, ts)
@@ -1490,6 +1510,15 @@ struct _IpcDecoder(Movable):
             var tp = self._r.read_table(fp, 3)
             var unit_v = self._r.read_u16(tp, 0, _TIME_UNIT_MILLISECOND)
             dtype = dt.duration(_IpcDecoder._wire_to_time_unit(unit_v)).to_any()
+        elif type_type == _TYPE_INTERVAL:
+            var tp = self._r.read_table(fp, 3)
+            var unit_v = self._r.read_u16(tp, 0, _INTERVAL_UNIT_YEAR_MONTH)
+            if unit_v == _INTERVAL_UNIT_DAY_TIME:
+                dtype = dt.day_time_interval().to_any()
+            elif unit_v == _INTERVAL_UNIT_MONTH_DAY_NANO:
+                dtype = dt.month_day_nano_interval().to_any()
+            else:
+                dtype = dt.year_month_interval().to_any()
         elif type_type == _TYPE_STRUCT:
             dtype = dt.struct_(children^)
         else:

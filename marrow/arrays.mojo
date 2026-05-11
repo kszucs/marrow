@@ -1369,6 +1369,10 @@ comptime Time64Array = PrimitiveArray[Time64Type]
 comptime DurationArray = PrimitiveArray[DurationType]
 comptime TimestampArray = PrimitiveArray[TimestampType]
 
+comptime YearMonthIntervalArray = PrimitiveArray[YearMonthIntervalType]
+comptime DayTimeIntervalArray = PrimitiveArray[DayTimeIntervalType]
+comptime MonthDayNanoIntervalArray = PrimitiveArray[MonthDayNanoIntervalType]
+
 comptime Decimal32Array = PrimitiveArray[Decimal32Type]
 comptime Decimal64Array = PrimitiveArray[Decimal64Type]
 comptime Decimal128Array = PrimitiveArray[Decimal128Type]
@@ -1915,6 +1919,9 @@ struct AnyArray(
         Time64Array,
         DurationArray,
         TimestampArray,
+        YearMonthIntervalArray,
+        DayTimeIntervalArray,
+        MonthDayNanoIntervalArray,
         Decimal32Array,
         Decimal64Array,
         Decimal128Array,
@@ -2162,6 +2169,17 @@ struct AnyArray(
     def as_time64(ref self) -> ref[self._v] Time64Array:
         return self._as[Time64Array]()
 
+    def as_year_month_interval(ref self) -> ref[self._v] YearMonthIntervalArray:
+        return self._as[YearMonthIntervalArray]()
+
+    def as_day_time_interval(ref self) -> ref[self._v] DayTimeIntervalArray:
+        return self._as[DayTimeIntervalArray]()
+
+    def as_month_day_nano_interval(
+        ref self,
+    ) -> ref[self._v] MonthDayNanoIntervalArray:
+        return self._as[MonthDayNanoIntervalArray]()
+
     def as_duration(ref self) -> ref[self._v] DurationArray:
         return self._as[DurationArray]()
 
@@ -2250,6 +2268,12 @@ struct AnyArray(
             return TimestampArray(data)
         elif dt.is_duration():
             return DurationArray(data)
+        elif dt.is_year_month_interval():
+            return YearMonthIntervalArray(data)
+        elif dt.is_day_time_interval():
+            return DayTimeIntervalArray(data)
+        elif dt.is_month_day_nano_interval():
+            return MonthDayNanoIntervalArray(data)
         elif dt.is_decimal32():
             return Decimal32Array(data)
         elif dt.is_decimal64():

@@ -133,6 +133,9 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         Time64Builder,
         DurationBuilder,
         TimestampBuilder,
+        YearMonthIntervalBuilder,
+        DayTimeIntervalBuilder,
+        MonthDayNanoIntervalBuilder,
         Decimal32Builder,
         Decimal64Builder,
         Decimal128Builder,
@@ -221,6 +224,14 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = TimestampBuilder(dtype.as_timestamp(), capacity)
         elif dtype.is_duration():
             self = DurationBuilder(dtype.as_duration(), capacity)
+        elif dtype.is_year_month_interval():
+            self = YearMonthIntervalBuilder(YearMonthIntervalType(), capacity)
+        elif dtype.is_day_time_interval():
+            self = DayTimeIntervalBuilder(DayTimeIntervalType(), capacity)
+        elif dtype.is_month_day_nano_interval():
+            self = MonthDayNanoIntervalBuilder(
+                MonthDayNanoIntervalType(), capacity
+            )
         elif dtype.is_decimal32():
             self = Decimal32Builder(dtype.as_decimal32(), capacity)
         elif dtype.is_decimal64():
@@ -391,6 +402,21 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def as_timestamp(ref self) -> ref[self._ptr[]] TimestampBuilder:
         return self._as[TimestampBuilder]()
+
+    def as_year_month_interval(
+        ref self,
+    ) -> ref[self._ptr[]] YearMonthIntervalBuilder:
+        return self._as[YearMonthIntervalBuilder]()
+
+    def as_day_time_interval(
+        ref self,
+    ) -> ref[self._ptr[]] DayTimeIntervalBuilder:
+        return self._as[DayTimeIntervalBuilder]()
+
+    def as_month_day_nano_interval(
+        ref self,
+    ) -> ref[self._ptr[]] MonthDayNanoIntervalBuilder:
+        return self._as[MonthDayNanoIntervalBuilder]()
 
     def as_decimal32(ref self) -> ref[self._ptr[]] Decimal32Builder:
         return self._as[Decimal32Builder]()
@@ -1580,6 +1606,12 @@ comptime Time32Builder = PrimitiveBuilder[Time32Type]
 comptime Time64Builder = PrimitiveBuilder[Time64Type]
 comptime DurationBuilder = PrimitiveBuilder[DurationType]
 comptime TimestampBuilder = PrimitiveBuilder[TimestampType]
+
+comptime YearMonthIntervalBuilder = PrimitiveBuilder[YearMonthIntervalType]
+comptime DayTimeIntervalBuilder = PrimitiveBuilder[DayTimeIntervalType]
+comptime MonthDayNanoIntervalBuilder = PrimitiveBuilder[
+    MonthDayNanoIntervalType
+]
 
 comptime Decimal32Builder = PrimitiveBuilder[Decimal32Type]
 comptime Decimal64Builder = PrimitiveBuilder[Decimal64Type]

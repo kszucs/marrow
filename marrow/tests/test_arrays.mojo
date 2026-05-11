@@ -1834,6 +1834,96 @@ def test_temporal_array_index_out_of_bounds() raises:
     assert_true(raised)
 
 
+def test_year_month_interval_array() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int32](3)
+    buf.unsafe_set[DType.int32](0, Int32(12))
+    buf.unsafe_set[DType.int32](1, Int32(24))
+    buf.unsafe_set[DType.int32](2, Int32(36))
+    var arr = YearMonthIntervalArray(
+        ArrayData(
+            dtype=year_month_interval().to_any(),
+            length=3,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 3)
+    assert_true(arr.type() == year_month_interval().to_any())
+    assert_equal(arr[0].value(), 12)
+    assert_equal(arr[1].value(), 24)
+    assert_equal(arr[2].value(), 36)
+
+
+def test_day_time_interval_array() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int64](3)
+    buf.unsafe_set[DType.int64](0, Int64(86400000))
+    buf.unsafe_set[DType.int64](1, Int64(172800000))
+    buf.unsafe_set[DType.int64](2, Int64(259200000))
+    var arr = DayTimeIntervalArray(
+        ArrayData(
+            dtype=day_time_interval().to_any(),
+            length=3,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 3)
+    assert_true(arr.type() == day_time_interval().to_any())
+    assert_equal(arr[0].value(), 86400000)
+    assert_equal(arr[1].value(), 172800000)
+    assert_equal(arr[2].value(), 259200000)
+
+
+def test_month_day_nano_interval_array() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int128](2)
+    buf.unsafe_set[DType.int128](0, 1)
+    buf.unsafe_set[DType.int128](1, 2)
+    var arr = MonthDayNanoIntervalArray(
+        ArrayData(
+            dtype=month_day_nano_interval().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    assert_equal(len(arr), 2)
+    assert_true(arr.type() == month_day_nano_interval().to_any())
+    assert_equal(arr[0].value(), 1)
+    assert_equal(arr[1].value(), 2)
+
+
+def test_interval_array_to_any_roundtrip() raises:
+    var buf = Buffer[mut=True].alloc_uninit[DType.int32](2)
+    buf.unsafe_set[DType.int32](0, Int32(6))
+    buf.unsafe_set[DType.int32](1, Int32(18))
+    var arr = YearMonthIntervalArray(
+        ArrayData(
+            dtype=year_month_interval().to_any(),
+            length=2,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffers=[buf.to_immutable()],
+            children=[],
+        )
+    )
+    var any_arr = arr^.to_any()
+    assert_true(any_arr.dtype() == year_month_interval().to_any())
+    assert_equal(any_arr.length(), 2)
+    ref ia = any_arr.as_year_month_interval()
+    assert_equal(ia[0].value(), 6)
+    assert_equal(ia[1].value(), 18)
+
+
 def test_dictionary_array() raises:
     # Build values: ["cat", "dog", "fish"]
     var vb = StringBuilder()
@@ -1905,7 +1995,7 @@ def test_dictionary_array_slice() raises:
 
     var ib = Int32Builder()
     for i in range(3):
-        ib.append(i)
+        ib.append(Int32(i))
     var indices: AnyArray = ib.finish()
     var arr = DictionaryArray.from_arrays(indices^, values^)
 

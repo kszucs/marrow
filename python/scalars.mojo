@@ -53,6 +53,12 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
         return PythonObject(scalar.as_float32().value())
     elif dtype.is_float64():
         return PythonObject(scalar.as_float64().value())
+    elif dtype.is_year_month_interval():
+        return PythonObject(scalar.as_year_month_interval().value())
+    elif dtype.is_day_time_interval():
+        return PythonObject(scalar.as_day_time_interval().value())
+    elif dtype.is_month_day_nano_interval():
+        return PythonObject(scalar.as_month_day_nano_interval().value())
     if dtype.is_string():
         return PythonObject(scalar.as_string().to_string())
     elif dtype.is_list():
