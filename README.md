@@ -83,7 +83,7 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 ## Python Quick Start
 
 ```bash
-pixi run -e dev build_python   # compile marrow.so
+pixi run -e dev build_python   # compile libmarrow.so
 ```
 
 ```python
@@ -384,7 +384,7 @@ pixi run -e dev fmt               # format all code (Mojo + Python)
 pixi run -e asan test_mojo_asan   # Mojo tests under ASAN
 ```
 
-The Python shared library (`python/marrow.so`) is built automatically before
+The Python shared library (`python/libmarrow.so`) is built automatically before
 each test run — no manual `build_python` step required.
 
 ### Running individual tests

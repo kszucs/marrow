@@ -69,7 +69,7 @@ all tests from the same `.mojo` file on the same worker so the compiled binary
 is reused.  Benchmark tasks always pass `-n0` to disable parallelism for
 accurate timing.
 
-The Python shared library (`python/marrow.so`) is rebuilt automatically by
+The Python shared library (`python/libmarrow.so`) is rebuilt automatically by
 `conftest.py` before each test session — no manual `build_python` step needed.
 
 ### Writing Mojo Tests

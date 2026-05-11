@@ -13,9 +13,9 @@ from ipc import add_to_module as add_ipc
 
 
 @export
-def PyInit_marrow() -> PythonObject:
+def PyInit_libmarrow() -> PythonObject:
     try:
-        var m = PythonModuleBuilder("marrow")
+        var m = PythonModuleBuilder("libmarrow")
         add_dtypes(m)
         add_scalars(m)
         add_arrays(m)

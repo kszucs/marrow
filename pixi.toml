@@ -27,7 +27,7 @@ pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc
 python = ">=3.14,<3.15"
 
 [tasks]
-build_python = { cmd = "mojo build -I . python/lib.mojo --emit shared-lib -o python/marrow.so" }
+build_python = { cmd = "mojo build -O3 -g0 -I . python/lib.mojo --emit shared-lib -o python/libmarrow.so" }
 profile = "python scripts/profile.py"
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
@@ -160,6 +160,24 @@ datafusion_udf = { cmd = "python examples/datafusion/main.py", depends-on = [
 build = { cmd = "docker compose build x86" }
 test = { cmd = "docker compose run --rm x86 pixi run -e dev pytest", depends-on = ["build"] }
 
+# Wheel — local wheel building for macOS development.
+[feature.wheel.dependencies]
+hatchling = ">=1.25,<2"
+delocate = ">=0.11,<1"
+pytest = ">=9.0.2,<10"
+pip = "*"
+
+[feature.wheel.pypi-dependencies]
+pyarrow = ">=23.0.1,<24"
+numpy = ">=2.4.4,<3"
+
+[feature.wheel.tasks]
+wheel_build = { cmd = "strip -x python/libmarrow.so && python -m hatchling build --target wheel && delocate-wheel -w dist/repaired/ -v dist/marrow-*.whl", depends-on = ["build_python"] }
+wheel_install = { cmd = "python -m pip install -q --force-reinstall --no-deps dist/repaired/marrow-*.whl", depends-on = ["wheel_build"] }
+wheel_import = { cmd = "python -c 'import marrow; print(marrow.__file__)'", depends-on = ["wheel_install"] }
+wheel_test = { cmd = "pytest python/tests/test_*.py -v --noconftest -m 'not gpu'", depends-on = ["wheel_install"] }
+wheel = { depends-on = ["wheel_import", "wheel_test"] }
+
 [environments]
 default = { features = ["dev", "format"], solve-group = "default" }
 dev = { features = ["dev", "format"], solve-group = "default" }
@@ -170,6 +188,7 @@ docs = { features = ["docs"], solve-group = "default" }
 examples = { features = ["examples"], solve-group = "default" }
 integration = { features = ["dev", "integration"], solve-group = "integration" }
 docker = { features = ["docker"], no-default-feature = true }
+wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
 mojo = ">=1.0.0b2.dev2026051106,<2"
