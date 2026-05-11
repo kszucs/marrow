@@ -20,6 +20,7 @@ packages = []
 [tool.cibuildwheel]
 build = "cp314-*"
 skip = "*-musllinux*"
+enable = ["cpython-prerelease"]
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
