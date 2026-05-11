@@ -52,7 +52,7 @@ def _release_schema_capsule(capsule: PyObjectPtr):
         var py = Python()
         ref cpy = py.cpython()
         var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_schema")
-        if ptr:
+        if Int(ptr) != 0:
             var c_schema = ptr.bitcast[CArrowSchema]()
             # Guard against double-free: an Arrow importer zeroes the release
             # field after taking ownership.
@@ -78,9 +78,9 @@ def _release_exported_schema(ptr: UnsafePointer[CArrowSchema, MutAnyOrigin]):
         ptr[].children[i].free()
     if ptr[].n_children > 0:
         ptr[].children.free()
-    if ptr[].format:
+    if Int(ptr[].format) != 0:
         ptr[].format.free()
-    if ptr[].name:
+    if Int(ptr[].name) != 0:
         ptr[].name.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
@@ -400,7 +400,7 @@ def _release_array_capsule(capsule: PyObjectPtr):
         var py = Python()
         ref cpy = py.cpython()
         var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_array")
-        if ptr:
+        if Int(ptr) != 0:
             var c_arr = ptr.bitcast[CArrowArray]()
             # Guard: release is zeroed by _release_exported_array after it runs,
             # or by an Arrow importer after it takes ownership.
@@ -439,7 +439,7 @@ def _release_exported_array(ptr: UnsafePointer[CArrowArray, MutAnyOrigin]):
         for i in range(Int(ptr[].n_children)):
             ptr[].children[i].free()
         ptr[].children.free()
-    if ptr[].buffers:
+    if Int(ptr[].buffers) != 0:
         ptr[].buffers.free()
     var data_ptr = ptr[].private_data.bitcast[ArrayData]()
     data_ptr.destroy_pointee()
@@ -510,7 +510,7 @@ struct CArrowArray(Copyable, Movable):
         var length = self.length + self.offset
 
         var bitmap: Optional[Bitmap[]]
-        if self.buffers[0]:
+        if Int(self.buffers[0]) != 0:
             bitmap = Bitmap(
                 Buffer.from_foreign(
                     self.buffers[0],
@@ -906,7 +906,7 @@ def _release_stream_capsule(capsule: PyObjectPtr):
         var py = Python()
         ref cpy = py.cpython()
         var ptr = cpy.PyCapsule_GetPointer(capsule, "arrow_array_stream")
-        if ptr:
+        if Int(ptr) != 0:
             var c_stream = ptr.bitcast[CArrowArrayStream]()
             if UnsafePointer(to=c_stream[].release).bitcast[UInt64]()[0] != 0:
                 c_stream[].release(c_stream)

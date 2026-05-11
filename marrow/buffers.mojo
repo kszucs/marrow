@@ -295,7 +295,7 @@ struct Allocation(Movable):
         if self.release:
             # FOREIGN: invoke the producer's C release callback.
             self.release.value()(self.ptr)
-        elif self.ptr:
+        elif Int(self.ptr) != 0:
             # CPU: free the Mojo heap allocation directly.
             # HOST and DEVICE have a null ptr, so this branch is CPU-only.
             self.ptr.free()
@@ -643,7 +643,7 @@ struct Buffer[*, mut: Bool = False](
     @always_inline
     def unsafe_get[T: DType = DType.uint8](self, index: Int) -> Scalar[T]:
         debug_assert(
-            self._ptr.__bool__(),
+            self.is_cpu(),
             "cannot read device buffer, call to_cpu() first",
         )
         comptime output = Scalar[T]
