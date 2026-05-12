@@ -5,8 +5,10 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-SO = Path("python/libmarrow.so")
-BUILD_CMD = ["mojo", "build", "-O3", "-g0", "-I", ".", "python/lib.mojo",
+ROOT = Path(__file__).parent.parent
+SO = Path(__file__).parent / "marrow" / "libmarrow.so"
+BUILD_CMD = ["mojo", "build", "-O3", "-g0", "-I", str(ROOT),
+             str(Path(__file__).parent / "bindings" / "lib.mojo"),
              "--emit", "shared-lib", "-o", str(SO)]
 
 
@@ -27,5 +29,5 @@ class CustomBuildHook(BuildHookInterface):
                 )
 
         suffix = sysconfig.get_config_var("EXT_SUFFIX")
-        build_data["force_include"]["python/__init__.py"] = "marrow/__init__.py"
+        build_data["force_include"][str(SO.parent / "__init__.py")] = "marrow/__init__.py"
         build_data["force_include"][str(SO)] = f"marrow/libmarrow{suffix}"

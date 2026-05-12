@@ -6,16 +6,38 @@ build-backend = "hatchling.build"
 name = "marrow"
 version = "0.1.0"
 description = "Apache Arrow implementation in Mojo"
-readme = "README.md"
+readme = "../README.md"
 requires-python = ">=3.14"
 
 [tool.hatch.build.hooks.custom]
-path = "hatch_build.py"
+path = "build.py"
 
 [tool.hatch.build.targets.wheel]
-# No packages — the hook adds both __init__.py and the compiled extension
-# explicitly via force_include, mapping python/ → marrow/ in site-packages.
-packages = []
+# only-include = [] means hatchling auto-discovers nothing; the hook's
+# force_include adds exactly marrow/__init__.py and the compiled extension.
+only-include = []
+
+[tool.hatch.build.targets.editable]
+# For editable installs, hatchling adds python/ to sys.path so import marrow
+# finds python/marrow/__init__.py directly; the hook still builds libmarrow.so.
+packages = ["marrow"]
+
+[tool.pixi.workspace]
+channels = [
+  "https://prefix.dev/mojo-community",
+  "https://conda.modular.com/max-nightly/",
+  "conda-forge",
+]
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[tool.pixi.dependencies]
+mojo-compiler = "==1.0.0b2.dev2026051106"
+mojo = "==1.0.0b2.dev2026051106"
+python = ">=3.14,<3.15"
+
+[tool.pixi.pypi-dependencies]
+marrow = { path = ".", editable = true }
 
 [tool.cibuildwheel]
 build = "cp314-*"

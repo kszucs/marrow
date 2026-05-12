@@ -48,7 +48,7 @@ from marrow.builders import (
 from marrow.scalars import AnyScalar
 import marrow.dtypes as dt
 
-from pontoneer import SequenceProtocolBuilder
+# from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod, marrow_module
 
 
@@ -1208,8 +1208,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_any_array_str]("__repr__")
         .def_method[marrow_module]("__module__")
     )
-    var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
-    _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
+    # var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
+    # _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 
     mb.def_function[infer_type](
         "infer_type",

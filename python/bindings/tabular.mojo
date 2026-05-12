@@ -9,7 +9,7 @@ References:
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
-from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
+# from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from std.collections import OwnedKwargsDict
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
@@ -223,12 +223,12 @@ def _record_batch_arrow_c_schema(
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
-def _record_batch_rich_compare(
-    first: RecordBatch, second: PythonObject, op: Int
-) raises -> Bool:
-    if op == RichCompareOps.Py_EQ:
-        return first == second.downcast_value_ptr[RecordBatch]()[]
-    raise NotImplementedError()
+# def _record_batch_rich_compare(
+#     first: RecordBatch, second: PythonObject, op: Int
+# ) raises -> Bool:
+#     if op == RichCompareOps.Py_EQ:
+#         return first == second.downcast_value_ptr[RecordBatch]()[]
+#     raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
@@ -355,12 +355,12 @@ def _table_arrow_c_schema(
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
-def _table_rich_compare(
-    first: Table, second: PythonObject, op: Int
-) raises -> Bool:
-    if op == RichCompareOps.Py_EQ:
-        return first == second.downcast_value_ptr[Table]()[]
-    raise NotImplementedError()
+# def _table_rich_compare(
+#     first: Table, second: PythonObject, op: Int
+# ) raises -> Bool:
+#     if op == RichCompareOps.Py_EQ:
+#         return first == second.downcast_value_ptr[Table]()[]
+#     raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
@@ -597,8 +597,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_str]("__repr__")
         .def_method[marrow_module]("__module__")
     )
-    var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
-    _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
+    # var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
+    # _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
     mb.def_function[record_batch](
         "record_batch",
@@ -632,8 +632,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_table_str]("__repr__")
         .def_method[marrow_module]("__module__")
     )
-    var t_tp = TypeProtocolBuilder[Table](t_py)
-    _ = t_tp.def_richcompare[_table_rich_compare]()
+    # var t_tp = TypeProtocolBuilder[Table](t_py)
+    # _ = t_tp.def_richcompare[_table_rich_compare]()
 
     mb.def_function[table](
         "table",

@@ -106,10 +106,10 @@ def main():
             env = None
         elif script.suffix == ".py":
             # Build the shared lib with debug info for Python workloads
-            so = ROOT / "python" / "libmarrow.so"
+            so = ROOT / "python" / "marrow" / "libmarrow.so"
             build_cmd = [
                 str(MOJO), "build", "-I", ".",
-                "python/lib.mojo", "--emit", "shared-lib",
+                "python/bindings/lib.mojo", "--emit", "shared-lib",
                 "-g", "--debug-info-language", "C",
                 "-O1", "-o", str(so),
             ]
