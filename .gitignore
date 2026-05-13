@@ -195,3 +195,10 @@ package/
 
 # integration test deps (cloned + built by pixi tasks)
 integration/arrow/
+
+# Profiler output from scripts/profile.py
+*.sample.txt
+
+# Working documents and history notes, kept out of version control
+notes/
+.superpowers/

@@ -5,7 +5,6 @@ from std.python import (
     Python,
 )
 from std.python.bindings import PythonModuleBuilder
-from std.collections import OwnedKwargsDict
 from std.python._cpython import (
     CPython,
     ExternalFunction,
@@ -21,8 +20,6 @@ from std.builtin.variadics import Variadic
 from std.os import abort
 from marrow.c_data import CArrowSchema, CArrowArray
 from marrow.kernels.execution import ExecutionContext
-from marrow.kernels.sort import argsort as _argsort_kernel
-from marrow.kernels.filter import take as _take_kernel
 from marrow.arrays import (
     AnyArray,
     ArrayData,
@@ -48,8 +45,7 @@ from marrow.builders import (
 from marrow.scalars import AnyScalar
 import marrow.dtypes as dt
 
-from pontoneer import SequenceProtocolBuilder
-from helpers import pymethod, marrow_module
+from helpers import pymethod
 
 
 # int PyBytes_AsStringAndSize(PyObject *obj, char **buffer, Py_ssize_t *length)
@@ -255,6 +251,13 @@ def _any_array_getitem(
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
     return ptr[][index].to_python_object()
+
+
+def _any_array_getitem_py(
+    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    index: PythonObject,
+) raises -> PythonObject:
+    return _any_array_getitem(ptr, Int(py=index))
 
 
 # ---------------------------------------------------------------------------
@@ -982,31 +985,26 @@ def infer_type(obj: PythonObject) raises -> PythonObject:
     return inferrer.infer(obj).to_python_object()
 
 
-def array(
-    obj: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
-) raises -> PythonObject:
-    # Try converting directly (handles marrow arrays and __arrow_c_array__).
-    # Skip when type= is given since the user wants explicit type control.
-    if not kwargs.find("type"):
+def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    var type_given = not type.__is__(builtins.None)
+    if not type_given:
         try:
             return AnyArray(py=obj).to_python_object()
         except:
             pass
 
-    # Fall back to building from a Python sequence.
     var dtype: dt.AnyDataType
     var has_nulls = True
-    if opt := kwargs.find("type"):
-        dtype = opt.value().downcast_value_ptr[dt.AnyDataType]()[].copy()
+    if type_given:
+        dtype = type.downcast_value_ptr[dt.AnyDataType]()[].copy()
     else:
         var inferrer = PyInferrer()
         dtype = inferrer.infer(obj)
         has_nulls = inferrer.none_count > 0
 
     if dtype.is_null():
-        # Explicit `type=ma.null()` builds a NullArray of the given length
-        # regardless of the input values (every element is null by definition).
-        if kwargs.find("type"):
+        if type_given:
             return NullArray(length=len(obj)).to_any().to_python_object()
         raise Error(
             "cannot build array: sequence is empty or all-None"
@@ -1044,82 +1042,51 @@ def _build_offsets_array(offsets_obj: PythonObject) raises -> Int32Array:
     return builder.finish()
 
 
-def _list_array_from_arrays(
-    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+def list_array_from_arrays(
+    offsets: PythonObject, values: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
-    """Build a ListArray from offsets, values, and optional mask.
-
-    Python API: list_array_from_arrays(offsets, *, values, mask=None)
-    """
-    var builtins = Python.import_module("builtins")
-    var mask_obj = builtins.None
-    if opt := kwargs.find("mask"):
-        mask_obj = opt.value()
-    var offsets_arr = _build_offsets_array(data)
-    var child = AnyArray(py=kwargs.find("values").value())
+    var offsets_arr = _build_offsets_array(offsets)
+    var child = AnyArray(py=values)
     var n = offsets_arr.length - 1
-    var mask = _build_mask_array(mask_obj, n)
+    var mask_opt = _build_mask_array(mask, n)
     return (
-        ListArray.from_arrays(offsets_arr, child^, mask^)
+        ListArray.from_arrays(offsets_arr, child^, mask_opt^)
         .to_any()
         .to_python_object()
     )
 
 
-def _fixed_size_list_array_from_arrays(
-    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+def fixed_size_list_array_from_arrays(
+    values: PythonObject, type: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
-    """Build a FixedSizeListArray from values, type, and optional mask.
-
-    Python API: fixed_size_list_array_from_arrays(values, *, type, mask=None)
-    """
-    var builtins = Python.import_module("builtins")
-    var mask_obj = builtins.None
-    if opt := kwargs.find("mask"):
-        mask_obj = opt.value()
-    var child = AnyArray(py=data)
-    var dtype = (
-        kwargs.find("type")
-        .value()
-        .downcast_value_ptr[dt.AnyDataType]()[]
-        .copy()
-    )
+    var child = AnyArray(py=values)
+    var dtype = type.downcast_value_ptr[dt.AnyDataType]()[].copy()
     var list_size = dtype.as_fixed_size_list().size
     var n = child.length() // list_size if list_size > 0 else 0
-    var mask = _build_mask_array(mask_obj, n)
+    var mask_opt = _build_mask_array(mask, n)
     return (
-        FixedSizeListArray.from_arrays(child^, list_size, mask^)
+        FixedSizeListArray.from_arrays(child^, list_size, mask_opt^)
         .to_any()
         .to_python_object()
     )
 
 
-def _struct_array_from_arrays(
-    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+def struct_array_from_arrays(
+    arrays: PythonObject, fields: PythonObject, mask: PythonObject
 ) raises -> PythonObject:
-    """Build a StructArray from child arrays, fields, and optional mask.
-
-    Python API: struct_array_from_arrays(arrays, *, fields, mask=None)
-    """
-    var builtins = Python.import_module("builtins")
-    var mask_obj = builtins.None
-    if opt := kwargs.find("mask"):
-        mask_obj = opt.value()
-    var arrays_obj = data
-    var fields_obj = kwargs.find("fields").value()
-    var n_fields = Int(py=arrays_obj.__len__())
+    var n_fields = Int(py=arrays.__len__())
     var children = List[AnyArray]()
-    var fields = List[dt.Field]()
+    var fields_list = List[dt.Field]()
     var n = 0
     for i in range(n_fields):
-        var arr = AnyArray(py=arrays_obj[i])
+        var arr = AnyArray(py=arrays[i])
         if i == 0:
             n = arr.length()
         children.append(arr^)
-        fields.append(fields_obj[i].downcast_value_ptr[dt.Field]()[].copy())
-    var mask = _build_mask_array(mask_obj, n)
+        fields_list.append(fields[i].downcast_value_ptr[dt.Field]()[].copy())
+    var mask_opt = _build_mask_array(mask, n)
     return (
-        StructArray.from_arrays(children^, fields^, mask^)
+        StructArray.from_arrays(children^, fields_list^, mask_opt^)
         .to_any()
         .to_python_object()
     )
@@ -1139,112 +1106,33 @@ def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
     return self.to_cpu(ctx.device.value())
 
 
-def _null_placement_to_bool(py: PythonObject) raises -> Bool:
-    """Convert null_placement kwarg ('at_start'/'at_end' or None) to nulls_first.
-    """
-    if py.__is__(PythonObject(None)):
-        return True
-    return String(py=py) != "at_end"
-
-
-def _any_array_argsort(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
-    ascending: PythonObject,
-    null_placement: PythonObject,
-) raises -> PythonObject:
-    var asc = True if ascending.__is__(PythonObject(None)) else Bool(
-        py=ascending
-    )
-    var nulls_first = _null_placement_to_bool(null_placement)
-    var idx: AnyArray = _argsort_kernel(
-        ptr[], asc, nulls_first, ctx=ExecutionContext.parallel()
-    )
-    return idx^.to_python_object()
-
-
-def _any_array_sort(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
-    ascending: PythonObject,
-    null_placement: PythonObject,
-) raises -> PythonObject:
-    var asc = True if ascending.__is__(PythonObject(None)) else Bool(
-        py=ascending
-    )
-    var nulls_first = _null_placement_to_bool(null_placement)
-    var ctx = ExecutionContext.parallel()
-    var indices = _argsort_kernel(ptr[], asc, nulls_first, ctx=ctx)
-    return _take_kernel(ptr[], indices, ctx).to_python_object()
-
-
-def _any_array_take(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
-    indices: PythonObject,
-) raises -> PythonObject:
-    return _take_kernel(
-        ptr[], AnyArray(py=indices).as_int32().copy()
-    ).to_python_object()
-
-
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
     # --- Array (type-erased AnyArray) ---
     ref array_py = mb.add_type[AnyArray]("Array")
     _ = (
-        array_py.def_method[pymethod[AnyArray.null_count]()]("null_count")
+        array_py.def_method[pymethod[AnyArray.__len__]()]("__len__")
+        .def_method[_any_array_getitem_py]("__getitem__")
+        .def_method[pymethod[AnyArray.null_count]()]("null_count")
         .def_method[pymethod[AnyArray.dtype]()]("type")
         .def_method[pymethod[AnyArray.is_valid]()]("is_valid")
         .def_method[pymethod[AnyArray.slice]()]("slice")
         .def_method[pymethod[_array_to_device]()]("to_device")
         .def_method[pymethod[_array_to_cpu]()]("to_cpu")
-        .def_method[_any_array_argsort]("argsort")
-        .def_method[_any_array_sort]("sort")
-        .def_method[_any_array_take]("take")
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )
-    _ = (
-        array_py.def_method[_any_array_str]("__str__")
-        .def_method[_any_array_str]("__repr__")
-        .def_method[marrow_module]("__module__")
-    )
-    var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
-    _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
+    _ = array_py.def_method[_any_array_str]("__str__").def_method[
+        _any_array_str
+    ]("__repr__")
+    # var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
+    # _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 
-    mb.def_function[infer_type](
-        "infer_type",
-        docstring=(
-            "infer_type(obj, /) -> DataType\n--\n\nInfer the Arrow type of a"
-            " Python sequence."
-        ),
+    mb.def_function[infer_type]("infer_type")
+    mb.def_function[array]("array")
+    mb.def_function[list_array_from_arrays]("list_array_from_arrays")
+    mb.def_function[fixed_size_list_array_from_arrays](
+        "fixed_size_list_array_from_arrays"
     )
-    mb.def_function[array](
-        "array",
-        docstring=(
-            "array(obj, /, *, type=None) -> Array\n--\n\nCreate a marrow array"
-            " from a Python sequence."
-        ),
-    )
-    mb.def_function[_list_array_from_arrays](
-        "list_array_from_arrays",
-        docstring=(
-            "list_array_from_arrays(offsets, /, *, values, type, mask=None) ->"
-            " Array\n--\n\nBuild a list array from offsets, values array, type,"
-            " and optional validity mask."
-        ),
-    )
-    mb.def_function[_fixed_size_list_array_from_arrays](
-        "fixed_size_list_array_from_arrays",
-        docstring=(
-            "fixed_size_list_array_from_arrays(values, /, *, type, mask=None)"
-            " -> Array\n--\n\nBuild a fixed-size list array from a flat values"
-            " array and type."
-        ),
-    )
-    mb.def_function[_struct_array_from_arrays](
-        "struct_array_from_arrays",
-        docstring=(
-            "struct_array_from_arrays(arrays, /, *, fields, mask=None) ->"
-            " Array\n--\n\nBuild a struct array from child arrays and fields."
-        ),
-    )
+    mb.def_function[struct_array_from_arrays]("struct_array_from_arrays")

@@ -11,7 +11,7 @@ from ..arrays import PrimitiveArray, AnyArray
 from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import PrimitiveType
-from . import (
+from .helpers import (
     bitmap_and,
     binary_array_dispatch,
     binary_float_dispatch,
@@ -250,7 +250,7 @@ def add[
     return _binary[T, func=_add[T.native, _], name="add"](left, right, ctx)
 
 
-def sub[
+def subtract[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -258,10 +258,10 @@ def sub[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise subtraction."""
-    return _binary[T, func=_sub[T.native, _], name="sub"](left, right, ctx)
+    return _binary[T, func=_sub[T.native, _], name="subtract"](left, right, ctx)
 
 
-def mul[
+def multiply[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -269,10 +269,10 @@ def mul[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise multiplication."""
-    return _binary[T, func=_mul[T.native, _], name="mul"](left, right, ctx)
+    return _binary[T, func=_mul[T.native, _], name="multiply"](left, right, ctx)
 
 
-def div[
+def divide[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -280,7 +280,7 @@ def div[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise true division."""
-    return _binary[T, func=_div[T.native, _], name="div"](left, right, ctx)
+    return _binary[T, func=_div[T.native, _], name="divide"](left, right, ctx)
 
 
 def floordiv[
@@ -307,7 +307,7 @@ def mod[
     return _binary[T, func=_mod[T.native, _], name="mod"](left, right, ctx)
 
 
-def min_[
+def min_element_wise[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -315,10 +315,12 @@ def min_[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise minimum."""
-    return _binary[T, func=_min[T.native, _], name="min_"](left, right, ctx)
+    return _binary[T, func=_min[T.native, _], name="min_element_wise"](
+        left, right, ctx
+    )
 
 
-def max_[
+def max_element_wise[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -326,7 +328,9 @@ def max_[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise maximum."""
-    return _binary[T, func=_max[T.native, _], name="max_"](left, right, ctx)
+    return _binary[T, func=_max[T.native, _], name="max_element_wise"](
+        left, right, ctx
+    )
 
 
 def pow_[
@@ -334,14 +338,13 @@ def pow_[
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
-) raises -> PrimitiveArray[
-    T
-]:
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise power: result[i] = left[i] ** right[i]."""
     comptime assert (
         T.native.is_floating_point()
     ), "pow_ requires a floating-point type"
-    return _binary[T, func=_pow_fn[T.native, _], name="pow_"](left, right)
+    return _binary[T, func=_pow_fn[T.native, _], name="pow_"](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -349,133 +352,191 @@ def pow_[
 # ---------------------------------------------------------------------------
 
 
-def neg[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def neg[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise negation."""
-    return _unary[T, _neg_fn[T.native, _]](array)
+    return _unary[T, _neg_fn[T.native, _]](array, ctx)
 
 
 def abs_[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise absolute value."""
-    return _unary[T, _abs_fn[T.native, _]](array)
+    return _unary[T, _abs_fn[T.native, _]](array, ctx)
 
 
 def sign[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise sign: -1, 0, or 1."""
-    return _unary[T, _sign_fn[T.native, _]](array)
+    return _unary[T, _sign_fn[T.native, _]](array, ctx)
 
 
 def sqrt[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise square root."""
     comptime assert (
         T.native.is_floating_point()
     ), "sqrt requires a floating-point type"
-    return _unary[T, _sqrt_fn[T.native, _]](array)
+    return _unary[T, _sqrt_fn[T.native, _]](array, ctx)
 
 
-def exp[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def exp[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise natural exponential (e^x)."""
     comptime assert (
         T.native.is_floating_point()
     ), "exp requires a floating-point type"
-    return _unary[T, _exp_fn[T.native, _]](array)
+    return _unary[T, _exp_fn[T.native, _]](array, ctx)
 
 
 def exp2[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise base-2 exponential (2^x)."""
     comptime assert (
         T.native.is_floating_point()
     ), "exp2 requires a floating-point type"
-    return _unary[T, _exp2_fn[T.native, _]](array)
+    return _unary[T, _exp2_fn[T.native, _]](array, ctx)
 
 
-def log[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def log[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise natural logarithm."""
     comptime assert (
         T.native.is_floating_point()
     ), "log requires a floating-point type"
-    return _unary[T, _log_fn[T.native, _]](array)
+    return _unary[T, _log_fn[T.native, _]](array, ctx)
 
 
 def log2[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise base-2 logarithm."""
     comptime assert (
         T.native.is_floating_point()
     ), "log2 requires a floating-point type"
-    return _unary[T, _log2_fn[T.native, _]](array)
+    return _unary[T, _log2_fn[T.native, _]](array, ctx)
 
 
 def log10[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise base-10 logarithm."""
     comptime assert (
         T.native.is_floating_point()
     ), "log10 requires a floating-point type"
-    return _unary[T, _log10_fn[T.native, _]](array)
+    return _unary[T, _log10_fn[T.native, _]](array, ctx)
 
 
 def log1p[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise log(1 + x)."""
     comptime assert (
         T.native.is_floating_point()
     ), "log1p requires a floating-point type"
-    return _unary[T, _log1p_fn[T.native, _]](array)
+    return _unary[T, _log1p_fn[T.native, _]](array, ctx)
 
 
 def floor[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise floor."""
-    return _unary[T, _floor_fn[T.native, _]](array)
+    return _unary[T, _floor_fn[T.native, _]](array, ctx)
 
 
 def ceil[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise ceiling."""
-    return _unary[T, _ceil_fn[T.native, _]](array)
+    return _unary[T, _ceil_fn[T.native, _]](array, ctx)
 
 
 def trunc[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise truncation toward zero."""
-    return _unary[T, _trunc_fn[T.native, _]](array)
+    return _unary[T, _trunc_fn[T.native, _]](array, ctx)
 
 
 def round[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise rounding to nearest integer."""
-    return _unary[T, _round_fn[T.native, _]](array)
+    return _unary[T, _round_fn[T.native, _]](array, ctx)
 
 
-def sin[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def sin[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise sine."""
     comptime assert (
         T.native.is_floating_point()
     ), "sin requires a floating-point type"
-    return _unary[T, _sin_fn[T.native, _]](array)
+    return _unary[T, _sin_fn[T.native, _]](array, ctx)
 
 
-def cos[T: PrimitiveType](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+def cos[
+    T: PrimitiveType
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Element-wise cosine."""
     comptime assert (
         T.native.is_floating_point()
     ), "cos requires a floating-point type"
-    return _unary[T, _cos_fn[T.native, _]](array)
+    return _unary[T, _cos_fn[T.native, _]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -492,133 +553,205 @@ def add(
     return binary_array_dispatch["add", add[_]](left, right, ctx)
 
 
-def sub(
+def subtract(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed sub."""
-    return binary_array_dispatch["sub", sub[_]](left, right, ctx)
+    """Runtime-typed subtract."""
+    return binary_array_dispatch["subtract", subtract[_]](left, right, ctx)
 
 
-def mul(
+def multiply(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed mul."""
-    return binary_array_dispatch["mul", mul[_]](left, right, ctx)
+    """Runtime-typed multiply."""
+    return binary_array_dispatch["multiply", multiply[_]](left, right, ctx)
 
 
-def div(
+def divide(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed div."""
-    return binary_array_dispatch["div", div[_]](left, right, ctx)
+    """Runtime-typed divide."""
+    return binary_array_dispatch["divide", divide[_]](left, right, ctx)
 
 
-def floordiv(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def floordiv(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed floordiv."""
-    return binary_array_dispatch["floordiv", floordiv[_]](left, right)
+    return binary_array_dispatch["floordiv", floordiv[_]](left, right, ctx)
 
 
-def mod(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def mod(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed mod."""
-    return binary_array_dispatch["mod", mod[_]](left, right)
+    return binary_array_dispatch["mod", mod[_]](left, right, ctx)
 
 
-def min_(left: AnyArray, right: AnyArray) raises -> AnyArray:
-    """Runtime-typed min_."""
-    return binary_array_dispatch["min_", min_[_]](left, right)
+def min_element_wise(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
+    """Runtime-typed min_element_wise."""
+    return binary_array_dispatch["min_element_wise", min_element_wise[_]](
+        left, right, ctx
+    )
 
 
-def max_(left: AnyArray, right: AnyArray) raises -> AnyArray:
-    """Runtime-typed max_."""
-    return binary_array_dispatch["max_", max_[_]](left, right)
+def max_element_wise(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
+    """Runtime-typed max_element_wise."""
+    return binary_array_dispatch["max_element_wise", max_element_wise[_]](
+        left, right, ctx
+    )
 
 
-def neg(array: AnyArray) raises -> AnyArray:
+def neg(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed neg."""
-    return unary_numeric_dispatch["neg", neg[_]](array)
+    return unary_numeric_dispatch["neg", neg[_]](array, ctx)
 
 
-def abs_(array: AnyArray) raises -> AnyArray:
+def abs_(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed abs_."""
-    return unary_numeric_dispatch["abs_", abs_[_]](array)
+    return unary_numeric_dispatch["abs_", abs_[_]](array, ctx)
 
 
-def sign(array: AnyArray) raises -> AnyArray:
+def sign(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed sign."""
-    return unary_numeric_dispatch["sign", sign[_]](array)
+    return unary_numeric_dispatch["sign", sign[_]](array, ctx)
 
 
-def pow_(left: AnyArray, right: AnyArray) raises -> AnyArray:
+def pow_(
+    left: AnyArray,
+    right: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed pow_."""
-    return binary_float_dispatch["pow_", pow_[_]](left, right)
+    return binary_float_dispatch["pow_", pow_[_]](left, right, ctx)
 
 
-def sqrt(array: AnyArray) raises -> AnyArray:
+def sqrt(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed sqrt."""
-    return unary_float_dispatch["sqrt", sqrt[_]](array)
+    return unary_float_dispatch["sqrt", sqrt[_]](array, ctx)
 
 
-def exp(array: AnyArray) raises -> AnyArray:
+def exp(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed exp."""
-    return unary_float_dispatch["exp", exp[_]](array)
+    return unary_float_dispatch["exp", exp[_]](array, ctx)
 
 
-def exp2(array: AnyArray) raises -> AnyArray:
+def exp2(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed exp2."""
-    return unary_float_dispatch["exp2", exp2[_]](array)
+    return unary_float_dispatch["exp2", exp2[_]](array, ctx)
 
 
-def log(array: AnyArray) raises -> AnyArray:
+def log(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed log."""
-    return unary_float_dispatch["log", log[_]](array)
+    return unary_float_dispatch["log", log[_]](array, ctx)
 
 
-def log2(array: AnyArray) raises -> AnyArray:
+def log2(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed log2."""
-    return unary_float_dispatch["log2", log2[_]](array)
+    return unary_float_dispatch["log2", log2[_]](array, ctx)
 
 
-def log10(array: AnyArray) raises -> AnyArray:
+def log10(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed log10."""
-    return unary_float_dispatch["log10", log10[_]](array)
+    return unary_float_dispatch["log10", log10[_]](array, ctx)
 
 
-def log1p(array: AnyArray) raises -> AnyArray:
+def log1p(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed log1p."""
-    return unary_float_dispatch["log1p", log1p[_]](array)
+    return unary_float_dispatch["log1p", log1p[_]](array, ctx)
 
 
-def floor(array: AnyArray) raises -> AnyArray:
+def floor(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed floor."""
-    return unary_numeric_dispatch["floor", floor[_]](array)
+    return unary_numeric_dispatch["floor", floor[_]](array, ctx)
 
 
-def ceil(array: AnyArray) raises -> AnyArray:
+def ceil(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed ceil."""
-    return unary_numeric_dispatch["ceil", ceil[_]](array)
+    return unary_numeric_dispatch["ceil", ceil[_]](array, ctx)
 
 
-def trunc(array: AnyArray) raises -> AnyArray:
+def trunc(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed trunc."""
-    return unary_numeric_dispatch["trunc", trunc[_]](array)
+    return unary_numeric_dispatch["trunc", trunc[_]](array, ctx)
 
 
-def round(array: AnyArray) raises -> AnyArray:
+def round(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed round."""
-    return unary_numeric_dispatch["round", round[_]](array)
+    return unary_numeric_dispatch["round", round[_]](array, ctx)
 
 
-def sin(array: AnyArray) raises -> AnyArray:
+def sin(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed sin."""
-    return unary_float_dispatch["sin", sin[_]](array)
+    return unary_float_dispatch["sin", sin[_]](array, ctx)
 
 
-def cos(array: AnyArray) raises -> AnyArray:
+def cos(
+    array: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed cos."""
-    return unary_float_dispatch["cos", cos[_]](array)
+    return unary_float_dispatch["cos", cos[_]](array, ctx)

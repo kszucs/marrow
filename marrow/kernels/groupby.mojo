@@ -56,6 +56,7 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from .hashtable import SwissHashTable
 from .hashing import rapidhash
+from .execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +698,7 @@ def groupby(
     keys: StructArray,
     values: List[AnyArray],
     aggregations: List[String],
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> RecordBatch:
     """Fused grouped aggregation on a struct array of keys.
 
@@ -733,6 +735,7 @@ def groupby(
     key: AnyArray,
     values: List[AnyArray],
     aggregations: List[String],
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> RecordBatch:
     """Fused grouped aggregation on a single key column."""
     var children = List[AnyArray]()
@@ -746,4 +749,4 @@ def groupby(
         bitmap=key_data.bitmap,
         children=children^,
     )
-    return groupby(sa, values, aggregations)
+    return groupby(sa, values, aggregations, ctx)

@@ -27,7 +27,7 @@ from ..dtypes import int32, uint64, UInt64Type
 from ..views import BufferView
 from .compare import equal
 from .execution import ExecutionContext
-from .filter import take, filter_
+from .filter import take, filter
 from .hashing import rapidhash
 
 
@@ -835,8 +835,8 @@ struct SwissHashTable[
             take(build_keys, build_indices), take(probe_keys, probe_indices)
         )
         return (
-            filter_[Int32Type](build_indices, mask),
-            filter_[Int32Type](probe_indices, mask),
+            filter[Int32Type](build_indices, mask),
+            filter[Int32Type](probe_indices, mask),
         )
 
     def num_keys(self) -> Int:

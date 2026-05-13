@@ -10,12 +10,11 @@ References:
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
-from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
+
 from marrow.scalars import AnyScalar
 from marrow.arrays import AnyArray
 from marrow.dtypes import AnyDataType
 from helpers import pymethod
-from helpers import marrow_module
 
 
 # ---------------------------------------------------------------------------
@@ -114,26 +113,26 @@ def _scalar_bool(
 # ---------------------------------------------------------------------------
 
 
-def _scalar_rich_compare(
-    first: AnyScalar,
-    second: PythonObject,
-    op: Int,
-) raises -> Bool:
-    var py_val = _as_py(first)
-    var oper = Python.import_module("operator")
-    if op == RichCompareOps.Py_EQ:
-        return Bool(py=oper.eq(py_val, second))
-    elif op == RichCompareOps.Py_NE:
-        return Bool(py=oper.ne(py_val, second))
-    elif op == RichCompareOps.Py_LT:
-        return Bool(py=oper.lt(py_val, second))
-    elif op == RichCompareOps.Py_LE:
-        return Bool(py=oper.le(py_val, second))
-    elif op == RichCompareOps.Py_GT:
-        return Bool(py=oper.gt(py_val, second))
-    elif op == RichCompareOps.Py_GE:
-        return Bool(py=oper.ge(py_val, second))
-    raise NotImplementedError()
+# def _scalar_rich_compare(
+#     first: AnyScalar,
+#     second: PythonObject,
+#     op: Int,
+# ) raises -> Bool:
+#     var py_val = _as_py(first)
+#     var oper = Python.import_module("operator")
+#     if op == RichCompareOps.Py_EQ:
+#         return Bool(py=oper.eq(py_val, second))
+#     elif op == RichCompareOps.Py_NE:
+#         return Bool(py=oper.ne(py_val, second))
+#     elif op == RichCompareOps.Py_LT:
+#         return Bool(py=oper.lt(py_val, second))
+#     elif op == RichCompareOps.Py_LE:
+#         return Bool(py=oper.le(py_val, second))
+#     elif op == RichCompareOps.Py_GT:
+#         return Bool(py=oper.gt(py_val, second))
+#     elif op == RichCompareOps.Py_GE:
+#         return Bool(py=oper.ge(py_val, second))
+#     raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +151,6 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_scalar_str]("__str__")
         .def_method[_scalar_repr]("__repr__")
         .def_method[_scalar_bool]("__bool__")
-        .def_method[marrow_module]("__module__")
     )
-    var scalar_tp = TypeProtocolBuilder[AnyScalar](scalar_py)
-    _ = scalar_tp.def_richcompare[_scalar_rich_compare]()
+    # var scalar_tp = TypeProtocolBuilder[AnyScalar](scalar_py)
+    # _ = scalar_tp.def_richcompare[_scalar_rich_compare]()

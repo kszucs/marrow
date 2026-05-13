@@ -497,53 +497,28 @@ def pytest_ignore_collect(collection_path, config):
             return True
 
 
-def _register_marrow(config):
-    """Register python/__init__.py as the 'marrow' module in sys.modules.
-
-    With pythonpath=python, Python resolves imports from inside python/, so
-    import marrow won't find python/__init__.py on its own. We load it
-    explicitly so that `import marrow` works in both controller and workers.
-    """
-    import importlib.util
-    if "marrow" in sys.modules:
-        return
-    python_dir = str(config.rootpath / "python")
-    spec = importlib.util.spec_from_file_location(
-        "marrow",
-        str(config.rootpath / "python" / "__init__.py"),
-        submodule_search_locations=[python_dir],
-    )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["marrow"] = mod
-    spec.loader.exec_module(mod)
-
-
 def pytest_sessionstart(session):
-    """Rebuild python/libmarrow.so before the session when Python tests will run."""
+    """Rebuild python/marrow/libmarrow.so before the session when Python tests will run."""
     config = session.config
 
     if _python_excluded(config):
         return
 
-    # xdist workers inherit the already-built library from the controller;
-    # skip the build but still register the marrow module.
     if not hasattr(config, "workerinput"):
-        print("building python/libmarrow.so ...", flush=True)
+        print("building python/marrow/libmarrow.so ...", flush=True)
         opt = "-O3" if config.getoption("--benchmark") else "-O1"
         cmd = (
             ["mojo", "build", opt, "-g0", "-I", "."]
             + MojoRunner.asan_flags(config)
-            + ["python/lib.mojo", "--emit", "shared-lib", "-o", "python/libmarrow.so"]
+            + ["python/bindings/lib.mojo", "--emit", "shared-lib", "-o", "python/marrow/libmarrow.so"]
         )
         result = subprocess.run(cmd, cwd=config.rootpath, capture_output=True, text=True)
         if result.returncode != 0:
             pytest.exit(
-                f"Failed to build python/libmarrow.so:\n{result.stderr}",
+                f"Failed to build python/marrow/libmarrow.so:\n{result.stderr}",
                 returncode=1,
             )
-        print("python/libmarrow.so built successfully", flush=True)
-
-    _register_marrow(config)
+        print("python/marrow/libmarrow.so built successfully", flush=True)
 
 
 def pytest_collection_modifyitems(config, items):

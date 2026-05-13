@@ -1,8 +1,8 @@
 """Filter, take, and selection kernels.
 
-``filter_``  — select elements where a boolean mask is True.
-``take``     — gather elements at arbitrary indices (index -1 → null).
-``drop_nulls`` — remove null elements using the validity bitmap.
+``filter``     — select elements where a boolean mask is True.
+``take``       — gather elements at arbitrary indices (index -1 → null).
+``drop_null``  — remove null elements using the validity bitmap.
 
 All functions support arrays with non-zero offsets (sliced arrays).
 """
@@ -53,7 +53,7 @@ from ..dtypes import (
 from std.algorithm.functional import sync_parallelize
 
 from ..views import BitmapView, BufferView
-from .aggregate import sum_
+from .aggregate import sum
 from .execution import ExecutionContext
 from .string import string_lengths
 
@@ -215,14 +215,20 @@ def _filter_values[
 # ---------------------------------------------------------------------------
 
 
-def filter_[
+def filter[
     T: PrimitiveType
-](array: PrimitiveArray[T], selection: BoolArray) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Filter a primitive array, keeping only elements where selection is True.
 
     Args:
         array: The input primitive array.
         selection: Boolean selection mask (True = keep).
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new PrimitiveArray containing only the selected elements.
@@ -275,12 +281,18 @@ def filter_[
     )
 
 
-def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
+def filter(
+    array: BoolArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
     """Filter a bool array, keeping only elements where selection is True.
 
     Args:
         array: The input bool array.
         selection: Boolean selection mask (True = keep).
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new BoolArray containing only the selected elements.
@@ -334,7 +346,11 @@ def filter_(array: BoolArray, selection: BoolArray) raises -> BoolArray:
 # ---------------------------------------------------------------------------
 
 
-def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
+def filter(
+    array: StringArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> StringArray:
     """Filter a string array, keeping only elements where selection is True.
 
     Uses run merging: consecutive selected elements are copied with a single
@@ -344,6 +360,8 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
     Args:
         array: The input string array.
         selection: Boolean selection mask (True = keep).
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new StringArray containing only the selected strings.
@@ -451,12 +469,18 @@ def filter_(array: StringArray, selection: BoolArray) raises -> StringArray:
 # ---------------------------------------------------------------------------
 
 
-def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
+def filter(
+    array: AnyArray,
+    selection: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Runtime-typed filter: dispatches to the correct typed overload.
 
     Args:
         array: The input array (runtime-typed).
         selection: Bit-packed boolean selection (True = keep).
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new AnyArray with only the selected elements.
@@ -464,51 +488,56 @@ def filter_(array: AnyArray, selection: AnyArray) raises -> AnyArray:
     var mask = selection.as_bool().copy()
 
     if array.dtype() == bool_:
-        return filter_(array.as_bool().copy(), mask).to_any()
+        return filter(array.as_bool().copy(), mask, ctx).to_any()
 
     if array.dtype() == int8:
-        return filter_(array.as_int8(), mask).to_any()
+        return filter(array.as_int8(), mask, ctx).to_any()
     elif array.dtype() == int16:
-        return filter_(array.as_int16(), mask).to_any()
+        return filter(array.as_int16(), mask, ctx).to_any()
     elif array.dtype() == int32:
-        return filter_(array.as_int32(), mask).to_any()
+        return filter(array.as_int32(), mask, ctx).to_any()
     elif array.dtype() == int64:
-        return filter_(array.as_int64(), mask).to_any()
+        return filter(array.as_int64(), mask, ctx).to_any()
     elif array.dtype() == uint8:
-        return filter_(array.as_uint8(), mask).to_any()
+        return filter(array.as_uint8(), mask, ctx).to_any()
     elif array.dtype() == uint16:
-        return filter_(array.as_uint16(), mask).to_any()
+        return filter(array.as_uint16(), mask, ctx).to_any()
     elif array.dtype() == uint32:
-        return filter_(array.as_uint32(), mask).to_any()
+        return filter(array.as_uint32(), mask, ctx).to_any()
     elif array.dtype() == uint64:
-        return filter_(array.as_uint64(), mask).to_any()
+        return filter(array.as_uint64(), mask, ctx).to_any()
     elif array.dtype() == float16:
-        return filter_(array.as_float16(), mask).to_any()
+        return filter(array.as_float16(), mask, ctx).to_any()
     elif array.dtype() == float32:
-        return filter_(array.as_float32(), mask).to_any()
+        return filter(array.as_float32(), mask, ctx).to_any()
     elif array.dtype() == float64:
-        return filter_(array.as_float64(), mask).to_any()
+        return filter(array.as_float64(), mask, ctx).to_any()
 
     if array.dtype().is_string():
-        return filter_(array.as_string(), mask).to_any()
+        return filter(array.as_string(), mask, ctx).to_any()
 
     raise Error("filter: unsupported dtype ", array.dtype())
 
 
 # ---------------------------------------------------------------------------
-# drop_nulls — reimplemented via filter
+# drop_null — reimplemented via filter
 # ---------------------------------------------------------------------------
 
 
-def drop_nulls[
+def drop_null[
     T: PrimitiveType
-](array: PrimitiveArray[T]) raises -> PrimitiveArray[T]:
+](
+    array: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> PrimitiveArray[T]:
     """Create a new array containing only the valid (non-null) elements.
 
     Uses the array's validity bitmap directly as the filter selection.
 
     Args:
         array: The input array.
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new PrimitiveArray containing only valid elements.
@@ -522,10 +551,12 @@ def drop_nulls[
         bitmap=None,
         buffer=array.bitmap.value(),
     )
-    return filter_[T](array, selection)
+    return filter[T](array, selection, ctx)
 
 
-def _drop_nulls_bool(array: BoolArray) raises -> BoolArray:
+def _drop_null_bool(
+    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> BoolArray:
     """Drop null elements from a bool array."""
     if not array.bitmap:
         return array.copy()
@@ -536,45 +567,49 @@ def _drop_nulls_bool(array: BoolArray) raises -> BoolArray:
         bitmap=None,
         buffer=array.bitmap.value(),
     )
-    return filter_(array, selection)
+    return filter(array, selection, ctx)
 
 
-def drop_nulls(array: AnyArray) raises -> AnyArray:
-    """Runtime-typed drop_nulls: dispatches to the correct typed version.
+def drop_null(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyArray:
+    """Runtime-typed drop_null: dispatches to the correct typed version.
 
     Args:
         array: The input array (runtime-typed).
+        ctx: Execution context (currently unused — accepted for signature
+            uniformity across kernels).
 
     Returns:
         A new AnyArray with null elements removed.
     """
     if array.dtype() == bool_:
-        return _drop_nulls_bool(array.as_bool().copy()).to_any()
+        return _drop_null_bool(array.as_bool().copy(), ctx).to_any()
 
     if array.dtype() == int8:
-        return drop_nulls(array.as_int8()).to_any()
+        return drop_null(array.as_int8(), ctx).to_any()
     elif array.dtype() == int16:
-        return drop_nulls(array.as_int16()).to_any()
+        return drop_null(array.as_int16(), ctx).to_any()
     elif array.dtype() == int32:
-        return drop_nulls(array.as_int32()).to_any()
+        return drop_null(array.as_int32(), ctx).to_any()
     elif array.dtype() == int64:
-        return drop_nulls(array.as_int64()).to_any()
+        return drop_null(array.as_int64(), ctx).to_any()
     elif array.dtype() == uint8:
-        return drop_nulls(array.as_uint8()).to_any()
+        return drop_null(array.as_uint8(), ctx).to_any()
     elif array.dtype() == uint16:
-        return drop_nulls(array.as_uint16()).to_any()
+        return drop_null(array.as_uint16(), ctx).to_any()
     elif array.dtype() == uint32:
-        return drop_nulls(array.as_uint32()).to_any()
+        return drop_null(array.as_uint32(), ctx).to_any()
     elif array.dtype() == uint64:
-        return drop_nulls(array.as_uint64()).to_any()
+        return drop_null(array.as_uint64(), ctx).to_any()
     elif array.dtype() == float16:
-        return drop_nulls(array.as_float16()).to_any()
+        return drop_null(array.as_float16(), ctx).to_any()
     elif array.dtype() == float32:
-        return drop_nulls(array.as_float32()).to_any()
+        return drop_null(array.as_float32(), ctx).to_any()
     elif array.dtype() == float64:
-        return drop_nulls(array.as_float64()).to_any()
+        return drop_null(array.as_float64(), ctx).to_any()
 
-    raise Error("drop_nulls: unsupported dtype ", array.dtype())
+    raise Error("drop_null: unsupported dtype ", array.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +724,11 @@ def take[
     )
 
 
-def take(array: BoolArray, indices: Int32Array) raises -> BoolArray:
+def take(
+    array: BoolArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
     """Gather elements from a bool array at the given indices.
 
     Null indices produce null output elements.
@@ -717,7 +756,11 @@ def take(array: BoolArray, indices: Int32Array) raises -> BoolArray:
     return builder.finish()
 
 
-def take(array: StringArray, indices: Int32Array) raises -> StringArray:
+def take(
+    array: StringArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> StringArray:
     """Gather elements from a string array at the given indices.
 
     Null indices produce null output elements.
@@ -763,7 +806,7 @@ def take(
         A new AnyArray with one element per index.
     """
     if array.dtype() == bool_:
-        return take(array.as_bool().copy(), indices).to_any()
+        return take(array.as_bool().copy(), indices, ctx).to_any()
 
     if array.dtype() == int8:
         return take(array.as_int8(), indices, ctx).to_any()
@@ -789,19 +832,23 @@ def take(
         return take(array.as_float64(), indices, ctx).to_any()
 
     if array.dtype().is_string():
-        return take(array.as_string(), indices).to_any()
+        return take(array.as_string(), indices, ctx).to_any()
 
     raise Error("take: unsupported dtype ", array.dtype())
 
 
-def take(array: StructArray, indices: Int32Array) raises -> StructArray:
+def take(
+    array: StructArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> StructArray:
     """Gather rows from a StructArray at the given indices.
 
     Applies ``take`` to each child column independently.
     """
     var children = List[AnyArray]()
     for c in range(len(array.children)):
-        children.append(take(array.children[c].copy(), indices))
+        children.append(take(array.children[c].copy(), indices, ctx))
     var out_length = len(indices)
     return StructArray(
         dtype=array.dtype.copy(),

@@ -1,6 +1,6 @@
-"""Sort kernels — argsort and sort for Marrow arrays.
+"""Sort kernels — sort_indices and sort for Marrow arrays.
 
-Phase 1: single-column argsort.
+Phase 1: single-column sort_indices.
   - Primitive arrays: PDQsort (pair-based) for N < 32768; parallel LSD radix for N ≥ 32768.
   - BoolArray: O(N) counting sort.
   - StringArray: stdlib comparison sort.
@@ -364,6 +364,7 @@ def array(
     null_list: List[Int32],
     n: Int,
     nulls_first: Bool,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """Merge sorted valid indices and null indices into the final Int32Array."""
     var out = Buffer.alloc_uninit[DType.int32](n)
@@ -385,7 +386,7 @@ def array(
     )
 
 
-def argsort[
+def sort_indices[
     T: PrimitiveType
 ](
     arr: PrimitiveArray[T],
@@ -394,7 +395,7 @@ def argsort[
     stable: Bool = False,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
-    """Argsort a typed primitive array. Returns sorted row indices."""
+    """Return the indices that would sort a typed primitive array."""
     var n = len(arr)
     if n == 0:
         return _primitive_array(int32)
@@ -427,13 +428,14 @@ def argsort[
             arr, valid_buf^, n_valid, ascending, ctx
         )
 
-    return array(sorted_valid, n_valid, null_list, n, nulls_first)
+    return array(sorted_valid, n_valid, null_list, n, nulls_first, ctx)
 
 
-def argsort(
+def sort_indices(
     array: BoolArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """O(N) counting sort for bool arrays.
 
@@ -491,11 +493,12 @@ def argsort(
     )
 
 
-def argsort(
+def sort_indices(
     array: StringArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """Comparison sort for string arrays using the Mojo stdlib sort."""
     var n = len(array)
@@ -553,7 +556,7 @@ def argsort(
     )
 
 
-def argsort(
+def sort_indices(
     array: AnyArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
@@ -579,39 +582,59 @@ def argsort(
     var result: Int32Array
 
     if array.dtype() == bool_dt:
-        result = argsort(array.as_bool().copy(), ascending, nulls_first)
+        result = sort_indices(
+            array.as_bool().copy(), ascending, nulls_first, ctx
+        )
     elif array.dtype() == int8:
-        result = argsort(array.as_int8(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int8(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int16:
-        result = argsort(array.as_int16(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int16(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int32:
-        result = argsort(array.as_int32(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int32(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int64:
-        result = argsort(array.as_int64(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int64(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint8:
-        result = argsort(array.as_uint8(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint8(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint16:
-        result = argsort(array.as_uint16(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint16(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint32:
-        result = argsort(array.as_uint32(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint32(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint64:
-        result = argsort(array.as_uint64(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint64(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == float16:
-        result = argsort(
+        result = sort_indices(
             array.as_float16(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype() == float32:
-        result = argsort(
+        result = sort_indices(
             array.as_float32(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype() == float64:
-        result = argsort(
+        result = sort_indices(
             array.as_float64(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype().is_string():
-        result = argsort(array.as_string(), ascending, nulls_first, stable)
+        result = sort_indices(
+            array.as_string(), ascending, nulls_first, stable, ctx
+        )
     else:
-        raise Error(t"argsort: unsupported dtype {array.dtype()}")
+        raise Error(t"sort_indices: unsupported dtype {array.dtype()}")
 
     if limit:
         var k = min(limit.value(), len(result))
@@ -662,7 +685,7 @@ def sort(
         )
 
     var key_col = array.field(key_indices[0])
-    var indices = argsort(
+    var indices = sort_indices(
         key_col, ascending[0], nulls_first, stable, limit, ctx
     )
     return _take(array, indices)

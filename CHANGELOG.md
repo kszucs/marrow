@@ -2,240 +2,60 @@
 
 ## [Unreleased]
 
-### Build Infrastructure
+### Arrays, scalars and builders
 
-- PyPI wheel packaging via cibuildwheel and hatchling; Mojo runtime dylibs bundled
-  with delocate (macOS) / auditwheel (Linux). Local build: `pixi run -e wheel build_wheel`.
-- `python/__init__.py` added; `marrow.so` renamed to `libmarrow.so` to distinguish
-  the internal Mojo extension from the `marrow` Python package.
-- `build_python` now explicitly passes `-O3 -g0` to `mojo build`.
+- Arrays, builders and scalars for the null, boolean, numeric, string,
+  binary, list, fixed-size-list, struct, dictionary and temporal layouts,
+  with typed aliases throughout (`Int32Array`, `StringBuilder`,
+  `TimestampArray`, `Decimal128Scalar`, ...), plus `ChunkedArray`.
+- `RecordBatch` and `Table` -- schema plus column arrays or chunked
+  columns, with slice, select, rename and add/remove/set column.
+- Type erasure without dynamic dispatch: erased containers back an inline
+  `Variant` selected with `isa[T]()`, and convert implicitly to and from
+  their typed forms. Every value holds its data behind refcounted
+  `Buffer`/`Bitmap` handles, so erasing or unerasing is O(1).
+- `Buffer` and `Bitmap` in mutable and immutable forms over four
+  allocation kinds -- owned CPU, foreign (with a release callback),
+  pinned host and device -- with borrowed, offset-applied `BufferView`
+  and `BitmapView` spans for kernels to compute over.
 
-### Features
+### Compute kernels
 
-- **Sort kernel — `argsort` and `sort`** (`marrow/kernels/sort.mojo`):
-  single-column sort for all array types. Primitive arrays use LSD radix sort
-  (O(N), 8-bit passes, UInt64-encoded keys, float NaN/sign-bit transform) for
-  N ≥ 32 768, with parallel histogram + scatter for N ≥ 524 288. PDQsort for
-  N < 32 768 (faster on Apple M-series up to ~28K elements); insertion-sort
-  leaf for N < 32. `BoolArray` uses O(N) counting sort; `StringArray` uses the
-  Mojo stdlib comparison sort. Null partitioning (pre-sort bitmap scan) with
-  `nulls_first`/`nulls_last` placement. `sort(StructArray, key_indices,
-  ascending)` wraps `argsort` + `take` for multi-column sort.
+- SIMD-vectorized, null-aware kernels whose names mirror
+  `pyarrow.compute`, each written as a typed overload per array type
+  with a type-erased layer on top.
+- Arithmetic and comparison: `add`, `subtract`, `multiply`, `divide`,
+  `floordiv`, `mod`, `neg`, `abs_`, and the six comparisons.
+- Aggregates: `sum`, `product`, `min`, `max`, `mean`, `any`, `all`.
+- Boolean logic with Kleene three-valued semantics, plus `is_null`,
+  `is_nan`, `is_inf`.
+- `hash_join` -- inner, left, right, full, semi and anti -- over a
+  `SwissHashTable` with a CSR index, partition-parallel.
+- rapidhash over primitive, string, struct, list, large-list, map and
+  fixed-size-list arrays.
 
-- **Large binary, string, and list types** (`marrow/{dtypes,arrays,builders,ipc,c_data}.mojo`):
-  added `LargeBinaryType`, `LargeStringType`, `LargeListType` (64-bit offsets);
-  `BinaryLikeType` trait with `comptime offset: DType` and `StringLikeType` sub-trait
-  for UTF-8 kernels; unified `BinaryArray[T: BinaryLikeType]` and
-  `BinaryBuilder[T: BinaryLikeType]` with aliases `StringArray`, `LargeBinaryArray`,
-  `LargeStringArray`, `StringBuilder`, `LargeBinaryBuilder`, `LargeStringBuilder`;
-  IPC type codes 19/20/21 for large binary/utf8/list; C Data format codes `Z`/`U`/`+L`.
+### Arrow IPC
 
-- **IPC support for dictionary-encoded columns** (`marrow/ipc.mojo`): the IPC
-  file and stream writer now emits a `DictionaryBatch` message (header type 2)
-  for each dictionary column before its first `RecordBatch`, encoding the
-  column's value array as a separate body. The `RecordBatch` body carries only
-  the integer indices. Dictionary blocks are registered in the IPC file footer so
-  C++ / Rust / Go readers can locate them. The IPC reader detects
-  `DictionaryEncoding` at schema-field slot 4, reconstructs `DictionaryType`
-  (index type + value type + ordered flag), loads `DictionaryBatch` messages via
-  footer-registered block offsets, and wires the decoded values back into
-  `DictionaryArray` instances when reading record batches. Validated across all
-  Arrow implementations (`dictionary` and `dictionary_unsigned` pass 14/14
-  integration phases with C++, Rust, and Go).
+- `read_ipc_file`/`write_ipc_file` and `read_ipc_stream`/
+  `write_ipc_stream`, plus streaming `RecordBatchFileReader`,
+  `RecordBatchStreamReader` and the matching writers.
+- Round-trips every implemented type, nested, dictionary, temporal and
+  null columns included, with delta dictionaries.
 
-- **Arrow interval types** (`marrow/{dtypes,scalars,arrays,builders,ipc,c_data}.mojo`, `python/`):
-  added `IntervalType` trait and three concrete types — `YearMonthIntervalType` (int32, months),
-  `DayTimeIntervalType` (int64, days+millis), `MonthDayNanoIntervalType` (int128, months+days+nanos).
-  `AnyDataType` gains `is_interval()`, `is_year_month_interval()`, `is_day_time_interval()`,
-  `is_month_day_nano_interval()` predicates and matching `as_*` accessors. Array, builder, and
-  scalar aliases (`YearMonthIntervalArray/Builder/Scalar`, etc.) are fully wired into the
-  `AnyArray`, `AnyBuilder`, and `AnyScalar` type-erased containers. C Data Interface uses
-  format codes `tiM`, `tiD`, `tin`; IPC uses the `Interval` flatbuffer type with unit field.
-  Python bindings expose `year_month_interval()`, `day_time_interval()`,
-  `month_day_nano_interval()` factory functions.
+### Interoperability and GPU
 
-- **Dictionary-encoded Arrow type** (`marrow/{dtypes,scalars,arrays,builders,
-  c_data}.mojo`): added `DictionaryType` (index type + value type + ordered
-  flag), `DictionaryScalar`, `DictionaryArray`, and `DictionaryBuilder`.
-  `DictionaryArray.from_arrays(indices, values)` constructs from an integer
-  indices array and an arbitrary values array; `__getitem__` decodes to the
-  underlying value scalar; `slice()` is zero-copy. The C Data Interface emits
-  the index type's format string and stores the value schema in the `dictionary`
-  field of `CArrowSchema`, with `ARROW_FLAG_DICT_ORDERED = 1` when ordered;
-  import detects a non-null `dictionary` field and reconstructs the type.
-  Enables zero-copy exchange of PyArrow `DictionaryArray` via the Arrow C Data
-  Interface (`__arrow_c_array__` / `__arrow_c_schema__` protocol).
+- Arrow C Data Interface: `CArrowSchema` and `CArrowArray` for zero-copy
+  exchange with PyArrow in both directions, release callbacks included.
+- GPU execution through Mojo's `DeviceContext` -- Metal on Apple Silicon,
+  CUDA on NVIDIA. Data movement is explicit: `to_device(ctx)` and
+  `to_cpu(ctx)` on buffers, bitmaps and arrays, with kernel results
+  staying device-resident.
 
-- **Arrow Null type** (`marrow/{arrays,scalars,builders,ipc,c_data}.mojo`,
-  `python/arrays.mojo`): added `NullArray`, `NullScalar`, `NullBuilder`
-  (registered in the `AnyArray`, `AnyScalar`, `AnyBuilder` variants); IPC
-  writer emits `Type.Null = 1` with zero body buffers; IPC reader skips the
-  validity slot for null fields; C Data Interface uses `n_buffers = 0` for null
-  per the spec; Python factory `ma.array(seq, type=ma.null())` builds a
-  `NullArray` of the given length.
+### Python
 
-- **Fixed-size binary type** (`marrow/{dtypes,arrays,builders,ipc,c_data}.mojo`):
-  added `FixedSizeBinaryType`, `FixedSizeBinaryArray`, `FixedSizeBinaryBuilder`;
-  C Data format code `"w:<n>"`; IPC type code 15 (FixedSizeBinary).
-
-- **Temporal array types** (`marrow/{dtypes,arrays,builders,ipc,c_data}.mojo`):
-  `Date32Array`, `Date64Array`, `Time32Array`, `Time64Array`, `TimestampArray`,
-  `DurationArray` with matching builders and type singletons; C Data format
-  codes (`"tdD"`, `"tdm"`, `"tts"`, `"ttu"`, `"tsn:"`, `"tDn"`, etc.); IPC
-  type codes and unit serialisation. Python constructors `ma.date32()`,
-  `ma.date64()`, `ma.time32(unit)`, `ma.time64(unit)`, `ma.timestamp(unit)`,
-  `ma.duration(unit)`.
-
-- **Decimal types in C Data Interface and IPC**
-  (`marrow/c_data.mojo`, `marrow/ipc.mojo`): wired `Decimal32Type`,
-  `Decimal64Type`, `Decimal128Type`, `Decimal256Type` into schema export/import
-  and IPC flatbuffer serialisation (precision, scale, bit-width).
-
-- **Custom metadata round-trip via the C Data Interface**
-  (`marrow/c_data.mojo`): `CArrowSchema.from_field` / `from_schema` now
-  encode `Field.metadata` and `Schema.metadata` into the spec-defined
-  metadata blob; `to_field` / `to_schema` decode it back. New
-  `_encode_c_metadata` / `_decode_c_metadata` helpers handle the
-  `int32 num_pairs ; (int32 key_len, key_bytes, int32 val_len, val_bytes)*`
-  layout. `from_schema` now takes a full `Schema` rather than `List[Field]`
-  so schema-level metadata flows through.
-
-- **Per-field metadata** (`marrow/dtypes.mojo`, `python/dtypes.mojo`):
-  `Field` carries an optional `metadata: Dict[String, String]`; the Python
-  factory `ma.field(name, type, metadata={…})` accepts a dict; the C Data
-  Interface and IPC flatbuffer encoder/decoder round-trip field-level
-  key-value metadata.
-
-- **Preserve nested-field names in IPC reader and C Data Interface**
-  (`marrow/ipc.mojo`, `marrow/c_data.mojo`): the IPC `_read_field`
-  decoder and the `CArrowSchema` list / fixed_size_list importer now preserve
-  child Field names as-is, so Arrow files written by other implementations
-  round-trip with the original schema.
-
-- **Arrow IPC reader/writer** (`marrow/ipc.mojo`): `read_ipc_file()`,
-  `write_ipc_file()`, `read_ipc_stream()`, `write_ipc_stream()`,
-  `read_ipc_file_schema()`, `read_ipc_stream_schema()`, and streaming struct
-  variants `RecordBatchFileReader`, `RecordBatchStreamReader`,
-  `RecordBatchFileWriter`, `RecordBatchStreamWriter`. Supports all implemented
-  Arrow types (bool, int8–64, uint8–64, float16/32/64, binary, utf8, list,
-  fixed_size_list, struct, dictionary, null, temporal, decimal) with full
-  nested and nullable column support. FlatBuffer encoding/decoding is a
-  self-contained Rust-faithful port with correct soffset sign convention and
-  `MetadataVersion::V5`.
-
-- **GPU aggregate reductions** (`marrow/kernels/aggregate.mojo`):
-  `sum_`, `min_`, `max_`, `product`, `any_`, `all_` now accept an
-  `ExecutionContext`; when `.is_gpu()` is true the reduction runs as a
-  single-pass GPU kernel via `_reduce_generator_wrapper`.
-
-- **`ExecutionContext`** (`marrow/kernels/execution.mojo`): new struct bundling
-  `num_threads` for CPU stripe parallelism and `device: Optional[DeviceContext]`
-  for GPU. Implicit conversions from `Optional[DeviceContext]` and
-  `DeviceContext` keep existing callers working. Factories: `.serial()`,
-  `.parallel(num_threads=0)` (0 = `num_physical_cores()`), `.gpu(device)`.
-  Wired through all kernels: arithmetic, aggregate, compare, filter, join, sort.
-
-- **Partition-parallel hash join** (`marrow/kernels/join.mojo`,
-  `marrow/kernels/hashtable.mojo`): `HashJoin` and `hash_join()` gain a
-  `num_threads` argument. The parallel path radix-partitions both sides by the
-  top bits of their hash into independent `SwissHashTable` instances, builds and
-  probes them concurrently via `sync_parallelize`, and concatenates per-partition
-  index pairs. No atomics on the hot path. At 10M×10M INNER join: **330 ms
-  (serial) → 67 ms (parallel, 4.9× speedup)** — faster than Polars (97 ms),
-  PyArrow (111 ms), and DuckDB (122 ms).
-
-- **`RadixPartitioner`** (`marrow/kernels/hashtable.mojo`): partitions hashes +
-  row indices by the top `num_bits` (default 6 → 64 partitions). Per-thread
-  histogram → partition-major prefix sum → parallel scatter into shared flat
-  buffers, then per-partition zero-copy slice via `ArcPointer`-shared immutable
-  buffers.
-
-- **Parallel per-column `take()`** (`marrow/kernels/filter.mojo`):
-  `take[T](PrimitiveArray, indices, ctx)` and the `AnyArray` dispatcher
-  accept an `ExecutionContext` and stripe the no-null fast path across workers.
-  End-to-end 10M inner join assembly: **143 ms → 67 ms**.
-
-- **Variant-based dispatch for `DataType`, `AnyArray`, and `Builder`**
-  (`marrow/dtypes.mojo`, `marrow/arrays.mojo`, `marrow/builders.mojo`):
-  Replaced integer-code dispatch with `Variant`-backed types using `comptime
-  for` loops. Eliminates runtime `if`/`elif` chains across kernels, Python
-  bindings, and the expression system.
-
-- **`BoolArray` dedicated type** (`marrow/arrays.mojo`): bit-packed boolean
-  arrays backed by a `Bitmap`, with `.values() -> BitmapView`, GPU transfer,
-  and a matching `BoolBuilder`.
-
-- **`BufferView` / `BitmapView` abstractions** (`marrow/views.mojo`):
-  type-safe, non-owning views with `apply` dispatch, `compressed_store`,
-  `pext`, and GPU-aware access.
-
-- **`SwissHashTable`** (`marrow/kernels/hashtable.mojo`): open-addressing hash
-  table with 7-bit control stamps, CSR chain storage, vectorised SIMD group
-  matching, and a batch-build API.
-
-- **Hash join** (`marrow/kernels/join.mojo`): `hash_join` kernel using
-  `SwissHashTable` with separate build and probe phases.
-
-- **`TestSuite` and `BenchSuite` framework** (`marrow/testing`):
-  auto-discovery of `test_*` / `bench_*` functions via
-  `__functions_in_module()`, with pytest harness integration, competition
-  tables, and per-element throughput metrics.
-
-- **AddressSanitizer support**: `pytest --asan` compiles test runners with ASAN
-  instrumentation via `libcompiler-rt`.
-
-- **GPU `BitmapView` and GPU rapidhash** (`marrow/kernels/`): `BitmapView`
-  supports device-resident bitmaps; `rapidhash` ported to Metal/CUDA with
-  128-bit multiply emulation.
-
-- **Bounds checking** (`marrow/buffers.mojo`): `Buffer`, `Bitmap`, and
-  `BufferView` accessors assert bounds in debug builds.
-
-- **Unary math kernels** (`marrow/kernels/arithmetic.mojo`): `sign`, `sqrt`,
-  `exp`, `exp2`, `log`, `log2`, `log10`, `log1p`, `floor`, `ceil`, `trunc`,
-  `round`, `sin`, `cos` (floating-point), plus binary `pow_`, `floordiv`, `mod`.
-
-- **Scalar types** (`marrow/scalars.mojo`): `PrimitiveScalar[T]`,
-  `StringScalar`, `ListScalar`, `StructScalar`, `AnyScalar` — typed and
-  type-erased scalar values mirroring the array hierarchy.
-
-- **Group-by kernel** (`marrow/kernels/groupby.mojo`): fused
-  `groupby(keys, values, aggregations)` that hashes, groups, and aggregates in
-  a single pass. Supports `"sum"`, `"min"`, `"max"`, `"count"`, `"mean"`.
-  Single-key (any primitive/string `AnyArray`) and multi-key (`StructArray`)
-  grouping.
-
-- **Hashing kernel** (`marrow/kernels/hashing.mojo`): `hash_` for primitive,
-  string, and struct arrays; `hash_identity` for bool/uint8/int8.
-
-- **Expression execution system** (`marrow/expr/`): pull-based streaming query
-  executor with `col()`, `lit()`, `if_else()`, relational plan nodes
-  (`InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate`), and
-  `execute()` to collect `RecordBatch` results.
-
-- **Parquet I/O** (`marrow/parquet.mojo`): `read_table(path)` and
-  `write_table(table, path)` via the Arrow C Stream Interface.
-
-- **Comparison kernels** (`marrow/kernels/compare.mojo`): `equal`,
-  `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` for typed and
-  runtime-typed arrays; null-propagating; GPU variants available.
-
-- **String kernels** (`marrow/kernels/string.mojo`): `string_lengths` returns
-  byte lengths for each element.
-
-- **RecordBatch column operations** (`marrow/tabular.mojo`): `slice`,
-  `select`, `rename_columns`, `add_column`, `append_column`, `remove_column`,
-  `set_column`, `to_struct_array`.
-
-- **Table enhancements** (`marrow/tabular.mojo`): `Table.from_batches`,
-  `Table.to_batches`, `Table.combine_chunks`.
-
-- **Schema enhancements** (`marrow/schema.mojo`): `get_field_index`, `field`
-  lookup by name, `names()`, equality operators, Python interop via Arrow C
-  Data Interface.
-
-- **Self-contained archery integration suite** (`integration/`, `pixi.toml`):
-  `pixi run integration` clones apache/arrow + arrow-rs + arrow-go, builds all
-  reference implementations, and runs cross-implementation tests against C++,
-  Rust, Go, and Mojo. All four implementations pass: 119 cases across 14
-  directional phases.
+- `import marrow as ma` -- a PyArrow-shaped API with `array()` type
+  inference, full null handling, and nested structure support. Wrappers
+  compose over the C extension rather than inheriting from it.
+- `marrow.compute` exposes the kernel library: arithmetic, comparison,
+  aggregates, `filter`/`take`/`drop_null`, `sort`/`sort_indices`, `cast`
+  and the distinct counts.

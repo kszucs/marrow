@@ -9,8 +9,7 @@ References:
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
-from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
-from std.collections import OwnedKwargsDict
+
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
 from marrow.arrays import AnyArray, ChunkedArray
@@ -21,7 +20,7 @@ from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
-from helpers import pymethod, marrow_module
+from helpers import pymethod
 
 
 # ---------------------------------------------------------------------------
@@ -223,12 +222,12 @@ def _record_batch_arrow_c_schema(
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
-def _record_batch_rich_compare(
-    first: RecordBatch, second: PythonObject, op: Int
-) raises -> Bool:
-    if op == RichCompareOps.Py_EQ:
-        return first == second.downcast_value_ptr[RecordBatch]()[]
-    raise NotImplementedError()
+# def _record_batch_rich_compare(
+#     first: RecordBatch, second: PythonObject, op: Int
+# ) raises -> Bool:
+#     if op == RichCompareOps.Py_EQ:
+#         return first == second.downcast_value_ptr[RecordBatch]()[]
+#     raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
@@ -237,11 +236,10 @@ def _record_batch_rich_compare(
 
 
 def record_batch(
-    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
+    data: PythonObject, schema: PythonObject, names: PythonObject
 ) raises -> PythonObject:
     """Create a RecordBatch from a dict, list+names, or Arrow protocol object.
     """
-    # Try converting directly (handles marrow objects and Arrow protocol).
     try:
         return RecordBatch(py=data).to_python_object()
     except:
@@ -251,13 +249,11 @@ def record_batch(
     if builtins.isinstance(data, builtins.dict):
         return _build_from_dict(data).to_python_object()
 
-    if opt := kwargs.find("schema"):
-        return _build_from_arrays_with_schema(
-            data, opt.value()
-        ).to_python_object()
+    if not schema.__is__(builtins.None):
+        return _build_from_arrays_with_schema(data, schema).to_python_object()
 
-    if opt := kwargs.find("names"):
-        return _build_from_arrays(data, opt.value()).to_python_object()
+    if not names.__is__(builtins.None):
+        return _build_from_arrays(data, names).to_python_object()
 
     raise Error(
         "record_batch: expected a dict, or a list of arrays with names= or"
@@ -355,12 +351,12 @@ def _table_arrow_c_schema(
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
-def _table_rich_compare(
-    first: Table, second: PythonObject, op: Int
-) raises -> Bool:
-    if op == RichCompareOps.Py_EQ:
-        return first == second.downcast_value_ptr[Table]()[]
-    raise NotImplementedError()
+# def _table_rich_compare(
+#     first: Table, second: PythonObject, op: Int
+# ) raises -> Bool:
+#     if op == RichCompareOps.Py_EQ:
+#         return first == second.downcast_value_ptr[Table]()[]
+#     raise NotImplementedError()
 
 
 # ---------------------------------------------------------------------------
@@ -368,11 +364,8 @@ def _table_rich_compare(
 # ---------------------------------------------------------------------------
 
 
-def table(
-    data: PythonObject, kwargs: OwnedKwargsDict[PythonObject]
-) raises -> PythonObject:
+def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     """Create a Table from a dict, list+names, or Arrow protocol object."""
-    # Try converting directly (handles marrow objects and Arrow protocol).
     try:
         return Table(py=data).to_python_object()
     except:
@@ -382,8 +375,8 @@ def table(
     var builtins = Python.import_module("builtins")
     if builtins.isinstance(data, builtins.dict):
         rb = _build_from_dict(data)
-    elif opt := kwargs.find("names"):
-        rb = _build_from_arrays(data, opt.value())
+    elif not names.__is__(builtins.None):
+        rb = _build_from_arrays(data, names)
     else:
         raise Error(
             "table: expected a dict, or a list of arrays with names= kwarg,"
@@ -592,22 +585,13 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
     )
-    _ = (
-        rb_py.def_method[_record_batch_str]("__str__")
-        .def_method[_record_batch_str]("__repr__")
-        .def_method[marrow_module]("__module__")
-    )
-    var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
-    _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
+    _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
+        _record_batch_str
+    ]("__repr__")
+    # var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
+    # _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
-    mb.def_function[record_batch](
-        "record_batch",
-        docstring=(
-            "record_batch(data, /, *, names=None) -> RecordBatch\n--\n\n"
-            "Create a RecordBatch from a dict of arrays, a list of arrays with"
-            " names=, or any object implementing __arrow_c_record_batch__."
-        ),
-    )
+    mb.def_function[record_batch]("record_batch")
 
     # Table
     ref t_py = mb.add_type[Table]("Table")
@@ -627,19 +611,10 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_table_arrow_c_stream]("__arrow_c_stream__")
         .def_method[_table_arrow_c_schema]("__arrow_c_schema__")
     )
-    _ = (
-        t_py.def_method[_table_str]("__str__")
-        .def_method[_table_str]("__repr__")
-        .def_method[marrow_module]("__module__")
+    _ = t_py.def_method[_table_str]("__str__").def_method[_table_str](
+        "__repr__"
     )
-    var t_tp = TypeProtocolBuilder[Table](t_py)
-    _ = t_tp.def_richcompare[_table_rich_compare]()
+    # var t_tp = TypeProtocolBuilder[Table](t_py)
+    # _ = t_tp.def_richcompare[_table_rich_compare]()
 
-    mb.def_function[table](
-        "table",
-        docstring=(
-            "table(data, /, *, names=None) -> Table\n--\n\n"
-            "Create a Table from a dict of arrays, a list of arrays with"
-            " names=, or any object implementing __arrow_c_stream__."
-        ),
-    )
+    mb.def_function[table]("table")

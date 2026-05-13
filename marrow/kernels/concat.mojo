@@ -11,9 +11,13 @@ for all supported array types.
 
 from ..arrays import AnyArray
 from ..builders import AnyBuilder
+from .execution import ExecutionContext
 
 
-def concat(arrays: List[AnyArray]) raises -> AnyArray:
+def concat(
+    arrays: List[AnyArray],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> AnyArray:
     """Concatenate a list of arrays into a single array.
 
     All arrays must have the same dtype. Validity bitmaps and buffer contents

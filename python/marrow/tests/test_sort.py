@@ -1,18 +1,12 @@
 """Tests for sort Python bindings.
 
 Covers:
-  - array.argsort(ascending, null_placement)
-  - array.sort(ascending, null_placement)
+  - array.argsort(order, null_placement) — PyArrow-compatible string order
+  - array.sort(order, null_placement)
   - array.take(indices)
   - record_batch.sort_by(by, null_placement)
-  - ma.argsort(array, *, ascending, null_placement)
+  - ma.sort_indices(array, *, ascending, null_placement)
   - ma.sort(array, *, ascending, null_placement)
-
-Note: array.argsort / array.sort / array.take / record_batch.sort_by are
-def_method bindings that only accept positional arguments.  Pass None to
-use the default for an optional parameter (ascending=True, nulls_first=True).
-The module-level ma.argsort / ma.sort support keyword arguments via
-OwnedKwargsDict.
 """
 
 import pytest
@@ -33,19 +27,19 @@ def arr_to_pylist(marrow_arr) -> list:
 
 def test_argsort_int64_ascending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = arr.argsort(True, "at_start")
+    idx = arr.argsort("ascending", "at_start")
     assert arr_to_pylist(idx) == [1, 2, 0]
 
 
 def test_argsort_int64_descending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = arr.argsort(False, "at_start")
+    idx = arr.argsort("descending", "at_start")
     assert arr_to_pylist(idx) == [0, 2, 1]
 
 
 def test_argsort_nulls_first():
     arr = ma.array([3, None, 1], type=ma.int64())
-    idx = arr.argsort(True, "at_start")
+    idx = arr.argsort("ascending", "at_start")
     result = arr_to_pylist(idx)
     assert result[0] == 1  # null at index 1 sorted first
     assert result[1:] == [2, 0]
@@ -53,7 +47,7 @@ def test_argsort_nulls_first():
 
 def test_argsort_nulls_last():
     arr = ma.array([3, None, 1], type=ma.int64())
-    idx = arr.argsort(True, "at_end")
+    idx = arr.argsort("ascending", "at_end")
     result = arr_to_pylist(idx)
     assert result[-1] == 1  # null at index 1 sorted last
     assert result[:2] == [2, 0]
@@ -61,21 +55,23 @@ def test_argsort_nulls_last():
 
 def test_argsort_float64():
     arr = ma.array([2.5, 1.0, 3.0], type=ma.float64())
-    idx = arr.argsort(True, "at_start")
+    idx = arr.argsort("ascending", "at_start")
     assert arr_to_pylist(idx) == [1, 0, 2]
 
 
 def test_argsort_string():
     arr = ma.array(["banana", "apple", "cherry"])
-    idx = arr.argsort(True, "at_start")
+    idx = arr.argsort("ascending", "at_start")
     assert arr_to_pylist(idx) == [1, 0, 2]
 
 
 def test_argsort_default_args():
-    # None → ascending=True, nulls_first=True
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = arr.argsort(None, None)
+    idx = arr.argsort()
     assert arr_to_pylist(idx) == [1, 2, 0]
+
+
+# ── ma.sort_indices (module-level, supports kwargs) ───────────────────────────
 
 
 # ── array.sort ────────────────────────────────────────────────────────────────
@@ -83,19 +79,19 @@ def test_argsort_default_args():
 
 def test_sort_int64_ascending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = arr.sort(True, "at_start")
+    result = arr.sort("ascending", "at_start")
     assert arr_to_pylist(result) == [1, 2, 3]
 
 
 def test_sort_int64_descending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = arr.sort(False, "at_start")
+    result = arr.sort("descending", "at_start")
     assert arr_to_pylist(result) == [3, 2, 1]
 
 
 def test_sort_with_nulls_first():
     arr = ma.array([3, None, 1], type=ma.int64())
-    result = arr.sort(True, "at_start")
+    result = arr.sort("ascending", "at_start")
     vals = arr_to_pylist(result)
     assert vals[0] is None
     assert vals[1:] == [1, 3]
@@ -103,7 +99,7 @@ def test_sort_with_nulls_first():
 
 def test_sort_with_nulls_last():
     arr = ma.array([3, None, 1], type=ma.int64())
-    result = arr.sort(True, "at_end")
+    result = arr.sort("ascending", "at_end")
     vals = arr_to_pylist(result)
     assert vals[-1] is None
     assert vals[:2] == [1, 3]
@@ -111,7 +107,7 @@ def test_sort_with_nulls_last():
 
 def test_sort_default_args():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    result = arr.sort(None, None)
+    result = arr.sort()
     assert arr_to_pylist(result) == [1, 2, 3]
 
 
@@ -132,24 +128,21 @@ def test_take_strings():
     assert arr_to_pylist(result) == ["b", "c", "a"]
 
 
-# ── ma.argsort (module-level, supports kwargs) ────────────────────────────────
-
-
-def test_module_argsort_ascending():
+def test_module_sort_indices_ascending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.argsort(arr, ascending=True, null_placement="at_start")
+    idx = ma.sort_indices(arr, ascending=True, null_placement="at_start")
     assert arr_to_pylist(idx) == [1, 2, 0]
 
 
-def test_module_argsort_descending():
+def test_module_sort_indices_descending():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.argsort(arr, ascending=False, null_placement="at_start")
+    idx = ma.sort_indices(arr, ascending=False, null_placement="at_start")
     assert arr_to_pylist(idx) == [0, 2, 1]
 
 
-def test_module_argsort_defaults():
+def test_module_sort_indices_defaults():
     arr = ma.array([3, 1, 2], type=ma.int64())
-    idx = ma.argsort(arr)
+    idx = ma.sort_indices(arr)
     assert arr_to_pylist(idx) == [1, 2, 0]
 
 

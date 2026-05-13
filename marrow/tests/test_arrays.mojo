@@ -20,7 +20,7 @@ from marrow.builders import (
 from marrow.dtypes import *
 from marrow.buffers import Buffer
 from marrow.buffers import Bitmap
-from marrow.kernels.filter import drop_nulls
+from marrow.kernels.filter import drop_null
 
 from std.reflection import call_location
 

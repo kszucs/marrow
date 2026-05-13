@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marrow"
+version = "0.1.0"
+description = "Apache Arrow implementation in Mojo"
+readme = "../README.md"
+requires-python = ">=3.14"
+
+[tool.hatch.build.hooks.custom]
+path = "build.py"
+
+[tool.hatch.build.targets.wheel]
+# only-include = [] means hatchling auto-discovers nothing; the hook's
+# force_include adds exactly marrow/__init__.py and the compiled extension.
+only-include = []
+
+[tool.hatch.build.targets.editable]
+# For editable installs, hatchling adds python/ to sys.path so import marrow
+# finds python/marrow/__init__.py directly; the hook still builds libmarrow.so.
+packages = ["marrow"]
+
+[tool.pixi.workspace]
+channels = [
+  "https://prefix.dev/mojo-community",
+  "https://conda.modular.com/max-nightly/",
+  "conda-forge",
+]
+platforms = ["osx-arm64", "linux-64"]
+preview = ["pixi-build"]
+
+[tool.pixi.dependencies]
+mojo-compiler = "==1.0.0b2.dev2026051106"
+mojo = "==1.0.0b2.dev2026051106"
+python = ">=3.14,<3.15"
+
+[tool.pixi.pypi-dependencies]
+marrow = { path = ".", editable = true }
+
+[tool.cibuildwheel]
+build = "cp314-*"
+skip = "*-musllinux*"
+enable = ["cpython-prerelease"]
+before-build = "pip install --pre 'mojo-compiler==1.0.0b2.dev2026051106' --extra-index-url https://whl.modular.com/nightly/simple/"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+before-all = "pip install delocate"
+repair-wheel-command = "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+manylinux-x86_64-image = "manylinux_2_34"
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"

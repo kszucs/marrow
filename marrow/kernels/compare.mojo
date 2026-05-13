@@ -32,7 +32,7 @@ from ..arrays import (
 from ..buffers import Bitmap
 from ..views import apply
 from ..dtypes import PrimitiveType, bool_ as bool_dt
-from . import bitmap_and, bool_array_dispatch
+from .helpers import bitmap_and, bool_array_dispatch
 from .execution import ExecutionContext
 
 
@@ -183,7 +183,11 @@ def greater_equal[
 # ---------------------------------------------------------------------------
 
 
-def equal(left: StringArray, right: StringArray) raises -> BoolArray:
+def equal(
+    left: StringArray,
+    right: StringArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
     """Element-wise string equality."""
     var n = len(left)
     if len(right) != n:
@@ -217,11 +221,15 @@ def equal(
 ) raises -> AnyArray:
     """Runtime-typed equal."""
     if left.dtype().is_string():
-        return equal(left.as_string(), right.as_string()).to_any()
+        return equal(left.as_string(), right.as_string(), ctx).to_any()
     return bool_array_dispatch["equal", equal[_]](left, right, ctx)
 
 
-def equal(left: StructArray, right: StructArray) raises -> BoolArray:
+def equal(
+    left: StructArray,
+    right: StructArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> BoolArray:
     """Element-wise struct equality: all corresponding columns must match.
 
     Returns a boolean array where element ``i`` is True iff
@@ -231,16 +239,17 @@ def equal(left: StructArray, right: StructArray) raises -> BoolArray:
 
     var n_keys = len(left.children)
     var mask = (
-        equal(left.children[0].copy(), right.children[0].copy())
+        equal(left.children[0].copy(), right.children[0].copy(), ctx)
         .as_bool()
         .copy()
     )
     for k in range(1, n_keys):
         mask = and_(
             mask,
-            equal(left.children[k].copy(), right.children[k].copy())
+            equal(left.children[k].copy(), right.children[k].copy(), ctx)
             .as_bool()
             .copy(),
+            ctx,
         )
     return mask^
 

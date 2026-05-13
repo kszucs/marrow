@@ -22,7 +22,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
-from . import unary_scalar_dispatch
+from .helpers import unary_scalar_dispatch
 from .execution import ExecutionContext
 
 
@@ -82,7 +82,7 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-def sum_[
+def sum[
     T: PrimitiveType
 ](
     array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
@@ -94,11 +94,11 @@ def sum_[
     )
 
 
-def sum_(
+def sum(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed sum."""
-    return unary_scalar_dispatch["sum_", sum_[_]](array, ctx)
+    return unary_scalar_dispatch["sum", sum[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -127,11 +127,11 @@ def product(
 
 
 # ---------------------------------------------------------------------------
-# min_
+# min
 # ---------------------------------------------------------------------------
 
 
-def min_[
+def min[
     T: PrimitiveType
 ](
     array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
@@ -146,19 +146,19 @@ def min_[
     )
 
 
-def min_(
+def min(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed min."""
-    return unary_scalar_dispatch["min_", min_[_]](array, ctx)
+    return unary_scalar_dispatch["min", min[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
-# max_
+# max
 # ---------------------------------------------------------------------------
 
 
-def max_[
+def max[
     T: PrimitiveType
 ](
     array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
@@ -173,23 +173,27 @@ def max_[
     )
 
 
-def max_(
+def max(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed max."""
-    return unary_scalar_dispatch["max_", max_[_]](array, ctx)
+    return unary_scalar_dispatch["max", max[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
-# any_ / all_  (bool arrays) — implemented via SIMD bitmap operations
+# any / all  (bool arrays) — implemented via SIMD bitmap operations
 # ---------------------------------------------------------------------------
 
 
-def any_(array: AnyArray) raises -> Bool:
-    return any_(array.as_bool())
+def any(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
+    return any(array.as_bool(), ctx)
 
 
-def any_(array: BoolArray) raises -> Bool:
+def any(
+    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
     var data_bv = array.values()
@@ -214,11 +218,15 @@ def any_(array: BoolArray) raises -> Bool:
     return False
 
 
-def all_(array: AnyArray) raises -> Bool:
-    return all_(array.as_bool())
+def all(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
+    return all(array.as_bool(), ctx)
 
 
-def all_(array: BoolArray) raises -> Bool:
+def all(
+    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     var n = len(array)
     var data_bv = array.values()

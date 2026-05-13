@@ -10,7 +10,7 @@ from std.benchmark import BenchMetric, keep
 from marrow.arrays import BoolArray, PrimitiveArray, Int64Array
 from marrow.builders import arange, BoolBuilder, PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, Int64Type
-from marrow.kernels.filter import filter_
+from marrow.kernels.filter import filter
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -41,38 +41,38 @@ def _make_array_with_nulls(size: Int) raises -> Int64Array:
 # ---------------------------------------------------------------------------
 
 
-def bench_filter_50pct_10k(mut b: Benchmark) raises:
+def bench_filter50pct_10k(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 10_000)
     var mask = _make_mask(10_000, 50)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
 
-def bench_filter_50pct_100k(mut b: Benchmark) raises:
+def bench_filter50pct_100k(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 100_000)
     var mask = _make_mask(100_000, 50)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
 
-def bench_filter_50pct_1m(mut b: Benchmark) raises:
+def bench_filter50pct_1m(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 1_000_000)
     var mask = _make_mask(1_000_000, 50)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
@@ -82,26 +82,26 @@ def bench_filter_50pct_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def bench_filter_10pct_100k(mut b: Benchmark) raises:
+def bench_filter10pct_100k(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 100_000)
     var mask = _make_mask(100_000, 10)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
 
-def bench_filter_10pct_1m(mut b: Benchmark) raises:
+def bench_filter10pct_1m(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 1_000_000)
     var mask = _make_mask(1_000_000, 10)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
@@ -111,26 +111,26 @@ def bench_filter_10pct_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def bench_filter_90pct_100k(mut b: Benchmark) raises:
+def bench_filter90pct_100k(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 100_000)
     var mask = _make_mask(100_000, 90)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
 
-def bench_filter_90pct_1m(mut b: Benchmark) raises:
+def bench_filter90pct_1m(mut b: Benchmark) raises:
     var arr = arange[Int64Type](0, 1_000_000)
     var mask = _make_mask(1_000_000, 90)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
@@ -140,26 +140,26 @@ def bench_filter_90pct_1m(mut b: Benchmark) raises:
 # ---------------------------------------------------------------------------
 
 
-def bench_filter_50pct_nulls_100k(mut b: Benchmark) raises:
+def bench_filter50pct_nulls_100k(mut b: Benchmark) raises:
     var arr = _make_array_with_nulls(100_000)
     var mask = _make_mask(100_000, 50)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
 
-def bench_filter_50pct_nulls_1m(mut b: Benchmark) raises:
+def bench_filter50pct_nulls_1m(mut b: Benchmark) raises:
     var arr = _make_array_with_nulls(1_000_000)
     var mask = _make_mask(1_000_000, 50)
 
     @always_inline
     @parameter
     def call() raises:
-        keep(len(filter_[Int64Type](arr, mask)))
+        keep(len(filter[Int64Type](arr, mask)))
 
     b.iter[call]()
 
