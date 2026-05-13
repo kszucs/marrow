@@ -581,21 +581,37 @@ def sort_indices(
     if array.dtype() == bool_dt:
         result = sort_indices(array.as_bool().copy(), ascending, nulls_first)
     elif array.dtype() == int8:
-        result = sort_indices(array.as_int8(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int8(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int16:
-        result = sort_indices(array.as_int16(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int16(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int32:
-        result = sort_indices(array.as_int32(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int32(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == int64:
-        result = sort_indices(array.as_int64(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_int64(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint8:
-        result = sort_indices(array.as_uint8(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint8(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint16:
-        result = sort_indices(array.as_uint16(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint16(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint32:
-        result = sort_indices(array.as_uint32(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint32(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == uint64:
-        result = sort_indices(array.as_uint64(), ascending, nulls_first, stable, ctx)
+        result = sort_indices(
+            array.as_uint64(), ascending, nulls_first, stable, ctx
+        )
     elif array.dtype() == float16:
         result = sort_indices(
             array.as_float16(), ascending, nulls_first, stable, ctx

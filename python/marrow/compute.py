@@ -190,7 +190,11 @@ def sort_indices(input, sort_keys=(), *, null_placement="at_end", memory_pool=No
     Equivalent to ``pyarrow.compute.sort_indices``.
     """
     if isinstance(sort_keys, (list, tuple)) and len(sort_keys) == 1:
-        _, order = sort_keys[0] if isinstance(sort_keys[0], tuple) else (sort_keys[0], "ascending")
+        _, order = (
+            sort_keys[0]
+            if isinstance(sort_keys[0], tuple)
+            else (sort_keys[0], "ascending")
+        )
         asc = order != "descending"
     else:
         asc = True

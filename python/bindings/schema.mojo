@@ -14,7 +14,8 @@ def _schema_arrow_c_schema(
 def schema(
     fields_or_schema: PythonObject, metadata: PythonObject
 ) raises -> PythonObject:
-    """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object."""
+    """Create a Schema from a list of Fields, a marrow Schema, or any __arrow_c_schema__ object.
+    """
     var s: Schema
     try:
         s = Schema(py=fields_or_schema)
@@ -33,8 +34,6 @@ def schema(
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add Schema type and constructor to the Python module."""
     ref schema_py = mb.add_type[Schema]("Schema")
-    _ = schema_py.def_method[_schema_arrow_c_schema](
-        "__arrow_c_schema__"
-    )
+    _ = schema_py.def_method[_schema_arrow_c_schema]("__arrow_c_schema__")
 
     mb.def_function[schema]("schema")

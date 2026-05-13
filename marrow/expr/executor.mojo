@@ -667,9 +667,7 @@ struct FilterProcessor(RelationProcessor):
             var mask = self.predicate.eval(batch)
             var result_cols = List[AnyArray]()
             for i in range(batch.num_columns()):
-                result_cols.append(
-                    filter(batch.columns[i].copy(), mask.copy())
-                )
+                result_cols.append(filter(batch.columns[i].copy(), mask.copy()))
             var result = RecordBatch(
                 schema=self.schema_.copy(), columns=result_cols^
             )

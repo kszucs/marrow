@@ -184,12 +184,16 @@ class Array(_Wrapper):
 
     def argsort(self, order="ascending", null_placement="at_end"):
         asc = order != "descending" if order is not None else True
-        nulls_first = null_placement != "at_end" if null_placement is not None else False
+        nulls_first = (
+            null_placement != "at_end" if null_placement is not None else False
+        )
         return Array.wrap(_ma.sort_indices(self._binding, asc, nulls_first, _serial()))
 
     def sort(self, order="ascending", null_placement="at_end"):
         asc = order != "descending" if order is not None else True
-        nulls_first = null_placement != "at_end" if null_placement is not None else False
+        nulls_first = (
+            null_placement != "at_end" if null_placement is not None else False
+        )
         return Array.wrap(_ma.sort(self._binding, asc, nulls_first, _serial()))
 
     def take(self, indices):
@@ -373,15 +377,21 @@ def table(data, names=None):
 
 
 def list_array_from_arrays(offsets, values, mask=None):
-    return Array.wrap(_ma.list_array_from_arrays(offsets.unwrap(), values.unwrap(), mask))
+    return Array.wrap(
+        _ma.list_array_from_arrays(offsets.unwrap(), values.unwrap(), mask)
+    )
 
 
 def fixed_size_list_array_from_arrays(values, type, mask=None):
-    return Array.wrap(_ma.fixed_size_list_array_from_arrays(values.unwrap(), type, mask))
+    return Array.wrap(
+        _ma.fixed_size_list_array_from_arrays(values.unwrap(), type, mask)
+    )
 
 
 def struct_array_from_arrays(arrays, fields, mask=None):
-    return Array.wrap(_ma.struct_array_from_arrays([a.unwrap() for a in arrays], fields, mask))
+    return Array.wrap(
+        _ma.struct_array_from_arrays([a.unwrap() for a in arrays], fields, mask)
+    )
 
 
 # ── Compute functions ──────────────────────────────────────────────────────────
@@ -448,7 +458,9 @@ def greater(left, right, ctx=None):
 
 
 def greater_equal(left, right, ctx=None):
-    return Array.wrap(_ma.greater_equal(left.unwrap(), right.unwrap(), ctx or _serial()))
+    return Array.wrap(
+        _ma.greater_equal(left.unwrap(), right.unwrap(), ctx or _serial())
+    )
 
 
 def filter(array, mask):
@@ -466,7 +478,9 @@ def take(array, indices, ctx=None):
 def sort_indices(array, ascending=True, null_placement="at_start", ctx=None):
     asc = ascending if ascending is not None else True
     nulls_first = null_placement != "at_end" if null_placement is not None else True
-    return Array.wrap(_ma.sort_indices(array.unwrap(), asc, nulls_first, ctx or _serial()))
+    return Array.wrap(
+        _ma.sort_indices(array.unwrap(), asc, nulls_first, ctx or _serial())
+    )
 
 
 def sort(array, ascending=True, null_placement="at_start", ctx=None):
@@ -480,12 +494,16 @@ def sort(array, ascending=True, null_placement="at_start", ctx=None):
 
 def write_ipc_file(path, batches=None, schema=None):
     raw_batches = [b.unwrap() for b in batches] if batches is not None else None
-    return _ma.write_ipc_file(path, raw_batches, schema.unwrap() if schema is not None else None)
+    return _ma.write_ipc_file(
+        path, raw_batches, schema.unwrap() if schema is not None else None
+    )
 
 
 def write_ipc_stream(path, batches=None, schema=None):
     raw_batches = [b.unwrap() for b in batches] if batches is not None else None
-    return _ma.write_ipc_stream(path, raw_batches, schema.unwrap() if schema is not None else None)
+    return _ma.write_ipc_stream(
+        path, raw_batches, schema.unwrap() if schema is not None else None
+    )
 
 
 def read_ipc_file(path):

@@ -261,4 +261,3 @@ def pymethod[
         return method(ptr[], A0(py=arg0), items^)
 
     return wrapper
-

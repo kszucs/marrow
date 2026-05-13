@@ -315,7 +315,9 @@ def min_element_wise[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise minimum."""
-    return _binary[T, func=_min[T.native, _], name="min_element_wise"](left, right, ctx)
+    return _binary[T, func=_min[T.native, _], name="min_element_wise"](
+        left, right, ctx
+    )
 
 
 def max_element_wise[
@@ -326,7 +328,9 @@ def max_element_wise[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise maximum."""
-    return _binary[T, func=_max[T.native, _], name="max_element_wise"](left, right, ctx)
+    return _binary[T, func=_max[T.native, _], name="max_element_wise"](
+        left, right, ctx
+    )
 
 
 def pow_[
@@ -531,12 +535,16 @@ def mod(left: AnyArray, right: AnyArray) raises -> AnyArray:
 
 def min_element_wise(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed min_element_wise."""
-    return binary_array_dispatch["min_element_wise", min_element_wise[_]](left, right)
+    return binary_array_dispatch["min_element_wise", min_element_wise[_]](
+        left, right
+    )
 
 
 def max_element_wise(left: AnyArray, right: AnyArray) raises -> AnyArray:
     """Runtime-typed max_element_wise."""
-    return binary_array_dispatch["max_element_wise", max_element_wise[_]](left, right)
+    return binary_array_dispatch["max_element_wise", max_element_wise[_]](
+        left, right
+    )
 
 
 def neg(array: AnyArray) raises -> AnyArray:

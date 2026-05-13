@@ -235,7 +235,12 @@ def test_pyarrow_add(benchmark, pa_arrays, n, dtype, a, b):
 @pytest.mark.benchmark(group="arithmetic")
 def test_marrow_subtract(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.subtract, ma_arrays["int64_a"], ma_arrays["int64_b"], ma.ExecutionContext.serial())
+    benchmark(
+        ma.subtract,
+        ma_arrays["int64_a"],
+        ma_arrays["int64_b"],
+        ma.ExecutionContext.serial(),
+    )
 
 
 @pytest.mark.benchmark(group="arithmetic")
@@ -247,7 +252,12 @@ def test_pyarrow_sub(benchmark, pa_arrays, n):
 @pytest.mark.benchmark(group="arithmetic")
 def test_marrow_multiply(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="int64")
-    benchmark(ma.multiply, ma_arrays["int64_a"], ma_arrays["int64_b"], ma.ExecutionContext.serial())
+    benchmark(
+        ma.multiply,
+        ma_arrays["int64_a"],
+        ma_arrays["int64_b"],
+        ma.ExecutionContext.serial(),
+    )
 
 
 @pytest.mark.benchmark(group="arithmetic")
@@ -259,7 +269,12 @@ def test_pyarrow_mul(benchmark, pa_arrays, n):
 @pytest.mark.benchmark(group="arithmetic")
 def test_marrow_divide(benchmark, ma_arrays, n):
     benchmark.extra_info.update(lib="marrow", n=n, dtype="float64")
-    benchmark(ma.divide, ma_arrays["float64_a"], ma_arrays["float64_b"], ma.ExecutionContext.serial())
+    benchmark(
+        ma.divide,
+        ma_arrays["float64_a"],
+        ma_arrays["float64_b"],
+        ma.ExecutionContext.serial(),
+    )
 
 
 @pytest.mark.benchmark(group="arithmetic")

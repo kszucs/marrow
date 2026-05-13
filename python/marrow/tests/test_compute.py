@@ -61,7 +61,10 @@ def test_sum_skips_nulls():
 
 
 def test_sum_all_nulls_returns_zero():
-    assert ma.sum(ma.array([1, 2, 3], type=ma.int64()), ma.ExecutionContext.serial()) == 6.0
+    assert (
+        ma.sum(ma.array([1, 2, 3], type=ma.int64()), ma.ExecutionContext.serial())
+        == 6.0
+    )
 
 
 # ── product ──────────────────────────────────────────────────────────────────
@@ -345,7 +348,9 @@ def test_sub_gpu():
     device = ma.ExecutionContext.parallel()
     a = ma.array([10, 20, 30], type=ma.int32())
     b = ma.array([1, 2, 3], type=ma.int32())
-    result = ma.subtract(a.to_device(device), b.to_device(device), device).to_cpu(device)
+    result = ma.subtract(a.to_device(device), b.to_device(device), device).to_cpu(
+        device
+    )
     assert result.__len__() == 3
     assert result.null_count() == 0
 
@@ -355,7 +360,9 @@ def test_mul_gpu():
     device = ma.ExecutionContext.parallel()
     a = ma.array([2, 3, 4], type=ma.int32())
     b = ma.array([5, 6, 7], type=ma.int32())
-    result = ma.multiply(a.to_device(device), b.to_device(device), device).to_cpu(device)
+    result = ma.multiply(a.to_device(device), b.to_device(device), device).to_cpu(
+        device
+    )
     assert result.__len__() == 3
     assert result.null_count() == 0
 

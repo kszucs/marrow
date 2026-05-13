@@ -986,9 +986,7 @@ def infer_type(obj: PythonObject) raises -> PythonObject:
     return inferrer.infer(obj).to_python_object()
 
 
-def array(
-    obj: PythonObject, type: PythonObject
-) raises -> PythonObject:
+def array(obj: PythonObject, type: PythonObject) raises -> PythonObject:
     var builtins = Python.import_module("builtins")
     var type_given = not type.__is__(builtins.None)
     if not type_given:
@@ -1109,7 +1107,6 @@ def _array_to_cpu(self: AnyArray, ctx: ExecutionContext) raises -> AnyArray:
     return self.to_cpu(ctx.device.value())
 
 
-
 def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     """Add array types and constructors to the Python API."""
 
@@ -1127,15 +1124,16 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[arrow_c_array[_any_to_array]]("__arrow_c_array__")
         .def_method[arrow_c_schema[_any_dtype]]("__arrow_c_schema__")
     )
-    _ = (
-        array_py.def_method[_any_array_str]("__str__")
-        .def_method[_any_array_str]("__repr__")
-    )
+    _ = array_py.def_method[_any_array_str]("__str__").def_method[
+        _any_array_str
+    ]("__repr__")
     # var array_sp = SequenceProtocolBuilder[AnyArray](array_py)
     # _ = array_sp.def_len[AnyArray.__len__]().def_getitem[_any_array_getitem]()
 
     mb.def_function[infer_type]("infer_type")
     mb.def_function[array]("array")
     mb.def_function[list_array_from_arrays]("list_array_from_arrays")
-    mb.def_function[fixed_size_list_array_from_arrays]("fixed_size_list_array_from_arrays")
+    mb.def_function[fixed_size_list_array_from_arrays](
+        "fixed_size_list_array_from_arrays"
+    )
     mb.def_function[struct_array_from_arrays]("struct_array_from_arrays")

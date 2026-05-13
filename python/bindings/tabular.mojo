@@ -9,6 +9,7 @@ References:
 
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
+
 # from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
@@ -238,7 +239,8 @@ def _record_batch_arrow_c_schema(
 def record_batch(
     data: PythonObject, schema: PythonObject, names: PythonObject
 ) raises -> PythonObject:
-    """Create a RecordBatch from a dict, list+names, or Arrow protocol object."""
+    """Create a RecordBatch from a dict, list+names, or Arrow protocol object.
+    """
     try:
         return RecordBatch(py=data).to_python_object()
     except:
@@ -363,9 +365,7 @@ def _table_arrow_c_schema(
 # ---------------------------------------------------------------------------
 
 
-def table(
-    data: PythonObject, names: PythonObject
-) raises -> PythonObject:
+def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
     """Create a Table from a dict, list+names, or Arrow protocol object."""
     try:
         return Table(py=data).to_python_object()
@@ -586,10 +586,9 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
     )
-    _ = (
-        rb_py.def_method[_record_batch_str]("__str__")
-        .def_method[_record_batch_str]("__repr__")
-    )
+    _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
+        _record_batch_str
+    ]("__repr__")
     # var rb_tp = TypeProtocolBuilder[RecordBatch](rb_py)
     # _ = rb_tp.def_richcompare[_record_batch_rich_compare]()
 
@@ -613,9 +612,8 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_table_arrow_c_stream]("__arrow_c_stream__")
         .def_method[_table_arrow_c_schema]("__arrow_c_schema__")
     )
-    _ = (
-        t_py.def_method[_table_str]("__str__")
-        .def_method[_table_str]("__repr__")
+    _ = t_py.def_method[_table_str]("__str__").def_method[_table_str](
+        "__repr__"
     )
     # var t_tp = TypeProtocolBuilder[Table](t_py)
     # _ = t_tp.def_richcompare[_table_rich_compare]()
