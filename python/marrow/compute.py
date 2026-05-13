@@ -87,7 +87,7 @@ def any(array, *, skip_nulls=True, memory_pool=None):
 
     Equivalent to ``pyarrow.compute.any``.
     """
-    return _ma.any(array.unwrap())
+    return _ma.any(array.unwrap(), _serial())
 
 
 def all(array, *, skip_nulls=True, memory_pool=None):
@@ -95,7 +95,7 @@ def all(array, *, skip_nulls=True, memory_pool=None):
 
     Equivalent to ``pyarrow.compute.all``.
     """
-    return _ma.all(array.unwrap())
+    return _ma.all(array.unwrap(), _serial())
 
 
 # ── Comparisons ───────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ def filter(input, selection_filter, memory_pool=None):
 
     Equivalent to ``pyarrow.compute.filter``.
     """
-    return Array.wrap(_ma.filter(input.unwrap(), selection_filter.unwrap()))
+    return Array.wrap(_ma.filter(input.unwrap(), selection_filter.unwrap(), _serial()))
 
 
 def drop_null(input, memory_pool=None):
@@ -167,7 +167,7 @@ def drop_null(input, memory_pool=None):
 
     Equivalent to ``pyarrow.compute.drop_null``.
     """
-    return Array.wrap(_ma.drop_null(input.unwrap()))
+    return Array.wrap(_ma.drop_null(input.unwrap(), _serial()))
 
 
 def take(data, indices, *, boundscheck=True, memory_pool=None):

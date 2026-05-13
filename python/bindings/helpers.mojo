@@ -15,6 +15,120 @@ from std.python import (
 )
 
 # ---------------------------------------------------------------------------
+# pyfunction — wrap a typed Mojo function as a PythonObject-based callable.
+# Type parameters are infer-only (//), so the call site just passes the
+# function reference: ``pyfunction[my_func]()``.
+# ---------------------------------------------------------------------------
+
+
+def pyfunction[
+    R: ConvertibleToPython, //,
+    func: def() raises thin -> R,
+]() -> def() raises thin -> PythonObject:
+    def wrapper() raises -> PythonObject:
+        return func()
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    R: ConvertibleToPython, //,
+    func: def(A0) raises thin -> R,
+]() -> def(PythonObject) raises thin -> PythonObject:
+    def wrapper(arg0: PythonObject) raises -> PythonObject:
+        return func(A0(py=arg0))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython, //,
+    func: def(A0) raises thin -> Bool,
+]() -> def(PythonObject) raises thin -> PythonObject:
+    def wrapper(arg0: PythonObject) raises -> PythonObject:
+        return func(A0(py=arg0))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    R: ConvertibleToPython, //,
+    func: def(A0, A1) raises thin -> R,
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
+    def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython, //,
+    func: def(A0, A1) raises thin -> Bool,
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
+    def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    A2: ConvertibleFromPython,
+    R: ConvertibleToPython, //,
+    func: def(A0, A1, A2) raises thin -> R,
+]() -> def(
+    PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        arg0: PythonObject, arg1: PythonObject, arg2: PythonObject
+    ) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1), A2(py=arg2))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    A2: ConvertibleFromPython,
+    A3: ConvertibleFromPython,
+    R: ConvertibleToPython, //,
+    func: def(A0, A1, A2, A3) raises thin -> R,
+]() -> def(
+    PythonObject, PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        arg0: PythonObject,
+        arg1: PythonObject,
+        arg2: PythonObject,
+        arg3: PythonObject,
+    ) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1), A2(py=arg2), A3(py=arg3))
+
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
+# pyinit — wrap T(py=...) as a def_py_init initializer
+# ---------------------------------------------------------------------------
+
+
+def pyinit[
+    T: Movable & ImplicitlyDestructible & ConvertibleFromPython
+](out self: T, args: PythonObject, kwargs: PythonObject) raises:
+    """Generic ``def_py_init`` wrapper that delegates to ``T(py=args[0])``.
+
+    Use this for any type that already implements ``ConvertibleFromPython``.
+    """
+    self = T(py=args[0])
+
+
+# ---------------------------------------------------------------------------
 # pymethod — wrap a Mojo instance method as a Python-callable method
 # ---------------------------------------------------------------------------
 

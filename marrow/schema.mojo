@@ -46,13 +46,19 @@ struct Schema(
         except:
             pass
 
-        # Fall back to the Arrow C Schema Interface for foreign objects.
-        var capsule: PythonObject
+        # Try the Arrow C Schema Interface for foreign objects.
         try:
-            capsule = py.__arrow_c_schema__()
+            var capsule = py.__arrow_c_schema__()
+            self = CArrowSchema.from_pycapsule(capsule).to_schema()
+            return
         except:
-            raise Error("cannot convert Python object to Schema")
-        self = CArrowSchema.from_pycapsule(capsule).to_schema()
+            pass
+
+        # Fall back to iterating as a sequence of Field objects.
+        var fields = List[Field]()
+        for f in py:
+            fields.append(f.downcast_value_ptr[Field]()[].copy())
+        self = Schema(fields=fields^)
 
     def append(mut self, var field: Field):
         """Appends a field to the schema."""

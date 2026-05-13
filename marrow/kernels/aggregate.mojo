@@ -22,7 +22,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
-from . import unary_scalar_dispatch
+from .helpers import unary_scalar_dispatch
 from .execution import ExecutionContext
 
 
@@ -185,11 +185,15 @@ def max(
 # ---------------------------------------------------------------------------
 
 
-def any(array: AnyArray) raises -> Bool:
-    return any(array.as_bool())
+def any(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
+    return any(array.as_bool(), ctx)
 
 
-def any(array: BoolArray) raises -> Bool:
+def any(
+    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
     """True if any valid element is True. False if empty or all null."""
     var n = len(array)
     var data_bv = array.values()
@@ -214,11 +218,15 @@ def any(array: BoolArray) raises -> Bool:
     return False
 
 
-def all(array: AnyArray) raises -> Bool:
-    return all(array.as_bool())
+def all(
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
+    return all(array.as_bool(), ctx)
 
 
-def all(array: BoolArray) raises -> Bool:
+def all(
+    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> Bool:
     """True if all valid elements are True. True if empty or all null."""
     var n = len(array)
     var data_bv = array.values()

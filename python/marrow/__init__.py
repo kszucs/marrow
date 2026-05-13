@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from . import libmarrow as _ma
 from .libmarrow import (
     DataType,
@@ -20,7 +22,6 @@ from .libmarrow import (
     string,
     binary,
     fixed_size_binary,
-    field,
     list_,
     fixed_size_list_,
     struct,
@@ -61,18 +62,11 @@ class _Wrapper:
 # ── ExecutionContext ───────────────────────────────────────────────────────────
 
 
-class ExecutionContext:
-    @staticmethod
-    def serial():
-        return _ma._serial_context()
-
-    @staticmethod
-    def parallel():
-        return _ma._parallel_context()
+ExecutionContext = _ma.ExecutionContext
 
 
 def _serial():
-    return ExecutionContext.serial()
+    return _ma.ExecutionContext.serial()
 
 
 # ── Scalar ─────────────────────────────────────────────────────────────────────
@@ -200,10 +194,10 @@ class Array(_Wrapper):
         return Array.wrap(_ma.take(self._binding, indices.unwrap(), _serial()))
 
     def filter(self, mask):
-        return Array.wrap(_ma.filter(self._binding, mask.unwrap()))
+        return Array.wrap(_ma.filter(self._binding, mask.unwrap(), _serial()))
 
     def drop_null(self):
-        return Array.wrap(_ma.drop_null(self._binding))
+        return Array.wrap(_ma.drop_null(self._binding, _serial()))
 
 
 # ── RecordBatch ────────────────────────────────────────────────────────────────
@@ -364,8 +358,48 @@ def array(obj, type=None):
     return Array.wrap(_ma.array(obj, type))
 
 
-def schema(fields_or_schema, metadata=None):
-    return _ma.schema(fields_or_schema, metadata)
+def field(name, type=None, nullable=True, metadata=None):
+    """Create a marrow Field.
+
+    Parameters
+    ----------
+    name : str
+        Name of the field.
+    type : DataType, default None
+        Arrow datatype of the field.
+    nullable : bool, default True
+        Whether the field's values are nullable.
+    metadata : dict, default None
+        Optional field metadata.
+    """
+    if nullable is None:
+        nullable = True
+    return _ma.field(name, type, nullable, metadata)
+
+
+def schema(fields):
+    """Construct a marrow Schema from a collection of fields.
+
+    Parameters
+    ----------
+    fields : iterable of Fields or tuples, or mapping of strings to DataTypes
+        Can also pass an object that implements the Arrow PyCapsule Protocol
+        for schemas (has an ``__arrow_c_schema__`` method).
+    """
+    if hasattr(fields, "__arrow_c_schema__") or isinstance(fields, Schema):
+        return _ma.Schema(fields)
+
+    if isinstance(fields, Mapping):
+        fields = list(fields.items())
+
+    coerced = []
+    for item in fields:
+        if isinstance(item, tuple):
+            coerced.append(field(*item))
+        else:
+            coerced.append(item)
+
+    return _ma.Schema(coerced)
 
 
 def record_batch(data, names=None, schema=None):
@@ -429,12 +463,12 @@ def max(a, ctx=None):
     return Scalar.wrap(_ma.max(a.unwrap(), ctx or _serial()))
 
 
-def any(a):
-    return _ma.any(a.unwrap())
+def any(a, ctx=None):
+    return _ma.any(a.unwrap(), ctx or _serial())
 
 
-def all(a):
-    return _ma.all(a.unwrap())
+def all(a, ctx=None):
+    return _ma.all(a.unwrap(), ctx or _serial())
 
 
 def equal(left, right, ctx=None):
@@ -463,12 +497,12 @@ def greater_equal(left, right, ctx=None):
     )
 
 
-def filter(array, mask):
-    return Array.wrap(_ma.filter(array.unwrap(), mask.unwrap()))
+def filter(array, mask, ctx=None):
+    return Array.wrap(_ma.filter(array.unwrap(), mask.unwrap(), ctx or _serial()))
 
 
-def drop_null(array):
-    return Array.wrap(_ma.drop_null(array.unwrap()))
+def drop_null(array, ctx=None):
+    return Array.wrap(_ma.drop_null(array.unwrap(), ctx or _serial()))
 
 
 def take(array, indices, ctx=None):

@@ -364,6 +364,7 @@ def array(
     null_list: List[Int32],
     n: Int,
     nulls_first: Bool,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """Merge sorted valid indices and null indices into the final Int32Array."""
     var out = Buffer.alloc_uninit[DType.int32](n)
@@ -427,13 +428,14 @@ def sort_indices[
             arr, valid_buf^, n_valid, ascending, ctx
         )
 
-    return array(sorted_valid, n_valid, null_list, n, nulls_first)
+    return array(sorted_valid, n_valid, null_list, n, nulls_first, ctx)
 
 
 def sort_indices(
     array: BoolArray,
     ascending: Bool = True,
     nulls_first: Bool = True,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """O(N) counting sort for bool arrays.
 
@@ -496,6 +498,7 @@ def sort_indices(
     ascending: Bool = True,
     nulls_first: Bool = True,
     stable: Bool = False,
+    ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> Int32Array:
     """Comparison sort for string arrays using the Mojo stdlib sort."""
     var n = len(array)
@@ -579,7 +582,9 @@ def sort_indices(
     var result: Int32Array
 
     if array.dtype() == bool_dt:
-        result = sort_indices(array.as_bool().copy(), ascending, nulls_first)
+        result = sort_indices(
+            array.as_bool().copy(), ascending, nulls_first, ctx
+        )
     elif array.dtype() == int8:
         result = sort_indices(
             array.as_int8(), ascending, nulls_first, stable, ctx
@@ -625,7 +630,9 @@ def sort_indices(
             array.as_float64(), ascending, nulls_first, stable, ctx
         )
     elif array.dtype().is_string():
-        result = sort_indices(array.as_string(), ascending, nulls_first, stable)
+        result = sort_indices(
+            array.as_string(), ascending, nulls_first, stable, ctx
+        )
     else:
         raise Error(t"sort_indices: unsupported dtype {array.dtype()}")
 

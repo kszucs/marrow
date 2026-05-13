@@ -447,7 +447,10 @@ def rapidhash(
 
 def hash_identity[
     T: PrimitiveType
-](keys: PrimitiveArray[T]) raises -> UInt64Array:
+](
+    keys: PrimitiveArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> UInt64Array:
     """Identity hash: returns values cast to uint64 with no hash overhead.
 
     For int8, values are offset by +128 to produce non-negative indices.
@@ -470,7 +473,10 @@ def hash_identity[
     return builder.finish()
 
 
-def hash_identity(keys: BoolArray) raises -> UInt64Array:
+def hash_identity(
+    keys: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> UInt64Array:
     """Identity hash for bool arrays (values 0 and 1)."""
     var n = len(keys)
     var builder = UInt64Builder(capacity=n)
@@ -483,12 +489,15 @@ def hash_identity(keys: BoolArray) raises -> UInt64Array:
     return builder.finish()
 
 
-def hash_identity(keys: AnyArray) raises -> UInt64Array:
+def hash_identity(
+    keys: AnyArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> UInt64Array:
     """Runtime-typed identity hash dispatch."""
     if keys.dtype() == bool_:
-        return hash_identity(keys.as_bool())
+        return hash_identity(keys.as_bool(), ctx)
     if keys.dtype() == uint8:
-        return hash_identity(keys.as_uint8())
+        return hash_identity(keys.as_uint8(), ctx)
     if keys.dtype() == int8:
-        return hash_identity(keys.as_int8())
+        return hash_identity(keys.as_int8(), ctx)
     raise Error("hash_identity: only supports bool, uint8, int8")
