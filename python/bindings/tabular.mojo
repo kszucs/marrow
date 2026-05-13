@@ -10,7 +10,6 @@ References:
 from std.python import Python, PythonObject
 from std.python.bindings import PythonModuleBuilder
 
-# from pontoneer import TypeProtocolBuilder, RichCompareOps, NotImplementedError
 from marrow.tabular import RecordBatch, Table
 from marrow.schema import Schema
 from marrow.arrays import AnyArray, ChunkedArray

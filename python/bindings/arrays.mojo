@@ -45,7 +45,6 @@ from marrow.builders import (
 from marrow.scalars import AnyScalar
 import marrow.dtypes as dt
 
-# from pontoneer import SequenceProtocolBuilder
 from helpers import pymethod
 
 
