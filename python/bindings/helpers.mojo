@@ -1,7 +1,7 @@
-"""Generic helpers for Python bindings: pymethod and pyfunction wrappers.
+"""Generic helpers for Python bindings: pymethod wrappers.
 
-These reduce boilerplate when exposing Mojo methods and functions to Python
-by auto-converting arguments via ConvertibleFromPython and return values via
+These reduce boilerplate when exposing Mojo methods to Python by
+auto-converting arguments via ConvertibleFromPython and return values via
 implicit PythonObject construction (ConvertibleToPython or primitive types).
 """
 
@@ -262,74 +262,3 @@ def pymethod[
 
     return wrapper
 
-
-# ---------------------------------------------------------------------------
-# pyfunction — wrap a Mojo free function as a Python-callable function
-# ---------------------------------------------------------------------------
-
-
-def pyfunction[
-    A0: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    func: def(A0) raises thin -> R,
-]() -> def(PythonObject) raises thin -> PythonObject:
-    """Wrap a one-arg function returning ConvertibleToPython."""
-
-    def wrapper(arg0: PythonObject) raises -> PythonObject:
-        return func(A0(py=arg0))
-
-    return wrapper
-
-
-def pyfunction[
-    A0: ConvertibleFromPython,
-    //,
-    func: def(A0) raises thin -> Bool,
-]() -> def(PythonObject) raises thin -> PythonObject:
-    """Wrap a one-arg function returning Bool."""
-
-    def wrapper(arg0: PythonObject) raises -> PythonObject:
-        return func(A0(py=arg0))
-
-    return wrapper
-
-
-def pyfunction[
-    A0: ConvertibleFromPython,
-    A1: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    func: def(A0, A1) raises thin -> R,
-]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
-    """Wrap a two-arg function returning ConvertibleToPython."""
-
-    def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
-        return func(A0(py=arg0), A1(py=arg1))
-
-    return wrapper
-
-
-def pyfunction[
-    A0: ConvertibleFromPython,
-    A1: ConvertibleFromPython,
-    A2: ConvertibleFromPython,
-    R: ConvertibleToPython,
-    //,
-    func: def(A0, A1, A2) raises thin -> R,
-]() -> def(
-    PythonObject, PythonObject, PythonObject
-) raises thin -> PythonObject:
-    """Wrap a three-arg function returning ConvertibleToPython."""
-
-    def wrapper(
-        arg0: PythonObject, arg1: PythonObject, arg2: PythonObject
-    ) raises -> PythonObject:
-        return func(A0(py=arg0), A1(py=arg1), A2(py=arg2))
-
-    return wrapper
-
-
-def marrow_module(obj: PythonObject) raises -> PythonObject:
-    """Return the name of the module to implement the __module__ method."""
-    return PythonObject("marrow")

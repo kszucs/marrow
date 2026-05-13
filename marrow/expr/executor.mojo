@@ -67,7 +67,7 @@ from marrow.dtypes import (
     float64,
     bool_ as bool_dt,
 )
-from marrow.kernels.arithmetic import add, sub, mul, div, neg, abs_
+from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
     equal,
@@ -80,7 +80,7 @@ from marrow.kernels.compare import (
 from marrow.kernels.concat import concat
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.kernels.filter import filter_
+from marrow.kernels.filter import filter
 from marrow.expr.values import (
     AnyValue,
     Column,
@@ -337,11 +337,11 @@ struct BinaryProcessor(ValueProcessor):
         if self.op == ADD:
             return add(l, r)
         elif self.op == SUB:
-            return sub(l, r)
+            return subtract(l, r)
         elif self.op == MUL:
-            return mul(l, r)
+            return multiply(l, r)
         elif self.op == DIV:
-            return div(l, r)
+            return divide(l, r)
         elif self.op == EQ:
             return equal(l, r)
         elif self.op == NE:
@@ -668,7 +668,7 @@ struct FilterProcessor(RelationProcessor):
             var result_cols = List[AnyArray]()
             for i in range(batch.num_columns()):
                 result_cols.append(
-                    filter_(batch.columns[i].copy(), mask.copy())
+                    filter(batch.columns[i].copy(), mask.copy())
                 )
             var result = RecordBatch(
                 schema=self.schema_.copy(), columns=result_cols^

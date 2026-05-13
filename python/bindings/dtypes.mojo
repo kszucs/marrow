@@ -2,10 +2,8 @@
 
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
-from std.collections import OwnedKwargsDict
 from std.memory import ArcPointer
 import marrow.dtypes as dt
-from helpers import marrow_module
 
 
 def _field_name(
@@ -216,160 +214,37 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
 
     _ = (
         mb.add_type[dt.Field]("Field")
-        .def_method[marrow_module]("__module__")
         .def_method[_field_name]("name")
         .def_method[_field_type]("type")
     )
-    _ = mb.add_type[dt.AnyDataType]("DataType").def_method[marrow_module](
-        "__module__"
-    )
+    _ = mb.add_type[dt.AnyDataType]("DataType")
 
-    mb.def_function[null](
-        "null", docstring="null() -> DataType\n--\n\nCreate a null DataType."
-    )
-    mb.def_function[bool_](
-        "bool_",
-        docstring="bool_() -> DataType\n--\n\nCreate a boolean DataType.",
-    )
-    mb.def_function[int8](
-        "int8", docstring="int8() -> DataType\n--\n\nCreate an int8 DataType."
-    )
-    mb.def_function[int16](
-        "int16",
-        docstring="int16() -> DataType\n--\n\nCreate an int16 DataType.",
-    )
-    mb.def_function[int32](
-        "int32",
-        docstring="int32() -> DataType\n--\n\nCreate an int32 DataType.",
-    )
-    mb.def_function[int64](
-        "int64",
-        docstring="int64() -> DataType\n--\n\nCreate an int64 DataType.",
-    )
-    mb.def_function[uint8](
-        "uint8", docstring="uint8() -> DataType\n--\n\nCreate a uint8 DataType."
-    )
-    mb.def_function[uint16](
-        "uint16",
-        docstring="uint16() -> DataType\n--\n\nCreate a uint16 DataType.",
-    )
-    mb.def_function[uint32](
-        "uint32",
-        docstring="uint32() -> DataType\n--\n\nCreate a uint32 DataType.",
-    )
-    mb.def_function[uint64](
-        "uint64",
-        docstring="uint64() -> DataType\n--\n\nCreate a uint64 DataType.",
-    )
-    mb.def_function[float16](
-        "float16",
-        docstring="float16() -> DataType\n--\n\nCreate a float16 DataType.",
-    )
-    mb.def_function[float32](
-        "float32",
-        docstring="float32() -> DataType\n--\n\nCreate a float32 DataType.",
-    )
-    mb.def_function[float64](
-        "float64",
-        docstring="float64() -> DataType\n--\n\nCreate a float64 DataType.",
-    )
-    mb.def_function[string](
-        "string",
-        docstring="string() -> DataType\n--\n\nCreate a string DataType.",
-    )
-    mb.def_function[binary](
-        "binary",
-        docstring="binary() -> DataType\n--\n\nCreate a binary DataType.",
-    )
-    mb.def_function[fixed_size_binary](
-        "fixed_size_binary",
-        docstring=(
-            "fixed_size_binary(byte_width: int, /) -> DataType\n--\n\nCreate a"
-            " fixed-size binary DataType."
-        ),
-    )
-    mb.def_function[field](
-        "field",
-        docstring=(
-            "field(name: str, /, *, type: DataType, nullable: bool = True) ->"
-            " Field\n--\n\nCreate a Field with the given name, data type, and"
-            " nullability."
-        ),
-    )
-    mb.def_function[list_](
-        "list_",
-        docstring=(
-            "list_(value_type: DataType, /) -> DataType\n--\n\nCreate a list"
-            " DataType from a value type."
-        ),
-    )
-    mb.def_function[fixed_size_list_](
-        "fixed_size_list_",
-        docstring=(
-            "fixed_size_list_(value_type: DataType, list_size: int, /) ->"
-            " DataType\n--\n\nCreate a fixed-size list DataType from a value"
-            " type and list size."
-        ),
-    )
-    mb.def_function[struct_](
-        "struct",
-        docstring=(
-            "struct(fields: list[Field], /) -> DataType\n--\n\nCreate a struct"
-            " DataType from a list of Fields."
-        ),
-    )
-    mb.def_function[date32](
-        "date32",
-        docstring="date32() -> DataType\n--\n\nCreate a date32 DataType.",
-    )
-    mb.def_function[date64](
-        "date64",
-        docstring="date64() -> DataType\n--\n\nCreate a date64 DataType.",
-    )
-    mb.def_function[time32](
-        "time32",
-        docstring=(
-            "time32(unit: str, /) -> DataType\n--\n\nCreate a time32 DataType."
-        ),
-    )
-    mb.def_function[time64](
-        "time64",
-        docstring=(
-            "time64(unit: str, /) -> DataType\n--\n\nCreate a time64 DataType."
-        ),
-    )
-    mb.def_function[timestamp](
-        "timestamp",
-        docstring=(
-            "timestamp(unit: str, tz: str | None = None, /) -> DataType\n--\n\n"
-            "Create a timestamp DataType."
-        ),
-    )
-    mb.def_function[duration](
-        "duration",
-        docstring=(
-            "duration(unit: str, /) -> DataType\n--\n\nCreate a duration"
-            " DataType."
-        ),
-    )
-    mb.def_function[year_month_interval](
-        "year_month_interval",
-        docstring=(
-            "year_month_interval() -> DataType\n--\n\nCreate a"
-            " year_month_interval DataType."
-        ),
-    )
-    mb.def_function[day_time_interval](
-        "day_time_interval",
-        docstring=(
-            "day_time_interval() -> DataType\n--\n\nCreate a day_time_interval"
-            " DataType."
-        ),
-    )
-    mb.def_function[month_day_nano_interval](
-        "month_day_nano_interval",
-        docstring=(
-            "month_day_nano_interval() -> DataType\n--\n\nCreate a"
-            " month_day_nano_interval DataType."
-        ),
-    )
+    mb.def_function[null]("null")
+    mb.def_function[bool_]("bool_")
+    mb.def_function[int8]("int8")
+    mb.def_function[int16]("int16")
+    mb.def_function[int32]("int32")
+    mb.def_function[int64]("int64")
+    mb.def_function[uint8]("uint8")
+    mb.def_function[uint16]("uint16")
+    mb.def_function[uint32]("uint32")
+    mb.def_function[uint64]("uint64")
+    mb.def_function[float16]("float16")
+    mb.def_function[float32]("float32")
+    mb.def_function[float64]("float64")
+    mb.def_function[string]("string")
+    mb.def_function[binary]("binary")
+    mb.def_function[fixed_size_binary]("fixed_size_binary")
+    mb.def_function[field]("field")
+    mb.def_function[list_]("list_")
+    mb.def_function[fixed_size_list_]("fixed_size_list_")
+    mb.def_function[struct_]("struct")
+    mb.def_function[date32]("date32")
+    mb.def_function[date64]("date64")
+    mb.def_function[time32]("time32")
+    mb.def_function[time64]("time64")
+    mb.def_function[timestamp]("timestamp")
+    mb.def_function[duration]("duration")
+    mb.def_function[year_month_interval]("year_month_interval")
+    mb.def_function[day_time_interval]("day_time_interval")
+    mb.def_function[month_day_nano_interval]("month_day_nano_interval")

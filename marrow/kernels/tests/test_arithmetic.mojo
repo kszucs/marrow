@@ -27,13 +27,13 @@ from marrow.dtypes import (
 )
 from marrow.kernels.arithmetic import (
     add,
-    sub,
-    mul,
-    div,
+    subtract,
+    multiply,
+    divide,
     floordiv,
     mod,
-    min_,
-    max_,
+    min_element_wise,
+    max_element_wise,
     neg,
     abs_,
     sign,
@@ -135,14 +135,14 @@ def test_add_large_array() raises:
 
 
 # ---------------------------------------------------------------------------
-# sub
+# subtract
 # ---------------------------------------------------------------------------
 
 
 def test_sub_typed() raises:
     var a = array([10, 20, 30, 40], int32)
     var b = array([1, 2, 3, 4], int32)
-    var result = sub[Int32Type](a, b)
+    var result = subtract[Int32Type](a, b)
     assert_equal(result[0].value(), 9)
     assert_equal(result[1].value(), 18)
     assert_equal(result[2].value(), 27)
@@ -156,7 +156,7 @@ def test_sub_with_nulls() raises:
     a.append_null()
 
     var b = array([1, 2, 3], int32)
-    var result = sub[Int32Type](a.finish(), b)
+    var result = subtract[Int32Type](a.finish(), b)
     assert_true(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_false(result.is_valid(2))
@@ -167,7 +167,7 @@ def test_sub_with_nulls() raises:
 def test_sub_untyped() raises:
     var a: AnyArray = array([10, 20, 30], int64)
     var b: AnyArray = array([1, 2, 3], int64)
-    var result = sub(a, b)
+    var result = subtract(a, b)
     ref typed = result.as_int64()
     assert_equal(typed[0].value(), 9)
     assert_equal(typed[1].value(), 18)
@@ -175,14 +175,14 @@ def test_sub_untyped() raises:
 
 
 # ---------------------------------------------------------------------------
-# mul
+# multiply
 # ---------------------------------------------------------------------------
 
 
 def test_mul_typed() raises:
     var a = array([2, 3, 4, 5], int32)
     var b = array([10, 10, 10, 10], int32)
-    var result = mul[Int32Type](a, b)
+    var result = multiply[Int32Type](a, b)
     assert_equal(result[0].value(), 20)
     assert_equal(result[1].value(), 30)
     assert_equal(result[2].value(), 40)
@@ -196,7 +196,7 @@ def test_mul_with_nulls() raises:
     a.append_null()
 
     var b = array([10, 10, 10], int32)
-    var result = mul[Int32Type](a.finish(), b)
+    var result = multiply[Int32Type](a.finish(), b)
     assert_true(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_false(result.is_valid(2))
@@ -207,21 +207,21 @@ def test_mul_with_nulls() raises:
 def test_mul_large_array() raises:
     var a = arange[Int32Type](0, 1000)
     var b = arange[Int32Type](0, 1000)
-    var result = mul[Int32Type](a, b)
+    var result = multiply[Int32Type](a, b)
     assert_equal(result[0].value(), 0)
     assert_equal(result[10].value(), 100)
     assert_equal(result[31].value(), 961)
 
 
 # ---------------------------------------------------------------------------
-# div
+# divide
 # ---------------------------------------------------------------------------
 
 
 def test_div_typed() raises:
     var a = array([10, 20, 30], float64)
     var b = array([2, 4, 5], float64)
-    var result = div[Float64Type](a, b)
+    var result = divide[Float64Type](a, b)
     assert_true(result[0].value() == 5.0)
     assert_true(result[1].value() == 5.0)
     assert_true(result[2].value() == 6.0)
@@ -234,7 +234,7 @@ def test_div_with_nulls() raises:
     a.append_null()
 
     var b = array([2, 4, 5], float64)
-    var result = div[Float64Type](a.finish(), b)
+    var result = divide[Float64Type](a.finish(), b)
     assert_true(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_false(result.is_valid(2))
@@ -271,14 +271,14 @@ def test_mod_typed() raises:
 
 
 # ---------------------------------------------------------------------------
-# min_ / max_
+# min_element_wise / max_element_wise
 # ---------------------------------------------------------------------------
 
 
 def test_min_typed() raises:
     var a = array([1, 5, 3, 8], int32)
     var b = array([4, 2, 3, 6], int32)
-    var result = min_[Int32Type](a, b)
+    var result = min_element_wise[Int32Type](a, b)
     assert_equal(result[0].value(), 1)
     assert_equal(result[1].value(), 2)
     assert_equal(result[2].value(), 3)
@@ -288,7 +288,7 @@ def test_min_typed() raises:
 def test_max_typed() raises:
     var a = array([1, 5, 3, 8], int32)
     var b = array([4, 2, 3, 6], int32)
-    var result = max_[Int32Type](a, b)
+    var result = max_element_wise[Int32Type](a, b)
     assert_equal(result[0].value(), 4)
     assert_equal(result[1].value(), 5)
     assert_equal(result[2].value(), 3)
@@ -302,7 +302,7 @@ def test_min_with_nulls() raises:
     a.append_null()
 
     var b = array([4, 2, 3], int32)
-    var result = min_[Int32Type](a.finish(), b)
+    var result = min_element_wise[Int32Type](a.finish(), b)
     assert_true(result.is_valid(0))
     assert_true(result.is_valid(1))
     assert_false(result.is_valid(2))

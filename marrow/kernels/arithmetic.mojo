@@ -250,7 +250,7 @@ def add[
     return _binary[T, func=_add[T.native, _], name="add"](left, right, ctx)
 
 
-def sub[
+def subtract[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -258,10 +258,10 @@ def sub[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise subtraction."""
-    return _binary[T, func=_sub[T.native, _], name="sub"](left, right, ctx)
+    return _binary[T, func=_sub[T.native, _], name="subtract"](left, right, ctx)
 
 
-def mul[
+def multiply[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -269,10 +269,10 @@ def mul[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise multiplication."""
-    return _binary[T, func=_mul[T.native, _], name="mul"](left, right, ctx)
+    return _binary[T, func=_mul[T.native, _], name="multiply"](left, right, ctx)
 
 
-def div[
+def divide[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -280,7 +280,7 @@ def div[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise true division."""
-    return _binary[T, func=_div[T.native, _], name="div"](left, right, ctx)
+    return _binary[T, func=_div[T.native, _], name="divide"](left, right, ctx)
 
 
 def floordiv[
@@ -307,7 +307,7 @@ def mod[
     return _binary[T, func=_mod[T.native, _], name="mod"](left, right, ctx)
 
 
-def min_[
+def min_element_wise[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -315,10 +315,10 @@ def min_[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise minimum."""
-    return _binary[T, func=_min[T.native, _], name="min_"](left, right, ctx)
+    return _binary[T, func=_min[T.native, _], name="min_element_wise"](left, right, ctx)
 
 
-def max_[
+def max_element_wise[
     T: PrimitiveType
 ](
     left: PrimitiveArray[T],
@@ -326,7 +326,7 @@ def max_[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
     """Element-wise maximum."""
-    return _binary[T, func=_max[T.native, _], name="max_"](left, right, ctx)
+    return _binary[T, func=_max[T.native, _], name="max_element_wise"](left, right, ctx)
 
 
 def pow_[
@@ -492,31 +492,31 @@ def add(
     return binary_array_dispatch["add", add[_]](left, right, ctx)
 
 
-def sub(
+def subtract(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed sub."""
-    return binary_array_dispatch["sub", sub[_]](left, right, ctx)
+    """Runtime-typed subtract."""
+    return binary_array_dispatch["subtract", subtract[_]](left, right, ctx)
 
 
-def mul(
+def multiply(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed mul."""
-    return binary_array_dispatch["mul", mul[_]](left, right, ctx)
+    """Runtime-typed multiply."""
+    return binary_array_dispatch["multiply", multiply[_]](left, right, ctx)
 
 
-def div(
+def divide(
     left: AnyArray,
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed div."""
-    return binary_array_dispatch["div", div[_]](left, right, ctx)
+    """Runtime-typed divide."""
+    return binary_array_dispatch["divide", divide[_]](left, right, ctx)
 
 
 def floordiv(left: AnyArray, right: AnyArray) raises -> AnyArray:
@@ -529,14 +529,14 @@ def mod(left: AnyArray, right: AnyArray) raises -> AnyArray:
     return binary_array_dispatch["mod", mod[_]](left, right)
 
 
-def min_(left: AnyArray, right: AnyArray) raises -> AnyArray:
-    """Runtime-typed min_."""
-    return binary_array_dispatch["min_", min_[_]](left, right)
+def min_element_wise(left: AnyArray, right: AnyArray) raises -> AnyArray:
+    """Runtime-typed min_element_wise."""
+    return binary_array_dispatch["min_element_wise", min_element_wise[_]](left, right)
 
 
-def max_(left: AnyArray, right: AnyArray) raises -> AnyArray:
-    """Runtime-typed max_."""
-    return binary_array_dispatch["max_", max_[_]](left, right)
+def max_element_wise(left: AnyArray, right: AnyArray) raises -> AnyArray:
+    """Runtime-typed max_element_wise."""
+    return binary_array_dispatch["max_element_wise", max_element_wise[_]](left, right)
 
 
 def neg(array: AnyArray) raises -> AnyArray:

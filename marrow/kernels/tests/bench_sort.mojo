@@ -15,7 +15,7 @@ from marrow.builders import (
     Float64Builder,
 )
 from marrow.dtypes import int32, int64, float64
-from marrow.kernels.sort import argsort
+from marrow.kernels.sort import sort_indices
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def _bench_sort_int32(mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(argsort(data.copy()))
+        keep(sort_indices(data.copy()))
 
     b.iter[call]()
     keep(data)
@@ -83,7 +83,7 @@ def _bench_sort_int64(mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(argsort(data.copy()))
+        keep(sort_indices(data.copy()))
 
     b.iter[call]()
     keep(data)
@@ -96,7 +96,7 @@ def _bench_sort_float64(mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(argsort(data.copy()))
+        keep(sort_indices(data.copy()))
 
     b.iter[call]()
     keep(data)

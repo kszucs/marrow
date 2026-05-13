@@ -16,7 +16,7 @@ Example usage::
         @always_inline
         @parameter
         def call():
-            var r = sum_(arr)
+            var r = sum(arr)
             keep(r)
 
         b.iter[call]()

@@ -4,7 +4,7 @@ from marrow.testing import TestSuite
 from marrow.arrays import PrimitiveArray, BoolArray, AnyArray, Int64Array
 from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
-from marrow.kernels.arithmetic import add, sub, abs_ as k_abs, neg as k_neg
+from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     AnyValue,
@@ -54,7 +54,7 @@ def test_sub_expr() raises:
     var b = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec(col(0) - col(1), batch)
-    assert_true(result == sub[Int64Type](a, b))
+    assert_true(result == subtract[Int64Type](a, b))
 
 
 def test_neg_expr() raises:
@@ -82,7 +82,7 @@ def test_abs_of_sub() raises:
     var b = array([5, 1, 3, 2, 10], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec((col(0) - col(1)).abs(), batch)
-    assert_true(result == k_abs[Int64Type](sub[Int64Type](a, b)))
+    assert_true(result == k_abs[Int64Type](subtract[Int64Type](a, b)))
 
 
 def test_diff_of_squares() raises:

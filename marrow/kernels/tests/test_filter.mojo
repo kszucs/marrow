@@ -30,7 +30,7 @@ from marrow.dtypes import (
     UInt8Type,
     Float32Type,
 )
-from marrow.kernels.filter import filter_, drop_nulls
+from marrow.kernels.filter import filter, drop_null
 
 
 # ---------------------------------------------------------------------------
@@ -38,60 +38,60 @@ from marrow.kernels.filter import filter_, drop_nulls
 # ---------------------------------------------------------------------------
 
 
-def test_filter_keep_all() raises:
+def test_filterkeep_all() raises:
     var a = array([1, 2, 3, 4], int32)
-    var result = filter_(a, array([True, True, True, True]))
+    var result = filter(a, array([True, True, True, True]))
     assert_equal(len(result), 4)
     assert_equal(result[0].value(), 1)
     assert_equal(result[3].value(), 4)
 
 
-def test_filter_keep_none() raises:
+def test_filterkeep_none() raises:
     var a = array([1, 2, 3], int32)
-    var result = filter_(a, array([False, False, False]))
+    var result = filter(a, array([False, False, False]))
     assert_equal(len(result), 0)
 
 
-def test_filter_alternating() raises:
+def test_filteralternating() raises:
     var a = array([10, 20, 30, 40, 50], int32)
-    var result = filter_(a, array([True, False, True, False, True]))
+    var result = filter(a, array([True, False, True, False, True]))
     assert_equal(len(result), 3)
     assert_equal(result[0].value(), 10)
     assert_equal(result[1].value(), 30)
     assert_equal(result[2].value(), 50)
 
 
-def test_filter_first_and_last() raises:
+def test_filterfirst_and_last() raises:
     var a = array([1, 2, 3, 4, 5], int32)
-    var result = filter_(a, array([True, False, False, False, True]))
+    var result = filter(a, array([True, False, False, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 1)
     assert_equal(result[1].value(), 5)
 
 
-def test_filter_empty_array() raises:
+def test_filterempty_array() raises:
     var a = array(int32)
-    var result = filter_(a, array(List[Optional[Bool]]()))
+    var result = filter(a, array(List[Optional[Bool]]()))
     assert_equal(len(result), 0)
 
 
-def test_filter_single_true() raises:
+def test_filtersingle_true() raises:
     var a = array([42], int64)
-    var result = filter_(a, array([True]))
+    var result = filter(a, array([True]))
     assert_equal(len(result), 1)
     assert_equal(result[0].value(), 42)
 
 
-def test_filter_single_false() raises:
+def test_filtersingle_false() raises:
     var a = array([42], int64)
-    var result = filter_(a, array([False]))
+    var result = filter(a, array([False]))
     assert_equal(len(result), 0)
 
 
-def test_filter_exactly_8_elements() raises:
+def test_filterexactly_8_elements() raises:
     """Tests that a single full byte of selection is processed correctly."""
     var a = array([1, 2, 3, 4, 5, 6, 7, 8], int32)
-    var result = filter_(
+    var result = filter(
         a, array([True, False, True, False, True, False, True, False])
     )
     assert_equal(len(result), 4)
@@ -101,11 +101,11 @@ def test_filter_exactly_8_elements() raises:
     assert_equal(result[3].value(), 7)
 
 
-def test_filter_cross_byte_boundary() raises:
+def test_filtercross_byte_boundary() raises:
     """Tests selection spanning multiple bytes (> 8 elements)."""
     var a = array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], int32)
     # Keep last 2 of first byte and first 2 of second byte
-    var result = filter_(
+    var result = filter(
         a,
         array(
             [False, False, False, False, False, False, True, True, True, True]
@@ -118,7 +118,7 @@ def test_filter_cross_byte_boundary() raises:
     assert_equal(result[3].value(), 10)
 
 
-def test_filter_sparse_zero_byte() raises:
+def test_filtersparse_zero_byte() raises:
     """Zero bytes in selection bitmap are skipped without inspecting elements.
     """
     var a = arange[Int32Type](0, 20)
@@ -126,12 +126,12 @@ def test_filter_sparse_zero_byte() raises:
     var sel = List[Optional[Bool]]()
     for i in range(20):
         sel.append(i == 16)
-    var result = filter_(a, array(sel))
+    var result = filter(a, array(sel))
     assert_equal(len(result), 1)
     assert_equal(result[0].value(), 16)
 
 
-def test_filter_preserves_null_count() raises:
+def test_filterpreserves_null_count() raises:
     """Nulls in the source are preserved at filtered positions."""
     var b = Int32Builder(4)
     b.append(1)
@@ -140,7 +140,7 @@ def test_filter_preserves_null_count() raises:
     b.append_null()
     var a = b.finish()
     # Select elements 0 (valid), 1 (null), 3 (null)
-    var result = filter_(a, array([True, True, False, True]))
+    var result = filter(a, array([True, True, False, True]))
     assert_equal(len(result), 3)
     assert_equal(result.nulls, 2)
     assert_true(result.is_valid(0))
@@ -149,31 +149,31 @@ def test_filter_preserves_null_count() raises:
     assert_true(not result.is_valid(2))
 
 
-def test_filter_all_null_source() raises:
+def test_filterall_null_source() raises:
     var a = nulls(4, int32)
-    var result = filter_(a, array([True, False, True, False]))
+    var result = filter(a, array([True, False, True, False]))
     assert_equal(len(result), 2)
     assert_equal(result.nulls, 2)
 
 
-def test_filter_length_mismatch_raises() raises:
+def test_filterlength_mismatch_raises() raises:
     var a = array([1, 2, 3], int32)
     with assert_raises():
-        _ = filter_(a, array([True, False]))
+        _ = filter(a, array([True, False]))
 
 
-def test_filter_float32() raises:
+def test_filterfloat32() raises:
     var a = array([1, 2, 3, 4], float32)
-    var result = filter_(a, array([False, True, False, True]))
+    var result = filter(a, array([False, True, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 2.0)
     assert_equal(result[1].value(), 4.0)
 
 
-def test_filter_bool_array() raises:
+def test_filterbool_array() raises:
     """Filter of a bool array produces correct bit-packed output."""
     var a = array([True, False, True, True, False, True])
-    var result = filter_(a, array([True, True, False, True, False, False]))
+    var result = filter(a, array([True, True, False, True, False, False]))
     assert_equal(len(result), 3)
     assert_equal(result[0].value(), True)
     assert_equal(result[1].value(), False)
@@ -185,50 +185,50 @@ def test_filter_bool_array() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_filter_strings_basic() raises:
+def test_filterstrings_basic() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
     s.append("foo")
     var a = s.finish()
-    var result = filter_(a, array([True, False, True]))
+    var result = filter(a, array([True, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].to_string(), "hello")
     assert_equal(result[1].to_string(), "foo")
 
 
-def test_filter_strings_keep_all() raises:
+def test_filterstrings_keep_all() raises:
     var s = StringBuilder()
     s.append("a")
     s.append("bb")
     s.append("ccc")
     var a = s.finish()
-    var result = filter_(a, array([True, True, True]))
+    var result = filter(a, array([True, True, True]))
     assert_equal(len(result), 3)
     assert_equal(result[0].to_string(), "a")
     assert_equal(result[1].to_string(), "bb")
     assert_equal(result[2].to_string(), "ccc")
 
 
-def test_filter_strings_keep_none() raises:
+def test_filterstrings_keep_none() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
     var a = s.finish()
-    var result = filter_(a, array([False, False]))
+    var result = filter(a, array([False, False]))
     assert_equal(len(result), 0)
 
 
-def test_filter_strings_single() raises:
+def test_filterstrings_single() raises:
     var s = StringBuilder()
     s.append("only")
     var a = s.finish()
-    var result = filter_(a, array([True]))
+    var result = filter(a, array([True]))
     assert_equal(len(result), 1)
     assert_equal(result[0].to_string(), "only")
 
 
-def test_filter_strings_with_nulls() raises:
+def test_filterstrings_with_nulls() raises:
     """Null strings in source are preserved at selected positions."""
     var s = StringBuilder()
     s.append("valid")
@@ -237,7 +237,7 @@ def test_filter_strings_with_nulls() raises:
     s.append_null()
     var a = s.finish()
     # Keep: "valid" (pos 0), null (pos 1), null (pos 3)
-    var result = filter_(a, array([True, True, False, True]))
+    var result = filter(a, array([True, True, False, True]))
     assert_equal(len(result), 3)
     assert_equal(result.nulls, 2)
     assert_true(result.is_valid(0))
@@ -246,7 +246,7 @@ def test_filter_strings_with_nulls() raises:
     assert_false(result.is_valid(2))
 
 
-def test_filter_strings_run_merging() raises:
+def test_filterstrings_run_merging() raises:
     """Consecutive selected elements are merged into a single copy."""
     var s = StringBuilder()
     s.append("aaa")
@@ -255,14 +255,14 @@ def test_filter_strings_run_merging() raises:
     s.append("ddd")
     var a = s.finish()
     # Select 0,1,2 — consecutive, single memcpy internally
-    var result = filter_(a, array([True, True, True, False]))
+    var result = filter(a, array([True, True, True, False]))
     assert_equal(len(result), 3)
     assert_equal(result[0].to_string(), "aaa")
     assert_equal(result[1].to_string(), "bbb")
     assert_equal(result[2].to_string(), "ccc")
 
 
-def test_filter_strings_non_consecutive() raises:
+def test_filterstrings_non_consecutive() raises:
     """Non-consecutive selection forces separate memcpy calls per run."""
     var s = StringBuilder()
     s.append("first")
@@ -271,28 +271,28 @@ def test_filter_strings_non_consecutive() raises:
     s.append("skip2")
     s.append("fifth")
     var a = s.finish()
-    var result = filter_(a, array([True, False, True, False, True]))
+    var result = filter(a, array([True, False, True, False, True]))
     assert_equal(len(result), 3)
     assert_equal(result[0].to_string(), "first")
     assert_equal(result[1].to_string(), "third")
     assert_equal(result[2].to_string(), "fifth")
 
 
-def test_filter_strings_empty_strings() raises:
+def test_filterstrings_empty_strings() raises:
     """Empty strings have zero bytes and don't corrupt offsets."""
     var s = StringBuilder()
     s.append("")
     s.append("x")
     s.append("")
     var a = s.finish()
-    var result = filter_(a, array([True, True, True]))
+    var result = filter(a, array([True, True, True]))
     assert_equal(len(result), 3)
     assert_equal(result[0], "")
     assert_equal(result[1].to_string(), "x")
     assert_equal(result[2], "")
 
 
-def test_filter_strings_offsets_correct() raises:
+def test_filterstrings_offsets_correct() raises:
     """Verify offsets buffer is a valid prefix sum after filtering."""
     var s = StringBuilder()
     s.append("ab")
@@ -300,19 +300,19 @@ def test_filter_strings_offsets_correct() raises:
     s.append("f")
     var a = s.finish()
     # Keep "ab" and "f" → offsets [0, 2, 3]
-    var result = filter_(a, array([True, False, True]))
+    var result = filter(a, array([True, False, True]))
     assert_equal(result.offsets.unsafe_get[DType.uint32](0), 0)
     assert_equal(result.offsets.unsafe_get[DType.uint32](1), 2)
     assert_equal(result.offsets.unsafe_get[DType.uint32](2), 3)
 
 
-def test_filter_strings_length_mismatch_raises() raises:
+def test_filterstrings_length_mismatch_raises() raises:
     var s = StringBuilder()
     s.append("a")
     s.append("b")
     var a = s.finish()
     with assert_raises():
-        _ = filter_(a, array([True]))
+        _ = filter(a, array([True]))
 
 
 # ---------------------------------------------------------------------------
@@ -320,78 +320,78 @@ def test_filter_strings_length_mismatch_raises() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_filter_array_dispatch_int32() raises:
+def test_filterarray_dispatch_int32() raises:
     var a: AnyArray = array([10, 20, 30], int32)
-    var result = filter_(a, array([False, True, True]))
+    var result = filter(a, array([False, True, True]))
     assert_equal(result.length(), 2)
 
 
-def test_filter_array_dispatch_float32() raises:
+def test_filterarray_dispatch_float32() raises:
     var a: AnyArray = array([1, 2, 3], float32)
-    var result = filter_(a, array([True, False, True]))
+    var result = filter(a, array([True, False, True]))
     assert_equal(result.length(), 2)
 
 
-def test_filter_array_dispatch_string() raises:
+def test_filterarray_dispatch_string() raises:
     var s = StringBuilder()
     s.append("hello")
     s.append("world")
     var a: AnyArray = s.finish()
-    var result = filter_(a, array([True, False]))
+    var result = filter(a, array([True, False]))
     assert_equal(result.length(), 1)
 
 
-def test_filter_array_dispatch_length_mismatch_raises() raises:
+def test_filterarray_dispatch_length_mismatch_raises() raises:
     var a: AnyArray = array([1, 2, 3], int32)
     with assert_raises():
-        _ = filter_(a, array([True, False]))
+        _ = filter(a, array([True, False]))
 
 
 # ---------------------------------------------------------------------------
-# drop_nulls
+# drop_null
 # ---------------------------------------------------------------------------
 
 
-def test_drop_nulls_typed() raises:
+def test_drop_null_typed() raises:
     var b = Int32Builder(4)
     b.append(10)
     b.append_null()
     b.append(30)
     b.append_null()
-    var result = drop_nulls(b.finish())
+    var result = drop_null(b.finish())
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 10)
     assert_equal(result[1].value(), 30)
 
 
-def test_drop_nulls_no_nulls() raises:
+def test_drop_null_no_nulls() raises:
     var a = array([1, 2, 3], int64)
-    var result = drop_nulls(a)
+    var result = drop_null(a)
     assert_equal(len(result), 3)
     assert_equal(result[0].value(), 1)
     assert_equal(result[1].value(), 2)
     assert_equal(result[2].value(), 3)
 
 
-def test_drop_nulls_all_nulls() raises:
-    var result = drop_nulls(nulls(5, int64))
+def test_drop_null_all_nulls() raises:
+    var result = drop_null(nulls(5, int64))
     assert_equal(len(result), 0)
 
 
-def test_drop_nulls_empty() raises:
-    var result = drop_nulls(array(int32))
+def test_drop_null_empty() raises:
+    var result = drop_null(array(int32))
     assert_equal(len(result), 0)
 
 
-def test_drop_nulls_untyped() raises:
-    var result = drop_nulls(
+def test_drop_null_untyped() raises:
+    var result = drop_null(
         array([None, 1, None, 3, None, 5, None, 7, None, 9], uint8)
     )
     assert_equal(result.length, 5)
 
 
-def test_drop_nulls_values_correct() raises:
-    var result = drop_nulls(
+def test_drop_null_values_correct() raises:
+    var result = drop_null(
         array([None, 1, None, 3, None, 5, None, 7, None, 9], uint8)
     )
     assert_equal(len(result), 5)
@@ -407,29 +407,29 @@ def test_drop_nulls_values_correct() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_filter_sliced_array() raises:
+def test_filtersliced_array() raises:
     """Filter a sliced int32 array with alternating selection."""
     var a = array([10, 20, 30, 40, 50], int32)
     var sliced = a.slice(1, 3)  # [20, 30, 40] with offset=1
     assert_equal(sliced.offset, 1)
-    var result = filter_(sliced, array([True, False, True]))
+    var result = filter(sliced, array([True, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 20)
     assert_equal(result[1].value(), 40)
 
 
-def test_filter_sliced_keep_all() raises:
+def test_filtersliced_keep_all() raises:
     """All-selected path with offset array."""
     var a = array([1, 2, 3, 4, 5], int32)
     var sliced = a.slice(2, 3)  # [3, 4, 5] with offset=2
-    var result = filter_(sliced, array([True, True, True]))
+    var result = filter(sliced, array([True, True, True]))
     assert_equal(len(result), 3)
     assert_equal(result[0].value(), 3)
     assert_equal(result[1].value(), 4)
     assert_equal(result[2].value(), 5)
 
 
-def test_filter_sliced_with_nulls() raises:
+def test_filtersliced_with_nulls() raises:
     """Sliced array with nulls preserves validity."""
     var b = Int32Builder(6)
     b.append(1)
@@ -440,7 +440,7 @@ def test_filter_sliced_with_nulls() raises:
     b.append(6)
     var a = b.finish()
     var sliced = a.slice(1, 4)  # [null, 3, null, 5] with offset=1
-    var result = filter_(sliced, array([True, True, True, False]))
+    var result = filter(sliced, array([True, True, True, False]))
     assert_equal(len(result), 3)
     assert_equal(result.nulls, 2)
     assert_false(result.is_valid(0))
@@ -449,17 +449,17 @@ def test_filter_sliced_with_nulls() raises:
     assert_false(result.is_valid(2))
 
 
-def test_filter_sliced_bool() raises:
+def test_filtersliced_bool() raises:
     """Filter a sliced bool array."""
     var a = array([True, False, True, True, False])
     var sliced = a.slice(1, 3)  # [False, True, True] with offset=1
-    var result = filter_(sliced, array([True, False, True]))
+    var result = filter(sliced, array([True, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), False)
     assert_equal(result[1].value(), True)
 
 
-def test_filter_sliced_strings() raises:
+def test_filtersliced_strings() raises:
     """Filter a sliced StringArray."""
     var s = StringBuilder()
     s.append("aa")
@@ -469,14 +469,14 @@ def test_filter_sliced_strings() raises:
     s.append("ee")
     var a = s.finish()
     var sliced = a.slice(1, 3)  # ["bb", "cc", "dd"] with offset=1
-    var result = filter_(sliced, array([True, False, True]))
+    var result = filter(sliced, array([True, False, True]))
     assert_equal(len(result), 2)
     assert_equal(result[0].to_string(), "bb")
     assert_equal(result[1].to_string(), "dd")
 
 
-def test_drop_nulls_sliced() raises:
-    """``drop_nulls`` on a sliced array with nulls."""
+def test_drop_null_sliced() raises:
+    """``drop_null`` on a sliced array with nulls."""
     var b = Int32Builder(6)
     b.append(10)
     b.append_null()
@@ -486,7 +486,7 @@ def test_drop_nulls_sliced() raises:
     b.append(60)
     var a = b.finish()
     var sliced = a.slice(1, 4)  # [null, 30, null, 50] with offset=1
-    var result = drop_nulls(sliced)
+    var result = drop_null(sliced)
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 30)
     assert_equal(result[1].value(), 50)

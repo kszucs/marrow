@@ -1,11 +1,11 @@
 """Profiling driver for the sort kernel.
 
-Calls the production argsort() and take() kernels directly so that the
+Calls the production sort_indices() and take() kernels directly so that the
 macOS `sample` profiler (or Instruments Time Profiler) can attribute hot
 samples to the real call tree:
 
-    main → _bench_argsort → argsort → _argsort_primitive → _radix_sort_indices
-    main → _bench_sort    → argsort + take → _radix_sort_indices + _gather
+    main → _bench_sort_indices → sort_indices → _sort_indices_primitive → _radix_sort_indices
+    main → _bench_sort    → sort_indices + take → _radix_sort_indices + _gather
 
 Run:
     pixi run profile --sample marrow/kernels/tests/profile_sort.mojo
@@ -23,7 +23,7 @@ from std.time import perf_counter_ns
 from marrow.arrays import AnyArray, Int64Array, Float64Array, PrimitiveArray
 from marrow.builders import Int64Builder, Float64Builder
 from marrow.dtypes import int64, float64, Int64Type, Float64Type, PrimitiveType
-from marrow.kernels.sort import argsort
+from marrow.kernels.sort import sort_indices
 from marrow.kernels.filter import take
 
 
@@ -91,24 +91,24 @@ def _throughput(n: Int, avg_ns: UInt) -> Float64:
 # ---------------------------------------------------------------------------
 
 
-def _bench_argsort[
+def _bench_sort_indices[
     T: PrimitiveType
 ](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
     var arr: AnyArray = data.copy()
 
     # warmup (not counted)
-    keep(argsort(arr))
+    keep(sort_indices(arr))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = argsort(arr)
+        var idx = sort_indices(arr)
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
     var avg = elapsed // UInt(iters)
     print(
-        "  argsort   ",
+        "  sort_indices   ",
         _ns_to_ms(avg),
         "ms avg",
         " |",
@@ -122,17 +122,17 @@ def _bench_argsort[
 
 
 def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
-    """argsort + take — the full sort pipeline."""
+    """sort_indices + take — the full sort pipeline."""
     var n = len(data)
     var arr: AnyArray = data.copy()
 
     # warmup
-    var wi = argsort(arr)
+    var wi = sort_indices(arr)
     keep(take(arr, wi))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = argsort(arr)
+        var idx = sort_indices(arr)
         var sorted = take(arr, idx)
         keep(idx)
         keep(sorted)
@@ -153,23 +153,23 @@ def _bench_sort[T: PrimitiveType](data: PrimitiveArray[T], iters: Int) raises:
     keep(arr)
 
 
-def _bench_argsort_desc[
+def _bench_sort_indices_desc[
     T: PrimitiveType
 ](data: PrimitiveArray[T], iters: Int) raises:
     var n = len(data)
     var arr: AnyArray = data.copy()
 
-    keep(argsort(arr, ascending=False))
+    keep(sort_indices(arr, ascending=False))
 
     var t0 = perf_counter_ns()
     for _ in range(iters):
-        var idx = argsort(arr, ascending=False)
+        var idx = sort_indices(arr, ascending=False)
         keep(idx)
     var elapsed = perf_counter_ns() - t0
 
     var avg = elapsed // UInt(iters)
     print(
-        "  argsort↓  ",
+        "  sort_indices↓  ",
         _ns_to_ms(avg),
         "ms avg",
         " |",
@@ -194,14 +194,14 @@ def main() raises:
 
     if dtype == "float64":
         var data = _random_float64(n)
-        _bench_argsort[Float64Type](data, iters)
-        _bench_argsort_desc[Float64Type](data, iters)
+        _bench_sort_indices[Float64Type](data, iters)
+        _bench_sort_indices_desc[Float64Type](data, iters)
         _bench_sort[Float64Type](data, iters)
         keep(data)
     else:
         var data = _random_int64(n)
-        _bench_argsort[Int64Type](data, iters)
-        _bench_argsort_desc[Int64Type](data, iters)
+        _bench_sort_indices[Int64Type](data, iters)
+        _bench_sort_indices_desc[Int64Type](data, iters)
         _bench_sort[Int64Type](data, iters)
         keep(data)
 
