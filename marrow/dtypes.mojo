@@ -671,6 +671,7 @@ struct AnyDataType(
     Equatable,
     Movable,
     Writable,
+    DataType,
 ):
     comptime VariantType = Variant[
         NullType,
@@ -716,6 +717,9 @@ struct AnyDataType(
     @implicit
     def __init__[T: DataType](out self, var value: T):
         self._v = Self.VariantType(value^)
+
+    def to_any(deinit self) -> AnyDataType:
+        return self^
 
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
@@ -1186,7 +1190,3 @@ comptime binary = BinaryType()
 comptime large_binary = LargeBinaryType()
 comptime string = StringType()
 comptime large_string = LargeStringType()
-
-
-def main() raises:
-    print("E")
