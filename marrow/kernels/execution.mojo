@@ -39,10 +39,17 @@ struct ExecutionContext(
     """
 
     var num_threads: Int
-    """Worker count for CPU striped parallelism. ``1`` = serial;
-    ``>1`` = ``sync_parallelize`` with that many workers; ``0`` is
-    treated as "auto" and resolved to ``num_physical_cores()`` in
-    ``resolved_num_threads()``."""
+    """CPU dispatch strategy, encoded as an Int sentinel:
+
+    - ``1``           — **Serial (forced)**: always run on the calling thread,
+      irrespective of problem size.
+    - ``N >= 2``      — **Multi(N) (forced)**: always stripe across exactly
+      ``N`` workers via ``sync_parallelize``, irrespective of problem size.
+    - ``0`` (default) — **Auto**: dispatch picks serial vs all-cores-multi
+      based on the per-kernel ``min_parallel_size`` threshold consulted by
+      ``wants_parallel()``.
+    - ``< 0``         — reserved for future strategies
+      (``adaptive``, ``work_stealing``…)."""
 
     var device: Optional[DeviceContext]
     """GPU ``DeviceContext``, or ``None`` for CPU execution."""
@@ -82,13 +89,29 @@ struct ExecutionContext(
 
     @staticmethod
     def serial() -> Self:
-        """Single-threaded CPU execution."""
+        """Single-threaded CPU execution. Forced — bypasses the size threshold.
+        """
         return Self(num_threads=1, device=None)
 
     @staticmethod
     def parallel(num_threads: Int = 0) -> Self:
-        """CPU execution with ``num_threads`` workers (0 = auto)."""
+        """CPU execution with ``num_threads`` workers.
+
+        - ``num_threads == 0`` (default) — **auto**: the dispatch picks serial
+          vs all-cores-multi based on the per-kernel size threshold consulted
+          by ``wants_parallel()``. Equivalent to ``auto()``.
+        - ``num_threads >= 2`` — **forced multi**: always stripes across
+          exactly ``num_threads`` workers, bypassing the size threshold.
+        """
         return Self(num_threads=num_threads, device=None)
+
+    @staticmethod
+    def auto() -> Self:
+        """CPU execution that picks serial vs all-cores-multi based on the
+        per-kernel ``min_parallel_size`` threshold consulted by
+        ``wants_parallel()``. Equivalent to ``parallel()`` with default
+        ``num_threads=0``."""
+        return Self(num_threads=0, device=None)
 
     @staticmethod
     def gpu(device: DeviceContext) -> Self:
@@ -102,23 +125,36 @@ struct ExecutionContext(
         return Bool(self.device)
 
     def resolved_num_threads(self) -> Int:
-        """Normalize ``num_threads``: ``0`` → ``num_physical_cores()``,
-        else the value itself (lower-bounded at 1)."""
-        if self.num_threads <= 0:
-            return num_physical_cores()
-        return self.num_threads
+        """Normalize ``num_threads`` into a concrete worker count.
+
+        - ``num_threads >= 1`` → returned as-is.
+        - ``num_threads == 0`` (auto) → ``num_physical_cores()``.
+        - ``num_threads < 0`` → treated as auto for now (reserved range).
+        """
+        if self.num_threads >= 1:
+            return self.num_threads
+        return num_physical_cores()
 
     def wants_parallel(self, n: Int, min_parallel_size: Int = 32768) -> Bool:
         """Decide whether a CPU kernel of size ``n`` should stripe work.
 
-        Returns ``False`` on the GPU path (GPU handles its own
-        parallelism) and when ``n`` is below the kernel's grain-size
-        threshold — below that, ``sync_parallelize`` dispatch overhead
-        dominates the actual compute.
+        Strategy contract (see ``num_threads`` doc):
+
+        - ``num_threads == 1`` → **serial (forced)**: always ``False``.
+        - ``num_threads >= 2`` → **multi(N) (forced)**: always ``True``,
+          regardless of ``n``.
+        - ``num_threads == 0`` → **auto**: ``True`` iff
+          ``n >= min_parallel_size``. Below that threshold,
+          ``sync_parallelize`` dispatch overhead dominates the actual compute.
+        - GPU path always returns ``False`` (GPU handles its own parallelism).
         """
         if self.is_gpu():
             return False
-        return self.resolved_num_threads() > 1 and n >= min_parallel_size
+        if self.num_threads == 1:
+            return False
+        if self.num_threads >= 2:
+            return True
+        return n >= min_parallel_size
 
     # --- Writable ---------------------------------------------------------
 

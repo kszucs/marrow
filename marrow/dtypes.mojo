@@ -1186,3 +1186,7 @@ comptime binary = BinaryType()
 comptime large_binary = LargeBinaryType()
 comptime string = StringType()
 comptime large_string = LargeStringType()
+
+
+def main() raises:
+    print("E")

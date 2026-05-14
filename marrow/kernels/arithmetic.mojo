@@ -1,7 +1,7 @@
 """Element-wise arithmetic kernels — CPU SIMD and GPU via ``elementwise``.
 
 Each public function dispatches based on the optional `ctx` argument:
-  - CPU (default): SIMD vectorization via ``elementwise[use_blocking_impl=True]``.
+  - CPU (default): SIMD vectorization via ``elementwise``.
   - GPU (ctx provided): kernel dispatch via ``elementwise[target="gpu"]``.
 """
 
