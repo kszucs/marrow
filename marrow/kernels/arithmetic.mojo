@@ -23,6 +23,7 @@ from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import PrimitiveType
 from .helpers import (
+    Kernel,
     bitmap_and,
     binary_array_dispatch,
     binary_float_dispatch,
@@ -71,7 +72,7 @@ def _binary[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         T.native, W
     ],
-    name: StringLiteral = "",
+    name: String = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -114,8 +115,12 @@ def _binary[
 # ---------------------------------------------------------------------------
 
 
-trait BinaryKernel:
-    """Element-wise binary kernel on numeric arrays."""
+trait BinaryKernel(Kernel):
+    """Element-wise binary kernel on numeric arrays.
+
+    Concrete structs define ``comptime name`` and ``core``; ``apply`` and
+    ``dispatch`` have default implementations.
+    """
 
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]: ...
@@ -124,19 +129,25 @@ trait BinaryKernel:
     def apply[T: PrimitiveType](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
-        ctx: ExecutionContext,
-    ) raises -> PrimitiveArray[T]: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        return _binary[T, func=Self.core[T.native, _], name=Self.name](left, right, ctx)
 
     @staticmethod
     def dispatch(
         left: AnyArray,
         right: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        return binary_array_dispatch[Self.name, Self.apply[_]](left, right, ctx)
 
 
-trait UnaryKernel:
-    """Element-wise unary kernel on numeric arrays."""
+trait UnaryKernel(Kernel):
+    """Element-wise unary kernel on numeric arrays.
+
+    Concrete structs define ``comptime name`` and ``core``; ``apply`` and
+    ``dispatch`` have default implementations.
+    """
 
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]: ...
@@ -144,21 +155,24 @@ trait UnaryKernel:
     @staticmethod
     def apply[T: PrimitiveType](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext,
-    ) raises -> PrimitiveArray[T]: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        return _unary[T, func=Self.core[T.native, _]](array, ctx)
 
     @staticmethod
     def dispatch(
         array: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        return unary_numeric_dispatch[Self.name, Self.apply[_]](array, ctx)
 
 
-trait BinaryFloatKernel:
+trait BinaryFloatKernel(Kernel):
     """Element-wise binary kernel on floating-point arrays.
 
     ``core`` is not in the trait (Mojo doesn't support ``where`` on trait
-    methods). Concrete structs define ``core`` with ``where T.is_floating_point()``.
+    methods). Concrete structs define ``core`` with ``where T.is_floating_point()``
+    and ``apply`` explicitly; ``dispatch`` has a default.
     """
 
     @staticmethod
@@ -172,15 +186,17 @@ trait BinaryFloatKernel:
     def dispatch(
         left: AnyArray,
         right: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        return binary_float_dispatch[Self.name, Self.apply[_]](left, right, ctx)
 
 
-trait UnaryFloatKernel:
+trait UnaryFloatKernel(Kernel):
     """Element-wise unary kernel on floating-point arrays.
 
     ``core`` is not in the trait (Mojo doesn't support ``where`` on trait
-    methods). Concrete structs define ``core`` with ``where T.is_floating_point()``.
+    methods). Concrete structs define ``core`` with ``where T.is_floating_point()``
+    and ``apply`` explicitly; ``dispatch`` has a default.
     """
 
     @staticmethod
@@ -192,8 +208,9 @@ trait UnaryFloatKernel:
     @staticmethod
     def dispatch(
         array: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        return unary_float_dispatch[Self.name, Self.apply[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -202,180 +219,68 @@ trait UnaryFloatKernel:
 
 
 struct AddKernel(BinaryKernel):
+    comptime name = "add"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a + b
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=AddKernel.core[T.native, _], name="add"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["add", AddKernel.apply[_]](left, right, ctx)
-
 
 struct SubKernel(BinaryKernel):
+    comptime name = "subtract"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a - b
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=SubKernel.core[T.native, _], name="subtract"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["subtract", SubKernel.apply[_]](left, right, ctx)
-
 
 struct MulKernel(BinaryKernel):
+    comptime name = "multiply"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a * b
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=MulKernel.core[T.native, _], name="multiply"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["multiply", MulKernel.apply[_]](left, right, ctx)
-
 
 struct DivKernel(BinaryKernel):
+    comptime name = "divide"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         # Replace zeros with 1 to avoid SIGFPE; null positions are masked by bitmap.
         return a / b.eq(0).select(SIMD[T, W](1), b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=DivKernel.core[T.native, _], name="divide"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["divide", DivKernel.apply[_]](left, right, ctx)
-
 
 struct FloordivKernel(BinaryKernel):
+    comptime name = "floordiv"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a // b.eq(0).select(SIMD[T, W](1), b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=FloordivKernel.core[T.native, _], name="floordiv"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["floordiv", FloordivKernel.apply[_]](left, right, ctx)
-
 
 struct ModKernel(BinaryKernel):
+    comptime name = "mod"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a % b.eq(0).select(SIMD[T, W](1), b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=ModKernel.core[T.native, _], name="mod"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["mod", ModKernel.apply[_]](left, right, ctx)
-
 
 struct MinKernel(BinaryKernel):
+    comptime name = "min_element_wise"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.min(a, b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=MinKernel.core[T.native, _], name="min_element_wise"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["min_element_wise", MinKernel.apply[_]](left, right, ctx)
-
 
 struct MaxKernel(BinaryKernel):
+    comptime name = "max_element_wise"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.max(a, b)
-
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        return _binary[T, func=MaxKernel.core[T.native, _], name="max_element_wise"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_array_dispatch["max_element_wise", MaxKernel.apply[_]](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -384,129 +289,59 @@ struct MaxKernel(BinaryKernel):
 
 
 struct NegKernel(UnaryKernel):
+    comptime name = "neg"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__neg__()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=NegKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["neg", NegKernel.apply[_]](array, ctx)
-
 
 struct AbsKernel(UnaryKernel):
+    comptime name = "abs_"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__abs__()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=AbsKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["abs_", AbsKernel.apply[_]](array, ctx)
-
 
 struct SignKernel(UnaryKernel):
+    comptime name = "sign"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.gt(SIMD[T, W](0)).cast[T]() - a.lt(SIMD[T, W](0)).cast[T]()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=SignKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["sign", SignKernel.apply[_]](array, ctx)
-
 
 struct FloorKernel(UnaryKernel):
+    comptime name = "floor"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__floor__()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=FloorKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["floor", FloorKernel.apply[_]](array, ctx)
-
 
 struct CeilKernel(UnaryKernel):
+    comptime name = "ceil"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__ceil__()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=CeilKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["ceil", CeilKernel.apply[_]](array, ctx)
-
 
 struct TruncKernel(UnaryKernel):
+    comptime name = "trunc"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__trunc__()
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=TruncKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["trunc", TruncKernel.apply[_]](array, ctx)
-
 
 struct RoundKernel(UnaryKernel):
+    comptime name = "round"
+
     @staticmethod
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         return a.__round__()
-
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveArray[T]:
-        return _unary[T, func=RoundKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_numeric_dispatch["round", RoundKernel.apply[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +350,8 @@ struct RoundKernel(UnaryKernel):
 
 
 struct PowKernel(BinaryFloatKernel):
+    comptime name = "pow_"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -529,14 +366,6 @@ struct PowKernel(BinaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _binary[T, func=PowKernel.core[T.native, _], name="pow_"](left, right, ctx)
 
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return binary_float_dispatch["pow_", PowKernel.apply[_]](left, right, ctx)
-
 
 # ---------------------------------------------------------------------------
 # Kernel structs — UnaryFloatKernel
@@ -544,6 +373,8 @@ struct PowKernel(BinaryFloatKernel):
 
 
 struct SqrtKernel(UnaryFloatKernel):
+    comptime name = "sqrt"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -556,14 +387,10 @@ struct SqrtKernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=SqrtKernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["sqrt", SqrtKernel.apply[_]](array, ctx)
-
 
 struct ExpKernel(UnaryFloatKernel):
+    comptime name = "exp"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -576,14 +403,10 @@ struct ExpKernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=ExpKernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["exp", ExpKernel.apply[_]](array, ctx)
-
 
 struct Exp2Kernel(UnaryFloatKernel):
+    comptime name = "exp2"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -596,14 +419,10 @@ struct Exp2Kernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=Exp2Kernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["exp2", Exp2Kernel.apply[_]](array, ctx)
-
 
 struct LogKernel(UnaryFloatKernel):
+    comptime name = "log"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -616,14 +435,10 @@ struct LogKernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=LogKernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["log", LogKernel.apply[_]](array, ctx)
-
 
 struct Log2Kernel(UnaryFloatKernel):
+    comptime name = "log2"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -636,14 +451,10 @@ struct Log2Kernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=Log2Kernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["log2", Log2Kernel.apply[_]](array, ctx)
-
 
 struct Log10Kernel(UnaryFloatKernel):
+    comptime name = "log10"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -656,14 +467,10 @@ struct Log10Kernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=Log10Kernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["log10", Log10Kernel.apply[_]](array, ctx)
-
 
 struct Log1pKernel(UnaryFloatKernel):
+    comptime name = "log1p"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -678,14 +485,10 @@ struct Log1pKernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=Log1pKernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["log1p", Log1pKernel.apply[_]](array, ctx)
-
 
 struct SinKernel(UnaryFloatKernel):
+    comptime name = "sin"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -698,14 +501,10 @@ struct SinKernel(UnaryFloatKernel):
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=SinKernel.core[T.native, _]](array, ctx)
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["sin", SinKernel.apply[_]](array, ctx)
-
 
 struct CosKernel(UnaryFloatKernel):
+    comptime name = "cos"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W]
@@ -717,12 +516,6 @@ struct CosKernel(UnaryFloatKernel):
         array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> PrimitiveArray[T]:
         return _unary[T, func=CosKernel.core[T.native, _]](array, ctx)
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyArray:
-        return unary_float_dispatch["cos", CosKernel.apply[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------

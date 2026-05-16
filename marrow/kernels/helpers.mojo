@@ -60,12 +60,23 @@ def bitmap_and(
 
 
 # ---------------------------------------------------------------------------
+# Base kernel trait
+# ---------------------------------------------------------------------------
+
+
+trait Kernel:
+    """Base trait for all SIMD compute kernels."""
+
+    comptime name: String
+
+
+# ---------------------------------------------------------------------------
 # Runtime-typed dispatch helpers
 # ---------------------------------------------------------------------------
 
 
 def binary_array_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[T],
@@ -119,7 +130,7 @@ def binary_array_dispatch[
 
 
 def binary_array_dispatch[
-    name: StringLiteral,
+    name: String,
     OutT: PrimitiveType,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
@@ -175,7 +186,7 @@ def binary_array_dispatch[
 
 
 def bool_array_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> BoolArray,
@@ -221,7 +232,7 @@ def bool_array_dispatch[
 
 
 def unary_numeric_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[T],
@@ -267,7 +278,7 @@ def unary_numeric_dispatch[
 
 
 def binary_float_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[T],
@@ -294,7 +305,7 @@ def binary_float_dispatch[
 
 
 def unary_float_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveArray[T],
@@ -326,7 +337,7 @@ def unary_float_dispatch[
 
 
 def unary_scalar_dispatch[
-    name: StringLiteral,
+    name: String,
     func: def[T: PrimitiveType](
         PrimitiveArray[T], ExecutionContext
     ) thin raises -> PrimitiveScalar[T],

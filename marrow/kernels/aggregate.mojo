@@ -22,7 +22,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
-from .helpers import unary_scalar_dispatch
+from .helpers import Kernel, unary_scalar_dispatch
 from .execution import ExecutionContext
 
 
@@ -61,11 +61,11 @@ def _reduce[
 # ---------------------------------------------------------------------------
 
 
-trait ReductionKernel:
+trait ReductionKernel(Kernel):
     """Reduction kernel: reduces a PrimitiveArray to a scalar.
 
-    ``combine`` is the associative SIMD binary function; ``identity`` provides
-    the neutral element so null positions contribute nothing to the result.
+    Concrete structs define ``comptime name``, ``combine``, and ``identity``;
+    ``apply`` and ``dispatch`` have default implementations.
     """
 
     @staticmethod
@@ -79,14 +79,21 @@ trait ReductionKernel:
     @staticmethod
     def apply[T: PrimitiveType](
         array: PrimitiveArray[T],
-        ctx: ExecutionContext,
-    ) raises -> PrimitiveScalar[T]: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[T]:
+        return PrimitiveScalar[T](
+            _reduce[T, combine=Self.combine[T.native, _]](
+                array, Self.identity[T.native](), ctx
+            ),
+            array.dtype.copy(),
+        )
 
     @staticmethod
     def dispatch(
         array: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyScalar: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyScalar:
+        return unary_scalar_dispatch[Self.name, Self.apply[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +102,8 @@ trait ReductionKernel:
 
 
 struct SumKernel(ReductionKernel):
+    comptime name = "sum"
+
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a + b
@@ -103,23 +112,10 @@ struct SumKernel(ReductionKernel):
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T](0)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveScalar[T]:
-        return PrimitiveScalar[T](
-            _reduce[T, combine=SumKernel.combine[T.native, _]](array, SumKernel.identity[T.native](), ctx),
-            array.dtype.copy(),
-        )
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        return unary_scalar_dispatch["sum", SumKernel.apply[_]](array, ctx)
-
 
 struct ProductKernel(ReductionKernel):
+    comptime name = "product"
+
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a * b
@@ -128,23 +124,10 @@ struct ProductKernel(ReductionKernel):
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T](1)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveScalar[T]:
-        return PrimitiveScalar[T](
-            _reduce[T, combine=ProductKernel.combine[T.native, _]](array, ProductKernel.identity[T.native](), ctx),
-            array.dtype.copy(),
-        )
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        return unary_scalar_dispatch["product", ProductKernel.apply[_]](array, ctx)
-
 
 struct MinAggKernel(ReductionKernel):
+    comptime name = "min"
+
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.min(a, b)
@@ -153,23 +136,10 @@ struct MinAggKernel(ReductionKernel):
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T].MAX_FINITE
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveScalar[T]:
-        return PrimitiveScalar[T](
-            _reduce[T, combine=MinAggKernel.combine[T.native, _]](array, MinAggKernel.identity[T.native](), ctx),
-            array.dtype.copy(),
-        )
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        return unary_scalar_dispatch["min", MinAggKernel.apply[_]](array, ctx)
-
 
 struct MaxAggKernel(ReductionKernel):
+    comptime name = "max"
+
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.max(a, b)
@@ -177,21 +147,6 @@ struct MaxAggKernel(ReductionKernel):
     @staticmethod
     def identity[T: DType]() -> Scalar[T]:
         return Scalar[T].MIN_FINITE
-
-    @staticmethod
-    def apply[T: PrimitiveType](
-        array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> PrimitiveScalar[T]:
-        return PrimitiveScalar[T](
-            _reduce[T, combine=MaxAggKernel.combine[T.native, _]](array, MaxAggKernel.identity[T.native](), ctx),
-            array.dtype.copy(),
-        )
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-    ) raises -> AnyScalar:
-        return unary_scalar_dispatch["max", MaxAggKernel.apply[_]](array, ctx)
 
 
 # ---------------------------------------------------------------------------

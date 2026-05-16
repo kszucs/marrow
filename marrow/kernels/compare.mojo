@@ -37,7 +37,7 @@ from ..arrays import (
 from ..buffers import Bitmap
 from ..views import apply
 from ..dtypes import PrimitiveType, bool_ as bool_dt
-from .helpers import bitmap_and, bool_array_dispatch
+from .helpers import Kernel, bitmap_and, bool_array_dispatch
 from .execution import ExecutionContext
 
 
@@ -51,7 +51,7 @@ def _binary_cmp[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         DType.bool, W
     ],
-    name: StringLiteral = "",
+    name: String = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -88,8 +88,12 @@ def _binary_cmp[
 # ---------------------------------------------------------------------------
 
 
-trait BinaryCompareKernel:
-    """Element-wise binary comparison kernel producing a BoolArray."""
+trait BinaryCompareKernel(Kernel):
+    """Element-wise binary comparison kernel producing a BoolArray.
+
+    Concrete structs define ``comptime name`` and ``core``; ``apply`` and
+    ``dispatch`` have default implementations.
+    """
 
     @staticmethod
     def core[T: DType, W: Int](
@@ -100,15 +104,19 @@ trait BinaryCompareKernel:
     def apply[T: PrimitiveType](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
-        ctx: ExecutionContext,
-    ) raises -> BoolArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        return _binary_cmp[T, func=Self.core[T.native, _], name=Self.name](
+            left, right, ctx
+        )
 
     @staticmethod
     def dispatch(
         left: AnyArray,
         right: AnyArray,
-        ctx: ExecutionContext,
-    ) raises -> AnyArray: ...
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        return bool_array_dispatch[Self.name, Self.apply[_]](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -117,147 +125,63 @@ trait BinaryCompareKernel:
 
 
 struct EqKernel(BinaryCompareKernel):
+    comptime name = "equal"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.eq(b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=EqKernel.core[T.native, _], name="equal"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["equal", EqKernel.apply[_]](left, right, ctx)
-
 
 struct NeKernel(BinaryCompareKernel):
+    comptime name = "not_equal"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.ne(b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=NeKernel.core[T.native, _], name="not_equal"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["not_equal", NeKernel.apply[_]](left, right, ctx)
-
 
 struct LtKernel(BinaryCompareKernel):
+    comptime name = "less"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.lt(b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=LtKernel.core[T.native, _], name="less"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["less", LtKernel.apply[_]](left, right, ctx)
-
 
 struct LeKernel(BinaryCompareKernel):
+    comptime name = "less_equal"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.le(b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=LeKernel.core[T.native, _], name="less_equal"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["less_equal", LeKernel.apply[_]](left, right, ctx)
-
 
 struct GtKernel(BinaryCompareKernel):
+    comptime name = "greater"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.gt(b)
 
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=GtKernel.core[T.native, _], name="greater"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["greater", GtKernel.apply[_]](left, right, ctx)
-
 
 struct GeKernel(BinaryCompareKernel):
+    comptime name = "greater_equal"
+
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
     ) -> SIMD[DType.bool, W]:
         return a.ge(b)
-
-    @staticmethod
-    def apply[T: PrimitiveType](
-        left: PrimitiveArray[T],
-        right: PrimitiveArray[T],
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        return _binary_cmp[T, func=GeKernel.core[T.native, _], name="greater_equal"](left, right, ctx)
-
-    @staticmethod
-    def dispatch(
-        left: AnyArray,
-        right: AnyArray,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        return bool_array_dispatch["greater_equal", GeKernel.apply[_]](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
