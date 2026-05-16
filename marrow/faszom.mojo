@@ -24,6 +24,7 @@ from marrow.buffers import Bitmap, Buffer
 from marrow.builders import arange
 from marrow.dtypes import Int32Type
 from marrow.kernels.arithmetic import add, neg, AddKernel, NegKernel, SubKernel, MulKernel
+from marrow.kernels.boolean import AndKernel, OrKernel, NotKernel
 from marrow.kernels.compare import EqKernel, NeKernel, LtKernel, LeKernel, GtKernel, GeKernel
 from marrow.views import BufferView
 from std.memory import OwnedPointer
@@ -387,6 +388,114 @@ struct GeExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
         writer.write("(", self.left, " >= ", self.right, ")")
 
 
+# ---------------------------------------------------------------------------
+# Boolean combinator nodes — BoolExpr × BoolExpr → BoolExpr
+# ---------------------------------------------------------------------------
+
+
+struct AndExpr[L: BoolExpr, R: BoolExpr](BoolExpr):
+    comptime InNative = Self.L.InNative
+
+    var left: Self.L
+    var right: Self.R
+
+    def __init__(out self, var left: Self.L, var right: Self.R):
+        self.left = left^
+        self.right = right^
+
+    def __init__(out self, *, copy: Self):
+        self.left = copy.left.copy()
+        self.right = copy.right.copy()
+
+    @always_inline
+    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return AndKernel.core[W](
+            self.left.exec_core[W](idx),
+            self.right.exec_core[W](idx),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("(", self.left, " AND ", self.right, ")")
+
+
+struct OrExpr[L: BoolExpr, R: BoolExpr](BoolExpr):
+    comptime InNative = Self.L.InNative
+
+    var left: Self.L
+    var right: Self.R
+
+    def __init__(out self, var left: Self.L, var right: Self.R):
+        self.left = left^
+        self.right = right^
+
+    def __init__(out self, *, copy: Self):
+        self.left = copy.left.copy()
+        self.right = copy.right.copy()
+
+    @always_inline
+    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return OrKernel.core[W](
+            self.left.exec_core[W](idx),
+            self.right.exec_core[W](idx),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("(", self.left, " OR ", self.right, ")")
+
+
+struct NotExpr[E: BoolExpr](BoolExpr):
+    comptime InNative = Self.E.InNative
+
+    var expr: Self.E
+
+    def __init__(out self, var expr: Self.E):
+        self.expr = expr^
+
+    def __init__(out self, *, copy: Self):
+        self.expr = copy.expr.copy()
+
+    @always_inline
+    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return NotKernel.core[W](self.expr.exec_core[W](idx))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("NOT(", self.expr, ")")
+
+
+# ---------------------------------------------------------------------------
+# FilterExpr — fused predicate evaluation + scatter-filter
+# ---------------------------------------------------------------------------
+
+
+struct FilterExpr[T: dt.NumericType, Pred: BoolExpr](
+    Copyable, Movable, Writable, ImplicitlyDestructible
+):
+    """Compile-time expression: single-pass fused predicate evaluation + filter.
+
+    execute() runs one loop:
+      - For each SIMD block: evaluate Pred → SIMD[DType.bool, W], then
+        compressed_store the matching data elements directly.
+      - No BoolArray allocated, no bit-pack/unpack round-trip.
+
+    Compare to dispatch, which materialises one intermediate numeric array per
+    arithmetic node in the predicate, then a BoolArray, before the filter runs.
+    """
+
+    var data: PrimitiveArray[Self.T]
+    var pred: Self.Pred
+
+    def __init__(out self, var data: PrimitiveArray[Self.T], var pred: Self.Pred):
+        self.data = data^
+        self.pred = pred^
+
+    def __init__(out self, *, copy: Self):
+        self.data = copy.data.copy()
+        self.pred = copy.pred.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Filter(data[", len(self.data), "] WHERE ", self.pred, ")")
+
+
 def _vectorize_dispatch[
     native: DType,
     cpu_width: Int,
@@ -458,6 +567,60 @@ def execute[B: BoolExpr](expr: B, length: Int) raises -> BoolArray:
         offset=0,
         bitmap=None,
         buffer=bm.to_immutable(),
+    )
+
+
+@always_inline
+def _pack_bools[W: Int](mask: SIMD[DType.bool, W]) -> UInt64:
+    """Pack W boolean SIMD lanes into the low W bits of a UInt64."""
+    var result: UInt64 = 0
+    comptime for b in range(W):
+        result |= UInt64(Int(mask[b])) << UInt64(b)
+    return result
+
+
+def execute[
+    T: dt.NumericType,
+    Pred: BoolExpr,
+](expr: FilterExpr[T, Pred], length: Int) raises -> PrimitiveArray[T]:
+    """Single-pass fused filter: predicate eval and scatter-select in one loop.
+
+    Evaluates the predicate tree for 64 elements at a time, assembles the
+    results into a UInt64 selection word in registers (no BoolArray, no bitmap
+    write/read round-trip), then uses the adaptive compressed_store (sparse CTZ
+    or dense byte-chunked branchless) for the scatter step.
+    """
+    comptime native = T.native
+    comptime width = max(8, simd_byte_width() // size_of[Scalar[Pred.InNative]]())
+
+    var src = expr.data.values()
+    var out_buf = Buffer.alloc_uninit[native](length)
+    var out_view = out_buf.view[native](0, length)
+    var out_pos = 0
+
+    var i = 0
+    while i + 64 <= length:
+        var word: UInt64 = 0
+        comptime for k in range(64 // width):
+            word |= _pack_bools[width](
+                expr.pred.exec_core[width](i + k * width)
+            ) << UInt64(k * width)
+        out_pos += out_view.slice(out_pos).compressed_store(src.slice(i), word)
+        i += 64
+
+    while i < length:
+        if expr.pred.exec_core[1](i)[0]:
+            out_view.unsafe_set(out_pos, src.unsafe_get(i))
+            out_pos += 1
+        i += 1
+
+    return PrimitiveArray[T](
+        dtype=T(),
+        length=out_pos,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=out_buf.to_immutable(),
     )
 
 
@@ -556,13 +719,29 @@ def main() raises:
         Add(Column(a.copy()), Column(b.copy())),
         Add(Column(c.copy()), Literal[Int32Type](1)),
     )
-    print(eq_expr)                     # ((Col[8] + Col[8]) == (Col[8] + Lit[1]))
-    print(execute(eq_expr, 8))         # [false, false, ..., false] (11!=2, 13!=3, ...)
+    print(eq_expr)
+    print(execute(eq_expr, 8))
 
-    # a > 0 — single comparison pass
-    var gt_expr = GtExpr(Column(a.copy()), Literal[Int32Type](0))
-    print(gt_expr)                     # (Col[8] > Lit[0])
-    print(execute(gt_expr, 8))         # [true, true, true, true, true, true, true, true]
+    # a > 0 AND b < 15 — compound predicate, 1 fused pass
+    var and_expr = AndExpr(
+        GtExpr(Column(a.copy()), Literal[Int32Type](0)),
+        LtExpr(Column(b.copy()), Literal[Int32Type](15)),
+    )
+    print(and_expr)                    # (Col[8] > Lit[0]) AND (Col[8] < Lit[15])
+    print(execute(and_expr, 8))        # [true, true, true, true, true, false, false, false]
+
+    # NOT (a > 5)
+    var not_expr = NotExpr(GtExpr(Column(a.copy()), Literal[Int32Type](5)))
+    print(not_expr)                    # NOT((Col[8] > Lit[5]))
+    print(execute(not_expr, 8))        # [true, true, true, true, true, false, false, false]
+
+    # filter(a, WHERE a + b > 15) — fused predicate + filter
+    var filter_expr = FilterExpr(
+        a.copy(),
+        GtExpr(Add(Column(a.copy()), Column(b.copy())), Literal[Int32Type](15)),
+    )
+    print(filter_expr)
+    print(execute(filter_expr, 8))     # elements of a where a+b > 15
 
     # Runtime path (unchanged)
     var rt_expr = RuntimeExpr.column("a").negate().add(RuntimeExpr.column("b"))
