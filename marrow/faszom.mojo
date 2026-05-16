@@ -23,7 +23,7 @@ from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.buffers import Buffer
 from marrow.builders import arange
 from marrow.dtypes import Int32Type
-from marrow.kernels.arithmetic import add, neg
+from marrow.kernels.arithmetic import add, neg, AddKernel, NegKernel
 from marrow.views import BufferView
 from std.memory import OwnedPointer
 from std.utils.index import IndexList
@@ -88,7 +88,7 @@ struct Negate[T: NumericExpr](NumericExpr):
         self.arg = copy.arg.copy()
 
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.OutType.native, W]:
-        return -self.arg.exec_core[W](idx)
+        return NegKernel.core[Self.T.OutType.native, W](self.arg.exec_core[W](idx))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Negate(", self.arg, ")")
@@ -114,7 +114,7 @@ struct Add[L: NumericExpr, R: NumericExpr](NumericExpr):
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
         var l = self.left.exec_core[W](idx)
         var r = self.right.exec_core[W](idx).cast[Self.L.OutType.native]()
-        return l + r
+        return AddKernel.core[Self.L.OutType.native, W](l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Add(", self.left, ", ", self.right, ")")

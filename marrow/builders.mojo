@@ -1627,7 +1627,7 @@ comptime Decimal256Builder = PrimitiveBuilder[Decimal256Type]
 
 def array[
     T: NumericType
-](values: List[Scalar[T.native]], type: T) -> PrimitiveArray[T]:
+](values: List[Scalar[T.native]], type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array from native scalars (mirrors ``pa.array``)."""
     var b = PrimitiveBuilder[T](len(values))
     for i in range(len(values)):
@@ -1637,7 +1637,7 @@ def array[
 
 def array[
     T: NumericType
-](values: List[Optional[Scalar[T.native]]], type: T) -> PrimitiveArray[
+](values: List[Optional[Scalar[T.native]]], type: T) raises -> PrimitiveArray[
     T
 ]:
     """Create a primitive array from optional native scalars (None → null)."""
@@ -1659,7 +1659,7 @@ def array[T: NumericType](type: T) raises -> PrimitiveArray[T]:
 
 def array[
     T: NumericType
-](values: List[Optional[Int]], type: T) -> PrimitiveArray[T]:
+](values: List[Optional[Int]], type: T) raises -> PrimitiveArray[T]:
     """Create a primitive array from integer literals, with optional nulls.
 
     Accepts list literals like ``[1, None, 3]`` or ``[10, 20, 30]`` and
