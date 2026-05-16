@@ -26,6 +26,7 @@ from marrow.dtypes import Int32Type
 from marrow.kernels.arithmetic import add, neg, AddKernel, NegKernel, SubKernel, MulKernel
 from marrow.kernels.boolean import AndKernel, OrKernel, NotKernel
 from marrow.kernels.compare import EqKernel, NeKernel, LtKernel, LeKernel, GtKernel, GeKernel
+from marrow.tabular import RecordBatch
 from marrow.views import BufferView
 from std.memory import OwnedPointer
 from std.utils.index import IndexList
@@ -49,6 +50,9 @@ trait Expr(Copyable, Movable, Writable, ImplicitlyDestructible):
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.OutType.native, W]:
         ...
+
+    def bind(mut self, batch: RecordBatch) raises:
+        pass
 
 
 trait NumericExpr(Expr):
@@ -74,6 +78,9 @@ trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]: ...
 
+    def bind(mut self, batch: RecordBatch) raises:
+        pass
+
 
 struct Column[T: dt.NumericType](Expr, NumericExpr):
     comptime OutType = Self.T
@@ -94,6 +101,48 @@ struct Column[T: dt.NumericType](Expr, NumericExpr):
         writer.write("Col[", len(self.arr), "]")
 
 
+struct ColumnRef[name: StringLiteral, T: dt.NumericType](Expr, NumericExpr):
+    """Named column placeholder resolved from a RecordBatch at execute time.
+
+    `name` and `T` are compile-time constants, so each distinct (name, T) pair
+    is a unique type — full AOT specialization and DCE are preserved.
+    """
+
+    comptime OutType = Self.T
+
+    var _arr: Optional[PrimitiveArray[Self.T]]
+
+    def __init__(out self):
+        self._arr = None
+
+    def __init__(out self, *, copy: Self):
+        if copy._arr:
+            self._arr = copy._arr.unsafe_value().copy()
+        else:
+            self._arr = None
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self._arr = batch.column(Self.name).as_primitive[Self.T]().copy()
+
+    @always_inline
+    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.native, W]:
+        return self._arr.unsafe_value().values().load[W](idx)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("ColRef['", Self.name, "']")
+
+
+@always_inline
+def col[name: StringLiteral, T: dt.NumericType](dtype: T) -> ColumnRef[name, T]:
+    """Create a named column placeholder for use in AOT expression trees.
+
+    Usage: ``col['price'](dt.float32)``
+    The return type is ``ColumnRef['price', Float32Type]`` — a unique
+    compile-time type that preserves full AOT specialization.
+    """
+    return ColumnRef[name, T]()
+
+
 struct Negate[T: NumericExpr](NumericExpr):
     comptime OutType = Self.T.OutType
 
@@ -104,6 +153,9 @@ struct Negate[T: NumericExpr](NumericExpr):
 
     def __init__(out self, *, copy: Self):
         self.arg = copy.arg.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.arg.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.OutType.native, W]:
@@ -129,6 +181,10 @@ struct Add[L: NumericExpr, R: NumericExpr](NumericExpr):
     def __init__(out self, *, copy: Self):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
@@ -178,6 +234,10 @@ struct Sub[L: NumericExpr, R: NumericExpr](NumericExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
         var l = self.left.exec_core[W](idx)
@@ -204,6 +264,10 @@ struct Mul[L: NumericExpr, R: NumericExpr](NumericExpr):
     def __init__(out self, *, copy: Self):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
@@ -237,6 +301,10 @@ struct EqExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return EqKernel.core[Self.L.OutType.native, W](
@@ -264,6 +332,10 @@ struct NeExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
     def __init__(out self, *, copy: Self):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
@@ -293,6 +365,10 @@ struct LtExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return LtKernel.core[Self.L.OutType.native, W](
@@ -320,6 +396,10 @@ struct LeExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
     def __init__(out self, *, copy: Self):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
@@ -349,6 +429,10 @@ struct GtExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return GtKernel.core[Self.L.OutType.native, W](
@@ -376,6 +460,10 @@ struct GeExpr[L: NumericExpr, R: NumericExpr](BoolExpr):
     def __init__(out self, *, copy: Self):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
@@ -407,6 +495,10 @@ struct AndExpr[L: BoolExpr, R: BoolExpr](BoolExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return AndKernel.core[W](
@@ -432,6 +524,10 @@ struct OrExpr[L: BoolExpr, R: BoolExpr](BoolExpr):
         self.left = copy.left.copy()
         self.right = copy.right.copy()
 
+    def bind(mut self, batch: RecordBatch) raises:
+        self.left.bind(batch)
+        self.right.bind(batch)
+
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return OrKernel.core[W](
@@ -453,6 +549,9 @@ struct NotExpr[E: BoolExpr](BoolExpr):
 
     def __init__(out self, *, copy: Self):
         self.expr = copy.expr.copy()
+
+    def bind(mut self, batch: RecordBatch) raises:
+        self.expr.bind(batch)
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
@@ -494,6 +593,76 @@ struct FilterExpr[T: dt.NumericType, Pred: BoolExpr](
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Filter(data[", len(self.data), "] WHERE ", self.pred, ")")
+
+
+struct FilterPipeline[
+    data_name: StringLiteral,
+    T: dt.NumericType,
+    Pred: BoolExpr,
+](Copyable, Movable, Writable, ImplicitlyDestructible):
+    """Reusable filter pipeline: define once, execute against many RecordBatches.
+
+    Per call: binds ColumnRef nodes in pred to the batch columns (O(cols)
+    ref-count bumps), then runs the single-pass fused filter loop.
+    """
+
+    var _pred: Self.Pred
+
+    def __init__(out self, var pred: Self.Pred):
+        self._pred = pred^
+
+    def __init__(out self, *, copy: Self):
+        self._pred = copy._pred.copy()
+
+    def __call__(
+        mut self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.T]:
+        self._pred.bind(batch)
+        var data = batch.column(Self.data_name).as_primitive[Self.T]().copy()
+        return execute(FilterExpr(data^, self._pred.copy()), batch.num_rows())
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("FilterPipeline['", Self.data_name, "'] WHERE ", self._pred)
+
+
+@always_inline
+def filter_pipeline[data_col: StringLiteral, T: dt.NumericType, Pred: BoolExpr](
+    var pred: Pred,
+    dtype: T,
+) -> FilterPipeline[data_col, T, Pred]:
+    """Create a reusable filter pipeline bound to named RecordBatch columns.
+
+    Usage::
+
+        var p = filter_pipeline['output'](
+            GtExpr(Add(col['a'](dt.int32), col['b'](dt.int32)), col['c'](dt.int32)),
+            dt.int32,
+        )
+        var result1 = p(batch1)
+        var result2 = p(batch2)
+    """
+    return FilterPipeline[data_col, T, Pred](pred^)
+
+
+struct Pipeline[E: NumericExpr](Copyable, Movable, Writable, ImplicitlyDestructible):
+    """Reusable numeric expression pipeline over named RecordBatch columns."""
+
+    var _expr: Self.E
+
+    def __init__(out self, var expr: Self.E):
+        self._expr = expr^
+
+    def __init__(out self, *, copy: Self):
+        self._expr = copy._expr.copy()
+
+    def __call__(
+        mut self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.E.OutType]:
+        self._expr.bind(batch)
+        return execute(self._expr, batch.num_rows())
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Pipeline(", self._expr, ")")
 
 
 def _vectorize_dispatch[

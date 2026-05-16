@@ -12,6 +12,20 @@
 
 ### Features
 
+- **ColumnRef / Pipeline / FilterPipeline** (`marrow/faszom.mojo`): named column
+  placeholders (`ColumnRef['name', T]`) resolved from a `RecordBatch` at execute
+  time via `bind()`. Enables reusable AOT-compiled query pipelines that are defined
+  once and called per batch. Convenience factories: `col['name'](dtype)`,
+  `filter_pipeline['data_col'](pred, dtype)`. `FilterPipeline` and `Pipeline`
+  wrappers bind all `ColumnRef` nodes in `O(cols)` and execute the fused loop in
+  `O(N)`. The AOT specialization property is preserved — each distinct
+  `(name, T)` pair remains a unique compile-time type.
+
+- **`PrimitiveArray.__eq__` correctness fix** (`marrow/arrays.mojo`): the fast
+  path now compares only the valid `length` elements instead of the full allocated
+  buffer, preventing spurious mismatches for filtered arrays whose backing buffer
+  is over-allocated.
+
 - **Sort kernel — `argsort` and `sort`** (`marrow/kernels/sort.mojo`):
   single-column sort for all array types. Primitive arrays use LSD radix sort
   (O(N), 8-bit passes, UInt64-encoded keys, float NaN/sign-bit transform) for
