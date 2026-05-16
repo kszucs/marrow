@@ -22,7 +22,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
-from .helpers import Kernel, unary_scalar_dispatch
+from .helpers import Kernel
 from .execution import ExecutionContext
 
 
@@ -93,7 +93,29 @@ trait ReductionKernel(Kernel):
         array: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyScalar:
-        return unary_scalar_dispatch[Self.name, Self.apply[_]](array, ctx)
+        if array.dtype() == int8:
+            return Self.apply(array.as_int8(), ctx)
+        elif array.dtype() == int16:
+            return Self.apply(array.as_int16(), ctx)
+        elif array.dtype() == int32:
+            return Self.apply(array.as_int32(), ctx)
+        elif array.dtype() == int64:
+            return Self.apply(array.as_int64(), ctx)
+        elif array.dtype() == uint8:
+            return Self.apply(array.as_uint8(), ctx)
+        elif array.dtype() == uint16:
+            return Self.apply(array.as_uint16(), ctx)
+        elif array.dtype() == uint32:
+            return Self.apply(array.as_uint32(), ctx)
+        elif array.dtype() == uint64:
+            return Self.apply(array.as_uint64(), ctx)
+        elif array.dtype() == float16:
+            return Self.apply(array.as_float16(), ctx)
+        elif array.dtype() == float32:
+            return Self.apply(array.as_float32(), ctx)
+        elif array.dtype() == float64:
+            return Self.apply(array.as_float64(), ctx)
+        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +126,7 @@ trait ReductionKernel(Kernel):
 struct SumKernel(ReductionKernel):
     comptime name = "sum"
 
+    @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a + b
@@ -116,6 +139,7 @@ struct SumKernel(ReductionKernel):
 struct ProductKernel(ReductionKernel):
     comptime name = "product"
 
+    @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return a * b
@@ -128,6 +152,7 @@ struct ProductKernel(ReductionKernel):
 struct MinAggKernel(ReductionKernel):
     comptime name = "min"
 
+    @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.min(a, b)
@@ -140,6 +165,7 @@ struct MinAggKernel(ReductionKernel):
 struct MaxAggKernel(ReductionKernel):
     comptime name = "max"
 
+    @always_inline
     @staticmethod
     def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
         return math.max(a, b)

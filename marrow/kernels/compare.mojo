@@ -18,8 +18,8 @@ Available kernels
 * ``greater_equal``  — left[i] >= right[i]
 
 Each has a typed overload ``def[T: DataType](PrimitiveArray[T], PrimitiveArray[T])``
-and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
-``bool_array_dispatch``.
+and a runtime-typed overload ``def(AnyArray, AnyArray)`` via the inlined dtype switch
+in ``BinaryCompareKernel.dispatch``.
 
 Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 0 (core)** — ``KernelStruct.core[T, W]``: raw SIMD predicate.
@@ -36,8 +36,22 @@ from ..arrays import (
 )
 from ..buffers import Bitmap
 from ..views import apply
-from ..dtypes import PrimitiveType, bool_ as bool_dt
-from .helpers import Kernel, bitmap_and, bool_array_dispatch
+from ..dtypes import (
+    PrimitiveType,
+    bool_ as bool_dt,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+)
+from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
 
@@ -116,7 +130,33 @@ trait BinaryCompareKernel(Kernel):
         right: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        return bool_array_dispatch[Self.name, Self.apply[_]](left, right, ctx)
+        if left.dtype() != right.dtype():
+            raise Error(
+                t"{Self.name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+            )
+        if left.dtype() == int8:
+            return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
+        elif left.dtype() == int16:
+            return Self.apply(left.as_int16(), right.as_int16(), ctx).to_any()
+        elif left.dtype() == int32:
+            return Self.apply(left.as_int32(), right.as_int32(), ctx).to_any()
+        elif left.dtype() == int64:
+            return Self.apply(left.as_int64(), right.as_int64(), ctx).to_any()
+        elif left.dtype() == uint8:
+            return Self.apply(left.as_uint8(), right.as_uint8(), ctx).to_any()
+        elif left.dtype() == uint16:
+            return Self.apply(left.as_uint16(), right.as_uint16(), ctx).to_any()
+        elif left.dtype() == uint32:
+            return Self.apply(left.as_uint32(), right.as_uint32(), ctx).to_any()
+        elif left.dtype() == uint64:
+            return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
+        elif left.dtype() == float16:
+            return Self.apply(left.as_float16(), right.as_float16(), ctx).to_any()
+        elif left.dtype() == float32:
+            return Self.apply(left.as_float32(), right.as_float32(), ctx).to_any()
+        elif left.dtype() == float64:
+            return Self.apply(left.as_float64(), right.as_float64(), ctx).to_any()
+        raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +167,7 @@ trait BinaryCompareKernel(Kernel):
 struct EqKernel(BinaryCompareKernel):
     comptime name = "equal"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -137,6 +178,7 @@ struct EqKernel(BinaryCompareKernel):
 struct NeKernel(BinaryCompareKernel):
     comptime name = "not_equal"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -147,6 +189,7 @@ struct NeKernel(BinaryCompareKernel):
 struct LtKernel(BinaryCompareKernel):
     comptime name = "less"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -157,6 +200,7 @@ struct LtKernel(BinaryCompareKernel):
 struct LeKernel(BinaryCompareKernel):
     comptime name = "less_equal"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -167,6 +211,7 @@ struct LeKernel(BinaryCompareKernel):
 struct GtKernel(BinaryCompareKernel):
     comptime name = "greater"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
@@ -177,6 +222,7 @@ struct GtKernel(BinaryCompareKernel):
 struct GeKernel(BinaryCompareKernel):
     comptime name = "greater_equal"
 
+    @always_inline
     @staticmethod
     def core[T: DType, W: Int](
         a: SIMD[T, W], b: SIMD[T, W]
