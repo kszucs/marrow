@@ -756,6 +756,75 @@ struct Pipeline[E: NumericExpr](Copyable, Movable, Writable, ImplicitlyDestructi
         writer.write("Pipeline(", self._expr, ")")
 
 
+# ---------------------------------------------------------------------------
+# Schema — Field type tags + __getattr__ for t.col_name syntax
+# ---------------------------------------------------------------------------
+
+
+trait FieldDescriptor:
+    """Compile-time trait for schema field descriptors."""
+
+    comptime dtype: dt.NumericType
+
+    @staticmethod
+    def _name_matches[other: StringLiteral]() -> Bool:
+        ...
+
+
+struct Field[name: StringLiteral, T: dt.NumericType](FieldDescriptor, Copyable, Movable):
+    """Compile-time schema field descriptor. Carries no runtime data.
+
+    Pass as a type parameter: ``Schema[Field['price', Float32Type], ...]``.
+    """
+
+    comptime dtype = Self.T
+
+    @staticmethod
+    def _name_matches[other: StringLiteral]() -> Bool:
+        return Self.name == other
+
+
+def _schema_find_idx[
+    name: StringLiteral,
+    *Fields: FieldDescriptor,
+    start: Int = 0,
+]() -> Int:
+    """Compile-time recursion: return the index of the field named ``name``."""
+    comptime if start >= Fields.size:
+        comptime assert False, "Schema has no field named '" + name + "'"
+        return -1
+    comptime if Fields[start]._name_matches[name]():
+        return start
+    return _schema_find_idx[name, *Fields, start = start + 1]()
+
+
+struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
+    """Schema parameterised by ``Field[name, T]`` type tags; no runtime fields.
+
+    Every attribute access (``t.col_name``) goes through ``__getattr_param__``,
+    which returns a ``ColumnRef[name, T]`` for the matching field.
+
+    Usage::
+
+        var t = Schema[Field['a', Int32Type], Field['data', Int32Type]]()
+        var result = t.data.where(t.a + t.b > lit(int32, 5)).execute(batch)
+    """
+
+    def __init__(out self):
+        pass
+
+    def __init__(out self, *, copy: Self):
+        pass
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral,
+        idx: Int = _schema_find_idx[name, *Self.Fields](),
+    ](self) -> ColumnRef[name, Self.Fields[idx].dtype]:
+        """Return ``ColumnRef[name, T]`` for the matching field in the schema."""
+        return ColumnRef[name, Self.Fields[idx].dtype]()
+
+
 def _vectorize_dispatch[
     native: DType,
     cpu_width: Int,

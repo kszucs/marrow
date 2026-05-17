@@ -4,17 +4,19 @@ from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
 from marrow.arrays import AnyArray
 from marrow.builders import arange, array
-from marrow.dtypes import Int32Type, int32, Field
-from marrow.schema import Schema
+from marrow.dtypes import Int32Type, int32, Field as ArrowField
+from marrow.schema import Schema as ArrowSchema
 from marrow.tabular import RecordBatch
 from marrow.faszom import (
     Add,
     Column,
     ColumnRef,
+    Field,
     FilterExpr,
     FilterPipeline,
     GtExpr,
     Pipeline,
+    Schema,
     col,
     execute,
     filter_pipeline,
@@ -24,8 +26,8 @@ from marrow.faszom import (
 
 def _make_batch(n: Int) raises -> RecordBatch:
     """Build a RecordBatch with columns a, b, c, data — all int32."""
-    var schema = Schema(
-        fields=[Field("a", int32), Field("b", int32), Field("c", int32), Field("data", int32)]
+    var schema = ArrowSchema(
+        fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("c", int32), ArrowField("data", int32)]
     )
     var ca: AnyArray = arange[Int32Type](0, n)
     var cb: AnyArray = arange[Int32Type](1, n + 1)
@@ -141,8 +143,8 @@ def test_filter_pipeline_reuse() raises:
     """FilterPipeline called on two different batches gives correct results for each."""
     var n = 64
 
-    var schema = Schema(
-        fields=[Field("a", int32), Field("b", int32), Field("c", int32), Field("data", int32)]
+    var schema = ArrowSchema(
+        fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("c", int32), ArrowField("data", int32)]
     )
 
     # batch1: a=[0..n), b=[1..n+1), c=[n/2..3n/2), data=[0..n)
@@ -218,9 +220,9 @@ def test_pipeline_numeric_expr() raises:
 
 
 def test_ibis_style_where_execute() raises:
-    """col['data'](int32).where(pred).execute(batch) gives the correct filtered result."""
+    """Col['data'](int32).where(pred).execute(batch) gives the correct filtered result."""
     var n = 10
-    var schema = Schema(fields=[Field("a", int32), Field("b", int32), Field("data", int32)])
+    var schema = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
     var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
     var cb: AnyArray = arange[Int32Type](1, n + 1)   # [1..10]
     var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
@@ -240,7 +242,7 @@ def test_ibis_style_where_execute() raises:
 def test_boolean_operators() raises:
     """& (AND) and ~ (NOT) operators on BoolExpr produce correct filtered results."""
     var n = 10
-    var schema = Schema(fields=[Field("a", int32), Field("b", int32), Field("data", int32)])
+    var schema = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
     var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
     var cb: AnyArray = arange[Int32Type](5, n + 5)   # [5..14]
     var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
@@ -264,7 +266,7 @@ def test_boolean_operators() raises:
 
 
 def test_table_ibis_style_one_liner() raises:
-    """t.data.where(t.a + t.b > t.c).execute(batch) gives the correct result."""
+    """Table struct: t.data.where(t.a + t.b > t.c).execute(batch) gives the correct result."""
     var n = 10
     var batch = _make_batch(n)
     var t = _TestTable()
@@ -284,6 +286,21 @@ def test_table_ibis_style_reuse() raises:
     # _make_batch(n): a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b>c: 2i+1 > n/2+i  =>  i >= n/2
     assert_true(pipeline(batch1) == arange[Int32Type](n // 2, n))
     assert_true(pipeline(batch2) == arange[Int32Type](n, 2 * n))
+
+
+def test_schema_getattr() raises:
+    """Schema[Field[...]] t.col_name access returns ColumnRef and filters correctly."""
+    var n = 10
+    var batch = _make_batch(n)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    # a[i]=i, b[i]=i+1, c[i]=5+i  =>  a+b > c: 2i+1 > 5+i  =>  i > 4
+    # Compare via AnyArray: Schema.__getattr_param__ returns ColumnRef with an opaque T
+    # (Mojo does not evaluate the default type parameter to its concrete type eagerly),
+    # so the result PrimitiveArray carries a non-canonical type tag even though the
+    # in-memory representation is identical to PrimitiveArray[Int32Type].
+    var result: AnyArray = t.data.where(t.a + t.b > t.c).execute(batch)
+    var expected: AnyArray = arange[Int32Type](5, n)
+    assert_true(result == expected)
 
 
 def test_col_name_dtype_properties() raises:

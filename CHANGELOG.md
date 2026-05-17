@@ -12,6 +12,13 @@
 
 ### Features
 
+- **`Schema[Field[...]]` with `__getattr_param__`** (`marrow/faszom.mojo`): compile-time
+  schema type that enables Ibis-style `t.data.where(t.a + t.b > t.c).execute(batch)`
+  syntax without per-field boilerplate. `Schema[Field['a', Int32Type], Field['data', Float32Type]]`
+  returns `ColumnRef['a', Int32Type]` for `t.a` via `__getattr_param__`, using a
+  `@staticmethod def _name_matches` trait + compile-time recursive index lookup
+  (`_schema_find_idx`) to resolve the field type at compile time.
+
 - **ColumnRef / Pipeline / FilterPipeline** (`marrow/faszom.mojo`): named column
   placeholders (`ColumnRef['name', T]`) resolved from a `RecordBatch` at execute
   time via `bind()`. Enables reusable AOT-compiled query pipelines that are defined
