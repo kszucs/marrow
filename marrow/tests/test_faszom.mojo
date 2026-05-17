@@ -18,6 +18,7 @@ from marrow.faszom import (
     col,
     execute,
     filter_pipeline,
+    lit,
 )
 
 
@@ -36,6 +37,25 @@ def _make_batch(n: Int) raises -> RecordBatch:
     columns.append(cc^)
     columns.append(cd^)
     return RecordBatch(schema=schema, columns=columns^)
+
+
+struct _TestTable:
+    """Typed table view — define once per schema, use like `t.col_name`.
+
+    Each field is a ColumnRef placeholder. Operator expressions copy the
+    fields into the expression tree; the table itself is never mutated.
+    """
+
+    var a: ColumnRef['a', Int32Type]
+    var b: ColumnRef['b', Int32Type]
+    var c: ColumnRef['c', Int32Type]
+    var data: ColumnRef['data', Int32Type]
+
+    def __init__(out self):
+        self.a = ColumnRef['a', Int32Type]()
+        self.b = ColumnRef['b', Int32Type]()
+        self.c = ColumnRef['c', Int32Type]()
+        self.data = ColumnRef['data', Int32Type]()
 
 
 def test_column_ref_same_result_as_column() raises:
@@ -195,6 +215,81 @@ def test_pipeline_numeric_expr() raises:
     var result = p(batch)
 
     assert_true(expected == result)
+
+
+def test_ibis_style_where_execute() raises:
+    """col['data'](int32).where(pred).execute(batch) gives the correct filtered result."""
+    var n = 10
+    var schema = Schema(fields=[Field("a", int32), Field("b", int32), Field("data", int32)])
+    var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cb: AnyArray = arange[Int32Type](1, n + 1)   # [1..10]
+    var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cols = List[AnyArray]()
+    cols.append(ca^)
+    cols.append(cb^)
+    cols.append(cd^)
+    var batch = RecordBatch(schema=schema, columns=cols^)
+
+    # WHERE a + b > 10: a+b=[1,3,5,7,9,11,13,15,17,19] => indices 5..9 => data [5..9]
+    var result = col['data'](int32).where(
+        col['a'](int32) + col['b'](int32) > lit(int32, 10)
+    ).execute(batch)
+    assert_true(result == arange[Int32Type](5, 10))
+
+
+def test_boolean_operators() raises:
+    """& (AND) and ~ (NOT) operators on BoolExpr produce correct filtered results."""
+    var n = 10
+    var schema = Schema(fields=[Field("a", int32), Field("b", int32), Field("data", int32)])
+    var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cb: AnyArray = arange[Int32Type](5, n + 5)   # [5..14]
+    var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cols = List[AnyArray]()
+    cols.append(ca^)
+    cols.append(cb^)
+    cols.append(cd^)
+    var batch = RecordBatch(schema=schema, columns=cols^)
+
+    # AND: a > 3 AND b < 12 => b[i]=a[i]+5 < 12 means a[i] < 7, combined a in {4,5,6}
+    var result_and = col['data'](int32).where(
+        (col['a'](int32) > lit(int32, 3)) & (col['b'](int32) < lit(int32, 12))
+    ).execute(batch)
+    assert_true(result_and == arange[Int32Type](4, 7))  # [4, 5, 6]
+
+    # NOT: ~(a > 5) => a <= 5 => data [0..5]
+    var result_not = col['data'](int32).where(
+        ~(col['a'](int32) > lit(int32, 5))
+    ).execute(batch)
+    assert_true(result_not == arange[Int32Type](0, 6))  # [0, 1, 2, 3, 4, 5]
+
+
+def test_table_ibis_style_one_liner() raises:
+    """t.data.where(t.a + t.b > t.c).execute(batch) gives the correct result."""
+    var n = 10
+    var batch = _make_batch(n)
+    var t = _TestTable()
+    # a[i]=i, b[i]=i+1, c[i]=5+i  =>  a+b > c: 2i+1 > 5+i  =>  i > 4
+    assert_true(t.data.where(t.a + t.b > t.c).execute(batch) == arange[Int32Type](5, n))
+
+
+def test_table_ibis_style_reuse() raises:
+    """A pipeline built from a table struct can be called on multiple batches."""
+    var n = 64
+    var batch1 = _make_batch(n)
+    var batch2 = _make_batch(2 * n)
+
+    var t = _TestTable()
+    var pipeline = t.data.where(t.a + t.b > t.c)
+
+    # _make_batch(n): a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b>c: 2i+1 > n/2+i  =>  i >= n/2
+    assert_true(pipeline(batch1) == arange[Int32Type](n // 2, n))
+    assert_true(pipeline(batch2) == arange[Int32Type](n, 2 * n))
+
+
+def test_col_name_dtype_properties() raises:
+    """ColumnRef.col_name() returns the compile-time column name as a String."""
+    assert_equal(col['price'](int32).col_name(), "price")
+    assert_equal(col['qty'](int32).col_name(), "qty")
 
 
 def main() raises:

@@ -58,11 +58,41 @@ trait Expr(Copyable, Movable, Writable, ImplicitlyDestructible):
 trait NumericExpr(Expr):
     """Marker: OutType is numeric. Inherits exec_core from Expr, so
     T: NumericExpr implies T.exec_core[W](idx) is callable.
-    Default negate() avoids per-struct repetition.
+    Operator overloads build the expression tree without executing it.
     """
 
-    def negate(self) raises -> Negate[Self]:
+    def __neg__(self) -> Negate[Self]:
         return Negate(self.copy())
+
+    def negate(self) -> Negate[Self]:
+        return Negate(self.copy())
+
+    def __add__[RHS: NumericExpr](self, rhs: RHS) -> Add[Self, RHS]:
+        return Add(self.copy(), rhs.copy())
+
+    def __sub__[RHS: NumericExpr](self, rhs: RHS) -> Sub[Self, RHS]:
+        return Sub(self.copy(), rhs.copy())
+
+    def __mul__[RHS: NumericExpr](self, rhs: RHS) -> Mul[Self, RHS]:
+        return Mul(self.copy(), rhs.copy())
+
+    def __eq__[RHS: NumericExpr](self, rhs: RHS) -> EqExpr[Self, RHS]:
+        return EqExpr(self.copy(), rhs.copy())
+
+    def __ne__[RHS: NumericExpr](self, rhs: RHS) -> NeExpr[Self, RHS]:
+        return NeExpr(self.copy(), rhs.copy())
+
+    def __lt__[RHS: NumericExpr](self, rhs: RHS) -> LtExpr[Self, RHS]:
+        return LtExpr(self.copy(), rhs.copy())
+
+    def __le__[RHS: NumericExpr](self, rhs: RHS) -> LeExpr[Self, RHS]:
+        return LeExpr(self.copy(), rhs.copy())
+
+    def __gt__[RHS: NumericExpr](self, rhs: RHS) -> GtExpr[Self, RHS]:
+        return GtExpr(self.copy(), rhs.copy())
+
+    def __ge__[RHS: NumericExpr](self, rhs: RHS) -> GeExpr[Self, RHS]:
+        return GeExpr(self.copy(), rhs.copy())
 
 
 trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
@@ -80,6 +110,15 @@ trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
 
     def bind(mut self, batch: RecordBatch) raises:
         pass
+
+    def __and__[RHS: BoolExpr](self, rhs: RHS) -> AndExpr[Self, RHS]:
+        return AndExpr(self.copy(), rhs.copy())
+
+    def __or__[RHS: BoolExpr](self, rhs: RHS) -> OrExpr[Self, RHS]:
+        return OrExpr(self.copy(), rhs.copy())
+
+    def __invert__(self) -> NotExpr[Self]:
+        return NotExpr(self.copy())
 
 
 struct Column[T: dt.NumericType](Expr, NumericExpr):
@@ -128,8 +167,44 @@ struct ColumnRef[name: StringLiteral, T: dt.NumericType](Expr, NumericExpr):
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.native, W]:
         return self._arr.unsafe_value().values().load[W](idx)
 
+    def col_name(self) -> String:
+        """Column name."""
+        return Self.name
+
+    def col_dtype(self) -> Self.T:
+        """Runtime DataType instance for this column."""
+        return Self.T()
+
+    def where[Pred: BoolExpr](self, pred: Pred) -> FilterPipeline[Self.name, Self.T, Pred]:
+        """Build a reusable filter pipeline: self is the data column, pred is the filter.
+
+        Usage::
+
+            col['data'](dt.int32).where(col['a'](dt.int32) + col['b'](dt.int32) > col['c'](dt.int32))
+        """
+        return FilterPipeline[Self.name, Self.T, Pred](pred.copy())
+
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("ColRef['", Self.name, "']")
+        writer.write("col['", Self.name, "', ", Self.T(), "]")
+
+
+@always_inline
+def lit[T: dt.NumericType](value: Scalar[T.native], dtype: T) -> Literal[T]:
+    """Create a scalar constant for use in AOT expression trees.
+
+    Usage: ``lit(Int32(5), dt.int32)`` or ``lit[dt.int32](5)``.
+    Returns a ``Literal[T]`` broadcast to all SIMD lanes.
+    """
+    return Literal[T](value)
+
+
+@always_inline
+def lit[T: dt.NumericType](dtype: T, value: Int) -> Literal[T]:
+    """Create a scalar constant from an ``Int`` literal.
+
+    Usage: ``lit(dt.int32, 5)`` — more ergonomic when the type is the lead arg.
+    """
+    return Literal[T](Scalar[T.native](value))
 
 
 @always_inline
@@ -617,6 +692,22 @@ struct FilterPipeline[
     def __call__(
         mut self, batch: RecordBatch
     ) raises -> PrimitiveArray[Self.T]:
+        self._pred.bind(batch)
+        var data = batch.column(Self.data_name).as_primitive[Self.T]().copy()
+        return execute(FilterExpr(data^, self._pred.copy()), batch.num_rows())
+
+    def execute(
+        var self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.T]:
+        """Single-call execution for use in chained expressions.
+
+        Unlike ``__call__``, this consumes the pipeline, allowing it to be
+        called directly on a temporary returned by ``.where()``:
+
+        .. code-block:: mojo
+
+            col['data'](dt.int32).where(col['a'](dt.int32) + col['b'](dt.int32) > col['c'](dt.int32)).execute(batch)
+        """
         self._pred.bind(batch)
         var data = batch.column(Self.data_name).as_primitive[Self.T]().copy()
         return execute(FilterExpr(data^, self._pred.copy()), batch.num_rows())
