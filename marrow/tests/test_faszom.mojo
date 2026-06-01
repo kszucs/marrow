@@ -1,4 +1,4 @@
-"""Tests for faszom static expression layer: ColumnRef, Pipeline, FilterPipeline."""
+"""Tests for faszom static expression layer: ColumnRef, Pipeline, FilterRel."""
 
 from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
@@ -12,14 +12,12 @@ from marrow.faszom import (
     Column,
     ColumnRef,
     Field,
-    FilterExpr,
-    FilterPipeline,
+    FilterRel,
     GtExpr,
     Pipeline,
     Schema,
     col,
     execute,
-    filter_pipeline,
     lit,
 )
 
@@ -39,25 +37,6 @@ def _make_batch(n: Int) raises -> RecordBatch:
     columns.append(cc^)
     columns.append(cd^)
     return RecordBatch(schema=schema, columns=columns^)
-
-
-struct _TestTable:
-    """Typed table view — define once per schema, use like `t.col_name`.
-
-    Each field is a ColumnRef placeholder. Operator expressions copy the
-    fields into the expression tree; the table itself is never mutated.
-    """
-
-    var a: ColumnRef['a', Int32Type]
-    var b: ColumnRef['b', Int32Type]
-    var c: ColumnRef['c', Int32Type]
-    var data: ColumnRef['data', Int32Type]
-
-    def __init__(out self):
-        self.a = ColumnRef['a', Int32Type]()
-        self.b = ColumnRef['b', Int32Type]()
-        self.c = ColumnRef['c', Int32Type]()
-        self.data = ColumnRef['data', Int32Type]()
 
 
 def test_column_ref_same_result_as_column() raises:
@@ -95,55 +74,22 @@ def test_col_convenience_same_as_column_ref() raises:
     assert_true(execute(expr1, n) == execute(expr2, n))
 
 
-def test_filter_pipeline_matches_filter_expr() raises:
-    """FilterPipeline output matches FilterExpr with arrays passed upfront."""
-    var n = 100
+def test_filter_rel_basic() raises:
+    """FilterRel.execute(batch) filters all batch columns and returns a RecordBatch."""
+    var n = 10
     var batch = _make_batch(n)
-
-    # FilterExpr with concrete arrays
-    var a_arr = arange[Int32Type](0, n)
-    var b_arr = arange[Int32Type](1, n + 1)
-    var c_arr = arange[Int32Type](n // 2, n // 2 + n)
-    var data_arr = arange[Int32Type](0, n)
-    var direct = execute(
-        FilterExpr(
-            data_arr^,
-            GtExpr(Add(Column(a_arr^), Column(b_arr^)), Column(c_arr^)),
-        ),
-        n,
-    )
-
-    # FilterPipeline via ColumnRef
-    var pipeline = FilterPipeline['data', Int32Type, GtExpr[Add[ColumnRef['a', Int32Type], ColumnRef['b', Int32Type]], ColumnRef['c', Int32Type]]](
-        GtExpr(Add(ColumnRef['a', Int32Type](), ColumnRef['b', Int32Type]()), ColumnRef['c', Int32Type]())
-    )
-    var piped = pipeline(batch)
-
-    assert_true(direct == piped)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    # a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b > c: 2i+1 > n/2+i  =>  i >= n/2
+    var result = t.filter(t.a + t.b > t.c).execute(batch)
+    assert_true(result.column("data") == arange[Int32Type](n // 2, n))
+    assert_true(result.column("a") == arange[Int32Type](n // 2, n))
 
 
-def test_filter_pipeline_convenience_syntax() raises:
-    """FilterPipeline convenience function produces the same result as the bracket form."""
-    var n = 100
-    var batch = _make_batch(n)
-
-    var p1 = FilterPipeline['data', Int32Type, GtExpr[Add[ColumnRef['a', Int32Type], ColumnRef['b', Int32Type]], ColumnRef['c', Int32Type]]](
-        GtExpr(Add(ColumnRef['a', Int32Type](), ColumnRef['b', Int32Type]()), ColumnRef['c', Int32Type]())
-    )
-
-    var p2 = filter_pipeline['data'](
-        GtExpr(Add(col['a'](int32), col['b'](int32)), col['c'](int32)),
-        int32,
-    )
-
-    assert_true(p1(batch) == p2(batch))
-
-
-def test_filter_pipeline_reuse() raises:
-    """FilterPipeline called on two different batches gives correct results for each."""
+def test_filter_rel_reuse() raises:
+    """FilterRel.__call__ can be invoked on multiple batches and gives correct results."""
     var n = 64
 
-    var schema = ArrowSchema(
+    var schema_rt = ArrowSchema(
         fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("c", int32), ArrowField("data", int32)]
     )
 
@@ -157,9 +103,9 @@ def test_filter_pipeline_reuse() raises:
     cols1.append(cb1^)
     cols1.append(cc1^)
     cols1.append(cd1^)
-    var batch1 = RecordBatch(schema=schema, columns=cols1^)
+    var batch1 = RecordBatch(schema=schema_rt, columns=cols1^)
 
-    # batch2: shifted by n
+    # batch2: shifted by n (condition always satisfied => all rows pass)
     var ca2: AnyArray = arange[Int32Type](n, 2 * n)
     var cb2: AnyArray = arange[Int32Type](n + 1, 2 * n + 1)
     var cc2: AnyArray = arange[Int32Type](3 * n // 2, 3 * n // 2 + n)
@@ -169,39 +115,48 @@ def test_filter_pipeline_reuse() raises:
     cols2.append(cb2^)
     cols2.append(cc2^)
     cols2.append(cd2^)
-    var batch2 = RecordBatch(schema=schema, columns=cols2^)
+    var batch2 = RecordBatch(schema=schema_rt, columns=cols2^)
 
-    var pipeline = filter_pipeline['data'](
-        GtExpr(Add(col['a'](int32), col['b'](int32)), col['c'](int32)),
-        int32,
-    )
-    var r1 = pipeline(batch1)
-    var r2 = pipeline(batch2)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    var rel = t.filter(t.a + t.b > t.c)
+    var r1 = rel(batch1)
+    var r2 = rel(batch2)
 
-    # Compute reference results with FilterExpr
-    var ref1 = execute(
-        FilterExpr(
-            arange[Int32Type](0, n),
-            GtExpr(
-                Add(Column(arange[Int32Type](0, n)), Column(arange[Int32Type](1, n + 1))),
-                Column(arange[Int32Type](n // 2, n // 2 + n)),
-            ),
-        ),
-        n,
-    )
-    var ref2 = execute(
-        FilterExpr(
-            arange[Int32Type](n, 2 * n),
-            GtExpr(
-                Add(Column(arange[Int32Type](n, 2 * n)), Column(arange[Int32Type](n + 1, 2 * n + 1))),
-                Column(arange[Int32Type](3 * n // 2, 3 * n // 2 + n)),
-            ),
-        ),
-        n,
-    )
+    # batch1: 2i+1 > n/2+i => i >= n/2
+    assert_true(r1.column("data") == arange[Int32Type](n // 2, n))
+    # batch2: 2(n+i)+1 > 3n/2+i => n/2+i+1 > 0 (always) => all rows pass
+    assert_true(r2.column("data") == arange[Int32Type](n, 2 * n))
 
-    assert_true(r1 == ref1)
-    assert_true(r2 == ref2)
+
+def test_schema_filter_execute() raises:
+    """Schema.filter(pred).execute(batch) filters and returns a RecordBatch."""
+    var n = 10
+    var schema_rt = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
+    var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cb: AnyArray = arange[Int32Type](1, n + 1)   # [1..10]
+    var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
+    var cols = List[AnyArray]()
+    cols.append(ca^)
+    cols.append(cb^)
+    cols.append(cd^)
+    var batch = RecordBatch(schema=schema_rt, columns=cols^)
+
+    # WHERE a + b > 10: a+b=[1,3,5,7,9,11,13,15,17,19] => indices 5..9 => data [5..9]
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['data', Int32Type]]()
+    var result = t.filter(t.a + t.b > lit(int32, 10)).execute(batch)
+    assert_true(result.column("data") == arange[Int32Type](5, 10))
+
+
+def test_filter_rel_with_projection() raises:
+    """FilterRel outputs all batch columns; individual columns are accessible by name."""
+    var n = 10
+    var batch = _make_batch(n)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    # a+b > c: i >= n/2; output has all 4 input columns, all filtered
+    var result = t.filter(t.a + t.b > t.c).execute(batch)
+    assert_equal(result.num_columns(), 4)
+    assert_true(result.column("data") == arange[Int32Type](n // 2, n))
+    assert_true(result.column("a") == arange[Int32Type](n // 2, n))
 
 
 def test_pipeline_numeric_expr() raises:
@@ -219,30 +174,10 @@ def test_pipeline_numeric_expr() raises:
     assert_true(expected == result)
 
 
-def test_ibis_style_where_execute() raises:
-    """Col['data'](int32).where(pred).execute(batch) gives the correct filtered result."""
-    var n = 10
-    var schema = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
-    var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
-    var cb: AnyArray = arange[Int32Type](1, n + 1)   # [1..10]
-    var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
-    var cols = List[AnyArray]()
-    cols.append(ca^)
-    cols.append(cb^)
-    cols.append(cd^)
-    var batch = RecordBatch(schema=schema, columns=cols^)
-
-    # WHERE a + b > 10: a+b=[1,3,5,7,9,11,13,15,17,19] => indices 5..9 => data [5..9]
-    var result = col['data'](int32).where(
-        col['a'](int32) + col['b'](int32) > lit(int32, 10)
-    ).execute(batch)
-    assert_true(result == arange[Int32Type](5, 10))
-
-
 def test_boolean_operators() raises:
     """& (AND) and ~ (NOT) operators on BoolExpr produce correct filtered results."""
     var n = 10
-    var schema = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
+    var schema_rt = ArrowSchema(fields=[ArrowField("a", int32), ArrowField("b", int32), ArrowField("data", int32)])
     var ca: AnyArray = arange[Int32Type](0, n)       # [0..9]
     var cb: AnyArray = arange[Int32Type](5, n + 5)   # [5..14]
     var cd: AnyArray = arange[Int32Type](0, n)       # [0..9]
@@ -250,42 +185,45 @@ def test_boolean_operators() raises:
     cols.append(ca^)
     cols.append(cb^)
     cols.append(cd^)
-    var batch = RecordBatch(schema=schema, columns=cols^)
+    var batch = RecordBatch(schema=schema_rt, columns=cols^)
+
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['data', Int32Type]]()
 
     # AND: a > 3 AND b < 12 => b[i]=a[i]+5 < 12 means a[i] < 7, combined a in {4,5,6}
-    var result_and = col['data'](int32).where(
-        (col['a'](int32) > lit(int32, 3)) & (col['b'](int32) < lit(int32, 12))
+    var r_and = t.filter(
+        (t.a > lit(int32, 3)) & (t.b < lit(int32, 12))
     ).execute(batch)
-    assert_true(result_and == arange[Int32Type](4, 7))  # [4, 5, 6]
+    assert_true(r_and.column("data") == arange[Int32Type](4, 7))  # [4, 5, 6]
 
     # NOT: ~(a > 5) => a <= 5 => data [0..5]
-    var result_not = col['data'](int32).where(
-        ~(col['a'](int32) > lit(int32, 5))
+    var r_not = t.filter(
+        ~(t.a > lit(int32, 5))
     ).execute(batch)
-    assert_true(result_not == arange[Int32Type](0, 6))  # [0, 1, 2, 3, 4, 5]
+    assert_true(r_not.column("data") == arange[Int32Type](0, 6))  # [0, 1, 2, 3, 4, 5]
 
 
-def test_table_ibis_style_one_liner() raises:
-    """Table struct: t.data.where(t.a + t.b > t.c).execute(batch) gives the correct result."""
+def test_schema_filter_one_liner() raises:
+    """Schema.filter(pred).execute(batch) gives the correct result."""
     var n = 10
     var batch = _make_batch(n)
-    var t = _TestTable()
-    # a[i]=i, b[i]=i+1, c[i]=5+i  =>  a+b > c: 2i+1 > 5+i  =>  i > 4
-    assert_true(t.data.where(t.a + t.b > t.c).execute(batch) == arange[Int32Type](5, n))
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    # a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b > c: 2i+1 > n/2+i  =>  i >= n/2
+    var result = t.filter(t.a + t.b > t.c).execute(batch)
+    assert_true(result.column("data") == arange[Int32Type](n // 2, n))
 
 
-def test_table_ibis_style_reuse() raises:
-    """A pipeline built from a table struct can be called on multiple batches."""
+def test_schema_filter_reuse() raises:
+    """A FilterRel built from Schema can be called on multiple batches."""
     var n = 64
     var batch1 = _make_batch(n)
     var batch2 = _make_batch(2 * n)
 
-    var t = _TestTable()
-    var pipeline = t.data.where(t.a + t.b > t.c)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
+    var rel = t.filter(t.a + t.b > t.c)
 
     # _make_batch(n): a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b>c: 2i+1 > n/2+i  =>  i >= n/2
-    assert_true(pipeline(batch1) == arange[Int32Type](n // 2, n))
-    assert_true(pipeline(batch2) == arange[Int32Type](n, 2 * n))
+    assert_true(rel(batch1).column("data") == arange[Int32Type](n // 2, n))
+    assert_true(rel(batch2).column("data") == arange[Int32Type](n, 2 * n))
 
 
 def test_schema_getattr() raises:
@@ -293,14 +231,25 @@ def test_schema_getattr() raises:
     var n = 10
     var batch = _make_batch(n)
     var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
-    # a[i]=i, b[i]=i+1, c[i]=5+i  =>  a+b > c: 2i+1 > 5+i  =>  i > 4
-    # Compare via AnyArray: Schema.__getattr_param__ returns ColumnRef with an opaque T
-    # (Mojo does not evaluate the default type parameter to its concrete type eagerly),
-    # so the result PrimitiveArray carries a non-canonical type tag even though the
-    # in-memory representation is identical to PrimitiveArray[Int32Type].
-    var result: AnyArray = t.data.where(t.a + t.b > t.c).execute(batch)
-    var expected: AnyArray = arange[Int32Type](5, n)
-    assert_true(result == expected)
+    # a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b > c: 2i+1 > n/2+i  =>  i >= n/2
+    var result = t.filter(t.a + t.b > t.c).execute(batch)
+    var expected: AnyArray = arange[Int32Type](n // 2, n)
+    assert_true(result.column("data") == expected)
+
+
+def test_schema_inferred() raises:
+    """Schema(Field['a'](int32), ...) infers *Fields from value args."""
+    var n = 10
+    var batch = _make_batch(n)
+    var t = Schema(
+        Field['a'](int32),
+        Field['b'](int32),
+        Field['c'](int32),
+        Field['data'](int32),
+    )
+    var result = t.filter(t.a + t.b > t.c).execute(batch)
+    var expected: AnyArray = arange[Int32Type](n // 2, n)
+    assert_true(result.column("data") == expected)
 
 
 def test_col_name_dtype_properties() raises:

@@ -26,6 +26,8 @@ from marrow.dtypes import Int32Type
 from marrow.kernels.arithmetic import add, neg, AddKernel, NegKernel, SubKernel, MulKernel
 from marrow.kernels.boolean import AndKernel, OrKernel, NotKernel
 from marrow.kernels.compare import EqKernel, NeKernel, LtKernel, LeKernel, GtKernel, GeKernel
+from marrow.kernels.execution import ExecutionContext
+from marrow.kernels.filter import filter as filter_kernel
 from marrow.tabular import RecordBatch
 from marrow.views import BufferView
 from std.memory import OwnedPointer
@@ -174,15 +176,6 @@ struct ColumnRef[name: StringLiteral, T: dt.NumericType](Expr, NumericExpr):
     def col_dtype(self) -> Self.T:
         """Runtime DataType instance for this column."""
         return Self.T()
-
-    def where[Pred: BoolExpr](self, pred: Pred) -> FilterPipeline[Self.name, Self.T, Pred]:
-        """Build a reusable filter pipeline: self is the data column, pred is the filter.
-
-        Usage::
-
-            col['data'](dt.int32).where(col['a'](dt.int32) + col['b'](dt.int32) > col['c'](dt.int32))
-        """
-        return FilterPipeline[Self.name, Self.T, Pred](pred.copy())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col['", Self.name, "', ", Self.T(), "]")
@@ -637,48 +630,24 @@ struct NotExpr[E: BoolExpr](BoolExpr):
 
 
 # ---------------------------------------------------------------------------
-# FilterExpr — fused predicate evaluation + scatter-filter
+# FilterRel — multi-column relational filter returning RecordBatch
 # ---------------------------------------------------------------------------
 
 
-struct FilterExpr[T: dt.NumericType, Pred: BoolExpr](
-    Copyable, Movable, Writable, ImplicitlyDestructible
-):
-    """Compile-time expression: single-pass fused predicate evaluation + filter.
-
-    execute() runs one loop:
-      - For each SIMD block: evaluate Pred → SIMD[DType.bool, W], then
-        compressed_store the matching data elements directly.
-      - No BoolArray allocated, no bit-pack/unpack round-trip.
-
-    Compare to dispatch, which materialises one intermediate numeric array per
-    arithmetic node in the predicate, then a BoolArray, before the filter runs.
-    """
-
-    var data: PrimitiveArray[Self.T]
-    var pred: Self.Pred
-
-    def __init__(out self, var data: PrimitiveArray[Self.T], var pred: Self.Pred):
-        self.data = data^
-        self.pred = pred^
-
-    def __init__(out self, *, copy: Self):
-        self.data = copy.data.copy()
-        self.pred = copy.pred.copy()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("Filter(data[", len(self.data), "] WHERE ", self.pred, ")")
-
-
-struct FilterPipeline[
-    data_name: StringLiteral,
-    T: dt.NumericType,
+struct FilterRel[
     Pred: BoolExpr,
+    *Fields: FieldDescriptor,
 ](Copyable, Movable, Writable, ImplicitlyDestructible):
-    """Reusable filter pipeline: define once, execute against many RecordBatches.
+    """Relational filter: evaluate Pred, apply selection mask to all batch columns.
 
-    Per call: binds ColumnRef nodes in pred to the batch columns (O(cols)
-    ref-count bumps), then runs the single-pass fused filter loop.
+    *Fields defines the schema made available to the predicate (via ColumnRef
+    bindings). All columns of the input RecordBatch are filtered and returned.
+
+    Usage::
+
+        var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['data', Int32Type]]()
+        var result: RecordBatch = t.filter(t.a + t.b > lit(int32, 5)).execute(batch)
+        var col_data = result.column("data")
     """
 
     var _pred: Self.Pred
@@ -689,50 +658,26 @@ struct FilterPipeline[
     def __init__(out self, *, copy: Self):
         self._pred = copy._pred.copy()
 
-    def __call__(
-        mut self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.T]:
+    def __call__(mut self, batch: RecordBatch) raises -> RecordBatch:
+        """Filter batch, rebinding the predicate each call (safe to reuse)."""
         self._pred.bind(batch)
-        var data = batch.column(Self.data_name).as_primitive[Self.T]().copy()
-        return execute(FilterExpr(data^, self._pred.copy()), batch.num_rows())
+        var sel: AnyArray = execute(self._pred, batch.num_rows())^
+        var out_cols = List[AnyArray]()
+        for i in range(batch.num_columns()):
+            out_cols.append(filter_kernel(batch.column(i), sel.copy()))
+        return RecordBatch(schema=batch.schema, columns=out_cols^)
 
-    def execute(
-        var self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.T]:
-        """Single-call execution for use in chained expressions.
-
-        Unlike ``__call__``, this consumes the pipeline, allowing it to be
-        called directly on a temporary returned by ``.where()``:
-
-        .. code-block:: mojo
-
-            col['data'](dt.int32).where(col['a'](dt.int32) + col['b'](dt.int32) > col['c'](dt.int32)).execute(batch)
-        """
+    def execute(var self, batch: RecordBatch) raises -> RecordBatch:
+        """Consuming execute for temporaries (e.g. returned by ``Schema.filter()``)."""
         self._pred.bind(batch)
-        var data = batch.column(Self.data_name).as_primitive[Self.T]().copy()
-        return execute(FilterExpr(data^, self._pred.copy()), batch.num_rows())
+        var sel: AnyArray = execute(self._pred, batch.num_rows())^
+        var out_cols = List[AnyArray]()
+        for i in range(batch.num_columns()):
+            out_cols.append(filter_kernel(batch.column(i), sel.copy()))
+        return RecordBatch(schema=batch.schema, columns=out_cols^)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("FilterPipeline['", Self.data_name, "'] WHERE ", self._pred)
-
-
-@always_inline
-def filter_pipeline[data_col: StringLiteral, T: dt.NumericType, Pred: BoolExpr](
-    var pred: Pred,
-    dtype: T,
-) -> FilterPipeline[data_col, T, Pred]:
-    """Create a reusable filter pipeline bound to named RecordBatch columns.
-
-    Usage::
-
-        var p = filter_pipeline['output'](
-            GtExpr(Add(col['a'](dt.int32), col['b'](dt.int32)), col['c'](dt.int32)),
-            dt.int32,
-        )
-        var result1 = p(batch1)
-        var result2 = p(batch2)
-    """
-    return FilterPipeline[data_col, T, Pred](pred^)
+        writer.write("FilterRel WHERE ", self._pred)
 
 
 struct Pipeline[E: NumericExpr](Copyable, Movable, Writable, ImplicitlyDestructible):
@@ -774,10 +719,20 @@ trait FieldDescriptor:
 struct Field[name: StringLiteral, T: dt.NumericType](FieldDescriptor, Copyable, Movable):
     """Compile-time schema field descriptor. Carries no runtime data.
 
-    Pass as a type parameter: ``Schema[Field['price', Float32Type], ...]``.
+    Pass as a type parameter or as a value with dtype inference::
+
+        Schema[Field['price', Float32Type], Field['qty', Int32Type]]()  # explicit
+        Schema(Field['price'](float32), Field['qty'](int32))             # inferred T
     """
 
     comptime dtype = Self.T
+
+    def __init__(out self, _dtype: Self.T):
+        """Construct with dtype value; T is inferred, name must be in brackets.
+
+        Enables ``Field['price'](float32)`` → ``Field['price', Float32Type]``.
+        """
+        pass
 
     @staticmethod
     def _name_matches[other: StringLiteral]() -> Bool:
@@ -807,10 +762,18 @@ struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
     Usage::
 
         var t = Schema[Field['a', Int32Type], Field['data', Int32Type]]()
+        var t = Schema(Field("a", int32), Field("data", int32))  # inferred
         var result = t.data.where(t.a + t.b > lit(int32, 5)).execute(batch)
     """
 
     def __init__(out self):
+        pass
+
+    def __init__(out self, *fields: *Self.Fields):
+        """Infer *Fields from Field value arguments.
+
+        Enables ``Schema(Field("a", int32), Field("b", float32))`` syntax.
+        """
         pass
 
     def __init__(out self, *, copy: Self):
@@ -823,6 +786,18 @@ struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
     ](self) -> ColumnRef[name, Self.Fields[idx].dtype]:
         """Return ``ColumnRef[name, T]`` for the matching field in the schema."""
         return ColumnRef[name, Self.Fields[idx].dtype]()
+
+    def filter[Pred: BoolExpr](
+        self, pred: Pred
+    ) -> FilterRel[Pred, *Self.Fields]:
+        """Build a FilterRel over all fields in this schema.
+
+        Usage::
+
+            var t = Schema[Field['a', Int32Type], Field['data', Int32Type]]()
+            var result: RecordBatch = t.filter(t.a > lit(int32, 5)).execute(batch)
+        """
+        return FilterRel[Pred, *Self.Fields](pred.copy())
 
 
 def _vectorize_dispatch[
@@ -896,60 +871,6 @@ def execute[B: BoolExpr](expr: B, length: Int) raises -> BoolArray:
         offset=0,
         bitmap=None,
         buffer=bm.to_immutable(),
-    )
-
-
-@always_inline
-def _pack_bools[W: Int](mask: SIMD[DType.bool, W]) -> UInt64:
-    """Pack W boolean SIMD lanes into the low W bits of a UInt64."""
-    var result: UInt64 = 0
-    comptime for b in range(W):
-        result |= UInt64(Int(mask[b])) << UInt64(b)
-    return result
-
-
-def execute[
-    T: dt.NumericType,
-    Pred: BoolExpr,
-](expr: FilterExpr[T, Pred], length: Int) raises -> PrimitiveArray[T]:
-    """Single-pass fused filter: predicate eval and scatter-select in one loop.
-
-    Evaluates the predicate tree for 64 elements at a time, assembles the
-    results into a UInt64 selection word in registers (no BoolArray, no bitmap
-    write/read round-trip), then uses the adaptive compressed_store (sparse CTZ
-    or dense byte-chunked branchless) for the scatter step.
-    """
-    comptime native = T.native
-    comptime width = max(8, simd_byte_width() // size_of[Scalar[Pred.InNative]]())
-
-    var src = expr.data.values()
-    var out_buf = Buffer.alloc_uninit[native](length)
-    var out_view = out_buf.view[native](0, length)
-    var out_pos = 0
-
-    var i = 0
-    while i + 64 <= length:
-        var word: UInt64 = 0
-        comptime for k in range(64 // width):
-            word |= _pack_bools[width](
-                expr.pred.exec_core[width](i + k * width)
-            ) << UInt64(k * width)
-        out_pos += out_view.slice(out_pos).compressed_store(src.slice(i), word)
-        i += 64
-
-    while i < length:
-        if expr.pred.exec_core[1](i)[0]:
-            out_view.unsafe_set(out_pos, src.unsafe_get(i))
-            out_pos += 1
-        i += 1
-
-    return PrimitiveArray[T](
-        dtype=T(),
-        length=out_pos,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=out_buf.to_immutable(),
     )
 
 
@@ -1064,13 +985,10 @@ def main() raises:
     print(not_expr)                    # NOT((Col[8] > Lit[5]))
     print(execute(not_expr, 8))        # [true, true, true, true, true, false, false, false]
 
-    # filter(a, WHERE a + b > 15) — fused predicate + filter
-    var filter_expr = FilterExpr(
-        a.copy(),
-        GtExpr(Add(Column(a.copy()), Column(b.copy())), Literal[Int32Type](15)),
-    )
-    print(filter_expr)
-    print(execute(filter_expr, 8))     # elements of a where a+b > 15
+    # Schema-based FilterRel — multi-column relational filter (print-only demo)
+    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['data', Int32Type]]()
+    var filter_rel = t.filter(GtExpr(Add(col['a'](Int32Type()), col['b'](Int32Type())), Literal[Int32Type](15)))
+    print(filter_rel)   # FilterRel WHERE (col['a', ...] + col['b', ...] > Lit[15])
 
     # Runtime path (unchanged)
     var rt_expr = RuntimeExpr.column("a").negate().add(RuntimeExpr.column("b"))
