@@ -119,8 +119,8 @@ def test_filter_rel_reuse() raises:
 
     var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['c', Int32Type], Field['data', Int32Type]]()
     var rel = t.filter(t.a + t.b > t.c)
-    var r1 = rel(batch1)
-    var r2 = rel(batch2)
+    var r1 = rel.execute(batch1)
+    var r2 = rel.execute(batch2)
 
     # batch1: 2i+1 > n/2+i => i >= n/2
     assert_true(r1.column("data") == arange[Int32Type](n // 2, n))
@@ -222,8 +222,8 @@ def test_schema_filter_reuse() raises:
     var rel = t.filter(t.a + t.b > t.c)
 
     # _make_batch(n): a[i]=i, b[i]=i+1, c[i]=n/2+i  =>  a+b>c: 2i+1 > n/2+i  =>  i >= n/2
-    assert_true(rel(batch1).column("data") == arange[Int32Type](n // 2, n))
-    assert_true(rel(batch2).column("data") == arange[Int32Type](n, 2 * n))
+    assert_true(rel.execute(batch1).column("data") == arange[Int32Type](n // 2, n))
+    assert_true(rel.execute(batch2).column("data") == arange[Int32Type](n, 2 * n))
 
 
 def test_schema_getattr() raises:

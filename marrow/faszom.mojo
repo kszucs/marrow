@@ -658,19 +658,15 @@ struct FilterRel[
     def __init__(out self, *, copy: Self):
         self._pred = copy._pred.copy()
 
-    def __call__(mut self, batch: RecordBatch) raises -> RecordBatch:
-        """Filter batch, rebinding the predicate each call (safe to reuse)."""
-        self._pred.bind(batch)
-        var sel: AnyArray = execute(self._pred, batch.num_rows())^
-        var out_cols = List[AnyArray]()
-        for i in range(batch.num_columns()):
-            out_cols.append(filter_kernel(batch.column(i), sel.copy()))
-        return RecordBatch(schema=batch.schema, columns=out_cols^)
+    def execute(self, batch: RecordBatch) raises -> RecordBatch:
+        """Execute the filter, binding a fresh copy of the predicate each call.
 
-    def execute(var self, batch: RecordBatch) raises -> RecordBatch:
-        """Consuming execute for temporaries (e.g. returned by ``Schema.filter()``)."""
-        self._pred.bind(batch)
-        var sel: AnyArray = execute(self._pred, batch.num_rows())^
+        Works on both rvalues (``t.filter(pred).execute(batch)``) and stored
+        vars (``rel.execute(batch1); rel.execute(batch2)``).
+        """
+        var pred = self._pred.copy()
+        pred.bind(batch)
+        var sel: AnyArray = execute(pred, batch.num_rows())^
         var out_cols = List[AnyArray]()
         for i in range(batch.num_columns()):
             out_cols.append(filter_kernel(batch.column(i), sel.copy()))
