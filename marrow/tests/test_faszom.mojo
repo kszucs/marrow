@@ -1,4 +1,4 @@
-"""Tests for faszom static expression layer: ColumnRef, Pipeline, FilterRel."""
+"""Tests for faszom static expression layer: ColumnRef, FilterRel."""
 
 from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
@@ -14,7 +14,6 @@ from marrow.faszom import (
     Field,
     FilterRel,
     GtExpr,
-    Pipeline,
     Schema,
     col,
     execute,
@@ -157,21 +156,6 @@ def test_filter_rel_with_projection() raises:
     assert_equal(result.num_columns(), 4)
     assert_true(result.column("data") == arange[Int32Type](n // 2, n))
     assert_true(result.column("a") == arange[Int32Type](n // 2, n))
-
-
-def test_pipeline_numeric_expr() raises:
-    """Pipeline over Add(col['a'], col['b']) matches execute(Add(Column, Column))."""
-    var n = 32
-    var batch = _make_batch(n)
-
-    var a_arr = arange[Int32Type](0, n)
-    var b_arr = arange[Int32Type](1, n + 1)
-    var expected = execute(Add(Column(a_arr^), Column(b_arr^)), n)
-
-    var p = Pipeline(Add(col['a'](int32), col['b'](int32)))
-    var result = p(batch)
-
-    assert_true(expected == result)
 
 
 def test_boolean_operators() raises:

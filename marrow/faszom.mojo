@@ -38,7 +38,6 @@ from std.utils.index import IndexList
 # Static layer — kernel fusion via comptime exec_core
 # ===========================================================================
 
-
 trait Expr(Copyable, Movable, Writable, ImplicitlyDestructible):
     """Base for statically-typed expression nodes.
 
@@ -630,6 +629,17 @@ struct NotExpr[E: BoolExpr](BoolExpr):
 
 
 # ---------------------------------------------------------------------------
+# Relation — base trait for compile-time relational nodes
+# ---------------------------------------------------------------------------
+
+
+trait Relation(Copyable, Movable, Writable, ImplicitlyDestructible):
+    """Base for compile-time relational nodes that consume a RecordBatch."""
+
+    def execute(self, batch: RecordBatch) raises -> RecordBatch: ...
+
+
+# ---------------------------------------------------------------------------
 # FilterRel — multi-column relational filter returning RecordBatch
 # ---------------------------------------------------------------------------
 
@@ -637,7 +647,7 @@ struct NotExpr[E: BoolExpr](BoolExpr):
 struct FilterRel[
     Pred: BoolExpr,
     *Fields: FieldDescriptor,
-](Copyable, Movable, Writable, ImplicitlyDestructible):
+](Relation):
     """Relational filter: evaluate Pred, apply selection mask to all batch columns.
 
     *Fields defines the schema made available to the predicate (via ColumnRef
@@ -674,27 +684,6 @@ struct FilterRel[
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("FilterRel WHERE ", self._pred)
-
-
-struct Pipeline[E: NumericExpr](Copyable, Movable, Writable, ImplicitlyDestructible):
-    """Reusable numeric expression pipeline over named RecordBatch columns."""
-
-    var _expr: Self.E
-
-    def __init__(out self, var expr: Self.E):
-        self._expr = expr^
-
-    def __init__(out self, *, copy: Self):
-        self._expr = copy._expr.copy()
-
-    def __call__(
-        mut self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.E.OutType]:
-        self._expr.bind(batch)
-        return execute(self._expr, batch.num_rows())
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("Pipeline(", self._expr, ")")
 
 
 # ---------------------------------------------------------------------------
