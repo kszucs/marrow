@@ -1,4 +1,4 @@
-"""Tests for faszom static expression layer: ColumnRef, FilterRel."""
+"""Tests for faszom static expression layer: ColumnRef, Filter."""
 
 from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
@@ -12,22 +12,18 @@ from marrow.faszom import (
     Column,
     ColumnRef,
     Field,
-    FilterRel,
-    GtExpr,
+    Filter,
+    Greater,
     Schema,
     col,
     field,
     lit,
     table,
-    Pina,
 )
 
 
-
-
-
 def _make_batch(n: Int) raises -> RecordBatch:
-    """Build a RecordBatch with columns a, b, c, data — all int32."""
+    """Build a RecordBatch with columns a, b, c, data -- all int32."""
     var schema = ArrowSchema(
         fields=[
             ArrowField("a", int32),
@@ -48,21 +44,20 @@ def _make_batch(n: Int) raises -> RecordBatch:
     return RecordBatch(schema=schema, columns=columns^)
 
 
-def test_column_ref_same_result_as_column() raises:
-    """ColumnRef bound via bind() produces the same exec_core output as Column.
+def test_column_unified() raises:
+    """Unified Column with owned data produces the same exec_core output as before.
     """
     var n = 16
     var batch = _make_batch(n)
 
     var a_arr = arange[Int32Type](0, n)
     var b_arr = arange[Int32Type](1, n + 1)
-    var c_arr = arange[Int32Type](n // 2, n // 2 + n)
 
-    # Column path — arrays embedded upfront
+    # Column path -- arrays embedded upfront
     var col_expr = Add(Column(a_arr.copy()), Column(b_arr.copy()))
     var col_result = col_expr.execute(n)
 
-    # ColumnRef path — bound at execute time
+    # ColumnRef path -- bound at execute time
     var ref_expr = Add(ColumnRef["a", Int32Type](), ColumnRef["b", Int32Type]())
     ref_expr.bind(batch)
     var ref_result = ref_expr.execute(n)
@@ -70,7 +65,7 @@ def test_column_ref_same_result_as_column() raises:
     assert_true(col_result == ref_result)
 
 
-def test_col_convenience_same_as_column_ref() raises:
+def test_col_convenience() raises:
     """Col convenience function col['a'](int32) produces the same result as ColumnRef['a', Int32Type]().
     """
     var n = 16
@@ -85,8 +80,8 @@ def test_col_convenience_same_as_column_ref() raises:
     assert_true(expr1.execute(n) == expr2.execute(n))
 
 
-def test_filter_rel_basic() raises:
-    """FilterRel.execute(batch) filters all batch columns and returns a RecordBatch.
+def test_filter_basic() raises:
+    """Filter.execute(batch) filters all batch columns and returns a RecordBatch.
     """
     var n = 10
     var batch = _make_batch(n)
@@ -102,20 +97,8 @@ def test_filter_rel_basic() raises:
     assert_true(result.column("a") == arange[Int32Type](n // 2, n))
 
 
-struct Pinasen:
-    var a: Int32Type
-
-def test_pina() raises:
-    var n = 10
-    var batch = _make_batch(n)
-    var t = Pina[Pinasen]()
-
-    var faszom = t.a
-
-
-
-def test_filter_rel_reuse() raises:
-    """FilterRel.__call__ can be invoked on multiple batches and gives correct results.
+def test_filter_reuse() raises:
+    """Filter.__call__ can be invoked on multiple batches and gives correct results.
     """
     var n = 64
 
@@ -195,8 +178,8 @@ def test_schema_filter_execute() raises:
     assert_true(result.column("data") == arange[Int32Type](5, 10))
 
 
-def test_filter_rel_with_projection() raises:
-    """FilterRel outputs all batch columns; individual columns are accessible by name.
+def test_filter_with_projection() raises:
+    """Filter outputs all batch columns; individual columns are accessible by name.
     """
     var n = 10
     var batch = _make_batch(n)
@@ -214,7 +197,7 @@ def test_filter_rel_with_projection() raises:
 
 
 def test_boolean_operators() raises:
-    """& (AND) and ~ (NOT) operators on BoolExpr produce correct filtered results.
+    """& (AND) and ~ (NOT) operators on BoolValue produce correct filtered results.
     """
     var n = 10
     var schema_rt = ArrowSchema(
@@ -266,7 +249,7 @@ def test_schema_filter_one_liner() raises:
 
 
 def test_schema_filter_reuse() raises:
-    """A FilterRel built from Schema can be called on multiple batches."""
+    """A Filter built from Schema can be called on multiple batches."""
     var n = 64
     var batch1 = _make_batch(n)
     var batch2 = _make_batch(2 * n)

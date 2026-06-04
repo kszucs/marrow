@@ -40,20 +40,17 @@ from marrow.builders import arange
 from marrow.dtypes import Int32Type
 from marrow.faszom import (
     Add,
-    AndExpr,
+    And,
     Column,
-    EqExpr,
-    FilterExpr,
-    GtExpr,
-    LtExpr,
+    Equal,
+    Greater,
+    Less,
     Literal,
     Mul,
     Sub,
 )
 from marrow.kernels.arithmetic import AddKernel, MulKernel, SubKernel
-from marrow.kernels.boolean import AndKernel
 from marrow.kernels.compare import EqKernel, GtKernel, LtKernel
-from marrow.kernels.filter import filter as filter_kernel
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -66,7 +63,7 @@ from marrow.testing import BenchSuite, Benchmark
 def bench_fused_eq_1op_100k(mut b: Benchmark) raises:
     var a = arange[Int32Type](0, 100_000)
     var c = arange[Int32Type](0, 100_000)
-    var expr = EqExpr(Column(a.copy()), Column(c.copy()))
+    var expr = Equal(Column(a.copy()), Column(c.copy()))
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
@@ -106,7 +103,7 @@ def bench_fused_add_eq_100k(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 100_001)
     var c = arange[Int32Type](2, 100_002)
     var d = arange[Int32Type](3, 100_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Column(a.copy()), Column(bv.copy())),
         Add(Column(c.copy()), Column(d.copy())),
     )
@@ -151,7 +148,7 @@ def bench_fused_add_eq_1m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 1_000_001)
     var c = arange[Int32Type](2, 1_000_002)
     var d = arange[Int32Type](3, 1_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Column(a.copy()), Column(bv.copy())),
         Add(Column(c.copy()), Column(d.copy())),
     )
@@ -196,7 +193,7 @@ def bench_fused_add_eq_10m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 10_000_001)
     var c = arange[Int32Type](2, 10_000_002)
     var d = arange[Int32Type](3, 10_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Column(a.copy()), Column(bv.copy())),
         Add(Column(c.copy()), Column(d.copy())),
     )
@@ -241,7 +238,7 @@ def bench_fused_add_eq_100m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 100_000_001)
     var c = arange[Int32Type](2, 100_000_002)
     var d = arange[Int32Type](3, 100_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Column(a.copy()), Column(bv.copy())),
         Add(Column(c.copy()), Column(d.copy())),
     )
@@ -292,7 +289,7 @@ def bench_fused_mul_add_eq_100k(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 100_001)
     var c = arange[Int32Type](2, 100_002)
     var d = arange[Int32Type](3, 100_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
         Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
     )
@@ -339,7 +336,7 @@ def bench_fused_mul_add_eq_1m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 1_000_001)
     var c = arange[Int32Type](2, 1_000_002)
     var d = arange[Int32Type](3, 1_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
         Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
     )
@@ -386,7 +383,7 @@ def bench_fused_mul_add_eq_10m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 10_000_001)
     var c = arange[Int32Type](2, 10_000_002)
     var d = arange[Int32Type](3, 10_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
         Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
     )
@@ -433,7 +430,7 @@ def bench_fused_mul_add_eq_100m(mut b: Benchmark) raises:
     var bv = arange[Int32Type](1, 100_000_001)
     var c = arange[Int32Type](2, 100_000_002)
     var d = arange[Int32Type](3, 100_000_003)
-    var expr = EqExpr(
+    var expr = Equal(
         Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
         Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
     )
@@ -473,166 +470,6 @@ def bench_dispatch_mul_add_eq_100m(mut b: Benchmark) raises:
     keep(bv)
     keep(c)
     keep(d)
-
-
-# ---------------------------------------------------------------------------
-# Group A — simple predicate filter: WHERE a + b > c
-# Fused:    1 pass — predicate eval (SIMD[bool,W]) fed directly into
-#           compressed_store; no BoolArray, no bitmap pack/unpack
-# Dispatch: ab=a+b (pass1), mask=ab>c → BoolArray (pass2), filter (pass3)
-#           — 1 intermediate arithmetic array + 1 BoolArray
-# ---------------------------------------------------------------------------
-
-
-def _bench_fused_filter_gt(mut b: Benchmark, n: Int) raises:
-    var a = arange[Int32Type](0, n)
-    var bv = arange[Int32Type](1, n + 1)
-    var c = arange[Int32Type](n // 2, n // 2 + n)  # ~50% selectivity: a+b > c
-    var data = arange[Int32Type](0, n)
-    var expr = FilterExpr(
-        data.copy(),
-        GtExpr(Add(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-    )
-    b.throughput(BenchMetric.elements, n)
-
-    @always_inline
-    @parameter
-    def call() raises:
-        keep(expr.execute(n))
-
-    b.iter[call]()
-    keep(a)
-    keep(bv)
-    keep(c)
-    keep(data)
-    keep(expr)
-
-
-def _bench_dispatch_filter_gt(mut b: Benchmark, n: Int) raises:
-    var a: AnyArray = arange[Int32Type](0, n)
-    var bv: AnyArray = arange[Int32Type](1, n + 1)
-    var c: AnyArray = arange[Int32Type](n // 2, n // 2 + n)
-    var data: AnyArray = arange[Int32Type](0, n)
-    b.throughput(BenchMetric.elements, n)
-
-    @always_inline
-    @parameter
-    def call() raises:
-        var ab = AddKernel.dispatch(a, bv)
-        var mask = GtKernel.dispatch(ab, c)
-        keep(filter_kernel(data, mask.as_bool().copy()))
-
-    b.iter[call]()
-    keep(a)
-    keep(bv)
-    keep(c)
-    keep(data)
-
-
-def bench_fused_filter_gt_100k(mut b: Benchmark) raises:
-    _bench_fused_filter_gt(b, 100_000)
-
-
-def bench_dispatch_filter_gt_100k(mut b: Benchmark) raises:
-    _bench_dispatch_filter_gt(b, 100_000)
-
-
-def bench_fused_filter_gt_1m(mut b: Benchmark) raises:
-    _bench_fused_filter_gt(b, 1_000_000)
-
-
-def bench_dispatch_filter_gt_1m(mut b: Benchmark) raises:
-    _bench_dispatch_filter_gt(b, 1_000_000)
-
-
-# ---------------------------------------------------------------------------
-# Group B — compound predicate filter: WHERE a + b > c AND d + e < f
-# Fused:    1 pass — full compound predicate (5 ops) eval'd per SIMD block,
-#           mask fed directly into compressed_store; no intermediate arrays,
-#           no BoolArray, no bitmap pack/unpack
-# Dispatch: ab=a+b, gt=ab>c, de=d+e, lt=de<f, mask=and_(gt,lt), filter
-#           — 4 intermediate arithmetic arrays + 1 BoolArray
-# Both conditions give exactly 50% selectivity; combined ~25%.
-# ---------------------------------------------------------------------------
-
-
-def _bench_fused_filter_compound(mut b: Benchmark, n: Int) raises:
-    var a = arange[Int32Type](0, n)
-    var bv = arange[Int32Type](1, n + 1)
-    var c = arange[Int32Type](n // 2, n // 2 + n)  # ~50% for a+b > c
-    var d = arange[Int32Type](0, n)
-    var ev = arange[Int32Type](1, n + 1)
-    var f = arange[Int32Type](n // 2 + 1, n // 2 + 1 + n)  # ~50% for d+e < f
-    var data = arange[Int32Type](0, n)
-    var expr = FilterExpr(
-        data.copy(),
-        AndExpr(
-            GtExpr(Add(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-            LtExpr(Add(Column(d.copy()), Column(ev.copy())), Column(f.copy())),
-        ),
-    )
-    b.throughput(BenchMetric.elements, n)
-
-    @always_inline
-    @parameter
-    def call() raises:
-        keep(expr.execute(n))
-
-    b.iter[call]()
-    keep(a)
-    keep(bv)
-    keep(c)
-    keep(d)
-    keep(ev)
-    keep(f)
-    keep(data)
-    keep(expr)
-
-
-def _bench_dispatch_filter_compound(mut b: Benchmark, n: Int) raises:
-    var a: AnyArray = arange[Int32Type](0, n)
-    var bv: AnyArray = arange[Int32Type](1, n + 1)
-    var c: AnyArray = arange[Int32Type](n // 2, n // 2 + n)
-    var d: AnyArray = arange[Int32Type](0, n)
-    var ev: AnyArray = arange[Int32Type](1, n + 1)
-    var f: AnyArray = arange[Int32Type](n // 2 + 1, n // 2 + 1 + n)
-    var data: AnyArray = arange[Int32Type](0, n)
-    b.throughput(BenchMetric.elements, n)
-
-    @always_inline
-    @parameter
-    def call() raises:
-        var ab = AddKernel.dispatch(a, bv)
-        var gt = GtKernel.dispatch(ab, c)
-        var de = AddKernel.dispatch(d, ev)
-        var lt = LtKernel.dispatch(de, f)
-        var mask = AndKernel.dispatch(gt, lt)
-        keep(filter_kernel(data, mask.as_bool().copy()))
-
-    b.iter[call]()
-    keep(a)
-    keep(bv)
-    keep(c)
-    keep(d)
-    keep(ev)
-    keep(f)
-    keep(data)
-
-
-def bench_fused_filter_compound_100k(mut b: Benchmark) raises:
-    _bench_fused_filter_compound(b, 100_000)
-
-
-def bench_dispatch_filter_compound_100k(mut b: Benchmark) raises:
-    _bench_dispatch_filter_compound(b, 100_000)
-
-
-def bench_fused_filter_compound_1m(mut b: Benchmark) raises:
-    _bench_fused_filter_compound(b, 1_000_000)
-
-
-def bench_dispatch_filter_compound_1m(mut b: Benchmark) raises:
-    _bench_dispatch_filter_compound(b, 1_000_000)
 
 
 def main() raises:
