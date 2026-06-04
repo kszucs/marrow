@@ -69,15 +69,17 @@ trait ReductionKernel(Kernel):
     """
 
     @staticmethod
-    def combine[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[T, W]: ...
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        ...
 
     @staticmethod
-    def identity[T: DType]() -> Scalar[T]: ...
+    def identity[T: DType]() -> Scalar[T]:
+        ...
 
     @staticmethod
-    def apply[T: PrimitiveType](
+    def apply[
+        T: PrimitiveType
+    ](
         array: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveScalar[T]:
@@ -206,7 +208,8 @@ def product[
 ](
     array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
-    """Multiply all valid (non-null) elements. Returns 1 if empty or all null."""
+    """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
+    """
     return ProductKernel.apply[T](array, ctx)
 
 

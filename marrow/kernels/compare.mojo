@@ -110,12 +110,15 @@ trait BinaryCompareKernel(Kernel):
     """
 
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]: ...
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        ...
 
     @staticmethod
-    def apply[T: PrimitiveType](
+    def apply[
+        T: PrimitiveType
+    ](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
@@ -132,7 +135,8 @@ trait BinaryCompareKernel(Kernel):
     ) raises -> AnyArray:
         if left.dtype() != right.dtype():
             raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
+                t" {right.dtype()}"
             )
         if left.dtype() == int8:
             return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
@@ -151,11 +155,17 @@ trait BinaryCompareKernel(Kernel):
         elif left.dtype() == uint64:
             return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
         elif left.dtype() == float16:
-            return Self.apply(left.as_float16(), right.as_float16(), ctx).to_any()
+            return Self.apply(
+                left.as_float16(), right.as_float16(), ctx
+            ).to_any()
         elif left.dtype() == float32:
-            return Self.apply(left.as_float32(), right.as_float32(), ctx).to_any()
+            return Self.apply(
+                left.as_float32(), right.as_float32(), ctx
+            ).to_any()
         elif left.dtype() == float64:
-            return Self.apply(left.as_float64(), right.as_float64(), ctx).to_any()
+            return Self.apply(
+                left.as_float64(), right.as_float64(), ctx
+            ).to_any()
         raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
 
 
@@ -169,9 +179,9 @@ struct EqKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.eq(b)
 
 
@@ -180,9 +190,9 @@ struct NeKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ne(b)
 
 
@@ -191,9 +201,9 @@ struct LtKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.lt(b)
 
 
@@ -202,9 +212,9 @@ struct LeKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.le(b)
 
 
@@ -213,9 +223,9 @@ struct GtKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.gt(b)
 
 
@@ -224,9 +234,9 @@ struct GeKernel(BinaryCompareKernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](
-        a: SIMD[T, W], b: SIMD[T, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ge(b)
 
 

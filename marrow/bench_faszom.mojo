@@ -49,7 +49,6 @@ from marrow.faszom import (
     Literal,
     Mul,
     Sub,
-    execute,
 )
 from marrow.kernels.arithmetic import AddKernel, MulKernel, SubKernel
 from marrow.kernels.boolean import AndKernel
@@ -73,7 +72,7 @@ def bench_fused_eq_1op_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 100_000))
+        keep(expr.execute(100_000))
 
     b.iter[call]()
     keep(a)
@@ -116,7 +115,7 @@ def bench_fused_add_eq_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 100_000))
+        keep(expr.execute(100_000))
 
     b.iter[call]()
     keep(a)
@@ -161,7 +160,7 @@ def bench_fused_add_eq_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 1_000_000))
+        keep(expr.execute(1_000_000))
 
     b.iter[call]()
     keep(a)
@@ -206,7 +205,7 @@ def bench_fused_add_eq_10m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 10_000_000))
+        keep(expr.execute(10_000_000))
 
     b.iter[call]()
     keep(a)
@@ -251,7 +250,7 @@ def bench_fused_add_eq_100m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 100_000_000))
+        keep(expr.execute(100_000_000))
 
     b.iter[call]()
     keep(a)
@@ -302,7 +301,7 @@ def bench_fused_mul_add_eq_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 100_000))
+        keep(expr.execute(100_000))
 
     b.iter[call]()
     keep(a)
@@ -349,7 +348,7 @@ def bench_fused_mul_add_eq_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 1_000_000))
+        keep(expr.execute(1_000_000))
 
     b.iter[call]()
     keep(a)
@@ -396,7 +395,7 @@ def bench_fused_mul_add_eq_10m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 10_000_000))
+        keep(expr.execute(10_000_000))
 
     b.iter[call]()
     keep(a)
@@ -443,7 +442,7 @@ def bench_fused_mul_add_eq_100m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, 100_000_000))
+        keep(expr.execute(100_000_000))
 
     b.iter[call]()
     keep(a)
@@ -499,7 +498,7 @@ def _bench_fused_filter_gt(mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, n))
+        keep(expr.execute(n))
 
     b.iter[call]()
     keep(a)
@@ -546,8 +545,6 @@ def bench_dispatch_filter_gt_1m(mut b: Benchmark) raises:
     _bench_dispatch_filter_gt(b, 1_000_000)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Group B — compound predicate filter: WHERE a + b > c AND d + e < f
 # Fused:    1 pass — full compound predicate (5 ops) eval'd per SIMD block,
@@ -562,7 +559,7 @@ def bench_dispatch_filter_gt_1m(mut b: Benchmark) raises:
 def _bench_fused_filter_compound(mut b: Benchmark, n: Int) raises:
     var a = arange[Int32Type](0, n)
     var bv = arange[Int32Type](1, n + 1)
-    var c = arange[Int32Type](n // 2, n // 2 + n)      # ~50% for a+b > c
+    var c = arange[Int32Type](n // 2, n // 2 + n)  # ~50% for a+b > c
     var d = arange[Int32Type](0, n)
     var ev = arange[Int32Type](1, n + 1)
     var f = arange[Int32Type](n // 2 + 1, n // 2 + 1 + n)  # ~50% for d+e < f
@@ -579,7 +576,7 @@ def _bench_fused_filter_compound(mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(execute(expr, n))
+        keep(expr.execute(n))
 
     b.iter[call]()
     keep(a)
@@ -636,8 +633,6 @@ def bench_fused_filter_compound_1m(mut b: Benchmark) raises:
 
 def bench_dispatch_filter_compound_1m(mut b: Benchmark) raises:
     _bench_dispatch_filter_compound(b, 1_000_000)
-
-
 
 
 def main() raises:

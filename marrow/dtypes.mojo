@@ -668,10 +668,10 @@ struct AnyDataType(
     ConvertibleFromPython,
     ConvertibleToPython,
     Copyable,
+    DataType,
     Equatable,
     Movable,
     Writable,
-    DataType,
 ):
     comptime VariantType = Variant[
         NullType,

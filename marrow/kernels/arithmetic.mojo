@@ -24,9 +24,17 @@ from ..views import apply
 from ..dtypes import (
     PrimitiveType,
     FloatingType,
-    int8, int16, int32, int64,
-    uint8, uint16, uint32, uint64,
-    float16, float32, float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
 )
 from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
@@ -45,18 +53,21 @@ trait BinaryKernel(Kernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]: ...
+    def core[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        ...
 
     @staticmethod
-    def apply[T: PrimitiveType](
+    def apply[
+        T: PrimitiveType
+    ](
         left: PrimitiveArray[T],
         right: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
         if len(left) != len(right):
             raise Error(
-                t"{Self.name} arrays must have the same length, got {len(left)} and"
-                t" {len(right)}"
+                t"{Self.name} arrays must have the same length, got"
+                t" {len(left)} and {len(right)}"
             )
         comptime native = T.native
         var length = len(left)
@@ -90,7 +101,8 @@ trait BinaryNumericKernel(BinaryKernel):
     ) raises -> AnyArray:
         if left.dtype() != right.dtype():
             raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
+                t" {right.dtype()}"
             )
         if left.dtype() == int8:
             return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
@@ -109,11 +121,17 @@ trait BinaryNumericKernel(BinaryKernel):
         elif left.dtype() == uint64:
             return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
         elif left.dtype() == float16:
-            return Self.apply(left.as_float16(), right.as_float16(), ctx).to_any()
+            return Self.apply(
+                left.as_float16(), right.as_float16(), ctx
+            ).to_any()
         elif left.dtype() == float32:
-            return Self.apply(left.as_float32(), right.as_float32(), ctx).to_any()
+            return Self.apply(
+                left.as_float32(), right.as_float32(), ctx
+            ).to_any()
         elif left.dtype() == float64:
-            return Self.apply(left.as_float64(), right.as_float64(), ctx).to_any()
+            return Self.apply(
+                left.as_float64(), right.as_float64(), ctx
+            ).to_any()
         raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
 
 
@@ -128,16 +146,24 @@ trait BinaryFloatKernel(BinaryKernel):
     ) raises -> AnyArray:
         if left.dtype() != right.dtype():
             raise Error(
-                t"{Self.name}: dtype mismatch: {left.dtype()} vs {right.dtype()}"
+                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
+                t" {right.dtype()}"
             )
         if left.dtype() == float16:
-            return Self.apply(left.as_float16(), right.as_float16(), ctx).to_any()
+            return Self.apply(
+                left.as_float16(), right.as_float16(), ctx
+            ).to_any()
         elif left.dtype() == float32:
-            return Self.apply(left.as_float32(), right.as_float32(), ctx).to_any()
+            return Self.apply(
+                left.as_float32(), right.as_float32(), ctx
+            ).to_any()
         elif left.dtype() == float64:
-            return Self.apply(left.as_float64(), right.as_float64(), ctx).to_any()
+            return Self.apply(
+                left.as_float64(), right.as_float64(), ctx
+            ).to_any()
         raise Error(
-            t"{Self.name}: unsupported dtype {left.dtype()}, expected float type"
+            t"{Self.name}: unsupported dtype {left.dtype()}, expected float"
+            t" type"
         )
 
 
@@ -149,10 +175,13 @@ trait UnaryKernel(Kernel):
 
     @always_inline
     @staticmethod
-    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]: ...
+    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
+        ...
 
     @staticmethod
-    def apply[T: PrimitiveType](
+    def apply[
+        T: PrimitiveType
+    ](
         array: PrimitiveArray[T],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
@@ -170,7 +199,9 @@ trait UnaryKernel(Kernel):
             dtype=array.dtype.copy(),
             length=length,
             nulls=length
-            - array.bitmap.value().view().count_set_bits() if array.bitmap else 0,
+            - array.bitmap.value()
+            .view()
+            .count_set_bits() if array.bitmap else 0,
             offset=0,
             bitmap=array.bitmap,
             buffer=buf.to_immutable(),
@@ -225,9 +256,9 @@ trait UnaryFloatKernel(UnaryKernel):
         elif array.dtype() == float64:
             return Self.apply(array.as_float64(), ctx).to_any()
         raise Error(
-            t"{Self.name}: unsupported dtype {array.dtype()}, expected float type"
+            t"{Self.name}: unsupported dtype {array.dtype()}, expected float"
+            t" type"
         )
-
 
 
 # ---------------------------------------------------------------------------

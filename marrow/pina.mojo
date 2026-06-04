@@ -6,7 +6,7 @@ import marrow.dtypes as dt
 from marrow.utils import variant_dispatch, variant_dispatch_raises
 
 
-trait Value(Copyable, Movable, Writable, ImplicitlyDestructible):
+trait Value(Copyable, ImplicitlyDestructible, Movable, Writable):
     comptime OutType: dt.DataType
 
     def type(self) -> Self.OutType:
@@ -43,8 +43,8 @@ trait Binary(Value):
 
 
 struct Column[T: dt.DataType](
-    Value,
     NumericValue where conforms_to(T, dt.NumericType),
+    Value,
 ):
     comptime OutType = Self.T
 
@@ -69,7 +69,7 @@ struct Column[T: dt.DataType](
         return AnyValue(Column(self.name, self.dtype.copy().to_any()))
 
 
-struct Negate[T: NumericValue](Unary, NumericValue):
+struct Negate[T: NumericValue](NumericValue, Unary):
     comptime ArgType = Self.T
     comptime OutType = Self.T.OutType
 
@@ -77,7 +77,9 @@ struct Negate[T: NumericValue](Unary, NumericValue):
 
     def __init__(out self, var arg: Self.T) raises:
         if not arg.type().to_any().is_numeric():
-            raise Error("Negate only supports numeric types, got: " + String(arg.type()))
+            raise Error(
+                "Negate only supports numeric types, got: " + String(arg.type())
+            )
         self.arg = arg^
 
     def __init__(out self, *, copy: Self):
@@ -102,7 +104,9 @@ struct Equal[L: Value, R: Value](Binary):
     var right: Self.R
 
     def __init__(out self, var left: Self.L, var right: Self.R) raises:
-        comptime assert _type_is_eq[Self.L.OutType, Self.R.OutType](), "Equal only supports comparing values of the same type"
+        comptime assert _type_is_eq[
+            Self.L.OutType, Self.R.OutType
+        ](), "Equal only supports comparing values of the same type"
         self.left = left^
         self.right = right^
 
@@ -122,7 +126,9 @@ struct Equal[L: Value, R: Value](Binary):
 
 struct Add[L: Value, R: Value](
     Binary,
-    NumericValue where conforms_to(L, NumericValue) and conforms_to(R, NumericValue),
+    NumericValue where conforms_to(L, NumericValue) and conforms_to(
+        R, NumericValue
+    ),
 ):
     comptime LeftType = Self.L
     comptime RightType = Self.R
@@ -133,9 +139,16 @@ struct Add[L: Value, R: Value](
 
     def __init__(out self, var left: Self.L, var right: Self.R) raises:
         if not left.type().to_any().is_numeric():
-            raise Error("Add only supports numeric types, got: " + String(left.type()))
+            raise Error(
+                "Add only supports numeric types, got: " + String(left.type())
+            )
         if left.type().to_any() != right.type().to_any():
-            raise Error("Add requires matching types, got: " + String(left.type()) + " and " + String(right.type()))
+            raise Error(
+                "Add requires matching types, got: "
+                + String(left.type())
+                + " and "
+                + String(right.type())
+            )
         self.left = left^
         self.right = right^
 
@@ -153,7 +166,7 @@ struct Add[L: Value, R: Value](
         return AnyValue(Add(self.left.to_any(), self.right.to_any()))
 
 
-struct AnyValue(Value, NumericValue):
+struct AnyValue(NumericValue, Value):
     comptime OutType = dt.AnyDataType
     comptime VariantType = Variant[
         Column[dt.AnyDataType],
@@ -187,7 +200,10 @@ struct AnyValue(Value, NumericValue):
 
     def negate(self) raises -> Negate[Self]:
         if not self.type().is_numeric():
-            raise Error("negate only supports numeric types, got: " + String(self.type()))
+            raise Error(
+                "negate only supports numeric types, got: "
+                + String(self.type())
+            )
         return Negate(self.copy())
 
     def to_any(self) -> AnyValue:
@@ -198,7 +214,9 @@ def negate[T: NumericValue](var arg: Negate[T]) -> T:
     return arg.arg.copy()
 
 
-def negate[T: NumericValue](var arg: T) raises -> Negate[T] where not conforms_to(T, Unary):
+def negate[
+    T: NumericValue
+](var arg: T) raises -> Negate[T] where not conforms_to(T, Unary):
     return Negate(arg^)
 
 

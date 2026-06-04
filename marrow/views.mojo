@@ -1040,14 +1040,18 @@ def _apply_dispatch[
         var chunk = ceildiv(length, workers)
 
         @always_inline
-        def task(wid: Int) {read chunk, read length,}:
+        def task(
+            wid: Int,
+        ) {read chunk, read length,}:
             var start = wid * chunk
             var end = min(start + chunk, length)
             if end <= start:
                 return
 
             @always_inline
-            def lane[W: Int](i: Int) {read start,}:
+            def lane[
+                W: Int
+            ](i: Int) {read start,}:
                 process[W, rank=1](IndexList[1](start + i))
 
             vectorize[cpu_width](end - start, lane)
@@ -1500,7 +1504,7 @@ def _reduce_dispatch[
 
         @always_inline
         def task(
-            wid: Int
+            wid: Int,
         ) {read chunk, read length, read identity, read partials_view,}:
             var start = wid * chunk
             var end = min(start + chunk, length)

@@ -23,22 +23,39 @@ from marrow.arrays import AnyArray, BoolArray, PrimitiveArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.builders import arange
 from marrow.dtypes import Int32Type
-from marrow.kernels.arithmetic import add, neg, AddKernel, NegKernel, SubKernel, MulKernel
+from marrow.kernels.arithmetic import (
+    add,
+    neg,
+    AddKernel,
+    NegKernel,
+    SubKernel,
+    MulKernel,
+)
 from marrow.kernels.boolean import AndKernel, OrKernel, NotKernel
-from marrow.kernels.compare import EqKernel, NeKernel, LtKernel, LeKernel, GtKernel, GeKernel
+from marrow.kernels.compare import (
+    EqKernel,
+    NeKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
+)
 from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.filter import filter as filter_kernel
 from marrow.tabular import RecordBatch
 from marrow.views import BufferView
 from std.memory import OwnedPointer
 from std.utils.index import IndexList
+from std.reflection import reflect
+
 
 
 # ===========================================================================
 # Static layer — kernel fusion via comptime exec_core
 # ===========================================================================
 
-trait Expr(Copyable, Movable, Writable, ImplicitlyDestructible):
+
+trait Expr(Copyable, ImplicitlyDestructible, Movable, Writable):
     """Base for statically-typed expression nodes.
 
     OutType is NumericType (not the broader PrimitiveType) so that
@@ -95,8 +112,33 @@ trait NumericExpr(Expr):
     def __ge__[RHS: NumericExpr](self, rhs: RHS) -> GeExpr[Self, RHS]:
         return GeExpr(self.copy(), rhs.copy())
 
+    def execute(self, length: Int) raises -> PrimitiveArray[Self.OutType]:
+        comptime native = Self.OutType.native
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var buf = Buffer.alloc_uninit[native](length)
+        var view = buf.view[native](0, length)
+        _ = view
 
-trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            var i = idx[0]
+            view.store[W](i, self.exec_core[W](i))
+
+        _vectorize_dispatch[native, width, fill](length)
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
+
+
+trait BoolExpr(Copyable, ImplicitlyDestructible, Movable, Writable):
     """Base for bool-output expression nodes (comparisons).
 
     InNative carries the numeric dtype of the leaves so execute() can choose
@@ -107,7 +149,8 @@ trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
     comptime InNative: DType
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]: ...
+    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        ...
 
     def bind(mut self, batch: RecordBatch) raises:
         pass
@@ -120,6 +163,31 @@ trait BoolExpr(Copyable, Movable, Writable, ImplicitlyDestructible):
 
     def __invert__(self) -> NotExpr[Self]:
         return NotExpr(self.copy())
+
+    def execute(self, length: Int) raises -> BoolArray:
+        comptime width = max(
+            8, simd_byte_width() // size_of[Scalar[Self.InNative]]()
+        )
+        var bm = Bitmap.alloc_uninit(length)
+        var view = bm.view()
+        _ = view
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank]) -> None:
+            var i = idx[0]
+            view.store[W](i, self.exec_core[W](i))
+
+        _vectorize_dispatch[Self.InNative, width, fill](length)
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=bm.to_immutable(),
+        )
 
 
 struct Column[T: dt.NumericType](Expr, NumericExpr):
@@ -141,7 +209,7 @@ struct Column[T: dt.NumericType](Expr, NumericExpr):
         writer.write("Col[", len(self.arr), "]")
 
 
-struct ColumnRef[name: StringLiteral, T: dt.NumericType](Expr, NumericExpr):
+struct ColumnRef[name: StaticString, T: dt.NumericType](Expr, NumericExpr):
     """Named column placeholder resolved from a RecordBatch at execute time.
 
     `name` and `T` are compile-time constants, so each distinct (name, T) pair
@@ -200,7 +268,7 @@ def lit[T: dt.NumericType](dtype: T, value: Int) -> Literal[T]:
 
 
 @always_inline
-def col[name: StringLiteral, T: dt.NumericType](dtype: T) -> ColumnRef[name, T]:
+def col[name: StaticString, T: dt.NumericType](dtype: T) -> ColumnRef[name, T]:
     """Create a named column placeholder for use in AOT expression trees.
 
     Usage: ``col['price'](dt.float32)``
@@ -226,7 +294,9 @@ struct Negate[T: NumericExpr](NumericExpr):
 
     @always_inline
     def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.OutType.native, W]:
-        return NegKernel.core[Self.T.OutType.native, W](self.arg.exec_core[W](idx))
+        return NegKernel.core[Self.T.OutType.native, W](
+            self.arg.exec_core[W](idx)
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Negate(", self.arg, ")")
@@ -633,10 +703,11 @@ struct NotExpr[E: BoolExpr](BoolExpr):
 # ---------------------------------------------------------------------------
 
 
-trait Relation(Copyable, Movable, Writable, ImplicitlyDestructible):
+trait Relation(Copyable, ImplicitlyDestructible, Movable, Writable):
     """Base for compile-time relational nodes that consume a RecordBatch."""
 
-    def execute(self, batch: RecordBatch) raises -> RecordBatch: ...
+    def execute(self, batch: RecordBatch) raises -> RecordBatch:
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -676,7 +747,7 @@ struct FilterRel[
         """
         var pred = self._pred.copy()
         pred.bind(batch)
-        var sel: AnyArray = execute(pred, batch.num_rows())^
+        var sel: AnyArray = pred.execute(batch.num_rows())
         var out_cols = List[AnyArray]()
         for i in range(batch.num_columns()):
             out_cols.append(filter_kernel(batch.column(i), sel.copy()))
@@ -697,11 +768,13 @@ trait FieldDescriptor:
     comptime dtype: dt.NumericType
 
     @staticmethod
-    def _name_matches[other: StringLiteral]() -> Bool:
+    def _name_matches[other: StaticString]() -> Bool:
         ...
 
 
-struct Field[name: StringLiteral, T: dt.NumericType](FieldDescriptor, Copyable, Movable):
+struct Field[name: StaticString, T: dt.NumericType](
+    Copyable, FieldDescriptor, Movable
+):
     """Compile-time schema field descriptor. Carries no runtime data.
 
     Pass as a type parameter or as a value with dtype inference::
@@ -720,12 +793,21 @@ struct Field[name: StringLiteral, T: dt.NumericType](FieldDescriptor, Copyable, 
         pass
 
     @staticmethod
-    def _name_matches[other: StringLiteral]() -> Bool:
+    def _name_matches[other: StaticString]() -> Bool:
         return Self.name == other
 
 
+@always_inline
+def field[name: StaticString, T: dt.NumericType](dtype: T) -> Field[name, T]:
+    """Convenience shorthand for ``Field["name"](dtype)``.
+
+    Usage: ``field["a"](int32)`` — same as ``Field["a"](int32)`` but shorter.
+    """
+    return Field[name](dtype)
+
+
 def _schema_find_idx[
-    name: StringLiteral,
+    name: StaticString,
     *Fields: FieldDescriptor,
     start: Int = 0,
 ]() -> Int:
@@ -735,7 +817,7 @@ def _schema_find_idx[
         return -1
     comptime if Fields[start]._name_matches[name]():
         return start
-    return _schema_find_idx[name, *Fields, start = start + 1]()
+    return _schema_find_idx[name, *Fields, start=start + 1]()
 
 
 struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
@@ -766,15 +848,16 @@ struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
 
     @always_inline
     def __getattr_param__[
-        name: StringLiteral,
+        name: StaticString,
         idx: Int = _schema_find_idx[name, *Self.Fields](),
     ](self) -> ColumnRef[name, Self.Fields[idx].dtype]:
-        """Return ``ColumnRef[name, T]`` for the matching field in the schema."""
+        """Return ``ColumnRef[name, T]`` for the matching field in the schema.
+        """
         return ColumnRef[name, Self.Fields[idx].dtype]()
 
-    def filter[Pred: BoolExpr](
-        self, pred: Pred
-    ) -> FilterRel[Pred, *Self.Fields]:
+    def filter[
+        Pred: BoolExpr
+    ](self, pred: Pred) -> FilterRel[Pred, *Self.Fields]:
         """Build a FilterRel over all fields in this schema.
 
         Usage::
@@ -783,6 +866,59 @@ struct Schema[*Fields: FieldDescriptor](Copyable, Movable):
             var result: RecordBatch = t.filter(t.a > lit(int32, 5)).execute(batch)
         """
         return FilterRel[Pred, *Self.Fields](pred.copy())
+
+
+struct Fiszem[N: StaticString, T: AnyType]():
+    """Compile-time schema field descriptor. Carries no runtime data.
+
+    Pass as a type parameter or as a value with dtype inference::
+
+        Schema[Field['price', Float32Type], Field['qty', Int32Type]]()  # explicit
+        Schema(Field['price'](float32), Field['qty'](int32))             # inferred T
+    """
+
+    def __init__(out self):
+        pass
+
+
+struct Pina[T: AnyType](Copyable, Movable):
+    """Schema parameterised by ``Field[name, T]`` type tags; no runtime fields.
+
+    Every attribute access (``t.col_name``) goes through ``__getattr_param__``,
+    which returns a ``ColumnRef[name, T]`` for the matching field.
+
+    Usage::
+
+        var t = Schema[Field['a', Int32Type], Field['data', Int32Type]]()
+        var t = Schema(Field("a", int32), Field("data", int32))  # inferred
+        var result = t.data.where(t.a + t.b > lit(int32, 5)).execute(batch)
+    """
+
+    def __init__(out self):
+        pass
+
+    def __init__(out self, *, copy: Self):
+        pass
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral,
+        typ: AnyType = reflect[Self.T].field_type[name].T,
+    ](self) -> Fiszem[name, typ]:
+        """Return ``ColumnRef[name, T]`` for the matching field in the schema.
+        """
+        return Fiszem[name, typ]()
+
+
+@always_inline
+def table[*Fields: FieldDescriptor](*fields: *Fields) -> Schema[*Fields]:
+    """Convenience alias for Schema().
+
+    Usage: ``table(field["a"](int32), field["b"](int32))``
+    """
+    return Schema[*Fields](copy=Schema[*Fields]())
+
+
 
 
 def _vectorize_dispatch[
@@ -801,64 +937,6 @@ def _vectorize_dispatch[
     vectorize[cpu_width](length, lane)
 
 
-def execute[E: NumericExpr](expr: E, length: Int) raises -> PrimitiveArray[E.OutType]:
-    """Drive a single fused vectorize loop over the expression tree.
-
-    Uses the same @parameter-closure pattern as views.mojo's apply() so that
-    the mutable view capture is safe and buf.to_immutable() is valid afterward.
-    """
-    comptime native = E.OutType.native
-    comptime width = simd_byte_width() // size_of[Scalar[native]]()
-    var buf = Buffer.alloc_uninit[native](length)
-    # view captured inside @parameter fill — suppress false-positive unused warning
-    var view = buf.view[native](0, length)
-    _ = view
-
-    @parameter
-    @always_inline
-    def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]) -> None:
-        var i = idx[0]
-        view.store[W](i, expr.exec_core[W](i))
-
-    _vectorize_dispatch[native, width, fill](length)
-    return PrimitiveArray[E.OutType](
-        dtype=E.OutType(),
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=buf.to_immutable(),
-    )
-
-
-def execute[B: BoolExpr](expr: B, length: Int) raises -> BoolArray:
-    """Drive a single fused vectorize loop over a boolean expression tree.
-
-    Computes W booleans per iteration and bit-packs them into a Bitmap via
-    BitmapView.store[W].  cpu_width is derived from B.InNative so the SIMD
-    width matches the numeric leaves of the expression tree.
-    """
-    comptime width = max(8, simd_byte_width() // size_of[Scalar[B.InNative]]())
-    var bm = Bitmap.alloc_uninit(length)
-    var view = bm.view()
-    _ = view
-
-    @parameter
-    @always_inline
-    def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]) -> None:
-        var i = idx[0]
-        view.store[W](i, expr.exec_core[W](i))
-
-    _vectorize_dispatch[B.InNative, width, fill](length)
-    return BoolArray(
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=bm.to_immutable(),
-    )
-
-
 # ===========================================================================
 # Runtime layer — lazy tree, NOT implementing Expr
 # ===========================================================================
@@ -872,7 +950,7 @@ comptime _RT_NEGATE = 1
 comptime _RT_ADD = 2
 
 
-struct _NodeContent(Copyable, Movable, ImplicitlyDestructible):
+struct _NodeContent(Copyable, ImplicitlyDestructible, Movable):
     var _kind: Int
     var _name: String
     var _args: List[RuntimeExpr]
@@ -895,7 +973,7 @@ struct _NodeContent(Copyable, Movable, ImplicitlyDestructible):
             self._args.append(RuntimeExpr(copy=copy._args[i]))
 
 
-struct RuntimeExpr(Copyable, Movable, ImplicitlyDestructible):
+struct RuntimeExpr(Copyable, ImplicitlyDestructible, Movable):
     """Lazy runtime expression tree. Call execute() to materialise.
 
     sizeof[RuntimeExpr] = sizeof(OwnedPointer) = pointer width, allowing
@@ -940,14 +1018,14 @@ struct RuntimeExpr(Copyable, Movable, ImplicitlyDestructible):
 
 
 def main() raises:
-    var a = arange[Int32Type](1, 9)    # [1, 2, 3, 4, 5, 6, 7, 8]
+    var a = arange[Int32Type](1, 9)  # [1, 2, 3, 4, 5, 6, 7, 8]
     var b = arange[Int32Type](10, 18)  # [10, 11, 12, 13, 14, 15, 16, 17]
-    var c = arange[Int32Type](1, 9)    # [1, 2, 3, 4, 5, 6, 7, 8]
+    var c = arange[Int32Type](1, 9)  # [1, 2, 3, 4, 5, 6, 7, 8]
 
     # -(a) + b — numeric fusion (existing)
     var num_expr = Add(Negate(Column(a.copy())), Column(b.copy()))
-    print(num_expr)                    # Add(Negate(Col[8]), Col[8])
-    print(execute(num_expr, 8))        # [9, 9, 9, 9, 9, 9, 9, 9]
+    print(num_expr)  # Add(Negate(Col[8]), Col[8])
+    print(execute(num_expr, 8))  # [9, 9, 9, 9, 9, 9, 9, 9]
 
     # (a + b) == (c + 1) — fused: 3 ops, 1 pass, 0 intermediate arrays
     var eq_expr = EqExpr(
@@ -962,18 +1040,31 @@ def main() raises:
         GtExpr(Column(a.copy()), Literal[Int32Type](0)),
         LtExpr(Column(b.copy()), Literal[Int32Type](15)),
     )
-    print(and_expr)                    # (Col[8] > Lit[0]) AND (Col[8] < Lit[15])
-    print(execute(and_expr, 8))        # [true, true, true, true, true, false, false, false]
+    print(and_expr)  # (Col[8] > Lit[0]) AND (Col[8] < Lit[15])
+    print(
+        execute(and_expr, 8)
+    )  # [true, true, true, true, true, false, false, false]
 
     # NOT (a > 5)
     var not_expr = NotExpr(GtExpr(Column(a.copy()), Literal[Int32Type](5)))
-    print(not_expr)                    # NOT((Col[8] > Lit[5]))
-    print(execute(not_expr, 8))        # [true, true, true, true, true, false, false, false]
+    print(not_expr)  # NOT((Col[8] > Lit[5]))
+    print(
+        execute(not_expr, 8)
+    )  # [true, true, true, true, true, false, false, false]
 
     # Schema-based FilterRel — multi-column relational filter (print-only demo)
-    var t = Schema[Field['a', Int32Type], Field['b', Int32Type], Field['data', Int32Type]]()
-    var filter_rel = t.filter(GtExpr(Add(col['a'](Int32Type()), col['b'](Int32Type())), Literal[Int32Type](15)))
-    print(filter_rel)   # FilterRel WHERE (col['a', ...] + col['b', ...] > Lit[15])
+    var t = Schema[
+        Field["a", Int32Type], Field["b", Int32Type], Field["data", Int32Type]
+    ]()
+    var filter_rel = t.filter(
+        GtExpr(
+            Add(col["a"](Int32Type()), col["b"](Int32Type())),
+            Literal[Int32Type](15),
+        )
+    )
+    print(
+        filter_rel
+    )  # FilterRel WHERE (col['a', ...] + col['b', ...] > Lit[15])
 
     # Runtime path (unchanged)
     var rt_expr = RuntimeExpr.column("a").negate().add(RuntimeExpr.column("b"))

@@ -61,16 +61,18 @@ trait BoolBinaryKernel(Kernel):
     """
 
     @staticmethod
-    def core[W: Int](
-        a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]
-    ) -> SIMD[DType.bool, W]: ...
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        ...
 
     @staticmethod
     def apply(
         left: BoolArray,
         right: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray: ...
+    ) raises -> BoolArray:
+        ...
 
     @staticmethod
     def dispatch(
@@ -80,7 +82,9 @@ trait BoolBinaryKernel(Kernel):
     ) raises -> AnyArray:
         if left.dtype() != bool_dt or right.dtype() != bool_dt:
             raise Error(t"{Self.name}: inputs must be bool arrays")
-        return Self.apply(left.as_bool().copy(), right.as_bool().copy(), ctx).to_any()
+        return Self.apply(
+            left.as_bool().copy(), right.as_bool().copy(), ctx
+        ).to_any()
 
 
 trait BoolUnaryKernel(Kernel):
@@ -91,13 +95,15 @@ trait BoolUnaryKernel(Kernel):
     """
 
     @staticmethod
-    def core[W: Int](a: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]: ...
+    def core[W: Int](a: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        ...
 
     @staticmethod
     def apply(
         arr: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray: ...
+    ) raises -> BoolArray:
+        ...
 
     @staticmethod
     def dispatch(
@@ -119,9 +125,9 @@ struct AndKernel(BoolBinaryKernel):
 
     @always_inline
     @staticmethod
-    def core[W: Int](
-        a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
         return a & b
 
     @staticmethod
@@ -147,9 +153,9 @@ struct OrKernel(BoolBinaryKernel):
 
     @always_inline
     @staticmethod
-    def core[W: Int](
-        a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]
-    ) -> SIMD[DType.bool, W]:
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
         return a | b
 
     @staticmethod

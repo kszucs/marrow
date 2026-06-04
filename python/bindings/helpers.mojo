@@ -22,7 +22,8 @@ from std.python import (
 
 
 def pyfunction[
-    R: ConvertibleToPython, //,
+    R: ConvertibleToPython,
+    //,
     func: def() raises thin -> R,
 ]() -> def() raises thin -> PythonObject:
     def wrapper() raises -> PythonObject:
@@ -33,7 +34,8 @@ def pyfunction[
 
 def pyfunction[
     A0: ConvertibleFromPython,
-    R: ConvertibleToPython, //,
+    R: ConvertibleToPython,
+    //,
     func: def(A0) raises thin -> R,
 ]() -> def(PythonObject) raises thin -> PythonObject:
     def wrapper(arg0: PythonObject) raises -> PythonObject:
@@ -43,7 +45,8 @@ def pyfunction[
 
 
 def pyfunction[
-    A0: ConvertibleFromPython, //,
+    A0: ConvertibleFromPython,
+    //,
     func: def(A0) raises thin -> Bool,
 ]() -> def(PythonObject) raises thin -> PythonObject:
     def wrapper(arg0: PythonObject) raises -> PythonObject:
@@ -55,7 +58,8 @@ def pyfunction[
 def pyfunction[
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
-    R: ConvertibleToPython, //,
+    R: ConvertibleToPython,
+    //,
     func: def(A0, A1) raises thin -> R,
 ]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
@@ -66,7 +70,8 @@ def pyfunction[
 
 def pyfunction[
     A0: ConvertibleFromPython,
-    A1: ConvertibleFromPython, //,
+    A1: ConvertibleFromPython,
+    //,
     func: def(A0, A1) raises thin -> Bool,
 ]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     def wrapper(arg0: PythonObject, arg1: PythonObject) raises -> PythonObject:
@@ -79,7 +84,8 @@ def pyfunction[
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
-    R: ConvertibleToPython, //,
+    R: ConvertibleToPython,
+    //,
     func: def(A0, A1, A2) raises thin -> R,
 ]() -> def(
     PythonObject, PythonObject, PythonObject
@@ -97,7 +103,8 @@ def pyfunction[
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
     A3: ConvertibleFromPython,
-    R: ConvertibleToPython, //,
+    R: ConvertibleToPython,
+    //,
     func: def(A0, A1, A2, A3) raises thin -> R,
 ]() -> def(
     PythonObject, PythonObject, PythonObject, PythonObject
