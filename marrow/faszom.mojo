@@ -2,10 +2,11 @@
 
 Two separate layers:
 
-- **Static layer** (`Value` / `NumericValue` traits, `Column` / `Negate` / `Add`
-  structs): each node implements `exec_core[W](idx) -> SIMD[OutType.native, W]`.
-  `execute()` drives a single fused `vectorize` loop -- the compiler inlines the
-  full tree, producing zero intermediate arrays.
+- **Static layer** (`Value` / `NumericValue` / `BoolValue` / `StringValue`
+  traits, `Column` / `Negate` / `Add` structs): each node implements
+  `core(idx) -> SIMD[...]` (numeric/bool) or `core(idx) -> StringScalar`.
+  `execute()` drives a single fused `vectorize` loop -- the compiler inlines
+  the full tree, producing zero intermediate arrays.
 
 - **Runtime layer** (`RuntimeExpr`): lazy tree built at construction time,
   evaluated on `.execute()` via the existing typed/`AnyArray` kernel overloads
@@ -19,7 +20,7 @@ from std.sys.info import simd_byte_width
 from std.sys.intrinsics import _type_is_eq
 
 import marrow.dtypes as dt
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray
+from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.builders import arange
 from marrow.dtypes import Int32Type
@@ -50,33 +51,39 @@ from std.reflection import reflect
 
 
 # ===========================================================================
-# Static layer -- kernel fusion via comptime exec_core
+# Static layer -- kernel fusion via comptime core()
 # ===========================================================================
 
 
 trait Value(Copyable, ImplicitlyDestructible, Movable, Writable):
     """Base for statically-typed expression nodes.
 
-    OutType is NumericType (not the broader PrimitiveType) so that
-    exec_core can return SIMD[OutType.native, W] and the executor can
-    construct a PrimitiveArray[OutType] via OutType() (Defaultable).
+    OutType is the broader dt.DataType so that Value can be implemented
+    by all data types (numeric, boolean, string).  Numeric-specific and
+    boolean-specific execution live on the derived traits.
     """
 
-    comptime OutType: dt.NumericType
-
-    @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.OutType.native, W]:
-        ...
+    comptime OutType: dt.DataType
 
     def bind(mut self, batch: RecordBatch) raises:
         pass
 
 
 trait NumericValue(Value):
-    """Marker: OutType is numeric. Inherits exec_core from Value, so
-    T: NumericValue implies T.exec_core[W](idx) is callable.
+    """Marker: OutType is numeric. Inherits bind() from Value.
+
+    NativeType is the Mojo scalar type for SIMD operations; OutType is the
+    broader dt.DataType used for array construction.  core[W](idx) returns a
+    SIMD lane of NativeType; execute() drives a single fused vectorize loop.
     Operator overloads build the expression tree without executing it.
     """
+
+    comptime OutType: dt.NumericType
+    comptime NativeType: DType
+
+    @always_inline
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        ...
 
     def __neg__(self) -> Negate[Self]:
         return Negate(self.copy())
@@ -112,11 +119,9 @@ trait NumericValue(Value):
         return GreaterEq(self.copy(), rhs.copy())
 
     def execute(self, length: Int) raises -> PrimitiveArray[Self.OutType]:
-        comptime native = Self.OutType.native
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
-        var buf = Buffer.alloc_uninit[native](length)
-        var view = buf.view[native](0, length)
-        _ = view
+        comptime width = simd_byte_width() // size_of[Scalar[Self.NativeType]]()
+        var buf = Buffer.alloc_uninit[Self.NativeType](length)
+        var view = buf.view[Self.NativeType](0, length)
 
         @parameter
         @always_inline
@@ -124,9 +129,9 @@ trait NumericValue(Value):
             W: Int, rank: Int, alignment: Int = 1
         ](idx: IndexList[rank]) -> None:
             var i = idx[0]
-            view.store[W](i, self.exec_core[W](i))
+            view.store[W](i, self.core[W](i))
 
-        _vectorize_dispatch[native, width, fill](length)
+        _vectorize_dispatch[Self.NativeType, width, fill](length)
         return PrimitiveArray[Self.OutType](
             dtype=Self.OutType(),
             length=length,
@@ -141,14 +146,14 @@ trait BoolValue(Copyable, ImplicitlyDestructible, Movable, Writable):
     """Base for bool-output expression nodes (comparisons).
 
     InNative carries the numeric dtype of the leaves so execute() can choose
-    the correct SIMD width.  exec_core[W](idx) returns W booleans that
+    the correct SIMD width.  core[W](idx) returns W booleans that
     execute() bit-packs into a BoolArray via BitmapView.store[W].
     """
 
     comptime InNative: DType
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         ...
 
     def bind(mut self, batch: RecordBatch) raises:
@@ -169,7 +174,6 @@ trait BoolValue(Copyable, ImplicitlyDestructible, Movable, Writable):
         )
         var bm = Bitmap.alloc_uninit(length)
         var view = bm.view()
-        _ = view
 
         @parameter
         @always_inline
@@ -177,7 +181,7 @@ trait BoolValue(Copyable, ImplicitlyDestructible, Movable, Writable):
             W: Int, rank: Int, alignment: Int = 1
         ](idx: IndexList[rank]) -> None:
             var i = idx[0]
-            view.store[W](i, self.exec_core[W](i))
+            view.store[W](i, self.core[W](i))
 
         _vectorize_dispatch[Self.InNative, width, fill](length)
         return BoolArray(
@@ -202,6 +206,7 @@ struct Column[T: dt.NumericType](NumericValue, Value):
     """
 
     comptime OutType = Self.T
+    comptime NativeType = Self.T.native
 
     var arr: PrimitiveArray[Self.T]
 
@@ -212,7 +217,7 @@ struct Column[T: dt.NumericType](NumericValue, Value):
         self.arr = copy.arr.copy()
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.native, W]:
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
         return self.arr.values().load[W](idx)
 
     def write_to[W: Writer](self, mut writer: W):
@@ -227,6 +232,7 @@ struct ColumnRef[name: StaticString, T: dt.NumericType](NumericValue, Value):
     """
 
     comptime OutType = Self.T
+    comptime NativeType = Self.T.native
 
     var _arr: Optional[PrimitiveArray[Self.T]]
 
@@ -243,7 +249,7 @@ struct ColumnRef[name: StaticString, T: dt.NumericType](NumericValue, Value):
         self._arr = batch.column(Self.name).as_primitive[Self.T]().copy()
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.native, W]:
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
         return self._arr.unsafe_value().values().load[W](idx)
 
     def col_name(self) -> String:
@@ -290,6 +296,7 @@ def col[name: StaticString, T: dt.NumericType](dtype: T) -> ColumnRef[name, T]:
 
 struct Negate[T: NumericValue](NumericValue):
     comptime OutType = Self.T.OutType
+    comptime NativeType = Self.T.NativeType
 
     var arg: Self.T
 
@@ -303,10 +310,8 @@ struct Negate[T: NumericValue](NumericValue):
         self.arg.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.OutType.native, W]:
-        return NegKernel.core[Self.T.OutType.native, W](
-            self.arg.exec_core[W](idx)
-        )
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        return NegKernel.core[Self.NativeType, W](self.arg.core[W](idx))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Negate(", self.arg, ")")
@@ -314,6 +319,7 @@ struct Negate[T: NumericValue](NumericValue):
 
 struct Add[L: NumericValue, R: NumericValue](NumericValue):
     comptime OutType = Self.L.OutType
+    comptime NativeType = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -334,10 +340,10 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
-        var l = self.left.exec_core[W](idx)
-        var r = self.right.exec_core[W](idx).cast[Self.L.OutType.native]()
-        return AddKernel.core[Self.L.OutType.native, W](l, r)
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](idx)
+        var r = self.right.core[W](idx).cast[Self.NativeType]()
+        return AddKernel.core[Self.NativeType, W](l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Add(", self.left, ", ", self.right, ")")
@@ -347,18 +353,19 @@ struct Literal[T: dt.NumericType](NumericValue):
     """Scalar constant broadcast to all SIMD lanes."""
 
     comptime OutType = Self.T
+    comptime NativeType = Self.T.native
 
-    var value: Scalar[Self.T.native]
+    var value: Scalar[Self.NativeType]
 
-    def __init__(out self, value: Scalar[Self.T.native]):
+    def __init__(out self, value: Scalar[Self.NativeType]):
         self.value = value
 
     def __init__(out self, *, copy: Self):
         self.value = copy.value
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.T.native, W]:
-        return SIMD[Self.T.native, W](self.value)
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        return SIMD[Self.NativeType, W](self.value)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Lit[", self.value, "]")
@@ -366,6 +373,7 @@ struct Literal[T: dt.NumericType](NumericValue):
 
 struct Sub[L: NumericValue, R: NumericValue](NumericValue):
     comptime OutType = Self.L.OutType
+    comptime NativeType = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -386,10 +394,10 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
-        var l = self.left.exec_core[W](idx)
-        var r = self.right.exec_core[W](idx).cast[Self.L.OutType.native]()
-        return SubKernel.core[Self.L.OutType.native, W](l, r)
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](idx)
+        var r = self.right.core[W](idx).cast[Self.NativeType]()
+        return SubKernel.core[Self.NativeType, W](l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Sub(", self.left, ", ", self.right, ")")
@@ -397,6 +405,7 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
 
 struct Mul[L: NumericValue, R: NumericValue](NumericValue):
     comptime OutType = Self.L.OutType
+    comptime NativeType = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -417,10 +426,10 @@ struct Mul[L: NumericValue, R: NumericValue](NumericValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[Self.L.OutType.native, W]:
-        var l = self.left.exec_core[W](idx)
-        var r = self.right.exec_core[W](idx).cast[Self.L.OutType.native]()
-        return MulKernel.core[Self.L.OutType.native, W](l, r)
+    def core[W: Int](self, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](idx)
+        var r = self.right.core[W](idx).cast[Self.NativeType]()
+        return MulKernel.core[Self.NativeType, W](l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Mul(", self.left, ", ", self.right, ")")
@@ -432,7 +441,7 @@ struct Mul[L: NumericValue, R: NumericValue](NumericValue):
 
 
 struct Equal[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -453,10 +462,10 @@ struct Equal[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return EqKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return EqKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -464,7 +473,7 @@ struct Equal[L: NumericValue, R: NumericValue](BoolValue):
 
 
 struct NotEqual[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -485,10 +494,10 @@ struct NotEqual[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return NeKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return NeKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -496,7 +505,7 @@ struct NotEqual[L: NumericValue, R: NumericValue](BoolValue):
 
 
 struct Less[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -517,10 +526,10 @@ struct Less[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return LtKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return LtKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -528,7 +537,7 @@ struct Less[L: NumericValue, R: NumericValue](BoolValue):
 
 
 struct LessEq[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -549,10 +558,10 @@ struct LessEq[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return LeKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return LeKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -560,7 +569,7 @@ struct LessEq[L: NumericValue, R: NumericValue](BoolValue):
 
 
 struct Greater[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -581,10 +590,10 @@ struct Greater[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return GtKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return GtKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -592,7 +601,7 @@ struct Greater[L: NumericValue, R: NumericValue](BoolValue):
 
 
 struct GreaterEq[L: NumericValue, R: NumericValue](BoolValue):
-    comptime InNative = Self.L.OutType.native
+    comptime InNative = Self.L.NativeType
 
     var left: Self.L
     var right: Self.R
@@ -613,10 +622,10 @@ struct GreaterEq[L: NumericValue, R: NumericValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return GeKernel.core[Self.L.OutType.native, W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx).cast[Self.L.OutType.native](),
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return GeKernel.core[Self.L.NativeType, W](
+            self.left.core[W](idx),
+            self.right.core[W](idx).cast[Self.L.NativeType](),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -647,10 +656,10 @@ struct And[L: BoolValue, R: BoolValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return AndKernel.core[W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx),
+            self.left.core[W](idx),
+            self.right.core[W](idx),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -676,10 +685,10 @@ struct Or[L: BoolValue, R: BoolValue](BoolValue):
         self.right.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
         return OrKernel.core[W](
-            self.left.exec_core[W](idx),
-            self.right.exec_core[W](idx),
+            self.left.core[W](idx),
+            self.right.core[W](idx),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -701,11 +710,52 @@ struct Not[E: BoolValue](BoolValue):
         self.expr.bind(batch)
 
     @always_inline
-    def exec_core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
-        return NotKernel.core[W](self.expr.exec_core[W](idx))
+    def core[W: Int](self, idx: Int) -> SIMD[DType.bool, W]:
+        return NotKernel.core[W](self.expr.core[W](idx))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("NOT(", self.expr, ")")
+
+
+# ---------------------------------------------------------------------------
+# StringValue trait and string leaf nodes
+# ---------------------------------------------------------------------------
+
+
+trait StringValue(Copyable, ImplicitlyDestructible, Movable, Writable):
+    """Base for string expression nodes.
+
+    core(idx) returns the StringScalar at the given index;
+    execute() materialises a StringArray.
+    """
+
+    comptime OutType = dt.string
+
+    @always_inline
+    def core(self, idx: Int) -> StringScalar:
+        ...
+
+    def bind(mut self, batch: RecordBatch) raises:
+        pass
+
+
+struct StringColumn(StringValue):
+    """Owned string column -- data provided at construction time."""
+
+    var arr: StringArray
+
+    def __init__(out self, var arr: StringArray):
+        self.arr = arr^
+
+    def __init__(out self, *, copy: Self):
+        self.arr = copy.arr.copy()
+
+    @always_inline
+    def core(self, idx: Int) -> StringScalar:
+        return self.arr.unsafe_get(UInt(idx))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("StrCol[", len(self.arr), "]")
 
 
 # ---------------------------------------------------------------------------
