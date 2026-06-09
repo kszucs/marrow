@@ -118,6 +118,7 @@ from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
+from marrow.expr.fused_values import NumericTypedValue, FusedColumn
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -418,6 +419,45 @@ struct IfElseProcessor(ValueProcessor):
         var t = self.then_.eval(batch)
         var e = self.else_.eval(batch)
         return select(c, t, e)
+
+
+# ---------------------------------------------------------------------------
+# FusedProcessor — comptime-fused expression evaluation
+# ---------------------------------------------------------------------------
+
+
+struct FusedProcessor[T: NumericTypedValue](ValueProcessor):
+    """Evaluates a comptime-fused expression against a RecordBatch.
+
+    Wraps a ``NumericTypedValue`` (e.g. ``FusedAdd[FusedColumn, FusedColumn]``)
+    and calls ``execute(batch)`` to produce a single fused ``PrimitiveArray``
+    with zero intermediate arrays.
+
+    This is the execution engine for the static (comptime) expression layer
+    that mirrors ``faszom.mojo``.  Unlike the type-erased ``ValueProcessor``
+    hierarchy, each ``FusedProcessor[T]`` is a unique type — the compiler
+    knows the full expression tree and can inline ``core[W]()`` across it.
+
+    Usage::
+
+        var col_a = FusedColumn[Int64Type](0)
+        var col_b = FusedColumn[Int64Type](1)
+        var expr = FusedAdd(col_a, col_b)
+        var proc = FusedProcessor(expr)
+        var result = proc.eval(batch)  # single fused pass
+    """
+
+    var expr: Self.T
+
+    def __init__(out self, var expr: Self.T):
+        self.expr = expr^
+
+    def __init__(out self, *, copy: Self):
+        self.expr = copy.expr.copy()
+
+    def eval(self, batch: RecordBatch) raises -> AnyArray:
+        var expr = self.expr.copy()
+        return expr.execute(batch).to_any()
 
 
 # ===================================================================

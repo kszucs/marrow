@@ -136,6 +136,7 @@ from marrow.expr.executor import (
     UnaryProcessor,
     IsNullProcessor,
     IfElseProcessor,
+    FusedProcessor,
     # Relation processors
     RelationProcessor,
     AnyRelationProcessor,
@@ -147,4 +148,15 @@ from marrow.expr.executor import (
     JoinProcessor,
     Planner,
     execute,
+)
+from marrow.expr.fused_values import (
+    # Traits
+    TypedValue,
+    NumericTypedValue,
+    # Expression nodes
+    FusedColumn,
+    FusedAdd,
+    FusedSub,
+    # Vectorize dispatch
+    _vectorize_dispatch,
 )
