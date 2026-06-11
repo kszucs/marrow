@@ -33,27 +33,15 @@ Rewriting
 from marrow.expr.values import (
     # Traits
     Value,
-    # Type-erased container
-    AnyValue,
-    # Concrete nodes
-    Column,
-    Literal,
-    Binary,
-    Unary,
-    IsNull,
-    IfElse,
-    Cast,
-    # Free-standing factory functions
+    # Unified expression node
+    Expr,
+    # Free-standing factory functions (return Expr)
     col,
     lit,
     if_else,
-    # Utilities
-    rebuild,
-    resolve_columns,
-    # Leaf-node kinds
+    # Node kinds
     LOAD,
     LITERAL,
-    # BinaryOp constants
     ADD,
     SUB,
     MUL,
@@ -66,18 +54,12 @@ from marrow.expr.values import (
     GE,
     AND,
     OR,
-    # UnaryOp constants
     NEG,
     ABS,
     NOT,
-    # Other node kinds
     IS_NULL,
     IF_ELSE,
     CAST,
-    # Dispatch hints
-    DISPATCH_AUTO,
-    DISPATCH_CPU,
-    DISPATCH_GPU,
 )
 from marrow.expr.relations import (
     Relation,

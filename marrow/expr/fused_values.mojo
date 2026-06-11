@@ -12,7 +12,8 @@ Expression nodes
 
 Traits
 ------
-``TypedValue`` — base trait (write_to)
+``Value`` — base trait for all expression nodes (kind, dtype, inputs, write_to)
+``TypedValue`` — extends Value with comptime fusion support
 ``NumericTypedValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 
 Usage
@@ -26,15 +27,46 @@ Usage
 
 from std.algorithm.backend.vectorize import vectorize
 from std.builtin.simd import Scalar
+from std.memory import ArcPointer
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 
 import marrow.dtypes as dt
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.buffers import Buffer
-from marrow.dtypes import DType, NumericType
+from marrow.dtypes import AnyDataType, DType, NumericType
+from marrow.expr.values import Expr
 from marrow.tabular import RecordBatch
+
+
+# ---------------------------------------------------------------------------
+# Value trait — base for all expression nodes
+# ---------------------------------------------------------------------------
+
+
+trait Value(ImplicitlyDestructible, Movable):
+    """Interface for immutable scalar expression nodes.
+
+    This trait is implemented by both the type-erased expressions in
+    ``values.mojo`` and the comptime-fused expressions in this module.
+    """
+
+    def kind(self) -> UInt8:
+        """Return the node-kind constant."""
+        ...
+
+    def dtype(self) -> Optional[AnyDataType]:
+        """Return the output data type, or None if not yet inferred."""
+        ...
+
+    def inputs(self) -> List[Expr]:
+        """Return child expressions (empty for leaf nodes)."""
+        ...
+
+    def write_to[W: Writer](self, mut writer: W):
+        """Format this node for display (children formatted recursively)."""
+        ...
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +74,7 @@ from marrow.tabular import RecordBatch
 # ---------------------------------------------------------------------------
 
 
-trait TypedValue(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writable):
+trait TypedValue(Value, Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writable):
     """Base trait for statically-typed (comptime-fused) expression nodes.
 
     Unlike the type-erased ``Value`` trait in ``values.mojo``, nodes that
@@ -90,6 +122,24 @@ trait NumericTypedValue(TypedValue):
 
     def execute(self, batch: RecordBatch) raises -> PrimitiveArray[Self.OutType]:
         """Run the fused vectorize loop and return the result array."""
+        ...
+
+    # Default Value trait implementations
+
+    def kind(self) -> UInt8:
+        """Return the node-kind constant."""
+        return 0  # Fused nodes don't have a specific kind constant
+
+    def dtype(self) -> Optional[AnyDataType]:
+        """Return the output data type."""
+        return Optional[AnyDataType](Self.OutType())
+
+    def inputs(self) -> List[Expr]:
+        """Return child expressions (empty for leaf nodes)."""
+        return List[Expr]()
+
+    def write_to[W: Writer](self, mut writer: W):
+        """Format this node for display."""
         ...
 
 

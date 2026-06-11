@@ -418,5 +418,26 @@ def test_parquet_scan_downcast() raises:
     assert_equal(node.downcast[ParquetScan]()[].path, "/tmp/x.parquet")
 
 
+def test_project_fused_add() raises:
+    """Project can use a fused add expression (col(0) + col(1))."""
+    var src = AnyRelation(
+        Scan(name="t", schema_=schema([field("x", int64), field("y", int64)]))
+    )
+    # col(0) + col(1) returns Expr, which is now the unified expression type
+    var proj = Project(
+        input=src,
+        names=["sum"],
+        exprs_=[col(0) + col(1)],
+        schema_=schema([field("sum", int64)]),
+    )
+    var s = proj.schema()
+    assert_equal(len(s), 1)
+    assert_equal(s.fields[0].name, "sum")
+    # Verify the expression is an ADD node
+    var exprs = proj.exprs()
+    assert_equal(len(exprs), 1)
+    assert_equal(exprs[0].kind(), ADD)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

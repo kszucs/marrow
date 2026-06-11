@@ -82,22 +82,13 @@ from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.kernels.filter import filter
 from marrow.expr.values import (
-    AnyValue,
-    Column,
-    Literal,
-    Binary,
-    Unary,
-    IsNull,
-    IfElse,
-    Cast,
+    Expr,
     LOAD,
+    LITERAL,
     ADD,
     SUB,
     MUL,
     DIV,
-    NEG,
-    ABS,
-    LITERAL,
     EQ,
     NE,
     LT,
@@ -106,12 +97,12 @@ from marrow.expr.values import (
     GE,
     AND,
     OR,
+    NEG,
+    ABS,
     NOT,
     IS_NULL,
     IF_ELSE,
     CAST,
-    DISPATCH_CPU,
-    DISPATCH_GPU,
 )
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
