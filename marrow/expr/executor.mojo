@@ -103,6 +103,7 @@ from marrow.expr.values import (
     IS_NULL,
     IF_ELSE,
     CAST,
+    FUSED,
 )
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
@@ -950,33 +951,39 @@ struct Planner:
     def __init__(out self, ctx: ExecutionContext = ExecutionContext()):
         self.ctx = ctx
 
-    def build(self, expr: AnyValue) raises -> AnyValueProcessor:
-        """Build a value processor tree from a scalar expression tree."""
+    def build(self, expr: Expr) raises -> AnyValueProcessor:
+        """Build a value processor tree from a scalar expression.
+
+        If the ``Expr`` carries a fused expression (``_tag == FUSED``), uses
+        ``FusedExprProcessor`` which calls ``expr.execute(batch)`` directly.
+        Otherwise dispatches on the tag and builds the runtime processor chain.
+        """
+        # Fused expression: can't build a runtime processor; use FusedProcessor directly.
+        if expr.kind() == FUSED:
+            raise Error(
+                "Planner.build: fused expressions require FusedProcessor, "
+                "not the runtime processor path"
+            )
+
         var k = expr.kind()
         if k == LOAD:
-            var arc = expr.downcast[Column]()
-            return ColumnProcessor(arc[].index)
+            return ColumnProcessor(Int(expr._kind_data))
         elif k == LITERAL:
-            var arc = expr.downcast[Literal]()
-            return LiteralProcessor(arc[].value)
+            return LiteralProcessor(expr._value.value().copy())
         elif k >= ADD and k <= OR:
-            var arc = expr.downcast[Binary]()
-            var left = self.build(arc[].left)
-            var right = self.build(arc[].right)
-            return BinaryProcessor(left^, right^, arc[].op)
+            var left = self.build(expr._args[0].copy())
+            var right = self.build(expr._args[1].copy())
+            return BinaryProcessor(left^, right^, k)
         elif k >= NEG and k <= NOT:
-            var arc = expr.downcast[Unary]()
-            var child = self.build(arc[].child)
-            return UnaryProcessor(child^, arc[].op)
+            var child = self.build(expr._args[0].copy())
+            return UnaryProcessor(child^, k)
         elif k == IS_NULL:
-            var arc = expr.downcast[IsNull]()
-            var child = self.build(arc[].child)
+            var child = self.build(expr._args[0].copy())
             return IsNullProcessor(child^)
         elif k == IF_ELSE:
-            var arc = expr.downcast[IfElse]()
-            var c = self.build(arc[].cond)
-            var t = self.build(arc[].then_)
-            var e = self.build(arc[].else_)
+            var c = self.build(expr._args[0].copy())
+            var t = self.build(expr._args[1].copy())
+            var e = self.build(expr._args[2].copy())
             return IfElseProcessor(c^, t^, e^)
         elif k == CAST:
             raise Error("Planner.build: cast not implemented")
@@ -1054,15 +1061,13 @@ struct Planner:
             var left_proc = self.build(arc[].left)
             var right_proc = self.build(arc[].right)
 
-            # Extract positional key indices from pre-resolved Column exprs.
+            # Extract positional key indices from LOAD Expr nodes.
             var left_key_indices = List[Int]()
             for ref e in arc[].left_keys:
-                var col_arc = e.downcast[Column]()
-                left_key_indices.append(col_arc[].index)
+                left_key_indices.append(Int(e._kind_data))
             var right_key_indices = List[Int]()
             for ref e in arc[].right_keys:
-                var col_arc = e.downcast[Column]()
-                right_key_indices.append(col_arc[].index)
+                right_key_indices.append(Int(e._kind_data))
 
             return JoinProcessor(
                 left_proc=left_proc^,

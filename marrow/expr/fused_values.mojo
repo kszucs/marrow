@@ -142,6 +142,51 @@ trait NumericTypedValue(TypedValue):
         """Format this node for display."""
         ...
 
+    def to_expr(self) -> Expr:
+        """Box this comptime-fused expression into a runtime Expr.
+
+        The resulting ``Expr`` carries the fused expression in its ``_fused``
+        slot, so ``dtype()`` and ``write_to()`` delegate to the comptime-fused
+        implementation.
+        """
+        var ptr = ArcPointer[Self](self.copy())
+        var result = Expr(
+            tag=FUSED,
+            args=List[Expr](),
+            kind_data=0,
+            value=None,
+            name=String(),
+        )
+        result._fused = rebind[ArcPointer[NoneType]](ptr^)
+        result._virt_fused_dtype = _fused_dtype_tramp[Self]
+        result._virt_fused_write = _fused_write_tramp[Self]
+        return result^
+
+
+# ---------------------------------------------------------------------------
+# Trampoline helpers for boxing fused expressions into Expr
+# ---------------------------------------------------------------------------
+
+
+@staticmethod
+def _fused_dtype_tramp[T: NumericTypedValue](
+    ptr: ArcPointer[NoneType],
+) -> Optional[AnyDataType]:
+    """Thin trampoline: delegate dtype() to a concrete NumericTypedValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].dtype()
+
+
+@staticmethod
+def _fused_write_tramp[T: NumericTypedValue](
+    ptr: ArcPointer[NoneType],
+) -> String:
+    """Thin trampoline: delegate write_to() to a concrete NumericTypedValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    var s = String()
+    typed[].write_to(s)
+    return s^
+
 
 # ---------------------------------------------------------------------------
 # FusedColumn — typed column reference

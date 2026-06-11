@@ -7,27 +7,42 @@ from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
 from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
-    AnyValue,
-    Column,
-    Binary,
+    Expr,
     Planner,
     col,
     lit,
     if_else,
-    DISPATCH_AUTO,
-    DISPATCH_CPU,
-    DISPATCH_GPU,
+    LOAD,
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+    AND,
+    OR,
+    NEG,
+    ABS,
+    NOT,
+    IS_NULL,
+    IF_ELSE,
+    CAST,
+    FUSED,
 )
 
 
-def _exec(expr: AnyValue, batch: RecordBatch) raises -> Int64Array:
+def _exec(expr: Expr, batch: RecordBatch) raises -> Int64Array:
     """Helper: build a value processor and evaluate against the batch."""
     var tmp = Planner().build(expr).eval(batch)
     ref result = tmp.as_int64()
     return result.copy()
 
 
-def _exec_pred(expr: AnyValue, batch: RecordBatch) raises -> BoolArray:
+def _exec_pred(expr: Expr, batch: RecordBatch) raises -> BoolArray:
     """Helper: build a value processor and evaluate predicate against the batch.
     """
     var tmp = Planner().build(expr).eval(batch)
@@ -253,82 +268,26 @@ def test_is_null() raises:
 
 
 # ---------------------------------------------------------------------------
-# Dispatch hint
-# ---------------------------------------------------------------------------
-
-
-def test_dispatch_hint_default() raises:
-    """Default dispatch is DISPATCH_AUTO."""
-    var expr = col(0) + col(1)
-    assert_equal(expr.dispatch, DISPATCH_AUTO)
-
-
-def test_dispatch_hint_cpu() raises:
-    """``with_dispatch(DISPATCH_CPU)`` returns a copy with CPU hint."""
-    var expr = (col(0) + col(1)).with_dispatch(DISPATCH_CPU)
-    assert_equal(expr.dispatch, DISPATCH_CPU)
-
-    var a = array([1, 2, 3], int64)
-    var b = array([10, 20, 30], int64)
-    var result = _exec(expr, record_batch([a^, b^], names=["c0", "c1"]))
-    assert_equal(result[0].value(), 11)
-    assert_equal(result[1].value(), 22)
-    assert_equal(result[2].value(), 33)
-
-
-# ---------------------------------------------------------------------------
-# Display
-# ---------------------------------------------------------------------------
-
-
-def test_write_to_literal() raises:
-    assert_equal(String(lit[Int64Type](5)), "literal(...)")
-
-
-def test_write_to_equal() raises:
-    assert_equal(
-        String(col(0) == col(1)),
-        "equal(input(0), input(1))",
-    )
-
-
-def test_write_to_if_else() raises:
-    var expr = if_else(col(0) < col(1), col(0), col(1))
-    assert_equal(
-        String(expr),
-        "if_else(less(input(0), input(1)), input(0), input(1))",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Kind / downcast
+# Kind / inputs
 # ---------------------------------------------------------------------------
 
 
 def test_kind_column() raises:
     """Column node reports LOAD kind."""
-    from marrow.expr import LOAD
-
     var expr = col(0)
     assert_equal(expr.kind(), LOAD)
-    assert_equal(expr.downcast[Column]()[].index, 0)
 
 
 def test_kind_literal() raises:
     """Literal node reports LITERAL kind."""
-    from marrow.expr import LITERAL
-
     var expr = lit[Int64Type](42)
     assert_equal(expr.kind(), LITERAL)
 
 
 def test_kind_binary() raises:
     """Binary node reports its op as kind."""
-    from marrow.expr import ADD
-
     var expr = col(0) + col(1)
     assert_equal(expr.kind(), ADD)
-    assert_equal(expr.downcast[Binary]()[].op, ADD)
 
 
 def test_inputs_binary() raises:

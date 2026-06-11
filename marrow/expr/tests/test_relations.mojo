@@ -7,11 +7,13 @@ from marrow.dtypes import field, int64, float64, Int64Type
 from marrow.schema import schema
 from marrow.tabular import record_batch
 from marrow.expr import (
-    AnyValue,
+    Expr,
     col,
     lit,
     ADD,
     LT,
+    LOAD,
+    FUSED,
     in_memory_table,
     SCAN_NODE,
     FILTER_NODE,
@@ -27,7 +29,10 @@ from marrow.expr.relations import (
     InMemoryTable,
     ParquetScan,
 )
-from marrow.expr.values import Column
+from marrow.expr.fused_values import (
+    FusedColumn,
+    FusedAdd,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -294,15 +299,15 @@ def test_scan_filter_schema_passthrough() raises:
     assert_equal(s.fields[1].name, "y")
 
 
-def test_scan_filter_resolves_column_name() raises:
-    """``col('x')`` inside filter is resolved to a positional col(0)."""
+def test_scan_filter_passes_unresolved_name() raises:
+    """``col('x')`` inside filter passes through as a LOAD Expr."""
     var src = AnyRelation(
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
     var plan = src.filter(col("x") > lit[Int64Type](0))
     var filt = plan.downcast[Filter]()
     var pred_inputs = filt[].predicate.inputs()
-    assert_equal(pred_inputs[0].downcast[Column]()[].index, 0)
+    assert_equal(pred_inputs[0].kind(), LOAD)
 
 
 def test_scan_select_kind() raises:

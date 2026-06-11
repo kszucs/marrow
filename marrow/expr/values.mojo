@@ -55,6 +55,8 @@ comptime NOT: UInt8 = 16
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
+comptime FUSED: UInt8 = 20
+"""Tag for Expr nodes that carry a comptime-fused expression in _fused."""
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +64,7 @@ comptime CAST: UInt8 = 19
 # ---------------------------------------------------------------------------
 
 
-struct Expr(Copyable, ImplicitlyDestructible, Movable, Writable):
+struct Expr(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writable):
     """Unified expression node using tag-based dispatch."""
 
     var _tag: UInt8
@@ -118,17 +120,25 @@ struct Expr(Copyable, ImplicitlyDestructible, Movable, Writable):
         return self._tag
 
     def dtype(self) -> Optional[AnyDataType]:
+        if self._fused:
+            try:
+                return self._virt_fused_dtype(self._fused[])
+            except:
+                return None
         if self._tag == LITERAL:
-            return self._value.dtype()
-        if self._tag == 0 and self._fused:
-            return self._virt_fused_dtype(self._fused[])
+            return self._value.value().dtype()
         return None
 
     def inputs(self) -> List[Expr]:
-        return self._args
+        var result = List[Expr](capacity=len(self._args))
+        for ref a in self._args:
+            result.append(a.copy())
+        return result^
 
     def write_to[W: Writer](self, mut writer: W):
-        if self._tag == LOAD:
+        if self._fused:
+            writer.write("fused(...)")
+        elif self._tag == LOAD:
             writer.write(t"input({self._kind_data})")
         elif self._tag == LITERAL:
             writer.write("literal(...)")

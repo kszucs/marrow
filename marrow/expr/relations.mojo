@@ -496,7 +496,7 @@ struct Project(Relation):
         *,
         var input: AnyRelation,
         var names: List[String],
-        var exprs_: List[AnyValue],
+        var exprs_: List[Expr],
         var schema_: Schema,
     ):
         self.input = input^
