@@ -12,6 +12,7 @@ from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
 from marrow.dtypes import Int32Type, Float64Type, NumericType
 from marrow.kernels.arithmetic import add
+from marrow.kernels.execution import ExecutionContext
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -254,6 +255,50 @@ def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
         keep(add[Float64Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
+
+
+# ---------------------------------------------------------------------------
+# add — parallel scaling on a 1M int32 input
+#
+# All benchmarks run on the same array (size 1M). They differ only in the
+# ExecutionContext passed: serial vs forced parallel(2/4/8) vs auto. Use
+# --competition to compare side-by-side and watch the scaling.
+# ---------------------------------------------------------------------------
+
+
+def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecutionContext) raises:
+    var lhs = arange[Int32Type](0, 1_000_000)
+    var rhs = arange[Int32Type](0, 1_000_000)
+    b.throughput(BenchMetric.elements, 1_000_000)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(add[Int32Type](lhs, rhs, ctx).unsafe_get(0))
+
+    b.iter[call]()
+    keep(lhs)
+    keep(rhs)
+
+
+def bench_add_int32_1m_serial(mut b: Benchmark) raises:
+    _bench_add_1m_ctx(b, ExecutionContext.serial())
+
+
+def bench_add_int32_1m_parallel_2(mut b: Benchmark) raises:
+    _bench_add_1m_ctx(b, ExecutionContext.parallel(2))
+
+
+def bench_add_int32_1m_parallel_4(mut b: Benchmark) raises:
+    _bench_add_1m_ctx(b, ExecutionContext.parallel(4))
+
+
+def bench_add_int32_1m_parallel_8(mut b: Benchmark) raises:
+    _bench_add_1m_ctx(b, ExecutionContext.parallel(8))
+
+
+def bench_add_int32_1m_auto(mut b: Benchmark) raises:
+    _bench_add_1m_ctx(b, ExecutionContext.auto())
 
 
 def main() raises:

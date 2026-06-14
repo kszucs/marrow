@@ -16,14 +16,13 @@ from marrow.dtypes import (
 )
 from marrow.tabular import record_batch
 from marrow.expr import (
-    AnyValue,
+    Expr,
     Planner,
     col,
     lit,
     in_memory_table,
     parquet_scan,
     execute,
-    DISPATCH_CPU,
 )
 from marrow.expr.executor import ExecutionContext
 from marrow.builders import arange
@@ -127,13 +126,13 @@ def test_chained_expression() raises:
 
 
 def test_dispatch_cpu_hint() raises:
-    """DISPATCH_CPU hint keeps execution on CPU."""
+    """Expression evaluation works without dispatch hints."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([5, 4, 3, 2, 1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     var result = (
         Planner()
-        .build((col(0) + col(1)).with_dispatch(DISPATCH_CPU))
+        .build(col(0) + col(1))
         .eval(batch)
     )
     assert_true(result == array([6, 6, 6, 6, 6], int64).to_any())
@@ -216,7 +215,7 @@ def test_filter_greater_than() raises:
     var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
-            col("x") > lit[Int64Type](3)
+            col(0) > lit[Int64Type](3)
         )
     )
     assert_equal(result.num_rows(), 2)
@@ -226,12 +225,12 @@ def test_filter_greater_than() raises:
 
 
 def test_filter_equality() raises:
-    """Filter col("x") == lit(3) keeps one row."""
+    """Filter col(0) == lit(3) keeps one row."""
     var x = array([1, 2, 3, 4, 5], int64)
     var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
-            col("x") == lit[Int64Type](3)
+            col(0) == lit[Int64Type](3)
         )
     )
     assert_equal(result.num_rows(), 1)
@@ -247,7 +246,7 @@ def test_filter_no_match() raises:
     var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
-            col("x") > lit[Int64Type](100)
+            col(0) > lit[Int64Type](100)
         )
     )
     assert_equal(result.num_rows(), 0)
@@ -265,7 +264,7 @@ def test_select_then_filter() raises:
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
         .select("x", "y")
-        .filter(col("x") > lit[Int64Type](2))
+        .filter(col(0) > lit[Int64Type](2))
     )
     assert_equal(result.num_rows(), 3)
     assert_equal(result.num_columns(), 2)
@@ -281,7 +280,7 @@ def test_filter_then_select() raises:
     var y = array([10, 20, 30, 40, 50], int64)
     var result = execute(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
-        .filter(col("x") > lit[Int64Type](3))
+        .filter(col(0) > lit[Int64Type](3))
         .select("y")
     )
     assert_equal(result.num_rows(), 2)
@@ -339,7 +338,7 @@ def test_streaming_filter_skips_empty() raises:
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
         in_memory_table(record_batch([x^, y^], names=["x", "y"])).filter(
-            col("x") > lit[Int64Type](4)
+            col(0) > lit[Int64Type](4)
         )
     )
     var batches = proc.to_batches()
@@ -357,7 +356,7 @@ def test_streaming_chained_filter_project() raises:
     ctx.morsel_size = 2
     var proc = Planner(ctx).build(
         in_memory_table(record_batch([x^, y^], names=["x", "y"]))
-        .filter(col("x") > lit[Int64Type](2))
+        .filter(col(0) > lit[Int64Type](2))
         .select("y")
     )
     var result = proc.read_all()
@@ -407,7 +406,7 @@ def test_parquet_scan_filter() raises:
     var path = "/tmp/marrow_test_parquet_scan_filter.parquet"
     _write_test_parquet(path)
     var result = execute(
-        parquet_scan(path).filter(col("id") > lit[Int64Type](3))
+        parquet_scan(path).filter(col(0) > lit[Int64Type](3))
     )
     assert_equal(result.num_rows(), 2)
     ref ids = result.columns[0].as_int64()
@@ -432,7 +431,7 @@ def test_parquet_scan_filter_select() raises:
     var path = "/tmp/marrow_test_parquet_scan_filter_select.parquet"
     _write_test_parquet(path)
     var result = execute(
-        parquet_scan(path).filter(col("id") > lit[Int64Type](3)).select("id")
+        parquet_scan(path).filter(col(0) > lit[Int64Type](3)).select("id")
     )
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 1)
@@ -456,7 +455,7 @@ def test_aggregate_sum() raises:
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
-        [col("key")], [col("val")], ["sum"]
+        [col(0)], [col(1)], ["sum"]
     )
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
@@ -481,7 +480,7 @@ def test_aggregate_count() raises:
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
-        [col("key")], [col("val")], ["count"]
+        [col(0)], [col(1)], ["count"]
     )
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
@@ -499,7 +498,7 @@ def test_aggregate_sum_int64_precision() raises:
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
-        [col("key")], [col("val")], ["sum"]
+        [col(0)], [col(1)], ["sum"]
     )
     var result = execute(plan)
     assert_equal(result.num_rows(), 1)
@@ -516,7 +515,7 @@ def test_aggregate_small_morsel() raises:
     var batch = record_batch(cols^, names=["key", "val"])
 
     var plan = in_memory_table(batch).aggregate(
-        [col("key")], [col("val")], ["sum"]
+        [col(0)], [col(1)], ["sum"]
     )
     var ctx = ExecutionContext()
     ctx.morsel_size = 2

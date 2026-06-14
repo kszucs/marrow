@@ -59,3 +59,9 @@
 - `marrow.compute` exposes the kernel library: arithmetic, comparison,
   aggregates, `filter`/`take`/`drop_null`, `sort`/`sort_indices`, `cast`
   and the distinct counts.
+
+### Ahead-of-time compilation
+
+- The comptime lane exists so a query can be compiled to a small,
+  self-contained binary: the closed world is dead-code-eliminable, so a
+  program links only the kernels its expressions name.

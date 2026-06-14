@@ -30,7 +30,7 @@ from std.memory import ArcPointer
 from marrow.dtypes import Field
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import AnyValue, col, resolve_columns
+from marrow.expr.values import Expr, col
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ trait Relation(ImplicitlyDestructible, Movable):
         """Return child plan nodes (empty for leaf nodes such as Scan)."""
         ...
 
-    def exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[Expr]:
         """Return scalar expressions attached to this node."""
         ...
 
@@ -156,7 +156,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_inputs: def(ArcPointer[NoneType]) thin -> List[AnyRelation]
-    var _virt_exprs: def(ArcPointer[NoneType]) thin -> List[AnyValue]
+    var _virt_exprs: def(ArcPointer[NoneType]) thin -> List[Expr]
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
 
@@ -177,7 +177,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].inputs()
 
     @staticmethod
-    def _tramp_exprs[T: Relation](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
+    def _tramp_exprs[T: Relation](ptr: ArcPointer[NoneType]) -> List[Expr]:
         return rebind[ArcPointer[T]](ptr)[].exprs()
 
     @staticmethod
@@ -226,7 +226,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def inputs(self) -> List[AnyRelation]:
         return self._virt_inputs(self._data)
 
-    def exprs(self) -> List[AnyValue]:
+    def exprs(self) -> List[Expr]:
         return self._virt_exprs(self._data)
 
     def write_to[W: Writer](self, mut writer: W):
@@ -238,7 +238,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[AnyValue]()
+        var exprs = List[Expr]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -257,21 +257,21 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         )
         return AnyRelation(proj^)
 
-    def filter(self, predicate: AnyValue) raises -> AnyRelation:
+    def filter(self, predicate: Expr) raises -> AnyRelation:
         """Filter rows by a boolean predicate, returning a new plan node.
 
         Column references using ``col("name")`` are resolved to positional
         indices against this node's output schema.
         """
         var schema = self.schema()
-        var resolved = resolve_columns(predicate, schema)
+        var resolved = predicate
         var filt = Filter(input=self, predicate=resolved^)
         return AnyRelation(filt^)
 
     def aggregate(
         self,
-        keys: List[AnyValue],
-        values: List[AnyValue],
+        keys: List[Expr],
+        values: List[Expr],
         funcs: List[String],
     ) raises -> AnyRelation:
         """Grouped aggregation, returning a new plan node.
@@ -287,12 +287,12 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         from marrow.dtypes import float64, int64, AnyDataType
 
         var input_schema = self.schema()
-        var resolved_keys = List[AnyValue]()
+        var resolved_keys = List[Expr]()
         for ref k in keys:
-            resolved_keys.append(resolve_columns(k, input_schema))
-        var resolved_vals = List[AnyValue]()
+            resolved_keys.append(k)
+        var resolved_vals = List[Expr]()
         for ref v in values:
-            resolved_vals.append(resolve_columns(v, input_schema))
+            resolved_vals.append(v)
 
         # Build output schema: key fields + agg result fields.
         var fields = List[Field]()
@@ -327,8 +327,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def join(
         self,
         right: AnyRelation,
-        left_on: List[AnyValue],
-        right_on: List[AnyValue],
+        left_on: List[Expr],
+        right_on: List[Expr],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
         algorithm: UInt8 = JOIN_ALGO_AUTO,
@@ -354,13 +354,13 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var left_schema = self.schema()
         var right_schema = right.schema()
 
-        # Resolve column name references to positional indices.
-        var resolved_left = List[AnyValue]()
+        # Use expressions directly (Expr is the unified type)
+        var resolved_left = List[Expr]()
         for ref k in left_on:
-            resolved_left.append(resolve_columns(k, left_schema))
-        var resolved_right = List[AnyValue]()
+            resolved_left.append(k)
+        var resolved_right = List[Expr]()
         for ref k in right_on:
-            resolved_right.append(resolve_columns(k, right_schema))
+            resolved_right.append(k)
 
         # Build output schema.
         var fields = List[Field]()
@@ -432,8 +432,8 @@ struct Scan(Relation):
     def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    def exprs(self) -> List[AnyValue]:
-        return List[AnyValue]()
+    def exprs(self) -> List[Expr]:
+        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Scan({self.name})")
@@ -449,9 +449,9 @@ struct Filter(Relation):
     """
 
     var input: AnyRelation
-    var predicate: AnyValue
+    var predicate: Expr
 
-    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
+    def __init__(out self, *, var input: AnyRelation, var predicate: Expr):
         self.input = input^
         self.predicate = predicate^
 
@@ -466,8 +466,8 @@ struct Filter(Relation):
         result.append(self.input)
         return result^
 
-    def exprs(self) -> List[AnyValue]:
-        var result = List[AnyValue](capacity=1)
+    def exprs(self) -> List[Expr]:
+        var result = List[Expr](capacity=1)
         result.append(self.predicate)
         return result^
 
@@ -488,7 +488,7 @@ struct Project(Relation):
 
     var input: AnyRelation
     var names: List[String]
-    var exprs_: List[AnyValue]
+    var exprs_: List[Expr]
     var schema_: Schema
 
     def __init__(
@@ -496,7 +496,7 @@ struct Project(Relation):
         *,
         var input: AnyRelation,
         var names: List[String],
-        var exprs_: List[AnyValue],
+        var exprs_: List[Expr],
         var schema_: Schema,
     ):
         self.input = input^
@@ -515,8 +515,8 @@ struct Project(Relation):
         result.append(self.input)
         return result^
 
-    def exprs(self) -> List[AnyValue]:
-        var result = List[AnyValue](capacity=len(self.exprs_))
+    def exprs(self) -> List[Expr]:
+        var result = List[Expr](capacity=len(self.exprs_))
         for ref e in self.exprs_:
             result.append(e)
         return result^
@@ -552,8 +552,8 @@ struct InMemoryTable(Relation):
     def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    def exprs(self) -> List[AnyValue]:
-        return List[AnyValue]()
+    def exprs(self) -> List[Expr]:
+        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -595,8 +595,8 @@ struct ParquetScan(Relation):
     def inputs(self) -> List[AnyRelation]:
         return List[AnyRelation]()
 
-    def exprs(self) -> List[AnyValue]:
-        return List[AnyValue]()
+    def exprs(self) -> List[Expr]:
+        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"ParquetScan({self.path})")
@@ -614,8 +614,8 @@ struct Aggregate(Relation):
     """
 
     var input: AnyRelation
-    var keys: List[AnyValue]
-    var agg_exprs: List[AnyValue]
+    var keys: List[Expr]
+    var agg_exprs: List[Expr]
     var agg_funcs: List[String]
     var schema_: Schema
 
@@ -623,8 +623,8 @@ struct Aggregate(Relation):
         out self,
         *,
         var input: AnyRelation,
-        var keys: List[AnyValue],
-        var agg_exprs: List[AnyValue],
+        var keys: List[Expr],
+        var agg_exprs: List[Expr],
         var agg_funcs: List[String],
         var schema_: Schema,
     ):
@@ -645,8 +645,8 @@ struct Aggregate(Relation):
         result.append(self.input)
         return result^
 
-    def exprs(self) -> List[AnyValue]:
-        var result = List[AnyValue](
+    def exprs(self) -> List[Expr]:
+        var result = List[Expr](
             capacity=len(self.keys) + len(self.agg_exprs)
         )
         for ref e in self.keys:
@@ -690,8 +690,8 @@ struct Join(Relation):
 
     var left: AnyRelation
     var right: AnyRelation
-    var left_keys: List[AnyValue]
-    var right_keys: List[AnyValue]
+    var left_keys: List[Expr]
+    var right_keys: List[Expr]
     var join_kind: UInt8
     var strictness: UInt8
     var algorithm: UInt8
@@ -702,8 +702,8 @@ struct Join(Relation):
         *,
         var left: AnyRelation,
         var right: AnyRelation,
-        var left_keys: List[AnyValue],
-        var right_keys: List[AnyValue],
+        var left_keys: List[Expr],
+        var right_keys: List[Expr],
         join_kind: UInt8,
         strictness: UInt8,
         algorithm: UInt8,
@@ -730,8 +730,8 @@ struct Join(Relation):
         result.append(self.right)
         return result^
 
-    def exprs(self) -> List[AnyValue]:
-        var result = List[AnyValue](
+    def exprs(self) -> List[Expr]:
+        var result = List[Expr](
             capacity=len(self.left_keys) + len(self.right_keys)
         )
         for ref e in self.left_keys:

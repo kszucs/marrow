@@ -1,4 +1,17 @@
-"""Boolean and bitwise kernels."""
+"""Boolean and bitwise kernels.
+
+Three tiers per kernel (same scheme as ``arithmetic.mojo``):
+
+- **Tier 0 (core)** — ``Kernel.core[W]``: raw SIMD predicate on
+  ``SIMD[DType.bool, W]``. Used by ``faszom.mojo`` expression nodes for
+  compile-time kernel fusion.
+- **Tier 1 (apply)** — ``Kernel.apply``: typed ``BoolArray`` API.  Operates
+  directly on bit-packed bitmaps via 64-bit word operations — more efficient
+  than element-wise SIMD for packed bits.
+- **Tier 2 (dispatch)** — ``Kernel.dispatch``: type-erased ``AnyArray`` entry.
+  Default implementation in the trait; concrete structs only define ``core``
+  and ``apply``.
+"""
 
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
@@ -31,7 +44,163 @@ from ..dtypes import (
     bool_ as bool_dt,
 )
 from ..views import BitmapView
+from .helpers import Kernel
 from .execution import ExecutionContext
+
+
+# ---------------------------------------------------------------------------
+# Traits
+# ---------------------------------------------------------------------------
+
+
+trait BoolBinaryKernel(Kernel):
+    """Element-wise binary boolean kernel (BoolArray × BoolArray → BoolArray).
+
+    Concrete structs define ``core`` and ``apply``; ``dispatch`` has a default
+    implementation that type-checks inputs and delegates to ``apply``.
+    """
+
+    @staticmethod
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        ...
+
+    @staticmethod
+    def apply(
+        left: BoolArray,
+        right: BoolArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        ...
+
+    @staticmethod
+    def dispatch(
+        left: AnyArray,
+        right: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        if left.dtype() != bool_dt or right.dtype() != bool_dt:
+            raise Error(t"{Self.name}: inputs must be bool arrays")
+        return Self.apply(
+            left.as_bool().copy(), right.as_bool().copy(), ctx
+        ).to_any()
+
+
+trait BoolUnaryKernel(Kernel):
+    """Element-wise unary boolean kernel (BoolArray → BoolArray).
+
+    Concrete structs define ``core`` and ``apply``; ``dispatch`` has a default
+    implementation that type-checks the input and delegates to ``apply``.
+    """
+
+    @staticmethod
+    def core[W: Int](a: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        ...
+
+    @staticmethod
+    def apply(
+        arr: BoolArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        ...
+
+    @staticmethod
+    def dispatch(
+        arr: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        if arr.dtype() != bool_dt:
+            raise Error(t"{Self.name}: input must be a bool array")
+        return Self.apply(arr.as_bool().copy(), ctx).to_any()
+
+
+# ---------------------------------------------------------------------------
+# Kernel structs
+# ---------------------------------------------------------------------------
+
+
+struct AndKernel(BoolBinaryKernel):
+    comptime name = "and_"
+
+    @always_inline
+    @staticmethod
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        return a & b
+
+    @staticmethod
+    def apply(
+        left: BoolArray,
+        right: BoolArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        var length = len(left)
+        if len(right) != length:
+            raise Error("and_: input arrays must have equal length")
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=(left.values() & right.values()).to_immutable(),
+        )
+
+
+struct OrKernel(BoolBinaryKernel):
+    comptime name = "or_"
+
+    @always_inline
+    @staticmethod
+    def core[
+        W: Int
+    ](a: SIMD[DType.bool, W], b: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        return a | b
+
+    @staticmethod
+    def apply(
+        left: BoolArray,
+        right: BoolArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        var length = len(left)
+        if len(right) != length:
+            raise Error("or_: input arrays must have equal length")
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=(left.values() | right.values()).to_immutable(),
+        )
+
+
+struct NotKernel(BoolUnaryKernel):
+    comptime name = "not_"
+
+    @always_inline
+    @staticmethod
+    def core[W: Int](a: SIMD[DType.bool, W]) -> SIMD[DType.bool, W]:
+        return ~a
+
+    @staticmethod
+    def apply(
+        arr: BoolArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        return BoolArray(
+            length=len(arr),
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=(~arr.values()).to_immutable(),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Public API — thin wrappers
+# ---------------------------------------------------------------------------
 
 
 def and_(
@@ -40,16 +209,7 @@ def and_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Bitwise AND of two bit-packed bool arrays."""
-    var length = len(lhs)
-    if len(rhs) != length:
-        raise Error("and_: input arrays must have equal length")
-    return BoolArray(
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=(lhs.values() & rhs.values()).to_immutable(),
-    )
+    return AndKernel.apply(lhs, rhs, ctx)
 
 
 def or_(
@@ -58,16 +218,7 @@ def or_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Bitwise OR of two bit-packed bool arrays."""
-    var length = len(lhs)
-    if len(rhs) != length:
-        raise Error("or_: input arrays must have equal length")
-    return BoolArray(
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=(lhs.values() | rhs.values()).to_immutable(),
-    )
+    return OrKernel.apply(lhs, rhs, ctx)
 
 
 def not_(
@@ -75,14 +226,7 @@ def not_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Bitwise NOT of a bit-packed bool array."""
-    var length = len(arr)
-    return BoolArray(
-        length=length,
-        nulls=0,
-        offset=0,
-        bitmap=None,
-        buffer=(~arr.values()).to_immutable(),
-    )
+    return NotKernel.apply(arr, ctx)
 
 
 def and_(
@@ -91,9 +235,7 @@ def and_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed AND: dispatches to the typed BoolArray overload."""
-    if lhs.dtype() != bool_dt or rhs.dtype() != bool_dt:
-        raise Error("and_: inputs must be bool arrays")
-    return and_(lhs.as_bool(), rhs.as_bool(), ctx).to_any()
+    return AndKernel.dispatch(lhs, rhs, ctx)
 
 
 def or_(
@@ -102,9 +244,7 @@ def or_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed OR: dispatches to the typed BoolArray overload."""
-    if lhs.dtype() != bool_dt or rhs.dtype() != bool_dt:
-        raise Error("or_: inputs must be bool arrays")
-    return or_(lhs.as_bool(), rhs.as_bool(), ctx).to_any()
+    return OrKernel.dispatch(lhs, rhs, ctx)
 
 
 def not_(
@@ -112,9 +252,12 @@ def not_(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed NOT: dispatches to the typed BoolArray overload."""
-    if arr.dtype() != bool_dt:
-        raise Error("not_: input must be a bool array")
-    return not_(arr.as_bool(), ctx).to_any()
+    return NotKernel.dispatch(arr, ctx)
+
+
+# ---------------------------------------------------------------------------
+# is_null
+# ---------------------------------------------------------------------------
 
 
 # TODO: it should return with the bitmap from the input array instead of creating a new one, but that requires
@@ -168,6 +311,11 @@ def is_null(
     elif arr.dtype() == float64:
         return is_null(arr.as_float64(), ctx).to_any()
     raise Error(t"is_null: unsupported dtype {arr.dtype()}")
+
+
+# ---------------------------------------------------------------------------
+# select
+# ---------------------------------------------------------------------------
 
 
 def select[

@@ -22,29 +22,8 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
-from .helpers import unary_scalar_dispatch
+from .helpers import Kernel
 from .execution import ExecutionContext
-
-
-# ---------------------------------------------------------------------------
-# SIMD combine functions — thin helpers passed as parameters to _reduce
-# ---------------------------------------------------------------------------
-
-
-def _add[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-    return a + b
-
-
-def _mul[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-    return a * b
-
-
-def _min[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-    return math.min(a, b)
-
-
-def _max[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-    return math.max(a, b)
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +57,128 @@ def _reduce[
 
 
 # ---------------------------------------------------------------------------
-# sum
+# Kernel trait
+# ---------------------------------------------------------------------------
+
+
+trait ReductionKernel(Kernel):
+    """Reduction kernel: reduces a PrimitiveArray to a scalar.
+
+    Concrete structs define ``comptime name``, ``combine``, and ``identity``;
+    ``apply`` and ``dispatch`` have default implementations.
+    """
+
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        ...
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        ...
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        array: PrimitiveArray[T],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[T]:
+        return PrimitiveScalar[T](
+            _reduce[T, combine=Self.combine[T.native, _]](
+                array, Self.identity[T.native](), ctx
+            ),
+            array.dtype.copy(),
+        )
+
+    @staticmethod
+    def dispatch(
+        array: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyScalar:
+        if array.dtype() == int8:
+            return Self.apply(array.as_int8(), ctx)
+        elif array.dtype() == int16:
+            return Self.apply(array.as_int16(), ctx)
+        elif array.dtype() == int32:
+            return Self.apply(array.as_int32(), ctx)
+        elif array.dtype() == int64:
+            return Self.apply(array.as_int64(), ctx)
+        elif array.dtype() == uint8:
+            return Self.apply(array.as_uint8(), ctx)
+        elif array.dtype() == uint16:
+            return Self.apply(array.as_uint16(), ctx)
+        elif array.dtype() == uint32:
+            return Self.apply(array.as_uint32(), ctx)
+        elif array.dtype() == uint64:
+            return Self.apply(array.as_uint64(), ctx)
+        elif array.dtype() == float16:
+            return Self.apply(array.as_float16(), ctx)
+        elif array.dtype() == float32:
+            return Self.apply(array.as_float32(), ctx)
+        elif array.dtype() == float64:
+            return Self.apply(array.as_float64(), ctx)
+        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
+
+
+# ---------------------------------------------------------------------------
+# Kernel structs
+# ---------------------------------------------------------------------------
+
+
+struct SumKernel(ReductionKernel):
+    comptime name = "sum"
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return a + b
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T](0)
+
+
+struct ProductKernel(ReductionKernel):
+    comptime name = "product"
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return a * b
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T](1)
+
+
+struct MinAggKernel(ReductionKernel):
+    comptime name = "min"
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return math.min(a, b)
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T].MAX_FINITE
+
+
+struct MaxAggKernel(ReductionKernel):
+    comptime name = "max"
+
+    @always_inline
+    @staticmethod
+    def combine[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+        return math.max(a, b)
+
+    @staticmethod
+    def identity[T: DType]() -> Scalar[T]:
+        return Scalar[T].MIN_FINITE
+
+
+# ---------------------------------------------------------------------------
+# Public API — thin wrappers
 # ---------------------------------------------------------------------------
 
 
@@ -88,17 +188,14 @@ def sum[
     array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> PrimitiveScalar[T]:
     """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    return PrimitiveScalar[T](
-        _reduce[T, _add[T.native, _]](array, Scalar[T.native](0), ctx),
-        array.dtype.copy(),
-    )
+    return SumKernel.apply[T](array, ctx)
 
 
 def sum(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed sum."""
-    return unary_scalar_dispatch["sum", sum[_]](array, ctx)
+    return SumKernel.dispatch(array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -113,17 +210,14 @@ def product[
 ) raises -> PrimitiveScalar[T]:
     """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
     """
-    return PrimitiveScalar[T](
-        _reduce[T, _mul[T.native, _]](array, Scalar[T.native](1), ctx),
-        array.dtype.copy(),
-    )
+    return ProductKernel.apply[T](array, ctx)
 
 
 def product(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed product."""
-    return unary_scalar_dispatch["product", product[_]](array, ctx)
+    return ProductKernel.dispatch(array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -140,17 +234,14 @@ def min[
 
     Returns MAX_FINITE if empty or all null.
     """
-    return PrimitiveScalar[T](
-        _reduce[T, _min[T.native, _]](array, Scalar[T.native].MAX_FINITE, ctx),
-        array.dtype.copy(),
-    )
+    return MinAggKernel.apply[T](array, ctx)
 
 
 def min(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed min."""
-    return unary_scalar_dispatch["min", min[_]](array, ctx)
+    return MinAggKernel.dispatch(array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -167,17 +258,14 @@ def max[
 
     Returns MIN_FINITE if empty or all null.
     """
-    return PrimitiveScalar[T](
-        _reduce[T, _max[T.native, _]](array, Scalar[T.native].MIN_FINITE, ctx),
-        array.dtype.copy(),
-    )
+    return MaxAggKernel.apply[T](array, ctx)
 
 
 def max(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
     """Runtime-typed max."""
-    return unary_scalar_dispatch["max", max[_]](array, ctx)
+    return MaxAggKernel.dispatch(array, ctx)
 
 
 # ---------------------------------------------------------------------------

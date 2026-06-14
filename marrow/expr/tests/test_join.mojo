@@ -8,7 +8,7 @@ from marrow.builders import array, PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, float64, Int64Type
 from marrow.tabular import record_batch, RecordBatch
 from marrow.expr import (
-    AnyValue,
+    Expr,
     col,
     lit,
     in_memory_table,
@@ -40,9 +40,9 @@ def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
     return record_batch(cols^, names=["k", "v"])
 
 
-def _keys(v: List[Int]) -> List[AnyValue]:
-    var r = List[AnyValue]()
-    r.append(col("k"))
+def _keys(v: List[Int]) -> List[Expr]:
+    var r = List[Expr]()
+    r.append(col(0))
     return r^
 
 

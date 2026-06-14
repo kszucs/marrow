@@ -25,8 +25,11 @@ from std.math import iota
 from std.memory import bitcast, memcpy, memset
 from std.builtin.device_passable import DevicePassable
 from std.sys.intrinsics import prefetch
+from std.algorithm.backend.vectorize import vectorize
+from std.algorithm.backend.cpu.parallelize import sync_parallelize
 from std.algorithm.functional import elementwise
 from std.algorithm.reduction import _reduce_generator_wrapper
+from std.math import ceildiv
 from std.utils.index import IndexList
 from std.gpu.host import DeviceContext, get_gpu_target
 
@@ -1004,12 +1007,21 @@ def _apply_dispatch[
         IndexList[rank]
     ) capturing -> None,
 ](length: Int, ctx: ExecutionContext) raises:
-    """Dispatch `process` to GPU or CPU (serial/parallel) based on `ctx`.
+    """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
 
-    `gpu_ok` is the caller's has_accelerator_support[...] check — passed as a
-    comptime Bool so the GPU branch is dead-code-eliminated when unsupported.
-    When ``ctx`` wants parallel execution, defers to elementwise's built-in
-    parallel executor; otherwise runs in-thread via ``use_blocking_impl=True``.
+    ``gpu_ok`` is the caller's ``has_accelerator_support[...]`` check, passed
+    as a comptime ``Bool`` so the GPU branch is dead-code-eliminated when
+    unsupported.
+
+    Three execution paths, picked from ``ctx``:
+
+    - **GPU** (``ctx.is_gpu()``) — single grid launch via Mojo's internal
+      ``_elementwise_impl_gpu``.
+    - **CPU multi-thread** (``ctx.wants_parallel(length)``) — explicit stripe
+      over ``ctx.resolved_num_threads()`` workers via ``sync_parallelize``;
+      each worker runs ``vectorize`` over its slice. Thread count is owned by
+      ``ctx`` — no Mojo-internal heuristic involved.
+    - **CPU serial** (default) — pure ``vectorize`` on the calling thread.
     """
     if ctx.is_gpu():
         comptime if gpu_ok:
@@ -1022,16 +1034,36 @@ def _apply_dispatch[
         return
 
     comptime cpu_width = simd_byte_width() // size_of[Scalar[Out]]()
+
     if ctx.wants_parallel(length):
-        # TODO: elementwise does not expose a thread-count parameter, so
-        # ctx.num_threads / ctx.resolved_num_threads() are ignored here.
-        # We need to either switch back to sync_parallelize striping or wait
-        # for elementwise to gain a num_threads knob.
-        elementwise[process, cpu_width, target="cpu"](length)
+        var workers = ctx.resolved_num_threads()
+        var chunk = ceildiv(length, workers)
+
+        @always_inline
+        def task(
+            wid: Int,
+        ) {read chunk, read length,}:
+            var start = wid * chunk
+            var end = min(start + chunk, length)
+            if end <= start:
+                return
+
+            @always_inline
+            def lane[
+                W: Int
+            ](i: Int) {read start,}:
+                process[W, rank=1](IndexList[1](start + i))
+
+            vectorize[cpu_width](end - start, lane)
+
+        sync_parallelize(task, workers)
     else:
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            process[W, rank=1](IndexList[1](i))
+
+        vectorize[cpu_width](length, lane)
 
 
 def apply[
@@ -1139,9 +1171,12 @@ def apply[
             raise Error("apply: no GPU accelerator available")
     else:
         comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
-        elementwise[process, cpu_width, target="cpu", use_blocking_impl=True](
-            length
-        )
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            process[W, rank=1](IndexList[1](i))
+
+        vectorize[cpu_width](length, lane)
 
 
 def apply[
@@ -1242,19 +1277,15 @@ def apply[
 
     if bit_shift == 0:
 
-        @parameter
         @always_inline
         def process_zero[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var i = idx[0]
+            W: Int
+        ](i: Int) {read dst, read data, read byte_start,}:
             dst.store[DType.uint8, W](
                 i, op[W]((data + byte_start + i).load[width=W]())
             )
 
-        elementwise[
-            process_zero, cpu_width, target="cpu", use_blocking_impl=True
-        ](out_bytes)
+        vectorize[cpu_width](out_bytes, process_zero)
         return
 
     # Non-zero bit_shift: shift-combine (lo >> rshift | hi << lshift).
@@ -1262,19 +1293,21 @@ def apply[
     var bulk = out_bytes - 1
     if bulk > 0:
 
-        @parameter
         @always_inline
         def process_shifted[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var i = idx[0]
+            W: Int
+        ](i: Int) {
+            read dst,
+            read data,
+            read byte_start,
+            read rshift,
+            read lshift,
+        }:
             var lo = (data + byte_start + i).load[width=W]()
             var hi = (data + byte_start + i + 1).load[width=W]()
             dst.store[DType.uint8, W](i, op[W]((lo >> rshift) | (hi << lshift)))
 
-        elementwise[
-            process_shifted, cpu_width, target="cpu", use_blocking_impl=True
-        ](bulk)
+        vectorize[cpu_width](bulk, process_shifted)
 
     # Last output byte: read hi only when the view's bits span into the next
     # source byte, avoiding a read past the end of source data.
@@ -1324,12 +1357,16 @@ def apply[
 
     if bit_shift_a == 0 and bit_shift_b == 0:
 
-        @parameter
         @always_inline
         def process_zero[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var i = idx[0]
+            W: Int
+        ](i: Int) {
+            read dst,
+            read src_a,
+            read byte_start_a,
+            read src_b,
+            read byte_start_b,
+        }:
             dst.store[DType.uint8, W](
                 i,
                 op[W](
@@ -1338,9 +1375,7 @@ def apply[
                 ),
             )
 
-        elementwise[
-            process_zero, cpu_width, target="cpu", use_blocking_impl=True
-        ](out_bytes)
+        vectorize[cpu_width](out_bytes, process_zero)
         return
 
     # At least one non-zero shift: shift-combine both operands.
@@ -1349,12 +1384,20 @@ def apply[
     var bulk = out_bytes - 1
     if bulk > 0:
 
-        @parameter
         @always_inline
         def process_shifted[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var i = idx[0]
+            W: Int
+        ](i: Int) {
+            read dst,
+            read src_a,
+            read byte_start_a,
+            read src_b,
+            read byte_start_b,
+            read rs_a,
+            read ls_a,
+            read rs_b,
+            read ls_b,
+        }:
             var lo_a = (src_a + byte_start_a + i).load[width=W]()
             var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
             var lo_b = (src_b + byte_start_b + i).load[width=W]()
@@ -1367,9 +1410,7 @@ def apply[
                 ),
             )
 
-        elementwise[
-            process_shifted, cpu_width, target="cpu", use_blocking_impl=True
-        ](bulk)
+        vectorize[cpu_width](bulk, process_shifted)
 
     # Last output byte: read hi only when bits span into the next source byte.
     var remaining_bits = lhs._length - bulk * 8
@@ -1400,19 +1441,17 @@ def _reduce_dispatch[
     ],
     combine: def[W: Int](SIMD[T, W], SIMD[T, W]) thin -> SIMD[T, W],
 ](length: Int, identity: Scalar[T], ctx: ExecutionContext) raises -> Scalar[T]:
-    """Dispatch a scalar reduction to CPU or GPU using ``_reduce_generator_wrapper``.
+    """Dispatch a scalar reduction to GPU or CPU (serial / parallel) based on
+    ``ctx``.
 
-    ``combine`` is wrapped in a capturing closure so the thin (no-capture)
-    function satisfies ``_reduce_generator_wrapper``'s ``capturing[_]`` requirement.
-    GPU path allocates a 1-element device buffer and reads back via ``Buffer.to_cpu``
-    (which enqueues a DMA copy and synchronizes).  CPU path writes directly to a
-    local ``Scalar``.
+    - **GPU** — Mojo's ``_reduce_generator_wrapper[target="gpu"]``, allocating
+      a 1-element device buffer and reading back via ``Buffer.to_cpu``.
+    - **CPU multi-thread** — each worker computes a partial reduction over its
+      slice using ``vectorize`` with a SIMD accumulator; the host thread folds
+      the partials with ``combine``.
+    - **CPU serial** — a single SIMD accumulator vectorized over the full
+      range, then horizontally reduced via ``combine`` lane-by-lane.
     """
-
-    @always_inline
-    @parameter
-    def combine_capturing[W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-        return combine[W](a, b)
 
     if length == 0:
         return identity
@@ -1422,6 +1461,14 @@ def _reduce_dispatch[
         # reduction backend (_reduce_generator_wrapper uses f32 accumulators
         # for f16 and cannot rebind back); exclude it until the stdlib fixes it.
         comptime if has_accelerator_support[T]() and T != DType.float16:
+
+            @always_inline
+            @parameter
+            def combine_capturing[
+                W: Int
+            ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
+                return combine[W](a, b)
+
             var dev_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
             var dev_view = dev_buf.device_view[T]()
 
@@ -1444,25 +1491,63 @@ def _reduce_dispatch[
             )
         else:
             raise Error("reduce: no GPU accelerator available")
-    else:
-        var out_buf = Buffer.alloc_zeroed[T](1)
-        var out_view = out_buf.view[T]()
+
+    comptime cpu_width = simd_byte_width() // size_of[Scalar[T]]()
+
+    if ctx.wants_parallel(length):
+        var workers = ctx.resolved_num_threads()
+        var chunk = ceildiv(length, workers)
+        var partials = Buffer.alloc_zeroed[T](workers)
+        var partials_view = partials.view[T]()
+        for w in range(workers):
+            partials_view.store[1](w, identity)
 
         @always_inline
-        @parameter
-        def output_fn_cpu[
-            W: Int, rank: Int
-        ](idx: IndexList[rank], val: SIMD[T, W]):
-            out_view.store[1](0, val[0])
+        def task(
+            wid: Int,
+        ) {read chunk, read length, read identity, read partials_view,}:
+            var start = wid * chunk
+            var end = min(start + chunk, length)
+            if end <= start:
+                return
+            var simd_acc = SIMD[T, cpu_width](identity)
+            var i = start
+            var simd_end = start + ((end - start) // cpu_width) * cpu_width
+            while i < simd_end:
+                simd_acc = combine[cpu_width](
+                    simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
+                )
+                i += cpu_width
+            var acc = identity
+            comptime for k in range(cpu_width):
+                acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
+            while i < end:
+                acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
+                i += 1
+            partials_view.store[1](wid, acc)
 
-        _reduce_generator_wrapper[
-            T,
-            input_fn,
-            output_fn_cpu,
-            combine_capturing,
-            single_thread_blocking_override=True,
-        ](IndexList[1](length), identity, 0)
-        return out_view.load[1](0)
+        sync_parallelize(task, workers)
+
+        var acc = identity
+        for w in range(workers):
+            acc = combine[1](acc, SIMD[T, 1](partials_view.load[1](w)))
+        return acc
+
+    var simd_acc = SIMD[T, cpu_width](identity)
+    var i = 0
+    var simd_end = (length // cpu_width) * cpu_width
+    while i < simd_end:
+        simd_acc = combine[cpu_width](
+            simd_acc, input_fn[cpu_width, 1](IndexList[1](i))
+        )
+        i += cpu_width
+    var acc = identity
+    comptime for k in range(cpu_width):
+        acc = combine[1](acc, SIMD[T, 1](simd_acc[k]))
+    while i < length:
+        acc = combine[1](acc, input_fn[1, 1](IndexList[1](i)))
+        i += 1
+    return acc
 
 
 def reduce[

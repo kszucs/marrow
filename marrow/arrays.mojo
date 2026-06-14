@@ -566,10 +566,8 @@ struct PrimitiveArray[T: PrimitiveType](Array):
         if self.bitmap:
             if not (self.bitmap.value() == other.bitmap.value()):
                 return False
-        # Fast path: no nulls, no offset — full buffer SIMD comparison.
-        if self.nulls == 0 and self.offset == 0 and other.offset == 0:
-            return self.buffer == other.buffer
-        # Slow path: nulls or offset — compare only valid elements.
+        # Compare only the valid length elements (buffer may be over-allocated
+        # in filtered output, so full Buffer.__eq__ would read uninitialized bytes).
         for i in range(self.length):
             if self.is_valid(i):
                 if self.unsafe_get(i) != other.unsafe_get(i):

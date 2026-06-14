@@ -18,8 +18,13 @@ Available kernels
 * ``greater_equal``  — left[i] >= right[i]
 
 Each has a typed overload ``def[T: DataType](PrimitiveArray[T], PrimitiveArray[T])``
-and a runtime-typed overload ``def(AnyArray, AnyArray)`` that dispatches via
-``binary_array_dispatch``.
+and a runtime-typed overload ``def(AnyArray, AnyArray)`` via the inlined dtype switch
+in ``BinaryCompareKernel.dispatch``.
+
+Three tiers per kernel (same scheme as ``arithmetic.mojo``):
+- **Tier 0 (core)** — ``KernelStruct.core[T, W]``: raw SIMD predicate.
+- **Tier 1 (apply)** — ``KernelStruct.apply[T]``: typed array API.
+- **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: type-erased entry.
 """
 
 from ..arrays import (
@@ -31,13 +36,27 @@ from ..arrays import (
 )
 from ..buffers import Bitmap
 from ..views import apply
-from ..dtypes import PrimitiveType, bool_ as bool_dt
-from .helpers import bitmap_and, bool_array_dispatch
+from ..dtypes import (
+    PrimitiveType,
+    bool_ as bool_dt,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+)
+from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
-# Generic comparison kernel — compare + bit-pack via apply
+# Generic comparison kernel helper — compare + bit-pack via apply
 # ---------------------------------------------------------------------------
 
 
@@ -46,7 +65,7 @@ def _binary_cmp[
     func: def[W: Int](SIMD[T.native, W], SIMD[T.native, W]) thin -> SIMD[
         DType.bool, W
     ],
-    name: StringLiteral = "",
+    name: String = "",
 ](
     left: PrimitiveArray[T],
     right: PrimitiveArray[T],
@@ -79,36 +98,150 @@ def _binary_cmp[
 
 
 # ---------------------------------------------------------------------------
-# SIMD predicates — def[T: DType, W: Int](SIMD[T, W], SIMD[T, W]) -> SIMD[bool, W]
+# Kernel trait
 # ---------------------------------------------------------------------------
 
 
-def _eq[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.eq(b)
+trait BinaryCompareKernel(Kernel):
+    """Element-wise binary comparison kernel producing a BoolArray.
 
+    Concrete structs define ``comptime name`` and ``core``; ``apply`` and
+    ``dispatch`` have default implementations.
+    """
 
-def _ne[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.ne(b)
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        ...
 
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        left: PrimitiveArray[T],
+        right: PrimitiveArray[T],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        return _binary_cmp[T, func=Self.core[T.native, _], name=Self.name](
+            left, right, ctx
+        )
 
-def _lt[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.lt(b)
-
-
-def _le[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.le(b)
-
-
-def _gt[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.gt(b)
-
-
-def _ge[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
-    return a.ge(b)
+    @staticmethod
+    def dispatch(
+        left: AnyArray,
+        right: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        if left.dtype() != right.dtype():
+            raise Error(
+                t"{Self.name}: dtype mismatch: {left.dtype()} vs"
+                t" {right.dtype()}"
+            )
+        if left.dtype() == int8:
+            return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
+        elif left.dtype() == int16:
+            return Self.apply(left.as_int16(), right.as_int16(), ctx).to_any()
+        elif left.dtype() == int32:
+            return Self.apply(left.as_int32(), right.as_int32(), ctx).to_any()
+        elif left.dtype() == int64:
+            return Self.apply(left.as_int64(), right.as_int64(), ctx).to_any()
+        elif left.dtype() == uint8:
+            return Self.apply(left.as_uint8(), right.as_uint8(), ctx).to_any()
+        elif left.dtype() == uint16:
+            return Self.apply(left.as_uint16(), right.as_uint16(), ctx).to_any()
+        elif left.dtype() == uint32:
+            return Self.apply(left.as_uint32(), right.as_uint32(), ctx).to_any()
+        elif left.dtype() == uint64:
+            return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
+        elif left.dtype() == float16:
+            return Self.apply(
+                left.as_float16(), right.as_float16(), ctx
+            ).to_any()
+        elif left.dtype() == float32:
+            return Self.apply(
+                left.as_float32(), right.as_float32(), ctx
+            ).to_any()
+        elif left.dtype() == float64:
+            return Self.apply(
+                left.as_float64(), right.as_float64(), ctx
+            ).to_any()
+        raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
 
 
 # ---------------------------------------------------------------------------
-# Typed public API
+# Kernel structs
+# ---------------------------------------------------------------------------
+
+
+struct EqKernel(BinaryCompareKernel):
+    comptime name = "equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.eq(b)
+
+
+struct NeKernel(BinaryCompareKernel):
+    comptime name = "not_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.ne(b)
+
+
+struct LtKernel(BinaryCompareKernel):
+    comptime name = "less"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.lt(b)
+
+
+struct LeKernel(BinaryCompareKernel):
+    comptime name = "less_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.le(b)
+
+
+struct GtKernel(BinaryCompareKernel):
+    comptime name = "greater"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.gt(b)
+
+
+struct GeKernel(BinaryCompareKernel):
+    comptime name = "greater_equal"
+
+    @always_inline
+    @staticmethod
+    def core[
+        T: DType, W: Int
+    ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
+        return a.ge(b)
+
+
+# ---------------------------------------------------------------------------
+# Typed public API — thin wrappers
 # ---------------------------------------------------------------------------
 
 
@@ -120,7 +253,7 @@ def equal[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise equality: result[i] = left[i] == right[i]."""
-    return _binary_cmp[T, _eq[T.native, _], "equal"](left, right, ctx)
+    return EqKernel.apply[T](left, right, ctx)
 
 
 def not_equal[
@@ -131,7 +264,7 @@ def not_equal[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise inequality: result[i] = left[i] != right[i]."""
-    return _binary_cmp[T, _ne[T.native, _], "not_equal"](left, right, ctx)
+    return NeKernel.apply[T](left, right, ctx)
 
 
 def less[
@@ -142,7 +275,7 @@ def less[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise less-than: result[i] = left[i] < right[i]."""
-    return _binary_cmp[T, _lt[T.native, _], "less"](left, right, ctx)
+    return LtKernel.apply[T](left, right, ctx)
 
 
 def less_equal[
@@ -153,7 +286,7 @@ def less_equal[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
-    return _binary_cmp[T, _le[T.native, _], "less_equal"](left, right, ctx)
+    return LeKernel.apply[T](left, right, ctx)
 
 
 def greater[
@@ -164,7 +297,7 @@ def greater[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise greater-than: result[i] = left[i] > right[i]."""
-    return _binary_cmp[T, _gt[T.native, _], "greater"](left, right, ctx)
+    return GtKernel.apply[T](left, right, ctx)
 
 
 def greater_equal[
@@ -175,7 +308,7 @@ def greater_equal[
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
     """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
-    return _binary_cmp[T, _ge[T.native, _], "greater_equal"](left, right, ctx)
+    return GeKernel.apply[T](left, right, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +355,7 @@ def equal(
     """Runtime-typed equal."""
     if left.dtype().is_string():
         return equal(left.as_string(), right.as_string(), ctx).to_any()
-    return bool_array_dispatch["equal", equal[_]](left, right, ctx)
+    return EqKernel.dispatch(left, right, ctx)
 
 
 def equal(
@@ -260,7 +393,7 @@ def not_equal(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed not_equal."""
-    return bool_array_dispatch["not_equal", not_equal[_]](left, right, ctx)
+    return NeKernel.dispatch(left, right, ctx)
 
 
 def less(
@@ -269,7 +402,7 @@ def less(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed less."""
-    return bool_array_dispatch["less", less[_]](left, right, ctx)
+    return LtKernel.dispatch(left, right, ctx)
 
 
 def less_equal(
@@ -278,7 +411,7 @@ def less_equal(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed less_equal."""
-    return bool_array_dispatch["less_equal", less_equal[_]](left, right, ctx)
+    return LeKernel.dispatch(left, right, ctx)
 
 
 def greater(
@@ -287,7 +420,7 @@ def greater(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed greater."""
-    return bool_array_dispatch["greater", greater[_]](left, right, ctx)
+    return GtKernel.dispatch(left, right, ctx)
 
 
 def greater_equal(
@@ -296,6 +429,4 @@ def greater_equal(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed greater_equal."""
-    return bool_array_dispatch["greater_equal", greater_equal[_]](
-        left, right, ctx
-    )
+    return GeKernel.dispatch(left, right, ctx)

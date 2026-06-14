@@ -52,6 +52,7 @@ from marrow.kernels.arithmetic import (
     sin,
     cos,
 )
+from marrow.kernels.execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +611,83 @@ def test_pow_runtime_typed() raises:
     var result = pow_(a^, b^)
     assert_equal(result[0].value(), 8.0)
     assert_equal(result[1].value(), 9.0)
+
+
+# ---------------------------------------------------------------------------
+# ExecutionContext dispatch — serial / parallel / auto must agree
+# ---------------------------------------------------------------------------
+
+
+def _assert_add_matches_reference(ctx: ExecutionContext) raises:
+    """Run ``add`` over a 100k-element input with ``ctx`` and assert the
+    output equals the analytic reference (a[i]+b[i] == 2*i)."""
+    comptime N = 100_000
+    var a = arange[Int32Type](0, N)
+    var b = arange[Int32Type](0, N)
+    var result = add[Int32Type](a, b, ctx)
+    assert_equal(len(result), N)
+    assert_equal(result[0].value(), 0)
+    assert_equal(result[1].value(), 2)
+    assert_equal(result[N - 1].value(), 2 * (N - 1))
+    # Spot-check across the range to ensure no chunk got skipped or
+    # double-summed by the parallel path.
+    assert_equal(result[N // 2].value(), 2 * (N // 2))
+    assert_equal(result[N // 3].value(), 2 * (N // 3))
+    assert_equal(result[N // 4].value(), 2 * (N // 4))
+
+
+def test_add_dispatch_serial() raises:
+    """Forced serial CPU dispatch produces correct results."""
+    _assert_add_matches_reference(ExecutionContext.serial())
+
+
+def test_add_dispatch_parallel_2() raises:
+    """Forced 2-worker parallel CPU dispatch produces correct results."""
+    _assert_add_matches_reference(ExecutionContext.parallel(2))
+
+
+def test_add_dispatch_parallel_4() raises:
+    """Forced 4-worker parallel CPU dispatch produces correct results."""
+    _assert_add_matches_reference(ExecutionContext.parallel(4))
+
+
+def test_add_dispatch_auto() raises:
+    """Auto CPU dispatch (threshold gated) produces correct results.
+
+    With N=100_000 (>= the 32_768 default min_parallel_size) auto should
+    pick the parallel path.
+    """
+    _assert_add_matches_reference(ExecutionContext.auto())
+
+
+def test_add_dispatch_auto_small() raises:
+    """Auto CPU dispatch on a sub-threshold input falls back to serial.
+
+    Below ``min_parallel_size`` auto must not stripe (would dominate the
+    compute with dispatch overhead) — output still correct.
+    """
+    var a = arange[Int32Type](0, 100)
+    var b = arange[Int32Type](0, 100)
+    var result = add[Int32Type](a, b, ExecutionContext.auto())
+    assert_equal(len(result), 100)
+    assert_equal(result[0].value(), 0)
+    assert_equal(result[50].value(), 100)
+    assert_equal(result[99].value(), 198)
+
+
+def test_add_dispatch_parallel_small() raises:
+    """Forced parallel on a small input still stripes (no threshold check).
+
+    Tests that ``parallel(N)`` is forced — bypasses the size threshold —
+    while still producing the correct result.
+    """
+    var a = arange[Int32Type](0, 100)
+    var b = arange[Int32Type](0, 100)
+    var result = add[Int32Type](a, b, ExecutionContext.parallel(8))
+    assert_equal(len(result), 100)
+    assert_equal(result[0].value(), 0)
+    assert_equal(result[50].value(), 100)
+    assert_equal(result[99].value(), 198)
 
 
 def main() raises:

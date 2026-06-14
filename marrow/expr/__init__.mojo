@@ -2,16 +2,23 @@
 
 Scalar expressions
 ------------------
-``AnyValue``    — type-erased scalar expression node (ArcPointer-backed)
+``Expr``        — unified n-ary term expression node
 ``Value``       — trait every scalar expression node must implement
 
-Concrete scalar nodes: ``Column``, ``Literal``, ``Binary``, ``Unary``,
-``IsNull``, ``IfElse``, ``Cast``
-
 Factory functions: ``col()``, ``lit()``, ``if_else()``
-Utilities: ``rebuild()``, ``resolve_columns()``
 Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
 ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
+
+Comptime-fused expressions
+--------------------------
+``TypedValue``       — base trait for comptime-fused expression nodes
+``NumericTypedValue`` — numeric fused nodes with SIMD vectorize execution
+``FusedColumn[T]``   — typed column reference
+``FusedAdd[L, R]``   — fused binary add
+``FusedSub[L, R]``   — fused binary subtract
+
+Fused expressions can be boxed into ``Expr`` via ``to_expr()`` or implicit
+conversion, enabling use in plan-building APIs (``filter()``, ``select()``).
 
 Relational plans
 ----------------
@@ -19,7 +26,7 @@ Relational plans
 ``Relation``    — trait every relational plan node must implement
 
 Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
-``ParquetScan``
+``ParquetScan``, ``Aggregate``, ``Join``
 Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
 Factory: ``in_memory_table()``, ``parquet_scan()``
 
@@ -33,27 +40,15 @@ Rewriting
 from marrow.expr.values import (
     # Traits
     Value,
-    # Type-erased container
-    AnyValue,
-    # Concrete nodes
-    Column,
-    Literal,
-    Binary,
-    Unary,
-    IsNull,
-    IfElse,
-    Cast,
-    # Free-standing factory functions
+    # Unified expression node
+    Expr,
+    # Free-standing factory functions (return Expr)
     col,
     lit,
     if_else,
-    # Utilities
-    rebuild,
-    resolve_columns,
-    # Leaf-node kinds
+    # Node kinds
     LOAD,
     LITERAL,
-    # BinaryOp constants
     ADD,
     SUB,
     MUL,
@@ -66,18 +61,13 @@ from marrow.expr.values import (
     GE,
     AND,
     OR,
-    # UnaryOp constants
     NEG,
     ABS,
     NOT,
-    # Other node kinds
     IS_NULL,
     IF_ELSE,
     CAST,
-    # Dispatch hints
-    DISPATCH_AUTO,
-    DISPATCH_CPU,
-    DISPATCH_GPU,
+    FUSED,
 )
 from marrow.expr.relations import (
     Relation,
@@ -136,6 +126,7 @@ from marrow.expr.executor import (
     UnaryProcessor,
     IsNullProcessor,
     IfElseProcessor,
+    FusedProcessor,
     # Relation processors
     RelationProcessor,
     AnyRelationProcessor,
@@ -147,4 +138,15 @@ from marrow.expr.executor import (
     JoinProcessor,
     Planner,
     execute,
+)
+from marrow.expr.fused_values import (
+    # Traits
+    TypedValue,
+    NumericTypedValue,
+    # Expression nodes
+    FusedColumn,
+    FusedAdd,
+    FusedSub,
+    # Vectorize dispatch
+    _vectorize_dispatch,
 )

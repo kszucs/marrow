@@ -1,16 +1,7 @@
 """Scalar expression nodes for the marrow expression system.
 
-``Value``       — the trait every scalar expression node must implement.
-``AnyValue``    — the type-erased, ArcPointer-backed container.
-Concrete node types
--------------------
-``Column``  — input column reference (LOAD)
-``Literal`` — scalar constant stored as a length-1 AnyArray (LITERAL)
-``Binary``  — binary arithmetic / comparison / boolean (ADD … OR)
-``Unary``   — unary arithmetic / boolean (NEG, ABS, NOT)
-``IsNull``  — null check (IS_NULL)
-``IfElse``  — conditional select (IF_ELSE)
-``Cast``    — explicit type cast (CAST)
+``Expr``        — unified n-ary term expression node
+``Value``       — trait every scalar expression node must implement
 
 Factory functions
 -----------------
@@ -18,15 +9,25 @@ Factory functions
 ``lit[T](value)``               — typed scalar literal
 ``if_else(cond, then_, else_)`` — conditional
 
-Operator overloads on ``AnyValue``: ``+``, ``-``, ``*``, ``/``, ``>``,
+Operator overloads on ``Expr``: ``+``, ``-``, ``*``, ``/``, ``>``,
 ``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
 unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
+
+Expression tags
+---------------
+LOAD    - Column reference
+LITERAL - Constant value
+ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
+NEG/ABS/NOT - Unary operations
+IS_NULL - Null check
+IF_ELSE - Conditional
+CAST - Type cast
 """
 
 from std.memory import ArcPointer
-from marrow.arrays import AnyArray, PrimitiveArray
+from marrow.arrays import AnyArray
 from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import AnyDataType, PrimitiveType, NumericType
+from marrow.dtypes import AnyDataType, NumericType
 from marrow.schema import Schema
 
 
@@ -34,11 +35,8 @@ from marrow.schema import Schema
 # Node-kind / op constants
 # ---------------------------------------------------------------------------
 
-# Leaf nodes
 comptime LOAD: UInt8 = 0
 comptime LITERAL: UInt8 = 1
-
-# BinaryOp values — also used as kind() for Binary nodes
 comptime ADD: UInt8 = 2
 comptime SUB: UInt8 = 3
 comptime MUL: UInt8 = 4
@@ -51,30 +49,196 @@ comptime GT: UInt8 = 10
 comptime GE: UInt8 = 11
 comptime AND: UInt8 = 12
 comptime OR: UInt8 = 13
-
-# UnaryOp values — also used as kind() for Unary nodes
 comptime NEG: UInt8 = 14
 comptime ABS: UInt8 = 15
 comptime NOT: UInt8 = 16
-
-# Other nodes
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
+comptime FUSED: UInt8 = 20
+"""Tag for Expr nodes that carry a comptime-fused expression in _fused."""
 
 
 # ---------------------------------------------------------------------------
-# Dispatch hint constants
+# Expr - unified n-ary term expression node
 # ---------------------------------------------------------------------------
 
-comptime DISPATCH_AUTO: UInt8 = 0
-"""Executor decides: GPU if DeviceContext present and array large enough."""
 
-comptime DISPATCH_CPU: UInt8 = 1
-"""Always use CPU SIMD path; DeviceContext is ignored."""
+struct Expr(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writable):
+    """Unified expression node using tag-based dispatch."""
 
-comptime DISPATCH_GPU: UInt8 = 2
-"""Always use GPU; raises if no accelerator or no DeviceContext."""
+    var _tag: UInt8
+    var _args: List[Expr]
+    var _kind_data: UInt8
+    var _value: Optional[AnyArray]
+    var _name: String
+    var dispatch: UInt8
+    var _fused: Optional[ArcPointer[NoneType]]
+    var _virt_fused_dtype: def(ArcPointer[NoneType]) thin -> Optional[AnyDataType]
+    var _virt_fused_write: def(ArcPointer[NoneType]) thin -> String
+
+    def __init__(
+        out self,
+        tag: UInt8,
+        var args: List[Expr],
+        kind_data: UInt8,
+        var value: Optional[AnyArray],
+        var name: String,
+    ):
+        self._tag = tag
+        self._args = args^
+        self._kind_data = kind_data
+        self._value = value.copy()
+        self._name = name^
+        self.dispatch = 0
+        self._fused = None
+        self._virt_fused_dtype = Self._tramp_fused_dtype_default
+        self._virt_fused_write = Self._tramp_fused_write_default
+
+    def __init__(out self, *, copy: Self):
+        self._tag = copy._tag
+        self._args = List[Expr]()
+        for i in range(len(copy._args)):
+            self._args.append(Expr(copy=copy._args[i]))
+        self._kind_data = copy._kind_data
+        self._value = copy._value.copy()
+        self._name = copy._name.copy()
+        self.dispatch = copy.dispatch
+        self._fused = copy._fused
+        self._virt_fused_dtype = copy._virt_fused_dtype
+        self._virt_fused_write = copy._virt_fused_write
+
+    @staticmethod
+    def _tramp_fused_dtype_default(ptr: ArcPointer[NoneType]) -> Optional[AnyDataType]:
+        return None
+
+    @staticmethod
+    def _tramp_fused_write_default(ptr: ArcPointer[NoneType]) -> String:
+        return String()
+
+    def kind(self) -> UInt8:
+        return self._tag
+
+    def dtype(self) -> Optional[AnyDataType]:
+        if self._fused:
+            try:
+                return self._virt_fused_dtype(self._fused[])
+            except:
+                return None
+        if self._tag == LITERAL:
+            return self._value.value().dtype()
+        return None
+
+    def inputs(self) -> List[Expr]:
+        var result = List[Expr](capacity=len(self._args))
+        for ref a in self._args:
+            result.append(a.copy())
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        if self._fused:
+            writer.write("fused(...)")
+        elif self._tag == LOAD:
+            writer.write(t"input({self._kind_data})")
+        elif self._tag == LITERAL:
+            writer.write("literal(...)")
+        elif self._tag >= ADD and self._tag <= OR:
+            var op_name = String("?")
+            if self._tag == ADD: op_name = "add"
+            elif self._tag == SUB: op_name = "sub"
+            elif self._tag == MUL: op_name = "mul"
+            elif self._tag == DIV: op_name = "div"
+            elif self._tag == EQ: op_name = "equal"
+            elif self._tag == NE: op_name = "not_equal"
+            elif self._tag == LT: op_name = "less"
+            elif self._tag == LE: op_name = "less_equal"
+            elif self._tag == GT: op_name = "greater"
+            elif self._tag == GE: op_name = "greater_equal"
+            elif self._tag == AND: op_name = "and"
+            elif self._tag == OR: op_name = "or"
+            writer.write(t"{op_name}(")
+            if len(self._args) >= 1: self._args[0].write_to(writer)
+            writer.write(t", ")
+            if len(self._args) >= 2: self._args[1].write_to(writer)
+            writer.write(t")")
+        elif self._tag >= NEG and self._tag <= NOT:
+            var op_name = String("?")
+            if self._tag == NEG: op_name = "neg"
+            elif self._tag == ABS: op_name = "abs"
+            elif self._tag == NOT: op_name = "not"
+            writer.write(t"{op_name}(")
+            if len(self._args) >= 1: self._args[0].write_to(writer)
+            writer.write(t")")
+        elif self._tag == IS_NULL:
+            writer.write(t"is_null(")
+            if len(self._args) >= 1: self._args[0].write_to(writer)
+            writer.write(t")")
+        elif self._tag == IF_ELSE:
+            writer.write(t"if_else(")
+            if len(self._args) >= 1: self._args[0].write_to(writer)
+            writer.write(t", ")
+            if len(self._args) >= 2: self._args[1].write_to(writer)
+            writer.write(t", ")
+            if len(self._args) >= 3: self._args[2].write_to(writer)
+            writer.write(t")")
+        elif self._tag == CAST:
+            writer.write(t"cast(")
+            if len(self._args) >= 1: self._args[0].write_to(writer)
+            writer.write(t")")
+        else:
+            writer.write(t"<unknown>({self._tag})")
+
+    # Operator overloads (methods on Expr)
+    def __add__(self, rhs: Expr) -> Expr:
+        return Expr(tag=ADD, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __sub__(self, rhs: Expr) -> Expr:
+        return Expr(tag=SUB, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __mul__(self, rhs: Expr) -> Expr:
+        return Expr(tag=MUL, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __truediv__(self, rhs: Expr) -> Expr:
+        return Expr(tag=DIV, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __gt__(self, rhs: Expr) -> Expr:
+        return Expr(tag=GT, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __lt__(self, rhs: Expr) -> Expr:
+        return Expr(tag=LT, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __ge__(self, rhs: Expr) -> Expr:
+        return Expr(tag=GE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __le__(self, rhs: Expr) -> Expr:
+        return Expr(tag=LE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __eq__(self, rhs: Expr) -> Expr:
+        return Expr(tag=EQ, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __ne__(self, rhs: Expr) -> Expr:
+        return Expr(tag=NE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __neg__(self) -> Expr:
+        return Expr(tag=NEG, args=[self.copy()], kind_data=0, value=None, name=String())
+
+    def __invert__(self) -> Expr:
+        return Expr(tag=NOT, args=[self.copy()], kind_data=0, value=None, name=String())
+
+    def __and__(self, rhs: Expr) -> Expr:
+        return Expr(tag=AND, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def __or__(self, rhs: Expr) -> Expr:
+        return Expr(tag=OR, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
+
+    def is_null(self) -> Expr:
+        return Expr(tag=IS_NULL, args=[self.copy()], kind_data=0, value=None, name=String())
+
+    def abs(self) -> Expr:
+        return Expr(tag=ABS, args=[self.copy()], kind_data=0, value=None, name=String())
+
+    def cast(self, to: AnyDataType) -> Expr:
+        return Expr(tag=CAST, args=[self.copy()], kind_data=0, value=None, name=String())
 
 
 # ---------------------------------------------------------------------------
@@ -83,543 +247,44 @@ comptime DISPATCH_GPU: UInt8 = 2
 
 
 trait Value(ImplicitlyDestructible, Movable):
-    """Interface for immutable scalar expression nodes.
-
-    Nodes are designed for e-graph compatibility: they must be immutable
-    after construction.  Implementors should also implement ``Hashable``
-    and ``Equatable`` (structural hash / equality over fields) to enable
-    hash consing and equality saturation in a future ``EGraph``.
-    """
+    """Interface for immutable scalar expression nodes."""
 
     def kind(self) -> UInt8:
-        """Return the node-kind constant (LOAD, ADD, NEG, …)."""
+        """Return the node-kind constant."""
         ...
 
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type, or None if not yet inferred."""
         ...
 
-    def inputs(self) -> List[AnyValue]:
+    def inputs(self) -> List[Expr]:
         """Return child expressions (empty for leaf nodes)."""
         ...
 
     def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display (children formatted recursively)."""
+        """Format this node for display."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# AnyValue — type-erased, ArcPointer-backed expression container
+# Factory functions (return Expr)
 # ---------------------------------------------------------------------------
 
 
-struct AnyValue(ImplicitlyCopyable, Movable, Writable):
-    """Type-erased scalar expression node.
-
-    Wraps any ``Value``-conforming type on the heap behind an
-    ``ArcPointer`` so copies are O(1) ref-count bumps.  Composite nodes
-    (``Binary``, ``IfElse``) hold ``AnyValue`` children — the entire DAG is
-    shared by reference.
-    """
-
-    var _data: ArcPointer[NoneType]
-    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
-    var _virt_dtype: def(ArcPointer[NoneType]) thin -> Optional[AnyDataType]
-    var _virt_inputs: def(ArcPointer[NoneType]) thin -> List[AnyValue]
-    var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
-    var _virt_drop: def(var ArcPointer[NoneType]) thin
-    var dispatch: UInt8
-    """Dispatch hint for the executor (DISPATCH_AUTO / CPU / GPU)."""
-
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_kind[T: Value](ptr: ArcPointer[NoneType]) -> UInt8:
-        return rebind[ArcPointer[T]](ptr)[].kind()
-
-    @staticmethod
-    def _tramp_dtype[
-        T: Value
-    ](ptr: ArcPointer[NoneType]) -> Optional[AnyDataType]:
-        return rebind[ArcPointer[T]](ptr)[].dtype()
-
-    @staticmethod
-    def _tramp_inputs[T: Value](ptr: ArcPointer[NoneType]) -> List[AnyValue]:
-        return rebind[ArcPointer[T]](ptr)[].inputs()
-
-    @staticmethod
-    def _tramp_write_to_string[T: Value](ptr: ArcPointer[NoneType]) -> String:
-        var s = String()
-        rebind[ArcPointer[T]](ptr)[].write_to(s)
-        return s^
-
-    @staticmethod
-    def _tramp_drop[T: Value](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[T]](ptr^)
-        _ = typed^
-
-    # --- construction ---
-
-    @implicit
-    def __init__[T: Value](out self, var value: T):
-        var ptr = ArcPointer(value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_kind = Self._tramp_kind[T]
-        self._virt_dtype = Self._tramp_dtype[T]
-        self._virt_inputs = Self._tramp_inputs[T]
-        self._virt_write_to_string = Self._tramp_write_to_string[T]
-        self._virt_drop = Self._tramp_drop[T]
-        self.dispatch = DISPATCH_AUTO
-
-    def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._virt_kind = copy._virt_kind
-        self._virt_dtype = copy._virt_dtype
-        self._virt_inputs = copy._virt_inputs
-        self._virt_write_to_string = copy._virt_write_to_string
-        self._virt_drop = copy._virt_drop
-        self.dispatch = copy.dispatch
-
-    # --- public API ---
-
-    def kind(self) -> UInt8:
-        return self._virt_kind(self._data)
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return self._virt_dtype(self._data)
-
-    def inputs(self) -> List[AnyValue]:
-        return self._virt_inputs(self._data)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(self._virt_write_to_string(self._data))
-
-    def with_dispatch(self, hint: UInt8) -> AnyValue:
-        """Return a copy of this expression with the given dispatch hint."""
-        var copy = self
-        copy.dispatch = hint
-        return copy^
-
-    # --- downcast helpers ---
-
-    def downcast[T: Value](self) -> ArcPointer[T]:
-        return rebind[ArcPointer[T]](self._data.copy())
-
-    # --- operator overloads (ibis-style) ---
-
-    def __add__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=ADD, left=self, right=other)
-
-    def __sub__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=SUB, left=self, right=other)
-
-    def __mul__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=MUL, left=self, right=other)
-
-    def __truediv__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=DIV, left=self, right=other)
-
-    def __gt__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=GT, left=self, right=other)
-
-    def __lt__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=LT, left=self, right=other)
-
-    def __ge__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=GE, left=self, right=other)
-
-    def __le__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=LE, left=self, right=other)
-
-    def __eq__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=EQ, left=self, right=other)
-
-    def __ne__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=NE, left=self, right=other)
-
-    def __neg__(self) -> AnyValue:
-        return Unary(op=NEG, child=self)
-
-    def __invert__(self) -> AnyValue:
-        """Logical NOT."""
-        return Unary(op=NOT, child=self)
-
-    def __and__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=AND, left=self, right=other)
-
-    def __or__(self, other: AnyValue) -> AnyValue:
-        return Binary(op=OR, left=self, right=other)
-
-    def is_null(self) -> AnyValue:
-        """True where this expression produces a null value."""
-        return IsNull(child=self)
-
-    def abs(self) -> AnyValue:
-        """Element-wise absolute value."""
-        return Unary(op=ABS, child=self)
-
-    def cast(self, to: AnyDataType) -> AnyValue:
-        """Explicit type cast."""
-        return Cast(child=self, to=to)
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)
-
-
-# ---------------------------------------------------------------------------
-# Concrete expression nodes
-# ---------------------------------------------------------------------------
-
-
-struct Column(Value):
-    """Input column reference (LOAD node).
-
-    ``index``  — positional index into the executor's input array list.
-    ``name``   — optional display name (may be empty).
-    ``dtype_`` — declared data type; None until type inference runs.
-    """
-
-    var index: Int
-    var name: String
-    var dtype_: Optional[AnyDataType]
-
-    def __init__(
-        out self, *, index: Int, var name: String, dtype_: Optional[AnyDataType]
-    ):
-        self.index = index
-        self.name = name^
-        self.dtype_ = dtype_.copy()
-
-    def kind(self) -> UInt8:
-        return LOAD
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return self.dtype_.copy()
-
-    def inputs(self) -> List[AnyValue]:
-        return List[AnyValue]()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"input({self.index})")
-
-
-struct Literal(Value):
-    """Scalar constant broadcast to the length of the first input (LITERAL node).
-
-    Stores the scalar as a length-1 AnyArray, supporting any dtype (numeric,
-    string, bool).  Similar to arrow-rs ``Scalar<T>``.
-    """
-
-    var value: AnyArray
-
-    def __init__(out self, *, var value: AnyArray):
-        self.value = value^
-
-    def kind(self) -> UInt8:
-        return LITERAL
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return self.value.dtype()
-
-    def inputs(self) -> List[AnyValue]:
-        return List[AnyValue]()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"literal(...)")
-
-
-struct Binary(Value):
-    """Binary operation node (arithmetic, comparison, boolean).
-
-    ``op``    — BinaryOp constant (ADD, SUB, … OR).
-    ``left``  — left child expression.
-    ``right`` — right child expression.
-
-    ``kind()`` returns ``op`` so the executor can dispatch on the kind
-    constant directly without downcasting.
-    """
-
-    var op: UInt8
-    var left: AnyValue
-    var right: AnyValue
-
-    def __init__(
-        out self, *, op: UInt8, var left: AnyValue, var right: AnyValue
-    ):
-        self.op = op
-        self.left = left^
-        self.right = right^
-
-    def kind(self) -> UInt8:
-        return self.op
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return None  # filled in by type inference
-
-    def inputs(self) -> List[AnyValue]:
-        return [self.left, self.right]
-
-    def write_to[W: Writer](self, mut writer: W):
-        if self.op == ADD:
-            writer.write(t"add(")
-        elif self.op == SUB:
-            writer.write(t"sub(")
-        elif self.op == MUL:
-            writer.write(t"mul(")
-        elif self.op == DIV:
-            writer.write(t"div(")
-        elif self.op == EQ:
-            writer.write(t"equal(")
-        elif self.op == NE:
-            writer.write(t"not_equal(")
-        elif self.op == LT:
-            writer.write(t"less(")
-        elif self.op == LE:
-            writer.write(t"less_equal(")
-        elif self.op == GT:
-            writer.write(t"greater(")
-        elif self.op == GE:
-            writer.write(t"greater_equal(")
-        elif self.op == AND:
-            writer.write(t"and_(")
-        elif self.op == OR:
-            writer.write(t"or_(")
-        else:
-            writer.write(t"<unknown_binary>(")
-        self.left.write_to(writer)
-        writer.write(t", ")
-        self.right.write_to(writer)
-        writer.write(t")")
-
-
-struct Unary(Value):
-    """Unary operation node (arithmetic negation, absolute value, logical NOT).
-
-    ``op``    — UnaryOp constant (NEG, ABS, NOT).
-    ``child`` — operand expression.
-
-    ``kind()`` returns ``op``.
-    """
-
-    var op: UInt8
-    var child: AnyValue
-
-    def __init__(out self, *, op: UInt8, var child: AnyValue):
-        self.op = op
-        self.child = child^
-
-    def kind(self) -> UInt8:
-        return self.op
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return None  # filled in by type inference
-
-    def inputs(self) -> List[AnyValue]:
-        return [self.child]
-
-    def write_to[W: Writer](self, mut writer: W):
-        if self.op == NEG:
-            writer.write(t"neg(")
-        elif self.op == ABS:
-            writer.write(t"abs(")
-        elif self.op == NOT:
-            writer.write(t"not_(")
-        else:
-            writer.write(t"<unknown_unary>(")
-        self.child.write_to(writer)
-        writer.write(t")")
-
-
-struct IsNull(Value):
-    """Null check — produces a bool array: True where child is null."""
-
-    var child: AnyValue
-
-    def __init__(out self, *, var child: AnyValue):
-        self.child = child^
-
-    def kind(self) -> UInt8:
-        return IS_NULL
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return None  # bool_ after type inference
-
-    def inputs(self) -> List[AnyValue]:
-        return [self.child]
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"is_null(")
-        self.child.write_to(writer)
-        writer.write(t")")
-
-
-struct IfElse(Value):
-    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i].
-    """
-
-    var cond: AnyValue
-    var then_: AnyValue
-    var else_: AnyValue
-
-    def __init__(
-        out self,
-        *,
-        var cond: AnyValue,
-        var then_: AnyValue,
-        var else_: AnyValue,
-    ):
-        self.cond = cond^
-        self.then_ = then_^
-        self.else_ = else_^
-
-    def kind(self) -> UInt8:
-        return IF_ELSE
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return None  # filled in by type inference
-
-    def inputs(self) -> List[AnyValue]:
-        return [self.cond, self.then_, self.else_]
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"if_else(")
-        self.cond.write_to(writer)
-        writer.write(t", ")
-        self.then_.write_to(writer)
-        writer.write(t", ")
-        self.else_.write_to(writer)
-        writer.write(t")")
-
-
-struct Cast(Value):
-    """Explicit type cast."""
-
-    var child: AnyValue
-    var to: AnyDataType
-
-    def __init__(out self, *, var child: AnyValue, to: AnyDataType):
-        self.child = child^
-        self.to = to.copy()
-
-    def kind(self) -> UInt8:
-        return CAST
-
-    def dtype(self) -> Optional[AnyDataType]:
-        return self.to.copy()
-
-    def inputs(self) -> List[AnyValue]:
-        return [self.child]
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"cast(")
-        self.child.write_to(writer)
-        writer.write(t", {self.to})")
-
-
-# ---------------------------------------------------------------------------
-# Literal helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_literal[T: NumericType](value: Scalar[T.native]) raises -> AnyValue:
-    """Create a Literal expression from a typed scalar value."""
+def col(index: Int) -> Expr:
+    """Reference to the ``index``-th input column."""
+    return Expr(tag=LOAD, args=List[Expr](), kind_data=index, value=None, name=String())
+
+def col(var name: String) -> Expr:
+    """Reference to a named column."""
+    return Expr(tag=LOAD, args=List[Expr](), kind_data=-1, value=None, name=name^)
+
+def lit[T: NumericType](value: Scalar[T.native]) raises -> Expr:
+    """A scalar constant."""
     var builder = PrimitiveBuilder[T](T(), 1)
     builder.unsafe_append(value)
-    return Literal(value=builder.finish().to_any())
+    return Expr(tag=LITERAL, args=List[Expr](), kind_data=0, value=builder.finish().to_any(), name=String())
 
-
-# ---------------------------------------------------------------------------
-# Free-standing factory functions
-# ---------------------------------------------------------------------------
-
-
-def col(index: Int) -> AnyValue:
-    """Reference to the ``index``-th input column."""
-    return Column(index=index, name=String(), dtype_=None)
-
-
-def col(var name: String) -> AnyValue:
-    """Reference to a named column (resolved against the schema at execution).
-    """
-    return Column(index=-1, name=name^, dtype_=None)
-
-
-def lit[T: NumericType](value: Scalar[T.native]) raises -> AnyValue:
-    """A scalar constant broadcast to the length of the first input."""
-    return _make_literal[T](value)
-
-
-def if_else(cond: AnyValue, then_: AnyValue, else_: AnyValue) -> AnyValue:
-    """Element-wise conditional: result[i] = then_[i] if cond[i] else else_[i].
-    """
-    return IfElse(cond=cond, then_=then_, else_=else_)
-
-
-# ---------------------------------------------------------------------------
-# Expression tree utilities
-# ---------------------------------------------------------------------------
-
-
-def rebuild(expr: AnyValue, children: List[AnyValue]) -> AnyValue:
-    """Reconstruct an expression node with replaced children.
-
-    Leaves (Column, Literal) are returned unchanged.
-    """
-    var k = expr.kind()
-    if k == LOAD or k == LITERAL:
-        return expr
-    if k >= ADD and k <= OR:  # Binary ops
-        var bin = expr.downcast[Binary]()
-        return Binary(op=bin[].op, left=children[0], right=children[1])
-    if k >= NEG and k <= NOT:  # Unary ops
-        var un = expr.downcast[Unary]()
-        return Unary(op=un[].op, child=children[0])
-    if k == IS_NULL:
-        return IsNull(child=children[0])
-    if k == IF_ELSE:
-        return IfElse(cond=children[0], then_=children[1], else_=children[2])
-    if k == CAST:
-        var c = expr.downcast[Cast]()
-        return Cast(child=children[0], to=c[].to)
-    return expr  # unknown: pass through
-
-
-def resolve_columns(expr: AnyValue, schema: Schema) raises -> AnyValue:
-    """Resolve name-based Column references (index == -1) to positional
-    indices using the schema.
-
-    Walks the expression tree bottom-up, replacing ``col("name")`` with
-    ``col(index)`` where ``index`` is the field position in ``schema``.
-    """
-    var k = expr.kind()
-    if k == LOAD:
-        var c = expr.downcast[Column]()
-        if c[].index == -1:
-            var idx = schema.get_field_index(c[].name)
-            if idx == -1:
-                raise Error(
-                    "resolve_columns: column '"
-                    + c[].name
-                    + "' not found in schema"
-                )
-            return Column(
-                index=idx,
-                name=c[].name.copy(),
-                dtype_=Optional(schema.fields[idx].dtype.copy()),
-            )
-        if not c[].dtype_:
-            return Column(
-                index=c[].index,
-                name=c[].name.copy(),
-                dtype_=Optional(schema.fields[c[].index].dtype.copy()),
-            )
-        return expr
-
-    if k == LITERAL:
-        return expr
-
-    # Recursively resolve children and rebuild
-    var children = expr.inputs()
-    for i in range(len(children)):
-        children[i] = resolve_columns(children[i], schema)
-    return rebuild(expr, children)
+def if_else(cond: Expr, then_: Expr, else_: Expr) -> Expr:
+    """Element-wise conditional."""
+    return Expr(tag=IF_ELSE, args=[cond.copy(), then_.copy(), else_.copy()], kind_data=0, value=None, name=String())
