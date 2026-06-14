@@ -168,7 +168,6 @@ trait NumericTypedValue(TypedValue):
 # ---------------------------------------------------------------------------
 
 
-@staticmethod
 def _fused_dtype_tramp[T: NumericTypedValue](
     ptr: ArcPointer[NoneType],
 ) -> Optional[AnyDataType]:
@@ -177,7 +176,6 @@ def _fused_dtype_tramp[T: NumericTypedValue](
     return typed[].dtype()
 
 
-@staticmethod
 def _fused_write_tramp[T: NumericTypedValue](
     ptr: ArcPointer[NoneType],
 ) -> String:
