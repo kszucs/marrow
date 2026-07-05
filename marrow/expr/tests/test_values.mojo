@@ -13,6 +13,7 @@ from marrow.expr import (
     lit,
     if_else,
     LOAD,
+    LITERAL,
     ADD,
     SUB,
     MUL,

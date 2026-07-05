@@ -411,3 +411,15 @@ def _vectorize_dispatch[
         process[W, rank=1](IndexList[1](i))
 
     vectorize[cpu_width](length, lane)
+
+
+# ---------------------------------------------------------------------------
+# Aliases for compatibility with new API names
+# ---------------------------------------------------------------------------
+
+
+# NumericValue is an alias for NumericTypedValue (new API name)
+comptime NumericValue = NumericTypedValue
+
+# Column is an alias for FusedColumn (new API name)
+comptime Column = FusedColumn

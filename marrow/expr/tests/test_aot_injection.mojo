@@ -24,7 +24,7 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import Expr, Planner, FUSED
-from marrow.expr.fused_values import (
+from marrow.expr.fused import (
     FusedColumn,
     FusedAdd,
     FusedSub,

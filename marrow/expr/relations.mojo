@@ -263,8 +263,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         Column references using ``col("name")`` are resolved to positional
         indices against this node's output schema.
         """
-        var schema = self.schema()
-        var resolved = predicate
+        var resolved = predicate.resolve_names(self.schema())
         var filt = Filter(input=self, predicate=resolved^)
         return AnyRelation(filt^)
 
@@ -354,13 +353,14 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var left_schema = self.schema()
         var right_schema = right.schema()
 
-        # Use expressions directly (Expr is the unified type)
+        # Resolve column-name key expressions to positional indices against
+        # each side's schema.
         var resolved_left = List[Expr]()
         for ref k in left_on:
-            resolved_left.append(k)
+            resolved_left.append(k.resolve_names(left_schema))
         var resolved_right = List[Expr]()
         for ref k in right_on:
-            resolved_right.append(k)
+            resolved_right.append(k.resolve_names(right_schema))
 
         # Build output schema.
         var fields = List[Field]()

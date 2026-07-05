@@ -76,10 +76,8 @@ def test_execute_inner_join_basic() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     var result = execute(left_plan.join(right_plan, keys_left, keys_right))
     assert_equal(result.num_rows(), 2)
@@ -107,10 +105,8 @@ def test_execute_inner_join_no_matches() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     var result = execute(left_plan.join(right_plan, keys_left, keys_right))
     assert_equal(result.num_rows(), 0)
@@ -142,10 +138,8 @@ def test_execute_left_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     var result = execute(
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_LEFT)
@@ -182,10 +176,8 @@ def test_execute_semi_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     var result = execute(
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_SEMI)
@@ -220,10 +212,8 @@ def test_execute_anti_join() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     var result = execute(
         left_plan.join(right_plan, keys_left, keys_right, how=JOIN_ANTI)
@@ -268,10 +258,8 @@ def test_join_then_filter() raises:
     var left_plan = in_memory_table(left_batch)
     var right_plan = in_memory_table(right_batch)
 
-    var keys_left = List[AnyValue]()
-    keys_left.append(col("k"))
-    var keys_right = List[AnyValue]()
-    keys_right.append(col("k"))
+    var keys_left = [col("k")]
+    var keys_right = [col("k")]
 
     # After join: columns are k(0), v(1), k_right(2), v_right(3)
     var result = execute(

@@ -110,7 +110,7 @@ from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
-from marrow.expr.fused_values import NumericTypedValue, FusedColumn
+from marrow.expr.fused import NumericValue, Column
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -418,10 +418,10 @@ struct IfElseProcessor(ValueProcessor):
 # ---------------------------------------------------------------------------
 
 
-struct FusedProcessor[T: NumericTypedValue](ValueProcessor):
+struct FusedProcessor[T: NumericValue](ValueProcessor):
     """Evaluates a comptime-fused expression against a RecordBatch.
 
-    Wraps a ``NumericTypedValue`` (e.g. ``FusedAdd[FusedColumn, FusedColumn]``)
+    Wraps a ``NumericValue`` (e.g. ``Add[Column, Column]``)
     and calls ``execute(batch)`` to produce a single fused ``PrimitiveArray``
     with zero intermediate arrays.
 
@@ -432,9 +432,9 @@ struct FusedProcessor[T: NumericTypedValue](ValueProcessor):
 
     Usage::
 
-        var col_a = FusedColumn[Int64Type](0)
-        var col_b = FusedColumn[Int64Type](1)
-        var expr = FusedAdd(col_a, col_b)
+        var col_a = Column[Int64Type](0)
+        var col_b = Column[Int64Type](1)
+        var expr = Add(col_a, col_b)
         var proc = FusedProcessor(expr)
         var result = proc.eval(batch)  # single fused pass
     """
@@ -1040,9 +1040,19 @@ struct Planner:
             for i in range(len(arc[].keys)):
                 key_fields.append(arc[].schema().fields[i].copy())
 
+            # Resolve each aggregated value's dtype.  ``Expr.dtype()`` only
+            # knows LITERAL nodes; plain LOAD nodes must be resolved against
+            # the aggregate's input schema so e.g. summing an int64 column
+            # uses an int64 accumulator instead of defaulting to float64.
+            var input_schema = arc[].input.schema()
             var value_dtypes = List[AnyDataType]()
             for i in range(len(arc[].agg_exprs)):
-                var dt = arc[].agg_exprs[i].dtype()
+                ref agg_expr = arc[].agg_exprs[i]
+                var dt = agg_expr.dtype()
+                if not dt and agg_expr.kind() == LOAD:
+                    dt = Optional[AnyDataType](
+                        input_schema.fields[Int(agg_expr.kind_data())].dtype.copy()
+                    )
                 if dt:
                     value_dtypes.append(dt.value().copy())
                 else:

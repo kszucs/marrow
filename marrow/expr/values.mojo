@@ -99,7 +99,7 @@ struct Expr(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writa
         self._tag = copy._tag
         self._args = List[Expr]()
         for i in range(len(copy._args)):
-            self._args.append(Expr(copy=copy._args[i]))
+            self._args.append(copy._args[i].copy())
         self._kind_data = copy._kind_data
         self._value = copy._value.copy()
         self._name = copy._name.copy()
@@ -118,6 +118,30 @@ struct Expr(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writa
 
     def kind(self) -> UInt8:
         return self._tag
+
+    def kind_data(self) -> UInt8:
+        """Return the kind-specific data (e.g. column index for LOAD nodes)."""
+        return self._kind_data
+
+    def name(self) -> String:
+        """Return the column name for a named LOAD node (empty otherwise)."""
+        return self._name
+
+    def resolve_names(self, schema: Schema) raises -> Expr:
+        """Recursively resolve ``col("name")`` references against *schema*.
+
+        Returns a copy of this expression tree with every named LOAD node
+        replaced by a positional column reference.
+        """
+        if self._tag == LOAD and self._name.byte_length() > 0:
+            var idx = schema.get_field_index(self._name)
+            if idx == -1:
+                raise Error("resolve_names: column '" + self._name + "' not found")
+            return col(idx)
+        var result = self.copy()
+        for i in range(len(result._args)):
+            result._args[i] = self._args[i].resolve_names(schema)
+        return result^
 
     def dtype(self) -> Optional[AnyDataType]:
         if self._fused:
@@ -273,7 +297,7 @@ trait Value(ImplicitlyDestructible, Movable):
 
 def col(index: Int) -> Expr:
     """Reference to the ``index``-th input column."""
-    return Expr(tag=LOAD, args=List[Expr](), kind_data=index, value=None, name=String())
+    return Expr(tag=LOAD, args=List[Expr](), kind_data=UInt8(index), value=None, name=String())
 
 def col(var name: String) -> Expr:
     """Reference to a named column."""

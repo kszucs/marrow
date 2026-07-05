@@ -11,11 +11,26 @@ Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
 
 Comptime-fused expressions
 --------------------------
-``TypedValue``       — base trait for comptime-fused expression nodes
-``NumericTypedValue`` — numeric fused nodes with SIMD vectorize execution
-``FusedColumn[T]``   — typed column reference
-``FusedAdd[L, R]``   — fused binary add
-``FusedSub[L, R]``   — fused binary subtract
+``NumericValue`` — base trait for numeric fused nodes with SIMD vectorize execution
+``BoolValue``    — base trait for boolean output expression nodes
+
+Expression nodes:
+``Column[T]``     — typed column reference (positional)
+``ColumnRef[name, T]`` — named column placeholder (resolved from RecordBatch)
+``Literal[T]``    — scalar constant broadcast to all SIMD lanes
+``Negate[T]``     — fused unary negate
+``Add[L, R]``     — fused binary add
+``Sub[L, R]``     — fused binary subtract
+``Mul[L, R]``     — fused binary multiply
+``Equal[L, R]``   — fused equality comparison
+``NotEqual[L, R]`` — fused inequality comparison
+``Less[L, R]``    — fused less-than comparison
+``LessEq[L, R]``  — fused less-than-or-equal comparison
+``Greater[L, R]`` — fused greater-than comparison
+``GreaterEq[L, R]`` — fused greater-than-or-equal comparison
+``And[L, R]``     — fused logical AND
+``Or[L, R]``      — fused logical OR
+``Not[E]``        — fused logical NOT
 
 Fused expressions can be boxed into ``Expr`` via ``to_expr()`` or implicit
 conversion, enabling use in plan-building APIs (``filter()``, ``select()``).
@@ -139,14 +154,18 @@ from marrow.expr.executor import (
     Planner,
     execute,
 )
-from marrow.expr.fused_values import (
+from marrow.expr.fused import (
     # Traits
     TypedValue,
     NumericTypedValue,
-    # Expression nodes
+    # Expression nodes (old API - aliases for compatibility)
     FusedColumn,
     FusedAdd,
     FusedSub,
+    # Expression nodes (new API - aliases)
+    FusedColumn as Column,
+    FusedAdd as Add,
+    FusedSub as Sub,
     # Vectorize dispatch
     _vectorize_dispatch,
 )
