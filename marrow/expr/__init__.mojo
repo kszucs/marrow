@@ -1,24 +1,40 @@
 """Expression and logical plan system for Marrow.
 
-Scalar expressions
-------------------
-``Expr``        — unified n-ary term expression node
-``Value``       — trait every scalar expression node must implement
+Two expression layers
+----------------------
+``values.mojo`` — the **default** comptime-typed layer.  Nodes are generic
+structs (``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``) whose type parameters
+encode the whole expression tree, so the compiler inlines evaluation into a
+single fused SIMD loop with zero intermediate arrays.
+
+``runtime.mojo`` — the type-erased runtime layer (``Expr``).  It exists so
+query plans can be built and executed without knowing concrete comptime
+types — this is what the Python bindings drive.  ``Expr`` carries a tag plus
+child args and dispatches its own execution by tag in ``eval()``.
+
+A comptime-typed node can be boxed into an ``Expr`` via the
+``Expr(value)`` constructor (tag ``FUSED``); the boxed node's ``eval()``,
+``dtype()``, and ``write_to()`` all delegate back to the concrete comptime
+node, so a fused subtree keeps its single-pass execution even when driven
+through the type-erased path.
+
+Scalar expressions (runtime layer)
+-----------------------------------
+``Expr``   — unified n-ary term expression node
+``Value``  — trait every expression node must implement (shared by both layers)
 
 Factory functions: ``col()``, ``lit()``, ``if_else()``
 Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
 ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
+Instance methods: ``.abs()``, ``.is_null()``, ``.length()``, ``.cast(to)``
 
-Comptime-fused expressions
---------------------------
-``TypedValue``       — base trait for comptime-fused expression nodes
-``NumericTypedValue`` — numeric fused nodes with SIMD vectorize execution
-``FusedColumn[T]``   — typed column reference
-``FusedAdd[L, R]``   — fused binary add
-``FusedSub[L, R]``   — fused binary subtract
+Comptime-typed expressions
+---------------------------
+``NumericValue`` — base trait for numeric comptime nodes with SIMD vectorize execution
+``StringValue`` — base trait for string comptime nodes (resolve/execute, no SIMD core)
 
-Fused expressions can be boxed into ``Expr`` via ``to_expr()`` or implicit
-conversion, enabling use in plan-building APIs (``filter()``, ``select()``).
+Expression nodes: ``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``,
+``StringColumn``, ``Length[S]``
 
 Relational plans
 ----------------
@@ -29,17 +45,9 @@ Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
 ``ParquetScan``, ``Aggregate``, ``Join``
 Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
 Factory: ``in_memory_table()``, ``parquet_scan()``
-
-Rewriting
----------
-``Rewrite``    — trait for non-destructive rewrite rules
-``AnyRewrite`` — type-erased rule container
-``Rewriter``   — bottom-up fixed-point rewrite driver
 """
 
-from marrow.expr.values import (
-    # Traits
-    Value,
+from marrow.expr.runtime import (
     # Unified expression node
     Expr,
     # Free-standing factory functions (return Expr)
@@ -68,6 +76,7 @@ from marrow.expr.values import (
     IF_ELSE,
     CAST,
     FUSED,
+    LENGTH,
 )
 from marrow.expr.relations import (
     Relation,
@@ -110,23 +119,8 @@ from marrow.expr.relations import (
     JOIN_ALGO_PIECEWISE,
     JOIN_ALGO_GRACE_HASH,
 )
-from marrow.expr.rewrite import (
-    Rewrite,
-    AnyRewrite,
-    Rewriter,
-)
 from marrow.expr.executor import (
     ExecutionContext,
-    # Value processors
-    ValueProcessor,
-    AnyValueProcessor,
-    ColumnProcessor,
-    LiteralProcessor,
-    BinaryProcessor,
-    UnaryProcessor,
-    IsNullProcessor,
-    IfElseProcessor,
-    FusedProcessor,
     # Relation processors
     RelationProcessor,
     AnyRelationProcessor,
@@ -139,14 +133,17 @@ from marrow.expr.executor import (
     Planner,
     execute,
 )
-from marrow.expr.fused_values import (
+from marrow.expr.values import (
     # Traits
-    TypedValue,
-    NumericTypedValue,
+    Value,
+    NumericValue,
+    StringValue,
     # Expression nodes
-    FusedColumn,
-    FusedAdd,
-    FusedSub,
+    Column,
+    Add,
+    Sub,
+    StringColumn,
+    Length,
     # Vectorize dispatch
     _vectorize_dispatch,
 )

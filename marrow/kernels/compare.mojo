@@ -352,7 +352,6 @@ def equal(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed equal."""
     if left.dtype().is_string():
         return equal(left.as_string(), right.as_string(), ctx).to_any()
     return EqKernel.dispatch(left, right, ctx)
@@ -392,7 +391,6 @@ def not_equal(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed not_equal."""
     return NeKernel.dispatch(left, right, ctx)
 
 
@@ -401,7 +399,6 @@ def less(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed less."""
     return LtKernel.dispatch(left, right, ctx)
 
 
@@ -410,7 +407,6 @@ def less_equal(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed less_equal."""
     return LeKernel.dispatch(left, right, ctx)
 
 
@@ -419,7 +415,6 @@ def greater(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed greater."""
     return GtKernel.dispatch(left, right, ctx)
 
 
@@ -428,5 +423,4 @@ def greater_equal(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed greater_equal."""
     return GeKernel.dispatch(left, right, ctx)

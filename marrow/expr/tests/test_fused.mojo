@@ -1,24 +1,24 @@
-"""Tests for comptime-fused expression execution through the executor pipeline.
+"""Tests for comptime-typed expression execution.
 
-These tests verify that ``FusedProcessor[T]`` correctly evaluates comptime-fused
-expression trees (``FusedColumn``, ``FusedAdd``) by binding them against a
-``RecordBatch`` and running the single fused vectorize loop.
+These tests verify that ``Column``/``Add``/``Sub`` (the default comptime-typed
+expression nodes) correctly evaluate expression trees via ``execute(batch)``,
+running a single fused vectorize loop with zero intermediate arrays.
 """
 
 from std.testing import assert_equal, assert_true
 
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import PrimitiveArray, UInt32Array
 from marrow.builders import array
-from marrow.dtypes import Int64Type, int64
+from marrow.dtypes import Int64Type, int64, uint32
 from marrow.expr import (
-    FusedColumn,
-    FusedAdd,
-    FusedSub,
-    FusedProcessor,
-    NumericTypedValue,
-    TypedValue,
+    Column,
+    Add,
+    Sub,
+    NumericValue,
+    StringColumn,
+    Length,
 )
 from marrow.tabular import RecordBatch, record_batch
 
@@ -28,24 +28,24 @@ from marrow.tabular import RecordBatch, record_batch
 # ---------------------------------------------------------------------------
 
 
-def _fused_add_exec(col_a: Int, col_b: Int, batch: RecordBatch) raises -> PrimitiveArray[Int64Type]:
-    """Build a FusedAdd processor and evaluate against the batch."""
-    var a = FusedColumn[Int64Type](col_a)
-    var b = FusedColumn[Int64Type](col_b)
-    var expr = FusedAdd(a, b)
-    var proc = FusedProcessor(expr)
-    ref result = proc.eval(batch).as_int64()
-    return result.copy()
+def _fused_add_exec(
+    col_a: Int, col_b: Int, batch: RecordBatch
+) raises -> PrimitiveArray[Int64Type]:
+    """Build an Add expression and evaluate against the batch."""
+    var a = Column[Int64Type](col_a)
+    var b = Column[Int64Type](col_b)
+    var expr = Add(a, b)
+    return expr.execute(batch)
 
 
-def _fused_sub_exec(col_a: Int, col_b: Int, batch: RecordBatch) raises -> PrimitiveArray[Int64Type]:
-    """Build a FusedSub processor and evaluate against the batch."""
-    var a = FusedColumn[Int64Type](col_a)
-    var b = FusedColumn[Int64Type](col_b)
-    var expr = FusedSub(a, b)
-    var proc = FusedProcessor(expr)
-    ref result = proc.eval(batch).as_int64()
-    return result.copy()
+def _fused_sub_exec(
+    col_a: Int, col_b: Int, batch: RecordBatch
+) raises -> PrimitiveArray[Int64Type]:
+    """Build a Sub expression and evaluate against the batch."""
+    var a = Column[Int64Type](col_a)
+    var b = Column[Int64Type](col_b)
+    var expr = Sub(a, b)
+    return expr.execute(batch)
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ def _fused_sub_exec(col_a: Int, col_b: Int, batch: RecordBatch) raises -> Primit
 
 
 def test_fused_add_basic() raises:
-    """FusedAdd(col(0), col(1)) produces element-wise addition."""
+    """Add(col(0), col(1)) produces element-wise addition."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -63,7 +63,7 @@ def test_fused_add_basic() raises:
 
 
 def test_fused_add_single_element() raises:
-    """FusedAdd works with a single-element array."""
+    """Add works with a single-element array."""
     var a = array([42], int64)
     var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
@@ -72,7 +72,7 @@ def test_fused_add_single_element() raises:
 
 
 def test_fused_add_non_aligned() raises:
-    """FusedAdd works with non-SIMD-aligned lengths."""
+    """Add works with non-SIMD-aligned lengths."""
     var a = array([1, 2, 3, 4, 5, 6, 7], int64)
     var b = array([10, 20, 30, 40, 50, 60, 70], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -81,7 +81,7 @@ def test_fused_add_non_aligned() raises:
 
 
 def test_fused_add_negative_values() raises:
-    """FusedAdd handles negative values correctly."""
+    """Add handles negative values correctly."""
     var a = array([-1, 2, -3, 4, -5], int64)
     var b = array([1, -2, 3, -4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -90,7 +90,7 @@ def test_fused_add_negative_values() raises:
 
 
 def test_fused_add_large_values() raises:
-    """FusedAdd handles large int64 values."""
+    """Add handles large int64 values."""
     var a = array([9_223_372_036_854_775_806], int64)  # near max
     var b = array([1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
@@ -99,7 +99,7 @@ def test_fused_add_large_values() raises:
 
 
 def test_fused_add_same_column() raises:
-    """FusedAdd(col(0), col(0)) doubles the values."""
+    """Add(col(0), col(0)) doubles the values."""
     var a = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy()], names=["c0"])
     var result = _fused_add_exec(0, 0, batch)
@@ -107,7 +107,7 @@ def test_fused_add_same_column() raises:
 
 
 def test_fused_add_zero() raises:
-    """FusedAdd with zeros produces all zeros."""
+    """Add with zeros produces all zeros."""
     var a = array([0, 0, 0], int64)
     var b = array([0, 0, 0], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
@@ -116,12 +116,12 @@ def test_fused_add_zero() raises:
 
 
 # ---------------------------------------------------------------------------
-# FusedSub
+# Sub
 # ---------------------------------------------------------------------------
 
 
 def test_fused_sub_basic() raises:
-    """FusedSub(col(0), col(1)) produces element-wise subtraction."""
+    """Sub(col(0), col(1)) produces element-wise subtraction."""
     var a = array([10, 20, 30, 40, 50], int64)
     var b = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -130,7 +130,7 @@ def test_fused_sub_basic() raises:
 
 
 def test_fused_sub_single_element() raises:
-    """FusedSub works with a single-element array."""
+    """Sub works with a single-element array."""
     var a = array([42], int64)
     var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
@@ -139,7 +139,7 @@ def test_fused_sub_single_element() raises:
 
 
 def test_fused_sub_negative_result() raises:
-    """FusedSub handles negative results."""
+    """Sub handles negative results."""
     var a = array([1, 2, 3], int64)
     var b = array([10, 20, 30], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -148,19 +148,56 @@ def test_fused_sub_negative_result() raises:
 
 
 # ---------------------------------------------------------------------------
+# Length (string)
+# ---------------------------------------------------------------------------
+
+
+def test_fused_length_basic() raises:
+    """Length(StringColumn(0)) produces per-element byte lengths."""
+    var a = array(["ab", "cde", "", "f"])
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([2, 3, 0, 1], uint32))
+
+
+def test_fused_length_non_aligned() raises:
+    """Length works with non-SIMD-aligned lengths."""
+    var a = array(["a", "bb", "ccc", "dddd", "e", "ff", "ggg"])
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([1, 2, 3, 4, 1, 2, 3], uint32))
+
+
+def test_fused_length_sliced() raises:
+    """Length matches kernels.string.string_lengths on a sliced array."""
+    var full = array(["aa", "b", "ccc", "dddd", "e"])
+    var a = full.slice(1, 3)
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([1, 3, 4], uint32))
+
+
+def test_fused_length_write_to() raises:
+    """Length.write_to produces nested readable output."""
+    var expr = Length(StringColumn(2))
+    assert_equal(String(expr), "Length(StrCol[2])")
+
+
+# ---------------------------------------------------------------------------
 # Trait conformance
 # ---------------------------------------------------------------------------
 
 
 def test_fused_column_implements_numeric_typed_value() raises:
-    """FusedColumn[Int64Type] satisfies NumericTypedValue."""
-    var col = FusedColumn[Int64Type](0)
-    # The fact that FusedProcessor compiles with this type proves trait conformance
-    var expr = FusedColumn[Int64Type](0)
-    var proc = FusedProcessor(expr)
+    """Column[Int64Type] satisfies NumericValue."""
+    # The fact that .execute() compiles on this type proves trait conformance.
+    var expr = Column[Int64Type](0)
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
-    var result = proc.eval(batch)
+    var result = expr.execute(batch)
     assert_true(result == array([1, 2, 3], int64))
 
 
@@ -170,17 +207,17 @@ def test_fused_column_implements_numeric_typed_value() raises:
 
 
 def test_fused_column_write_to() raises:
-    """FusedColumn.write_to produces readable output."""
-    var col = FusedColumn[Int64Type](3)
-    assert_equal(String(col), "FusedCol[3]")
+    """Column.write_to produces readable output."""
+    var col = Column[Int64Type](3)
+    assert_equal(String(col), "Col[3]")
 
 
 def test_fused_add_write_to() raises:
-    """FusedAdd.write_to produces nested readable output."""
-    var a = FusedColumn[Int64Type](0)
-    var b = FusedColumn[Int64Type](1)
-    var expr = FusedAdd(a, b)
-    assert_equal(String(expr), "FusedAdd(FusedCol[0], FusedCol[1])")
+    """Add.write_to produces nested readable output."""
+    var a = Column[Int64Type](0)
+    var b = Column[Int64Type](1)
+    var expr = Add(a, b)
+    assert_equal(String(expr), "Add(Col[0], Col[1])")
 
 
 # ---------------------------------------------------------------------------
@@ -189,23 +226,23 @@ def test_fused_add_write_to() raises:
 
 
 def test_fused_column_copy() raises:
-    """FusedColumn can be copied."""
+    """Column can be copied."""
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
-    var col = FusedColumn[Int64Type](0)
+    var col = Column[Int64Type](0)
     var copy = col.copy()
     var result = copy.execute(batch)
     assert_true(result == array([1, 2, 3], int64))
 
 
 def test_fused_add_copy() raises:
-    """FusedAdd can be copied and re-executed."""
+    """Add can be copied and re-executed."""
     var a = array([1, 2, 3], int64)
     var b = array([10, 20, 30], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var expr = FusedAdd(col_a, col_b)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var expr = Add(col_a, col_b)
     var copy = expr.copy()
     var result = copy.execute(batch)
     assert_true(result == array([11, 22, 33], int64))

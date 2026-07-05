@@ -1,6 +1,6 @@
 """String compute kernels."""
 
-from ..arrays import StringArray, PrimitiveArray, UInt32Array
+from ..arrays import AnyArray, StringArray, PrimitiveArray, UInt32Array
 from ..buffers import Buffer
 from ..dtypes import uint32
 
@@ -31,3 +31,9 @@ def string_lengths(array: StringArray) -> UInt32Array:
         bitmap=None,
         buffer=buf.to_immutable(),
     )
+
+
+def string_lengths(array: AnyArray) -> UInt32Array:
+    """Runtime-typed string_lengths: dispatches to the typed StringArray overload.
+    """
+    return string_lengths(array.as_string())

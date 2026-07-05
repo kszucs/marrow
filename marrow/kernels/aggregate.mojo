@@ -194,13 +194,7 @@ def sum[
 def sum(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
-    """Runtime-typed sum."""
     return SumKernel.dispatch(array, ctx)
-
-
-# ---------------------------------------------------------------------------
-# product
-# ---------------------------------------------------------------------------
 
 
 def product[
@@ -216,13 +210,7 @@ def product[
 def product(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
-    """Runtime-typed product."""
     return ProductKernel.dispatch(array, ctx)
-
-
-# ---------------------------------------------------------------------------
-# min
-# ---------------------------------------------------------------------------
 
 
 def min[
@@ -240,13 +228,7 @@ def min[
 def min(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
-    """Runtime-typed min."""
     return MinAggKernel.dispatch(array, ctx)
-
-
-# ---------------------------------------------------------------------------
-# max
-# ---------------------------------------------------------------------------
 
 
 def max[
@@ -264,7 +246,6 @@ def max[
 def max(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyScalar:
-    """Runtime-typed max."""
     return MaxAggKernel.dispatch(array, ctx)
 
 

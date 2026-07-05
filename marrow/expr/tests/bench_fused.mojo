@@ -30,7 +30,7 @@ Group B — compound predicate filter: WHERE a + b > c AND d + e < f
 At 100M elements with 50% selectivity:
   Group B dispatch materialises ~900 MB of intermediate arrays before any filter runs.
 
-Run with: pixi run pytest marrow/bench_faszom.mojo --benchmark
+Run with: pixi run pytest marrow/bench_fused.mojo --benchmark
 """
 
 from std.benchmark import BenchMetric, keep
@@ -38,7 +38,7 @@ from std.benchmark import BenchMetric, keep
 from marrow.arrays import AnyArray, BoolArray, PrimitiveArray
 from marrow.builders import arange
 from marrow.dtypes import Int32Type
-from marrow.faszom import (
+from marrow.expr.fused import (
     Add,
     And,
     Column,

@@ -2,21 +2,21 @@
 
 Execution model
 ---------------
-Each logical plan node maps to a physical **processor** that implements a
-pull-based pipeline.  There are two processor hierarchies mirroring the two
-expression hierarchies:
+Each logical relational plan node maps to a physical **relation processor**
+that implements a pull-based pipeline (``ScanProcessor``, ``FilterProcessor``,
+``ProjectProcessor``, ``AggregateProcessor``, ``JoinProcessor``, ...).
 
-**Relation processors** (yield ``RecordBatch`` via ``pull()``):
-    ``ScanProcessor``, ``FilterProcessor``, ``ProjectProcessor``
+Scalar expressions have no separate processor hierarchy: ``Expr`` (see
+``marrow.expr.runtime``) already carries its own tag and args, so relation
+processors hold ``Expr``/``List[Expr]`` fields directly and call
+``Expr.eval(batch)``, which dispatches on tag itself — including delegating
+to a boxed comptime-typed node's own fused ``execute()`` for the ``FUSED``
+tag.
 
-**Value processors** (evaluate ``AnyArray`` via ``eval(inputs)``):
-    *Leaf* — ``ColumnProcessor``, ``LiteralProcessor`` (hold data)
-    *Operations* — ``BinaryProcessor``, ``UnaryProcessor``,
-    ``IsNullProcessor``, ``IfElseProcessor`` (compose nested value processors)
-
-``Planner.build(expr)`` walks the expression tree bottom-up and builds both
-hierarchies.  Consuming the top-level relation processor pulls morsel-sized
-``RecordBatch`` values through the pipeline.
+``Planner.build(relation)`` walks the relational expression tree bottom-up
+and builds the relation-processor pipeline.  Consuming the top-level
+relation processor pulls morsel-sized ``RecordBatch`` values through the
+pipeline.
 
 Convenience wrapper ``execute(relation)`` materialises the full result as a
 ``RecordBatch``.
@@ -27,20 +27,6 @@ from std.gpu.host import DeviceContext
 import std.math as math
 
 from marrow.arrays import PrimitiveArray, AnyArray
-from marrow.builders import (
-    PrimitiveBuilder,
-    Int8Builder,
-    Int16Builder,
-    Int32Builder,
-    Int64Builder,
-    UInt8Builder,
-    UInt16Builder,
-    UInt32Builder,
-    UInt64Builder,
-    Float16Builder,
-    Float32Builder,
-    Float64Builder,
-)
 from marrow.dtypes import (
     Int8Type,
     Int16Type,
@@ -54,63 +40,19 @@ from marrow.dtypes import (
     Float32Type,
     Float64Type,
     AnyDataType,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
     float64,
     bool_ as bool_dt,
-)
-from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
-from marrow.kernels.boolean import and_, or_, not_, is_null, select
-from marrow.kernels.compare import (
-    equal,
-    not_equal,
-    less,
-    less_equal,
-    greater,
-    greater_equal,
 )
 from marrow.kernels.concat import concat
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.kernels.filter import filter
-from marrow.expr.values import (
-    Expr,
-    LOAD,
-    LITERAL,
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    AND,
-    OR,
-    NEG,
-    ABS,
-    NOT,
-    IS_NULL,
-    IF_ELSE,
-    CAST,
-    FUSED,
-)
+from marrow.expr.runtime import Expr, LOAD
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
-from marrow.expr.fused_values import NumericTypedValue, FusedColumn
 from marrow.expr.relations import (
     AnyRelation,
     Scan,
@@ -192,264 +134,6 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
         self.num_cpu_workers = 0
         self.morsel_size = 65_536
         self.gpu_threshold = gpu_threshold
-
-
-# ===================================================================
-# Value processor hierarchy — evaluate scalar expressions
-# ===================================================================
-
-
-# ---------------------------------------------------------------------------
-# ValueProcessor trait
-# ---------------------------------------------------------------------------
-
-
-trait ValueProcessor(ImplicitlyDestructible, Movable):
-    """Evaluates a scalar expression against a morsel batch.
-
-    Leaf processors (``ColumnProcessor``, ``LiteralProcessor``) hold data.
-    Operation processors (``BinaryProcessor``, ``UnaryProcessor``, etc.)
-    compose nested ``AnyValueProcessor`` children.
-    """
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        """Evaluate the expression against the given batch."""
-        ...
-
-
-# ---------------------------------------------------------------------------
-# AnyValueProcessor — type-erased value processor
-# ---------------------------------------------------------------------------
-
-
-struct AnyValueProcessor(ImplicitlyCopyable, Movable):
-    """Type-erased value processor.
-
-    Wraps any ``ValueProcessor``-conforming type on the heap behind an
-    ``ArcPointer`` so the value processor tree can be composed at runtime.
-    Copies are O(1) ref-count bumps.
-    """
-
-    var _data: ArcPointer[NoneType]
-    var _virt_eval: def(
-        ArcPointer[NoneType], RecordBatch
-    ) thin raises -> AnyArray
-    var _virt_drop: def(var ArcPointer[NoneType]) thin
-
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_eval[
-        T: ValueProcessor
-    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-        return rebind[ArcPointer[T]](ptr)[].eval(batch)
-
-    @staticmethod
-    def _tramp_drop[T: ValueProcessor](var ptr: ArcPointer[NoneType]):
-        var typed = rebind[ArcPointer[T]](ptr^)
-        _ = typed^
-
-    # --- construction ---
-
-    @implicit
-    def __init__[T: ValueProcessor](out self, var value: T):
-        var ptr = ArcPointer(value^)
-        self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_eval = Self._tramp_eval[T]
-        self._virt_drop = Self._tramp_drop[T]
-
-    def __init__(out self, *, copy: Self):
-        self._data = copy._data
-        self._virt_eval = copy._virt_eval
-        self._virt_drop = copy._virt_drop
-
-    # --- public API ---
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        """Evaluate the expression against the given batch."""
-        return self._virt_eval(self._data, batch)
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)
-
-
-# ---------------------------------------------------------------------------
-# Leaf value processors — hold data
-# ---------------------------------------------------------------------------
-
-
-struct ColumnProcessor(ValueProcessor):
-    """Returns the input array at the given column index."""
-
-    var index: Int
-
-    def __init__(out self, index: Int):
-        self.index = index
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        return batch.columns[self.index].copy()
-
-
-struct LiteralProcessor(ValueProcessor):
-    """Broadcasts a scalar value to match the input length."""
-
-    var value: AnyArray
-
-    def __init__(out self, value: AnyArray):
-        self.value = value.copy()
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        return _broadcast_literal(batch.num_rows(), self.value)
-
-
-# ---------------------------------------------------------------------------
-# Operation value processors — compose nested value processors
-# ---------------------------------------------------------------------------
-
-
-struct BinaryProcessor(ValueProcessor):
-    """Evaluates two children and applies a binary kernel."""
-
-    var left: AnyValueProcessor
-    var right: AnyValueProcessor
-    var op: UInt8
-
-    def __init__(
-        out self,
-        var left: AnyValueProcessor,
-        var right: AnyValueProcessor,
-        op: UInt8,
-    ):
-        self.left = left^
-        self.right = right^
-        self.op = op
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        var l = self.left.eval(batch)
-        var r = self.right.eval(batch)
-        if self.op == ADD:
-            return add(l, r)
-        elif self.op == SUB:
-            return subtract(l, r)
-        elif self.op == MUL:
-            return multiply(l, r)
-        elif self.op == DIV:
-            return divide(l, r)
-        elif self.op == EQ:
-            return equal(l, r)
-        elif self.op == NE:
-            return not_equal(l, r)
-        elif self.op == LT:
-            return less(l, r)
-        elif self.op == LE:
-            return less_equal(l, r)
-        elif self.op == GT:
-            return greater(l, r)
-        elif self.op == GE:
-            return greater_equal(l, r)
-        elif self.op == AND:
-            return and_(l, r)
-        elif self.op == OR:
-            return or_(l, r)
-        else:
-            raise Error("BinaryProcessor: unknown op ", self.op)
-
-
-struct UnaryProcessor(ValueProcessor):
-    """Evaluates one child and applies a unary kernel."""
-
-    var child: AnyValueProcessor
-    var op: UInt8
-
-    def __init__(out self, var child: AnyValueProcessor, op: UInt8):
-        self.child = child^
-        self.op = op
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        var c = self.child.eval(batch)
-        if self.op == NEG:
-            return neg(c)
-        elif self.op == ABS:
-            return abs_(c)
-        elif self.op == NOT:
-            return not_(c)
-        else:
-            raise Error("UnaryProcessor: unknown op ", self.op)
-
-
-struct IsNullProcessor(ValueProcessor):
-    """Evaluates one child and returns a boolean null-check array."""
-
-    var child: AnyValueProcessor
-
-    def __init__(out self, var child: AnyValueProcessor):
-        self.child = child^
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        return is_null(self.child.eval(batch))
-
-
-struct IfElseProcessor(ValueProcessor):
-    """Evaluates condition, then, and else branches and selects."""
-
-    var cond: AnyValueProcessor
-    var then_: AnyValueProcessor
-    var else_: AnyValueProcessor
-
-    def __init__(
-        out self,
-        var cond: AnyValueProcessor,
-        var then_: AnyValueProcessor,
-        var else_: AnyValueProcessor,
-    ):
-        self.cond = cond^
-        self.then_ = then_^
-        self.else_ = else_^
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        var c = self.cond.eval(batch)
-        var t = self.then_.eval(batch)
-        var e = self.else_.eval(batch)
-        return select(c, t, e)
-
-
-# ---------------------------------------------------------------------------
-# FusedProcessor — comptime-fused expression evaluation
-# ---------------------------------------------------------------------------
-
-
-struct FusedProcessor[T: NumericTypedValue](ValueProcessor):
-    """Evaluates a comptime-fused expression against a RecordBatch.
-
-    Wraps a ``NumericTypedValue`` (e.g. ``FusedAdd[FusedColumn, FusedColumn]``)
-    and calls ``execute(batch)`` to produce a single fused ``PrimitiveArray``
-    with zero intermediate arrays.
-
-    This is the execution engine for the static (comptime) expression layer
-    that mirrors ``faszom.mojo``.  Unlike the type-erased ``ValueProcessor``
-    hierarchy, each ``FusedProcessor[T]`` is a unique type — the compiler
-    knows the full expression tree and can inline ``core[W]()`` across it.
-
-    Usage::
-
-        var col_a = FusedColumn[Int64Type](0)
-        var col_b = FusedColumn[Int64Type](1)
-        var expr = FusedAdd(col_a, col_b)
-        var proc = FusedProcessor(expr)
-        var result = proc.eval(batch)  # single fused pass
-    """
-
-    var expr: Self.T
-
-    def __init__(out self, var expr: Self.T):
-        self.expr = expr^
-
-    def __init__(out self, *, copy: Self):
-        self.expr = copy.expr.copy()
-
-    def eval(self, batch: RecordBatch) raises -> AnyArray:
-        var expr = self.expr.copy()
-        return expr.execute(batch).to_any()
 
 
 # ===================================================================
@@ -676,13 +360,13 @@ struct FilterProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var predicate: AnyValueProcessor
+    var predicate: Expr
     var schema_: Schema
 
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var predicate: AnyValueProcessor,
+        var predicate: Expr,
         schema_: Schema,
     ):
         self.child = child^
@@ -718,13 +402,13 @@ struct ProjectProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var values: List[AnyValueProcessor]
+    var values: List[Expr]
     var schema_: Schema
 
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var values: List[AnyValueProcessor],
+        var values: List[Expr],
         schema_: Schema,
     ):
         self.child = child^
@@ -778,8 +462,8 @@ struct AggregateProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var key_exprs: List[AnyValueProcessor]
-    var value_exprs: List[AnyValueProcessor]
+    var key_exprs: List[Expr]
+    var value_exprs: List[Expr]
     var grouper: HashGrouper
     var schema_: Schema
     var key_fields: List[Field]
@@ -788,8 +472,8 @@ struct AggregateProcessor(RelationProcessor):
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var key_exprs: List[AnyValueProcessor],
-        var value_exprs: List[AnyValueProcessor],
+        var key_exprs: List[Expr],
+        var value_exprs: List[Expr],
         var grouper: HashGrouper,
         schema_: Schema,
         var key_fields: List[Field],
@@ -940,55 +624,19 @@ struct JoinProcessor(RelationProcessor):
 
 
 struct Planner:
-    """Builds physical processor pipelines from logical expression trees.
+    """Builds physical relation-processor pipelines from logical plan trees.
 
-    Walks expression trees bottom-up and creates the corresponding processor
-    hierarchies.  Holds the ``ExecutionContext`` used during planning.
+    Walks the relational expression tree bottom-up and creates the
+    corresponding processor hierarchy.  Holds the ``ExecutionContext`` used
+    during planning.  Scalar expressions need no separate build step — every
+    relation node already stores fully name-resolved ``Expr`` values, which
+    evaluate themselves via ``Expr.eval(batch)``.
     """
 
     var ctx: ExecutionContext
 
     def __init__(out self, ctx: ExecutionContext = ExecutionContext()):
         self.ctx = ctx
-
-    def build(self, expr: Expr) raises -> AnyValueProcessor:
-        """Build a value processor tree from a scalar expression.
-
-        If the ``Expr`` carries a fused expression (``_tag == FUSED``), uses
-        ``FusedExprProcessor`` which calls ``expr.execute(batch)`` directly.
-        Otherwise dispatches on the tag and builds the runtime processor chain.
-        """
-        # Fused expression: can't build a runtime processor; use FusedProcessor directly.
-        if expr.kind() == FUSED:
-            raise Error(
-                "Planner.build: fused expressions require FusedProcessor, "
-                "not the runtime processor path"
-            )
-
-        var k = expr.kind()
-        if k == LOAD:
-            return ColumnProcessor(Int(expr._kind_data))
-        elif k == LITERAL:
-            return LiteralProcessor(expr._value.value().copy())
-        elif k >= ADD and k <= OR:
-            var left = self.build(expr._args[0].copy())
-            var right = self.build(expr._args[1].copy())
-            return BinaryProcessor(left^, right^, k)
-        elif k >= NEG and k <= NOT:
-            var child = self.build(expr._args[0].copy())
-            return UnaryProcessor(child^, k)
-        elif k == IS_NULL:
-            var child = self.build(expr._args[0].copy())
-            return IsNullProcessor(child^)
-        elif k == IF_ELSE:
-            var c = self.build(expr._args[0].copy())
-            var t = self.build(expr._args[1].copy())
-            var e = self.build(expr._args[2].copy())
-            return IfElseProcessor(c^, t^, e^)
-        elif k == CAST:
-            raise Error("Planner.build: cast not implemented")
-        else:
-            raise Error("Planner.build: unknown expression kind ", k)
 
     def build(self, expr: AnyRelation) raises -> AnyRelationProcessor:
         """Build a relation processor pipeline from a relational expression tree.
@@ -1002,18 +650,17 @@ struct Planner:
         if k == FILTER_NODE:
             var arc = expr.downcast[PlanFilter]()
             var child = self.build(arc[].input)
-            var predicate = self.build(arc[].predicate)
             return FilterProcessor(
                 child=child^,
-                predicate=predicate^,
+                predicate=arc[].predicate.copy(),
                 schema_=arc[].input.schema(),
             )
         if k == PROJECT_NODE:
             var arc = expr.downcast[Project]()
             var child = self.build(arc[].input)
-            var values = List[AnyValueProcessor]()
+            var values = List[Expr]()
             for ref e in arc[].exprs_:
-                values.append(self.build(e))
+                values.append(e.copy())
             return ProjectProcessor(
                 child=child^,
                 values=values^,
@@ -1028,21 +675,32 @@ struct Planner:
             var arc = expr.downcast[PlanAggregate]()
             var child = self.build(arc[].input)
 
-            # Build key and value expression processors.
-            var key_exprs = List[AnyValueProcessor]()
+            var key_exprs = List[Expr]()
             for ref e in arc[].keys:
-                key_exprs.append(self.build(e))
-            var value_exprs = List[AnyValueProcessor]()
+                key_exprs.append(e.copy())
+            var value_exprs = List[Expr]()
             for ref e in arc[].agg_exprs:
-                value_exprs.append(self.build(e))
+                value_exprs.append(e.copy())
 
             var key_fields = List[Field]()
             for i in range(len(arc[].keys)):
                 key_fields.append(arc[].schema().fields[i].copy())
 
+            # Resolve each aggregated value's dtype.  ``Expr.dtype()`` only
+            # knows LITERAL nodes; plain LOAD nodes must be resolved against
+            # the aggregate's input schema so e.g. summing an int64 column
+            # uses an int64 accumulator instead of defaulting to float64.
+            var input_schema = arc[].input.schema()
             var value_dtypes = List[AnyDataType]()
             for i in range(len(arc[].agg_exprs)):
-                var dt = arc[].agg_exprs[i].dtype()
+                ref agg_expr = arc[].agg_exprs[i]
+                var dt = agg_expr.dtype()
+                if not dt and agg_expr.kind() == LOAD:
+                    dt = Optional[AnyDataType](
+                        input_schema.fields[
+                            Int(agg_expr.kind_data())
+                        ].dtype.copy()
+                    )
                 if dt:
                     value_dtypes.append(dt.value().copy())
                 else:
@@ -1105,79 +763,3 @@ def execute(
     """
     var proc = Planner(ctx).build(expr)
     return proc.read_all()
-
-
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
-
-
-def _broadcast_literal(length: Int, scalar_array: AnyArray) raises -> AnyArray:
-    """Broadcast a length-1 scalar array to the given length."""
-    if scalar_array.dtype() == int8:
-        var val = scalar_array.as_int8().unsafe_get(0)
-        var builder = Int8Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == int16:
-        var val = scalar_array.as_int16().unsafe_get(0)
-        var builder = Int16Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == int32:
-        var val = scalar_array.as_int32().unsafe_get(0)
-        var builder = Int32Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == int64:
-        var val = scalar_array.as_int64().unsafe_get(0)
-        var builder = Int64Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == uint8:
-        var val = scalar_array.as_uint8().unsafe_get(0)
-        var builder = UInt8Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == uint16:
-        var val = scalar_array.as_uint16().unsafe_get(0)
-        var builder = UInt16Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == uint32:
-        var val = scalar_array.as_uint32().unsafe_get(0)
-        var builder = UInt32Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == uint64:
-        var val = scalar_array.as_uint64().unsafe_get(0)
-        var builder = UInt64Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == float16:
-        var val = scalar_array.as_float16().unsafe_get(0)
-        var builder = Float16Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == float32:
-        var val = scalar_array.as_float32().unsafe_get(0)
-        var builder = Float32Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    elif scalar_array.dtype() == float64:
-        var val = scalar_array.as_float64().unsafe_get(0)
-        var builder = Float64Builder(length)
-        for _ in range(length):
-            builder.unsafe_append(val)
-        return builder.finish().to_any()
-    raise Error(t"_broadcast_literal: unsupported dtype {scalar_array.dtype()}")

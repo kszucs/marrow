@@ -1,18 +1,22 @@
 """Tests for AOT-compiled value expression injection into runtime expressions.
 
-These tests verify that comptime-fused expressions (from ``faszom.mojo`` and
-``fused_values.mojo``) can be properly boxed into runtime ``Expr`` nodes via
-the ``to_expr()`` method.
+These tests verify that comptime-typed expressions (``values.mojo``) can be
+boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor, and
+executed end-to-end through the type-erased runtime path.
 
 The key pattern is:
-1. Create a comptime-fused expression (e.g., FusedAdd[FusedColumn, FusedColumn])
-2. Box it into a runtime Expr via to_expr()
-3. The boxed Expr carries the fused expression in its _fused slot
-4. Fused expressions are executed via FusedProcessor[T], not through Planner
+1. Create a comptime-typed expression (e.g., Add[Column, Column])
+2. Box it into a runtime Expr via Expr(value)
+3. The boxed Expr carries the comptime node in its _fused slot
+4. Both the direct path (``expr.execute(batch)``) and the boxed runtime path
+   (``boxed.eval(batch)``) run the same single fused vectorize loop, since
+   ``Expr.eval()`` delegates FUSED nodes straight back to ``execute()``
 
 This test verifies that:
-- to_expr() produces valid Expr with FUSED tag
-- Fused expressions can be executed via FusedProcessor[T]
+- Expr(value) produces a valid Expr with FUSED tag
+- The boxed Expr can be executed directly via Expr.eval(), matching the
+  typed direct-execution path exactly — the runtime and comptime layers are
+  a genuine two-way bridge, not just a one-way introspection box.
 """
 
 from std.testing import assert_equal, assert_true
@@ -23,14 +27,13 @@ from marrow.arrays import PrimitiveArray, Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import Expr, Planner, FUSED
-from marrow.expr.fused_values import (
-    FusedColumn,
-    FusedAdd,
-    FusedSub,
-    NumericTypedValue,
+from marrow.expr import Expr, FUSED
+from marrow.expr.values import (
+    Column,
+    Add,
+    Sub,
+    NumericValue,
 )
-from marrow.expr.executor import FusedProcessor
 
 
 # ---------------------------------------------------------------------------
@@ -38,12 +41,11 @@ from marrow.expr.executor import FusedProcessor
 # ---------------------------------------------------------------------------
 
 
-def _exec_fused_processor[T: NumericTypedValue](
-    expr: T, batch: RecordBatch
-) raises -> Int64Array:
-    """Build a FusedProcessor and evaluate against the batch."""
-    var proc = FusedProcessor[T](expr)
-    ref result = proc.eval(batch).as_int64()
+def _exec_typed[
+    T: NumericValue
+](expr: T, batch: RecordBatch) raises -> Int64Array:
+    """Evaluate a comptime-typed expression directly against the batch."""
+    ref result = expr.execute(batch).to_any().as_int64()
     return result.copy()
 
 
@@ -53,72 +55,78 @@ def _exec_fused_processor[T: NumericTypedValue](
 
 
 def test_fused_column_to_expr() raises:
-    """FusedColumn.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """Column.to_expr() produces a valid runtime Expr with FUSED tag."""
     var a = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy()], names=["c0"])
 
-    # Create a fused column expression
-    var fused = FusedColumn[Int64Type](0)
+    # Create a typed column expression
+    var fused = Column[Int64Type](0)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
 
-    # Execute via FusedProcessor (direct path)
-    var direct_result = _exec_fused_processor(fused, batch)
-
-    # Results should match
+    # Execute via the direct typed path
+    var direct_result = _exec_typed(fused, batch)
     assert_true(direct_result == array([1, 2, 3, 4, 5], int64))
+
+    # Execute via the boxed runtime path — same fused pass, same result
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
 
 
 def test_fused_add_to_expr() raises:
-    """FusedAdd.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """Add.to_expr() produces a valid runtime Expr with FUSED tag."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    # Create a fused add expression
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedAdd(col_a, col_b)
+    # Create a typed add expression
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Add(col_a, col_b)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
 
-    # Execute via FusedProcessor (direct path)
-    var direct_result = _exec_fused_processor(fused, batch)
-
-    # Results should match
+    # Execute via the direct typed path
+    var direct_result = _exec_typed(fused, batch)
     assert_true(direct_result == array([11, 22, 33, 44, 55], int64))
+
+    # Execute via the boxed runtime path — same fused pass, same result
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
 
 
 def test_fused_sub_to_expr() raises:
-    """FusedSub.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """Sub.to_expr() produces a valid runtime Expr with FUSED tag."""
     var a = array([10, 20, 30, 40, 50], int64)
     var b = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    # Create a fused sub expression
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedSub(col_a, col_b)
+    # Create a typed sub expression
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Sub(col_a, col_b)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
 
-    # Execute via FusedProcessor (direct path)
-    var direct_result = _exec_fused_processor(fused, batch)
-
-    # Results should match
+    # Execute via the direct typed path
+    var direct_result = _exec_typed(fused, batch)
     assert_true(direct_result == array([9, 18, 27, 36, 45], int64))
+
+    # Execute via the boxed runtime path — same fused pass, same result
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -127,56 +135,68 @@ def test_fused_sub_to_expr() raises:
 
 
 def test_nested_fused_add_sub_to_expr() raises:
-    """Nested FusedAdd/FusedSub expressions can be boxed and evaluated."""
+    """Nested Add/Sub expressions can be boxed and evaluated."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([10, 20, 30, 40, 50], int64)
     var c = array([100, 200, 300, 400, 500], int64)
-    var batch = record_batch([a.copy(), b.copy(), c.copy()], names=["c0", "c1", "c2"])
+    var batch = record_batch(
+        [a.copy(), b.copy(), c.copy()], names=["c0", "c1", "c2"]
+    )
 
     # Create a nested expression: (a + b) - c
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var col_c = FusedColumn[Int64Type](2)
-    var add_expr = FusedAdd(col_a, col_b)
-    var fused = FusedSub(add_expr, col_c)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var col_c = Column[Int64Type](2)
+    var add_expr = Add(col_a, col_b)
+    var fused = Sub(add_expr, col_c)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    # Execute via FusedProcessor (direct path)
-    var direct_result = _exec_fused_processor(fused, batch)
+    # Execute via the direct typed path
+    var direct_result = _exec_typed(fused, batch)
 
     # Results should match: (a + b) - c = [11-100, 22-200, 33-300, 44-400, 55-500]
     assert_true(direct_result == array([-89, -178, -267, -356, -445], int64))
 
+    # Execute via the boxed runtime path — same fused pass, same result
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
+
 
 def test_chained_fused_adds_to_expr() raises:
-    """Chained FusedAdd expressions can be boxed and evaluated."""
+    """Chained Add expressions can be boxed and evaluated."""
     var a = array([1, 2, 3], int64)
     var b = array([10, 20, 30], int64)
     var c = array([100, 200, 300], int64)
     var d = array([1000, 2000, 3000], int64)
-    var batch = record_batch([a.copy(), b.copy(), c.copy(), d.copy()], names=["c0", "c1", "c2", "c3"])
+    var batch = record_batch(
+        [a.copy(), b.copy(), c.copy(), d.copy()], names=["c0", "c1", "c2", "c3"]
+    )
 
     # Create a chained expression: a + b + c + d
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var col_c = FusedColumn[Int64Type](2)
-    var col_d = FusedColumn[Int64Type](3)
-    var add_ab = FusedAdd(col_a, col_b)
-    var add_abc = FusedAdd(add_ab, col_c)
-    var fused = FusedAdd(add_abc, col_d)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var col_c = Column[Int64Type](2)
+    var col_d = Column[Int64Type](3)
+    var add_ab = Add(col_a, col_b)
+    var add_abc = Add(add_ab, col_c)
+    var fused = Add(add_abc, col_d)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    # Execute via FusedProcessor (direct path)
-    var direct_result = _exec_fused_processor(fused, batch)
+    # Execute via the direct typed path
+    var direct_result = _exec_typed(fused, batch)
 
     # Results should match: a + b + c + d = [1111, 2222, 3333]
     assert_true(direct_result == array([1111, 2222, 3333], int64))
+
+    # Execute via the boxed runtime path — same fused pass, same result
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -185,17 +205,20 @@ def test_chained_fused_adds_to_expr() raises:
 
 
 def test_fused_column_different_types_to_expr() raises:
-    """FusedColumn with different numeric types can be boxed."""
+    """Column with different numeric types can be boxed."""
     # Test Int64
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
 
-    var col_i64 = FusedColumn[Int64Type](0)
-    var expr_i64: Expr = col_i64.to_expr()
+    var col_i64 = Column[Int64Type](0)
+    var expr_i64 = Expr(col_i64)
     assert_equal(expr_i64.kind(), FUSED)
 
-    var result_i64 = _exec_fused_processor(col_i64, batch)
+    var result_i64 = _exec_typed(col_i64, batch)
     assert_true(result_i64 == array([1, 2, 3], int64))
+
+    var boxed_result = expr_i64.eval(batch)
+    assert_true(boxed_result == result_i64.copy().to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -209,15 +232,18 @@ def test_single_element_fused_to_expr() raises:
     var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
 
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedAdd(col_a, col_b)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    var result = _exec_fused_processor(fused, batch)
+    var result = _exec_typed(fused, batch)
     assert_equal(result[0].value(), 50)
+
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == result.copy().to_any())
 
 
 def test_negative_values_fused_to_expr() raises:
@@ -226,15 +252,18 @@ def test_negative_values_fused_to_expr() raises:
     var b = array([1, -2, 3, -4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedAdd(col_a, col_b)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    var result = _exec_fused_processor(fused, batch)
+    var result = _exec_typed(fused, batch)
     assert_true(result == array([0, 0, 0, 0], int64))
+
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == result.copy().to_any())
 
 
 def test_large_values_fused_to_expr() raises:
@@ -243,15 +272,18 @@ def test_large_values_fused_to_expr() raises:
     var b = array([1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
 
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedAdd(col_a, col_b)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    var result = _exec_fused_processor(fused, batch)
+    var result = _exec_typed(fused, batch)
     assert_equal(result[0].value(), 9_223_372_036_854_775_807)  # max int64
+
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == result.copy().to_any())
 
 
 # ---------------------------------------------------------------------------
@@ -265,15 +297,18 @@ def test_non_aligned_length_fused_to_expr() raises:
     var b = array([10, 20, 30, 40, 50, 60, 70], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    var col_a = FusedColumn[Int64Type](0)
-    var col_b = FusedColumn[Int64Type](1)
-    var fused = FusedAdd(col_a, col_b)
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
-    var result = _exec_fused_processor(fused, batch)
+    var result = _exec_typed(fused, batch)
     assert_true(result == array([11, 22, 33, 44, 55, 66, 77], int64))
+
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == result.copy().to_any())
 
 
 # ---------------------------------------------------------------------------

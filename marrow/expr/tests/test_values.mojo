@@ -1,18 +1,25 @@
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, BoolArray, AnyArray, Int64Array
+from marrow.arrays import (
+    PrimitiveArray,
+    BoolArray,
+    AnyArray,
+    Int64Array,
+    UInt32Array,
+)
 from marrow.builders import array
-from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
+from marrow.dtypes import int64, float64, bool_ as bool_dt, uint32, Int64Type
 from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
+from marrow.kernels.string import string_lengths
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     Expr,
-    Planner,
     col,
     lit,
     if_else,
     LOAD,
+    LITERAL,
     ADD,
     SUB,
     MUL,
@@ -32,20 +39,27 @@ from marrow.expr import (
     IF_ELSE,
     CAST,
     FUSED,
+    LENGTH,
 )
 
 
 def _exec(expr: Expr, batch: RecordBatch) raises -> Int64Array:
-    """Helper: build a value processor and evaluate against the batch."""
-    var tmp = Planner().build(expr).eval(batch)
+    """Helper: evaluate an expression against the batch."""
+    var tmp = expr.eval(batch)
     ref result = tmp.as_int64()
     return result.copy()
 
 
+def _exec_length(expr: Expr, batch: RecordBatch) raises -> UInt32Array:
+    """Helper: evaluate a length expression against the batch."""
+    var tmp = expr.eval(batch)
+    ref result = tmp.as_uint32()
+    return result.copy()
+
+
 def _exec_pred(expr: Expr, batch: RecordBatch) raises -> BoolArray:
-    """Helper: build a value processor and evaluate predicate against the batch.
-    """
-    var tmp = Planner().build(expr).eval(batch)
+    """Helper: evaluate a predicate expression against the batch."""
+    var tmp = expr.eval(batch)
     return tmp.as_bool().copy()
 
 
@@ -265,6 +279,31 @@ def test_is_null() raises:
     var a = array([1, 2, 3], int64)
     var result = _exec_pred(col(0).is_null(), record_batch([a^], names=["c0"]))
     assert_true(result == array([False, False, False]))
+
+
+# ---------------------------------------------------------------------------
+# LENGTH (string)
+# ---------------------------------------------------------------------------
+
+
+def test_length_expr() raises:
+    """``.length()`` matches kernels.string.string_lengths."""
+    var a = array(["ab", "cde", "", "f"])
+    var batch = record_batch([a.copy()], names=["c0"])
+    var result = _exec_length(col(0).length(), batch)
+    assert_true(result == string_lengths(a))
+
+
+def test_kind_length() raises:
+    """``.length()`` node reports LENGTH kind."""
+    var expr = col(0).length()
+    assert_equal(expr.kind(), LENGTH)
+
+
+def test_length_write_to() raises:
+    """``.length()`` formats as length(...)."""
+    var expr = col(0).length()
+    assert_equal(String(expr), "length(input(0))")
 
 
 # ---------------------------------------------------------------------------
