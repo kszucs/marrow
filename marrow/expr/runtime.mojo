@@ -21,7 +21,8 @@ Factory functions
 
 Operator overloads on ``Expr``: ``+``, ``-``, ``*``, ``/``, ``>``,
 ``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
-unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
+unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.length()``,
+``.cast(to)``.
 
 Expression tags
 ---------------
@@ -33,6 +34,7 @@ IS_NULL - Null check
 IF_ELSE - Conditional
 CAST - Type cast (not yet implemented — see Expr.eval)
 FUSED - Carries a boxed comptime-typed node (see values.mojo)
+LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
 from std.memory import ArcPointer
@@ -52,6 +54,7 @@ from marrow.kernels.compare import (
     greater,
     greater_equal,
 )
+from marrow.kernels.string import string_lengths
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +83,7 @@ comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
 comptime FUSED: UInt8 = 20
 """Tag for Expr nodes that carry a boxed comptime-typed node in _fused."""
+comptime LENGTH: UInt8 = 21
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +318,8 @@ struct Expr(
             return not_(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
+        elif self._tag == LENGTH:
+            return string_lengths(self._args[0].eval(batch)).to_any()
         elif self._tag == IF_ELSE:
             return select(
                 self._args[0].eval(batch),
@@ -359,6 +365,8 @@ struct Expr(
             return "not"
         elif self._tag == IS_NULL:
             return "is_null"
+        elif self._tag == LENGTH:
+            return "length"
         elif self._tag == IF_ELSE:
             return "if_else"
         elif self._tag == CAST:
@@ -452,6 +460,9 @@ struct Expr(
 
     def abs(self) -> Expr:
         return self._unary(ABS)
+
+    def length(self) -> Expr:
+        return self._unary(LENGTH)
 
     def cast(self, to: AnyDataType) -> Expr:
         return self._unary(CAST)

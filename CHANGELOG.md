@@ -12,6 +12,12 @@
 
 ### Refactors
 
+- **`NumericValue.execute()` is now a single default trait implementation**
+  (`marrow/expr/values.mojo`): the identical fused-vectorize-loop body
+  previously copy-pasted into `Column`, `Add`, `Sub`, and `Length` now lives
+  once in the trait itself (calling `self.core[W]()`, matching the existing
+  pattern already used for `dtype()`); each node only defines its own
+  `core[W]()`.
 - **Boxing a comptime node into `Expr` is now an `Expr(value)` constructor**
   (`marrow/expr/runtime.mojo`), replacing the `NumericValue.to_expr()` method;
   the fused-node trampolines moved alongside it into `runtime.mojo`. Also
@@ -61,6 +67,19 @@
   instead of an 11-branch per-dtype broadcast loop.
 
 ### Features
+
+- **String `Length` expression node + `.length()`** (`marrow/expr/values.mojo`,
+  `marrow/expr/runtime.mojo`, `marrow/kernels/string.mojo`): computes
+  per-element string byte lengths through both expression layers. Adds a
+  `StringValue` trait (mirrors `NumericValue` but resolves to a `StringArray`
+  instead of a per-lane SIMD `core[W]()`) and a `StringColumn` leaf node; the
+  comptime `Length[S: StringValue]` node implements `NumericValue` with a
+  SIMD-vectorized `core[W]()` that loads `W+1` contiguous string offsets and
+  subtracts the shifted-by-one lanes, so it composes into a fused pass with
+  other numeric nodes. The runtime `Expr` gains a `LENGTH` tag and `.length()`
+  method that dispatch to a new type-erased `string_lengths(AnyArray)`
+  overload, matching the existing typed-overload-plus-`AnyArray`-blanket
+  kernel pattern.
 
 - **`Schema[Field[...]]` with `__getattr_param__`** (`marrow/faszom.mojo`): compile-time
   schema type that enables Ibis-style `t.data.where(t.a + t.b > t.c).execute(batch)`

@@ -42,7 +42,7 @@ from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 
 import marrow.dtypes as dt
-from marrow.arrays import AnyArray, PrimitiveArray
+from marrow.arrays import AnyArray, PrimitiveArray, StringArray
 from marrow.buffers import Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
 from marrow.tabular import RecordBatch
@@ -112,8 +112,35 @@ trait NumericValue(Value):
     def execute(
         self, batch: RecordBatch
     ) raises -> PrimitiveArray[Self.OutType]:
-        """Run the fused vectorize loop and return the result array."""
-        ...
+        """Run the fused vectorize loop over ``core[W]()`` and return the
+        result array.  Shared by every ``NumericValue`` node — only
+        ``core[W]()`` (and ``comptime OutType``/``NativeType``) differ per
+        node, so this default implementation covers all of them.
+        """
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var buf = Buffer.alloc_uninit[native](length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            var val = self.core[W](batch, i)
+            var v = buf.view[native](i, length)
+            v.store[W](0, val)
+
+        _vectorize_dispatch[native, width, fill](length)
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
 
     # Default Value trait implementation
 
@@ -167,34 +194,6 @@ struct Column[T: dt.NumericType](NumericValue):
             .load[W](idx)
         )
 
-    def execute(
-        self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.OutType]:
-        comptime native = Self.NativeType
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
-        var length = batch.num_rows()
-        var buf = Buffer.alloc_uninit[native](length)
-
-        @parameter
-        @always_inline
-        def fill[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank],) -> None:
-            var i = idx[0]
-            var val = self.core[W](batch, i)
-            var v = buf.view[native](i, length)
-            v.store[W](0, val)
-
-        _vectorize_dispatch[native, width, fill](length)
-        return PrimitiveArray[Self.OutType](
-            dtype=Self.OutType(),
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf.to_immutable(),
-        )
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Col[{self.index}]")
 
@@ -243,34 +242,6 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l + r
 
-    def execute(
-        self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.OutType]:
-        comptime native = Self.NativeType
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
-        var length = batch.num_rows()
-        var buf = Buffer.alloc_uninit[native](length)
-
-        @parameter
-        @always_inline
-        def fill[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank],) -> None:
-            var i = idx[0]
-            var val = self.core[W](batch, i)
-            var v = buf.view[native](i, length)
-            v.store[W](0, val)
-
-        _vectorize_dispatch[native, width, fill](length)
-        return PrimitiveArray[Self.OutType](
-            dtype=Self.OutType(),
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf.to_immutable(),
-        )
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Add(")
         self.left.write_to(writer)
@@ -310,39 +281,130 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l - r
 
-    def execute(
-        self, batch: RecordBatch
-    ) raises -> PrimitiveArray[Self.OutType]:
-        comptime native = Self.NativeType
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
-        var length = batch.num_rows()
-        var buf = Buffer.alloc_uninit[native](length)
-
-        @parameter
-        @always_inline
-        def fill[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank],) -> None:
-            var i = idx[0]
-            var val = self.core[W](batch, i)
-            var v = buf.view[native](i, length)
-            v.store[W](0, val)
-
-        _vectorize_dispatch[native, width, fill](length)
-        return PrimitiveArray[Self.OutType](
-            dtype=Self.OutType(),
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=buf.to_immutable(),
-        )
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Sub(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# StringValue trait — string comptime expression nodes
+# ---------------------------------------------------------------------------
+
+
+trait StringValue(Value):
+    """Trait for string comptime-typed expression nodes.
+
+    Mirrors ``NumericValue`` but for the variable-length string
+    representation: rather than a per-lane SIMD ``core[W]()``, nodes
+    implementing this trait resolve directly to a ``StringArray``.
+
+    Provides ``resolve(batch)`` (fetch the node's string data from a batch)
+    and ``execute(batch)`` (top-level entry point, equal to ``resolve`` for
+    leaf nodes).  ``StringColumn`` implements this trait.
+    """
+
+    def resolve(self, batch: RecordBatch) -> StringArray:
+        """Resolve this node's string data from *batch*."""
+        ...
+
+    def execute(self, batch: RecordBatch) raises -> StringArray:
+        """Run this node and return the resulting string array."""
+        ...
+
+    # Default Value trait implementation
+
+    def dtype(self) -> Optional[AnyDataType]:
+        """Return the output data type."""
+        return Optional[AnyDataType](dt.string)
+
+    def write_to[W: Writer](self, mut writer: W):
+        """Format this node for display."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# StringColumn — typed string column reference
+# ---------------------------------------------------------------------------
+
+
+struct StringColumn(StringValue):
+    """Typed string column reference that resolves from a RecordBatch.
+
+    ``index``  — positional index into the batch's column list.
+
+    Usage::
+
+        var col = StringColumn(0)
+        var result = col.execute(batch)  # resolves batch.columns[0] internally
+    """
+
+    var index: Int
+
+    def __init__(out self, index: Int):
+        self.index = index
+
+    def __init__(out self, *, copy: Self):
+        self.index = copy.index
+
+    def resolve(self, batch: RecordBatch) -> StringArray:
+        return batch.columns[self.index].as_string().copy()
+
+    def execute(self, batch: RecordBatch) raises -> StringArray:
+        return self.resolve(batch)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"StrCol[{self.index}]")
+
+
+# ---------------------------------------------------------------------------
+# Length — comptime-typed string length
+# ---------------------------------------------------------------------------
+
+
+struct Length[S: StringValue](NumericValue):
+    """Fused string length: per-element byte length of a string column.
+
+    Wraps any ``StringValue`` child (e.g. ``StringColumn``) and produces a
+    ``UInt32Array`` of byte lengths, matching
+    ``marrow.kernels.string.string_lengths``.  Implements ``NumericValue``
+    (rather than duplicating a whole-array kernel call) so it composes with
+    other numeric nodes through the same single fused vectorize loop —
+    ``core[W]`` vectorizes the length computation by loading ``W+1``
+    contiguous string offsets and subtracting the shifted-by-one lanes.
+
+    Usage::
+
+        var expr = Length(StringColumn(0))
+        var result = expr.execute(batch)  # single fused pass
+    """
+
+    comptime OutType = dt.UInt32Type
+    comptime NativeType = Self.OutType.native
+
+    var child: Self.S
+
+    def __init__(out self, var child: Self.S):
+        self.child = child^
+
+    def __init__(out self, *, copy: Self):
+        self.child = copy.child.copy()
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var arr = self.child.resolve(batch)
+        var off = arr.offsets.view[Self.NativeType](arr.offset + idx, W + 1)
+        var starts = off.load[W](0)
+        var ends = off.load[W](1)
+        return ends - starts
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Length(")
+        self.child.write_to(writer)
         writer.write(t")")
 
 

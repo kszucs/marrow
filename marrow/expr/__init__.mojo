@@ -26,12 +26,15 @@ Scalar expressions (runtime layer)
 Factory functions: ``col()``, ``lit()``, ``if_else()``
 Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
 ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
+Instance methods: ``.abs()``, ``.is_null()``, ``.length()``, ``.cast(to)``
 
 Comptime-typed expressions
 ---------------------------
 ``NumericValue`` — base trait for numeric comptime nodes with SIMD vectorize execution
+``StringValue`` — base trait for string comptime nodes (resolve/execute, no SIMD core)
 
-Expression nodes: ``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``
+Expression nodes: ``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``,
+``StringColumn``, ``Length[S]``
 
 Relational plans
 ----------------
@@ -73,6 +76,7 @@ from marrow.expr.runtime import (
     IF_ELSE,
     CAST,
     FUSED,
+    LENGTH,
 )
 from marrow.expr.relations import (
     Relation,
@@ -133,10 +137,13 @@ from marrow.expr.values import (
     # Traits
     Value,
     NumericValue,
+    StringValue,
     # Expression nodes
     Column,
     Add,
     Sub,
+    StringColumn,
+    Length,
     # Vectorize dispatch
     _vectorize_dispatch,
 )

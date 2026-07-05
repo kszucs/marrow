@@ -9,14 +9,16 @@ from std.testing import assert_equal, assert_true
 
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray
+from marrow.arrays import PrimitiveArray, UInt32Array
 from marrow.builders import array
-from marrow.dtypes import Int64Type, int64
+from marrow.dtypes import Int64Type, int64, uint32
 from marrow.expr import (
     Column,
     Add,
     Sub,
     NumericValue,
+    StringColumn,
+    Length,
 )
 from marrow.tabular import RecordBatch, record_batch
 
@@ -143,6 +145,45 @@ def test_fused_sub_negative_result() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _fused_sub_exec(0, 1, batch)
     assert_true(result == array([-9, -18, -27], int64))
+
+
+# ---------------------------------------------------------------------------
+# Length (string)
+# ---------------------------------------------------------------------------
+
+
+def test_fused_length_basic() raises:
+    """Length(StringColumn(0)) produces per-element byte lengths."""
+    var a = array(["ab", "cde", "", "f"])
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([2, 3, 0, 1], uint32))
+
+
+def test_fused_length_non_aligned() raises:
+    """Length works with non-SIMD-aligned lengths."""
+    var a = array(["a", "bb", "ccc", "dddd", "e", "ff", "ggg"])
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([1, 2, 3, 4, 1, 2, 3], uint32))
+
+
+def test_fused_length_sliced() raises:
+    """Length matches kernels.string.string_lengths on a sliced array."""
+    var full = array(["aa", "b", "ccc", "dddd", "e"])
+    var a = full.slice(1, 3)
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Length(StringColumn(0))
+    var result = expr.execute(batch)
+    assert_true(result == array([1, 3, 4], uint32))
+
+
+def test_fused_length_write_to() raises:
+    """Length.write_to produces nested readable output."""
+    var expr = Length(StringColumn(2))
+    assert_equal(String(expr), "Length(StrCol[2])")
 
 
 # ---------------------------------------------------------------------------
