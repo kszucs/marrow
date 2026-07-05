@@ -1,277 +1,72 @@
-"""Scalar expression nodes for the marrow expression system.
+"""Comptime-typed expression nodes for the marrow expression system.
 
-``Expr``        — unified n-ary term expression node
-``Value``       — trait every scalar expression node must implement
+This is the **default** expression layer: each node is a generic struct
+where type parameters encode the expression tree structure, enabling the
+compiler to inline the full ``core[W]()`` call chain into a single fused
+vectorize loop with zero intermediate arrays.
 
-Factory functions
------------------
-``col(index)``  / ``col(name)`` — column reference
-``lit[T](value)``               — typed scalar literal
-``if_else(cond, then_, else_)`` — conditional
+Expression nodes
+----------------
+``Column[T]`` — typed column reference (resolves from RecordBatch at core time)
+``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
+``Sub[L, R]`` — fused binary subtract
 
-Operator overloads on ``Expr``: ``+``, ``-``, ``*``, ``/``, ``>``,
-``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
-unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.cast(to)``.
+Traits
+------
+``Value`` — base trait for every expression node (kind, dtype, inputs,
+    write_to; Copyable/Writable/etc.), shared with the type-erased ``Expr``
+    in ``runtime.mojo``.
+``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 
-Expression tags
----------------
-LOAD    - Column reference
-LITERAL - Constant value
-ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
-NEG/ABS/NOT - Unary operations
-IS_NULL - Null check
-IF_ELSE - Conditional
-CAST - Type cast
+Bridging to the runtime layer
+-----------------------------
+``NumericValue.to_expr()`` boxes a comptime node into a runtime ``Expr``
+(see ``runtime.mojo``), so it can flow through APIs that build/execute plans
+without knowing the concrete comptime type (e.g. the Python bindings).  The
+boxed ``Expr`` fully delegates ``dtype()``, ``write_to()``, and ``eval()``
+back to the concrete node via trampolines, so a fused subtree keeps its
+single-pass execution even when driven through the type-erased path.
+
+Usage
+-----
+    var col_a = Column[Int64Type](0)
+    var col_b = Column[Int64Type](1)
+    var expr = Add(col_a, col_b)
+    var result = expr.execute(batch)  # single fused pass, zero intermediates
 """
 
+from std.algorithm.backend.vectorize import vectorize
+from std.builtin.simd import Scalar
 from std.memory import ArcPointer
-from marrow.arrays import AnyArray
-from marrow.builders import PrimitiveBuilder
-from marrow.dtypes import AnyDataType, NumericType
-from marrow.schema import Schema
+from std.sys import size_of
+from std.sys.info import simd_byte_width
+from std.utils.index import IndexList
+
+import marrow.dtypes as dt
+from marrow.arrays import AnyArray, PrimitiveArray
+from marrow.buffers import Buffer
+from marrow.dtypes import AnyDataType, DType, NumericType
+from marrow.expr.runtime import Expr, FUSED
+from marrow.tabular import RecordBatch
 
 
 # ---------------------------------------------------------------------------
-# Node-kind / op constants
-# ---------------------------------------------------------------------------
-
-comptime LOAD: UInt8 = 0
-comptime LITERAL: UInt8 = 1
-comptime ADD: UInt8 = 2
-comptime SUB: UInt8 = 3
-comptime MUL: UInt8 = 4
-comptime DIV: UInt8 = 5
-comptime EQ: UInt8 = 6
-comptime NE: UInt8 = 7
-comptime LT: UInt8 = 8
-comptime LE: UInt8 = 9
-comptime GT: UInt8 = 10
-comptime GE: UInt8 = 11
-comptime AND: UInt8 = 12
-comptime OR: UInt8 = 13
-comptime NEG: UInt8 = 14
-comptime ABS: UInt8 = 15
-comptime NOT: UInt8 = 16
-comptime IS_NULL: UInt8 = 17
-comptime IF_ELSE: UInt8 = 18
-comptime CAST: UInt8 = 19
-comptime FUSED: UInt8 = 20
-"""Tag for Expr nodes that carry a comptime-fused expression in _fused."""
-
-
-# ---------------------------------------------------------------------------
-# Expr - unified n-ary term expression node
+# Value trait — base for all expression nodes (shared with runtime.mojo)
 # ---------------------------------------------------------------------------
 
 
-struct Expr(Copyable, ImplicitlyCopyable, ImplicitlyDestructible, Movable, Writable):
-    """Unified expression node using tag-based dispatch."""
+trait Value(
+    Copyable,
+    ImplicitlyCopyable,
+    ImplicitlyDestructible,
+    Movable,
+    Writable,
+):
+    """Interface every expression node must implement.
 
-    var _tag: UInt8
-    var _args: List[Expr]
-    var _kind_data: UInt8
-    var _value: Optional[AnyArray]
-    var _name: String
-    var dispatch: UInt8
-    var _fused: Optional[ArcPointer[NoneType]]
-    var _virt_fused_dtype: def(ArcPointer[NoneType]) thin -> Optional[AnyDataType]
-    var _virt_fused_write: def(ArcPointer[NoneType]) thin -> String
-
-    def __init__(
-        out self,
-        tag: UInt8,
-        var args: List[Expr],
-        kind_data: UInt8,
-        var value: Optional[AnyArray],
-        var name: String,
-    ):
-        self._tag = tag
-        self._args = args^
-        self._kind_data = kind_data
-        self._value = value.copy()
-        self._name = name^
-        self.dispatch = 0
-        self._fused = None
-        self._virt_fused_dtype = Self._tramp_fused_dtype_default
-        self._virt_fused_write = Self._tramp_fused_write_default
-
-    def __init__(out self, *, copy: Self):
-        self._tag = copy._tag
-        self._args = List[Expr]()
-        for i in range(len(copy._args)):
-            self._args.append(copy._args[i].copy())
-        self._kind_data = copy._kind_data
-        self._value = copy._value.copy()
-        self._name = copy._name.copy()
-        self.dispatch = copy.dispatch
-        self._fused = copy._fused
-        self._virt_fused_dtype = copy._virt_fused_dtype
-        self._virt_fused_write = copy._virt_fused_write
-
-    @staticmethod
-    def _tramp_fused_dtype_default(ptr: ArcPointer[NoneType]) -> Optional[AnyDataType]:
-        return None
-
-    @staticmethod
-    def _tramp_fused_write_default(ptr: ArcPointer[NoneType]) -> String:
-        return String()
-
-    def kind(self) -> UInt8:
-        return self._tag
-
-    def kind_data(self) -> UInt8:
-        """Return the kind-specific data (e.g. column index for LOAD nodes)."""
-        return self._kind_data
-
-    def name(self) -> String:
-        """Return the column name for a named LOAD node (empty otherwise)."""
-        return self._name
-
-    def resolve_names(self, schema: Schema) raises -> Expr:
-        """Recursively resolve ``col("name")`` references against *schema*.
-
-        Returns a copy of this expression tree with every named LOAD node
-        replaced by a positional column reference.
-        """
-        if self._tag == LOAD and self._name.byte_length() > 0:
-            var idx = schema.get_field_index(self._name)
-            if idx == -1:
-                raise Error("resolve_names: column '" + self._name + "' not found")
-            return col(idx)
-        var result = self.copy()
-        for i in range(len(result._args)):
-            result._args[i] = self._args[i].resolve_names(schema)
-        return result^
-
-    def dtype(self) -> Optional[AnyDataType]:
-        if self._fused:
-            try:
-                return self._virt_fused_dtype(self._fused[])
-            except:
-                return None
-        if self._tag == LITERAL:
-            return self._value.value().dtype()
-        return None
-
-    def inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=len(self._args))
-        for ref a in self._args:
-            result.append(a.copy())
-        return result^
-
-    def write_to[W: Writer](self, mut writer: W):
-        if self._fused:
-            writer.write("fused(...)")
-        elif self._tag == LOAD:
-            writer.write(t"input({self._kind_data})")
-        elif self._tag == LITERAL:
-            writer.write("literal(...)")
-        elif self._tag >= ADD and self._tag <= OR:
-            var op_name = String("?")
-            if self._tag == ADD: op_name = "add"
-            elif self._tag == SUB: op_name = "sub"
-            elif self._tag == MUL: op_name = "mul"
-            elif self._tag == DIV: op_name = "div"
-            elif self._tag == EQ: op_name = "equal"
-            elif self._tag == NE: op_name = "not_equal"
-            elif self._tag == LT: op_name = "less"
-            elif self._tag == LE: op_name = "less_equal"
-            elif self._tag == GT: op_name = "greater"
-            elif self._tag == GE: op_name = "greater_equal"
-            elif self._tag == AND: op_name = "and"
-            elif self._tag == OR: op_name = "or"
-            writer.write(t"{op_name}(")
-            if len(self._args) >= 1: self._args[0].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 2: self._args[1].write_to(writer)
-            writer.write(t")")
-        elif self._tag >= NEG and self._tag <= NOT:
-            var op_name = String("?")
-            if self._tag == NEG: op_name = "neg"
-            elif self._tag == ABS: op_name = "abs"
-            elif self._tag == NOT: op_name = "not"
-            writer.write(t"{op_name}(")
-            if len(self._args) >= 1: self._args[0].write_to(writer)
-            writer.write(t")")
-        elif self._tag == IS_NULL:
-            writer.write(t"is_null(")
-            if len(self._args) >= 1: self._args[0].write_to(writer)
-            writer.write(t")")
-        elif self._tag == IF_ELSE:
-            writer.write(t"if_else(")
-            if len(self._args) >= 1: self._args[0].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 2: self._args[1].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 3: self._args[2].write_to(writer)
-            writer.write(t")")
-        elif self._tag == CAST:
-            writer.write(t"cast(")
-            if len(self._args) >= 1: self._args[0].write_to(writer)
-            writer.write(t")")
-        else:
-            writer.write(t"<unknown>({self._tag})")
-
-    # Operator overloads (methods on Expr)
-    def __add__(self, rhs: Expr) -> Expr:
-        return Expr(tag=ADD, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __sub__(self, rhs: Expr) -> Expr:
-        return Expr(tag=SUB, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __mul__(self, rhs: Expr) -> Expr:
-        return Expr(tag=MUL, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __truediv__(self, rhs: Expr) -> Expr:
-        return Expr(tag=DIV, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __gt__(self, rhs: Expr) -> Expr:
-        return Expr(tag=GT, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __lt__(self, rhs: Expr) -> Expr:
-        return Expr(tag=LT, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __ge__(self, rhs: Expr) -> Expr:
-        return Expr(tag=GE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __le__(self, rhs: Expr) -> Expr:
-        return Expr(tag=LE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __eq__(self, rhs: Expr) -> Expr:
-        return Expr(tag=EQ, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __ne__(self, rhs: Expr) -> Expr:
-        return Expr(tag=NE, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __neg__(self) -> Expr:
-        return Expr(tag=NEG, args=[self.copy()], kind_data=0, value=None, name=String())
-
-    def __invert__(self) -> Expr:
-        return Expr(tag=NOT, args=[self.copy()], kind_data=0, value=None, name=String())
-
-    def __and__(self, rhs: Expr) -> Expr:
-        return Expr(tag=AND, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def __or__(self, rhs: Expr) -> Expr:
-        return Expr(tag=OR, args=[self.copy(), rhs.copy()], kind_data=0, value=None, name=String())
-
-    def is_null(self) -> Expr:
-        return Expr(tag=IS_NULL, args=[self.copy()], kind_data=0, value=None, name=String())
-
-    def abs(self) -> Expr:
-        return Expr(tag=ABS, args=[self.copy()], kind_data=0, value=None, name=String())
-
-    def cast(self, to: AnyDataType) -> Expr:
-        return Expr(tag=CAST, args=[self.copy()], kind_data=0, value=None, name=String())
-
-
-# ---------------------------------------------------------------------------
-# Value trait — interface every concrete expression node must implement
-# ---------------------------------------------------------------------------
-
-
-trait Value(ImplicitlyDestructible, Movable):
-    """Interface for immutable scalar expression nodes."""
+    This is the single canonical trait implemented by both the comptime-typed
+    expressions in this module and the type-erased ``Expr`` in ``runtime.mojo``.
+    """
 
     def kind(self) -> UInt8:
         """Return the node-kind constant."""
@@ -286,29 +81,358 @@ trait Value(ImplicitlyDestructible, Movable):
         ...
 
     def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display."""
+        """Format this node for display (children formatted recursively)."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# Factory functions (return Expr)
+# NumericValue trait — numeric comptime expression nodes
 # ---------------------------------------------------------------------------
 
 
-def col(index: Int) -> Expr:
-    """Reference to the ``index``-th input column."""
-    return Expr(tag=LOAD, args=List[Expr](), kind_data=UInt8(index), value=None, name=String())
+trait NumericValue(Value):
+    """Trait for numeric comptime-typed expression nodes.
 
-def col(var name: String) -> Expr:
-    """Reference to a named column."""
-    return Expr(tag=LOAD, args=List[Expr](), kind_data=-1, value=None, name=name^)
+    Nodes implementing this trait are generic structs where type parameters
+    encode the full expression tree — enabling the compiler to inline
+    ``core[W]()`` across the entire tree into a single fused vectorize loop.
 
-def lit[T: NumericType](value: Scalar[T.native]) raises -> Expr:
-    """A scalar constant."""
-    var builder = PrimitiveBuilder[T](T(), 1)
-    builder.unsafe_append(value)
-    return Expr(tag=LITERAL, args=List[Expr](), kind_data=0, value=builder.finish().to_any(), name=String())
+    Provides ``core[W](batch, idx)`` (SIMD lane computation with batch) and
+    ``execute(batch)`` (fused vectorize loop).  Both ``Column[T]`` and
+    ``Add[L, R]`` implement this trait.
 
-def if_else(cond: Expr, then_: Expr, else_: Expr) -> Expr:
-    """Element-wise conditional."""
-    return Expr(tag=IF_ELSE, args=[cond.copy(), then_.copy(), else_.copy()], kind_data=0, value=None, name=String())
+    ``comptime OutType`` — the output ``NumericType``.
+    ``comptime NativeType`` — the Mojo scalar type for SIMD operations.
+    """
+
+    comptime OutType: NumericType
+    """Output numeric data type (inferred from children for composite nodes)."""
+
+    comptime NativeType: DType
+    """Native Mojo scalar type for SIMD operations."""
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        """Compute one SIMD lane at the given index, resolving data from batch.
+        """
+        ...
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.OutType]:
+        """Run the fused vectorize loop and return the result array."""
+        ...
+
+    # Default Value trait implementations
+
+    def kind(self) -> UInt8:
+        """Return the node-kind constant."""
+        return 0  # Comptime-typed nodes don't have a specific kind constant
+
+    def dtype(self) -> Optional[AnyDataType]:
+        """Return the output data type."""
+        return Optional[AnyDataType](Self.OutType())
+
+    def inputs(self) -> List[Expr]:
+        """Return child expressions (empty for leaf nodes)."""
+        return List[Expr]()
+
+    def write_to[W: Writer](self, mut writer: W):
+        """Format this node for display."""
+        ...
+
+    def to_expr(self) -> Expr:
+        """Box this comptime-typed expression into a runtime Expr.
+
+        The resulting ``Expr`` carries the comptime node in its ``_fused``
+        slot, so ``dtype()``, ``write_to()``, and ``eval()`` all delegate to
+        the comptime-typed implementation — including a single fused pass
+        for ``eval()``, with no intermediate arrays.
+        """
+        var ptr = ArcPointer[Self](self.copy())
+        var result = Expr(
+            tag=FUSED,
+            args=List[Expr](),
+            kind_data=0,
+            value=None,
+            name=String(),
+        )
+        result._fused = rebind[ArcPointer[NoneType]](ptr^)
+        result._virt_fused_dtype = _fused_dtype_tramp[Self]
+        result._virt_fused_write = _fused_write_tramp[Self]
+        result._virt_fused_eval = _fused_eval_tramp[Self]
+        return result^
+
+
+# ---------------------------------------------------------------------------
+# Trampoline helpers for boxing comptime-typed expressions into Expr
+# ---------------------------------------------------------------------------
+
+
+def _fused_dtype_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
+    """Thin trampoline: delegate dtype() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].dtype()
+
+
+def _fused_write_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType],) -> String:
+    """Thin trampoline: delegate write_to() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    var s = String()
+    typed[].write_to(s)
+    return s^
+
+
+def _fused_eval_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    """Thin trampoline: delegate execute() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].execute(batch).to_any()
+
+
+# ---------------------------------------------------------------------------
+# Column — typed column reference
+# ---------------------------------------------------------------------------
+
+
+struct Column[T: dt.NumericType](NumericValue):
+    """Typed column reference that resolves from a RecordBatch at core time.
+
+    ``index``  — positional index into the batch's column list.
+
+    The column data is resolved on demand from the batch passed to ``core()``,
+    so no separate bind phase is needed.
+
+    Usage::
+
+        var col = Column[Int64Type](0)
+        var result = col.execute(batch)  # resolves batch.columns[0] internally
+    """
+
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+
+    var index: Int
+
+    def __init__(out self, index: Int):
+        self.index = index
+
+    def __init__(out self, *, copy: Self):
+        self.index = copy.index
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return (
+            batch.columns[self.index]
+            .as_primitive[Self.T]()
+            .values()
+            .load[W](idx)
+        )
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.OutType]:
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var buf = Buffer.alloc_uninit[native](length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            var val = self.core[W](batch, i)
+            var v = buf.view[native](i, length)
+            v.store[W](0, val)
+
+        _vectorize_dispatch[native, width, fill](length)
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Col[{self.index}]")
+
+
+# ---------------------------------------------------------------------------
+# Add — comptime-typed binary add
+# ---------------------------------------------------------------------------
+
+
+struct Add[L: NumericValue, R: NumericValue](NumericValue):
+    """Fused binary add: evaluates left + right in a single vectorized pass.
+
+    Generic over any two ``NumericValue`` children, so the compiler can
+    inline the full ``core[W]()`` call chain.
+
+    ``comptime OutType`` and ``comptime NativeType`` are inherited from the
+    left child (both operands must have the same dtype).
+
+    Usage::
+
+        var col_a = Column[Int64Type](0)
+        var col_b = Column[Int64Type](1)
+        var expr = Add(col_a, col_b)
+        var result = expr.execute(batch)  # single fused pass
+    """
+
+    comptime OutType = Self.L.OutType
+    comptime NativeType = Self.L.NativeType
+
+    var left: Self.L
+    var right: Self.R
+
+    def __init__(out self, var left: Self.L, var right: Self.R):
+        self.left = left^
+        self.right = right^
+
+    def __init__(out self, *, copy: Self):
+        self.left = copy.left.copy()
+        self.right = copy.right.copy()
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](batch, idx)
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return l + r
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.OutType]:
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var buf = Buffer.alloc_uninit[native](length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            var val = self.core[W](batch, i)
+            var v = buf.view[native](i, length)
+            v.store[W](0, val)
+
+        _vectorize_dispatch[native, width, fill](length)
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Add(")
+        self.left.write_to(writer)
+        writer.write(t", ")
+        self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# Sub — comptime-typed binary subtract
+# ---------------------------------------------------------------------------
+
+
+struct Sub[L: NumericValue, R: NumericValue](NumericValue):
+    """Fused binary subtract: evaluates left - right in a single vectorized pass.
+    """
+
+    comptime OutType = Self.L.OutType
+    comptime NativeType = Self.L.NativeType
+
+    var left: Self.L
+    var right: Self.R
+
+    def __init__(out self, var left: Self.L, var right: Self.R):
+        self.left = left^
+        self.right = right^
+
+    def __init__(out self, *, copy: Self):
+        self.left = copy.left.copy()
+        self.right = copy.right.copy()
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](batch, idx)
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return l - r
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.OutType]:
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var buf = Buffer.alloc_uninit[native](length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            var val = self.core[W](batch, i)
+            var v = buf.view[native](i, length)
+            v.store[W](0, val)
+
+        _vectorize_dispatch[native, width, fill](length)
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Sub(")
+        self.left.write_to(writer)
+        writer.write(t", ")
+        self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# Vectorize dispatch helper
+# ---------------------------------------------------------------------------
+
+
+def _vectorize_dispatch[
+    native: DType,
+    cpu_width: Int,
+    process: def[W: Int, rank: Int, alignment: Int = 1](
+        IndexList[rank]
+    ) capturing -> None,
+](length: Int):
+    """Run process over [0, length) using vectorize."""
+
+    @always_inline
+    def lane[W: Int](i: Int):
+        process[W, rank=1](IndexList[1](i))
+
+    vectorize[cpu_width](length, lane)

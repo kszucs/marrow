@@ -1,39 +1,37 @@
 """Expression and logical plan system for Marrow.
 
-Scalar expressions
-------------------
-``Expr``        — unified n-ary term expression node
-``Value``       — trait every scalar expression node must implement
+Two expression layers
+----------------------
+``values.mojo`` — the **default** comptime-typed layer.  Nodes are generic
+structs (``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``) whose type parameters
+encode the whole expression tree, so the compiler inlines evaluation into a
+single fused SIMD loop with zero intermediate arrays.
+
+``runtime.mojo`` — the type-erased runtime layer (``Expr``).  It exists so
+query plans can be built and executed without knowing concrete comptime
+types — this is what the Python bindings drive.  ``Expr`` carries a tag plus
+child args and dispatches its own execution by tag in ``eval()``.
+
+A comptime-typed node can be boxed into an ``Expr`` via
+``NumericValue.to_expr()`` (tag ``FUSED``); the boxed node's ``eval()``,
+``dtype()``, and ``write_to()`` all delegate back to the concrete comptime
+node, so a fused subtree keeps its single-pass execution even when driven
+through the type-erased path.
+
+Scalar expressions (runtime layer)
+-----------------------------------
+``Expr``   — unified n-ary term expression node
+``Value``  — trait every expression node must implement (shared by both layers)
 
 Factory functions: ``col()``, ``lit()``, ``if_else()``
 Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
 ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
 
-Comptime-fused expressions
---------------------------
-``NumericValue`` — base trait for numeric fused nodes with SIMD vectorize execution
-``BoolValue``    — base trait for boolean output expression nodes
+Comptime-typed expressions
+---------------------------
+``NumericValue`` — base trait for numeric comptime nodes with SIMD vectorize execution
 
-Expression nodes:
-``Column[T]``     — typed column reference (positional)
-``ColumnRef[name, T]`` — named column placeholder (resolved from RecordBatch)
-``Literal[T]``    — scalar constant broadcast to all SIMD lanes
-``Negate[T]``     — fused unary negate
-``Add[L, R]``     — fused binary add
-``Sub[L, R]``     — fused binary subtract
-``Mul[L, R]``     — fused binary multiply
-``Equal[L, R]``   — fused equality comparison
-``NotEqual[L, R]`` — fused inequality comparison
-``Less[L, R]``    — fused less-than comparison
-``LessEq[L, R]``  — fused less-than-or-equal comparison
-``Greater[L, R]`` — fused greater-than comparison
-``GreaterEq[L, R]`` — fused greater-than-or-equal comparison
-``And[L, R]``     — fused logical AND
-``Or[L, R]``      — fused logical OR
-``Not[E]``        — fused logical NOT
-
-Fused expressions can be boxed into ``Expr`` via ``to_expr()`` or implicit
-conversion, enabling use in plan-building APIs (``filter()``, ``select()``).
+Expression nodes: ``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``
 
 Relational plans
 ----------------
@@ -52,9 +50,7 @@ Rewriting
 ``Rewriter``   — bottom-up fixed-point rewrite driver
 """
 
-from marrow.expr.values import (
-    # Traits
-    Value,
+from marrow.expr.runtime import (
     # Unified expression node
     Expr,
     # Free-standing factory functions (return Expr)
@@ -132,16 +128,6 @@ from marrow.expr.rewrite import (
 )
 from marrow.expr.executor import (
     ExecutionContext,
-    # Value processors
-    ValueProcessor,
-    AnyValueProcessor,
-    ColumnProcessor,
-    LiteralProcessor,
-    BinaryProcessor,
-    UnaryProcessor,
-    IsNullProcessor,
-    IfElseProcessor,
-    FusedProcessor,
     # Relation processors
     RelationProcessor,
     AnyRelationProcessor,
@@ -154,18 +140,14 @@ from marrow.expr.executor import (
     Planner,
     execute,
 )
-from marrow.expr.fused import (
+from marrow.expr.values import (
     # Traits
-    TypedValue,
-    NumericTypedValue,
-    # Expression nodes (old API - aliases for compatibility)
-    FusedColumn,
-    FusedAdd,
-    FusedSub,
-    # Expression nodes (new API - aliases)
-    FusedColumn as Column,
-    FusedAdd as Add,
-    FusedSub as Sub,
+    Value,
+    NumericValue,
+    # Expression nodes
+    Column,
+    Add,
+    Sub,
     # Vectorize dispatch
     _vectorize_dispatch,
 )

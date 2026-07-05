@@ -30,7 +30,7 @@ from std.memory import ArcPointer
 from marrow.dtypes import Field
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import Expr, col
+from marrow.expr.runtime import Expr, col
 
 
 # ---------------------------------------------------------------------------
@@ -646,9 +646,7 @@ struct Aggregate(Relation):
         return result^
 
     def exprs(self) -> List[Expr]:
-        var result = List[Expr](
-            capacity=len(self.keys) + len(self.agg_exprs)
-        )
+        var result = List[Expr](capacity=len(self.keys) + len(self.agg_exprs))
         for ref e in self.keys:
             result.append(e)
         for ref e in self.agg_exprs:

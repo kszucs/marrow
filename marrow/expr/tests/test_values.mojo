@@ -8,7 +8,6 @@ from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     Expr,
-    Planner,
     col,
     lit,
     if_else,
@@ -37,16 +36,15 @@ from marrow.expr import (
 
 
 def _exec(expr: Expr, batch: RecordBatch) raises -> Int64Array:
-    """Helper: build a value processor and evaluate against the batch."""
-    var tmp = Planner().build(expr).eval(batch)
+    """Helper: evaluate an expression against the batch."""
+    var tmp = expr.eval(batch)
     ref result = tmp.as_int64()
     return result.copy()
 
 
 def _exec_pred(expr: Expr, batch: RecordBatch) raises -> BoolArray:
-    """Helper: build a value processor and evaluate predicate against the batch.
-    """
-    var tmp = Planner().build(expr).eval(batch)
+    """Helper: evaluate a predicate expression against the batch."""
+    var tmp = expr.eval(batch)
     return tmp.as_bool().copy()
 
 

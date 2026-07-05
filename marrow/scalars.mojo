@@ -12,7 +12,7 @@ Typed scalars:
 
 Type-erased container:
   AnyScalar          — wraps any typed scalar via @implicit conversion;
-                       backed by a length-1 AnyArray for uniform storage.
+                       backed by an inline Variant, dispatched at runtime.
 
 Scalar trait:
   Common interface implemented by all four typed scalars.
@@ -170,6 +170,17 @@ struct PrimitiveScalar[T: PrimitiveType](Scalar):
     def value(self) -> Self.NativeScalar:
         """Get the underlying native value. Undefined if null."""
         return self._value
+
+    def repeat(self, times: Int) raises -> PrimitiveArray[Self.T]:
+        """Broadcast this scalar into an array of length `times`."""
+        var builder = PrimitiveBuilder[Self.T](self._dtype.copy(), times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.unsafe_append(self._value)
+        else:
+            for _ in range(times):
+                builder.unsafe_append_null()
+        return builder.finish()
 
     def write_to[W: Writer](self, mut writer: W):
         if self._is_valid:
@@ -551,6 +562,32 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             return t.is_valid()
 
         return variant_dispatch[Scalar, func=f](self._v)
+
+    def repeat(self, times: Int) raises -> AnyArray:
+        """Broadcast this scalar into an array of length `times`."""
+        if self.type() == int8:
+            return self.as_int8().repeat(times).to_any()
+        elif self.type() == int16:
+            return self.as_int16().repeat(times).to_any()
+        elif self.type() == int32:
+            return self.as_int32().repeat(times).to_any()
+        elif self.type() == int64:
+            return self.as_int64().repeat(times).to_any()
+        elif self.type() == uint8:
+            return self.as_uint8().repeat(times).to_any()
+        elif self.type() == uint16:
+            return self.as_uint16().repeat(times).to_any()
+        elif self.type() == uint32:
+            return self.as_uint32().repeat(times).to_any()
+        elif self.type() == uint64:
+            return self.as_uint64().repeat(times).to_any()
+        elif self.type() == float16:
+            return self.as_float16().repeat(times).to_any()
+        elif self.type() == float32:
+            return self.as_float32().repeat(times).to_any()
+        elif self.type() == float64:
+            return self.as_float64().repeat(times).to_any()
+        raise Error(t"AnyScalar.repeat: unsupported dtype {self.type()}")
 
     def is_null(self) -> Bool:
         return not self.is_valid()

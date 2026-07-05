@@ -38,7 +38,7 @@ def test_sequential_fallback() raises:
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var result = Planner().build(col(0) + col(1)).eval(batch)
+    var result = (col(0) + col(1)).eval(batch)
     assert_true(result == array([11, 22, 33, 44, 55], int64).to_any())
 
 
@@ -48,7 +48,7 @@ def test_large_add() raises:
     var a = arange[Int64Type](0, n)
     var b = arange[Int64Type](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var tmp_large_add = Planner().build(col(0) + col(1)).eval(batch)
+    var tmp_large_add = (col(0) + col(1)).eval(batch)
     ref result = tmp_large_add.as_int64()
     for i in range(n):
         assert_equal(result[i].value(), Scalar[int64.native](i * 2))
@@ -60,7 +60,7 @@ def test_large_mul() raises:
     var a = arange[Int64Type](1, n + 1)
     var b = arange[Int64Type](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var tmp_large_mul = Planner().build(col(0) * col(1)).eval(batch)
+    var tmp_large_mul = (col(0) * col(1)).eval(batch)
     ref result = tmp_large_mul.as_int64()
     for i in range(n):
         assert_equal(result[i].value(), Int64((i + 1) * i))
@@ -70,9 +70,7 @@ def test_chunk_boundary_values() raises:
     """Values at boundaries are correct."""
     var a = arange[Int64Type](0, 128)
     var batch = record_batch([a^], names=["c0"])
-    var tmp_chunk_boundary = (
-        Planner().build(col(0) + lit[Int64Type](1)).eval(batch)
-    )
+    var tmp_chunk_boundary = (col(0) + lit[Int64Type](1)).eval(batch)
     ref result = tmp_chunk_boundary.as_int64()
     for i in range(128):
         assert_equal(result[i].value(), Scalar[int64.native](i + 1))
@@ -82,7 +80,7 @@ def test_non_aligned_length() raises:
     """Handles lengths not divisible by SIMD width."""
     var a = arange[Int64Type](0, 100)
     var batch = record_batch([a^], names=["c0"])
-    var tmp_non_aligned = Planner().build(-col(0)).eval(batch)
+    var tmp_non_aligned = (-col(0)).eval(batch)
     ref result = tmp_non_aligned.as_int64()
     for i in range(100):
         assert_equal(result[i].value(), Scalar[int64.native](-i))
@@ -93,7 +91,7 @@ def test_single_element() raises:
     var a = array([42], int64)
     var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var result = Planner().build(col(0) + col(1)).eval(batch)
+    var result = (col(0) + col(1)).eval(batch)
     assert_true(result == array([50], int64).to_any())
 
 
@@ -103,7 +101,7 @@ def test_predicate() raises:
     var a = arange[Int64Type](0, n)
     var b = arange[Int64Type](0, n)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var tmp_pred = Planner().build(col(0) < col(1)).eval(batch)
+    var tmp_pred = (col(0) < col(1)).eval(batch)
     ref result = tmp_pred.as_bool()
     # a == b everywhere, so all False
     for i in range(n):
@@ -116,9 +114,7 @@ def test_chained_expression() raises:
     var b = arange[Int64Type](1, 257)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
     # (a + b) * (a - b)
-    var tmp_chained = (
-        Planner().build((col(0) + col(1)) * (col(0) - col(1))).eval(batch)
-    )
+    var tmp_chained = ((col(0) + col(1)) * (col(0) - col(1))).eval(batch)
     ref result = tmp_chained.as_int64()
     for i in range(256):
         var expected = (i + (i + 1)) * (i - (i + 1))
@@ -130,11 +126,7 @@ def test_dispatch_cpu_hint() raises:
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([5, 4, 3, 2, 1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
-    var result = (
-        Planner()
-        .build(col(0) + col(1))
-        .eval(batch)
-    )
+    var result = (col(0) + col(1)).eval(batch)
     assert_true(result == array([6, 6, 6, 6, 6], int64).to_any())
 
 
@@ -405,9 +397,7 @@ def test_parquet_scan_filter() raises:
     """Filter over a ParquetScan keeps only matching rows."""
     var path = "/tmp/marrow_test_parquet_scan_filter.parquet"
     _write_test_parquet(path)
-    var result = execute(
-        parquet_scan(path).filter(col(0) > lit[Int64Type](3))
-    )
+    var result = execute(parquet_scan(path).filter(col(0) > lit[Int64Type](3)))
     assert_equal(result.num_rows(), 2)
     ref ids = result.columns[0].as_int64()
     assert_equal(ids[0].value(), 4)
@@ -454,9 +444,7 @@ def test_aggregate_sum() raises:
     cols.append(array([10, 20, 30, 40, 50], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(
-        [col(0)], [col(1)], ["sum"]
-    )
+    var plan = in_memory_table(batch).aggregate([col(0)], [col(1)], ["sum"])
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     assert_equal(result.num_columns(), 2)  # key + sum
@@ -479,9 +467,7 @@ def test_aggregate_count() raises:
     cols.append(array([10, 20, 30, 40, 50], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(
-        [col(0)], [col(1)], ["count"]
-    )
+    var plan = in_memory_table(batch).aggregate([col(0)], [col(1)], ["count"])
     var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     ref c = result.columns[1].as_int64()
@@ -497,9 +483,7 @@ def test_aggregate_sum_int64_precision() raises:
     cols.append(array([9_007_199_254_740_993, 1], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(
-        [col(0)], [col(1)], ["sum"]
-    )
+    var plan = in_memory_table(batch).aggregate([col(0)], [col(1)], ["sum"])
     var result = execute(plan)
     assert_equal(result.num_rows(), 1)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
@@ -514,9 +498,7 @@ def test_aggregate_small_morsel() raises:
     cols.append(array([10, 20, 30, 40, 50, 60], int64).to_any())
     var batch = record_batch(cols^, names=["key", "val"])
 
-    var plan = in_memory_table(batch).aggregate(
-        [col(0)], [col(1)], ["sum"]
-    )
+    var plan = in_memory_table(batch).aggregate([col(0)], [col(1)], ["sum"])
     var ctx = ExecutionContext()
     ctx.morsel_size = 2
     var result = execute(plan, ctx)

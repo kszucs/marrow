@@ -10,6 +10,50 @@
   the internal Mojo extension from the `marrow` Python package.
 - `build_python` now explicitly passes `-O3 -g0` to `mojo build`.
 
+### Refactors
+
+- **`marrow/expr` split into two clear layers** — `values.mojo` now holds the
+  comptime-typed expression layer (`Column[T]`, `Add[L, R]`, `Sub[L, R]`,
+  renamed from `FusedColumn`/`FusedAdd`/`FusedSub` since these are the default
+  expression layer, not an alternate "fused" one), while `runtime.mojo` holds
+  the type-erased `Expr` used to build/execute plans without concrete comptime
+  types (what the Python bindings drive). The two share a single canonical
+  `Value` trait (previously duplicated verbatim in both files).
+- **Collapsed the value-processor hierarchy into `Expr.eval()`**
+  (`marrow/expr/executor.mojo`): removed `ValueProcessor`, `AnyValueProcessor`,
+  `ColumnProcessor`, `LiteralProcessor`, `BinaryProcessor`, `UnaryProcessor`,
+  `IsNullProcessor`, `IfElseProcessor`, `FusedProcessor[T]`, and
+  `Planner.build(Expr)` — `Expr` already carries its own tag and args, so it
+  now dispatches its own execution directly. A boxed comptime-typed node
+  (`FUSED` tag, produced by `to_expr()`) delegates straight back to its own
+  fused `execute()` via a new trampoline, so `Expr.eval()` can now run a
+  boxed fused subtree end-to-end through the runtime path — previously
+  `Planner.build` raised on `FUSED` and required calling `FusedProcessor`
+  directly. Relation processors (`FilterProcessor`, `ProjectProcessor`,
+  `AggregateProcessor`) now hold `Expr`/`List[Expr]` fields directly instead
+  of `AnyValueProcessor`/`List[AnyValueProcessor]`.
+- Removed the dead `Expr.dispatch` field (always `0`, never read) and the
+  `col(name)` sentinel that wrapped `-1` into a `UInt8` `kind_data`. Fixed
+  `Expr.write_to()` to actually call the fused-node write trampoline for
+  `FUSED` nodes instead of printing a fixed placeholder string.
+- **Renamed `NumericTypedValue` → `NumericValue` and merged `TypedValue` into
+  `Value`** (`marrow/expr/values.mojo`): `TypedValue` only re-stated `Value`'s
+  bounds without adding new behavior, so it's gone — `Value` itself now
+  carries the `Copyable`/`Writable`/etc. bounds every conformer already needed.
+- **`Expr` literals now store an `AnyScalar` instead of a length-1 `AnyArray`**
+  (`marrow/expr/runtime.mojo`): `lit[T]()` builds a `PrimitiveScalar[T]`
+  directly rather than round-tripping through a one-element
+  `PrimitiveBuilder`. Broadcasting a literal to a full batch now goes through
+  the new `marrow.scalars.repeat(AnyScalar, times) -> AnyArray` free function.
+- **`PrimitiveBuilder[T].extend(scalar, n)` and `AnyBuilder.extend(scalar,
+  times)`** (`marrow/builders.mojo`): append the same scalar value `n` times
+  in one call. `PrimitiveBuilder[T]`'s version is a single generic method
+  (parameterized over every numeric type at once); `AnyBuilder`'s dispatches
+  to it by dtype, mirroring the existing `AnyBuilder(dtype, capacity)`
+  constructor's dispatch style. `marrow.scalars.repeat()` is now a thin
+  3-line wrapper (`AnyBuilder(dtype, times).extend(scalar, times).finish()`)
+  instead of an 11-branch per-dtype broadcast loop.
+
 ### Features
 
 - **`Schema[Field[...]]` with `__getattr_param__`** (`marrow/faszom.mojo`): compile-time
