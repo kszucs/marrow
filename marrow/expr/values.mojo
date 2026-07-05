@@ -20,8 +20,8 @@ Traits
 
 Bridging to the runtime layer
 -----------------------------
-``NumericValue.to_expr()`` boxes a comptime node into a runtime ``Expr``
-(see ``runtime.mojo``), so it can flow through APIs that build/execute plans
+The ``Expr(value)`` constructor (see ``runtime.mojo``) boxes a comptime node
+into a runtime ``Expr``, so it can flow through APIs that build/execute plans
 without knowing the concrete comptime type (e.g. the Python bindings).  The
 boxed ``Expr`` fully delegates ``dtype()``, ``write_to()``, and ``eval()``
 back to the concrete node via trampolines, so a fused subtree keeps its
@@ -37,7 +37,6 @@ Usage
 
 from std.algorithm.backend.vectorize import vectorize
 from std.builtin.simd import Scalar
-from std.memory import ArcPointer
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
@@ -46,7 +45,6 @@ import marrow.dtypes as dt
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.buffers import Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
-from marrow.expr.runtime import Expr, FUSED
 from marrow.tabular import RecordBatch
 
 
@@ -126,59 +124,6 @@ trait NumericValue(Value):
     def write_to[W: Writer](self, mut writer: W):
         """Format this node for display."""
         ...
-
-    def to_expr(self) -> Expr:
-        """Box this comptime-typed expression into a runtime Expr.
-
-        The resulting ``Expr`` carries the comptime node in its ``_fused``
-        slot, so ``dtype()``, ``write_to()``, and ``eval()`` all delegate to
-        the comptime-typed implementation — including a single fused pass
-        for ``eval()``, with no intermediate arrays.
-        """
-        var ptr = ArcPointer[Self](self.copy())
-        var result = Expr(
-            tag=FUSED,
-            args=List[Expr](),
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-        result._fused = rebind[ArcPointer[NoneType]](ptr^)
-        result._virt_fused_dtype = _fused_dtype_tramp[Self]
-        result._virt_fused_write = _fused_write_tramp[Self]
-        result._virt_fused_eval = _fused_eval_tramp[Self]
-        return result^
-
-
-# ---------------------------------------------------------------------------
-# Trampoline helpers for boxing comptime-typed expressions into Expr
-# ---------------------------------------------------------------------------
-
-
-def _fused_dtype_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
-    """Thin trampoline: delegate dtype() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].dtype()
-
-
-def _fused_write_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType],) -> String:
-    """Thin trampoline: delegate write_to() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    var s = String()
-    typed[].write_to(s)
-    return s^
-
-
-def _fused_eval_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    """Thin trampoline: delegate execute() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].execute(batch).to_any()
 
 
 # ---------------------------------------------------------------------------

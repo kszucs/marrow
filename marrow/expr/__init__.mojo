@@ -12,8 +12,8 @@ query plans can be built and executed without knowing concrete comptime
 types — this is what the Python bindings drive.  ``Expr`` carries a tag plus
 child args and dispatches its own execution by tag in ``eval()``.
 
-A comptime-typed node can be boxed into an ``Expr`` via
-``NumericValue.to_expr()`` (tag ``FUSED``); the boxed node's ``eval()``,
+A comptime-typed node can be boxed into an ``Expr`` via the
+``Expr(value)`` constructor (tag ``FUSED``); the boxed node's ``eval()``,
 ``dtype()``, and ``write_to()`` all delegate back to the concrete comptime
 node, so a fused subtree keeps its single-pass execution even when driven
 through the type-erased path.

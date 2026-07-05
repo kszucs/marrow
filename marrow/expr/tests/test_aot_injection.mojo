@@ -1,19 +1,19 @@
 """Tests for AOT-compiled value expression injection into runtime expressions.
 
 These tests verify that comptime-typed expressions (``values.mojo``) can be
-boxed into runtime ``Expr`` nodes via the ``to_expr()`` method, and executed
-end-to-end through the type-erased runtime path.
+boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor, and
+executed end-to-end through the type-erased runtime path.
 
 The key pattern is:
 1. Create a comptime-typed expression (e.g., Add[Column, Column])
-2. Box it into a runtime Expr via to_expr()
+2. Box it into a runtime Expr via Expr(value)
 3. The boxed Expr carries the comptime node in its _fused slot
 4. Both the direct path (``expr.execute(batch)``) and the boxed runtime path
    (``boxed.eval(batch)``) run the same single fused vectorize loop, since
    ``Expr.eval()`` delegates FUSED nodes straight back to ``execute()``
 
 This test verifies that:
-- to_expr() produces a valid Expr with FUSED tag
+- Expr(value) produces a valid Expr with FUSED tag
 - The boxed Expr can be executed directly via Expr.eval(), matching the
   typed direct-execution path exactly — the runtime and comptime layers are
   a genuine two-way bridge, not just a one-way introspection box.
@@ -63,7 +63,7 @@ def test_fused_column_to_expr() raises:
     var fused = Column[Int64Type](0)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -89,7 +89,7 @@ def test_fused_add_to_expr() raises:
     var fused = Add(col_a, col_b)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -115,7 +115,7 @@ def test_fused_sub_to_expr() raises:
     var fused = Sub(col_a, col_b)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -151,7 +151,7 @@ def test_nested_fused_add_sub_to_expr() raises:
     var fused = Sub(add_expr, col_c)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     # Execute via the direct typed path
@@ -185,7 +185,7 @@ def test_chained_fused_adds_to_expr() raises:
     var fused = Add(add_abc, col_d)
 
     # Box it into a runtime Expr
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     # Execute via the direct typed path
@@ -211,7 +211,7 @@ def test_fused_column_different_types_to_expr() raises:
     var batch = record_batch([a.copy()], names=["c0"])
 
     var col_i64 = Column[Int64Type](0)
-    var expr_i64: Expr = col_i64.to_expr()
+    var expr_i64 = Expr(col_i64)
     assert_equal(expr_i64.kind(), FUSED)
 
     var result_i64 = _exec_typed(col_i64, batch)
@@ -236,7 +236,7 @@ def test_single_element_fused_to_expr() raises:
     var col_b = Column[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -256,7 +256,7 @@ def test_negative_values_fused_to_expr() raises:
     var col_b = Column[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -276,7 +276,7 @@ def test_large_values_fused_to_expr() raises:
     var col_b = Column[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -301,7 +301,7 @@ def test_non_aligned_length_fused_to_expr() raises:
     var col_b = Column[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr: Expr = fused.to_expr()
+    var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)

@@ -8,7 +8,7 @@ a tag plus its child args, and dispatches its own execution by tag in
 ``eval()`` — there is no separate "processor" hierarchy mirroring the tree.
 
 A comptime-typed node from ``values.mojo`` can be boxed into an ``Expr`` via
-``NumericValue.to_expr()`` (tag ``FUSED``); ``eval()``/``dtype()``/
+the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``/``dtype()``/
 ``write_to()`` on a boxed node all delegate back to the concrete comptime
 node through trampolines, so a fused subtree keeps its single fused pass
 even when driven through this type-erased path.
@@ -41,7 +41,7 @@ from marrow.dtypes import AnyDataType, NumericType
 from marrow.scalars import AnyScalar, PrimitiveScalar
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import Value
+from marrow.expr.values import Value, NumericValue
 from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -80,6 +80,37 @@ comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
 comptime FUSED: UInt8 = 20
 """Tag for Expr nodes that carry a boxed comptime-typed node in _fused."""
+
+
+# ---------------------------------------------------------------------------
+# Trampoline helpers for boxing comptime-typed expressions into Expr
+# ---------------------------------------------------------------------------
+
+
+def _fused_dtype_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
+    """Thin trampoline: delegate dtype() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].dtype()
+
+
+def _fused_write_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType],) -> String:
+    """Thin trampoline: delegate write_to() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    var s = String()
+    typed[].write_to(s)
+    return s^
+
+
+def _fused_eval_tramp[
+    T: NumericValue
+](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    """Thin trampoline: delegate execute() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].execute(batch).to_any()
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +164,25 @@ struct Expr(
         self._virt_fused_dtype = Self._tramp_fused_dtype_default
         self._virt_fused_write = Self._tramp_fused_write_default
         self._virt_fused_eval = Self._tramp_fused_eval_default
+
+    def __init__[T: NumericValue](out self, value: T):
+        """Box a comptime-typed expression node into a runtime Expr.
+
+        The resulting ``Expr`` carries the comptime node in its ``_fused``
+        slot, so ``dtype()``, ``write_to()``, and ``eval()`` all delegate to
+        the comptime-typed implementation — including a single fused pass
+        for ``eval()``, with no intermediate arrays.
+        """
+        var ptr = ArcPointer[T](value.copy())
+        self._tag = FUSED
+        self._args = List[Expr]()
+        self._kind_data = 0
+        self._value = None
+        self._name = String()
+        self._fused = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_fused_dtype = _fused_dtype_tramp[T]
+        self._virt_fused_write = _fused_write_tramp[T]
+        self._virt_fused_eval = _fused_eval_tramp[T]
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
@@ -275,6 +325,47 @@ struct Expr(
         else:
             raise Error("Expr.eval: unknown expression kind ", self._tag)
 
+    def _op_name(self) -> String:
+        """Display name for an operator tag (empty if not an operator)."""
+        if self._tag == ADD:
+            return "add"
+        elif self._tag == SUB:
+            return "sub"
+        elif self._tag == MUL:
+            return "mul"
+        elif self._tag == DIV:
+            return "div"
+        elif self._tag == EQ:
+            return "equal"
+        elif self._tag == NE:
+            return "not_equal"
+        elif self._tag == LT:
+            return "less"
+        elif self._tag == LE:
+            return "less_equal"
+        elif self._tag == GT:
+            return "greater"
+        elif self._tag == GE:
+            return "greater_equal"
+        elif self._tag == AND:
+            return "and"
+        elif self._tag == OR:
+            return "or"
+        elif self._tag == NEG:
+            return "neg"
+        elif self._tag == ABS:
+            return "abs"
+        elif self._tag == NOT:
+            return "not"
+        elif self._tag == IS_NULL:
+            return "is_null"
+        elif self._tag == IF_ELSE:
+            return "if_else"
+        elif self._tag == CAST:
+            return "cast"
+        else:
+            return String()
+
     def write_to[W: Writer](self, mut writer: W):
         if self._fused:
             writer.write(self._virt_fused_write(self._fused.value()))
@@ -282,212 +373,88 @@ struct Expr(
             writer.write(t"input({self._kind_data})")
         elif self._tag == LITERAL:
             writer.write("literal(...)")
-        elif self._tag >= ADD and self._tag <= OR:
-            var op_name = String("?")
-            if self._tag == ADD:
-                op_name = "add"
-            elif self._tag == SUB:
-                op_name = "sub"
-            elif self._tag == MUL:
-                op_name = "mul"
-            elif self._tag == DIV:
-                op_name = "div"
-            elif self._tag == EQ:
-                op_name = "equal"
-            elif self._tag == NE:
-                op_name = "not_equal"
-            elif self._tag == LT:
-                op_name = "less"
-            elif self._tag == LE:
-                op_name = "less_equal"
-            elif self._tag == GT:
-                op_name = "greater"
-            elif self._tag == GE:
-                op_name = "greater_equal"
-            elif self._tag == AND:
-                op_name = "and"
-            elif self._tag == OR:
-                op_name = "or"
-            writer.write(t"{op_name}(")
-            if len(self._args) >= 1:
-                self._args[0].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 2:
-                self._args[1].write_to(writer)
-            writer.write(t")")
-        elif self._tag >= NEG and self._tag <= NOT:
-            var op_name = String("?")
-            if self._tag == NEG:
-                op_name = "neg"
-            elif self._tag == ABS:
-                op_name = "abs"
-            elif self._tag == NOT:
-                op_name = "not"
-            writer.write(t"{op_name}(")
-            if len(self._args) >= 1:
-                self._args[0].write_to(writer)
-            writer.write(t")")
-        elif self._tag == IS_NULL:
-            writer.write(t"is_null(")
-            if len(self._args) >= 1:
-                self._args[0].write_to(writer)
-            writer.write(t")")
-        elif self._tag == IF_ELSE:
-            writer.write(t"if_else(")
-            if len(self._args) >= 1:
-                self._args[0].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 2:
-                self._args[1].write_to(writer)
-            writer.write(t", ")
-            if len(self._args) >= 3:
-                self._args[2].write_to(writer)
-            writer.write(t")")
-        elif self._tag == CAST:
-            writer.write(t"cast(")
-            if len(self._args) >= 1:
-                self._args[0].write_to(writer)
-            writer.write(t")")
         else:
-            writer.write(t"<unknown>({self._tag})")
+            var op = self._op_name()
+            if op.byte_length() == 0:
+                writer.write(t"<unknown>({self._tag})")
+            else:
+                writer.write(t"{op}(")
+                for i in range(len(self._args)):
+                    if i > 0:
+                        writer.write(t", ")
+                    self._args[i].write_to(writer)
+                writer.write(t")")
 
-    # Operator overloads (methods on Expr)
-    def __add__(self, rhs: Expr) -> Expr:
+    # Node builders shared by the operator overloads below
+    def _binary(self, tag: UInt8, rhs: Expr) -> Expr:
         return Expr(
-            tag=ADD,
+            tag=tag,
             args=[self.copy(), rhs.copy()],
             kind_data=0,
             value=None,
             name=String(),
         )
 
-    def __sub__(self, rhs: Expr) -> Expr:
+    def _unary(self, tag: UInt8) -> Expr:
         return Expr(
-            tag=SUB,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __mul__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=MUL,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __truediv__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=DIV,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __gt__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=GT,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __lt__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=LT,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __ge__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=GE,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __le__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=LE,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __eq__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=EQ,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __ne__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=NE,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __neg__(self) -> Expr:
-        return Expr(
-            tag=NEG, args=[self.copy()], kind_data=0, value=None, name=String()
-        )
-
-    def __invert__(self) -> Expr:
-        return Expr(
-            tag=NOT, args=[self.copy()], kind_data=0, value=None, name=String()
-        )
-
-    def __and__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=AND,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def __or__(self, rhs: Expr) -> Expr:
-        return Expr(
-            tag=OR,
-            args=[self.copy(), rhs.copy()],
-            kind_data=0,
-            value=None,
-            name=String(),
-        )
-
-    def is_null(self) -> Expr:
-        return Expr(
-            tag=IS_NULL,
+            tag=tag,
             args=[self.copy()],
             kind_data=0,
             value=None,
             name=String(),
         )
 
+    # Operator overloads (methods on Expr)
+    def __add__(self, rhs: Expr) -> Expr:
+        return self._binary(ADD, rhs)
+
+    def __sub__(self, rhs: Expr) -> Expr:
+        return self._binary(SUB, rhs)
+
+    def __mul__(self, rhs: Expr) -> Expr:
+        return self._binary(MUL, rhs)
+
+    def __truediv__(self, rhs: Expr) -> Expr:
+        return self._binary(DIV, rhs)
+
+    def __gt__(self, rhs: Expr) -> Expr:
+        return self._binary(GT, rhs)
+
+    def __lt__(self, rhs: Expr) -> Expr:
+        return self._binary(LT, rhs)
+
+    def __ge__(self, rhs: Expr) -> Expr:
+        return self._binary(GE, rhs)
+
+    def __le__(self, rhs: Expr) -> Expr:
+        return self._binary(LE, rhs)
+
+    def __eq__(self, rhs: Expr) -> Expr:
+        return self._binary(EQ, rhs)
+
+    def __ne__(self, rhs: Expr) -> Expr:
+        return self._binary(NE, rhs)
+
+    def __and__(self, rhs: Expr) -> Expr:
+        return self._binary(AND, rhs)
+
+    def __or__(self, rhs: Expr) -> Expr:
+        return self._binary(OR, rhs)
+
+    def __neg__(self) -> Expr:
+        return self._unary(NEG)
+
+    def __invert__(self) -> Expr:
+        return self._unary(NOT)
+
+    def is_null(self) -> Expr:
+        return self._unary(IS_NULL)
+
     def abs(self) -> Expr:
-        return Expr(
-            tag=ABS, args=[self.copy()], kind_data=0, value=None, name=String()
-        )
+        return self._unary(ABS)
 
     def cast(self, to: AnyDataType) -> Expr:
-        return Expr(
-            tag=CAST, args=[self.copy()], kind_data=0, value=None, name=String()
-        )
+        return self._unary(CAST)
 
 
 # ---------------------------------------------------------------------------

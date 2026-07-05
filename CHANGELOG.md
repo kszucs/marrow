@@ -12,6 +12,12 @@
 
 ### Refactors
 
+- **Boxing a comptime node into `Expr` is now an `Expr(value)` constructor**
+  (`marrow/expr/runtime.mojo`), replacing the `NumericValue.to_expr()` method;
+  the fused-node trampolines moved alongside it into `runtime.mojo`. Also
+  slimmed `Expr`'s operator overloads (shared `_binary`/`_unary` builders) and
+  `write_to()` (single `_op_name()` lookup + generic arg formatting), dropping
+  ~160 lines with no behavior change.
 - **`marrow/expr` split into two clear layers** — `values.mojo` now holds the
   comptime-typed expression layer (`Column[T]`, `Add[L, R]`, `Sub[L, R]`,
   renamed from `FusedColumn`/`FusedAdd`/`FusedSub` since these are the default
