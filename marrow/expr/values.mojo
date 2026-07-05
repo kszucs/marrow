@@ -158,6 +158,7 @@ trait NumericValue(Value):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct Column[T: dt.NumericType](NumericValue):
     """Typed column reference that resolves from a RecordBatch at core time.
 
@@ -176,12 +177,6 @@ struct Column[T: dt.NumericType](NumericValue):
     comptime NativeType = Self.T.native
 
     var index: Int
-
-    def __init__(out self, index: Int):
-        self.index = index
-
-    def __init__(out self, *, copy: Self):
-        self.index = copy.index
 
     @always_inline
     def core[
@@ -203,6 +198,7 @@ struct Column[T: dt.NumericType](NumericValue):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct Add[L: NumericValue, R: NumericValue](NumericValue):
     """Fused binary add: evaluates left + right in a single vectorized pass.
 
@@ -226,14 +222,6 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
     var left: Self.L
     var right: Self.R
 
-    def __init__(out self, var left: Self.L, var right: Self.R):
-        self.left = left^
-        self.right = right^
-
-    def __init__(out self, *, copy: Self):
-        self.left = copy.left.copy()
-        self.right = copy.right.copy()
-
     @always_inline
     def core[
         W: Int
@@ -255,6 +243,7 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct Sub[L: NumericValue, R: NumericValue](NumericValue):
     """Fused binary subtract: evaluates left - right in a single vectorized pass.
     """
@@ -264,14 +253,6 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
 
     var left: Self.L
     var right: Self.R
-
-    def __init__(out self, var left: Self.L, var right: Self.R):
-        self.left = left^
-        self.right = right^
-
-    def __init__(out self, *, copy: Self):
-        self.left = copy.left.copy()
-        self.right = copy.right.copy()
 
     @always_inline
     def core[
@@ -330,6 +311,7 @@ trait StringValue(Value):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct StringColumn(StringValue):
     """Typed string column reference that resolves from a RecordBatch.
 
@@ -342,12 +324,6 @@ struct StringColumn(StringValue):
     """
 
     var index: Int
-
-    def __init__(out self, index: Int):
-        self.index = index
-
-    def __init__(out self, *, copy: Self):
-        self.index = copy.index
 
     def resolve(self, batch: RecordBatch) -> StringArray:
         return batch.columns[self.index].as_string().copy()
@@ -364,6 +340,7 @@ struct StringColumn(StringValue):
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct Length[S: StringValue](NumericValue):
     """Fused string length: per-element byte length of a string column.
 
@@ -385,12 +362,6 @@ struct Length[S: StringValue](NumericValue):
     comptime NativeType = Self.OutType.native
 
     var child: Self.S
-
-    def __init__(out self, var child: Self.S):
-        self.child = child^
-
-    def __init__(out self, *, copy: Self):
-        self.child = copy.child.copy()
 
     @always_inline
     def core[
