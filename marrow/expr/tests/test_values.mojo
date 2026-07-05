@@ -1,7 +1,13 @@
 from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, BoolArray, AnyArray, Int64Array, UInt32Array
+from marrow.arrays import (
+    PrimitiveArray,
+    BoolArray,
+    AnyArray,
+    Int64Array,
+    UInt32Array,
+)
 from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt, uint32, Int64Type
 from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
