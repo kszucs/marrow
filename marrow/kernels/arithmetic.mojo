@@ -791,7 +791,6 @@ def add(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed add."""
     return AddKernel.dispatch(left, right, ctx)
 
 
@@ -800,7 +799,6 @@ def subtract(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed subtract."""
     return SubKernel.dispatch(left, right, ctx)
 
 
@@ -809,7 +807,6 @@ def multiply(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed multiply."""
     return MulKernel.dispatch(left, right, ctx)
 
 
@@ -818,7 +815,6 @@ def divide(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed divide."""
     return DivKernel.dispatch(left, right, ctx)
 
 
@@ -827,7 +823,6 @@ def floordiv(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed floordiv."""
     return FloordivKernel.dispatch(left, right, ctx)
 
 
@@ -836,7 +831,6 @@ def mod(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed mod."""
     return ModKernel.dispatch(left, right, ctx)
 
 
@@ -845,7 +839,6 @@ def min_element_wise(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed min_element_wise."""
     return MinKernel.dispatch(left, right, ctx)
 
 
@@ -854,7 +847,6 @@ def max_element_wise(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed max_element_wise."""
     return MaxKernel.dispatch(left, right, ctx)
 
 
@@ -862,7 +854,6 @@ def neg(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed neg."""
     return NegKernel.dispatch(array, ctx)
 
 
@@ -870,7 +861,6 @@ def abs_(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed abs_."""
     return AbsKernel.dispatch(array, ctx)
 
 
@@ -878,7 +868,6 @@ def sign(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed sign."""
     return SignKernel.dispatch(array, ctx)
 
 
@@ -887,7 +876,6 @@ def pow_(
     right: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed pow_."""
     return PowKernel.dispatch(left, right, ctx)
 
 
@@ -895,7 +883,6 @@ def sqrt(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed sqrt."""
     return SqrtKernel.dispatch(array, ctx)
 
 
@@ -903,7 +890,6 @@ def exp(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed exp."""
     return ExpKernel.dispatch(array, ctx)
 
 
@@ -911,7 +897,6 @@ def exp2(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed exp2."""
     return Exp2Kernel.dispatch(array, ctx)
 
 
@@ -919,7 +904,6 @@ def log(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed log."""
     return LogKernel.dispatch(array, ctx)
 
 
@@ -927,7 +911,6 @@ def log2(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed log2."""
     return Log2Kernel.dispatch(array, ctx)
 
 
@@ -935,7 +918,6 @@ def log10(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed log10."""
     return Log10Kernel.dispatch(array, ctx)
 
 
@@ -943,7 +925,6 @@ def log1p(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed log1p."""
     return Log1pKernel.dispatch(array, ctx)
 
 
@@ -951,7 +932,6 @@ def floor(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed floor."""
     return FloorKernel.dispatch(array, ctx)
 
 
@@ -959,7 +939,6 @@ def ceil(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed ceil."""
     return CeilKernel.dispatch(array, ctx)
 
 
@@ -967,7 +946,6 @@ def trunc(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed trunc."""
     return TruncKernel.dispatch(array, ctx)
 
 
@@ -975,7 +953,6 @@ def round(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed round."""
     return RoundKernel.dispatch(array, ctx)
 
 
@@ -983,7 +960,6 @@ def sin(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed sin."""
     return SinKernel.dispatch(array, ctx)
 
 
@@ -991,5 +967,4 @@ def cos(
     array: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed cos."""
     return CosKernel.dispatch(array, ctx)
