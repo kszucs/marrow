@@ -13,9 +13,9 @@ Expression nodes
 
 Traits
 ------
-``Value`` — base trait for every expression node (kind, dtype, inputs,
-    write_to; Copyable/Writable/etc.), shared with the type-erased ``Expr``
-    in ``runtime.mojo``.
+``Value`` — base trait for every expression node (dtype, write_to;
+    Copyable/Writable/etc.), shared with the type-erased ``Expr`` in
+    ``runtime.mojo``.
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 
 Bridging to the runtime layer
@@ -68,16 +68,8 @@ trait Value(
     expressions in this module and the type-erased ``Expr`` in ``runtime.mojo``.
     """
 
-    def kind(self) -> UInt8:
-        """Return the node-kind constant."""
-        ...
-
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type, or None if not yet inferred."""
-        ...
-
-    def inputs(self) -> List[Expr]:
-        """Return child expressions (empty for leaf nodes)."""
         ...
 
     def write_to[W: Writer](self, mut writer: W):
@@ -125,19 +117,11 @@ trait NumericValue(Value):
         """Run the fused vectorize loop and return the result array."""
         ...
 
-    # Default Value trait implementations
-
-    def kind(self) -> UInt8:
-        """Return the node-kind constant."""
-        return 0  # Comptime-typed nodes don't have a specific kind constant
+    # Default Value trait implementation
 
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](Self.OutType())
-
-    def inputs(self) -> List[Expr]:
-        """Return child expressions (empty for leaf nodes)."""
-        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         """Format this node for display."""

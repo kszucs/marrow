@@ -127,14 +127,6 @@ trait Relation(ImplicitlyDestructible, Movable):
         """Return the output schema produced by this plan node."""
         ...
 
-    def inputs(self) -> List[AnyRelation]:
-        """Return child plan nodes (empty for leaf nodes such as Scan)."""
-        ...
-
-    def exprs(self) -> List[Expr]:
-        """Return scalar expressions attached to this node."""
-        ...
-
     def write_to[W: Writer](self, mut writer: W):
         """Format this node for display."""
         ...
@@ -155,8 +147,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     var _data: ArcPointer[NoneType]
     var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
-    var _virt_inputs: def(ArcPointer[NoneType]) thin -> List[AnyRelation]
-    var _virt_exprs: def(ArcPointer[NoneType]) thin -> List[Expr]
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
 
@@ -169,16 +159,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     @staticmethod
     def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
         return rebind[ArcPointer[T]](ptr)[].schema()
-
-    @staticmethod
-    def _tramp_inputs[
-        T: Relation
-    ](ptr: ArcPointer[NoneType]) -> List[AnyRelation]:
-        return rebind[ArcPointer[T]](ptr)[].inputs()
-
-    @staticmethod
-    def _tramp_exprs[T: Relation](ptr: ArcPointer[NoneType]) -> List[Expr]:
-        return rebind[ArcPointer[T]](ptr)[].exprs()
 
     @staticmethod
     def _tramp_write_to_string[
@@ -201,8 +181,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_kind = Self._tramp_kind[T]
         self._virt_schema = Self._tramp_schema[T]
-        self._virt_inputs = Self._tramp_inputs[T]
-        self._virt_exprs = Self._tramp_exprs[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
 
@@ -210,8 +188,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._data = copy._data
         self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
-        self._virt_inputs = copy._virt_inputs
-        self._virt_exprs = copy._virt_exprs
         self._virt_write_to_string = copy._virt_write_to_string
         self._virt_drop = copy._virt_drop
 
@@ -222,12 +198,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
-
-    def inputs(self) -> List[AnyRelation]:
-        return self._virt_inputs(self._data)
-
-    def exprs(self) -> List[Expr]:
-        return self._virt_exprs(self._data)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
@@ -429,12 +399,6 @@ struct Scan(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.schema_)
 
-    def inputs(self) -> List[AnyRelation]:
-        return List[AnyRelation]()
-
-    def exprs(self) -> List[Expr]:
-        return List[Expr]()
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Scan({self.name})")
 
@@ -460,16 +424,6 @@ struct Filter(Relation):
 
     def schema(self) -> Schema:
         return self.input.schema()
-
-    def inputs(self) -> List[AnyRelation]:
-        var result = List[AnyRelation](capacity=1)
-        result.append(self.input)
-        return result^
-
-    def exprs(self) -> List[Expr]:
-        var result = List[Expr](capacity=1)
-        result.append(self.predicate)
-        return result^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Filter(predicate=")
@@ -510,17 +464,6 @@ struct Project(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.schema_)
 
-    def inputs(self) -> List[AnyRelation]:
-        var result = List[AnyRelation](capacity=1)
-        result.append(self.input)
-        return result^
-
-    def exprs(self) -> List[Expr]:
-        var result = List[Expr](capacity=len(self.exprs_))
-        for ref e in self.exprs_:
-            result.append(e)
-        return result^
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Project([")
         for i in range(len(self.names)):
@@ -548,12 +491,6 @@ struct InMemoryTable(Relation):
 
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
-
-    def inputs(self) -> List[AnyRelation]:
-        return List[AnyRelation]()
-
-    def exprs(self) -> List[Expr]:
-        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -591,12 +528,6 @@ struct ParquetScan(Relation):
 
     def schema(self) -> Schema:
         return Schema(copy=self.schema_)
-
-    def inputs(self) -> List[AnyRelation]:
-        return List[AnyRelation]()
-
-    def exprs(self) -> List[Expr]:
-        return List[Expr]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"ParquetScan({self.path})")
@@ -639,19 +570,6 @@ struct Aggregate(Relation):
 
     def schema(self) -> Schema:
         return Schema(copy=self.schema_)
-
-    def inputs(self) -> List[AnyRelation]:
-        var result = List[AnyRelation](capacity=1)
-        result.append(self.input)
-        return result^
-
-    def exprs(self) -> List[Expr]:
-        var result = List[Expr](capacity=len(self.keys) + len(self.agg_exprs))
-        for ref e in self.keys:
-            result.append(e)
-        for ref e in self.agg_exprs:
-            result.append(e)
-        return result^
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(keys=[")
@@ -721,22 +639,6 @@ struct Join(Relation):
 
     def schema(self) -> Schema:
         return Schema(copy=self.schema_)
-
-    def inputs(self) -> List[AnyRelation]:
-        var result = List[AnyRelation](capacity=2)
-        result.append(self.left)
-        result.append(self.right)
-        return result^
-
-    def exprs(self) -> List[Expr]:
-        var result = List[Expr](
-            capacity=len(self.left_keys) + len(self.right_keys)
-        )
-        for ref e in self.left_keys:
-            result.append(e)
-        for ref e in self.right_keys:
-            result.append(e)
-        return result^
 
     def write_to[W: Writer](self, mut writer: W):
         var kind_name = String("?")

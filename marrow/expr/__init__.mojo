@@ -42,12 +42,6 @@ Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
 ``ParquetScan``, ``Aggregate``, ``Join``
 Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
 Factory: ``in_memory_table()``, ``parquet_scan()``
-
-Rewriting
----------
-``Rewrite``    — trait for non-destructive rewrite rules
-``AnyRewrite`` — type-erased rule container
-``Rewriter``   — bottom-up fixed-point rewrite driver
 """
 
 from marrow.expr.runtime import (
@@ -120,11 +114,6 @@ from marrow.expr.relations import (
     JOIN_ALGO_SORT_MERGE,
     JOIN_ALGO_PIECEWISE,
     JOIN_ALGO_GRACE_HASH,
-)
-from marrow.expr.rewrite import (
-    Rewrite,
-    AnyRewrite,
-    Rewriter,
 )
 from marrow.expr.executor import (
     ExecutionContext,
