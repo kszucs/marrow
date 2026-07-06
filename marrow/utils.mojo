@@ -3,7 +3,8 @@
 These helpers drive runtime dispatch over a `Variant[*Ts]` without dynamic
 dispatch or vtables.  The active type is detected via `v.isa[T]()` in a
 compile-time loop; the value is then reinterpreted as *Trait* through
-`trait_downcast` and forwarded to *func*.
+`rebind[downcast[T, Trait]]` (guarded by a `comptime assert conforms_to`
+witness) and forwarded to *func*.
 
 Three overloads are provided — distinguished by whether *func* raises and
 whether it takes its argument by value or by mutable reference:
@@ -17,7 +18,7 @@ compiler currently crashes when `ref[_]` is used here (tracked as a TODO).
 """
 
 from std.utils import Variant
-from std.builtin.rebind import trait_downcast
+from std.builtin.rebind import downcast
 from std.os import abort
 from std.sys import has_accelerator, CompilationTarget
 from std.sys.info import _accelerator_arch
@@ -88,7 +89,8 @@ def variant_dispatch[
         comptime T = Ts[i]
         comptime if predicate[T]:
             if v.isa[T]():
-                return func(trait_downcast[Trait](v[T]))
+                comptime assert conforms_to(T, Trait)
+                return func(rebind[downcast[T, Trait]](v[T]))
     abort("unreachable: variant_dispatch")
 
 
@@ -105,7 +107,8 @@ def variant_dispatch_raises[
         comptime T = Ts[i]
         comptime if predicate[T]:
             if v.isa[T]():
-                return func(trait_downcast[Trait](v[T]))
+                comptime assert conforms_to(T, Trait)
+                return func(rebind[downcast[T, Trait]](v[T]))
     abort("unreachable: variant_dispatch_raises")
 
 
@@ -123,5 +126,6 @@ def variant_dispatch_raises[
         comptime T = Ts[i]
         comptime if predicate[T]:
             if v.isa[T]():
-                return func(trait_downcast[Trait](v[T]))
+                comptime assert conforms_to(T, Trait)
+                return func(rebind[downcast[T, Trait]](v[T]))
     abort("unreachable: variant_dispatch_raises")
