@@ -15,7 +15,7 @@ from marrow.dtypes import (
     AnyDataType,
 )
 from marrow.tabular import record_batch
-from marrow.expr import (
+from marrow.dyn import (
     Expr,
     Planner,
     col,
@@ -24,7 +24,7 @@ from marrow.expr import (
     parquet_scan,
     execute,
 )
-from marrow.expr.executor import ExecutionContext
+from marrow.dyn.executor import ExecutionContext
 from marrow.builders import arange
 
 

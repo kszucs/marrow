@@ -7,7 +7,7 @@ from marrow.arrays import AnyArray
 from marrow.builders import array, PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, float64, Int64Type
 from marrow.tabular import record_batch, RecordBatch
-from marrow.expr import (
+from marrow.dyn import (
     Expr,
     col,
     lit,

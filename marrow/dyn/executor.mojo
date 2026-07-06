@@ -7,7 +7,7 @@ that implements a pull-based pipeline (``ScanProcessor``, ``FilterProcessor``,
 ``ProjectProcessor``, ``AggregateProcessor``, ``JoinProcessor``, ...).
 
 Scalar expressions have no separate processor hierarchy: ``Expr`` (see
-``marrow.expr.runtime``) already carries its own tag and args, so relation
+``marrow.dyn.expr``) already carries its own tag and args, so relation
 processors hold ``Expr``/``List[Expr]`` fields directly and call
 ``Expr.eval(batch)``, which dispatches on tag itself — including delegating
 to a boxed comptime-typed node's own fused ``execute()`` for the ``FUSED``
@@ -47,13 +47,13 @@ from marrow.kernels.concat import concat
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.kernels.filter import filter
-from marrow.expr.runtime import Expr, LOAD
+from marrow.dyn.expr import Expr, LOAD
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
-from marrow.expr.relations import (
+from marrow.dyn.relations import (
     AnyRelation,
     Scan,
     Filter as PlanFilter,

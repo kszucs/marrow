@@ -1,31 +1,42 @@
-"""Comptime-typed expression nodes for the marrow expression system.
+"""Comptime-typed expression nodes and traits — the foundation of
+``marrow.aot``.
 
-This is the **default** expression layer: each node is a generic struct
-where type parameters encode the expression tree structure, enabling the
-compiler to inline the full ``core[W]()`` call chain into a single fused
-vectorize loop with zero intermediate arrays.
+Each node is a generic struct where type parameters encode the expression
+tree structure, enabling the compiler to inline the full ``core[W]()`` call
+chain into a single fused vectorize loop with zero intermediate arrays.
+Columns are referenced by position (``Column[T](index)``); see
+``marrow.aot.table`` for the named, reflection-based, ``Table``-schema
+variant used by ``Project``/``Filter``.
 
 Expression nodes
 ----------------
 ``Column[T]`` — typed column reference (resolves from RecordBatch at core time)
 ``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
 ``Sub[L, R]`` — fused binary subtract
+``Lt[L, R]``, ``Gt[L, R]``, ``Eq[L, R]`` — fused binary comparisons; result is
+    a bit-packed BoolArray, not a PrimitiveArray (see ``BoolValue`` below)
+``StringColumn`` — typed string column reference
+``Length[S]`` — fused string byte length
 
 Traits
 ------
 ``Value`` — base trait for every expression node (dtype, write_to;
     Copyable/Writable/etc.), shared with the type-erased ``Expr`` in
-    ``runtime.mojo``.
+    ``marrow.dyn.expr`` — that module imports these traits directly
+    from here (``aot`` has no dependency on ``dyn``; the reverse does).
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
+``BoolValue`` — boolean/predicate nodes (core[W] returns SIMD[bool, W];
+    execute(batch) bit-packs directly into a BoolArray)
 
 Bridging to the runtime layer
 -----------------------------
-The ``Expr(value)`` constructor (see ``runtime.mojo``) boxes a comptime node
-into a runtime ``Expr``, so it can flow through APIs that build/execute plans
-without knowing the concrete comptime type (e.g. the Python bindings).  The
-boxed ``Expr`` fully delegates ``dtype()``, ``write_to()``, and ``eval()``
-back to the concrete node via trampolines, so a fused subtree keeps its
-single-pass execution even when driven through the type-erased path.
+The ``Expr(value)`` constructor (see ``marrow.dyn.expr``) boxes a
+comptime node from this module into a runtime ``Expr``, so it can flow
+through APIs that build/execute plans without knowing the concrete comptime
+type (e.g. the Python bindings). The boxed ``Expr`` fully delegates
+``dtype()``, ``write_to()``, and ``eval()`` back to the concrete node via
+trampolines, so a fused subtree keeps its single-pass execution even when
+driven through the type-erased path.
 
 Usage
 -----
@@ -42,8 +53,8 @@ from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 
 import marrow.dtypes as dt
-from marrow.arrays import AnyArray, PrimitiveArray, StringArray
-from marrow.buffers import Buffer
+from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
+from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
 from marrow.tabular import RecordBatch
 
@@ -259,6 +270,169 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Sub(")
+        self.left.write_to(writer)
+        writer.write(t", ")
+        self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# BoolValue trait — boolean comptime expression nodes (comparisons/predicates)
+# ---------------------------------------------------------------------------
+
+
+trait BoolValue(Value):
+    """Trait for boolean comptime-typed expression nodes (predicates).
+
+    Mirrors ``NumericValue`` but the result is a bit-packed ``BoolArray``
+    instead of a ``PrimitiveArray[OutType]``: ``core[W]()`` returns a
+    ``SIMD[DType.bool, W]`` mask, and ``execute()`` bit-packs that mask
+    directly into a ``Bitmap`` in the same single fused vectorize loop — no
+    intermediate array for either comparison operand, no separate
+    array-of-bools-to-BoolArray conversion.
+
+    ``comptime NativeType`` is the operands' native Mojo scalar type (drives
+    vectorize width); the output dtype is always ``bool_``, so there is no
+    ``OutType`` here.
+    """
+
+    comptime NativeType: DType
+    """Native Mojo scalar type of the compared operands (both sides must
+    match, like NumericValue's Add/Sub)."""
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+        """Compute one SIMD lane of the predicate at the given index."""
+        ...
+
+    def execute(self, batch: RecordBatch) raises -> BoolArray:
+        """Run the fused vectorize loop over ``core[W]()``, bit-packing each
+        lane directly into the result bitmap.
+        """
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var bm = Bitmap.alloc_uninit(length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            var val = self.core[W](batch, i)
+            var view = bm.view()
+            view.store[W](i, val)
+
+        _vectorize_dispatch[native, width, fill](length)
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=bm.to_immutable(),
+        )
+
+    # Default Value trait implementation (write_to comes from Writable)
+
+    def dtype(self) -> Optional[AnyDataType]:
+        """Return the output data type (always bool)."""
+        return Optional[AnyDataType](dt.bool_)
+
+
+# ---------------------------------------------------------------------------
+# Lt — comptime-typed binary less-than
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct Lt[L: NumericValue, R: NumericValue](BoolValue):
+    """Fused binary less-than: evaluates left < right in a single vectorized
+    pass, producing a bit-packed BoolArray with zero intermediate arrays.
+    """
+
+    comptime NativeType = Self.L.NativeType
+
+    var left: Self.L
+    var right: Self.R
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+        var l = self.left.core[W](batch, idx)
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return l.lt(r)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Lt(")
+        self.left.write_to(writer)
+        writer.write(t", ")
+        self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# Gt — comptime-typed binary greater-than
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct Gt[L: NumericValue, R: NumericValue](BoolValue):
+    """Fused binary greater-than: evaluates left > right in a single
+    vectorized pass, producing a bit-packed BoolArray with zero intermediate
+    arrays.
+    """
+
+    comptime NativeType = Self.L.NativeType
+
+    var left: Self.L
+    var right: Self.R
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+        var l = self.left.core[W](batch, idx)
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return l.gt(r)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Gt(")
+        self.left.write_to(writer)
+        writer.write(t", ")
+        self.right.write_to(writer)
+        writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# Eq — comptime-typed binary equality
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct Eq[L: NumericValue, R: NumericValue](BoolValue):
+    """Fused binary equality: evaluates left == right in a single vectorized
+    pass, producing a bit-packed BoolArray with zero intermediate arrays.
+    """
+
+    comptime NativeType = Self.L.NativeType
+
+    var left: Self.L
+    var right: Self.R
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+        var l = self.left.core[W](batch, idx)
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return l.eq(r)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Eq(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)

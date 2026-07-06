@@ -409,7 +409,7 @@ def _record_batch_join(
             (default) picks ``num_physical_cores()``; ``1`` forces the
             serial path; ``>=2`` opts into parallel execution.
     """
-    from marrow.expr.relations import (
+    from marrow.dyn.relations import (
         JOIN_INNER,
         JOIN_LEFT,
         JOIN_RIGHT,

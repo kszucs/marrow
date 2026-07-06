@@ -16,6 +16,7 @@ from marrow.dtypes import (
 )
 from marrow.dtypes import float16, float32, float64, binary, string, list_
 from marrow.dtypes import Field, field
+from marrow.dtypes import Int64Type, StringType, Float64Type
 
 
 def test_schema_primitive_fields() raises:
@@ -223,6 +224,26 @@ def test_field_fn_various_types() raises:
     assert_equal(field("float64", float64).dtype, float64)
     assert_equal(field("string", string).dtype, string)
     assert_equal(field("binary", binary).dtype, binary)
+
+
+struct _OrdersSchema:
+    var id: Int64Type
+    var name: StringType
+    var score: Float64Type
+
+
+def test_schema_from_struct() raises:
+    """Schema.from_struct[T] reflects a marker struct's fields into a Schema.
+    """
+    var s = Schema.from_struct[_OrdersSchema]()
+    var expected = schema(
+        [
+            field("id", int64, nullable=False),
+            field("name", string, nullable=False),
+            field("score", float64, nullable=False),
+        ]
+    )
+    assert_true(s == expected)
 
 
 def main() raises:

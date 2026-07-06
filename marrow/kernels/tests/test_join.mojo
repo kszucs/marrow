@@ -32,8 +32,8 @@ from marrow.dtypes import (
 )
 from marrow.tabular import record_batch
 from marrow.kernels.filter import take
-from marrow.kernels.join import hash_join
-from marrow.expr.relations import (
+from marrow.kernels.join import (
+    hash_join,
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,

@@ -12,7 +12,7 @@ from marrow.testing import TestSuite
 from marrow.arrays import PrimitiveArray, UInt32Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64, uint32
-from marrow.expr import (
+from marrow.aot import (
     Column,
     Add,
     Sub,

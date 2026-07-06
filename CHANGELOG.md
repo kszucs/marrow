@@ -12,6 +12,22 @@
 
 ### Refactors
 
+- **`marrow.expr` split into two independent top-level packages, `marrow.aot`
+  and `marrow.dyn`** (previously `marrow/expr/{values,typed}.mojo` and
+  `marrow/expr/{runtime,relations,executor}.mojo` under one `marrow.expr`
+  parent): `marrow.aot` is the comptime-typed, fully-monomorphized
+  implementation; `marrow.dyn` is the type-erased, runtime-dispatched one
+  (what the Python bindings drive). `comptime` is a reserved Mojo keyword and
+  can't be a module name; `aot`/`dyn` were chosen to match the existing
+  `docs/aot-*-design.md` / `docs/dynamic-dispatch-design.md` naming. One-way
+  dependency: `dyn.expr` imports `NumericValue`/`BoolValue` from `aot.values`
+  to declare its `Expr(value)` boxing constructors' generic bounds; `aot`
+  imports nothing from `dyn`. Tests relocated to `marrow/aot/tests/` and
+  `marrow/dyn/tests/` to mirror.
+- **`JOIN_*` kind/strictness/algorithm-hint constants moved from
+  `marrow.dyn.relations` to `marrow.kernels.join`**: the join kernel owns
+  this vocabulary; the relational-plan layer is a consumer, not the owner.
+  `relations.mojo` now imports and re-exports them for existing callers.
 - **`NumericValue.execute()` is now a single default trait implementation**
   (`marrow/expr/values.mojo`): the identical fused-vectorize-loop body
   previously copy-pasted into `Column`, `Add`, `Sub`, and `Length` now lives
@@ -68,6 +84,25 @@
 
 ### Features
 
+- **`marrow.aot` — a fully-monomorphized (AOT) relational layer**:
+  `Schema.from_struct[T]()` (`marrow/schema.mojo`) derives a `Schema` from a
+  marker struct via compile-time reflection; `Table`, `Column[Tbl, name, T]`,
+  `StringColumn[Tbl, name]` (`marrow/aot/table.mojo`) resolve a column's
+  position as a `comptime` constant via `reflect[Tbl].field_index[name]()` —
+  no runtime `Schema` lookup, ever; `BoolValue` + `Lt`/`Gt`/`Eq`
+  (`marrow/aot/values.mojo`) give fused, bit-packed-`BoolArray` comparisons;
+  `Project[*Es]`/`Filter[Input, Pred]` (`marrow/aot/table.mojo`) compile a
+  `SELECT`/`WHERE`-shaped query into fused SIMD loops with no tag dispatch.
+  See `docs/aot-relations-design.md`.
+- **`Expr`'s `FUSED` boxing constructor now also accepts `BoolValue` nodes**
+  (`marrow/dyn/expr.mojo`), not just `NumericValue` — lets a comptime
+  `Lt`/`Gt`/`Eq` predicate drive a runtime `AnyRelation.filter()` plan.
+- **Binary-size benchmark** (`benchmarks/binary_size/`): three files
+  implement the identical query via `marrow.aot`, `marrow.dyn`, and a hybrid
+  (runtime plan + AOT-fused predicate), showing the fully-monomorphized
+  version compiles ~33x smaller (stripped). `pixi run binary_size` runs
+  `compare.py`, which builds, strips, and reports a size/symbol-count table
+  plus a per-module symbol breakdown.
 - **String `Length` expression node + `.length()`** (`marrow/expr/values.mojo`,
   `marrow/expr/runtime.mojo`, `marrow/kernels/string.mojo`): computes
   per-element string byte lengths through both expression layers. Adds a

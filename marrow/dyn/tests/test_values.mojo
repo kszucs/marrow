@@ -13,7 +13,7 @@ from marrow.dtypes import int64, float64, bool_ as bool_dt, uint32, Int64Type
 from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
 from marrow.kernels.string import string_lengths
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import (
+from marrow.dyn import (
     Expr,
     col,
     lit,

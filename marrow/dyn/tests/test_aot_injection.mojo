@@ -1,8 +1,8 @@
 """Tests for AOT-compiled value expression injection into runtime expressions.
 
-These tests verify that comptime-typed expressions (``values.mojo``) can be
-boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor, and
-executed end-to-end through the type-erased runtime path.
+These tests verify that comptime-typed expressions (``marrow.aot.values``)
+can be boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor,
+and executed end-to-end through the type-erased runtime path.
 
 The key pattern is:
 1. Create a comptime-typed expression (e.g., Add[Column, Column])
@@ -27,11 +27,12 @@ from marrow.arrays import PrimitiveArray, Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import Expr, FUSED
-from marrow.expr.values import (
+from marrow.dyn import Expr, FUSED
+from marrow.aot.values import (
     Column,
     Add,
     Sub,
+    Gt,
     NumericValue,
 )
 
@@ -309,6 +310,53 @@ def test_non_aligned_length_fused_to_expr() raises:
 
     var boxed_result = expr.eval(batch)
     assert_true(boxed_result == result.copy().to_any())
+
+
+# ---------------------------------------------------------------------------
+# BoolValue injection tests (Lt/Gt/Eq boxed into Expr via FUSED)
+# ---------------------------------------------------------------------------
+
+
+def test_fused_gt_to_expr() raises:
+    """Expr(Gt(Column, Column)) produces a valid runtime Expr with FUSED tag,
+    and both the direct and boxed paths agree.
+    """
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+
+    var fused = Gt(Column[Int64Type](0), Column[Int64Type](1))
+    var expr = Expr(fused)
+    assert_equal(expr.kind(), FUSED)
+
+    var direct_result = fused.execute(batch)
+    var boxed_result = expr.eval(batch)
+    assert_true(boxed_result == direct_result.copy().to_any())
+
+    assert_true(not direct_result[0].value())
+    assert_true(direct_result[1].value())
+    assert_true(not direct_result[2].value())
+    assert_true(direct_result[3].value())
+    assert_true(not direct_result[4].value())
+
+
+def test_fused_bool_value_drives_runtime_relational_plan() raises:
+    """A boxed BoolValue predicate can drive AnyRelation.filter() -- the
+    'hybrid' pattern: runtime relational structure, AOT-fused predicate.
+    """
+    from marrow.dyn import in_memory_table, execute
+
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
+
+    var predicate = Expr(Gt(Column[Int64Type](0), Column[Int64Type](1)))
+    var plan = in_memory_table(batch).filter(predicate)
+    var result = execute(plan)
+
+    assert_equal(result.num_rows(), 2)
+    ref col_a = result.columns[0].as_int64()
+    assert_true(col_a.copy() == array([5, 8], int64))
 
 
 # ---------------------------------------------------------------------------

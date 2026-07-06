@@ -55,10 +55,9 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Strings: `string_lengths`
 - Similarity: `cosine_similarity` (batch N-vectors vs 1 query, CPU SIMD + GPU)
 
-**Expression execution** (`marrow/expr`)
-- Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …)
-- Relational plan nodes: `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate` with `.filter()`, `.select()`, `.aggregate()` chaining
-- Pull-based streaming executor: `Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results
+**Expression execution** — two independent implementations behind one API shape (see `docs/aot-relations-design.md`)
+- `marrow.dyn` — type-erased, runtime-dispatched. Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …); relational plan nodes `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate` with `.filter()`, `.select()`, `.aggregate()` chaining; pull-based streaming executor (`Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results). This is what the Python bindings drive.
+- `marrow.aot` — comptime-typed, fully-monomorphized. A query's entire shape lives in its type (`Table`, `Column[Tbl, name, T]`, `Project`, `Filter`), compiling to fused SIMD loops with no tag dispatch — measured ~33x smaller stripped binary than the `dyn` equivalent (`benchmarks/binary_size/`).
 
 **Parquet I/O** (`marrow/parquet`)
 - `read_table(path)` — read a Parquet file into a marrow `Table`
@@ -238,7 +237,7 @@ var result = groupby(keys, [vals], ["sum"])   # RecordBatch: key=[1,2], sum=[90.
 ### Expression execution
 
 ```mojo
-from marrow.expr import col, lit, in_memory_table, execute, ExecutionContext
+from marrow.dyn import col, lit, in_memory_table, execute, ExecutionContext
 from marrow.tabular import record_batch
 
 var batch = record_batch(

@@ -6,7 +6,7 @@ from marrow.builders import array
 from marrow.dtypes import field, int64, float64, Int64Type
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr import (
+from marrow.dyn import (
     col,
     lit,
     ADD,
@@ -18,7 +18,7 @@ from marrow.expr import (
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
 )
-from marrow.expr.relations import (
+from marrow.dyn.relations import (
     AnyRelation,
     Scan,
     Filter,

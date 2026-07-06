@@ -1,17 +1,21 @@
 """Type-erased runtime expression nodes for the marrow expression system.
 
 ``Expr`` is the runtime counterpart to the comptime-typed layer in
-``values.mojo``.  It exists so that query plans can be built and executed
-without knowing concrete comptime types — this is what the Python bindings
-(and any other runtime-typed caller) drive.  A single ``Expr`` node carries
-a tag plus its child args, and dispatches its own execution by tag in
+``marrow.aot.values``.  It exists so that query plans can be built and
+executed without knowing concrete comptime types — this is what the Python
+bindings (and any other runtime-typed caller) drive.  A single ``Expr`` node
+carries a tag plus its child args, and dispatches its own execution by tag in
 ``eval()`` — there is no separate "processor" hierarchy mirroring the tree.
 
-A comptime-typed node from ``values.mojo`` can be boxed into an ``Expr`` via
-the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``/``dtype()``/
-``write_to()`` on a boxed node all delegate back to the concrete comptime
-node through trampolines, so a fused subtree keeps its single fused pass
-even when driven through this type-erased path.
+A comptime-typed node from ``marrow.aot.values`` can be boxed into an
+``Expr`` via the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``/
+``dtype()``/``write_to()`` on a boxed node all delegate back to the concrete
+comptime node through trampolines, so a fused subtree keeps its single fused
+pass even when driven through this type-erased path. This is the one
+dependency between the two ``marrow.aot`` / ``marrow.dyn`` packages — ``dyn``
+imports the ``NumericValue``/``BoolValue`` traits from ``aot.values`` to
+declare the boxing constructors' generic bounds; ``aot`` never imports
+anything from ``dyn``.
 
 Factory functions
 -----------------
@@ -33,7 +37,7 @@ NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
 CAST - Type cast (not yet implemented — see Expr.eval)
-FUSED - Carries a boxed comptime-typed node (see values.mojo)
+FUSED - Carries a boxed comptime-typed node (see marrow.aot.values)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
@@ -43,7 +47,7 @@ from marrow.dtypes import AnyDataType, NumericType
 from marrow.scalars import AnyScalar, PrimitiveScalar
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import Value, NumericValue
+from marrow.aot.values import Value, NumericValue, BoolValue
 from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -113,6 +117,32 @@ def _fused_eval_tramp[
     T: NumericValue
 ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
     """Thin trampoline: delegate execute() to a concrete NumericValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].execute(batch).to_any()
+
+
+def _fused_dtype_tramp_bool[
+    T: BoolValue
+](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
+    """Thin trampoline: delegate dtype() to a concrete BoolValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    return typed[].dtype()
+
+
+def _fused_write_tramp_bool[
+    T: BoolValue
+](ptr: ArcPointer[NoneType],) -> String:
+    """Thin trampoline: delegate write_to() to a concrete BoolValue."""
+    var typed = rebind[ArcPointer[T]](ptr)
+    var s = String()
+    typed[].write_to(s)
+    return s^
+
+
+def _fused_eval_tramp_bool[
+    T: BoolValue
+](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    """Thin trampoline: delegate execute() to a concrete BoolValue."""
     var typed = rebind[ArcPointer[T]](ptr)
     return typed[].execute(batch).to_any()
 
@@ -187,6 +217,24 @@ struct Expr(
         self._virt_fused_dtype = _fused_dtype_tramp[T]
         self._virt_fused_write = _fused_write_tramp[T]
         self._virt_fused_eval = _fused_eval_tramp[T]
+
+    def __init__[T: BoolValue](out self, value: T):
+        """Box a comptime-typed predicate node (``Lt``/``Gt``/``Eq``) into a
+        runtime ``Expr``. Mirrors the ``NumericValue`` overload above — same
+        ``FUSED`` tag, same trampoline mechanism, just a ``BoolValue``
+        trampoline set so ``eval()`` produces a bit-packed ``BoolArray``
+        instead of a ``PrimitiveArray``.
+        """
+        var ptr = ArcPointer[T](value.copy())
+        self._tag = FUSED
+        self._args = List[Expr]()
+        self._kind_data = 0
+        self._value = None
+        self._name = String()
+        self._fused = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_fused_dtype = _fused_dtype_tramp_bool[T]
+        self._virt_fused_write = _fused_write_tramp_bool[T]
+        self._virt_fused_eval = _fused_eval_tramp_bool[T]
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
