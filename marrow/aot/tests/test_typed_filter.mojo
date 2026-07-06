@@ -1,4 +1,4 @@
-"""Tests for ``Filter[Input, Pred]`` (``marrow.aot.table``) -- the
+"""Tests for ``Filter[Input, Pred]`` (``marrow.aot.relations``) -- the
 fully-typed row filter over a typed relation, chained via
 ``Project.filter(...)``.
 
@@ -23,7 +23,7 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.dyn import col, in_memory_table, execute
-from marrow.aot.table import Column, StringColumn, Table, Project, Filter
+from marrow.aot.relations import Column, StringColumn, Table, Project, Filter
 from marrow.aot.values import Gt, Lt
 
 

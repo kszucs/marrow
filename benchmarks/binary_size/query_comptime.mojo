@@ -4,7 +4,7 @@ Same query as `query_runtime.mojo`:
 
     SELECT a, name FROM orders WHERE a > b
 
-built with `marrow.aot.table` (`Project`, `Filter`, `Column`,
+built with `marrow.aot.relations` (`Project`, `Filter`, `Column`,
 `StringColumn`) instead of the type-erased `marrow.dyn`
 `AnyRelation`/`Expr` layer. No `Expr.eval()` tag interpreter, no
 `AnyRelation` vtable/trampolines, no `executor.mojo`
@@ -20,7 +20,7 @@ Build + strip + compare against `query_runtime.mojo`:
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.aot.table import Column, StringColumn, Table, Project
+from marrow.aot.relations import Column, StringColumn, Table, Project
 from marrow.aot.values import Gt
 
 

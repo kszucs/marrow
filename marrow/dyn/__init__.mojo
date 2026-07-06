@@ -34,7 +34,7 @@ Usage::
     var result = execute(plan)
 """
 
-from marrow.dyn.expr import (
+from marrow.dyn.values import (
     # Unified expression node
     Expr,
     # Free-standing factory functions (return Expr)

@@ -1,4 +1,4 @@
-"""Tests for named comptime-typed expression nodes (``marrow.aot.table``).
+"""Tests for named comptime-typed expression nodes (``marrow.aot.relations``).
 
 Mirrors ``dyn/tests/test_aot_injection.mojo``'s coverage of
 ``values.Column``/``Add``, but for the fully-typed
@@ -27,7 +27,7 @@ from marrow.arrays import Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.aot.table import Column, StringColumn, Table
+from marrow.aot.relations import Column, StringColumn, Table
 from marrow.aot.values import Add, Gt
 
 

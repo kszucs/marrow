@@ -28,7 +28,7 @@ nothing outside this file constructs an ``AnyArray`` of a dtype a given
 query doesn't use, so the compiler can prove and prune the rest of
 ``filter()``'s/kernels' per-dtype branches. Calling into
 ``marrow.dyn.executor`` (``Planner``, ``*Processor``) or
-``marrow.dyn.expr.Expr.eval()`` instead reaches a genuinely *open*
+``marrow.dyn.values.Expr.eval()`` instead reaches a genuinely *open*
 dispatcher built to stay ready for dtypes/node-kinds it can't know ahead of
 time, and nothing there can be pruned. Measured in ``benchmarks/binary_size/``:
 a ``Project``+``Filter`` plan compiles ~33x smaller (stripped) than the same

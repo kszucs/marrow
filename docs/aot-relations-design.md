@@ -10,7 +10,7 @@ batch. Aggregations and joins are deliberately out of scope here (see
 *Deferred* at the end).
 
 **Status: implemented and tested (milestones 1–5 of 6).** Lives in
-`marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/table.mojo`
+`marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/relations.mojo`
 (`Table`, `Column`, `StringColumn`, `Project`, `Filter`), tested in
 `marrow/aot/tests/test_typed*.mojo` and `marrow/tests/test_schema.mojo`. Two
 things changed from the sketch below during implementation — both confirmed
@@ -44,11 +44,11 @@ against the pinned toolchain, not judgment calls:
    and can't be a module name (confirmed: `import marrow.expr.comptime`
    fails to parse) — `aot` / `dyn` were chosen instead, matching this doc's
    own title and `dynamic-dispatch-design.md`. The one cross-package
-   dependency is `dyn.expr` importing the `NumericValue`/`BoolValue` traits
+   dependency is `dyn.values` importing the `NumericValue`/`BoolValue` traits
    from `aot.values` to declare its `FUSED`-boxing constructors' generic
    bounds (see *Bridge to the erased layer*); `aot` imports nothing from
-   `dyn`. File map: `marrow/aot/values.mojo`, `marrow/aot/table.mojo`,
-   `marrow/dyn/expr.mojo`, `marrow/dyn/relations.mojo`,
+   `dyn`. File map: `marrow/aot/values.mojo`, `marrow/aot/relations.mojo`,
+   `marrow/dyn/values.mojo`, `marrow/dyn/relations.mojo`,
    `marrow/dyn/executor.mojo`, each with a `tests/` subdirectory mirroring it.
 
 ## Where this sits relative to prior designs
@@ -64,7 +64,7 @@ Two earlier docs cover the scalar/plan AOT story:
 What actually shipped (`marrow/aot/values.mojo`) took a third route: dedicated
 comptime nodes (`Column[T]`, `Add[L, R]`, `Sub[L, R]`, `Length[S]`) whose type
 parameters encode the tree, plus a **boxing bridge** — the `FUSED` tag in
-`marrow/dyn/expr.mojo` wraps a comptime node into a type-erased `Expr` via trampolines,
+`marrow/dyn/values.mojo` wraps a comptime node into a type-erased `Expr` via trampolines,
 so a fused subtree keeps its single-pass execution even when driven through the
 runtime path (Python bindings, dynamic SQL). That bridge is the model this
 design reuses at the *relational* level.
@@ -183,7 +183,7 @@ limitation entirely, since regular trait-bound method dispatch works fine
 
 ## Design of the first slice (as implemented)
 
-`marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/table.mojo`
+`marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/relations.mojo`
 (`Table`, `Named`, `Column`, `StringColumn`, `TypedRelation`, `Project`,
 `Filter`). Reuses `marrow/aot/values.mojo`'s `NumericValue`/`StringValue`/`BoolValue`
 traits and `Add`/`Sub`/`Lt`/`Gt`/`Eq` nodes directly.
@@ -217,7 +217,7 @@ resolvable. Routing the construction through a *separately-instantiated*
 generic function bound on `Defaultable & DataType`
 (`_construct_default[D: Defaultable & DataType]() -> D: return D()`) makes the
 zero-arg constructor visible via the trait witness instead — same fix reused
-throughout `marrow/aot/table.mojo` (see `_numeric_col_to_any` /
+throughout `marrow/aot/relations.mojo` (see `_numeric_col_to_any` /
 `_named_field_name` below).
 
 ### `Table` and `Named`
@@ -384,7 +384,7 @@ slice.
 1. ✅ `Schema.from_struct[T]()` in `schema.mojo` — the reflection foundation
    (see `reflect-schema-from-struct.md`). Tested in `test_schema.mojo`.
 2. ✅ `Table`, `Named`, `Column[Tbl, name, T]` / `StringColumn[Tbl, name]` in
-   `marrow/aot/table.mojo` — compile-time-resolved position (the CRTP finding
+   `marrow/aot/relations.mojo` — compile-time-resolved position (the CRTP finding
    above, a stronger result than the originally-sketched access style A).
    Tested in `marrow/aot/tests/test_typed.mojo`.
 3. ✅ `BoolValue` + comparison nodes (`Lt`/`Gt`/`Eq`) in `marrow/aot/values.mojo`,

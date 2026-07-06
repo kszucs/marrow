@@ -5,7 +5,7 @@ WHERE a > b` — over the same 5-row in-memory batch, producing identical
 output:
 
 - **`query_comptime.mojo`** — the fully-monomorphized layer from
-  `marrow.aot.table` (`Table`, `Column`, `Project`, `Filter`). The whole plan
+  `marrow.aot.relations` (`Table`, `Column`, `Project`, `Filter`). The whole plan
   is one nested generic type; `.execute(batch)` compiles straight to column
   loads, a SIMD comparison, and a filter call. No tag dispatch, no vtables.
 - **`query_hybrid.mojo`** — relational *structure* stays runtime/type-erased
@@ -101,9 +101,9 @@ type params — this is a proportional breakdown, not a strict partition):
 | `buffers` | 10 | 34 | 34 |
 | `dyn::executor` | 0 | 29 | 29 |
 | `dyn::relations` | 0 | 34 | 34 |
-| `dyn::expr` | 0 | 16 | 13 |
+| `dyn::values` | 0 | 16 | 13 |
 | `aot::values` | 0 | 4 | 0 |
-| `aot::table` | 0 | 0 | 0 |
+| `aot::relations` | 0 | 0 | 0 |
 
 Why the biggest buckets are so lopsided: `comptime_query` only ever
 instantiates the *exact* concrete types this one query needs —
@@ -124,6 +124,6 @@ are the same story one level up: `Planner.build()`'s exhaustive per-node-kind
 dispatch makes `AggregateProcessor`/`JoinProcessor` reachable — and therefore
 compiled in — even though this query never aggregates or joins anything.
 
-See `marrow/aot/table.mojo`'s module docstring for the "closed vs. open
+See `marrow/aot/relations.mojo`'s module docstring for the "closed vs. open
 erasure boundary" framing this demonstrates, and
 `docs/aot-relations-design.md` for the full design.

@@ -5,7 +5,7 @@ Each node is a generic struct where type parameters encode the expression
 tree structure, enabling the compiler to inline the full ``core[W]()`` call
 chain into a single fused vectorize loop with zero intermediate arrays.
 Columns are referenced by position (``Column[T](index)``); see
-``marrow.aot.table`` for the named, reflection-based, ``Table``-schema
+``marrow.aot.relations`` for the named, reflection-based, ``Table``-schema
 variant used by ``Project``/``Filter``.
 
 Expression nodes
@@ -22,7 +22,7 @@ Traits
 ------
 ``Value`` — base trait for every expression node (dtype, write_to;
     Copyable/Writable/etc.), shared with the type-erased ``Expr`` in
-    ``marrow.dyn.expr`` — that module imports these traits directly
+    ``marrow.dyn.values`` — that module imports these traits directly
     from here (``aot`` has no dependency on ``dyn``; the reverse does).
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 ``BoolValue`` — boolean/predicate nodes (core[W] returns SIMD[bool, W];
@@ -30,7 +30,7 @@ Traits
 
 Bridging to the runtime layer
 -----------------------------
-The ``Expr(value)`` constructor (see ``marrow.dyn.expr``) boxes a
+The ``Expr(value)`` constructor (see ``marrow.dyn.values``) boxes a
 comptime node from this module into a runtime ``Expr``, so it can flow
 through APIs that build/execute plans without knowing the concrete comptime
 type (e.g. the Python bindings). The boxed ``Expr`` fully delegates

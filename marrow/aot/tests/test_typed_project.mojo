@@ -1,4 +1,4 @@
-"""Tests for ``Project[*Es]`` (``marrow.aot.table``) -- the fully-typed,
+"""Tests for ``Project[*Es]`` (``marrow.aot.relations``) -- the fully-typed,
 variadic projection over named comptime expression nodes.
 
 ``Project`` takes a pre-built ``Tuple[*Es]``, not bare variadic args
@@ -21,7 +21,7 @@ from marrow.arrays import Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64, string
 from marrow.tabular import RecordBatch, record_batch
-from marrow.aot.table import Column, StringColumn, Table, Project
+from marrow.aot.relations import Column, StringColumn, Table, Project
 from marrow.aot.values import Add
 
 

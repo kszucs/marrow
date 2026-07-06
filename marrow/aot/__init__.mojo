@@ -18,7 +18,7 @@ re-exported here as the default surface.
 ``Column[Tbl, name, T]``, ``StringColumn[Tbl, name]``, ``Project``,
 ``Filter``). **Not** re-exported here — its ``Column``/``StringColumn``
 would collide with ``values.mojo``'s positional ones of the same name.
-Import explicitly: ``from marrow.aot.table import Table, Column,
+Import explicitly: ``from marrow.aot.relations import Table, Column,
 StringColumn, Project, Filter``.
 
 Usage (positional layer)::
@@ -28,7 +28,7 @@ Usage (positional layer)::
     var expr = Add(col_a, col_b)
     var result = expr.execute(batch)
 
-Usage (table layer, see ``marrow.aot.table`` for the full example)::
+Usage (table layer, see ``marrow.aot.relations`` for the full example)::
 
     struct Orders(Table):
         var a: Column[Orders, "a", Int32Type]

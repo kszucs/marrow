@@ -5,7 +5,7 @@ Same query as `query_comptime.mojo`:
     SELECT a, name FROM orders WHERE a > b
 
 built with the existing `AnyRelation`/`Expr` layer
-(`marrow.dyn.relations`, `marrow.dyn.expr`, `marrow.dyn.executor`)
+(`marrow.dyn.relations`, `marrow.dyn.values`, `marrow.dyn.executor`)
 -- `in_memory_table(batch).filter(...).select(...)` then `execute(plan)`, which
 walks the plan through `Planner.build()` into a pull-based
 `RelationProcessor` pipeline, evaluating the predicate via `Expr.eval()`'s
