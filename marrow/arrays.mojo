@@ -61,7 +61,7 @@ from .scalars import (
 trait Array(
     Copyable,
     Equatable,
-    ImplicitlyDestructible,
+    ImplicitlyDeletable,
     Movable,
     Sized,
     Writable,
@@ -130,6 +130,12 @@ struct ArrayData(Copyable, Movable):
     var bitmap: Optional[Bitmap[mut=False]]
     var buffers: List[Buffer[mut=False]]
     var children: List[ArrayData]
+
+    # Explicit (empty) destructor so this self-referential struct
+    # (`children: List[ArrayData]`) is ImplicitlyDeletable; fields are still
+    # destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -1946,6 +1952,12 @@ struct AnyArray(
 
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
+
+    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # the `StructArray -> List[AnyArray] -> AnyArray` reference cycle; the
+    # variant field is still destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     def __init__(out self, *, py: PythonObject) raises:
         from .c_data import CArrowSchema, CArrowArray

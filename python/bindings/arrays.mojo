@@ -303,6 +303,12 @@ struct PyInferrer(Copyable, Movable):
         self._field_children = []
         self.py = PyHelpers()
 
+    # Explicit (empty) destructor so this self-referential struct
+    # (`_list_child` / `_field_children` are `List[PyInferrer]`) is
+    # ImplicitlyDeletable; fields are still destroyed automatically.
+    def __del__(deinit self):
+        pass
+
     def visit(mut self, ptr: PyObjectPtr) raises -> Bool:
         """Count one element's Python type, following PyArrow's Visit() order.
 
@@ -374,7 +380,12 @@ struct PyInferrer(Copyable, Movable):
         var val_raw = alloc[PyObjectPtr](1)
         var pos_ptr = UnsafePointer(to=pos)
         for _ in range(n):
-            _ = cpy.PyDict_Next(dict_ptr, pos_ptr, key_raw, val_raw)
+            _ = cpy.PyDict_Next(
+                dict_ptr,
+                pos_ptr.as_unsafe_any_origin(),
+                key_raw.as_unsafe_any_origin(),
+                val_raw.as_unsafe_any_origin(),
+            )
             var name = self.py.to_string_slice(key_raw[])
             var idx = -1
             for i in range(len(self._field_order)):
@@ -515,6 +526,12 @@ struct PyAnyConverter(ImplicitlyCopyable, Movable):
 
     def __init__(out self, *, copy: Self):
         self._v = copy._v.copy()
+
+    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # the `PyStructConverter -> List[PyAnyConverter] -> PyAnyConverter` cycle;
+    # the ArcPointer field is still destroyed automatically after the body.
+    def __del__(deinit self):
+        pass
 
     def __init__(
         out self,

@@ -547,6 +547,12 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def __init__(out self, *, copy: Self):
         self._v = Self.VariantType(copy=copy._v)
 
+    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # the `StructScalar -> List[AnyScalar] -> AnyScalar` reference cycle; the
+    # variant field is still destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
+
     # --- dispatch-based methods ---
 
     def type(self) -> AnyDataType:

@@ -116,7 +116,7 @@ comptime JOIN_ALGO_GRACE_HASH: UInt8 = 4
 # ---------------------------------------------------------------------------
 
 
-trait Relation(ImplicitlyDestructible, Movable):
+trait Relation(ImplicitlyDeletable, Movable):
     """Interface for immutable relational plan nodes."""
 
     def kind(self) -> UInt8:

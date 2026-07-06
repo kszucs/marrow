@@ -183,10 +183,12 @@ struct Allocation(Movable):
     than the raw `__init__`.
     """
 
-    var ptr: Optional[UnsafePointer[UInt8, MutAnyOrigin]]
+    var ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
     """Raw CPU pointer.  Some for CPU and FOREIGN; None for HOST/DEVICE."""
 
-    var release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None]
+    var release: Optional[
+        def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None
+    ]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
     None for HOST and DEVICE (their Optional field destructors handle release)."""
 
@@ -198,8 +200,10 @@ struct Allocation(Movable):
 
     def __init__(
         out self,
-        ptr: Optional[UnsafePointer[UInt8, MutAnyOrigin]],
-        release: Optional[def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None],
+        ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]],
+        release: Optional[
+            def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None
+        ],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
     ):
@@ -209,14 +213,14 @@ struct Allocation(Movable):
         self._device = device
 
     @staticmethod
-    def cpu(ptr: UnsafePointer[UInt8, MutAnyOrigin]) -> Allocation:
+    def cpu(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> Allocation:
         """Create an owned CPU allocation.  `__del__` calls `ptr.free()`."""
         return Allocation(Optional(ptr), None, None, None)
 
     @staticmethod
     def foreign(
-        ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        release: def(UnsafePointer[UInt8, MutAnyOrigin]) thin -> None,
+        ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
+        release: def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None,
     ) -> Allocation:
         """Create a foreign CPU allocation with a custom release callback."""
         return Allocation(Optional(ptr), release, None, None)
@@ -320,7 +324,7 @@ struct Buffer[*, mut: Bool = False](
       Call `to_cpu(ctx)` before reading a DEVICE buffer on the CPU.
     """
 
-    var _ptr: UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]]
+    var _ptr: UnsafePointer[UInt8, UntrackedOrigin[mut=Self.mut]]
     """Raw allocation pointer.
     For `mut=True` CPU/HOST allocations: the CPU-accessible data pointer.
     For `mut=True` DEVICE allocations: the GPU device pointer (used by kernels).
@@ -340,7 +344,7 @@ struct Buffer[*, mut: Bool = False](
     def __init__(
         out self,
         size: Int,
-        ptr: UnsafePointer[UInt8, ExternalOrigin[mut=Self.mut]],
+        ptr: UnsafePointer[UInt8, UntrackedOrigin[mut=Self.mut]],
         owner: ArcPointer[Allocation],
     ):
         debug_assert(
@@ -400,10 +404,10 @@ struct Buffer[*, mut: Bool = False](
         """
         var size = Buffer._aligned_size[T](Int(length))
         var raw = alloc[UInt8](size, alignment=64)
-        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](raw)
+        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](raw)
         return Buffer[mut=True](
             size=size,
-            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            ptr=rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr),
             owner=ArcPointer(Allocation.cpu(ptr)),
         )
 
@@ -426,11 +430,13 @@ struct Buffer[*, mut: Bool = False](
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](host.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+            host.unsafe_ptr()
+        )
         memset_zero(ptr, byte_size)
         return Buffer[mut=True](
             size=byte_size,
-            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            ptr=rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr),
             owner=ArcPointer(Allocation.host(host)),
         )
 
@@ -440,16 +446,18 @@ struct Buffer[*, mut: Bool = False](
     ](ctx: DeviceContext, length: I) raises -> Buffer[mut=True]:
         """Allocate a device (GPU) buffer for `length` elements of type T.
 
-        The returned buffer exposes `ptr` as a `MutAnyOrigin` device pointer
+        The returned buffer exposes `ptr` as a `MutUntrackedOrigin` device pointer
         suitable for GPU kernel writes. Call `to_immutable()` to obtain an immutable
         device-resident `Buffer[mut=False]`.
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutAnyOrigin]](dev.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+            dev.unsafe_ptr()
+        )
         return Buffer[mut=True](
             size=byte_size,
-            ptr=rebind[UnsafePointer[UInt8, MutExternalOrigin]](ptr),
+            ptr=rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr),
             owner=ArcPointer(Allocation.device(dev)),
         )
 
@@ -459,7 +467,7 @@ struct Buffer[*, mut: Bool = False](
     def from_foreign[
         I: Intable, //
     ](
-        ptr: OpaquePointer[MutAnyOrigin],
+        ptr: OpaquePointer[MutUntrackedOrigin],
         size: I,
         owner: ArcPointer[Allocation],
     ) -> Buffer[mut=False]:
@@ -478,7 +486,7 @@ struct Buffer[*, mut: Bool = False](
         """
         return Buffer[mut=False](
             size=math.align_up(Int(size), 64),
-            ptr=rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](ptr),
+            ptr=rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](ptr),
             owner=owner,
         )
 
@@ -494,7 +502,7 @@ struct Buffer[*, mut: Bool = False](
         for the lifetime of the Allocation.  `device_type()` is inferred from
         the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
         """
-        var ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+        var ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
             host.unsafe_ptr()
         )
         return Buffer[mut=False](
@@ -517,7 +525,7 @@ struct Buffer[*, mut: Bool = False](
         `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
         metal→METAL).
         """
-        var ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+        var ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
             dev.unsafe_ptr()
         )
         return Buffer[mut=False](
@@ -537,7 +545,7 @@ struct Buffer[*, mut: Bool = False](
         the device pointer so ``view()`` works without a separate ``device_view``
         call.
         """
-        var imm_ptr = rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](
+        var imm_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
             self._ptr
         )
         return Buffer[mut=False](
@@ -643,32 +651,20 @@ struct Buffer[*, mut: Bool = False](
         comptime output = Scalar[T]
         return self._ptr.bitcast[output]()[index]
 
-    # TODO: remove these methods in favor of `view()` and `BufferView` for both CPU and DEVICE buffers.  The
+    # TODO: remove this method in favor of `view()` and `BufferView` for both CPU and DEVICE buffers.
     @always_inline
     def device_view[
         T: DType = DType.uint8
-    ](self: Buffer[mut=False], offset: Int = 0) -> BufferView[T, MutAnyOrigin]:
-        """Mutable view backed by the GPU device pointer at element ``offset``.
+    ](ref self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
+        """Typed view backed by the GPU device pointer at element ``offset``.
 
-        Returns a ``MutAnyOrigin`` view suitable for GPU kernel writes.
-        Precondition: `is_device()` must be True.
+        The origin is tied to ``self`` (``origin_of(self)``) so the view keeps
+        the backing device buffer alive for the duration of any GPU kernel that
+        captures it. An ``UntrackedOrigin`` view would let ASAP free the buffer
+        before the kernel runs, so the kernel would read/write freed memory.
+        The view's mutability follows ``self``. Precondition: ``is_device()``.
         """
-        var ptr = rebind[UnsafePointer[Scalar[T], MutAnyOrigin]](
-            self._ptr.bitcast[Scalar[T]]() + offset
-        )
-        return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)
-
-    @always_inline
-    def device_view[
-        T: DType = DType.uint8
-    ](self: Buffer[mut=True], offset: Int = 0) -> BufferView[T, MutAnyOrigin]:
-        """Typed MutAnyOrigin view for a mutable GPU-allocated buffer.
-
-        For buffers created with ``alloc_device``, ``_ptr`` holds the device
-        pointer (originally ``MutAnyOrigin``, stored as ``MutExternalOrigin``).
-        This method reinterprets it as ``MutAnyOrigin`` for GPU kernel writes.
-        """
-        var ptr = rebind[UnsafePointer[Scalar[T], MutAnyOrigin]](
+        var ptr = rebind[UnsafePointer[Scalar[T], origin_of(self)]](
             self._ptr.bitcast[Scalar[T]]() + offset
         )
         return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)
@@ -709,7 +705,7 @@ struct Buffer[*, mut: Bool = False](
             raise Error("to_device: buffer is already on device")
         var dev = ctx.enqueue_create_buffer[DType.uint8](self._size)
         ctx.enqueue_copy(
-            dev, rebind[UnsafePointer[UInt8, ImmutExternalOrigin]](self._ptr)
+            dev, rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](self._ptr)
         )
         return Buffer.from_device(dev, self._size)
 
@@ -730,7 +726,7 @@ struct Buffer[*, mut: Bool = False](
             raise Error("to_cpu: buffer is not on device")
         var builder = Buffer.alloc_zeroed(self._size)
         ctx.enqueue_copy(
-            rebind[UnsafePointer[UInt8, MutExternalOrigin]](builder._ptr),
+            rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](builder._ptr),
             self._owner[]._device.value(),
         )
         ctx.synchronize()

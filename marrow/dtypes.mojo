@@ -53,7 +53,7 @@ from .utils import _always_true, variant_dispatch, variant_dispatch_raises
 # ---------------------------------------------------------------------------
 
 
-trait DataType(Copyable, Equatable, Movable, Writable):
+trait DataType(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     def to_any(deinit self) -> AnyDataType:
         return AnyDataType(self^)
 
@@ -522,7 +522,7 @@ struct ListType(DataType, ListLikeType):
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[]
 
-    def value_field(ref self) -> ref[self.item] Field:
+    def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
     def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
@@ -546,7 +546,7 @@ struct LargeListType(DataType, ListLikeType):
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[]
 
-    def value_field(ref self) -> ref[self.item] Field:
+    def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
     def value_type(ref self) -> ref[self.item[].dtype] AnyDataType:
@@ -571,7 +571,7 @@ struct FixedSizeListType(DataType):
     def __eq__(self, other: Self) -> Bool:
         return self.item[] == other.item[] and self.size == other.size
 
-    def value_field(ref self) -> ref[self.item] Field:
+    def value_field(ref self) -> ref[self.item[]] Field:
         return self.item[]
 
     def value_type(self) -> AnyDataType:
@@ -634,10 +634,10 @@ struct DictionaryType(DataType):
         self._value_type = OwnedPointer(copy._value_type[].copy())
         self.ordered = copy.ordered
 
-    def index_type(ref self) -> ref[self._index_type] AnyDataType:
+    def index_type(ref self) -> ref[self._index_type[]] AnyDataType:
         return self._index_type[]
 
-    def value_type(ref self) -> ref[self._value_type] AnyDataType:
+    def value_type(ref self) -> ref[self._value_type[]] AnyDataType:
         return self._value_type[]
 
     def __eq__(self, other: Self) -> Bool:

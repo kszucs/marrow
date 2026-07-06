@@ -125,7 +125,7 @@ def _fused_eval_tramp[
 struct Expr(
     Copyable,
     ImplicitlyCopyable,
-    ImplicitlyDestructible,
+    ImplicitlyDeletable,
     Movable,
     Value,
     Writable,
@@ -200,6 +200,12 @@ struct Expr(
         self._virt_fused_dtype = copy._virt_fused_dtype
         self._virt_fused_write = copy._virt_fused_write
         self._virt_fused_eval = copy._virt_fused_eval
+
+    # Explicit (empty) destructor so this self-referential struct
+    # (`_args: List[Expr]`) is ImplicitlyDeletable; fields are still destroyed
+    # automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     @staticmethod
     def _tramp_fused_dtype_default(

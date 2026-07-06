@@ -20,7 +20,6 @@ from std.testing import TestSuite as _StdTestSuite
 from std.testing.suite import TestResult, TestSuiteReport
 from std.reflection import get_function_name
 from std.sys import argv
-from std.sys.intrinsics import _type_is_eq
 
 
 struct CLIFlags:

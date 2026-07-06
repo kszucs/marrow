@@ -56,7 +56,7 @@ from marrow.tabular import RecordBatch
 trait Value(
     Copyable,
     ImplicitlyCopyable,
-    ImplicitlyDestructible,
+    ImplicitlyDeletable,
     Movable,
     Writable,
 ):
@@ -64,15 +64,14 @@ trait Value(
 
     This is the single canonical trait implemented by both the comptime-typed
     expressions in this module and the type-erased ``Expr`` in ``runtime.mojo``.
+
+    ``dtype()`` is declared by the ``NumericValue`` / ``StringValue`` sub-traits
+    (which supply a default implementation); ``write_to()`` comes from the
+    inherited ``Writable`` requirement. Declaring them here too would make calls
+    on a generic ``Value`` ambiguous between the base and sub-trait candidates.
     """
 
-    def dtype(self) -> Optional[AnyDataType]:
-        """Return the output data type, or None if not yet inferred."""
-        ...
-
-    def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display (children formatted recursively)."""
-        ...
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -142,15 +141,11 @@ trait NumericValue(Value):
             buffer=buf.to_immutable(),
         )
 
-    # Default Value trait implementation
+    # Default Value trait implementation (write_to comes from Writable)
 
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](Self.OutType())
-
-    def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display."""
-        ...
 
 
 # ---------------------------------------------------------------------------
@@ -295,15 +290,11 @@ trait StringValue(Value):
         """Run this node and return the resulting string array."""
         ...
 
-    # Default Value trait implementation
+    # Default Value trait implementation (write_to comes from Writable)
 
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](dt.string)
-
-    def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display."""
-        ...
 
 
 # ---------------------------------------------------------------------------

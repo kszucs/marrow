@@ -22,8 +22,8 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, memcpy, memset
-from std.builtin.device_passable import DevicePassable
+from std.memory import bitcast, memcpy, memset, Span
+from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
 from std.algorithm.backend.cpu.parallelize import sync_parallelize
@@ -31,6 +31,8 @@ from std.algorithm.functional import elementwise
 from std.algorithm.reduction import _reduce_generator_wrapper
 from std.math import ceildiv
 from std.utils.index import IndexList
+from std.utils.coord import Coord
+from std.builtin.simd_size import SIMDSize
 from std.gpu.host import DeviceContext, get_gpu_target
 
 from .buffers import Buffer, Bitmap
@@ -106,8 +108,10 @@ struct BufferView[
 
     comptime device_type: AnyType = Self
 
-    def _to_device_type(self, target: MutOpaquePointer[_]):
-        target.bitcast[Self.device_type]()[] = self
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        encoder.encode(self, target)
 
     @staticmethod
     def get_type_name() -> String:
@@ -312,7 +316,11 @@ struct BufferView[
 
     def to_string_slice(self) -> StringSlice[Self.origin]:
         """Convert this byte view to a StringSlice with origin `self_o`."""
-        return StringSlice(ptr=self._data.bitcast[Byte](), length=self._length)
+        return StringSlice(
+            unsafe_from_utf8=Span[Byte](
+                ptr=self._data.bitcast[Byte](), length=self._length
+            )
+        )
 
     def copy_from(
         self: BufferView[mut=True, T=DType.uint8, origin=_],
@@ -403,8 +411,10 @@ struct BitmapView[
 
     comptime device_type: AnyType = Self
 
-    def _to_device_type(self, target: MutOpaquePointer[_]):
-        target.bitcast[Self.device_type]()[] = self
+    def _to_device_type(
+        self, mut encoder: Some[DeviceTypeEncoder], target: MutOpaquePointer[_]
+    ):
+        encoder.encode(self, target)
 
     @staticmethod
     def get_type_name() -> String:
@@ -1000,12 +1010,11 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 """A parameterized SIMD function that takes a value vector and a validity mask."""
 
 
+@always_inline
 def _apply_dispatch[
     Out: DType,
     gpu_ok: Bool,
-    process: def[W: Int, rank: Int, alignment: Int = 1](
-        IndexList[rank]
-    ) capturing -> None,
+    process: def[W: Int, alignment: Int = 1](Coord) capturing -> None,
 ](length: Int, ctx: ExecutionContext) raises:
     """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
 
@@ -1015,8 +1024,7 @@ def _apply_dispatch[
 
     Three execution paths, picked from ``ctx``:
 
-    - **GPU** (``ctx.is_gpu()``) — single grid launch via Mojo's internal
-      ``_elementwise_impl_gpu``.
+    - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
     - **CPU multi-thread** (``ctx.wants_parallel(length)``) — explicit stripe
       over ``ctx.resolved_num_threads()`` workers via ``sync_parallelize``;
       each worker runs ``vectorize`` over its slice. Thread count is owned by
@@ -1027,7 +1035,7 @@ def _apply_dispatch[
         comptime if gpu_ok:
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
             elementwise[process, gpu_width, target="gpu"](
-                length, ctx.device.value()
+                Coord(length), ctx.device.value()
             )
         else:
             raise Error("apply: no GPU accelerator available")
@@ -1052,7 +1060,7 @@ def _apply_dispatch[
             def lane[
                 W: Int
             ](i: Int) {read start,}:
-                process[W, rank=1](IndexList[1](start + i))
+                process[W](Coord(start + i))
 
             vectorize[cpu_width](end - start, lane)
 
@@ -1061,7 +1069,7 @@ def _apply_dispatch[
 
         @always_inline
         def lane[W: Int](i: Int):
-            process[W, rank=1](IndexList[1](i))
+            process[W](Coord(i))
 
         vectorize[cpu_width](length, lane)
 
@@ -1084,10 +1092,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1111,10 +1117,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1144,10 +1148,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx.is_gpu():
@@ -1164,8 +1166,9 @@ def apply[
                 math.align_up(length, gpu_width),
                 length + max_pad,
             )
+
             elementwise[process, gpu_width, target="gpu"](
-                padded, ctx.device.value()
+                Coord(padded), ctx.device.value()
             )
         else:
             raise Error("apply: no GPU accelerator available")
@@ -1174,7 +1177,7 @@ def apply[
 
         @always_inline
         def lane[W: Int](i: Int):
-            process[W, rank=1](IndexList[1](i))
+            process[W](Coord(i))
 
         vectorize[cpu_width](length, lane)
 
@@ -1192,10 +1195,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
@@ -1216,10 +1217,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1241,10 +1240,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
@@ -1465,9 +1462,9 @@ def _reduce_dispatch[
             @always_inline
             @parameter
             def combine_capturing[
-                W: Int
+                W: SIMDSize
             ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
-                return combine[W](a, b)
+                return combine[Int(W)](a, b)
 
             var dev_buf = Buffer.alloc_device[T](ctx.device.value(), 1)
             var dev_view = dev_buf.device_view[T]()
@@ -1476,13 +1473,18 @@ def _reduce_dispatch[
             @__copy_capture(dev_view)
             @parameter
             def output_fn_gpu[
-                W: Int, rank: Int
+                W: SIMDSize, rank: Int
             ](idx: IndexList[rank], val: SIMD[T, W]):
                 dev_view.store[1](0, val[0])
 
             _reduce_generator_wrapper[
-                T, input_fn, output_fn_gpu, combine_capturing, target="gpu"
-            ](IndexList[1](length), identity, 0, ctx.device.value())
+                T,
+                input_fn,
+                output_fn_gpu,
+                combine_capturing,
+                target="gpu",
+                reduce_dim=0,
+            ](Coord(length), identity, ctx.device.value())
             return (
                 dev_buf.to_immutable()
                 .to_cpu(ctx.device.value())

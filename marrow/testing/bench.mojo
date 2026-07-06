@@ -30,7 +30,6 @@ from std.collections import Set, Dict
 from std.benchmark import Bench, BenchConfig, Bencher, BenchId, BenchMetric
 from std.reflection import get_function_name, call_location, SourceLocation
 from std.sys import argv
-from std.sys.intrinsics import _type_is_eq
 from std.time import perf_counter_ns
 
 
@@ -179,7 +178,7 @@ struct BenchSuite(Movable):
                 # Only register functions matching the expected signature.
                 # Other bench_* functions (e.g. parameterized helpers) are
                 # silently skipped — they can be registered manually.
-                comptime if _type_is_eq[type_of(func), _Bench.fn_type]():
+                comptime if type_of(func) == _Bench.fn_type:
                     self.bench[rebind[_Bench.fn_type](func)]()
 
     @always_inline
