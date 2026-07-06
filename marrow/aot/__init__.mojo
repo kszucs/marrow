@@ -10,35 +10,33 @@ design, including a measured ~33x binary-size difference between the two
 (``benchmarks/binary_size/``).
 
 ``values.mojo`` — traits (``Value``, ``NumericValue``, ``StringValue``,
-``BoolValue``) and positional expression nodes (``Column[T]``, ``Add[L, R]``,
+``BoolValue``) and positional expression nodes (``NumericColumn[T]``, ``Add[L, R]``,
 ``Sub[L, R]``, ``Lt``, ``Gt``, ``Eq``, ``StringColumn``, ``Length[S]``) — all
 re-exported here as the default surface.
 
-``table.mojo`` — the named, ``Table``-schema relational layer (``Table``,
-``Column[Tbl, name, T]``, ``StringColumn[Tbl, name]``, ``Project``,
-``Filter``). **Not** re-exported here — its ``Column``/``StringColumn``
-would collide with ``values.mojo``'s positional ones of the same name.
-Import explicitly: ``from marrow.aot.relations import Table, Column,
-StringColumn, Project, Filter``.
+``relations.mojo`` — the named relational layer: the ``Table[T]()``
+column-access handle over a plain schema struct, the ``Column`` base trait and
+its ``NumericColumn[name, T, index]`` / ``StringColumn[name, index]`` leaves,
+and ``Project`` / ``Filter``. **Not** re-exported here — its
+``NumericColumn``/``StringColumn`` would collide with ``values.mojo``'s
+positional ones of the same name. Import explicitly:
+``from marrow.aot.relations import Table, Project, Filter``.
 
 Usage (positional layer)::
 
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var expr = Add(col_a, col_b)
     var result = expr.execute(batch)
 
-Usage (table layer, see ``marrow.aot.relations`` for the full example)::
+Usage (relational layer, see ``marrow.aot.relations`` for the full example)::
 
     struct Orders(Table):
-        var a: Column[Orders, "a", Int32Type]
-        var b: StringColumn[Orders, "b"]
-        def __init__(out self):
-            self.a = {}
-            self.b = {}
+        var a: Int32Type
+        var b: StringType
 
-    var t = Orders()
-    var plan = Project(Tuple(t.a, t.b)).filter(Gt(t.a, t.b))
+    var t = table[Orders]()
+    var plan = Project(Tuple(t.a, t.a)).filter(Gt(t.a, t.a))
     var result = execute(plan, batch)
 """
 
@@ -49,7 +47,7 @@ from marrow.aot.values import (
     StringValue,
     BoolValue,
     # Expression nodes
-    Column,
+    NumericColumn,
     Add,
     Sub,
     Lt,

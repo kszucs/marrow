@@ -11,17 +11,17 @@ batch. Aggregations and joins are deliberately out of scope here (see
 
 **Status: implemented and tested (milestones 1–5 of 6).** Lives in
 `marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/relations.mojo`
-(`Table`, `Column`, `StringColumn`, `Project`, `Filter`), tested in
-`marrow/aot/tests/test_typed*.mojo` and `marrow/tests/test_schema.mojo`. Two
+(`Table`, `NumericColumn`, `StringColumn`, `Project`, `Filter`), tested in
+`marrow/aot/tests/test_relations.mojo` and `marrow/tests/test_schema.mojo`. Two
 things changed from the sketch below during implementation — both confirmed
 against the pinned toolchain, not judgment calls:
 
-1. **No runtime `Schema` object anywhere.** `Column[Tbl, name, T]`'s position
-   is a `comptime` constant derived by reflecting on the enclosing table
-   struct directly (`reflect[Tbl].field_index[name]()`), not resolved via a
-   `.from_schema(schema)` runtime lookup as first sketched. See *Column
-   access* below — the actual implementation, not what's in the milestones
-   section originally drafted.
+1. **No runtime `Schema` object anywhere.** `NumericColumn[name, T, index]`'s position
+   is a `comptime` constant derived by reflecting the named field on the table
+   struct (`reflect[Tbl].field_index[name]()`) in the `Table[Tbl]()` handle,
+   not resolved via a `.from_schema(schema)` runtime lookup as first sketched.
+   See *Column access* below — the actual implementation, not what's in the
+   milestones section originally drafted.
 2. **`t.select(t.a, t.b)` doesn't compile as bare variadic args.** A
    `VariadicPack` captured by one function (`select`'s own `*exprs`) cannot
    be forwarded to another function's variadic parameter (`Tuple`'s
@@ -62,7 +62,7 @@ Two earlier docs cover the scalar/plan AOT story:
   (`Add[L = AnyValue, R = AnyValue]`) serving both the runtime and AOT paths.
 
 What actually shipped (`marrow/aot/values.mojo`) took a third route: dedicated
-comptime nodes (`Column[T]`, `Add[L, R]`, `Sub[L, R]`, `Length[S]`) whose type
+comptime nodes (`NumericColumn[T]`, `Add[L, R]`, `Sub[L, R]`, `Length[S]`) whose type
 parameters encode the tree, plus a **boxing bridge** — the `FUSED` tag in
 `marrow/dyn/values.mojo` wraps a comptime node into a type-erased `Expr` via trampolines,
 so a fused subtree keeps its single-pass execution even when driven through the
@@ -73,7 +73,7 @@ Three things none of the prior docs cover — the substance of this design:
 
 1. **Deriving a `Schema` from a Mojo struct via compile-time reflection**
    (a `Table` type), rather than hand-writing `Schema(Field(...), ...)`.
-2. **Named columns** — `Column[name, T]` carrying the column *name* in its
+2. **Named columns** — `NumericColumn[name, T]` carrying the column *name* in its
    type (prior docs used positional `ColRef[idx, T]`), so output schemas are
    compile-time known and column access can key on the field name.
 3. **Variadic projection** — `Project[*Es]` carrying one type parameter per
@@ -117,7 +117,7 @@ plan's type instead of assembled at runtime.
   fresh args (`Tuple(a, b, c)`), but a pack already captured by an enclosing
   function's own `*args` parameter cannot be forwarded into it — see
   *Project* below.
-- **Comptime string params**: `struct Column[Tbl: AnyType, name:
+- **Comptime string params**: `struct NumericColumn[Tbl: AnyType, name:
   StringLiteral, T: ...]` is valid. Confirmed `StringLiteral` (not
   `StaticString` as first assumed) is what `reflect[Tbl].field_index[name]`
   /`.field[name]` actually require.
@@ -133,42 +133,70 @@ The original sketch had three candidate styles (A: column-typed fields with a
 runtime `.from_schema(schema)` resolve step; B: marker struct + reflection
 accessor; C: marker struct + the `__getattr_param__` comptime hook). Once
 milestone 1 (`Schema.from_struct[T]()`) proved `reflect[T].field_index[name]()`
-works, a stronger option emerged that supersedes all three: have
-`Column[Tbl, name, T]` reflect **on the enclosing table struct itself**,
-self-referentially:
+works, the styles collapsed onto style C (marker struct + the
+`__getattr_param__` comptime hook), which reaches the strongest ergonomics —
+the table is a plain struct of dtype-tag fields, and a separate handle carries
+the column accessors:
 
 ```mojo
-struct Orders(Table):
-    var a: Column[Orders, "a", Int32Type]
-    var b: StringColumn[Orders, "b"]
+struct Orders:
+    var a: Int32Type
+    var b: StringType
 
-    def __init__(out self):
-        self.a = {}
-        self.b = {}
-
-var t = Orders()
+var t = Table[Orders]()
 t.a.index   # 0 — a compile-time constant, baked directly into t.a's generated code
 ```
 
-This compiles and works *exactly* as hoped for style A — `t.a` is the column
-node, `t.a.index` is `Self.T.index = reflect[Self.Tbl].field_index[Self.name]()`
-evaluated at compile time — **with zero runtime `Schema` lookup**, stronger
-than the original style A sketch (which resolved `index` via a runtime
-`.from_schema(schema)` call). Confirmed against the pinned toolchain: `Orders`
-referencing itself as a field's type parameter while `Orders` is still being
-defined is legal, because `reflect[Tbl].field_index[name]()` only needs
-`Tbl`'s field *names*, available independent of resolving each field's own
-type (a `#kgen.struct_field_types` property, evaluated after specialization).
-A name that doesn't exist on `Tbl` is a **compile error**
-(`struct 'Bad' has no field named 'x'`), not a runtime exception — strictly
-better than the runtime-raise a `.from_schema()` step would have given.
+`Table[Orders]()` is a handle whose two
+`__getattr_param__` overloads reflect the named field on `Orders`:
+`reflect[Orders].field_index[name]()` gives the position (baked into the
+returned `NumericColumn[name, T, index]` / `StringColumn[name, index]`) and
+`reflect[Orders].field[name].T` gives the dtype, with a `where` clause routing
+numeric fields to `NumericColumn` and string fields to `StringColumn`. Both reflection
+queries fold to builtin KGEN attributes, so the constraint solver can prove the
+`where` clause *during overload selection* — the linchpin that makes the
+numeric/string dispatch work.
 
-Given this, style B (marker struct + reflection accessor) and style C (the
-`__getattr_param__` spike) are no longer necessary to reach the target
-ergonomics — style A already gets there with zero remaining language risk.
-Both stay theoretically available (`Column[Tbl, name, T]`'s `Tbl` parameter
-accepts *any* reflectable struct, not just a self-referential one), but
-neither was built; not needed once the CRTP form worked.
+Two hard constraints shaped this:
+
+- **A handle is required; `Orders()` cannot be the accessor.** `Orders`'s real
+  field `a` (of type `Int32Type`) shadows `__getattr_param__` — `Orders().a`
+  reads the dtype value, not a column node. `__getattr_param__` only fires for
+  *missing* attributes, so the accessors must live on a separate `Table[Orders]`
+  handle. The dtype fields exist purely for reflection; they are never
+  instantiated, so `Orders` needs no `__init__`.
+- **`var` is mandatory.** Mojo rejects bare `a: Int32Type` field declarations,
+  so `var a: Int32Type` is as terse as the struct gets.
+
+An earlier sketch had `Column` reflect **on the enclosing table struct itself**
+(`var a: Column[Orders, "a", Int32Type]`, a self-referential CRTP form). That
+compiled, but forced the name and type to be repeated per field and required a
+hand-written `__init__` — strictly more boilerplate than the dtype-tag struct.
+It was dropped once the `__getattr_param__` handle (which needs neither) was
+shown to dispatch numeric/string via the `where` clause.
+
+A name that doesn't exist on `Orders` is a **compile error**
+(`struct 'Orders' has no field named 'x'`), not a runtime exception.
+
+**Rejected alternative — a struct-free `Schema[Field["a", T], ...]` form.** An
+earlier iteration also offered a variadic `Schema[*Fields: FieldDescriptor]`
+over `Field["a", T]` tags that *was itself* the handle (no companion struct).
+It was prototyped and then **removed** — `Table[T]()` is the single, more
+idiomatic surface. Two hard limits also made it strictly weaker, and are worth
+recording because they constrain any future pack-based surface:
+
+1. It could not do the numeric/string `where`-dispatch. Its field index comes
+   from a recursive `def` (`_field_index[name, *Fields]()`), not a builtin
+   reflection attribute, and the constraint solver **refuses to evaluate a
+   non-builtin function inside a `where` clause** (unlike `Table[T]()`'s
+   `reflect[T].field_index[name]()`, which folds). Returning a
+   `comptime`-branched type from a helper is likewise rejected ("dynamic type
+   values not permitted yet"). So it was **numeric-only** (`Field` bounded to
+   `dt.NumericType`, single `__getattr_param__` always returning
+   `NumericColumn`).
+2. `Schema[*Fields]` has no reflectable named fields (the names live in the
+   `Field` type params, not as struct fields), so it cannot use the same
+   builtin reflection path as `Table[T]()` at all.
 
 One real compiler limitation surfaced during this work: **a comptime alias
 requirement (`comptime name: StringLiteral`) on a trait doesn't resolve
@@ -184,7 +212,7 @@ limitation entirely, since regular trait-bound method dispatch works fine
 ## Design of the first slice (as implemented)
 
 `marrow/schema.mojo` (`Schema.from_struct[T]()`) and `marrow/aot/relations.mojo`
-(`Table`, `Named`, `Column`, `StringColumn`, `TypedRelation`, `Project`,
+(`Table`, `Named`, `NumericColumn`, `StringColumn`, `Relation`, `Project`,
 `Filter`). Reuses `marrow/aot/values.mojo`'s `NumericValue`/`StringValue`/`BoolValue`
 traits and `Add`/`Sub`/`Lt`/`Gt`/`Eq` nodes directly.
 
@@ -216,32 +244,41 @@ enclosing generic function (`from_struct[T: AnyType]`), with no constructor
 resolvable. Routing the construction through a *separately-instantiated*
 generic function bound on `Defaultable & DataType`
 (`_construct_default[D: Defaultable & DataType]() -> D: return D()`) makes the
-zero-arg constructor visible via the trait witness instead — same fix reused
-throughout `marrow/aot/relations.mojo` (see `_numeric_col_to_any` /
-`_named_field_name` below).
+zero-arg constructor visible via the trait witness instead. (An earlier
+iteration reused this "route through a generic instantiation" trick in
+`Project` too, via `_numeric_col_to_any` / `_string_col_to_any` /
+`_named_field_name` helpers; those were removed once the `Column` base trait
+let `Project` call `to_array()` / `field_name()` directly on pack-indexed
+values — see *Project* below.)
 
-### `Table` and `Named`
+### `Table[T]` handle, `Named` / `Column` traits
+
+The user's schema is a plain struct (no marker trait) — `Table[T]` is the
+column-access handle over it, and the two leaf column nodes share a `Column`
+base trait so `Project` can treat them uniformly:
 
 ```mojo
-trait Table:
-    """Marker for a struct whose fields are Column[Self, name, T] /
-    StringColumn[Self, name] nodes."""
-    pass
+struct Table[T: AnyType](Copyable, Movable):
+    """Column-access handle: Table[Orders]().a -> NumericColumn[...]."""
+    ...  # __getattr_param__ overloads (see below)
 
 trait Named:
     def field_name(self) -> String:
         ...
+
+trait Column(Named, Value):
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        ...
 ```
 
-### `Column[Tbl, name, T]` / `StringColumn[Tbl, name]` — zero runtime fields
+### `NumericColumn[name, T, index]` / `StringColumn[name, index]` — zero runtime fields
 
 ```mojo
-struct Column[Tbl: AnyType, name: StringLiteral, T: dt.NumericType](
-    NumericValue, Named
+struct NumericColumn[name: StringLiteral, T: dt.NumericType, index: Int](
+    Column, Named, NumericValue
 ):
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
-    comptime index = reflect[Self.Tbl].field_index[Self.name]()
 
     def __init__(out self):
         pass
@@ -254,19 +291,20 @@ struct Column[Tbl: AnyType, name: StringLiteral, T: dt.NumericType](
         return String(t"{Self.name}")
 ```
 
-`index` is a `comptime` constant — no `var index: Int` field, no runtime
-lookup, ever. `StringColumn[Tbl, name]` mirrors this for the string path
-(`StringValue` instead of `NumericValue`, no `T` param since string is a
-single type). `Lt`/`Gt`/`Eq` (in `marrow/aot/values.mojo`, implementing the new
+`index` is a `comptime` parameter — no `var index: Int` field, no runtime
+lookup, ever. It is baked in by the `Table[Tbl]()` handle, which passes
+`reflect[Tbl].field_index[name]()`. `StringColumn[name, index]` mirrors this
+for the string path (`StringValue` instead of `NumericValue`, no `T` param
+since string is a single type). `Lt`/`Gt`/`Eq` (in `marrow/aot/values.mojo`, implementing the new
 `BoolValue` trait — bit-packs a `SIMD[bool, W]` mask directly into a `Bitmap`,
 same fused-vectorize-loop shape as `NumericValue.execute()`) give `Filter` a
-predicate; both accept `Column`/`StringColumn` children interchangeably with
-the unnamed `values.Column`, since they're generic over any `NumericValue`.
+predicate; both accept `NumericColumn`/`StringColumn` children interchangeably with
+the unnamed `values.NumericColumn`, since they're generic over any `NumericValue`.
 
 ### `Project[*Es]` — the single deliberate erasure boundary
 
 ```mojo
-struct Project[*Es: Value](TypedRelation):
+struct Project[*Es: Column](Relation):
     var exprs: Tuple[*Self.Es]
 
     def __init__(out self, var exprs: Tuple[*Self.Es]):
@@ -276,21 +314,21 @@ struct Project[*Es: Value](TypedRelation):
         var cols = List[AnyArray]()
         var fields = List[Field]()
         comptime for i in range(Self.Es.__len__()):
-            comptime E = Self.Es[i]
             ref e = self.exprs[i]
-            comptime if conforms_to(E, NumericValue):
-                cols.append(_numeric_col_to_any[E](e, batch))
-            elif conforms_to(E, StringValue):
-                cols.append(_string_col_to_any[E](e, batch))
-            fields.append(Field(_named_field_name[E](e), cols[len(cols)-1].dtype()))
+            var arr = e.to_array(batch)
+            fields.append(Field(e.field_name(), arr.dtype()))
+            cols.append(arr^)
         return RecordBatch(Schema(fields=fields^), cols^)
 
     def filter[P: BoolValue](var self, var predicate: P) -> Filter[Self, P]:
         return Filter(self^, predicate^)
 ```
 
-Every projected expression executes as its own monomorphized, fused kernel.
-The **only** dynamic step is collecting heterogeneous columns into
+Bounding on `*Es: Column` (not the broader `Value`) is what makes `execute`
+this small: every element exposes `to_array()` and `field_name()`, so there is
+no numeric-vs-string `comptime if` and no per-sub-trait erasure helper — each
+column executes as its own monomorphized, fused kernel and erases its own
+result. The **only** dynamic step is collecting heterogeneous columns into
 `List[AnyArray]` / `RecordBatch` — inherently heterogeneous and O(#columns),
 so `AnyArray` is the correct join point. Nothing about per-element compute
 goes through tag dispatch.
@@ -311,19 +349,22 @@ class of raw/unsafe code to a few vetted files (`buffers.mojo`, `views.mojo`,
 `c_data.mojo`); `Project`/`Filter` don't qualify. Decided (user's call,
 2026-07-06) to accept the `Tuple(...)` wrapper rather than replicate it.
 
-`_numeric_col_to_any` / `_string_col_to_any` / `_named_field_name` are the
-same "separately-instantiated generic function" fix as
-`_construct_default` above — needed again here because `e`'s type comes from
-indexing the `Es` pack.
+An earlier iteration routed each call through per-sub-trait helpers
+(`_numeric_col_to_any` / `_string_col_to_any` / `_named_field_name`) as the
+same "separately-instantiated generic function" fix as `_construct_default`
+above. That turned out to be unnecessary: `to_array()` / `field_name()` are
+single `Column`-trait methods and resolve directly on the pack-indexed `e`
+(`self.exprs[i]`) with no helper, so the `Column` bound removed all three
+helpers *and* the numeric/string branch.
 
-### `TypedRelation` and `Filter[Input, Pred]`
+### `Relation` and `Filter[Input, Pred]`
 
 ```mojo
-trait TypedRelation(ImplicitlyDeletable, Movable):
+trait Relation(ImplicitlyDeletable, Movable):
     def execute(self, batch: RecordBatch) raises -> RecordBatch:
         ...
 
-struct Filter[Input: TypedRelation, Pred: BoolValue](TypedRelation):
+struct Filter[Input: Relation, Pred: BoolValue](Relation):
     var input: Self.Input
     var predicate: Self.Pred
 
@@ -337,7 +378,7 @@ struct Filter[Input: TypedRelation, Pred: BoolValue](TypedRelation):
 ```
 
 `predicate` evaluates against the *original* input `batch`, not `input`'s
-projected output — its `Column` nodes are typed against the source `Table`,
+projected output — its column nodes are typed against the source `Table`,
 so a filter can reference a column absent from the projection, exactly like
 SQL's `WHERE` referencing a column outside `SELECT`. Tested directly (see
 `test_filter_predicate_references_dropped_column`).
@@ -345,12 +386,12 @@ SQL's `WHERE` referencing a column outside `SELECT`. Tested directly (see
 ### Chaining and data entry
 
 `Project(Tuple(...))` builds the leaf; `.filter(pred)` on it returns
-`Filter[Project[*Es], Pred]` (`Project` conforms to `TypedRelation` so this
+`Filter[Project[*Es], Pred]` (`Project` conforms to `Relation` so this
 composes). The whole plan is one nested type; `execute(batch)` recurses. Data
 enters through the `batch` argument (matching `marrow/aot/values.mojo`); the `Table` is
-pure schema, and every column's position is a compile-time constant baked in
-via the `Tbl` self-reference — no `Schema` object is ever constructed or
-consulted at runtime by `Column`/`Project`/`Filter` themselves.
+pure schema, and every column's position is a compile-time constant baked into
+the node by the `Table[Tbl]()` handle — no `Schema` object is ever constructed
+or consulted at runtime by `NumericColumn`/`Project`/`Filter` themselves.
 
 ### Bridge to the erased layer — not yet built (milestone 6)
 
@@ -383,17 +424,18 @@ slice.
 
 1. ✅ `Schema.from_struct[T]()` in `schema.mojo` — the reflection foundation
    (see `reflect-schema-from-struct.md`). Tested in `test_schema.mojo`.
-2. ✅ `Table`, `Named`, `Column[Tbl, name, T]` / `StringColumn[Tbl, name]` in
-   `marrow/aot/relations.mojo` — compile-time-resolved position (the CRTP finding
-   above, a stronger result than the originally-sketched access style A).
-   Tested in `marrow/aot/tests/test_typed.mojo`.
+2. ✅ `Table`, `Named`, `Table[Tbl]()`,
+   `NumericColumn[name, T, index]` / `StringColumn[name, index]` in
+   `marrow/aot/relations.mojo` — compile-time-resolved position via the
+   `__getattr_param__` handle (access style C; see *Column access* above).
+   Tested in `marrow/aot/tests/test_relations.mojo`.
 3. ✅ `BoolValue` + comparison nodes (`Lt`/`Gt`/`Eq`) in `marrow/aot/values.mojo`,
-   mirroring `Add`/`Sub`. Tested in `test_bool_values.mojo`.
+   mirroring `Add`/`Sub`. Tested in `test_values.mojo`.
 4. ✅ `Project[*Es].execute -> RecordBatch`, via `Project(Tuple(...))` (not
    bare variadic `select` — see the `VariadicPack`-forwarding finding above).
-   Tested in `test_typed_project.mojo`.
+   Tested in `test_relations.mojo`.
 5. ✅ `Filter[Input, Pred].execute -> RecordBatch` with `.filter(pred)`
-   chaining off `Project`. Tested in `test_typed_filter.mojo`, including the
+   chaining off `Project`. Tested in `test_relations.mojo`, including the
    exact milestone DoD round trip below.
 6. ⬜ `AnyRelation(typed_plan)` bridge. Not started — see *Bridge to the
    erased layer* above for why it's a bigger scope decision than the rest.
@@ -411,8 +453,10 @@ slice.
   not yet written; the existing tests assert behavior (correct values,
   correct schema), not the type shape itself. Worth adding before widening
   scope further.
-- N/A — the access-style-C (`__getattr_param__`) spike is moot: the CRTP form
-  found during milestone 2 already reaches the target ergonomics without it.
+- ✅ Access style C (`__getattr_param__`) is the shipped form: the `Table[Tbl]()`
+  handle reaches the target ergonomics (plain dtype-tag struct, no `__init__`)
+  and dispatches numeric/string columns via a `where` clause on the reflected
+  field type.
 - Widen beyond `Project` + `Filter` only after milestone 6 (the bridge) lands
   or is explicitly deferred, and after this note is updated with the
   aggregate/join extension.

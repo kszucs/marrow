@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Features
+
+- **AOT typed tables declared as plain dtype-tag structs** (`marrow.aot.relations`):
+  a plain struct declares its columns as bare dtype fields (`var a: Int64Type`,
+  `var name: StringType`) with no column-node wrappers and no `__init__`, and
+  `Table[Orders]()` is a column-access handle whose `t.a` / `t.name` reflect
+  each field's compile-time position and dtype into `NumericColumn[name, T,
+  index]` / `StringColumn[name, index]` (numeric vs string is dispatched by a
+  `where` clause on the reflected field type). Replaces the previous
+  `var a: NumericColumn[Orders, "a", Int64Type]`-style fields + hand-written
+  `__init__` boilerplate. The positional and named numeric column nodes are
+  renamed `Column` → `NumericColumn` to pair with `StringColumn` per type
+  family, and both named leaves share a new `Column` base trait exposing
+  `to_array()`, so `Project[*Es: Column]` assembles a projection with no
+  numeric-vs-string branching.
+
 ### Build Infrastructure
 
 - PyPI wheel packaging via cibuildwheel and hatchling; Mojo runtime dylibs bundled

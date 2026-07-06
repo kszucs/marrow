@@ -4,13 +4,13 @@
 Each node is a generic struct where type parameters encode the expression
 tree structure, enabling the compiler to inline the full ``core[W]()`` call
 chain into a single fused vectorize loop with zero intermediate arrays.
-Columns are referenced by position (``Column[T](index)``); see
+Columns are referenced by position (``NumericColumn[T](index)``); see
 ``marrow.aot.relations`` for the named, reflection-based, ``Table``-schema
 variant used by ``Project``/``Filter``.
 
 Expression nodes
 ----------------
-``Column[T]`` — typed column reference (resolves from RecordBatch at core time)
+``NumericColumn[T]`` — typed column reference (resolves from RecordBatch at core time)
 ``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
 ``Sub[L, R]`` — fused binary subtract
 ``Lt[L, R]``, ``Gt[L, R]``, ``Eq[L, R]`` — fused binary comparisons; result is
@@ -40,8 +40,8 @@ driven through the type-erased path.
 
 Usage
 -----
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var expr = Add(col_a, col_b)
     var result = expr.execute(batch)  # single fused pass, zero intermediates
 """
@@ -98,7 +98,7 @@ trait NumericValue(Value):
     ``core[W]()`` across the entire tree into a single fused vectorize loop.
 
     Provides ``core[W](batch, idx)`` (SIMD lane computation with batch) and
-    ``execute(batch)`` (fused vectorize loop).  Both ``Column[T]`` and
+    ``execute(batch)`` (fused vectorize loop).  Both ``NumericColumn[T]`` and
     ``Add[L, R]`` implement this trait.
 
     ``comptime OutType`` — the output ``NumericType``.
@@ -160,12 +160,12 @@ trait NumericValue(Value):
 
 
 # ---------------------------------------------------------------------------
-# Column — typed column reference
+# NumericColumn — typed column reference
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct Column[T: dt.NumericType](NumericValue):
+struct NumericColumn[T: dt.NumericType](NumericValue):
     """Typed column reference that resolves from a RecordBatch at core time.
 
     ``index``  — positional index into the batch's column list.
@@ -175,7 +175,7 @@ struct Column[T: dt.NumericType](NumericValue):
 
     Usage::
 
-        var col = Column[Int64Type](0)
+        var col = NumericColumn[Int64Type](0)
         var result = col.execute(batch)  # resolves batch.columns[0] internally
     """
 
@@ -216,8 +216,8 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
 
     Usage::
 
-        var col_a = Column[Int64Type](0)
-        var col_b = Column[Int64Type](1)
+        var col_a = NumericColumn[Int64Type](0)
+        var col_b = NumericColumn[Int64Type](1)
         var expr = Add(col_a, col_b)
         var result = expr.execute(batch)  # single fused pass
     """
@@ -301,9 +301,7 @@ trait BoolValue(Value):
     match, like NumericValue's Add/Sub)."""
 
     @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
         """Compute one SIMD lane of the predicate at the given index."""
         ...
 
@@ -359,9 +357,7 @@ struct Lt[L: NumericValue, R: NumericValue](BoolValue):
     var right: Self.R
 
     @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
         var l = self.left.core[W](batch, idx)
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.lt(r)
@@ -392,9 +388,7 @@ struct Gt[L: NumericValue, R: NumericValue](BoolValue):
     var right: Self.R
 
     @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
         var l = self.left.core[W](batch, idx)
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.gt(r)
@@ -424,9 +418,7 @@ struct Eq[L: NumericValue, R: NumericValue](BoolValue):
     var right: Self.R
 
     @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+    def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
         var l = self.left.core[W](batch, idx)
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.eq(r)

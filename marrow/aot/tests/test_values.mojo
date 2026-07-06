@@ -1,26 +1,26 @@
-"""Tests for comptime-typed expression execution.
+"""Tests for the comptime-typed expression nodes in ``marrow.aot.values``.
 
-These tests verify that ``Column``/``Add``/``Sub`` (the default comptime-typed
-expression nodes) correctly evaluate expression trees via ``execute(batch)``,
-running a single fused vectorize loop with zero intermediate arrays.
+Two families, both exercising the single-fused-vectorize-pass execution model:
+
+- ``NumericValue`` nodes — ``NumericColumn``/``Add``/``Sub``/``Length`` evaluate
+  an expression tree via ``execute(batch)`` with zero intermediate arrays.
+- ``BoolValue`` nodes — ``Lt``/``Gt``/``Eq`` bit-pack the comparison mask
+  directly into a ``BoolArray``, and compose with ``NumericValue`` children in
+  the same fused pass.
+
+See ``dyn/tests/test_aot_injection.mojo`` for these nodes boxed into the runtime
+``Expr`` via the ``FUSED`` tag.
 """
 
 from std.testing import assert_equal, assert_true
 
 from marrow.testing import TestSuite
 
-from marrow.arrays import PrimitiveArray, UInt32Array
+from marrow.arrays import PrimitiveArray
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64, uint32
-from marrow.aot import (
-    Column,
-    Add,
-    Sub,
-    NumericValue,
-    StringColumn,
-    Length,
-)
 from marrow.tabular import RecordBatch, record_batch
+from marrow.aot import NumericColumn, Add, Sub, Lt, Gt, Eq, StringColumn, Length
 
 
 # ---------------------------------------------------------------------------
@@ -32,8 +32,8 @@ def _fused_add_exec(
     col_a: Int, col_b: Int, batch: RecordBatch
 ) raises -> PrimitiveArray[Int64Type]:
     """Build an Add expression and evaluate against the batch."""
-    var a = Column[Int64Type](col_a)
-    var b = Column[Int64Type](col_b)
+    var a = NumericColumn[Int64Type](col_a)
+    var b = NumericColumn[Int64Type](col_b)
     var expr = Add(a, b)
     return expr.execute(batch)
 
@@ -42,8 +42,8 @@ def _fused_sub_exec(
     col_a: Int, col_b: Int, batch: RecordBatch
 ) raises -> PrimitiveArray[Int64Type]:
     """Build a Sub expression and evaluate against the batch."""
-    var a = Column[Int64Type](col_a)
-    var b = Column[Int64Type](col_b)
+    var a = NumericColumn[Int64Type](col_a)
+    var b = NumericColumn[Int64Type](col_b)
     var expr = Sub(a, b)
     return expr.execute(batch)
 
@@ -192,9 +192,9 @@ def test_fused_length_write_to() raises:
 
 
 def test_fused_column_implements_numeric_typed_value() raises:
-    """Column[Int64Type] satisfies NumericValue."""
+    """NumericColumn[Int64Type] satisfies NumericValue."""
     # The fact that .execute() compiles on this type proves trait conformance.
-    var expr = Column[Int64Type](0)
+    var expr = NumericColumn[Int64Type](0)
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
     var result = expr.execute(batch)
@@ -207,15 +207,15 @@ def test_fused_column_implements_numeric_typed_value() raises:
 
 
 def test_fused_column_write_to() raises:
-    """Column.write_to produces readable output."""
-    var col = Column[Int64Type](3)
+    """NumericColumn.write_to produces readable output."""
+    var col = NumericColumn[Int64Type](3)
     assert_equal(String(col), "Col[3]")
 
 
 def test_fused_add_write_to() raises:
     """Add.write_to produces nested readable output."""
-    var a = Column[Int64Type](0)
-    var b = Column[Int64Type](1)
+    var a = NumericColumn[Int64Type](0)
+    var b = NumericColumn[Int64Type](1)
     var expr = Add(a, b)
     assert_equal(String(expr), "Add(Col[0], Col[1])")
 
@@ -226,10 +226,10 @@ def test_fused_add_write_to() raises:
 
 
 def test_fused_column_copy() raises:
-    """Column can be copied."""
+    """NumericColumn can be copied."""
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
-    var col = Column[Int64Type](0)
+    var col = NumericColumn[Int64Type](0)
     var copy = col.copy()
     var result = copy.execute(batch)
     assert_true(result == array([1, 2, 3], int64))
@@ -240,8 +240,8 @@ def test_fused_add_copy() raises:
     var a = array([1, 2, 3], int64)
     var b = array([10, 20, 30], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var expr = Add(col_a, col_b)
     var copy = expr.copy()
     var result = copy.execute(batch)
@@ -249,8 +249,89 @@ def test_fused_add_copy() raises:
 
 
 # ---------------------------------------------------------------------------
-# main
+# BoolValue nodes — Lt / Gt / Eq
 # ---------------------------------------------------------------------------
+
+
+def test_lt_fuses() raises:
+    """Lt(NumericColumn, NumericColumn) produces the correct bit-packed
+    BoolArray."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
+
+    var lt = Lt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
+    var result = lt.execute(batch)
+    assert_true(result[0].value())
+    assert_true(not result[1].value())
+    assert_true(result[2].value())
+    assert_true(not result[3].value())
+    assert_true(result[4].value())
+
+
+def test_gt_fuses() raises:
+    """Gt(NumericColumn, NumericColumn) produces the correct bit-packed
+    BoolArray."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
+
+    var gt = Gt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
+    var result = gt.execute(batch)
+    assert_true(not result[0].value())
+    assert_true(result[1].value())
+    assert_true(not result[2].value())
+    assert_true(result[3].value())
+    assert_true(not result[4].value())
+
+
+def test_eq_fuses() raises:
+    """Eq(NumericColumn, NumericColumn) produces the correct bit-packed
+    BoolArray."""
+    var a = array([1, 4, 3, 4, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
+
+    var eq = Eq(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
+    var result = eq.execute(batch)
+    assert_true(not result[0].value())
+    assert_true(result[1].value())
+    assert_true(not result[2].value())
+    assert_true(result[3].value())
+    assert_true(not result[4].value())
+
+
+def test_comparison_composes_with_add() raises:
+    """Gt((a + b), b) composes NumericValue and BoolValue nodes in one fused
+    pass -- no intermediate arrays for either the add or the comparison.
+    """
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([4, 4, 4, 4, 4], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
+
+    var added = Add(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
+    var pred = Gt(added, NumericColumn[Int64Type](1))
+    var result = pred.execute(batch)
+    # a + b = [5, 9, 7, 12, 6]; compared to b = [4, 4, 4, 4, 4] -> all True
+    for i in range(5):
+        assert_true(result[i].value())
+
+
+def test_comparison_write_to() raises:
+    """Lt/Gt/Eq.write_to() display the expected nested structure."""
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
+    assert_equal(String(Lt(col_a, col_b)), "Lt(Col[0], Col[1])")
+    assert_equal(String(Gt(col_a, col_b)), "Gt(Col[0], Col[1])")
+    assert_equal(String(Eq(col_a, col_b)), "Eq(Col[0], Col[1])")
+
+
+def test_comparison_dtype_is_bool() raises:
+    """Lt/Gt/Eq.dtype() reports bool_, matching BoolValue's default impl."""
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
+    var lt = Lt(col_a, col_b)
+    assert_true(lt.dtype().value().is_bool())
 
 
 def main() raises:

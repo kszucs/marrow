@@ -41,7 +41,7 @@ from marrow.dtypes import Int32Type
 from marrow.expr.fused import (
     Add,
     And,
-    Column,
+    NumericColumn,
     Equal,
     Greater,
     Less,
@@ -63,7 +63,7 @@ from marrow.testing import BenchSuite, Benchmark
 def bench_fused_eq_1op_100k(mut b: Benchmark) raises:
     var a = arange[Int32Type](0, 100_000)
     var c = arange[Int32Type](0, 100_000)
-    var expr = Equal(Column(a.copy()), Column(c.copy()))
+    var expr = Equal(NumericColumn(a.copy()), NumericColumn(c.copy()))
     b.throughput(BenchMetric.elements, 100_000)
 
     @always_inline
@@ -104,8 +104,8 @@ def bench_fused_add_eq_100k(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 100_002)
     var d = arange[Int32Type](3, 100_003)
     var expr = Equal(
-        Add(Column(a.copy()), Column(bv.copy())),
-        Add(Column(c.copy()), Column(d.copy())),
+        Add(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+        Add(NumericColumn(c.copy()), NumericColumn(d.copy())),
     )
     b.throughput(BenchMetric.elements, 100_000)
 
@@ -149,8 +149,8 @@ def bench_fused_add_eq_1m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 1_000_002)
     var d = arange[Int32Type](3, 1_000_003)
     var expr = Equal(
-        Add(Column(a.copy()), Column(bv.copy())),
-        Add(Column(c.copy()), Column(d.copy())),
+        Add(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+        Add(NumericColumn(c.copy()), NumericColumn(d.copy())),
     )
     b.throughput(BenchMetric.elements, 1_000_000)
 
@@ -194,8 +194,8 @@ def bench_fused_add_eq_10m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 10_000_002)
     var d = arange[Int32Type](3, 10_000_003)
     var expr = Equal(
-        Add(Column(a.copy()), Column(bv.copy())),
-        Add(Column(c.copy()), Column(d.copy())),
+        Add(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+        Add(NumericColumn(c.copy()), NumericColumn(d.copy())),
     )
     b.throughput(BenchMetric.elements, 10_000_000)
 
@@ -239,8 +239,8 @@ def bench_fused_add_eq_100m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 100_000_002)
     var d = arange[Int32Type](3, 100_000_003)
     var expr = Equal(
-        Add(Column(a.copy()), Column(bv.copy())),
-        Add(Column(c.copy()), Column(d.copy())),
+        Add(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+        Add(NumericColumn(c.copy()), NumericColumn(d.copy())),
     )
     b.throughput(BenchMetric.elements, 100_000_000)
 
@@ -290,8 +290,14 @@ def bench_fused_mul_add_eq_100k(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 100_002)
     var d = arange[Int32Type](3, 100_003)
     var expr = Equal(
-        Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-        Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
+        Add(
+            Mul(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+            NumericColumn(c.copy()),
+        ),
+        Sub(
+            Mul(NumericColumn(d.copy()), NumericColumn(a.copy())),
+            NumericColumn(bv.copy()),
+        ),
     )
     b.throughput(BenchMetric.elements, 100_000)
 
@@ -337,8 +343,14 @@ def bench_fused_mul_add_eq_1m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 1_000_002)
     var d = arange[Int32Type](3, 1_000_003)
     var expr = Equal(
-        Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-        Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
+        Add(
+            Mul(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+            NumericColumn(c.copy()),
+        ),
+        Sub(
+            Mul(NumericColumn(d.copy()), NumericColumn(a.copy())),
+            NumericColumn(bv.copy()),
+        ),
     )
     b.throughput(BenchMetric.elements, 1_000_000)
 
@@ -384,8 +396,14 @@ def bench_fused_mul_add_eq_10m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 10_000_002)
     var d = arange[Int32Type](3, 10_000_003)
     var expr = Equal(
-        Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-        Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
+        Add(
+            Mul(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+            NumericColumn(c.copy()),
+        ),
+        Sub(
+            Mul(NumericColumn(d.copy()), NumericColumn(a.copy())),
+            NumericColumn(bv.copy()),
+        ),
     )
     b.throughput(BenchMetric.elements, 10_000_000)
 
@@ -431,8 +449,14 @@ def bench_fused_mul_add_eq_100m(mut b: Benchmark) raises:
     var c = arange[Int32Type](2, 100_000_002)
     var d = arange[Int32Type](3, 100_000_003)
     var expr = Equal(
-        Add(Mul(Column(a.copy()), Column(bv.copy())), Column(c.copy())),
-        Sub(Mul(Column(d.copy()), Column(a.copy())), Column(bv.copy())),
+        Add(
+            Mul(NumericColumn(a.copy()), NumericColumn(bv.copy())),
+            NumericColumn(c.copy()),
+        ),
+        Sub(
+            Mul(NumericColumn(d.copy()), NumericColumn(a.copy())),
+            NumericColumn(bv.copy()),
+        ),
     )
     b.throughput(BenchMetric.elements, 100_000_000)
 

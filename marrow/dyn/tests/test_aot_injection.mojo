@@ -5,7 +5,7 @@ can be boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor,
 and executed end-to-end through the type-erased runtime path.
 
 The key pattern is:
-1. Create a comptime-typed expression (e.g., Add[Column, Column])
+1. Create a comptime-typed expression (e.g., Add[NumericColumn, NumericColumn])
 2. Box it into a runtime Expr via Expr(value)
 3. The boxed Expr carries the comptime node in its _fused slot
 4. Both the direct path (``expr.execute(batch)``) and the boxed runtime path
@@ -29,7 +29,7 @@ from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.dyn import Expr, FUSED
 from marrow.aot.values import (
-    Column,
+    NumericColumn,
     Add,
     Sub,
     Gt,
@@ -56,12 +56,12 @@ def _exec_typed[
 
 
 def test_fused_column_to_expr() raises:
-    """Column.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """NumericColumn.to_expr() produces a valid runtime Expr with FUSED tag."""
     var a = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy()], names=["c0"])
 
     # Create a typed column expression
-    var fused = Column[Int64Type](0)
+    var fused = NumericColumn[Int64Type](0)
 
     # Box it into a runtime Expr
     var expr = Expr(fused)
@@ -85,8 +85,8 @@ def test_fused_add_to_expr() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
     # Create a typed add expression
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
     # Box it into a runtime Expr
@@ -111,8 +111,8 @@ def test_fused_sub_to_expr() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
     # Create a typed sub expression
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Sub(col_a, col_b)
 
     # Box it into a runtime Expr
@@ -145,9 +145,9 @@ def test_nested_fused_add_sub_to_expr() raises:
     )
 
     # Create a nested expression: (a + b) - c
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
-    var col_c = Column[Int64Type](2)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
+    var col_c = NumericColumn[Int64Type](2)
     var add_expr = Add(col_a, col_b)
     var fused = Sub(add_expr, col_c)
 
@@ -177,10 +177,10 @@ def test_chained_fused_adds_to_expr() raises:
     )
 
     # Create a chained expression: a + b + c + d
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
-    var col_c = Column[Int64Type](2)
-    var col_d = Column[Int64Type](3)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
+    var col_c = NumericColumn[Int64Type](2)
+    var col_d = NumericColumn[Int64Type](3)
     var add_ab = Add(col_a, col_b)
     var add_abc = Add(add_ab, col_c)
     var fused = Add(add_abc, col_d)
@@ -206,12 +206,12 @@ def test_chained_fused_adds_to_expr() raises:
 
 
 def test_fused_column_different_types_to_expr() raises:
-    """Column with different numeric types can be boxed."""
+    """NumericColumn with different numeric types can be boxed."""
     # Test Int64
     var a = array([1, 2, 3], int64)
     var batch = record_batch([a.copy()], names=["c0"])
 
-    var col_i64 = Column[Int64Type](0)
+    var col_i64 = NumericColumn[Int64Type](0)
     var expr_i64 = Expr(col_i64)
     assert_equal(expr_i64.kind(), FUSED)
 
@@ -233,8 +233,8 @@ def test_single_element_fused_to_expr() raises:
     var b = array([8], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
 
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
     var expr = Expr(fused)
@@ -253,8 +253,8 @@ def test_negative_values_fused_to_expr() raises:
     var b = array([1, -2, 3, -4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
     var expr = Expr(fused)
@@ -273,8 +273,8 @@ def test_large_values_fused_to_expr() raises:
     var b = array([1], int64)
     var batch = record_batch([a^, b^], names=["c0", "c1"])
 
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
     var expr = Expr(fused)
@@ -298,8 +298,8 @@ def test_non_aligned_length_fused_to_expr() raises:
     var b = array([10, 20, 30, 40, 50, 60, 70], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    var col_a = Column[Int64Type](0)
-    var col_b = Column[Int64Type](1)
+    var col_a = NumericColumn[Int64Type](0)
+    var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
     var expr = Expr(fused)
@@ -318,14 +318,14 @@ def test_non_aligned_length_fused_to_expr() raises:
 
 
 def test_fused_gt_to_expr() raises:
-    """Expr(Gt(Column, Column)) produces a valid runtime Expr with FUSED tag,
+    """Expr(Gt(NumericColumn, NumericColumn)) produces a valid runtime Expr with FUSED tag,
     and both the direct and boxed paths agree.
     """
     var a = array([1, 5, 3, 8, 2], int64)
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
-    var fused = Gt(Column[Int64Type](0), Column[Int64Type](1))
+    var fused = Gt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
     var expr = Expr(fused)
     assert_equal(expr.kind(), FUSED)
 
@@ -350,7 +350,9 @@ def test_fused_bool_value_drives_runtime_relational_plan() raises:
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var predicate = Expr(Gt(Column[Int64Type](0), Column[Int64Type](1)))
+    var predicate = Expr(
+        Gt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
+    )
     var plan = in_memory_table(batch).filter(predicate)
     var result = execute(plan)
 
