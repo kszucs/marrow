@@ -426,7 +426,9 @@ struct Buffer[*, mut: Bool = False](
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var host = ctx.enqueue_create_host_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](host.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+            host.unsafe_ptr()
+        )
         memset_zero(ptr, byte_size)
         return Buffer[mut=True](
             size=byte_size,
@@ -643,32 +645,20 @@ struct Buffer[*, mut: Bool = False](
         comptime output = Scalar[T]
         return self._ptr.bitcast[output]()[index]
 
-    # TODO: remove these methods in favor of `view()` and `BufferView` for both CPU and DEVICE buffers.  The
+    # TODO: remove this method in favor of `view()` and `BufferView` for both CPU and DEVICE buffers.
     @always_inline
     def device_view[
         T: DType = DType.uint8
-    ](self: Buffer[mut=False], offset: Int = 0) -> BufferView[T, MutUntrackedOrigin]:
-        """Mutable view backed by the GPU device pointer at element ``offset``.
+    ](ref self, offset: Int = 0) -> BufferView[T, origin_of(self)]:
+        """Typed view backed by the GPU device pointer at element ``offset``.
 
-        Returns a ``MutUntrackedOrigin`` view suitable for GPU kernel writes.
-        Precondition: `is_device()` must be True.
+        The origin is tied to ``self`` (``origin_of(self)``) so the view keeps
+        the backing device buffer alive for the duration of any GPU kernel that
+        captures it. An ``UntrackedOrigin`` view would let ASAP free the buffer
+        before the kernel runs, so the kernel would read/write freed memory.
+        The view's mutability follows ``self``. Precondition: ``is_device()``.
         """
-        var ptr = rebind[UnsafePointer[Scalar[T], MutUntrackedOrigin]](
-            self._ptr.bitcast[Scalar[T]]() + offset
-        )
-        return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)
-
-    @always_inline
-    def device_view[
-        T: DType = DType.uint8
-    ](self: Buffer[mut=True], offset: Int = 0) -> BufferView[T, MutUntrackedOrigin]:
-        """Typed MutUntrackedOrigin view for a mutable GPU-allocated buffer.
-
-        For buffers created with ``alloc_device``, ``_ptr`` holds the device
-        pointer (originally ``MutUntrackedOrigin``, stored as ``MutUntrackedOrigin``).
-        This method reinterprets it as ``MutUntrackedOrigin`` for GPU kernel writes.
-        """
-        var ptr = rebind[UnsafePointer[Scalar[T], MutUntrackedOrigin]](
+        var ptr = rebind[UnsafePointer[Scalar[T], origin_of(self)]](
             self._ptr.bitcast[Scalar[T]]() + offset
         )
         return BufferView(ptr=ptr, length=(self._size // size_of[T]()) - offset)

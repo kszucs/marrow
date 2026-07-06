@@ -22,7 +22,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, memcpy, memset
+from std.memory import bitcast, memcpy, memset, Span
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
@@ -316,7 +316,11 @@ struct BufferView[
 
     def to_string_slice(self) -> StringSlice[Self.origin]:
         """Convert this byte view to a StringSlice with origin `self_o`."""
-        return StringSlice(ptr=self._data.bitcast[Byte](), length=self._length)
+        return StringSlice(
+            unsafe_from_utf8=Span[Byte](
+                ptr=self._data.bitcast[Byte](), length=self._length
+            )
+        )
 
     def copy_from(
         self: BufferView[mut=True, T=DType.uint8, origin=_],
@@ -1006,12 +1010,11 @@ comptime MaskedFn[In: DType, Out: DType] = def[W: Int](
 """A parameterized SIMD function that takes a value vector and a validity mask."""
 
 
+@always_inline
 def _apply_dispatch[
     Out: DType,
     gpu_ok: Bool,
-    process: def[W: Int, rank: Int, alignment: Int = 1](
-        IndexList[rank]
-    ) capturing -> None,
+    process: def[W: Int, alignment: Int = 1](Coord) capturing -> None,
 ](length: Int, ctx: ExecutionContext) raises:
     """Dispatch ``process`` to GPU or CPU (serial / parallel) based on ``ctx``.
 
@@ -1021,8 +1024,7 @@ def _apply_dispatch[
 
     Three execution paths, picked from ``ctx``:
 
-    - **GPU** (``ctx.is_gpu()``) — single grid launch via Mojo's internal
-      ``_elementwise_impl_gpu``.
+    - **GPU** (``ctx.is_gpu()``) — single grid launch via ``elementwise``.
     - **CPU multi-thread** (``ctx.wants_parallel(length)``) — explicit stripe
       over ``ctx.resolved_num_threads()`` workers via ``sync_parallelize``;
       each worker runs ``vectorize`` over its slice. Thread count is owned by
@@ -1032,15 +1034,7 @@ def _apply_dispatch[
     if ctx.is_gpu():
         comptime if gpu_ok:
             comptime gpu_width = simd_width_of[Out, target=get_gpu_target()]()
-
-            @always_inline
-            @parameter
-            def gpu_body[W: Int, alignment: Int = 1](coord: Coord):
-                process[W, rank=1, alignment=alignment](
-                    IndexList[1](Int(coord[0].value()))
-                )
-
-            elementwise[gpu_body, gpu_width, target="gpu"](
+            elementwise[process, gpu_width, target="gpu"](
                 Coord(length), ctx.device.value()
             )
         else:
@@ -1066,7 +1060,7 @@ def _apply_dispatch[
             def lane[
                 W: Int
             ](i: Int) {read start,}:
-                process[W, rank=1](IndexList[1](start + i))
+                process[W](Coord(start + i))
 
             vectorize[cpu_width](end - start, lane)
 
@@ -1075,7 +1069,7 @@ def _apply_dispatch[
 
         @always_inline
         def lane[W: Int](i: Int):
-            process[W, rank=1](IndexList[1](i))
+            process[W](Coord(i))
 
         vectorize[cpu_width](length, lane)
 
@@ -1098,10 +1092,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1125,10 +1117,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1158,10 +1148,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](lhs.load[W](i), rhs.load[W](i)))
 
     if ctx.is_gpu():
@@ -1179,14 +1167,7 @@ def apply[
                 length + max_pad,
             )
 
-            @always_inline
-            @parameter
-            def gpu_body[W: Int, alignment: Int = 1](coord: Coord):
-                process[W, rank=1, alignment=alignment](
-                    IndexList[1](Int(coord[0].value()))
-                )
-
-            elementwise[gpu_body, gpu_width, target="gpu"](
+            elementwise[process, gpu_width, target="gpu"](
                 Coord(padded), ctx.device.value()
             )
         else:
@@ -1196,7 +1177,7 @@ def apply[
 
         @always_inline
         def lane[W: Int](i: Int):
-            process[W, rank=1](IndexList[1](i))
+            process[W](Coord(i))
 
         vectorize[cpu_width](length, lane)
 
@@ -1214,10 +1195,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)
@@ -1238,10 +1217,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.load[W](i), validity.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
@@ -1263,10 +1240,8 @@ def apply[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank]) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, op[W](src.mask[W](i), validity.mask[W](i)))
 
     _apply_dispatch[Out, has_accelerator_support[Out](), process](length, ctx)

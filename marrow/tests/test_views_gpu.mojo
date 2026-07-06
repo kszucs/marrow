@@ -11,7 +11,7 @@ from std.sys import has_accelerator
 from std.sys.info import simd_width_of
 from std.testing import assert_equal, assert_false, assert_true
 from marrow.testing import TestSuite
-from std.utils.index import IndexList
+from std.utils.coord import Coord
 
 from marrow.buffers import Bitmap, Buffer
 from marrow.kernels.execution import ExecutionContext
@@ -76,15 +76,13 @@ def _scale_by_two[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank],) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.store[W](i, src.load[W](i) * 2)
 
     comptime if has_accelerator():
         comptime width = simd_width_of[T, target=get_gpu_target()]()
-        elementwise[process, width, target="gpu"](length, ctx)
+        elementwise[process, width, target="gpu"](Coord(length), ctx)
     else:
         raise Error("_scale_by_two: no GPU accelerator available")
 
@@ -110,14 +108,12 @@ def _bits_to_bytes[
 
     @parameter
     @always_inline
-    def process[
-        W: Int, rank: Int, alignment: Int = 1
-    ](idx: IndexList[rank],) -> None:
-        var i = idx[0]
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
         dst.unsafe_set(i, UInt8(1) if bv.test(i) else UInt8(0))
 
     comptime if has_accelerator():
-        elementwise[process, 1, target="gpu"](length, ctx)
+        elementwise[process, 1, target="gpu"](Coord(length), ctx)
     else:
         raise Error("_bits_to_bytes: no GPU accelerator available")
 
