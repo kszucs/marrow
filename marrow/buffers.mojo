@@ -186,7 +186,9 @@ struct Allocation(Movable):
     var ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]]
     """Raw CPU pointer.  Some for CPU and FOREIGN; None for HOST/DEVICE."""
 
-    var release: Optional[def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None]
+    var release: Optional[
+        def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None
+    ]
     """Release callback.  Set for CPU (_cpu_release) and FOREIGN (producer callback);
     None for HOST and DEVICE (their Optional field destructors handle release)."""
 
@@ -199,7 +201,9 @@ struct Allocation(Movable):
     def __init__(
         out self,
         ptr: Optional[UnsafePointer[UInt8, MutUntrackedOrigin]],
-        release: Optional[def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None],
+        release: Optional[
+            def(UnsafePointer[UInt8, MutUntrackedOrigin]) thin -> None
+        ],
         host: Optional[HostBuffer[DType.uint8]],
         device: Optional[DeviceBuffer[DType.uint8]],
     ):
@@ -448,7 +452,9 @@ struct Buffer[*, mut: Bool = False](
         """
         var byte_size = Buffer._aligned_size[T](Int(length))
         var dev = ctx.enqueue_create_buffer[DType.uint8](byte_size)
-        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](dev.unsafe_ptr())
+        var ptr = rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](
+            dev.unsafe_ptr()
+        )
         return Buffer[mut=True](
             size=byte_size,
             ptr=rebind[UnsafePointer[UInt8, MutUntrackedOrigin]](ptr),

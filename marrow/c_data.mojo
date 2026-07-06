@@ -45,7 +45,9 @@ def _alloc_c_string(s: String) -> UnsafePointer[c_char, MutUntrackedOrigin]:
     var buf = alloc[c_char](n + 1)
     memcpy(dest=buf.bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
     buf.bitcast[UInt8]()[n] = 0
-    return UnsafePointer[c_char, MutUntrackedOrigin](unsafe_from_address=Int(buf))
+    return UnsafePointer[c_char, MutUntrackedOrigin](
+        unsafe_from_address=Int(buf)
+    )
 
 
 def _encode_c_metadata(
@@ -216,9 +218,9 @@ struct CArrowSchema(Copyable, Movable):
         UnsafePointer[CArrowSchema, MutUntrackedOrigin], MutUntrackedOrigin
     ]
     var dictionary: UnsafePointer[CArrowSchema, MutUntrackedOrigin]
-    var release: def(
-        UnsafePointer[CArrowSchema, MutUntrackedOrigin]
-    ) thin abi("C") -> None
+    var release: def(UnsafePointer[CArrowSchema, MutUntrackedOrigin]) thin abi(
+        "C"
+    ) -> None
     var private_data: OpaquePointer[MutUntrackedOrigin]
 
     def __del__(deinit self):
@@ -534,7 +536,11 @@ struct CArrowSchema(Copyable, Movable):
         )
 
     def to_dtype(self) raises -> AnyDataType:
-        var fmt = StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=self.format.as_immutable()))
+        var fmt = StringSlice(
+            unsafe_from_utf8=CStringSlice(
+                unsafe_from_ptr=self.format.as_immutable()
+            )
+        )
         # Dictionary type: non-null `dictionary` field signals dictionary encoding.
         # The format string is the index type's format (e.g. "i" for int32).
         # Must be checked before the regular format string dispatch.
@@ -680,7 +686,11 @@ struct CArrowSchema(Copyable, Movable):
             raise Error("Unknown format: ", fmt)
 
     def to_field(self) raises -> Field:
-        var name = StringSlice(unsafe_from_utf8=CStringSlice(unsafe_from_ptr=self.name.as_immutable()))
+        var name = StringSlice(
+            unsafe_from_utf8=CStringSlice(
+                unsafe_from_ptr=self.name.as_immutable()
+            )
+        )
         var dtype = self.to_dtype()
         var nullable = self.flags & ARROW_FLAG_NULLABLE
         var metadata = _decode_c_metadata(self.metadata)
@@ -718,7 +728,9 @@ def _release_array_capsule(capsule: PyObjectPtr) abi("C"):
         pass
 
 
-def _release_imported_array(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> None:
+def _release_imported_array(
+    ptr: UnsafePointer[UInt8, MutUntrackedOrigin]
+) -> None:
     """Release callback for CArrowArray imported via the C Data Interface.
 
     Called when the last Buffer (or Bitmap) that references the imported array
@@ -789,14 +801,16 @@ struct CArrowArray(Copyable, Movable):
     var offset: Int64
     var n_buffers: Int64
     var n_children: Int64
-    var buffers: UnsafePointer[OpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin]
+    var buffers: UnsafePointer[
+        OpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin
+    ]
     var children: UnsafePointer[
         UnsafePointer[CArrowArray, MutUntrackedOrigin], MutUntrackedOrigin
     ]
     var dictionary: UnsafePointer[CArrowArray, MutUntrackedOrigin]
-    var release: def(
-        UnsafePointer[CArrowArray, MutUntrackedOrigin]
-    ) thin abi("C") -> None
+    var release: def(UnsafePointer[CArrowArray, MutUntrackedOrigin]) thin abi(
+        "C"
+    ) -> None
     var private_data: OpaquePointer[MutUntrackedOrigin]
 
     def __del__(deinit self):
@@ -1010,9 +1024,9 @@ struct CArrowArray(Copyable, Movable):
             UnsafePointer[CArrowArray, MutUntrackedOrigin], MutUntrackedOrigin
         ] = _null_ptr[UnsafePointer[CArrowArray, MutUntrackedOrigin]]()
         if n_children > 0:
-            children_ptr = alloc[UnsafePointer[CArrowArray, MutUntrackedOrigin]](
-                Int(n_children)
-            )
+            children_ptr = alloc[
+                UnsafePointer[CArrowArray, MutUntrackedOrigin]
+            ](Int(n_children))
             for i in range(Int(n_children)):
                 var child = CArrowArray.from_data(
                     data_heap[].children[i].copy()
@@ -1104,7 +1118,9 @@ struct CArrowArray(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-def _release_c_device_array(ptr: UnsafePointer[UInt8, MutUntrackedOrigin]) -> None:
+def _release_c_device_array(
+    ptr: UnsafePointer[UInt8, MutUntrackedOrigin]
+) -> None:
     """Release callback for CArrowDeviceArray imported via the C Device Data Interface.
 
     Called when the last Buffer that references the imported array is dropped.
