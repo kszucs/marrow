@@ -146,7 +146,7 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-trait RelationProcessor(ImplicitlyDestructible, Movable):
+trait RelationProcessor(ImplicitlyDeletable, Movable):
     """Pull-based relation processor.
 
     Concrete processors implement ``pull()`` to yield morsel-sized

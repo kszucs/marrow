@@ -30,7 +30,7 @@ from .arrays import AnyArray, ArrayData, DictionaryArray, NullArray
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
-import . dtypes as dt
+from . import dtypes as dt
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +167,12 @@ struct _FieldIpcInfo(Copyable, Movable):
     def __init__(out self, *, copy: Self):
         self.dict_id = copy.dict_id
         self.children = copy.children.copy()
+
+    # Explicit (empty) destructor so this self-referential struct
+    # (`children: List[_FieldIpcInfo]`) is ImplicitlyDeletable; fields are still
+    # destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     @staticmethod
     def find(

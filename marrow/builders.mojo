@@ -65,7 +65,7 @@ from .arrays import (
 # ---------------------------------------------------------------------------
 
 
-trait Builder(ImplicitlyDestructible, Movable, Sized):
+trait Builder(ImplicitlyDeletable, Movable, Sized):
     comptime ArrayType: Array
 
     def __len__(self) -> Int:
@@ -162,6 +162,12 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def __init__(out self, *, copy: Self):
         self._ptr = copy._ptr.copy()
+
+    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite
+    # the `StructBuilder -> List[AnyBuilder] -> AnyBuilder` reference cycle; the
+    # ArcPointer field is still destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     def __init__(out self, dtype: AnyDataType, capacity: Int = 0) raises:
         if dtype.is_null():
@@ -1125,6 +1131,12 @@ struct StructBuilder(Builder):
         self._null_count = 0
         self._bitmap = Bitmap.alloc_zeroed(capacity)
         self._children = children^
+
+    # Explicit (empty) destructor so this struct's `_children: List[AnyBuilder]`
+    # (which cycles back through AnyBuilder's variant) is ImplicitlyDeletable;
+    # fields are still destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
 
     def length(self) -> Int:
         return self._length
