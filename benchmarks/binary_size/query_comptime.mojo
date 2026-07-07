@@ -6,7 +6,7 @@ Same query as `query_runtime.mojo`:
 
 built with `marrow.expr.relations` (`Table`, `Project`, `Filter`,
 `NumericColumn`, `StringColumn`) instead of the type-erased `marrow.expr`
-`AnyRelation`/`Expr` layer. No `Expr.eval()` tag interpreter, no
+`AnyRelation`/`DynValue` layer. No `DynValue.eval()` tag interpreter, no
 `AnyRelation` vtable/trampolines, no `executor.mojo`
 `Planner`/`RelationProcessor` pull pipeline get linked in at all — the whole
 plan is one nested generic type, and `.execute(batch)` compiles straight to

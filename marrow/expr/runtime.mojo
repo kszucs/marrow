@@ -1,14 +1,14 @@
 """Type-erased runtime expression nodes for the marrow expression system.
 
-``Expr`` is the runtime counterpart to the comptime-typed layer in
+``DynValue`` is the runtime counterpart to the comptime-typed layer in
 ``marrow.expr.values``.  It exists so that query plans can be built and
 executed without knowing concrete comptime types — this is what the Python
-bindings (and any other runtime-typed caller) drive.  A single ``Expr`` node
+bindings (and any other runtime-typed caller) drive.  A single ``DynValue`` node
 carries a tag plus its child args, and dispatches its own execution by tag in
 ``eval()`` — there is no separate "processor" hierarchy mirroring the tree.
 
 A comptime-typed node from ``marrow.expr.values`` can be boxed into an
-``Expr`` via the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``/
+``DynValue`` via the ``DynValue(value)`` constructor (tag ``FUSED``); ``eval()``/
 ``dtype()``/``write_to()`` on a boxed node all delegate back to the concrete
 comptime node through trampolines, so a fused subtree keeps its single fused
 pass even when driven through this type-erased path. This is the one
@@ -23,7 +23,7 @@ Factory functions
 ``lit[T](value)``               — typed scalar literal
 ``if_else(cond, then_, else_)`` — conditional
 
-Operator overloads on ``Expr``: ``+``, ``-``, ``*``, ``/``, ``>``,
+Operator overloads on ``DynValue``: ``+``, ``-``, ``*``, ``/``, ``>``,
 ``<``, ``>=``, ``<=``, ``==``, ``!=``, ``&``, ``|``, ``~`` (NOT),
 unary ``-``.  Instance methods: ``.abs()``, ``.is_null()``, ``.length()``,
 ``.cast(to)``.
@@ -36,7 +36,7 @@ ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
 NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
-CAST - Type cast (not yet implemented — see Expr.eval)
+CAST - Type cast (not yet implemented — see DynValue.eval)
 FUSED - Carries a boxed comptime-typed node (see marrow.expr.values)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
@@ -86,12 +86,12 @@ comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
 comptime FUSED: UInt8 = 20
-"""Tag for Expr nodes that carry a boxed comptime-typed node in _fused."""
+"""Tag for DynValue nodes that carry a boxed comptime-typed node in _fused."""
 comptime LENGTH: UInt8 = 21
 
 
 # ---------------------------------------------------------------------------
-# Trampoline helpers for boxing comptime-typed expressions into Expr
+# Trampoline helpers for boxing comptime-typed expressions into DynValue
 # ---------------------------------------------------------------------------
 
 
@@ -148,11 +148,11 @@ def _fused_eval_tramp_bool[
 
 
 # ---------------------------------------------------------------------------
-# Expr - unified n-ary term expression node
+# DynValue - unified n-ary term expression node
 # ---------------------------------------------------------------------------
 
 
-struct Expr(
+struct DynValue(
     Copyable,
     ImplicitlyCopyable,
     ImplicitlyDeletable,
@@ -168,7 +168,7 @@ struct Expr(
     """
 
     var _tag: UInt8
-    var _args: List[Expr]
+    var _args: List[DynValue]
     var _kind_data: UInt8
     var _value: Optional[AnyScalar]
     var _name: String
@@ -184,7 +184,7 @@ struct Expr(
     def __init__(
         out self,
         tag: UInt8,
-        var args: List[Expr],
+        var args: List[DynValue],
         kind_data: UInt8,
         var value: Optional[AnyScalar],
         var name: String,
@@ -200,16 +200,16 @@ struct Expr(
         self._virt_fused_eval = Self._tramp_fused_eval_default
 
     def __init__[T: NumericValue](out self, value: T):
-        """Box a comptime-typed expression node into a runtime Expr.
+        """Box a comptime-typed expression node into a runtime DynValue.
 
-        The resulting ``Expr`` carries the comptime node in its ``_fused``
+        The resulting ``DynValue`` carries the comptime node in its ``_fused``
         slot, so ``dtype()``, ``write_to()``, and ``eval()`` all delegate to
         the comptime-typed implementation — including a single fused pass
         for ``eval()``, with no intermediate arrays.
         """
         var ptr = ArcPointer[T](value.copy())
         self._tag = FUSED
-        self._args = List[Expr]()
+        self._args = List[DynValue]()
         self._kind_data = 0
         self._value = None
         self._name = String()
@@ -220,14 +220,14 @@ struct Expr(
 
     def __init__[T: BoolValue](out self, value: T):
         """Box a comptime-typed predicate node (``Lt``/``Gt``/``Eq``) into a
-        runtime ``Expr``. Mirrors the ``NumericValue`` overload above — same
+        runtime ``DynValue``. Mirrors the ``NumericValue`` overload above — same
         ``FUSED`` tag, same trampoline mechanism, just a ``BoolValue``
         trampoline set so ``eval()`` produces a bit-packed ``BoolArray``
         instead of a ``PrimitiveArray``.
         """
         var ptr = ArcPointer[T](value.copy())
         self._tag = FUSED
-        self._args = List[Expr]()
+        self._args = List[DynValue]()
         self._kind_data = 0
         self._value = None
         self._name = String()
@@ -238,7 +238,7 @@ struct Expr(
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
-        self._args = List[Expr]()
+        self._args = List[DynValue]()
         for i in range(len(copy._args)):
             self._args.append(copy._args[i].copy())
         self._kind_data = copy._kind_data
@@ -250,7 +250,7 @@ struct Expr(
         self._virt_fused_eval = copy._virt_fused_eval
 
     # Explicit (empty) destructor so this self-referential struct
-    # (`_args: List[Expr]`) is ImplicitlyDeletable; fields are still destroyed
+    # (`_args: List[DynValue]`) is ImplicitlyDeletable; fields are still destroyed
     # automatically after the body runs.
     def __del__(deinit self):
         pass
@@ -269,7 +269,7 @@ struct Expr(
     def _tramp_fused_eval_default(
         ptr: ArcPointer[NoneType], batch: RecordBatch
     ) raises -> AnyArray:
-        raise Error("Expr.eval: FUSED tag set without a bound comptime node")
+        raise Error("DynValue.eval: FUSED tag set without a bound comptime node")
 
     def kind(self) -> UInt8:
         return self._tag
@@ -282,7 +282,18 @@ struct Expr(
         """Return the column name for a named LOAD node (empty otherwise)."""
         return self._name
 
-    def resolve_names(self, schema: Schema) raises -> Expr:
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        """Evaluate against *batch*, resolving named ``col(...)`` references
+        against its schema first. This is the ``AnyValue``-box entry point (the
+        fused/streaming relations call it directly), so the executor's separate
+        ``resolve_names`` pass is folded in here."""
+        return self.resolve_names(batch.schema).eval(batch)
+
+    def field_name(self) -> String:
+        """Output column name (the LOAD name; empty for computed nodes)."""
+        return self._name.copy()
+
+    def resolve_names(self, schema: Schema) raises -> DynValue:
         """Recursively resolve ``col("name")`` references against *schema*.
 
         Returns a copy of this expression tree with every named LOAD node
@@ -310,8 +321,8 @@ struct Expr(
             return self._value.value().type()
         return None
 
-    def inputs(self) -> List[Expr]:
-        var result = List[Expr](capacity=len(self._args))
+    def inputs(self) -> List[DynValue]:
+        var result = List[DynValue](capacity=len(self._args))
         for ref a in self._args:
             result.append(a.copy())
         return result^
@@ -381,9 +392,9 @@ struct Expr(
                 self._args[2].eval(batch),
             )
         elif self._tag == CAST:
-            raise Error("Expr.eval: cast not implemented")
+            raise Error("DynValue.eval: cast not implemented")
         else:
-            raise Error("Expr.eval: unknown expression kind ", self._tag)
+            raise Error("DynValue.eval: unknown expression kind ", self._tag)
 
     def _op_name(self) -> String:
         """Display name for an operator tag (empty if not an operator)."""
@@ -448,8 +459,8 @@ struct Expr(
                 writer.write(t")")
 
     # Node builders shared by the operator overloads below
-    def _binary(self, tag: UInt8, rhs: Expr) -> Expr:
-        return Expr(
+    def _binary(self, tag: UInt8, rhs: DynValue) -> DynValue:
+        return DynValue(
             tag=tag,
             args=[self.copy(), rhs.copy()],
             kind_data=0,
@@ -457,8 +468,8 @@ struct Expr(
             name=String(),
         )
 
-    def _unary(self, tag: UInt8) -> Expr:
-        return Expr(
+    def _unary(self, tag: UInt8) -> DynValue:
+        return DynValue(
             tag=tag,
             args=[self.copy()],
             kind_data=0,
@@ -466,99 +477,99 @@ struct Expr(
             name=String(),
         )
 
-    # Operator overloads (methods on Expr)
-    def __add__(self, rhs: Expr) -> Expr:
+    # Operator overloads (methods on DynValue)
+    def __add__(self, rhs: DynValue) -> DynValue:
         return self._binary(ADD, rhs)
 
-    def __sub__(self, rhs: Expr) -> Expr:
+    def __sub__(self, rhs: DynValue) -> DynValue:
         return self._binary(SUB, rhs)
 
-    def __mul__(self, rhs: Expr) -> Expr:
+    def __mul__(self, rhs: DynValue) -> DynValue:
         return self._binary(MUL, rhs)
 
-    def __truediv__(self, rhs: Expr) -> Expr:
+    def __truediv__(self, rhs: DynValue) -> DynValue:
         return self._binary(DIV, rhs)
 
-    def __gt__(self, rhs: Expr) -> Expr:
+    def __gt__(self, rhs: DynValue) -> DynValue:
         return self._binary(GT, rhs)
 
-    def __lt__(self, rhs: Expr) -> Expr:
+    def __lt__(self, rhs: DynValue) -> DynValue:
         return self._binary(LT, rhs)
 
-    def __ge__(self, rhs: Expr) -> Expr:
+    def __ge__(self, rhs: DynValue) -> DynValue:
         return self._binary(GE, rhs)
 
-    def __le__(self, rhs: Expr) -> Expr:
+    def __le__(self, rhs: DynValue) -> DynValue:
         return self._binary(LE, rhs)
 
-    def __eq__(self, rhs: Expr) -> Expr:
+    def __eq__(self, rhs: DynValue) -> DynValue:
         return self._binary(EQ, rhs)
 
-    def __ne__(self, rhs: Expr) -> Expr:
+    def __ne__(self, rhs: DynValue) -> DynValue:
         return self._binary(NE, rhs)
 
-    def __and__(self, rhs: Expr) -> Expr:
+    def __and__(self, rhs: DynValue) -> DynValue:
         return self._binary(AND, rhs)
 
-    def __or__(self, rhs: Expr) -> Expr:
+    def __or__(self, rhs: DynValue) -> DynValue:
         return self._binary(OR, rhs)
 
-    def __neg__(self) -> Expr:
+    def __neg__(self) -> DynValue:
         return self._unary(NEG)
 
-    def __invert__(self) -> Expr:
+    def __invert__(self) -> DynValue:
         return self._unary(NOT)
 
-    def is_null(self) -> Expr:
+    def is_null(self) -> DynValue:
         return self._unary(IS_NULL)
 
-    def abs(self) -> Expr:
+    def abs(self) -> DynValue:
         return self._unary(ABS)
 
-    def length(self) -> Expr:
+    def length(self) -> DynValue:
         return self._unary(LENGTH)
 
-    def cast(self, to: AnyDataType) -> Expr:
+    def cast(self, to: AnyDataType) -> DynValue:
         return self._unary(CAST)
 
 
 # ---------------------------------------------------------------------------
-# Factory functions (return Expr)
+# Factory functions (return DynValue)
 # ---------------------------------------------------------------------------
 
 
-def col(index: Int) -> Expr:
+def col(index: Int) -> DynValue:
     """Reference to the ``index``-th input column."""
-    return Expr(
+    return DynValue(
         tag=LOAD,
-        args=List[Expr](),
+        args=List[DynValue](),
         kind_data=UInt8(index),
         value=None,
         name=String(),
     )
 
 
-def col(var name: String) -> Expr:
+def col(var name: String) -> DynValue:
     """Reference to a named column."""
-    return Expr(
-        tag=LOAD, args=List[Expr](), kind_data=0, value=None, name=name^
+    return DynValue(
+        tag=LOAD, args=List[DynValue](), kind_data=0, value=None, name=name^
     )
 
 
-def lit[T: NumericType](value: Scalar[T.native]) raises -> Expr:
+def lit[T: NumericType](value: Scalar[T.native]) raises -> DynValue:
     """A scalar constant."""
-    return Expr(
+    return DynValue(
         tag=LITERAL,
-        args=List[Expr](),
+        args=List[DynValue](),
         kind_data=0,
         value=PrimitiveScalar[T](value).to_any(),
         name=String(),
     )
 
 
-def if_else(cond: Expr, then_: Expr, else_: Expr) -> Expr:
+def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
     """Element-wise conditional."""
-    return Expr(
+    return DynValue(
         tag=IF_ELSE,
         args=[cond.copy(), then_.copy(), else_.copy()],
         kind_data=0,

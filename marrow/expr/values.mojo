@@ -21,7 +21,7 @@ Expression nodes
 Traits
 ------
 ``Value`` — base trait for every expression node (dtype, write_to;
-    Copyable/Writable/etc.), shared with the type-erased ``Expr`` in
+    Copyable/Writable/etc.), shared with the type-erased ``DynValue`` in
     ``marrow.expr.runtime`` — that module imports these traits directly
     from here (``aot`` has no dependency on ``dyn``; the reverse does).
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
@@ -30,10 +30,10 @@ Traits
 
 Bridging to the runtime layer
 -----------------------------
-The ``Expr(value)`` constructor (see ``marrow.expr.runtime``) boxes a
-comptime node from this module into a runtime ``Expr``, so it can flow
+The ``DynValue(value)`` constructor (see ``marrow.expr.runtime``) boxes a
+comptime node from this module into a runtime ``DynValue``, so it can flow
 through APIs that build/execute plans without knowing the concrete comptime
-type (e.g. the Python bindings). The boxed ``Expr`` fully delegates
+type (e.g. the Python bindings). The boxed ``DynValue`` fully delegates
 ``dtype()``, ``write_to()``, and ``eval()`` back to the concrete node via
 trampolines, so a fused subtree keeps its single-pass execution even when
 driven through the type-erased path.
@@ -75,7 +75,7 @@ trait Value(
     """Interface every expression node must implement.
 
     This is the single canonical trait implemented by both the comptime-typed
-    expressions in this module and the type-erased ``Expr`` in ``runtime.mojo``.
+    expressions in this module and the type-erased ``DynValue`` in ``runtime.mojo``.
 
     ``dtype()`` is declared by the ``NumericValue`` / ``StringValue`` sub-traits
     (which supply a default implementation); ``write_to()`` comes from the

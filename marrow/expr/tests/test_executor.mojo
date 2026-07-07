@@ -16,7 +16,7 @@ from marrow.dtypes import (
 )
 from marrow.tabular import record_batch
 from marrow.expr import (
-    Expr,
+    DynValue,
     Planner,
     col,
     lit,

@@ -6,10 +6,10 @@ Each logical relational plan node maps to a physical **relation processor**
 that implements a pull-based pipeline (``ScanProcessor``, ``FilterProcessor``,
 ``ProjectProcessor``, ``AggregateProcessor``, ``JoinProcessor``, ...).
 
-Scalar expressions have no separate processor hierarchy: ``Expr`` (see
+Scalar expressions have no separate processor hierarchy: ``DynValue`` (see
 ``marrow.expr.runtime``) already carries its own tag and args, so relation
-processors hold ``Expr``/``List[Expr]`` fields directly and call
-``Expr.eval(batch)``, which dispatches on tag itself — including delegating
+processors hold ``DynValue``/``List[DynValue]`` fields directly and call
+``DynValue.eval(batch)``, which dispatches on tag itself — including delegating
 to a boxed comptime-typed node's own fused ``execute()`` for the ``FUSED``
 tag.
 
@@ -47,7 +47,7 @@ from marrow.kernels.concat import concat
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.kernels.filter import filter
-from marrow.expr.runtime import Expr, LOAD
+from marrow.expr.runtime import DynValue, LOAD
 from marrow.arrays import StructArray
 from marrow.dtypes import Field, struct_
 from marrow.kernels.groupby import HashGrouper
@@ -360,13 +360,13 @@ struct FilterProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var predicate: Expr
+    var predicate: DynValue
     var schema_: Schema
 
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var predicate: Expr,
+        var predicate: DynValue,
         schema_: Schema,
     ):
         self.child = child^
@@ -402,13 +402,13 @@ struct ProjectProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var values: List[Expr]
+    var values: List[DynValue]
     var schema_: Schema
 
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var values: List[Expr],
+        var values: List[DynValue],
         schema_: Schema,
     ):
         self.child = child^
@@ -462,8 +462,8 @@ struct AggregateProcessor(RelationProcessor):
     """
 
     var child: AnyRelationProcessor
-    var key_exprs: List[Expr]
-    var value_exprs: List[Expr]
+    var key_exprs: List[DynValue]
+    var value_exprs: List[DynValue]
     var grouper: HashGrouper
     var schema_: Schema
     var key_fields: List[Field]
@@ -472,8 +472,8 @@ struct AggregateProcessor(RelationProcessor):
     def __init__(
         out self,
         var child: AnyRelationProcessor,
-        var key_exprs: List[Expr],
-        var value_exprs: List[Expr],
+        var key_exprs: List[DynValue],
+        var value_exprs: List[DynValue],
         var grouper: HashGrouper,
         schema_: Schema,
         var key_fields: List[Field],
@@ -629,8 +629,8 @@ struct Planner:
     Walks the relational expression tree bottom-up and creates the
     corresponding processor hierarchy.  Holds the ``ExecutionContext`` used
     during planning.  Scalar expressions need no separate build step — every
-    relation node already stores fully name-resolved ``Expr`` values, which
-    evaluate themselves via ``Expr.eval(batch)``.
+    relation node already stores fully name-resolved ``DynValue`` values, which
+    evaluate themselves via ``DynValue.eval(batch)``.
     """
 
     var ctx: ExecutionContext
@@ -658,7 +658,7 @@ struct Planner:
         if k == PROJECT_NODE:
             var arc = expr.downcast[Project]()
             var child = self.build(arc[].input)
-            var values = List[Expr]()
+            var values = List[DynValue]()
             for ref e in arc[].exprs_:
                 values.append(e.copy())
             return ProjectProcessor(
@@ -675,10 +675,10 @@ struct Planner:
             var arc = expr.downcast[PlanAggregate]()
             var child = self.build(arc[].input)
 
-            var key_exprs = List[Expr]()
+            var key_exprs = List[DynValue]()
             for ref e in arc[].keys:
                 key_exprs.append(e.copy())
-            var value_exprs = List[Expr]()
+            var value_exprs = List[DynValue]()
             for ref e in arc[].agg_exprs:
                 value_exprs.append(e.copy())
 
@@ -686,7 +686,7 @@ struct Planner:
             for i in range(len(arc[].keys)):
                 key_fields.append(arc[].schema().fields[i].copy())
 
-            # Resolve each aggregated value's dtype.  ``Expr.dtype()`` only
+            # Resolve each aggregated value's dtype.  ``DynValue.dtype()`` only
             # knows LITERAL nodes; plain LOAD nodes must be resolved against
             # the aggregate's input schema so e.g. summing an int64 column
             # uses an int64 accumulator instead of defaulting to float64.
@@ -719,7 +719,7 @@ struct Planner:
             var left_proc = self.build(arc[].left)
             var right_proc = self.build(arc[].right)
 
-            # Extract positional key indices from LOAD Expr nodes.
+            # Extract positional key indices from LOAD DynValue nodes.
             var left_key_indices = List[Int]()
             for ref e in arc[].left_keys:
                 left_key_indices.append(Int(e._kind_data))

@@ -14,7 +14,7 @@ from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
 from marrow.kernels.string import string_lengths
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
-    Expr,
+    DynValue,
     col,
     lit,
     if_else,
@@ -43,21 +43,21 @@ from marrow.expr import (
 )
 
 
-def _exec(expr: Expr, batch: RecordBatch) raises -> Int64Array:
+def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:
     """Helper: evaluate an expression against the batch."""
     var tmp = expr.eval(batch)
     ref result = tmp.as_int64()
     return result.copy()
 
 
-def _exec_length(expr: Expr, batch: RecordBatch) raises -> UInt32Array:
+def _exec_length(expr: DynValue, batch: RecordBatch) raises -> UInt32Array:
     """Helper: evaluate a length expression against the batch."""
     var tmp = expr.eval(batch)
     ref result = tmp.as_uint32()
     return result.copy()
 
 
-def _exec_pred(expr: Expr, batch: RecordBatch) raises -> BoolArray:
+def _exec_pred(expr: DynValue, batch: RecordBatch) raises -> BoolArray:
     """Helper: evaluate a predicate expression against the batch."""
     var tmp = expr.eval(batch)
     return tmp.as_bool().copy()

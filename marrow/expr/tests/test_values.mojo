@@ -9,7 +9,7 @@ Two families, both exercising the single-fused-vectorize-pass execution model:
   the same fused pass.
 
 See ``dyn/tests/test_aot_injection.mojo`` for these nodes boxed into the runtime
-``Expr`` via the ``FUSED`` tag.
+``DynValue`` via the ``FUSED`` tag.
 """
 
 from std.testing import assert_equal, assert_true

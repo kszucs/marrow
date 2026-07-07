@@ -1,20 +1,20 @@
 """Tests for AOT-compiled value expression injection into runtime expressions.
 
 These tests verify that comptime-typed expressions (``marrow.expr.values``)
-can be boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor,
+can be boxed into runtime ``DynValue`` nodes via the ``DynValue(value)`` constructor,
 and executed end-to-end through the type-erased runtime path.
 
 The key pattern is:
 1. Create a comptime-typed expression (e.g., Add[NumericColumn, NumericColumn])
-2. Box it into a runtime Expr via Expr(value)
-3. The boxed Expr carries the comptime node in its _fused slot
+2. Box it into a runtime DynValue via DynValue(value)
+3. The boxed DynValue carries the comptime node in its _fused slot
 4. Both the direct path (``expr.execute(batch)``) and the boxed runtime path
    (``boxed.eval(batch)``) run the same single fused vectorize loop, since
-   ``Expr.eval()`` delegates FUSED nodes straight back to ``execute()``
+   ``DynValue.eval()`` delegates FUSED nodes straight back to ``execute()``
 
 This test verifies that:
-- Expr(value) produces a valid Expr with FUSED tag
-- The boxed Expr can be executed directly via Expr.eval(), matching the
+- DynValue(value) produces a valid DynValue with FUSED tag
+- The boxed DynValue can be executed directly via DynValue.eval(), matching the
   typed direct-execution path exactly — the runtime and comptime layers are
   a genuine two-way bridge, not just a one-way introspection box.
 """
@@ -27,7 +27,7 @@ from marrow.arrays import PrimitiveArray, Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr import Expr, FUSED
+from marrow.expr import DynValue, FUSED
 from marrow.expr.values import (
     NumericColumn,
     Add,
@@ -56,15 +56,15 @@ def _exec_typed[
 
 
 def test_fused_column_to_expr() raises:
-    """NumericColumn.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """NumericColumn.to_expr() produces a valid runtime DynValue with FUSED tag."""
     var a = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy()], names=["c0"])
 
     # Create a typed column expression
     var fused = NumericColumn[Int64Type](0)
 
-    # Box it into a runtime Expr
-    var expr = Expr(fused)
+    # Box it into a runtime DynValue
+    var expr = DynValue(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -79,7 +79,7 @@ def test_fused_column_to_expr() raises:
 
 
 def test_fused_add_to_expr() raises:
-    """Add.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """Add.to_expr() produces a valid runtime DynValue with FUSED tag."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -89,8 +89,8 @@ def test_fused_add_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    # Box it into a runtime Expr
-    var expr = Expr(fused)
+    # Box it into a runtime DynValue
+    var expr = DynValue(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -105,7 +105,7 @@ def test_fused_add_to_expr() raises:
 
 
 def test_fused_sub_to_expr() raises:
-    """Sub.to_expr() produces a valid runtime Expr with FUSED tag."""
+    """Sub.to_expr() produces a valid runtime DynValue with FUSED tag."""
     var a = array([10, 20, 30, 40, 50], int64)
     var b = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
@@ -115,8 +115,8 @@ def test_fused_sub_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Sub(col_a, col_b)
 
-    # Box it into a runtime Expr
-    var expr = Expr(fused)
+    # Box it into a runtime DynValue
+    var expr = DynValue(fused)
 
     # Verify the expression is tagged as FUSED
     assert_equal(expr.kind(), FUSED)
@@ -151,8 +151,8 @@ def test_nested_fused_add_sub_to_expr() raises:
     var add_expr = Add(col_a, col_b)
     var fused = Sub(add_expr, col_c)
 
-    # Box it into a runtime Expr
-    var expr = Expr(fused)
+    # Box it into a runtime DynValue
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     # Execute via the direct typed path
@@ -185,8 +185,8 @@ def test_chained_fused_adds_to_expr() raises:
     var add_abc = Add(add_ab, col_c)
     var fused = Add(add_abc, col_d)
 
-    # Box it into a runtime Expr
-    var expr = Expr(fused)
+    # Box it into a runtime DynValue
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     # Execute via the direct typed path
@@ -212,7 +212,7 @@ def test_fused_column_different_types_to_expr() raises:
     var batch = record_batch([a.copy()], names=["c0"])
 
     var col_i64 = NumericColumn[Int64Type](0)
-    var expr_i64 = Expr(col_i64)
+    var expr_i64 = DynValue(col_i64)
     assert_equal(expr_i64.kind(), FUSED)
 
     var result_i64 = _exec_typed(col_i64, batch)
@@ -237,7 +237,7 @@ def test_single_element_fused_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr = Expr(fused)
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -257,7 +257,7 @@ def test_negative_values_fused_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr = Expr(fused)
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -277,7 +277,7 @@ def test_large_values_fused_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr = Expr(fused)
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -302,7 +302,7 @@ def test_non_aligned_length_fused_to_expr() raises:
     var col_b = NumericColumn[Int64Type](1)
     var fused = Add(col_a, col_b)
 
-    var expr = Expr(fused)
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     var result = _exec_typed(fused, batch)
@@ -313,12 +313,12 @@ def test_non_aligned_length_fused_to_expr() raises:
 
 
 # ---------------------------------------------------------------------------
-# BoolValue injection tests (Lt/Gt/Eq boxed into Expr via FUSED)
+# BoolValue injection tests (Lt/Gt/Eq boxed into DynValue via FUSED)
 # ---------------------------------------------------------------------------
 
 
 def test_fused_gt_to_expr() raises:
-    """Expr(Gt(NumericColumn, NumericColumn)) produces a valid runtime Expr with FUSED tag,
+    """DynValue(Gt(NumericColumn, NumericColumn)) produces a valid runtime DynValue with FUSED tag,
     and both the direct and boxed paths agree.
     """
     var a = array([1, 5, 3, 8, 2], int64)
@@ -326,7 +326,7 @@ def test_fused_gt_to_expr() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
 
     var fused = Gt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
-    var expr = Expr(fused)
+    var expr = DynValue(fused)
     assert_equal(expr.kind(), FUSED)
 
     var direct_result = fused.execute(batch)
@@ -350,7 +350,7 @@ def test_fused_bool_value_drives_runtime_relational_plan() raises:
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var predicate = Expr(
+    var predicate = DynValue(
         Gt(NumericColumn[Int64Type](0), NumericColumn[Int64Type](1))
     )
     var plan = in_memory_table(batch).filter(predicate)

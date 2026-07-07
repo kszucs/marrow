@@ -42,11 +42,11 @@ nothing outside this file constructs an ``AnyArray`` of a dtype a given
 query doesn't use, so the compiler can prove and prune the rest of
 ``filter()``'s/kernels' per-dtype branches. Calling into
 ``marrow.expr.executor`` (``Planner``, ``*Processor``) or
-``marrow.expr.runtime.Expr.eval()`` instead reaches a genuinely *open*
+``marrow.expr.runtime.DynValue.eval()`` instead reaches a genuinely *open*
 dispatcher built to stay ready for dtypes/node-kinds it can't know ahead of
 time, and nothing there can be pruned. Measured in ``benchmarks/binary_size/``:
 a ``Project``+``Filter`` plan compiles ~31x smaller (stripped) than the same
-query on ``marrow.expr``'s ``AnyRelation``/``Expr``; a hybrid variant
+query on ``marrow.expr``'s ``AnyRelation``/``DynValue``; a hybrid variant
 that only fuses the *predicate* but still calls into the executor is the
 same size as the fully runtime one.
 

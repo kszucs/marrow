@@ -5,7 +5,7 @@ operator is *its own processor* (holds its child ``AnySource``, has ``pull()``),
 so morsel-at-a-time streaming works **without** a central ``Planner`` — there is
 no open per-kind dispatch to link every processor, so only the nodes actually
 constructed get compiled in. Values are ``AnyValue`` (fused-capable, via
-``marrow.expr.erased``), not the ``Expr`` interpreter, so a fused-value pipeline
+``marrow.expr.erased``), not the ``DynValue`` interpreter, so a fused-value pipeline
 stays tiny while an interpreter-value pipeline pays only for what it constructs.
 
 This mirrors ``marrow.expr.executor``'s ``*Processor`` classes exactly (same

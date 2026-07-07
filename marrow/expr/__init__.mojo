@@ -2,7 +2,7 @@
 
 Pick this package when the query isn't known until the program runs — this
 is what the Python bindings drive, and what any dynamic-SQL or user-supplied-
-schema caller needs. ``Expr`` and ``AnyRelation`` build and execute plans
+schema caller needs. ``DynValue`` and ``AnyRelation`` build and execute plans
 without knowing concrete comptime types, at the cost of tag/vtable dispatch
 and a much larger compiled surface (~33x, stripped, in the measured
 ``benchmarks/binary_size/`` case) than the comptime counterpart in
@@ -10,12 +10,12 @@ and a much larger compiled surface (~33x, stripped, in the measured
 at compile time.
 
 A comptime-typed node from ``marrow.expr.values`` can be boxed into an
-``Expr`` via the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``,
+``DynValue`` via the ``DynValue(value)`` constructor (tag ``FUSED``); ``eval()``,
 ``dtype()``, and ``write_to()`` on a boxed node all delegate back to the
 concrete comptime node, so a fused subtree keeps its single-pass execution
 even when driven through this type-erased path.
 
-``expr.mojo`` — ``Expr`` (unified n-ary expression node), factory functions
+``expr.mojo`` — ``DynValue`` (unified n-ary expression node), factory functions
 (``col()``, ``lit()``, ``if_else()``), and the expression tag constants.
 
 ``relations.mojo`` — ``AnyRelation`` (type-erased relational plan node) and
@@ -36,8 +36,8 @@ Usage::
 
 from marrow.expr.runtime import (
     # Unified expression node
-    Expr,
-    # Free-standing factory functions (return Expr)
+    DynValue,
+    # Free-standing factory functions (return DynValue)
     col,
     lit,
     if_else,

@@ -16,7 +16,8 @@ from marrow.dtypes import Int64Type, StringType, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.relations import Table
 from marrow.expr.values import Gt
-from marrow.expr.erased import AnyValue, DynValue
+from marrow.expr.runtime import col
+from marrow.expr.erased import AnyValue
 from marrow.expr.streaming import AnySource, Scan, Filter, Project
 
 
@@ -86,15 +87,11 @@ def test_streaming_interpreter_values() raises:
     """The same pipeline with DynValue interpreter values (small morsels)
     produces the same result — fused and interpreted interchange."""
     var scan = AnySource(Scan(_batch(), 2))
-    var pred = AnyValue(
-        DynValue.gt(
-            AnyValue(DynValue.load(0, "a")), AnyValue(DynValue.load(1, "b"))
-        )
-    )
+    var pred = AnyValue(col("a") > col("b"))
     var filtered = AnySource(Filter(scan^, pred^))
     var values = List[AnyValue]()
-    values.append(AnyValue(DynValue.load(0, "a")))
-    values.append(AnyValue(DynValue.load(2, "name")))
+    values.append(AnyValue(col("a")))
+    values.append(AnyValue(col("name")))
     var plan = AnySource(Project(filtered^, values^))
     var result = plan.collect()
     assert_equal(result.num_rows(), 2)

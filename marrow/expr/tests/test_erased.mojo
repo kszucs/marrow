@@ -1,15 +1,15 @@
-"""Tests for the erased/unified relational layer in ``marrow.expr.erased``.
+"""Tests for the erased/unified value layer in ``marrow.expr.erased``.
 
-Covers the two halves of the ``marrow.expr`` unification prototype
+Covers the two halves of the ``marrow.expr`` unification
 (``docs/expr-unification-plan.md``):
 
 - ``AnyValue`` + self-executing runtime ``Project``/``Filter`` — a walkable,
-  rewritable plan tree over **fused-only** value boxes. Same result as the typed
-  ``marrow.expr.relations`` layer, at the same (measured) binary size.
-- ``DynValue`` — the type-erased tag-interpreter node (the reworked ``Expr``),
-  boxed into the *same* ``AnyValue``. The load-bearing property is that fused
-  and interpreted values interchange: a plan built from either produces the same
-  result, and a single ``Project`` can hold both at once.
+  rewritable plan tree over boxed values. Same result as the typed layer, at the
+  same (measured) binary size.
+- ``DynValue`` (from ``marrow.expr.runtime``, built the Python way via ``col``
+  and operators) boxed into the *same* ``AnyValue``. The load-bearing property
+  is that fused and interpreted values interchange: a plan built from either
+  produces the same result, and a single ``Project`` can hold both at once.
 """
 
 from std.testing import assert_equal, assert_true
@@ -21,7 +21,8 @@ from marrow.dtypes import Int64Type, StringType, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.relations import Table
 from marrow.expr.values import Gt
-from marrow.expr.erased import AnyValue, DynValue, Project, ADD, GT
+from marrow.expr.runtime import col
+from marrow.expr.erased import AnyValue, Project
 
 
 struct _Orders:
@@ -57,7 +58,9 @@ def test_fused_project() raises:
     assert_equal(len(result.columns), 2)
     assert_equal(result.schema.fields[0].name, "a")
     assert_equal(result.schema.fields[1].name, "name")
-    assert_true(result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64))
+    assert_true(
+        result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+    )
 
 
 def test_fused_filter() raises:
@@ -74,25 +77,22 @@ def test_fused_filter() raises:
 
 
 # ---------------------------------------------------------------------------
-# Interpreter path — DynValue boxed into the same AnyValue
+# Interpreter path — DynValue (col/operators) boxed into the same AnyValue
 # ---------------------------------------------------------------------------
 
 
 def test_dynvalue_arithmetic() raises:
-    """DynValue interprets a binary op over LOAD children."""
+    """A DynValue built from col()+col() interprets over the batch."""
     var batch = _batch()
-    var expr = DynValue.binary(
-        ADD, AnyValue(DynValue.load(0, "a")), AnyValue(DynValue.load(1, "b"))
-    )
+    var expr = col("a") + col("b")
     ref result = expr.to_array(batch).as_int64()
     assert_true(result.copy() == array([5, 9, 7, 12, 6], int64))
 
 
 def test_dynvalue_load_resolves_by_name() raises:
-    """A DynValue LOAD resolves by name (matching the fused columns), so a wrong
-    index is overridden by the name."""
+    """col("a") resolves by name against the batch schema."""
     var batch = _batch()
-    var expr = DynValue.load(99, "a")  # bogus index, name wins
+    var expr = col("a")
     ref result = expr.to_array(batch).as_int64()
     assert_true(result.copy() == array([1, 5, 3, 8, 2], int64))
 
@@ -102,13 +102,9 @@ def test_dynvalue_matches_fused() raises:
     result as the fused path — fused and interpreted values interchange."""
     var batch = _batch()
     var exprs = List[AnyValue]()
-    exprs.append(AnyValue(DynValue.load(0, "a")))
-    exprs.append(AnyValue(DynValue.load(2, "name")))
-    var pred = AnyValue(
-        DynValue.gt(
-            AnyValue(DynValue.load(0, "a")), AnyValue(DynValue.load(1, "b"))
-        )
-    )
+    exprs.append(AnyValue(col("a")))
+    exprs.append(AnyValue(col("name")))
+    var pred = AnyValue(col("a") > col("b"))
     var result = Project(exprs^).filter(pred^).execute(batch)
 
     assert_equal(result.num_rows(), 2)
@@ -122,12 +118,16 @@ def test_cobox_fused_and_dynvalue() raises:
     var batch = _batch()
     var exprs = List[AnyValue]()
     exprs.append(AnyValue(t.a))  # fused
-    exprs.append(AnyValue(DynValue.load(1, "b")))  # interpreter
+    exprs.append(AnyValue(col("b")))  # interpreter
     var result = Project(exprs^).execute(batch)
 
     assert_equal(result.num_rows(), 5)
-    assert_true(result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64))
-    assert_true(result.columns[1].as_int64().copy() == array([4, 4, 4, 4, 4], int64))
+    assert_true(
+        result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+    )
+    assert_true(
+        result.columns[1].as_int64().copy() == array([4, 4, 4, 4, 4], int64)
+    )
 
 
 def main() raises:

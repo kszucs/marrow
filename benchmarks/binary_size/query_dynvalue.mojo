@@ -3,14 +3,15 @@
 Same query as the other variants (`SELECT a, name WHERE a > b`) and the same
 runtime, self-executing `marrow.expr.erased` `Project`/`Filter` as
 `query_erased_aot.mojo` — but the values are boxed `DynValue` **interpreter**
-nodes (tag-dispatched `to_array()`) instead of fused nodes.
+nodes (tag-dispatched `to_array()`) built the Python way (`col(...)` +
+operators), instead of fused nodes.
 
 This is the other half of the unification's DCE proof: the relational ops are
 identical to `query_erased_aot`, so any size difference is purely the value
 representation. Constructing a `DynValue` links its interpreter (and the
-`AnyArray`-dispatching `greater` kernel's per-dtype fanout); `query_erased_aot`,
-which never constructs one, must stay tiny. If both hold, one `AnyValue` box
-serving fused and interpreted values is confirmed size-safe.
+per-dtype kernel fanout); `query_erased_aot`, which never constructs one, stays
+tiny. If both hold, one `AnyValue` box serving fused and interpreted values is
+confirmed size-safe.
 
     pixi run binary_size
 """
@@ -18,7 +19,8 @@ serving fused and interpreted values is confirmed size-safe.
 from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.tabular import record_batch
-from marrow.expr.erased import AnyValue, DynValue, Project
+from marrow.expr.runtime import col
+from marrow.expr.erased import AnyValue, Project
 
 
 def main() raises:
@@ -30,11 +32,9 @@ def main() raises:
     )
 
     var exprs = List[AnyValue]()
-    exprs.append(AnyValue(DynValue.load(0, "a")))
-    exprs.append(AnyValue(DynValue.load(2, "name")))
-    var predicate = AnyValue(
-        DynValue.gt(AnyValue(DynValue.load(0, "a")), AnyValue(DynValue.load(1, "b")))
-    )
+    exprs.append(AnyValue(col("a")))
+    exprs.append(AnyValue(col("name")))
+    var predicate = AnyValue(col("a") > col("b"))
     var plan = Project(exprs^).filter(predicate^)
     var result = plan.execute(batch)
     print(result)

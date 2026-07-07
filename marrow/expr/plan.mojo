@@ -30,7 +30,7 @@ from std.memory import ArcPointer
 from marrow.dtypes import Field
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.runtime import Expr, col
+from marrow.expr.runtime import DynValue, col
 from marrow.kernels.join import (
     JOIN_INNER,
     JOIN_LEFT,
@@ -166,7 +166,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[Expr]()
+        var exprs = List[DynValue]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -185,7 +185,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         )
         return AnyRelation(proj^)
 
-    def filter(self, predicate: Expr) raises -> AnyRelation:
+    def filter(self, predicate: DynValue) raises -> AnyRelation:
         """Filter rows by a boolean predicate, returning a new plan node.
 
         Column references using ``col("name")`` are resolved to positional
@@ -197,8 +197,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def aggregate(
         self,
-        keys: List[Expr],
-        values: List[Expr],
+        keys: List[DynValue],
+        values: List[DynValue],
         funcs: List[String],
     ) raises -> AnyRelation:
         """Grouped aggregation, returning a new plan node.
@@ -214,10 +214,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         from marrow.dtypes import float64, int64, AnyDataType
 
         var input_schema = self.schema()
-        var resolved_keys = List[Expr]()
+        var resolved_keys = List[DynValue]()
         for ref k in keys:
             resolved_keys.append(k)
-        var resolved_vals = List[Expr]()
+        var resolved_vals = List[DynValue]()
         for ref v in values:
             resolved_vals.append(v)
 
@@ -254,8 +254,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def join(
         self,
         right: AnyRelation,
-        left_on: List[Expr],
-        right_on: List[Expr],
+        left_on: List[DynValue],
+        right_on: List[DynValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
         algorithm: UInt8 = JOIN_ALGO_AUTO,
@@ -283,10 +283,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
         # Resolve column-name key expressions to positional indices against
         # each side's schema.
-        var resolved_left = List[Expr]()
+        var resolved_left = List[DynValue]()
         for ref k in left_on:
             resolved_left.append(k.resolve_names(left_schema))
-        var resolved_right = List[Expr]()
+        var resolved_right = List[DynValue]()
         for ref k in right_on:
             resolved_right.append(k.resolve_names(right_schema))
 
@@ -371,9 +371,9 @@ struct Filter(Relation):
     """
 
     var input: AnyRelation
-    var predicate: Expr
+    var predicate: DynValue
 
-    def __init__(out self, *, var input: AnyRelation, var predicate: Expr):
+    def __init__(out self, *, var input: AnyRelation, var predicate: DynValue):
         self.input = input^
         self.predicate = predicate^
 
@@ -400,7 +400,7 @@ struct Project(Relation):
 
     var input: AnyRelation
     var names: List[String]
-    var exprs_: List[Expr]
+    var exprs_: List[DynValue]
     var schema_: Schema
 
     def __init__(
@@ -408,7 +408,7 @@ struct Project(Relation):
         *,
         var input: AnyRelation,
         var names: List[String],
-        var exprs_: List[Expr],
+        var exprs_: List[DynValue],
         var schema_: Schema,
     ):
         self.input = input^
@@ -503,8 +503,8 @@ struct Aggregate(Relation):
     """
 
     var input: AnyRelation
-    var keys: List[Expr]
-    var agg_exprs: List[Expr]
+    var keys: List[DynValue]
+    var agg_exprs: List[DynValue]
     var agg_funcs: List[String]
     var schema_: Schema
 
@@ -512,8 +512,8 @@ struct Aggregate(Relation):
         out self,
         *,
         var input: AnyRelation,
-        var keys: List[Expr],
-        var agg_exprs: List[Expr],
+        var keys: List[DynValue],
+        var agg_exprs: List[DynValue],
         var agg_funcs: List[String],
         var schema_: Schema,
     ):
@@ -564,8 +564,8 @@ struct Join(Relation):
 
     var left: AnyRelation
     var right: AnyRelation
-    var left_keys: List[Expr]
-    var right_keys: List[Expr]
+    var left_keys: List[DynValue]
+    var right_keys: List[DynValue]
     var join_kind: UInt8
     var strictness: UInt8
     var algorithm: UInt8
@@ -576,8 +576,8 @@ struct Join(Relation):
         *,
         var left: AnyRelation,
         var right: AnyRelation,
-        var left_keys: List[Expr],
-        var right_keys: List[Expr],
+        var left_keys: List[DynValue],
+        var right_keys: List[DynValue],
         join_kind: UInt8,
         strictness: UInt8,
         algorithm: UInt8,
