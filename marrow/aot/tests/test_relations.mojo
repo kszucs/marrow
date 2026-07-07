@@ -3,10 +3,12 @@
 Three surfaces, all fully monomorphized (``docs/aot-relations-design.md``):
 
 - ``Table[Tbl]()`` — the column-access handle over a plain schema struct of
-  dtype-tag fields. ``t.a`` reflects each field's compile-time position into a
-  ``NumericColumn[name, T, index]`` / ``StringColumn[name, index]`` leaf (no
-  runtime ``index`` field, no runtime schema lookup); string fields dispatch to
-  ``StringColumn`` automatically.
+  dtype-tag fields. ``t.a`` reflects each field's dtype into a
+  ``NumericColumn[T]`` / ``StringColumn`` leaf (columns carry only a runtime
+  ``name``; position is resolved by name against the batch); string fields
+  dispatch to ``StringColumn`` automatically.
+- ``col(name, dtype)`` — the schema-struct-free, polars-style by-name factory
+  producing the same leaves.
 - ``Project[*Es: Column]`` — variadic projection assembling a ``RecordBatch``
   from a fixed heterogeneous column pack via ``Column.to_array()``. Takes a
   pre-built ``Tuple[*Es]`` (a ``VariadicPack`` can't be forwarded to another
@@ -28,9 +30,9 @@ from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string
 from marrow.tabular import RecordBatch, record_batch
-from marrow.dyn import col, in_memory_table, execute
+from marrow.dyn import col as dyn_col, in_memory_table, execute
 from marrow.aot.relations import Table, Project, Filter
-from marrow.aot.values import Add, Gt, Lt
+from marrow.aot.values import Add, Gt, Lt, col
 
 
 struct _Orders:
@@ -66,12 +68,13 @@ def _make_filter_batch() raises -> RecordBatch:
 # ---------------------------------------------------------------------------
 
 
-def test_column_index_is_compile_time_constant() raises:
-    """Column index matches Tbl's declared field order via Table[Tbl]()."""
+def test_column_name_matches_declared_field() raises:
+    """Table[Tbl]().<name> carries the field name; position is resolved by name
+    against the batch schema (columns store no index)."""
     var t = Table[_Orders]()
-    assert_equal(t.a.index, 0)
-    assert_equal(t.b.index, 1)
-    assert_equal(t.name.index, 2)
+    assert_equal(t.a.field_name(), "a")
+    assert_equal(t.b.field_name(), "b")
+    assert_equal(t.name.field_name(), "name")
 
 
 def test_column_executes_without_runtime_schema() raises:
@@ -259,7 +262,9 @@ def test_filter_matches_hand_written_relations_equivalent() raises:
     var typed_result = typed_plan.execute(batch)
 
     var erased_plan = (
-        in_memory_table(batch).select("a", "b").filter(col("a") > col("b"))
+        in_memory_table(batch)
+        .select("a", "b")
+        .filter(dyn_col("a") > dyn_col("b"))
     )
     var erased_result = execute(erased_plan)
 
@@ -271,6 +276,48 @@ def test_filter_matches_hand_written_relations_equivalent() raises:
     ref erased_b = erased_result.columns[1].as_int64()
     ref typed_b = typed_result.columns[1].as_int64()
     assert_true(erased_b.copy() == typed_b.copy())
+
+
+# ---------------------------------------------------------------------------
+# col(name, dtype) — polars-style by-name column factory
+# ---------------------------------------------------------------------------
+
+
+def test_col_resolves_numeric_by_name() raises:
+    """A numeric col resolves its position by name against the batch."""
+    var batch = _make_batch()
+    ref result = col("a", int64).execute(batch).to_any().as_int64()
+    assert_true(result.copy() == array([1, 2, 3], int64))
+
+
+def test_col_resolves_string_by_name() raises:
+    """A string col dispatches to StringColumn and resolves by name."""
+    var batch = _make_batch()
+    var result = col("name", string).execute(batch)
+    assert_equal(result[0].to_string(), "x")
+    assert_equal(result[2].to_string(), "z")
+
+
+def test_col_composes_and_filters() raises:
+    """``col`` columns compose into Add/Gt and drive a full Project+Filter — the
+    same mixed numeric-predicate + string-projection query as Table[Tbl](),
+    with no schema struct and no reflection.
+    """
+    var batch = _make_filter_batch()
+
+    var added = Add(col("a", int64), col("b", int64))
+    ref sum = added.execute(batch).to_any().as_int64()
+    assert_true(sum.copy() == array([5, 9, 7, 12, 6], int64))
+
+    var plan = Project(Tuple(col("a", int64), col("name", string))).filter(
+        Gt(col("a", int64), col("b", int64))
+    )
+    var result = plan.execute(batch)
+    assert_equal(result.num_rows(), 2)
+    assert_equal(result.schema.fields[0].name, "a")
+    assert_equal(result.schema.fields[1].name, "name")
+    ref out_a = result.columns[0].as_int64()
+    assert_true(out_a.copy() == array([5, 8], int64))
 
 
 def main() raises:

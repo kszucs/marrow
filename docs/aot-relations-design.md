@@ -16,12 +16,12 @@ batch. Aggregations and joins are deliberately out of scope here (see
 things changed from the sketch below during implementation — both confirmed
 against the pinned toolchain, not judgment calls:
 
-1. **No runtime `Schema` object anywhere.** `NumericColumn[name, T, index]`'s position
-   is a `comptime` constant derived by reflecting the named field on the table
-   struct (`reflect[Tbl].field_index[name]()`) in the `Table[Tbl]()` handle,
-   not resolved via a `.from_schema(schema)` runtime lookup as first sketched.
-   See *Column access* below — the actual implementation, not what's in the
-   milestones section originally drafted.
+1. **No runtime `Schema` object anywhere.** A `NumericColumn[T]`'s position is
+   derived by reflecting the named field on the table struct
+   (`reflect[Tbl].field_index[name]()`) in the `Table[Tbl]()` handle, not
+   resolved via a `.from_schema(schema)` runtime lookup as first sketched. (The
+   position/name are passed as *runtime* constructor args so the column type
+   monomorphizes only on dtype — see *Column access* below.)
 2. **`t.select(t.a, t.b)` doesn't compile as bare variadic args.** A
    `VariadicPack` captured by one function (`select`'s own `*exprs`) cannot
    be forwarded to another function's variadic parameter (`Tuple`'s
@@ -149,8 +149,8 @@ t.a.index   # 0 — a compile-time constant, baked directly into t.a's generated
 
 `Table[Orders]()` is a handle whose two
 `__getattr_param__` overloads reflect the named field on `Orders`:
-`reflect[Orders].field_index[name]()` gives the position (baked into the
-returned `NumericColumn[name, T, index]` / `StringColumn[name, index]`) and
+`reflect[Orders].field_index[name]()` gives the position (passed as a runtime
+constructor arg to the returned `NumericColumn[T]` / `StringColumn`) and
 `reflect[Orders].field[name].T` gives the dtype, with a `where` clause routing
 numeric fields to `NumericColumn` and string fields to `StringColumn`. Both reflection
 queries fold to builtin KGEN attributes, so the constraint solver can prove the
@@ -271,31 +271,38 @@ trait Column(Named, Value):
         ...
 ```
 
-### `NumericColumn[name, T, index]` / `StringColumn[name, index]` — zero runtime fields
+### `NumericColumn[T]` / `StringColumn` — runtime name, no stored index
 
 ```mojo
-struct NumericColumn[name: StringLiteral, T: dt.NumericType, index: Int](
-    Column, Named, NumericValue
-):
+struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
 
-    def __init__(out self):
-        pass
+    var name: String
+
+    def __init__(out self, var name: String):
+        self.name = name^
 
     @always_inline
     def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        return batch.columns[Self.index].as_primitive[Self.T]().values().load[W](idx)
+        var i = batch.schema.get_field_index(self.name)
+        return batch.columns[i].as_primitive[Self.T]().values().load[W](idx)
 
     def field_name(self) -> String:
-        return String(t"{Self.name}")
+        return self.name.copy()
 ```
 
-`index` is a `comptime` parameter — no `var index: Int` field, no runtime
-lookup, ever. It is baked in by the `Table[Tbl]()` handle, which passes
-`reflect[Tbl].field_index[name]()`. `StringColumn[name, index]` mirrors this
-for the string path (`StringValue` instead of `NumericValue`, no `T` param
-since string is a single type). `Lt`/`Gt`/`Eq` (in `marrow/aot/values.mojo`, implementing the new
+The column carries only its `name` (a runtime field); the sole type parameter is
+the dtype `T`, because only the dtype drives the SIMD `core`. So a query with N
+int64 columns instantiates `NumericColumn[Int64Type]` once, not N distinct types
+(the field name is metadata that never affects the generated compute). The
+position isn't stored — it's resolved by name against `batch.schema` at
+execution (a loop-invariant lookup, hoisted out of the fused loop). `Table[Tbl]()`
+reflects only the *dtype* (`reflect[Tbl].field[name].T`) to pick the column
+type; `col(name, dtype)` takes it explicitly — both produce the same
+name-carrying leaf. `StringColumn` mirrors this for the string path
+(`StringValue` instead of `NumericValue`, no `T` param since string is a single
+physical type). `Lt`/`Gt`/`Eq` (in `marrow/aot/values.mojo`, implementing the new
 `BoolValue` trait — bit-packs a `SIMD[bool, W]` mask directly into a `Bitmap`,
 same fused-vectorize-loop shape as `NumericValue.execute()`) give `Filter` a
 predicate; both accept `NumericColumn`/`StringColumn` children interchangeably with
@@ -424,11 +431,10 @@ slice.
 
 1. ✅ `Schema.from_struct[T]()` in `schema.mojo` — the reflection foundation
    (see `reflect-schema-from-struct.md`). Tested in `test_schema.mojo`.
-2. ✅ `Table`, `Named`, `Table[Tbl]()`,
-   `NumericColumn[name, T, index]` / `StringColumn[name, index]` in
-   `marrow/aot/relations.mojo` — compile-time-resolved position via the
-   `__getattr_param__` handle (access style C; see *Column access* above).
-   Tested in `marrow/aot/tests/test_relations.mojo`.
+2. ✅ `Table`, `Named`, `Column`, `Table[Tbl]()`, `NumericColumn[T]` /
+   `StringColumn` (runtime name/index) in `marrow/aot/relations.mojo` —
+   reflected position via the `__getattr_param__` handle (access style C; see
+   *Column access* above). Tested in `marrow/aot/tests/test_relations.mojo`.
 3. ✅ `BoolValue` + comparison nodes (`Lt`/`Gt`/`Eq`) in `marrow/aot/values.mojo`,
    mirroring `Add`/`Sub`. Tested in `test_values.mojo`.
 4. ✅ `Project[*Es].execute -> RecordBatch`, via `Project(Tuple(...))` (not

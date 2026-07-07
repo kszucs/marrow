@@ -8,15 +8,25 @@
   a plain struct declares its columns as bare dtype fields (`var a: Int64Type`,
   `var name: StringType`) with no column-node wrappers and no `__init__`, and
   `Table[Orders]()` is a column-access handle whose `t.a` / `t.name` reflect
-  each field's compile-time position and dtype into `NumericColumn[name, T,
-  index]` / `StringColumn[name, index]` (numeric vs string is dispatched by a
-  `where` clause on the reflected field type). Replaces the previous
-  `var a: NumericColumn[Orders, "a", Int64Type]`-style fields + hand-written
-  `__init__` boilerplate. The positional and named numeric column nodes are
-  renamed `Column` → `NumericColumn` to pair with `StringColumn` per type
-  family, and both named leaves share a new `Column` base trait exposing
-  `to_array()`, so `Project[*Es: Column]` assembles a projection with no
-  numeric-vs-string branching.
+  each field's dtype into `NumericColumn[T]` / `StringColumn` (numeric vs string
+  is dispatched by a `where` clause on the reflected field type). Replaces the
+  previous `var a: NumericColumn[Orders, "a", Int64Type]`-style fields +
+  hand-written `__init__` boilerplate. The named columns carry only a runtime
+  `name` (the sole type parameter is the dtype), so a query with N same-dtype
+  columns instantiates one column type, not N — the name never affects the
+  generated SIMD compute, and the position is resolved by name against the batch
+  schema at execution. The positional and named numeric column nodes are renamed
+  `Column` → `NumericColumn` to pair with `StringColumn` per type family, and
+  both named leaves share a new `Column` base trait exposing `to_array()`, so
+  `Project[*Es: Column]` assembles a projection with no numeric-vs-string
+  branching.
+- **Polars-style `col(name, dtype)` column factory** (`marrow.aot.relations`):
+  `col("a", int64)` / `col("name", string)` reference a column by name without a
+  schema struct or handle — overloaded on the dtype's trait so the numeric case
+  returns `NumericColumn[T]` and the string case `StringColumn`, both fully
+  composable (`Add(col("a", int64), col("b", int64))`, `Project`/`Filter`).
+  Produces the same name-carrying leaf as `Table[Tbl]()`; the two differ only in
+  whether the dtype is read off a struct or spelled explicitly.
 
 ### Build Infrastructure
 

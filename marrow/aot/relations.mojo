@@ -1,12 +1,13 @@
 """Named comptime-typed expression nodes for the fully-monomorphized (AOT)
 relational layer.
 
-Unlike ``values.mojo``'s ``NumericColumn[T]`` (a runtime ``index: Int`` field,
-populated however the caller likes), the leaf nodes here — ``NumericColumn[name, T,
-index]`` and ``StringColumn[name, index]`` — carry **zero runtime fields**:
-``index`` is a ``comptime`` constant baked directly into the generated code,
-so the compiler compiles ``batch.columns[0]`` straight into ``t.a`` with no
-name-to-position lookup at runtime.
+The leaf nodes here — ``NumericColumn[T]`` and ``StringColumn`` — carry only
+their ``name`` (a runtime field); the column *type* encodes just the dtype
+(which is what drives the SIMD ``core``). A query with many int64 columns
+instantiates ``NumericColumn[Int64Type]`` once, not one type per column: the
+field name is metadata that never affects the generated compute. The column
+position is resolved by name against ``batch.schema`` at execution — a
+loop-invariant lookup, hoisted out of the fused loop.
 
 You never spell those leaf nodes by hand. Instead you declare a plain struct
 of dtype-tag fields and access columns through a handle:
@@ -17,16 +18,23 @@ of dtype-tag fields and access columns through a handle:
         var name: StringType
 
     var t = Table[Orders]()
-    t.a     # NumericColumn["a", Int64Type, 0]     (numeric)
-    t.name  # StringColumn["name", 2]        (string)
+    t.a     # NumericColumn[Int64Type]("a")   (numeric)
+    t.name  # StringColumn("name")            (string)
 
 ``Table[Orders]()`` is a column-access handle whose ``__getattr_param__``
-reflects each field on ``Orders`` at compile time:
-``reflect[Orders].field_index[name]()`` gives the position and
-``reflect[Orders].field[name].T`` gives the dtype, then a ``where`` clause
-picks the numeric (``NumericColumn``) or string (``StringColumn``) overload. The
-struct's fields are plain dtype tags used *only* for reflection — they are
-never instantiated, so ``Orders`` needs no ``__init__``.
+reflects each field's *dtype* on ``Orders`` at compile time
+(``reflect[Orders].field[name].T``), then a ``where`` clause picks the numeric
+(``NumericColumn``) or string (``StringColumn``) overload — passing the name as
+a runtime constructor argument. The struct's fields are plain dtype tags used
+*only* for reflection — they are never instantiated, so ``Orders`` needs no
+``__init__``.
+
+For a schema-struct-free, polars-style surface, ``col(name, dtype)`` (defined in
+``values.mojo``) references a column by name (``col("a", int64)``,
+``col("name", string)``) and resolves its position against the batch at
+execution. It produces the same ``NumericColumn[T]`` / ``StringColumn`` leaves,
+so it composes identically (``Add(col("a", int64), col("b", int64))``,
+``Project``/``Filter``).
 
 This file's one ``AnyArray`` erasure boundary (``Project``/``Filter``
 assembling heterogeneous columns) stays cheap because it's *closed* —
@@ -37,7 +45,7 @@ query doesn't use, so the compiler can prove and prune the rest of
 ``marrow.dyn.values.Expr.eval()`` instead reaches a genuinely *open*
 dispatcher built to stay ready for dtypes/node-kinds it can't know ahead of
 time, and nothing there can be pruned. Measured in ``benchmarks/binary_size/``:
-a ``Project``+``Filter`` plan compiles ~33x smaller (stripped) than the same
+a ``Project``+``Filter`` plan compiles ~31x smaller (stripped) than the same
 query on ``marrow.dyn``'s ``AnyRelation``/``Expr``; a hybrid variant
 that only fuses the *predicate* but still calls into the executor is the
 same size as the fully runtime one.
@@ -51,7 +59,7 @@ Usage::
         var b: StringType
 
     var t = Table[Orders]()
-    var result = t.a.execute(batch)  # batch.columns[0], baked in at compile time
+    var result = t.a.execute(batch)  # resolves the "a" column against the batch
 """
 
 from std.reflection import reflect
@@ -124,79 +132,91 @@ trait Relation(ImplicitlyDeletable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# NumericColumn — named typed column reference, compile-time-resolved position
+# NumericColumn — named typed column reference
 # ---------------------------------------------------------------------------
 
 
-struct NumericColumn[name: StringLiteral, T: dt.NumericType, index: Int](
-    Column, Named, NumericValue
-):
-    """Named typed numeric column reference with a compile-time ``index``.
+struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
+    """Named typed numeric column reference.
 
-    You never construct this directly — ``Table[Tbl]()`` produces it, baking
-    ``index`` in from the field's reflected position on ``Tbl``. Zero runtime
-    fields — execution (``core[W]``) is otherwise identical to
-    ``values.NumericColumn[T]``.
+    Carries only its ``name`` (a runtime field); the type parameter is just the
+    dtype, which drives the SIMD ``core``. A query with 20 int64 columns
+    instantiates ``NumericColumn[Int64Type]`` once, not 20 distinct types — the
+    field name is metadata and never affects the generated compute. The column
+    position is resolved by name against ``batch.schema`` at execution (a
+    loop-invariant lookup, hoisted out of the fused loop).
+
+    You never construct this directly — ``Table[Tbl]()`` and ``col(name, dtype)``
+    produce it.
     """
 
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
 
-    def __init__(out self):
-        pass
+    var name: String
+
+    def __init__(out self, var name: String):
+        self.name = name^
 
     @always_inline
     def core[
         W: Int
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
         return (
-            batch.columns[Self.index]
+            batch.columns[batch.schema.get_field_index(self.name)]
             .as_primitive[Self.T]()
             .values()
             .load[W](idx)
         )
 
     def field_name(self) -> String:
-        return String(t"{Self.name}")
+        return self.name.copy()
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self.execute(batch).to_any()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Col[{Self.name}]")
+        writer.write("Col[", self.name, "]")
 
 
 # ---------------------------------------------------------------------------
-# StringColumn — named typed string column reference, compile-time position
+# StringColumn — named typed string column reference, resolved by name
 # ---------------------------------------------------------------------------
 
 
-struct StringColumn[name: StringLiteral, index: Int](
-    Column, Named, StringValue
-):
-    """Named typed string column reference with a compile-time ``index``.
+struct StringColumn(Column, Named, StringValue):
+    """Named typed string column reference.
 
-    The string counterpart of ``NumericColumn[name, T, index]``, produced by
-    ``Table[Tbl]()`` for string-typed fields.
+    The string counterpart of ``NumericColumn[T]``, produced by ``Table[Tbl]()``
+    for string-typed fields. Carries only its ``name`` (there is no dtype
+    parameter — string is a single physical type), so there is exactly one
+    ``StringColumn`` type across all string columns; the position is resolved by
+    name against ``batch.schema``.
     """
 
-    def __init__(out self):
-        pass
+    var name: String
+
+    def __init__(out self, var name: String):
+        self.name = name^
 
     def resolve(self, batch: RecordBatch) -> StringArray:
-        return batch.columns[Self.index].as_string().copy()
+        return (
+            batch.columns[batch.schema.get_field_index(self.name)]
+            .as_string()
+            .copy()
+        )
 
     def execute(self, batch: RecordBatch) raises -> StringArray:
         return self.resolve(batch)
 
     def field_name(self) -> String:
-        return String(t"{Self.name}")
+        return self.name.copy()
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self.execute(batch).to_any()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"StrCol[{Self.name}]")
+        writer.write("StrCol[", self.name, "]")
 
 
 # ---------------------------------------------------------------------------
@@ -208,10 +228,11 @@ struct Table[T: AnyType](Copyable, Movable):
     """Column-access handle over a plain schema struct — ``Table[Orders]()``.
 
     ``T`` is any struct whose fields are plain dtype tags (``var a: Int64Type``).
-    Attribute access reflects the named field on ``T`` at compile time —
-    ``reflect[T].field_index[name]()`` for the position and
-    ``reflect[T].field[name].T`` for the dtype, factored into the
-    ``_index``/``_dtype`` parametric ``comptime`` aliases.
+    Attribute access reflects the named field's **dtype** on ``T`` at compile
+    time (``reflect[T].field[name].T``, via the ``_dtype`` alias) to pick the
+    column type; the position is resolved by name at execution, same as
+    ``col(name, dtype)``. So ``Table[Orders]()`` is really just the ``col``
+    surface with the dtypes read off a struct instead of spelled per reference.
 
     A handle is needed because ``T``'s own fields shadow ``__getattr_param__``:
     ``T().a`` would read the ``Int64Type`` field value, not a column node.
@@ -221,15 +242,13 @@ struct Table[T: AnyType](Copyable, Movable):
     The two ``__getattr_param__`` overloads are irreducible — they return
     different node types (``NumericColumn`` vs ``StringColumn``), and Mojo has
     no way to pick a return type by a ``comptime`` condition — so a ``where``
-    clause routes numeric fields to one and string fields to the other, leaving
-    each overload differing only in its node type and trait bound. The
-    ``_index``/``_dtype`` aliases fold to builtin KGEN attributes, so the
-    constraint solver can prove the ``where`` clause during overload selection
-    (a plain ``def`` lookup would not fold, which is why this reflection-based
-    handle is the only column-access surface).
+    clause routes numeric fields to one and string fields to the other. The
+    ``_dtype`` alias folds to a builtin KGEN attribute, so the constraint solver
+    can prove the ``where`` clause during overload selection (a plain ``def``
+    lookup would not fold, which is why reflection on a declared struct is the
+    only way to do this dispatch from a *name*).
     """
 
-    comptime _index[name: StringLiteral] = reflect[Self.T].field_index[name]()
     comptime _dtype[name: StringLiteral] = reflect[Self.T].field[name].T
 
     def __init__(out self):
@@ -238,18 +257,18 @@ struct Table[T: AnyType](Copyable, Movable):
     @always_inline
     def __getattr_param__[
         name: StringLiteral
-    ](self) -> NumericColumn[
-        name, Self._dtype[name], Self._index[name]
-    ] where conforms_to(Self._dtype[name], dt.NumericType):
-        return {}
+    ](self) -> NumericColumn[Self._dtype[name]] where conforms_to(
+        Self._dtype[name], dt.NumericType
+    ):
+        return NumericColumn[Self._dtype[name]](String(name))
 
     @always_inline
     def __getattr_param__[
         name: StringLiteral
-    ](self) -> StringColumn[name, Self._index[name]] where conforms_to(
+    ](self) -> StringColumn where conforms_to(
         Self._dtype[name], dt.StringLikeType
     ):
-        return {}
+        return StringColumn(String(name))
 
 
 # ---------------------------------------------------------------------------
@@ -354,3 +373,23 @@ def execute[T: Relation](plan: T, batch: RecordBatch) raises -> RecordBatch:
     itself carries no data).
     """
     return plan.execute(batch)
+
+
+# struct Table[*Ts: datatype]:
+#     var columns: Tuple[*Ts]
+
+#     def __init__(out self, var columns: Tuple[*Ts]):
+#         self.columns = columns^
+
+#     def __getattr_param__[name: StringLiteral](self) -> Self.Ts[reflect[Self.Ts].field_index[name]()] where conforms_to(
+#         reflect[Self.Ts].field[name].T, dt.NumericType
+#     ):
+#         return self.columns[reflect[Self.Ts].field_index[name]()]
+
+# def table[*Ts](...): return Table[*Ts](Tuple(*Ts)())
+
+# table(field["a"](int64), field["b"](int64), field["name"](string))
+# should not be necessary, I mean "a"/"b" the field names could be
+# passed entirely at runtime, this way we wouldn't generate
+# new code paths for the same type of data just because
+# the field name is different

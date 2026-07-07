@@ -6,21 +6,23 @@ expression tree, so ``.execute()`` compiles straight to fused SIMD loops with
 no tag dispatch and no vtables. See ``marrow.dyn`` for the runtime-typed
 counterpart (used by the Python bindings and anywhere the plan isn't known
 until the program runs) and ``docs/aot-relations-design.md`` for the full
-design, including a measured ~33x binary-size difference between the two
+design, including a measured ~31x binary-size difference between the two
 (``benchmarks/binary_size/``).
 
 ``values.mojo`` — traits (``Value``, ``NumericValue``, ``StringValue``,
-``BoolValue``) and positional expression nodes (``NumericColumn[T]``, ``Add[L, R]``,
-``Sub[L, R]``, ``Lt``, ``Gt``, ``Eq``, ``StringColumn``, ``Length[S]``) — all
-re-exported here as the default surface.
+``BoolValue``), positional expression nodes (``NumericColumn[T]``, ``Add[L, R]``,
+``Sub[L, R]``, ``Lt``, ``Gt``, ``Eq``, ``StringColumn``, ``Length[S]``), and the
+polars-style ``col(name, dtype)`` factory (which builds the *named* leaves from
+``relations.mojo``) — all re-exported here as the default surface.
 
 ``relations.mojo`` — the named relational layer: the ``Table[T]()``
 column-access handle over a plain schema struct, the ``Column`` base trait and
-its ``NumericColumn[name, T, index]`` / ``StringColumn[name, index]`` leaves,
-and ``Project`` / ``Filter``. **Not** re-exported here — its
-``NumericColumn``/``StringColumn`` would collide with ``values.mojo``'s
-positional ones of the same name. Import explicitly:
-``from marrow.aot.relations import Table, Project, Filter``.
+its ``NumericColumn[T]`` / ``StringColumn`` leaves (only ``name`` is a runtime
+field; position is resolved by name), and ``Project`` / ``Filter``. **Not**
+re-exported here — its ``NumericColumn``/``StringColumn`` would collide with
+``values.mojo``'s positional ones of the same name. Import explicitly:
+``from marrow.aot.relations import Table, Project, Filter`` (``col`` lives in
+``values.mojo``).
 
 Usage (positional layer)::
 
@@ -55,6 +57,8 @@ from marrow.aot.values import (
     Eq,
     StringColumn,
     Length,
+    # Column factory (resolved by name)
+    col,
     # Vectorize dispatch
     _vectorize_dispatch,
 )

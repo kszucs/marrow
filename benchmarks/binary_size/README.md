@@ -39,14 +39,18 @@ on `$PATH`) — read it directly if you want to change what gets measured.
 
 | binary | unstripped | stripped | symbols | symbols (stripped) | `__TEXT` |
 |---|---:|---:|---:|---:|---:|
-| `query_comptime` | 693,712 B (694 KB) | 233,608 B (234 KB) | 246 | 24 | 212,992 B |
-| `query_hybrid` | 11,653,040 B (11.1 MB) | 7,734,104 B (7.7 MB) | 3,360 | 52 | 7,651,328 B |
+| `query_comptime` | 710,320 B (710 KB) | 250,120 B (250 KB) | 247 | 24 | 229,376 B |
+| `query_hybrid` | 11,653,296 B (11.1 MB) | 7,734,104 B (7.7 MB) | 3,361 | 52 | 7,651,328 B |
 | `query_runtime` | 11,649,200 B (11.1 MB) | 7,734,088 B (7.7 MB) | 3,353 | 52 | 7,651,328 B |
 
-**~33.1x smaller, stripped**, for the fully-monomorphized version. `size` on
+**~30.9x smaller, stripped**, for the fully-monomorphized version. `size` on
 the stripped binaries confirms the gap is genuinely in compiled code, not
 just symbol-table noise — the `__TEXT` (executable code) segment column above
-tells the same story as the file-size columns.
+tells the same story as the file-size columns. (The comptime binary grew ~16 KB
+vs. earlier revisions when named columns dropped their baked `index` in favor of
+resolving the position by name against the batch schema — that links
+`Schema.get_field_index`'s comparison code, a small, deliberate trade for one
+column type per dtype and a unified `Table[…]` / `col(…)` surface.)
 
 ## The hybrid result is the interesting one
 

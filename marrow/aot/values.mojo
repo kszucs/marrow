@@ -53,6 +53,7 @@ from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 
 import marrow.dtypes as dt
+import marrow.aot.relations as rel
 from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
@@ -555,3 +556,33 @@ def _vectorize_dispatch[
         process[W, rank=1](IndexList[1](i))
 
     vectorize[cpu_width](length, lane)
+
+
+# ---------------------------------------------------------------------------
+# col — polars-style column factory, resolved by name against the batch
+# ---------------------------------------------------------------------------
+
+
+def col[T: dt.NumericType](var name: String, dtype: T) -> rel.NumericColumn[T]:
+    """Reference a numeric column by name — ``col("a", int64)``.
+
+    A schema-struct-free, polars-style leaf: the dtype is given explicitly (the
+    AOT layer needs it as a type parameter to stay fused), and the position is
+    resolved by name against the batch schema at execution. Overloaded on the
+    dtype's trait, so ``col("a", int64)`` returns a numeric column and
+    ``col("s", string)`` a string one — both the named leaves from
+    ``marrow.aot.relations`` (``NumericColumn[T]`` / ``StringColumn``), so they
+    compose with ``Add``/``Gt`` and drop into ``Project``/``Filter``.
+
+    Usage::
+
+        var plan = Project(Tuple(col("a", int64), col("name", string)))
+        var plan = ... .filter(Gt(col("a", int64), col("b", int64)))
+    """
+    return rel.NumericColumn[T](name^)
+
+
+def col[T: dt.StringLikeType](var name: String, dtype: T) -> rel.StringColumn:
+    """Reference a string column by name — ``col("name", string)``. See the
+    numeric overload above."""
+    return rel.StringColumn(name^)
