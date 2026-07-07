@@ -5,7 +5,7 @@ Same query as `query_comptime.mojo`:
     SELECT a, name FROM orders WHERE a > b
 
 built with the existing `AnyRelation`/`Expr` layer
-(`marrow.dyn.relations`, `marrow.dyn.values`, `marrow.dyn.executor`)
+(`marrow.expr.plan`, `marrow.expr.runtime`, `marrow.expr.executor`)
 -- `in_memory_table(batch).filter(...).select(...)` then `execute(plan)`, which
 walks the plan through `Planner.build()` into a pull-based
 `RelationProcessor` pipeline, evaluating the predicate via `Expr.eval()`'s
@@ -23,7 +23,7 @@ Build + strip + compare against `query_comptime.mojo`:
 from marrow.builders import array
 from marrow.dtypes import int64
 from marrow.tabular import record_batch
-from marrow.dyn import col, in_memory_table, execute
+from marrow.expr import col, in_memory_table, execute
 
 
 def main() raises:

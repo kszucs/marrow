@@ -1,4 +1,4 @@
-"""Tests for the comptime-typed expression nodes in ``marrow.aot.values``.
+"""Tests for the comptime-typed expression nodes in ``marrow.expr.values``.
 
 Two families, both exercising the single-fused-vectorize-pass execution model:
 
@@ -20,7 +20,16 @@ from marrow.arrays import PrimitiveArray
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64, uint32
 from marrow.tabular import RecordBatch, record_batch
-from marrow.aot import NumericColumn, Add, Sub, Lt, Gt, Eq, StringColumn, Length
+from marrow.expr.values import (
+    NumericColumn,
+    Add,
+    Sub,
+    Lt,
+    Gt,
+    Eq,
+    StringColumn,
+    Length,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -1,11 +1,11 @@
 """Comptime-typed expression nodes and traits — the foundation of
-``marrow.aot``.
+``marrow.expr``.
 
 Each node is a generic struct where type parameters encode the expression
 tree structure, enabling the compiler to inline the full ``core[W]()`` call
 chain into a single fused vectorize loop with zero intermediate arrays.
 Columns are referenced by position (``NumericColumn[T](index)``); see
-``marrow.aot.relations`` for the named, reflection-based, ``Table``-schema
+``marrow.expr.relations`` for the named, reflection-based, ``Table``-schema
 variant used by ``Project``/``Filter``.
 
 Expression nodes
@@ -22,7 +22,7 @@ Traits
 ------
 ``Value`` — base trait for every expression node (dtype, write_to;
     Copyable/Writable/etc.), shared with the type-erased ``Expr`` in
-    ``marrow.dyn.values`` — that module imports these traits directly
+    ``marrow.expr.runtime`` — that module imports these traits directly
     from here (``aot`` has no dependency on ``dyn``; the reverse does).
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 ``BoolValue`` — boolean/predicate nodes (core[W] returns SIMD[bool, W];
@@ -30,7 +30,7 @@ Traits
 
 Bridging to the runtime layer
 -----------------------------
-The ``Expr(value)`` constructor (see ``marrow.dyn.values``) boxes a
+The ``Expr(value)`` constructor (see ``marrow.expr.runtime``) boxes a
 comptime node from this module into a runtime ``Expr``, so it can flow
 through APIs that build/execute plans without knowing the concrete comptime
 type (e.g. the Python bindings). The boxed ``Expr`` fully delegates
@@ -53,7 +53,7 @@ from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 
 import marrow.dtypes as dt
-import marrow.aot.relations as rel
+import marrow.expr.relations as rel
 from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
@@ -571,7 +571,7 @@ def col[T: dt.NumericType](var name: String, dtype: T) -> rel.NumericColumn[T]:
     resolved by name against the batch schema at execution. Overloaded on the
     dtype's trait, so ``col("a", int64)`` returns a numeric column and
     ``col("s", string)`` a string one — both the named leaves from
-    ``marrow.aot.relations`` (``NumericColumn[T]`` / ``StringColumn``), so they
+    ``marrow.expr.relations`` (``NumericColumn[T]`` / ``StringColumn``), so they
     compose with ``Add``/``Gt`` and drop into ``Project``/``Filter``.
 
     Usage::

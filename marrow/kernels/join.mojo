@@ -139,9 +139,9 @@ from .hashing import rapidhash
 # ---------------------------------------------------------------------------
 # Join kind constants — what rows appear in output
 #
-# Owned here (not in marrow.dyn.relations) since these describe the join
+# Owned here (not in marrow.expr.plan) since these describe the join
 # kernel's own algorithm/behavior; the relational-plan layer is a consumer
-# of this vocabulary, not its owner. marrow.dyn.relations imports these.
+# of this vocabulary, not its owner. marrow.expr.plan imports these.
 # ---------------------------------------------------------------------------
 
 comptime JOIN_INNER: UInt8 = 0

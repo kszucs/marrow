@@ -1,4 +1,4 @@
-"""Tests for the named relational layer in ``marrow.aot.relations``.
+"""Tests for the named relational layer in ``marrow.expr.relations``.
 
 Three surfaces, all fully monomorphized (``docs/aot-relations-design.md``):
 
@@ -30,9 +30,9 @@ from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string
 from marrow.tabular import RecordBatch, record_batch
-from marrow.dyn import col as dyn_col, in_memory_table, execute
-from marrow.aot.relations import Table, Project, Filter
-from marrow.aot.values import Add, Gt, Lt, col
+from marrow.expr import col as dyn_col, in_memory_table, execute
+from marrow.expr.relations import Table, Project, Filter
+from marrow.expr.values import Add, Gt, Lt, col
 
 
 struct _Orders:
@@ -252,7 +252,7 @@ def test_filter_no_matching_rows() raises:
 
 def test_filter_matches_hand_written_relations_equivalent() raises:
     """The typed Project+Filter round trip matches the hand-written
-    marrow.dyn.relations (AnyRelation) equivalent -- the milestone
+    marrow.expr.plan (AnyRelation) equivalent -- the milestone
     definition-of-done from docs/aot-relations-design.md.
     """
     var t = Table[_Orders]()

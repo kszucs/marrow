@@ -1,6 +1,6 @@
-# Binary size: comptime (AOT) vs. hybrid vs. runtime relational plans
+# Binary size: comptime (AOT) vs. erased-AOT vs. hybrid vs. runtime relational plans
 
-Three files implement the exact same query — `SELECT a, name FROM orders
+Four files implement the exact same query — `SELECT a, name FROM orders
 WHERE a > b` — over the same 5-row in-memory batch, producing identical
 output:
 
@@ -8,6 +8,13 @@ output:
   `marrow.aot.relations` (`Table`, `Column`, `Project`, `Filter`). The whole plan
   is one nested generic type; `.execute(batch)` compiles straight to column
   loads, a SIMD comparison, and a filter call. No tag dispatch, no vtables.
+- **`query_erased_aot.mojo`** — the "option 1" layer from `marrow.aot.erased`:
+  the relational operators are plain **runtime** structs over `List[AnyValue]`
+  (a walkable, rewritable plan tree, *not* a `*Es` type pack), but each value is
+  a **fused-only** box (`AnyValue`) that trampolines into the concrete node's
+  own `execute()` — no `eval()` tag interpreter. The operators execute
+  themselves single-shot (no `Planner`/`RelationProcessor`). Tests whether a
+  runtime plan tree can keep the comptime binary size.
 - **`query_hybrid.mojo`** — relational *structure* stays runtime/type-erased
   (`marrow.dyn`'s `AnyRelation`, `Planner.build()`, the pull-based
   `RelationProcessor` pipeline — same as `query_runtime.mojo`), but the
@@ -20,7 +27,7 @@ output:
   predicate built from `col("a") > col("b")` and evaluated by `Expr.eval()`'s
   tag interpreter.
 
-All three are compiled with `-O3 -g0`, then `strip`ped, so the comparison is
+All four are compiled with `-O3 -g0`, then `strip`ped, so the comparison is
 release, no-debug-info code — the fairest apples-to-apples measurement of
 what actually ships.
 
@@ -30,7 +37,7 @@ what actually ships.
 pixi run binary_size
 ```
 
-Builds all three, strips them, and prints the size/symbol table plus the
+Builds all four, strips them, and prints the size/symbol table plus the
 per-module symbol breakdown below. `benchmarks/binary_size/compare.py` is a
 plain Python script (no dependencies beyond `mojo`, `nm`, `size`, and `strip`
 on `$PATH`) — read it directly if you want to change what gets measured.
@@ -40,8 +47,9 @@ on `$PATH`) — read it directly if you want to change what gets measured.
 | binary | unstripped | stripped | symbols | symbols (stripped) | `__TEXT` |
 |---|---:|---:|---:|---:|---:|
 | `query_comptime` | 710,320 B (710 KB) | 250,120 B (250 KB) | 247 | 24 | 229,376 B |
-| `query_hybrid` | 11,653,296 B (11.1 MB) | 7,734,104 B (7.7 MB) | 3,361 | 52 | 7,651,328 B |
-| `query_runtime` | 11,649,200 B (11.1 MB) | 7,734,088 B (7.7 MB) | 3,353 | 52 | 7,651,328 B |
+| `query_erased_aot` | 734,128 B (734 KB) | 250,136 B (250 KB) | 256 | 24 | 229,376 B |
+| `query_hybrid` | 11,652,992 B (11.1 MB) | 7,734,104 B (7.7 MB) | 3,360 | 52 | 7,651,328 B |
+| `query_runtime` | 11,649,328 B (11.1 MB) | 7,734,088 B (7.7 MB) | 3,353 | 52 | 7,651,328 B |
 
 **~30.9x smaller, stripped**, for the fully-monomorphized version. `size` on
 the stripped binaries confirms the gap is genuinely in compiled code, not
@@ -81,33 +89,67 @@ types this one query uses (`Column`, `StringColumn`, `Gt`) — no relational
 processor pipeline, no `Expr` tag interpreter, no vtables, nothing unused to
 strip because there was never a branch to begin with.
 
+## The erased-AOT result is the payoff
+
+`query_erased_aot` is the interesting *positive* result. Its plan is a
+**runtime** object — `Project`/`Filter` are plain structs over
+`List[AnyValue]`, walkable and rewritable, not a `*Es` type pack — yet its
+`__TEXT` is **229,376 B, byte-identical to `query_comptime`** (1.0x, versus
+30.9x for the runtime path). Making the plan a runtime, pushdown-friendly tree
+cost *zero* compiled code.
+
+Two properties, together, are what buy it — and the per-module table shows both
+holding:
+
+1. **The value box is fused-only.** `AnyValue` trampolines straight into each
+   node's own fused `execute()` and carries no `eval()` tag-switch, so
+   `Expr.eval()` is never reachable. `kernels::arithmetic` (0, vs 371) and
+   `kernels::compare` (0, vs 74) confirm the per-op/per-dtype interpreter is
+   simply absent.
+2. **The driver is closed.** `Project`/`Filter` execute themselves single-shot;
+   there is no `Planner` referencing every processor kind, so
+   `kernels::join`/`groupby`/`hashing` (0/0/0, vs 11/17/141) and all of
+   `dyn::*` (0) never link.
+
+With *both* open surfaces gone, the big shared buckets that only collapse when
+neither is reachable (`kernels::execution` 9 vs 667, `views` 2 vs 455, `arrays`
+39 vs 376) fall to their comptime levels. The entire cost of the runtime plan
+tree is the 17 symbols in `aot::erased`/`aot::relations`/`aot::values` (5/7/5) —
+the box, its trampolines, the two column types, and `Gt`. This is the empirical
+proof that **rewritability and ~250 KB binaries are decoupled**: the size win is
+a property of the closed driver + fused-only values, not of encoding the plan in
+the type system. Contrast `query_hybrid`, which fused the value but kept the
+open driver and saved nothing — the two experiments bracket exactly which half
+matters.
+
 ### Per-module symbol counts (unstripped)
 
 Counting distinct symbols whose mangled name references each module (a
 symbol can match more than one bucket, since Mojo names embed nested generic
 type params — this is a proportional breakdown, not a strict partition):
 
-| module | `query_comptime` | `query_hybrid` | `query_runtime` |
-|---|---:|---:|---:|
-| `kernels::execution` | 9 | 667 | 667 |
-| `dtypes` | 58 | 566 | 562 |
-| `views` | 2 | 455 | 455 |
-| `arrays` | 39 | 376 | 376 |
-| `kernels::arithmetic` | 0 | 371 | 371 |
-| `builders` | 1 | 89 | 89 |
-| `kernels::hashing` | 0 | 141 | 141 |
-| `kernels::compare` | 0 | 74 | 74 |
-| `kernels::filter` | 10 | 66 | 66 |
-| `kernels::join` | 0 | 11 | 11 |
-| `kernels::groupby` | 0 | 17 | 17 |
-| `kernels::boolean` | 0 | 13 | 13 |
-| `scalars` | 0 | 20 | 20 |
-| `buffers` | 10 | 34 | 34 |
-| `dyn::executor` | 0 | 29 | 29 |
-| `dyn::relations` | 0 | 34 | 34 |
-| `dyn::values` | 0 | 16 | 13 |
-| `aot::values` | 0 | 4 | 0 |
-| `aot::relations` | 0 | 0 | 0 |
+| module | `query_comptime` | `query_erased_aot` | `query_hybrid` | `query_runtime` |
+|---|---:|---:|---:|---:|
+| `kernels::execution` | 9 | 9 | 667 | 667 |
+| `dtypes` | 58 | 62 | 566 | 562 |
+| `views` | 2 | 2 | 455 | 455 |
+| `arrays` | 39 | 39 | 376 | 376 |
+| `kernels::arithmetic` | 0 | 0 | 371 | 371 |
+| `builders` | 1 | 1 | 89 | 89 |
+| `kernels::hashing` | 0 | 0 | 141 | 141 |
+| `kernels::compare` | 0 | 0 | 74 | 74 |
+| `kernels::filter` | 10 | 10 | 66 | 66 |
+| `kernels::join` | 0 | 0 | 11 | 11 |
+| `kernels::groupby` | 0 | 0 | 17 | 17 |
+| `kernels::boolean` | 0 | 0 | 13 | 13 |
+| `scalars` | 0 | 0 | 20 | 20 |
+| `buffers` | 10 | 10 | 34 | 34 |
+| `dyn::executor` | 0 | 0 | 29 | 29 |
+| `dyn::relations` | 0 | 0 | 34 | 34 |
+| `dyn::values` | 0 | 0 | 16 | 13 |
+| `aot::values` | 0 | 5 | 4 | 0 |
+| `aot::relations` | 0 | 7 | 0 | 0 |
+| `aot::erased` | 0 | 5 | 0 | 0 |
 
 Why the biggest buckets are so lopsided: `comptime_query` only ever
 instantiates the *exact* concrete types this one query needs —

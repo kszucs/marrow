@@ -30,7 +30,7 @@ from std.memory import ArcPointer
 from marrow.dtypes import Field
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.dyn.values import Expr, col
+from marrow.expr.runtime import Expr, col
 from marrow.kernels.join import (
     JOIN_INNER,
     JOIN_LEFT,

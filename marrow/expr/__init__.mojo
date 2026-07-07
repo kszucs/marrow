@@ -6,10 +6,10 @@ schema caller needs. ``Expr`` and ``AnyRelation`` build and execute plans
 without knowing concrete comptime types, at the cost of tag/vtable dispatch
 and a much larger compiled surface (~33x, stripped, in the measured
 ``benchmarks/binary_size/`` case) than the comptime counterpart in
-``marrow.aot``, which pick that package instead when the query is fixed
+``marrow.expr``, which pick that package instead when the query is fixed
 at compile time.
 
-A comptime-typed node from ``marrow.aot.values`` can be boxed into an
+A comptime-typed node from ``marrow.expr.values`` can be boxed into an
 ``Expr`` via the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``,
 ``dtype()``, and ``write_to()`` on a boxed node all delegate back to the
 concrete comptime node, so a fused subtree keeps its single-pass execution
@@ -34,7 +34,7 @@ Usage::
     var result = execute(plan)
 """
 
-from marrow.dyn.values import (
+from marrow.expr.runtime import (
     # Unified expression node
     Expr,
     # Free-standing factory functions (return Expr)
@@ -65,7 +65,7 @@ from marrow.dyn.values import (
     FUSED,
     LENGTH,
 )
-from marrow.dyn.relations import (
+from marrow.expr.plan import (
     Relation,
     AnyRelation,
     Scan,
@@ -106,7 +106,7 @@ from marrow.dyn.relations import (
     JOIN_ALGO_PIECEWISE,
     JOIN_ALGO_GRACE_HASH,
 )
-from marrow.dyn.executor import (
+from marrow.expr.executor import (
     ExecutionContext,
     # Relation processors
     RelationProcessor,

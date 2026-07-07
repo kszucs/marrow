@@ -467,15 +467,381 @@ slice.
   or is explicitly deferred, and after this note is updated with the
   aggregate/join extension.
 
+## Late binding: prepared plans, `Env`, `Param`, and joins
+
+**Status: design, not yet implemented. Unverified against the toolchain** —
+unlike the first slice above, nothing here has been compiled. The compiler
+findings that shaped the first slice (reflection, `VariadicPack` forwarding,
+`where`-clause folding) all still apply and are assumed, but the specific
+shapes below are sketches, not confirmed forms.
+
+### Objective
+
+A plan should be a **precompiled artifact you invoke many times**, reusable
+across *both* different data sources and different scalar values — as long as
+the schema shape (field names + dtypes) matches. This is the prepared-statement
+model: build the query once, bind data and parameters at execution.
+
+The plan's **type is the compile cache key**. Two invocations with the same
+schema shape and the same parameter dtypes resolve to the same fully-specialized
+nested type, so they share one monomorphized artifact — the generated `core[W]`
+machine code is identical across calls; only the bound environment differs.
+
+Half of this is already true. The plan is data-free (`plan.execute(batch)`),
+and `NumericColumn` resolves its position *by name* against `batch.schema` at
+execution — so a plan already runs on any batch whose fields match by name and
+dtype, regardless of column order or extra columns. The two missing pieces are
+(1) binding **more than one** data source, and (2) binding **scalar
+parameters** instead of baking constants into the plan.
+
+### The generalization: thread an `Env`, not a `RecordBatch`
+
+Both a named column and a bind parameter are the same thing — *a name resolved
+at execute against the environment*. A column reads its array from a batch; a
+param reads its scalar from a bindings map. So the value threaded down through
+`core[W]` and `execute` stops being a bare `RecordBatch` and becomes an
+execution environment:
+
+```mojo
+struct Env:
+    var tables: Catalog    # name -> RecordBatch  (late-bound data sources)
+    var params: Bindings   # name -> AnyScalar     (late-bound scalar params)
+```
+
+(Distinct from the join kernel's `ExecutionContext`, which is the GPU/threading
+handle — a different concept. `Env` is the *data + parameter* environment.)
+
+`core[W](self, batch, idx)` becomes `core[W](self, env, idx)`; `execute(self,
+batch)` becomes `execute(self, env)`. This ripples through every existing node,
+but it is a clean generalization and it is the **load-bearing change** — both
+joins and params depend on it. The single-source `execute(batch)` survives as a
+one-line convenience wrapper (`execute(Env(Catalog(anon = batch)))`).
+
+The key structural simplification: **only the join subtree is ever
+two-input.** A `Join` executes its two children (each pulls its own source from
+the catalog) and returns *one* joined batch; every node stacked above the join
+(`filter`, `select`) is single-batch again over that joined output. So the
+entire existing `col` / `Table` / fused-predicate machinery works unchanged
+above a join — the multi-input concern is contained to the join node itself.
+
+### `Param[T]` — scalar late binding, the analog of a named column
+
+`Param[T]` is to a scalar what `NumericColumn[T]` is to a column: the **dtype
+lives in the type**, the **name is a runtime field**, and the **value is read
+from the environment at execute** — never baked into the plan. So the same
+plan object, executed with different `Bindings`, yields different results with
+no rebuild and no recompile.
+
+```mojo
+struct Param[T: dt.NumericType](NumericValue):
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+    var name: String
+
+    @always_inline
+    def core[W: Int](self, env: Env, idx: Int) -> SIMD[Self.NativeType, W]:
+        # loop-invariant: resolve once, splat — see "resolution" below
+        return env.params.get(self.name).as_primitive[Self.T]().splat[W]()
+```
+
+This contrasts with a `Literal[T]` node, which bakes a constant into a runtime
+field — fine for genuinely fixed constants, but not reusable across values
+without rebuilding the node. `lit()` and `param()` coexist: `lit` for constant
+folding, `param` for the late-bound case.
+
+Parameters get the **same struct-reflection surface as tables**, so the mental
+model is one rule applied twice — *dtype-tag struct → typed placeholder nodes →
+resolved by name against the environment*:
+
+```mojo
+# polars-style leaf, dtype spelled explicitly
+... .filter(o.amount > param("min_amount", float64))
+
+# or the reflected handle, symmetric with Table[T]()
+struct Args:
+    var min_amount: Float64Type
+    var region:     StringType
+
+var p = Params[Args]()          # mirror of Table[Orders]()
+... .filter(o.amount > p.min_amount)   # p.min_amount : Param[Float64Type]("min_amount")
+```
+
+`Params[Args]()` reflects the dtype tags off `Args` exactly as `Table[Orders]()`
+reflects `Orders` — the same `__getattr_param__` + `reflect[T].field[name].T`
+machinery, so it inherits the numeric/string `where`-dispatch for free.
+
+### Resolution must stay loop-invariant
+
+A param is a scalar constant for the whole run; a column's position is fixed for
+the whole run. Neither may be resolved per SIMD lane — a `String`-keyed map
+lookup inside `core[W]` would run once per lane. Column index resolution has the
+same hazard today (`get_field_index` is called inside `core`; the doc asserts
+the compiler hoists it, which holds for an integer field-index but is far less
+certain for a `String`-keyed param lookup).
+
+The safe design is a **per-execute resolve pass**: walk the typed tree once,
+turn each column *name* into an index and each param *name* into its resolved
+scalar, then run the fused loop over the resolved form. This keeps the inner
+loop pure arithmetic while staying fully late-bound. Whether this can stay
+implicit (trust the hoist) or needs an explicit resolved-node representation is
+an **open question** to settle when prototyping.
+
+### Joins — the two-input node
+
+A `Join[L: Relation, R: Relation, ...]` is the binary node that collapses two
+sources into one batch. Two surfaces for the keys:
+
+```mojo
+# Pragmatic (near-term): argument position encodes side, zero new machinery.
+# Mirrors dyn's join() and the hash_join kernel (positional left_on/right_on: List[Int]).
+o.join(c, left_on = Tuple(o.cust_id), right_on = Tuple(c.cust_id), how = INNER)
+
+# Sugar (north star): needs an On[L, R] node (NOT the fused SIMD Eq — a join
+# condition is a hash equijoin, not a per-row compare) with "left operand = left side".
+o.join(c, on = o.cust_id == c.cust_id)
+```
+
+`left_on`/`right_on` needs nothing new — columns stay plain
+`NumericColumn[T]("cust_id")`, the left key resolves against the left child's
+output schema and the right against the right's. Composite keys are tuples of
+equalities / two grouped tuples.
+
+**Name collisions are the reason to invest in source-tagged columns.** After a
+join, colliding names get suffixed (`cust_id` → `cust_id_right`, matching
+`dyn`). With plain `col("name", string)` in a post-join `select`, the user must
+know and spell the suffixed name — fragile. If columns are parameterized by
+their source struct — `NumericColumn[T, Src]`, so `o.cust_id :
+NumericColumn[Int64Type, Orders]` and `c.name : StringColumn[Customers]` — then
+`c.name` *knows* it came from the right side and auto-resolves to the suffixed
+name. `Src` is a phantom type param (like `name` today, it never touches the
+SIMD `core`), adding one instantiation axis whose cardinality is just the number
+of tables in the query. This is the difference between "works" and the target
+ergonomics, and it also makes `on = a == b` unambiguous without a positional
+convention and lets `join` statically verify at comptime that a left key's `Src`
+is actually the left table.
+
+### Filter/select ordering over a join
+
+The natural order is **JOIN → filter → select** (SQL/polars), i.e. `Filter`
+wraps the join and `Project` wraps the filter, each resolving against its
+*child's output*. This is cleaner than the first slice's `Project(...).filter(...)`
+nesting (where the filter's predicate deliberately evaluates against the
+*source* batch — see *Relation and Filter* above). For the join story, flipping
+to child-output semantics — the filter sees the full joined schema, the select
+picks from filtered rows — is more predictable and generalizes to N-way. This is
+a **semantics change to make deliberately**, not silently.
+
+### The reuse pattern (the payoff)
+
+```mojo
+# compile ONCE — no data, no scalar values in the type or the object
+var query = (
+    o.join(c, on = o.cust_id == c.cust_id)
+     .filter(o.amount > param("min_amount", float64))
+     .select(o.order_id, c.name, o.amount)
+)
+
+# reuse the SAME compiled plan across data sources AND parameter values
+var jan = query.execute(Env(
+    Catalog(orders = jan_orders, customers = customers),
+    Bindings(min_amount = 100.0),
+))
+var feb = query.execute(Env(
+    Catalog(orders = feb_orders, customers = customers),
+    Bindings(min_amount = 250.0),
+))
+```
+
+`query` is a single value of a single monomorphized type; `jan`/`feb` differ
+only in the bound `Env`. This goes a step beyond DataFusion/substrait
+bound-vs-unbound plans or polars `pl.lit`/`pl.col`, which do late binding but
+stay runtime-typed — here the late binding is statically typed and
+monomorphized.
+
+### Type-safety of the binding — open question
+
+`Bindings(min_amount = 100.0)` hands a `Param[Float64Type]` node an `AnyScalar`
+at execute; a dtype mismatch is a **runtime** error. The `Params[Args]()` handle
+closes half the gap (the node's dtype is comptime-checked against the plan), but
+the *provided value* is still checked at execute. Fully-static binding would
+make `Bindings` itself a typed struct keyed to `Args`. Same tension applies to
+`Catalog`: matching a bound batch's schema against the plan's expected shape is
+a runtime check unless the catalog is typed. Decide per surface when
+prototyping; runtime-checked bindings are an acceptable first cut.
+
+### Suggested build order
+
+1. **`Env` foundation** — generalize `core[W]`/`execute` from `RecordBatch` to
+   `Env` (tables + params). Load-bearing; do first. `Catalog` + single-source
+   convenience wrapper.
+2. **`lit` + `Param[T]` + `param()` + `Bindings`** — scalar late binding, and
+   the constant `t.a > lit(0)` predicate that *Deferred* below still lists as
+   missing.
+3. **`Join` binary node + `left_on`/`right_on`** — working `join().filter().select()`
+   on the `col()` surface, child-output semantics.
+4. **Source-tagged columns + `Params[Args]()` + operator sugar** — the north
+   star (`on = a == b`, `o.amount > p.min_amount`, auto-suffix resolution).
+
+Prove the "one compiled plan, many executions" property with a reuse test plus a
+binary-size comparison against the equivalent `dyn` join (mirroring
+`benchmarks/binary_size/`).
+
+## Erased relations over fused values: rewritable plans at comptime size
+
+**Status: the binary-size result is measured (verified). The rewrite designs
+(projection/predicate pushdown) are design, not yet implemented.** The prototype
+lives in `marrow/aot/erased.mojo`; the measurement in
+`benchmarks/binary_size/query_erased_aot.mojo`.
+
+The `Project[*Es]` type-pack encoding makes the whole plan shape a type, which
+is what buys the fully-monomorphized, tiny binary — but a *type* can't be
+restructured from a runtime decision, so rule-based rewrites (predicate/
+projection pushdown, join reordering) are effectively impossible on it. The
+question this section answers is whether we can have a **runtime, walkable plan
+tree** (rewritable) *without* paying the ~30x binary-size cost of the `dyn`
+path.
+
+### The measured result — yes, byte-for-byte
+
+`marrow/aot/erased.mojo` replaces the type pack with plain runtime structs:
+`Project`/`Filter` hold `List[AnyValue]`, and `AnyValue` is a **fused-only value
+box** — an `ArcPointer` to the concrete node plus a thin trampoline into that
+node's own fused `execute()`/`to_array()`. Crucially it carries **no `eval()`
+tag-switch** (unlike `dyn.values.Expr`), and the operators execute themselves
+single-shot (no `Planner`/`RelationProcessor`). Same query as the other
+binary-size variants (`SELECT a, name WHERE a > b`):
+
+| binary | stripped | `__TEXT` | ratio |
+|---|---:|---:|---:|
+| `query_comptime` (type-pack) | 250,120 B | 229,376 B | 1.0x |
+| `query_erased_aot` (runtime tree) | 250,136 B | 229,376 B | 1.0x |
+| `query_hybrid` | 7,734,104 B | 7,651,328 B | 30.9x |
+| `query_runtime` | 7,734,088 B | 7,651,328 B | 30.9x |
+
+The `__TEXT` is **byte-identical** to the type-pack layer. The per-module
+breakdown confirms both open surfaces are absent: `kernels::arithmetic` 0 (no
+`Expr.eval` interpreter), `kernels::join`/`groupby`/`hashing` 0 (no `Planner`),
+`dyn::*` 0. The entire cost of the runtime plan tree is ~17 symbols (the box,
+its trampolines, the two column types, `Gt`).
+
+`query_hybrid` and `query_erased_aot` bracket exactly which knob controls size.
+Both fuse the value; hybrid keeps the open driver and saves **nothing**, erased
+closes the driver and gets the **full 30x**. So the size win is a property of
+**the closed self-executing driver + fused-only value box**, not of encoding the
+plan in the type system. **Rewritability and ~250 KB binaries are decoupled.**
+
+### The box is the fusion boundary
+
+Fusion is fully preserved *inside* a box. `AnyValue(Gt(Add(a, b), c))` holds the
+root `Gt[Add[…], …]` node, whose type still encodes the whole subtree, so
+`box.to_array(batch)` trampolines into one fused vectorize loop computing
+`(a+b) > c` per SIMD lane with zero intermediate arrays. The only indirection is
+the single root call through the trampoline — O(#boxes), not per-node,
+definitely not per-row.
+
+Boxing loses **zero** fusion, because the typed relational layer never fused
+across operators in the first place: `Filter.execute` materializes the predicate
+mask, then filters each projected column — two passes, two materializations. The
+*only* fusion anywhere is intra-expression, and it lives entirely inside one
+`AnyValue`. So:
+
+> **erasure boundary = fusion boundary = rewrite granularity.**
+
+Above the boundary — relations, conjunction lists, projection lists — everything
+is runtime, walkable, and rewritable, and does not fuse (it is already columnar/
+`AnyArray`-erased). Below the boundary — inside one `AnyValue` — is a single
+monomorphized fused kernel, opaque to rewrites.
+
+This cleanly partitions which rewrites the design admits:
+
+- **Move/drop/reorder whole sub-expressions** — projection pushdown, predicate
+  pushdown, conjunction splitting, join reordering. These live *above* the
+  boundary and need only *metadata* from each box, never its internals. **Fully
+  supported.**
+- **Restructure the inside of an expression** — common-subexpression elimination
+  across expressions, reassociating `a+b+c`, constant-folding inside a fused
+  tree. These need to see *through* the box. They must happen **before boxing**
+  (in the typed construction layer, or a dedicated pre-boxing pass — see
+  *granularity* below), or they cost fusion.
+
+That partition is the whole trade: you give up cheap intra-expression rewrites
+(rare, and recoverable before boxing) to keep fusion + a tiny binary, and you
+keep every relation-level rewrite (the ones that matter for pushdown) for free.
+
+### Projection pushdown
+
+Goal: read/carry only the columns actually needed. Mechanism: give `AnyValue` a
+`referenced_columns() -> List[String]` accessor (one more trampoline; each node
+implements it — a column returns its own name, `Add` returns the union of its
+children). Then, at the relational level:
+
+1. Union `referenced_columns()` across the top `Project`'s expressions **and**
+   any `Filter` predicates above the scan → the required column set.
+2. Narrow the scan to emit only those columns; drop any intermediate projection
+   output no expression above references.
+
+The synergy with the **name-resolved columns** (the current leaf design —
+`NumericColumn` carries a name, resolves its position against `batch.schema` at
+execution) is what makes this cheap: narrowing the scan changes column
+*positions*, but every surviving expression still resolves its columns **by
+name**, so **the expressions themselves are never rewritten** — no re-indexing,
+no touching the fused boxes. Pushdown is purely a relational-tree edit plus a
+metadata union.
+
+### Predicate pushdown
+
+Goal: evaluate each filter as early (and on as narrow an input) as possible,
+especially below a join. Mechanism:
+
+1. Represent a `Filter` as a **list of conjuncts** (`List[AnyValue]`), not a
+   single boxed `AND(...)`. Splitting a conjunction then costs nothing — the
+   conjunction is modeled *in the relation*, above the boundary; each conjunct
+   stays its own fully-fused box. (Modeling `AND` inside a box instead would
+   force the rewrite to see through the box — the wrong side of the boundary.)
+2. For each conjunct, test `referenced_columns()` against each side's schema. A
+   conjunct referencing only left-side columns pushes into the left input; only
+   right-side, into the right; mixed conjuncts stay above the join.
+3. Relocate the conjunct box (an `ArcPointer` clone — O(1)). Name resolution
+   again means the moved predicate resolves against its new, narrower input with
+   no re-indexing.
+
+Both rewrites need from `AnyValue` only: `referenced_columns()` (new),
+`dtype()`/`field_name()` (already present), and O(1) cloning (already true — it's
+`ArcPointer`-backed). **None of these de-fuse anything** — they are all metadata
+over an opaque-but-fused box.
+
+### Granularity is a lowering choice
+
+The box boundary need not be "one box per whole predicate." It is a spectrum:
+per-whole-expression (max fusion, expression internals opaque), per-conjunct
+(full fusion within each conjunct, conjunct-level pushdown — the sweet spot
+above), down to per-node (`dyn`'s model — no fusion, maximal structural
+visibility). This suggests a two-level plan, matching how query compilers stage
+optimization:
+
+- **Logical plan** — fine-grained enough for the rewrites you want (relations +
+  conjunct lists; expression internals visible if intra-expression rewrites are
+  needed). All rule-based rewrites run here.
+- **Physical plan** — after rewrites, **lower** each maximal fusible expression
+  subtree into one `AnyValue`. Boxing *is* the lowering step: it trades
+  structural visibility for fusion + the small binary, exactly at the granularity
+  the optimizer chose.
+
+For plans authored directly in Mojo (the AOT path's primary case), the "logical"
+stage can be as simple as constructing the already-good plan and boxing it; the
+staging only earns its keep once runtime/cost-based rewriting is in play.
+
 ## Deferred
 
 - **Aggregations** (`Sum`/`Mean`/`Min`/`Max`, `aggregate(keys, *aggs)`).
-- **Joins** — `unified-plan-hierarchy.md` already sketches a typed
-  `HashJoin[Left, Right, LK, RK]`; fold it in once milestone 6 lands.
+- **Joins** — designed above (*Late binding*); `unified-plan-hierarchy.md` also
+  sketches a typed `HashJoin[Left, Right, LK, RK]`. Fold in once milestone 6
+  lands and the `Env` foundation is in place.
 - **A comptime `Literal[value]` node.** `marrow/aot/values.mojo` has no comptime literal
   yet (only the runtime layer's `lit()`) — every `Filter` test so far
   compares two columns (`Gt(t.a, t.b)`); a predicate against a constant
-  (`t.a > 0`) needs this first.
+  (`t.a > 0`) needs this first. See *Late binding* above, where `lit` sits
+  alongside the late-bound `param()`.
 - **Nested/`Optional` fields, variable-length types** in `Schema.from_struct`
   — see the open questions in `reflect-schema-from-struct.md`.
 - **Bare variadic `select(a, b)` / `Project(a, b)`.** Recoverable only by

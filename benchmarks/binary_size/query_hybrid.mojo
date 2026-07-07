@@ -9,7 +9,7 @@ The relational *structure* (`Scan`/`Filter`/`Project` via `AnyRelation`,
 runtime/type-erased -- exactly like `query_runtime.mojo`, and just as capable
 of being built dynamically (parsed SQL, a Python-driven plan, ...). The
 *predicate* itself, though, is a comptime-typed `Gt(NumericColumn, NumericColumn)` node
-(`marrow.aot.values`) boxed into a runtime `Expr` via the `FUSED` tag --
+(`marrow.expr.values`) boxed into a runtime `Expr` via the `FUSED` tag --
 `Expr(gt_node)` -- so evaluating it is a direct call into the fused
 vectorize loop, not a walk through `Expr.eval()`'s full tag-dispatch
 interpreter.
@@ -29,8 +29,8 @@ Build + strip + compare against the other two:
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import record_batch
-from marrow.dyn import Expr, in_memory_table, execute
-from marrow.aot.values import NumericColumn, Gt
+from marrow.expr import Expr, in_memory_table, execute
+from marrow.expr.values import NumericColumn, Gt
 
 
 def main() raises:

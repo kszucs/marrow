@@ -17,7 +17,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 
-NAMES = ["query_comptime", "query_hybrid", "query_runtime"]
+NAMES = [
+    "query_comptime",
+    "query_erased_aot",
+    "query_streaming",
+    "query_dynvalue",
+    "query_hybrid",
+    "query_runtime",
+]
 
 # Symbol-name substrings to group by, in report order. A symbol may match
 # more than one (mangled names embed nested generic type params), so these
@@ -42,6 +49,7 @@ MODULE_BUCKETS = [
     "marrow::dyn::values",
     "marrow::aot::values",
     "marrow::aot::relations",
+    "marrow::aot::erased",
     "marrow::tabular",
     "marrow::c_data",
     "marrow::schema",

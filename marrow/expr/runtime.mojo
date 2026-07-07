@@ -1,18 +1,18 @@
 """Type-erased runtime expression nodes for the marrow expression system.
 
 ``Expr`` is the runtime counterpart to the comptime-typed layer in
-``marrow.aot.values``.  It exists so that query plans can be built and
+``marrow.expr.values``.  It exists so that query plans can be built and
 executed without knowing concrete comptime types — this is what the Python
 bindings (and any other runtime-typed caller) drive.  A single ``Expr`` node
 carries a tag plus its child args, and dispatches its own execution by tag in
 ``eval()`` — there is no separate "processor" hierarchy mirroring the tree.
 
-A comptime-typed node from ``marrow.aot.values`` can be boxed into an
+A comptime-typed node from ``marrow.expr.values`` can be boxed into an
 ``Expr`` via the ``Expr(value)`` constructor (tag ``FUSED``); ``eval()``/
 ``dtype()``/``write_to()`` on a boxed node all delegate back to the concrete
 comptime node through trampolines, so a fused subtree keeps its single fused
 pass even when driven through this type-erased path. This is the one
-dependency between the two ``marrow.aot`` / ``marrow.dyn`` packages — ``dyn``
+dependency between the two ``marrow.expr`` / ``marrow.expr`` packages — ``dyn``
 imports the ``NumericValue``/``BoolValue`` traits from ``aot.values`` to
 declare the boxing constructors' generic bounds; ``aot`` never imports
 anything from ``dyn``.
@@ -37,7 +37,7 @@ NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
 CAST - Type cast (not yet implemented — see Expr.eval)
-FUSED - Carries a boxed comptime-typed node (see marrow.aot.values)
+FUSED - Carries a boxed comptime-typed node (see marrow.expr.values)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
@@ -47,7 +47,7 @@ from marrow.dtypes import AnyDataType, NumericType
 from marrow.scalars import AnyScalar, PrimitiveScalar
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.aot.values import Value, NumericValue, BoolValue
+from marrow.expr.values import Value, NumericValue, BoolValue
 from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (

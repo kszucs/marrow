@@ -1,6 +1,6 @@
 """Tests for AOT-compiled value expression injection into runtime expressions.
 
-These tests verify that comptime-typed expressions (``marrow.aot.values``)
+These tests verify that comptime-typed expressions (``marrow.expr.values``)
 can be boxed into runtime ``Expr`` nodes via the ``Expr(value)`` constructor,
 and executed end-to-end through the type-erased runtime path.
 
@@ -27,8 +27,8 @@ from marrow.arrays import PrimitiveArray, Int64Array
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.dyn import Expr, FUSED
-from marrow.aot.values import (
+from marrow.expr import Expr, FUSED
+from marrow.expr.values import (
     NumericColumn,
     Add,
     Sub,
@@ -344,7 +344,7 @@ def test_fused_bool_value_drives_runtime_relational_plan() raises:
     """A boxed BoolValue predicate can drive AnyRelation.filter() -- the
     'hybrid' pattern: runtime relational structure, AOT-fused predicate.
     """
-    from marrow.dyn import in_memory_table, execute
+    from marrow.expr import in_memory_table, execute
 
     var a = array([1, 5, 3, 8, 2], int64)
     var b = array([4, 4, 4, 4, 4], int64)
