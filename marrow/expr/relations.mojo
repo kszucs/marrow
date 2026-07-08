@@ -370,8 +370,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             Project(
                 input=self,
                 names=col_names^,
-                exprs_=exprs^,
-                schema_=Schema(fields=fields^),
+                values=exprs^,
+                schema=Schema(fields=fields^),
             )
         )
 
@@ -444,7 +444,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 agg_exprs=val_exprs^,
                 grouper=HashGrouper(funcs.copy(), value_dtypes^),
                 key_fields=key_fields^,
-                schema_=out_schema,
+                schema=out_schema,
             )
         )
 
@@ -499,7 +499,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 right_key_indices=right_indices^,
                 join_kind=how,
                 strictness=strictness,
-                schema_=Schema(fields=fields^),
+                schema=Schema(fields=fields^),
             )
         )
 
@@ -513,17 +513,17 @@ struct Scan(Relation):
     """Unbound named scan — a leaf with no data (cannot execute directly)."""
 
     var name: String
-    var schema_: Schema
+    var _schema: Schema
 
-    def __init__(out self, *, var name: String, var schema_: Schema):
+    def __init__(out self, *, var name: String, var schema: Schema):
         self.name = name^
-        self.schema_ = schema_^
+        self._schema = schema^
 
     def kind(self) -> UInt8:
         return SCAN_NODE
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
 
     def pull(mut self) raises -> RecordBatch:
         raise Error("Scan requires external data source binding")
@@ -577,7 +577,7 @@ struct ParquetScan(Relation):
     """Leaf that reads a Parquet file on first pull, then yields morsels."""
 
     var path: String
-    var schema_: Schema
+    var _schema: Schema
     var morsel_size: Int
     var _batch: Optional[RecordBatch]
     var _offset: Int
@@ -586,11 +586,11 @@ struct ParquetScan(Relation):
         out self,
         *,
         var path: String,
-        var schema_: Schema,
+        var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
     ):
         self.path = path^
-        self.schema_ = schema_^
+        self._schema = schema^
         self.morsel_size = morsel_size
         self._batch = None
         self._offset = 0
@@ -599,7 +599,7 @@ struct ParquetScan(Relation):
         return PARQUET_SCAN_NODE
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
 
     def pull(mut self) raises -> RecordBatch:
         if not self._batch:
@@ -637,7 +637,7 @@ struct ParquetScan(Relation):
 
 def parquet_scan(path: String, schema: Schema) -> AnyRelation:
     """Create a Parquet file scan with a known schema."""
-    return ParquetScan(path=path, schema_=schema)
+    return ParquetScan(path=path, schema=schema)
 
 
 # ---------------------------------------------------------------------------
@@ -684,34 +684,34 @@ struct Project(Relation):
 
     var input: AnyRelation
     var names: List[String]
-    var exprs_: List[AnyValue]
-    var schema_: Schema
+    var values: List[AnyValue]
+    var _schema: Schema
 
     def __init__(
         out self,
         *,
         var input: AnyRelation,
         var names: List[String],
-        var exprs_: List[AnyValue],
-        var schema_: Schema,
+        var values: List[AnyValue],
+        var schema: Schema,
     ):
         self.input = input^
         self.names = names^
-        self.exprs_ = exprs_^
-        self.schema_ = schema_^
+        self.values = values^
+        self._schema = schema^
 
     def kind(self) -> UInt8:
         return PROJECT_NODE
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
 
     def pull(mut self) raises -> RecordBatch:
         var batch = self.input.pull()  # raises Exhausted when done
         var cols = List[AnyArray]()
-        for ref v in self.exprs_:
+        for ref v in self.values:
             cols.append(v.to_array(batch))
-        return RecordBatch(schema=self.schema_.copy(), columns=cols^)
+        return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Project([")
@@ -720,7 +720,7 @@ struct Project(Relation):
                 writer.write(t", ")
             writer.write(self.names[i])
             writer.write(t"=")
-            self.exprs_[i].write_to(writer)
+            self.values[i].write_to(writer)
         writer.write(t"])")
 
 
@@ -737,7 +737,7 @@ struct Aggregate(Relation):
     var agg_exprs: List[AnyValue]
     var grouper: HashGrouper
     var key_fields: List[Field]
-    var schema_: Schema
+    var _schema: Schema
     var _emitted: Bool
 
     def __init__(
@@ -748,21 +748,21 @@ struct Aggregate(Relation):
         var agg_exprs: List[AnyValue],
         var grouper: HashGrouper,
         var key_fields: List[Field],
-        var schema_: Schema,
+        var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
         self.agg_exprs = agg_exprs^
         self.grouper = grouper^
         self.key_fields = key_fields^
-        self.schema_ = schema_^
+        self._schema = schema^
         self._emitted = False
 
     def kind(self) -> UInt8:
         return AGGREGATE_NODE
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
 
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
@@ -811,7 +811,7 @@ struct Join(Relation):
     var right_key_indices: List[Int]
     var join_kind: UInt8
     var strictness: UInt8
-    var schema_: Schema
+    var _schema: Schema
     var _index: Optional[HashJoin[rapidhash]]
     var _exhausted: Bool
 
@@ -824,7 +824,7 @@ struct Join(Relation):
         var right_key_indices: List[Int],
         join_kind: UInt8,
         strictness: UInt8,
-        var schema_: Schema,
+        var schema: Schema,
     ):
         self.left = left^
         self.right = right^
@@ -832,7 +832,7 @@ struct Join(Relation):
         self.right_key_indices = right_key_indices^
         self.join_kind = join_kind
         self.strictness = strictness
-        self.schema_ = schema_^
+        self._schema = schema^
         self._index = None
         self._exhausted = False
 
@@ -840,7 +840,7 @@ struct Join(Relation):
         return JOIN_NODE
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
 
     def pull(mut self) raises -> RecordBatch:
         if self._exhausted:
@@ -859,7 +859,7 @@ struct Join(Relation):
                 self.strictness,
             )
             return RecordBatch(
-                schema=self.schema_.copy(), columns=result.children.copy()
+                schema=self._schema.copy(), columns=result.children.copy()
             )
         except Exhausted:
             self._exhausted = True

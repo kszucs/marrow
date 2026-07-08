@@ -53,8 +53,8 @@ def _fused_plan(morsel: Int) raises -> AnyRelation:
         Project(
             input=filtered,
             names=["a", "name"],
-            exprs_=values^,
-            schema_=_out_schema(),
+            values=values^,
+            schema=_out_schema(),
         )
     )
 
@@ -107,8 +107,8 @@ def test_streaming_interpreter_values() raises:
         Project(
             input=filtered,
             names=["a", "name"],
-            exprs_=values^,
-            schema_=_out_schema(),
+            values=values^,
+            schema=_out_schema(),
         )
     )
     var result = plan.collect()

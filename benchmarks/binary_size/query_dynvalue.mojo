@@ -36,7 +36,7 @@ def main() raises:
     var proj = Project(
         input=filtered,
         names=["a", "name"],
-        exprs_=values^,
-        schema_=schema([field("a", int64), field("name", string)]),
+        values=values^,
+        schema=schema([field("a", int64), field("name", string)]),
     )
     print(execute(AnyRelation(proj^)))
