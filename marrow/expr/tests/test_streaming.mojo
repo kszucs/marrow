@@ -168,5 +168,26 @@ def test_aggregate_plan_is_reusable() raises:
     assert_equal(r1.num_columns(), r2.num_columns())
 
 
+def test_aggregate_multi_key_schema() raises:
+    """Two group keys produce two distinctly-named key fields (their source
+    column names), not two fields both named 'key'."""
+    var region = array([1, 1, 2], int64)
+    var dept = array([1, 2, 2], int64)
+    var v = array([10, 20, 30], int64)
+    var batch = record_batch(
+        [region^, dept^, v^], names=["region", "dept", "v"]
+    )
+    var plan = in_memory_table(batch).aggregate(
+        keys=[dyn_col("region"), dyn_col("dept")],
+        values=[dyn_col("v")],
+        funcs=["sum"],
+    )
+    var result = execute(plan)
+    assert_equal(result.num_columns(), 3)
+    assert_equal(result.schema.fields[0].name, "region")
+    assert_equal(result.schema.fields[1].name, "dept")
+    assert_equal(result.schema.fields[2].name, "sum")
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

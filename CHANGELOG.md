@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+### Fixes
+
+- **Relational plans are reusable templates** (`marrow.expr.relations`): the fat
+  nodes carried mutable execution cursors (scan offset, built hash index,
+  grouper, emitted flag) shared through `AnyRelation`'s `ArcPointer`, so a plan
+  was single-use and copying it aliased the cursors — draining one corrupted the
+  other. `AnyRelation.copy()` now deep-clones the sub-tree with every node's
+  execution state reset (sharing only the immutable leaf batches), and
+  `execute()` runs on a fresh clone, so a plan can be executed repeatedly and
+  copies never share a cursor. The aggregate grouper is built lazily per run so
+  it resets cleanly on clone.
+- **Correct grouped-aggregation output schema** (`marrow.expr.relations`): a
+  multi-key `aggregate` named every key field `"key"` (duplicate names) and fell
+  back to the *first* input column's dtype for any key. Each key field is now
+  named after its source column with that column's dtype, and key/value
+  expressions are bound to positions once. The aggregate output columns are also
+  relabelled to the plan's declared schema, so `plan.schema()` matches the
+  executed result exactly (previously the grouper emitted `col{i}_{func}` names
+  the declared schema did not carry).
+
+### Refactors
+
+- **The value box erases behind `Value`** (`marrow.expr.values`): `to_array` and
+  `field_name` moved onto the `Value` trait itself (the `NumericValue` /
+  `BoolValue` / `StringValue` sub-traits default `to_array` via their fused
+  `execute()`; the named column leaves override `field_name`), so `AnyValue`'s
+  three `@implicit` constructors and six trampolines collapse to one
+  `__init__[V: Value]` and one trampoline pair. Removes the separate `Boxable` /
+  `Named` / `Column` traits. The fused path still dead-code-eliminates the
+  interpreter — `query_streaming` stays 448 KB, 12.7× smaller than the `DynValue`
+  paths.
+- **Single named column representation** (`marrow.expr`): removed the positional
+  `NumericColumn[T](index)` / `StringColumn(index)` leaves that duplicated the
+  name-resolved leaves in `relations.mojo`; the fused algebra
+  (`Add`/`Gt`/`Length`…) composes over the `col(name, dtype)` leaves the same
+  way. Removed the stale `bench_fused.mojo`, which imported the long-removed
+  `marrow.expr.fused` module and no longer compiled.
+- **No per-morsel expression-tree reconstruction** (`marrow.expr.dynamic`):
+  `DynValue.to_array` ran `resolve_names(schema).eval(batch)` on every morsel,
+  deep-copying the whole expression tree each time; `eval` now resolves a named
+  column reference inline (one schema lookup, no allocation) and `to_array`
+  calls it directly.
+- **Encapsulated join key extraction** (`marrow.expr`): the join builder read
+  `DynValue._kind_data` directly and assumed each key was a bare column
+  reference; a new public `DynValue.column_index(schema)` resolves a key to its
+  position and raises on a computed (non-column) key.
+- **Trimmed unimplemented join surface** (`marrow.expr.relations`): dropped the
+  never-read `algorithm` parameter from `.join()` and stopped re-exporting
+  `JOIN_ALGO_*`, `JOIN_ASOF`, and `JOIN_CROSS`/`JOIN_SINGLE`/`JOIN_MARK` (the
+  hash-join path implements inner/left/right/full/semi/anti with all/any
+  strictness).
+
 ### Features
 
 - **AOT typed tables declared as plain dtype-tag structs** (`marrow.aot.relations`):

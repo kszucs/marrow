@@ -154,6 +154,18 @@ struct DynValue(
         """Output column name (the LOAD name; empty for computed nodes)."""
         return self._name.copy()
 
+    def column_index(self, schema: Schema) raises -> Int:
+        """Resolve this expression to a column position for use as a join/group
+        key. Requires a bare column reference (``col(...)``); raises on a
+        computed expression, so callers never mis-read a non-column key."""
+        var resolved = self.resolve_names(schema)
+        if resolved.kind() != LOAD:
+            raise Error(
+                "expected a column reference as a key, got a computed"
+                " expression"
+            )
+        return Int(resolved.kind_data())
+
     def resolve_names(self, schema: Schema) raises -> DynValue:
         """Recursively resolve ``col("name")`` references against *schema*.
 

@@ -214,6 +214,21 @@ def _concat(arrays: List[AnyArray]) raises -> AnyArray:
         raise Error("collect: unsupported column dtype ", dtype)
 
 
+def _value_dtype(
+    expr: DynValue, input_schema: Schema
+) -> Optional[AnyDataType]:
+    """Best-effort dtype of an aggregated value expression: its static dtype, or
+    the input column's dtype when it is a (bound) column reference; else None."""
+    var dt = expr.dtype()
+    if dt:
+        return dt^
+    if expr.kind() == LOAD:
+        return Optional[AnyDataType](
+            input_schema.fields[Int(expr.kind_data())].dtype.copy()
+        )
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Relation trait — node = structure + self-execution
 # ---------------------------------------------------------------------------
@@ -409,21 +424,39 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
         var input_schema = self.schema()
 
-        # Output schema: key fields + agg result fields.
-        var fields = List[Field]()
+        # Bind key/value expressions to positional form once (names -> indices),
+        # so per-morsel eval and the dtype lookups below use positions directly.
+        var resolved_keys = List[DynValue]()
         for ref k in keys:
-            var kdt = k.dtype()
-            if kdt:
-                fields.append(Field("key", kdt.value().copy()))
+            resolved_keys.append(k.resolve_names(input_schema))
+        var resolved_values = List[DynValue]()
+        for ref v in values:
+            resolved_values.append(v.resolve_names(input_schema))
+
+        # Output schema: one field per key (named after its source column, with
+        # that column's dtype) then one field per aggregate (named after its
+        # function).
+        var fields = List[Field]()
+        for i in range(len(resolved_keys)):
+            ref k = resolved_keys[i]
+            if k.kind() == LOAD:
+                ref src = input_schema.fields[Int(k.kind_data())]
+                fields.append(Field(src.name, src.dtype.copy()))
             else:
-                fields.append(Field("key", input_schema.fields[0].dtype.copy()))
+                var kdt = k.dtype()
+                if not kdt:
+                    raise Error(
+                        "aggregate: cannot infer dtype for computed key "
+                        + String(i)
+                    )
+                fields.append(Field("key" + String(i), kdt.value().copy()))
         for i in range(len(funcs)):
             if funcs[i] == "count":
                 fields.append(Field(funcs[i], AnyDataType(int64)))
             elif funcs[i] == "mean":
                 fields.append(Field(funcs[i], AnyDataType(float64)))
             else:
-                var maybe_dt = values[i].dtype()
+                var maybe_dt = _value_dtype(resolved_values[i], input_schema)
                 if maybe_dt and maybe_dt.value().is_integer():
                     fields.append(Field(funcs[i], AnyDataType(int64)))
                 else:
@@ -431,28 +464,23 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var out_schema = Schema(fields=fields^)
 
         # Key struct fields (first len(keys) output fields) + value accumulator
-        # dtypes (resolve LOAD nodes against the input schema).
+        # dtypes (the input dtype of each aggregated value expression).
         var key_fields = List[Field]()
-        for i in range(len(keys)):
+        for i in range(len(resolved_keys)):
             key_fields.append(out_schema.fields[i].copy())
         var value_dtypes = List[AnyDataType]()
-        for i in range(len(values)):
-            ref agg_expr = values[i]
-            var dt = agg_expr.dtype()
-            if not dt and agg_expr.kind() == LOAD:
-                dt = Optional[AnyDataType](
-                    input_schema.fields[Int(agg_expr.kind_data())].dtype.copy()
-                )
+        for i in range(len(resolved_values)):
+            var dt = _value_dtype(resolved_values[i], input_schema)
             if dt:
                 value_dtypes.append(dt.value().copy())
             else:
                 value_dtypes.append(AnyDataType(float64))
 
         var key_exprs = List[AnyValue]()
-        for ref k in keys:
+        for ref k in resolved_keys:
             key_exprs.append(AnyValue(k.copy()))
         var val_exprs = List[AnyValue]()
-        for ref v in values:
+        for ref v in resolved_values:
             val_exprs.append(AnyValue(v.copy()))
 
         return AnyRelation(
@@ -482,13 +510,14 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var left_schema = self.schema()
         var right_schema = right.schema()
 
-        # Resolve key expressions to positional column indices.
+        # Resolve key expressions to positional column indices (each key must be
+        # a bare column reference — column_index raises otherwise).
         var left_indices = List[Int]()
         for ref k in left_on:
-            left_indices.append(Int(k.resolve_names(left_schema)._kind_data))
+            left_indices.append(k.column_index(left_schema))
         var right_indices = List[Int]()
         for ref k in right_on:
-            right_indices.append(Int(k.resolve_names(right_schema)._kind_data))
+            right_indices.append(k.column_index(right_schema))
 
         # Output schema: left columns + (suffixed) right columns.
         var fields = List[Field]()
@@ -857,7 +886,14 @@ struct Aggregate(Relation):
             except Exhausted:
                 break
         self._emitted = True
-        return self._grouper.value().finish(self.key_fields)
+        # The grouper generates its own aggregate column names (col{i}_{func}).
+        # Re-label with the plan's declared schema so plan.schema() matches the
+        # executed output exactly (columns are in the same key-then-agg order).
+        var raw = self._grouper.value().finish(self.key_fields)
+        var cols = List[AnyArray]()
+        for ref c in raw.columns:
+            cols.append(c.copy())
+        return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(keys=[")
