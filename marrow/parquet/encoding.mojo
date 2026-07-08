@@ -41,6 +41,13 @@ def _read_varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
     return (result, p)
 
 
+@always_inline
+def _load_u64(data: Span[UInt8, _], byte_idx: Int) -> UInt64:
+    """Unaligned little-endian 64-bit load. Callers guarantee 8 readable bytes
+    at `byte_idx` (mmap has trailing bytes; scratch is padded)."""
+    return (data.unsafe_ptr() + byte_idx).bitcast[UInt64]()[0]
+
+
 def _read_bits(data: Span[UInt8, _], bit_offset: Int, nbits: Int) -> UInt64:
     """Read `nbits` starting at absolute `bit_offset`, least-significant first.
     """
@@ -73,24 +80,15 @@ def rle_decode(
         var header: UInt64
         header, pos = _read_varint(data, pos)
         if (header & 1) == 1:
-            # bit-packed run — unpack with a rolling 64-bit accumulator so each
-            # source byte is read once (vs bit-by-bit).
+            # bit-packed run — one unaligned 64-bit load per value (width <= 32).
             var num_groups = Int(header >> 1)
             var num_vals = num_groups * 8
-            var bytepos = pos
-            var bitbuf: UInt64 = 0
-            var bitcnt = 0
             var mask = (UInt64(1) << UInt64(width)) - 1
-            for _ in range(num_vals):
-                while bitcnt < width:
-                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
-                    bytepos += 1
-                    bitcnt += 8
-                var v = bitbuf & mask
-                bitbuf >>= UInt64(width)
-                bitcnt -= width
+            for k in range(num_vals):
+                var abs_bit = k * width
+                var word = _load_u64(data, pos + (abs_bit >> 3))
                 if len(out) < count:
-                    out.append(Int32(v))
+                    out.append(Int32((word >> UInt64(abs_bit & 7)) & mask))
             pos += num_groups * width
         else:
             # RLE run
@@ -131,18 +129,13 @@ def rle_gather[
         if (header & 1) == 1:
             var num_groups = Int(header >> 1)
             var num_vals = num_groups * 8
-            var bytepos = pos
-            var bitbuf: UInt64 = 0
-            var bitcnt = 0
             var mask = (UInt64(1) << UInt64(width)) - 1
-            for _ in range(num_vals):
-                while bitcnt < width:
-                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
-                    bytepos += 1
-                    bitcnt += 8
-                var idx = Int(bitbuf & mask)
-                bitbuf >>= UInt64(width)
-                bitcnt -= width
+            # width <= 32 for dictionary indices, so one 64-bit load per value
+            # covers it (shift <= 7 + width <= 39 bits).
+            for k in range(num_vals):
+                var abs_bit = k * width
+                var word = _load_u64(data, pos + (abs_bit >> 3))
+                var idx = Int((word >> UInt64(abs_bit & 7)) & mask)
                 if produced < count:
                     dest[produced] = dict[idx]
                     produced += 1

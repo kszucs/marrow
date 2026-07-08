@@ -171,8 +171,11 @@ struct Codecs(Movable):
         out_size: Int,
         mut scratch: List[UInt8],
     ) raises:
-        """Decompress `src` into `scratch` (resized, reused across pages)."""
-        scratch.resize(unsafe_uninit_length=out_size)
+        """Decompress `src` into `scratch` (resized, reused across pages).
+
+        8 trailing bytes of slack let the bit-unpackers do unaligned 64-bit
+        loads past the last value without overrunning the buffer."""
+        scratch.resize(unsafe_uninit_length=out_size + 8)
         var ptr = scratch.unsafe_ptr()
         if codec == CODEC_UNCOMPRESSED:
             memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
@@ -195,6 +198,7 @@ struct Codecs(Movable):
         """Decompress `src` into a fresh `out_size`-byte list."""
         var dst = List[UInt8]()
         self.decompress_into(codec, src, out_size, dst)
+        dst.resize(unsafe_uninit_length=out_size)  # drop the scratch slack
         return dst^
 
     def compress(
