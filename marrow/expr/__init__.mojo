@@ -18,13 +18,11 @@ even when driven through this type-erased path.
 ``expr.mojo`` — ``DynValue`` (unified n-ary expression node), factory functions
 (``col()``, ``lit()``, ``if_else()``), and the expression tag constants.
 
-``relations.mojo`` — ``AnyRelation`` (type-erased relational plan node) and
-its concrete node kinds (``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
-``ParquetScan``, ``Aggregate``, ``Join``), plus the join kind/strictness/
-algorithm constants.
-
-``executor.mojo`` — ``Planner``/``*Processor`` (the pull-based streaming
-execution engine) and the ``execute(plan)`` convenience wrapper.
+``plan.mojo`` — ``AnyRelation`` and its **self-executing** node kinds
+(``Scan``, ``Filter``, ``Project``, ``InMemoryTable``, ``ParquetScan``,
+``Aggregate``, ``Join``): each node is both the plan node and its own
+pull-based executor (``pull()``/``collect()``), so there is no separate
+``Planner``/``*Processor`` hierarchy. ``execute(plan)`` drains to one batch.
 
 See ``docs/aot-relations-design.md`` for the full design.
 
@@ -77,6 +75,11 @@ from marrow.expr.plan import (
     Join,
     in_memory_table,
     parquet_scan,
+    # Streaming execution (fat nodes; formerly executor.mojo)
+    Relation,
+    Exhausted,
+    ExecutionContext,
+    execute,
     # Plan node kind constants
     SCAN_NODE,
     FILTER_NODE,
@@ -105,18 +108,4 @@ from marrow.expr.plan import (
     JOIN_ALGO_SORT_MERGE,
     JOIN_ALGO_PIECEWISE,
     JOIN_ALGO_GRACE_HASH,
-)
-from marrow.expr.executor import (
-    ExecutionContext,
-    # Relation processors
-    RelationProcessor,
-    AnyRelationProcessor,
-    ScanProcessor,
-    ParquetScanProcessor,
-    FilterProcessor,
-    ProjectProcessor,
-    AggregateProcessor,
-    JoinProcessor,
-    Planner,
-    execute,
 )
