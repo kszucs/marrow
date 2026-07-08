@@ -69,9 +69,10 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     var dtype: AnyDataType
     var max_def: Int
+    var num_rows: Int
     var values: Buffer[mut=True]
     var bitmap: Bitmap[mut=True]
-    var has_validity: Bool
+    var has_bitmap: Bool  # materialized only once a null actually appears
     var dict: List[Scalar[Self.store_dt]]
     var wpos: Int
     var null_count: Int
@@ -79,17 +80,24 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
     def __init__(out self, num_rows: Int, leaf: LeafColumn):
         self.dtype = leaf.dtype.copy()
         self.max_def = leaf.max_def
-        self.has_validity = leaf.max_def >= 1
+        self.num_rows = num_rows
         self.values = Buffer.alloc_uninit[Self.store_dt](num_rows)
-        self.bitmap = Bitmap[mut=True].alloc_zeroed(
-            num_rows if self.has_validity else 0
-        )
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
         self.dict = List[Scalar[Self.store_dt]]()
         self.wpos = 0
         self.null_count = 0
 
     def _read(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.store_dt]:
         return read_fixed_le[Self.phys_dt](span, off).cast[Self.store_dt]()
+
+    def _ensure_bitmap(mut self):
+        """Allocate the validity bitmap on first null, backfilling all values
+        written so far as valid (they were present). No-op if already built."""
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -112,10 +120,10 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         var vspan = page.values()
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if page.is_plain() and page.all_present():
-            var start = self.wpos
+            # fast path: contiguous present values, no validity to track
             comptime if Self.SAME:
                 memcpy(
-                    dest=vptr + start,
+                    dest=vptr + self.wpos,
                     src=vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
                     count=page.num_values,
                 )
@@ -124,9 +132,12 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 for i in range(page.num_values):
                     vptr[self.wpos] = self._read(vspan, i * PW)
                     self.wpos += 1
-            if self.has_validity:
-                self.bitmap.set_range(start, page.num_values, True)
+            if self.has_bitmap:
+                self.bitmap.set_range(
+                    self.wpos - page.num_values, page.num_values, True
+                )
         elif page.is_plain():
+            self._ensure_bitmap()  # this page has nulls
             var vi = 0
             for row in range(page.num_values):
                 if Int(page.def_levels[row]) == self.max_def:
@@ -140,6 +151,8 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         elif page.is_dictionary():
             var indices = rle_decode(vspan[1:], Int(vspan[0]), page.num_present)
             var all_present = page.all_present()
+            if not all_present:
+                self._ensure_bitmap()
             var di = 0
             for row in range(page.num_values):
                 var present = all_present or (
@@ -148,7 +161,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 if present:
                     vptr[self.wpos] = self.dict[Int(indices[di])]
                     di += 1
-                    if self.has_validity:
+                    if self.has_bitmap:
                         self.bitmap.set(self.wpos)
                 else:
                     vptr[self.wpos] = 0
