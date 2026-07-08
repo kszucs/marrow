@@ -44,6 +44,7 @@ from marrow.kernels.groupby import HashGrouper
 from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
 from marrow.parquet import read_table
+from marrow.expr.erased import AnyValue
 from marrow.expr.runtime import DynValue, col, LOAD
 from marrow.kernels.join import (
     JOIN_INNER,
@@ -257,7 +258,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[DynValue]()
+        var exprs = List[AnyValue]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -265,7 +266,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             if idx == -1:
                 raise Error("select: column '" + name + "' not found")
             col_names.append(name)
-            exprs.append(col(idx))
+            exprs.append(AnyValue(col(idx)))
             fields.append(schema.fields[idx].copy())
         return AnyRelation(
             Project(
@@ -276,11 +277,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
-    def filter(self, predicate: DynValue) raises -> AnyRelation:
-        """Filter rows by a boolean predicate (``col("name")`` resolved to
-        positional indices against this node's schema)."""
-        var resolved = predicate.resolve_names(self.schema())
-        return AnyRelation(Filter(input=self, predicate=resolved^))
+    def filter(self, var predicate: AnyValue) raises -> AnyRelation:
+        """Filter rows by a boolean predicate. Column references resolve by name
+        against the batch schema when the boxed value executes."""
+        return AnyRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
         self,
@@ -332,12 +332,12 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             else:
                 value_dtypes.append(AnyDataType(float64))
 
-        var key_exprs = List[DynValue]()
+        var key_exprs = List[AnyValue]()
         for ref k in keys:
-            key_exprs.append(k.copy())
-        var val_exprs = List[DynValue]()
+            key_exprs.append(AnyValue(k.copy()))
+        var val_exprs = List[AnyValue]()
         for ref v in values:
-            val_exprs.append(v.copy())
+            val_exprs.append(AnyValue(v.copy()))
 
         return AnyRelation(
             Aggregate(
@@ -551,9 +551,9 @@ struct Filter(Relation):
     """Apply a boolean predicate; keep rows where True (schema unchanged)."""
 
     var input: AnyRelation
-    var predicate: DynValue
+    var predicate: AnyValue
 
-    def __init__(out self, *, var input: AnyRelation, var predicate: DynValue):
+    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
         self.input = input^
         self.predicate = predicate^
 
@@ -567,7 +567,7 @@ struct Filter(Relation):
         # Skip morsels that filter to 0 rows; Exhausted propagates from input.
         while True:
             var batch = self.input.pull()
-            var mask = self.predicate.eval(batch)
+            var mask = self.predicate.to_array(batch)
             var cols = List[AnyArray]()
             for i in range(batch.num_columns()):
                 cols.append(filter(batch.columns[i].copy(), mask.copy()))
@@ -586,7 +586,7 @@ struct Project(Relation):
 
     var input: AnyRelation
     var names: List[String]
-    var exprs_: List[DynValue]
+    var exprs_: List[AnyValue]
     var schema_: Schema
 
     def __init__(
@@ -594,7 +594,7 @@ struct Project(Relation):
         *,
         var input: AnyRelation,
         var names: List[String],
-        var exprs_: List[DynValue],
+        var exprs_: List[AnyValue],
         var schema_: Schema,
     ):
         self.input = input^
@@ -612,7 +612,7 @@ struct Project(Relation):
         var batch = self.input.pull()  # raises Exhausted when done
         var cols = List[AnyArray]()
         for ref v in self.exprs_:
-            cols.append(v.eval(batch))
+            cols.append(v.to_array(batch))
         return RecordBatch(schema=self.schema_.copy(), columns=cols^)
 
     def write_to[W: Writer](self, mut writer: W):
@@ -635,8 +635,8 @@ struct Aggregate(Relation):
     """Grouped aggregation — blocking: consume all input, then emit once."""
 
     var input: AnyRelation
-    var keys: List[DynValue]
-    var agg_exprs: List[DynValue]
+    var keys: List[AnyValue]
+    var agg_exprs: List[AnyValue]
     var grouper: HashGrouper
     var key_fields: List[Field]
     var schema_: Schema
@@ -646,8 +646,8 @@ struct Aggregate(Relation):
         out self,
         *,
         var input: AnyRelation,
-        var keys: List[DynValue],
-        var agg_exprs: List[DynValue],
+        var keys: List[AnyValue],
+        var agg_exprs: List[AnyValue],
         var grouper: HashGrouper,
         var key_fields: List[Field],
         var schema_: Schema,
@@ -675,7 +675,7 @@ struct Aggregate(Relation):
                 var key_children = List[AnyArray]()
                 var key_struct_fields = List[Field]()
                 for i in range(len(self.keys)):
-                    key_children.append(self.keys[i].eval(batch))
+                    key_children.append(self.keys[i].to_array(batch))
                     key_struct_fields.append(self.key_fields[i].copy())
                 var key_struct = StructArray(
                     dtype=struct_(key_struct_fields^),
@@ -688,7 +688,7 @@ struct Aggregate(Relation):
                 var gids = self.grouper.consume_keys(key_struct)
                 var val_arrays = List[AnyArray]()
                 for i in range(len(self.agg_exprs)):
-                    val_arrays.append(self.agg_exprs[i].eval(batch))
+                    val_arrays.append(self.agg_exprs[i].to_array(batch))
                 self.grouper.consume_values(gids, val_arrays)
             except Exhausted:
                 break

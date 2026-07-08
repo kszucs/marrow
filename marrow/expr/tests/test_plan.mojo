@@ -1,5 +1,6 @@
-from std.testing import assert_equal
+from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
+from marrow.expr.erased import AnyValue
 
 from marrow.arrays import AnyArray
 from marrow.builders import array
@@ -77,7 +78,7 @@ def test_filter_predicate() raises:
         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
     )
     var filt = Filter(input=src, predicate=col(0) < col(1))
-    assert_equal(filt.predicate.kind(), LT)
+    assert_true(String(filt.predicate).find("less") != -1)
 
 
 def test_filter_write_to() raises:
@@ -117,11 +118,11 @@ def test_project_exprs() raises:
     var proj = Project(
         input=src,
         names=["z"],
-        exprs_=[col(0) + col(1)],
+        exprs_=[AnyValue(col(0) + col(1))],
         schema_=schema([field("z", int64)]),
     )
     assert_equal(len(proj.exprs_), 1)
-    assert_equal(proj.exprs_[0].kind(), ADD)
+    assert_true(String(proj.exprs_[0]).find("add") != -1)
 
 
 def test_project_write_to() raises:
