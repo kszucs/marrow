@@ -68,7 +68,7 @@ struct Codecs(Movable):
             return out^
 
         var dst = List[UInt8]()
-        dst.resize(out_size, 0)
+        dst.resize(unsafe_uninit_length=out_size)  # codec fills every byte
         var dst_ptr = dst.unsafe_ptr()
         var src_ptr = src.unsafe_ptr()
 

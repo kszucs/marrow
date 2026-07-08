@@ -3,15 +3,22 @@
 Footer → row groups → column chunks → pages → decode → Arrow arrays. Milestone-1
 handles flat columns (primitives + string/binary), PLAIN and dictionary
 (RLE_DICTIONARY / PLAIN_DICTIONARY) encodings, definition-level nullability, and
-both v1 and v2 data pages. Values are materialized through the typed builders in
-`marrow.builders`, so validity bitmaps and offsets come for free.
+both v1 and v2 data pages, plus struct nesting.
+
+Page navigation, decompression, and level decoding are centralized in
+`_next_page`; the typed readers only decode values. Fixed-width primitive
+columns take a memcpy fast path (contiguous PLAIN pages copy straight into the
+output buffer); nullable/dictionary pages scatter element-by-element.
 """
 
 from std.sys import size_of
-from std.pathlib import Path
+from std.ffi import external_call
+from std.io.file import FileHandle
+from std.memory import memcpy
 
-from ..arrays import AnyArray, StructArray
-from ..builders import PrimitiveBuilder, StringBuilder, BoolBuilder
+from ..arrays import AnyArray, StructArray, ArrayData
+from ..buffers import Buffer, Bitmap
+from ..builders import StringBuilder, BoolBuilder
 from ..dtypes import (
     Field,
     bool_,
@@ -33,7 +40,7 @@ from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
 from .thrift import CompactReader
-from .encoding import rle_decode, bit_width
+from .encoding import rle_decode, rle_count_matches, bit_width
 from .compression import Codecs
 from .schema import (
     parquet_to_arrow,
@@ -51,6 +58,45 @@ from .format import (
     PAGE_DATA_V2,
     ENC_PLAIN,
 )
+
+
+# ---------------------------------------------------------------------------
+# Memory-mapped file — read the file zero-copy instead of copying it in
+# ---------------------------------------------------------------------------
+
+
+struct MappedFile(Movable):
+    """A read-only mmap of the whole file, freed when the value drops. Decoded
+    values are copied into owned Arrow buffers, so the map only needs to outlive
+    the decode."""
+
+    var ptr: UnsafePointer[UInt8, ImmutUntrackedOrigin]
+    var size: Int
+
+    def __init__(out self, path: String) raises:
+        # Use Mojo's file open (the libc variadic `open` cannot be external_call'd
+        # in an archive build); mmap/lseek are plain syscalls and are fine.
+        var f = FileHandle(path, "r")
+        var size = Int(
+            external_call["lseek", Int64](
+                f.handle, Int64(0), Int(2)
+            )  # SEEK_END
+        )
+        # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
+        var ptr = external_call[
+            "mmap", UnsafePointer[UInt8, ImmutUntrackedOrigin]
+        ](UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0))
+        _ = f^  # close the fd; mmap stays valid
+        if Int(ptr) == 0 or Int(ptr) == -1:
+            raise Error("parquet: mmap failed for " + path)
+        self.ptr = ptr
+        self.size = size
+
+    def span(self) -> Span[UInt8, ImmutUntrackedOrigin]:
+        return Span[UInt8, ImmutUntrackedOrigin](ptr=self.ptr, length=self.size)
+
+    def __del__(deinit self):
+        _ = external_call["munmap", Int32](self.ptr, self.size)
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +122,33 @@ def _read_fixed_le[dt: DType](body: Span[UInt8, _], off: Int) -> Scalar[dt]:
 
 
 # ---------------------------------------------------------------------------
-# Level decoding — returns (def_levels, value_byte_offset, num_present)
+# Page reading — one decoded page (levels + value bytes), v1/v2 unified
 # ---------------------------------------------------------------------------
+
+comptime PAGEKIND_DICT: Int = 0
+comptime PAGEKIND_DATA: Int = 1
+
+
+struct PageData(Movable):
+    """A decoded page: the (decompressed) body plus, for data pages, the
+    definition levels, the byte offset where values start, and counts."""
+
+    var kind: Int
+    var body: List[UInt8]
+    var def_levels: List[Int32]
+    var value_offset: Int
+    var num_present: Int
+    var encoding: Int
+    var num_values: Int
+
+    def __init__(out self):
+        self.kind = PAGEKIND_DATA
+        self.body = List[UInt8]()
+        self.def_levels = List[Int32]()
+        self.value_offset = 0
+        self.num_present = 0
+        self.encoding = ENC_PLAIN
+        self.num_values = 0
 
 
 def _levels_v1(
@@ -93,19 +164,98 @@ def _levels_v1(
     if max_rep >= 1:
         var l = _read_u32le(body, cursor)
         cursor += 4 + l  # repetition levels not needed for flat columns
+    var num_present = num_values
     if max_def >= 1:
         var bw = bit_width(max_def)
         var l = _read_u32le(body, cursor)
         cursor += 4
-        def_levels = rle_decode(body[cursor : cursor + l], bw, num_values)
+        var levels = body[cursor : cursor + l]
+        # Count present values first (O(1) for the all-present run); only
+        # materialize the full level list when there are actually nulls.
+        num_present = rle_count_matches(levels, bw, num_values, Int32(max_def))
+        if num_present != num_values:
+            def_levels = rle_decode(levels, bw, num_values)
         cursor += l
-    var num_present = num_values
-    if max_def >= 1:
-        num_present = 0
-        for d in def_levels:
-            if Int(d) == max_def:
-                num_present += 1
     return (cursor, num_present)
+
+
+def _next_page(
+    data: Span[UInt8, _],
+    mut pos: Int,
+    meta: ColumnMetaData,
+    leaf: LeafColumn,
+    mut codecs: Codecs,
+) raises -> PageData:
+    """Read the page at `pos`, decompress it, decode its levels, and advance
+    `pos` past it."""
+    var pr = CompactReader(data, pos)
+    var ph = PageHeader.read(pr)
+    var body_start = pr.pos
+    var comp = data[body_start : body_start + ph.compressed_page_size]
+    pos = body_start + ph.compressed_page_size
+
+    var pg = PageData()
+    if ph.type == PAGE_DICTIONARY:
+        pg.kind = PAGEKIND_DICT
+        pg.num_values = ph.dictionary_page_header.value().num_values
+        pg.body = codecs.decompress(meta.codec, comp, ph.uncompressed_page_size)
+        return pg^
+
+    if ph.type == PAGE_DATA:
+        ref dph = ph.data_page_header.value()
+        pg.num_values = dph.num_values
+        pg.encoding = dph.encoding
+        pg.body = codecs.decompress(meta.codec, comp, ph.uncompressed_page_size)
+        var defs = List[Int32]()
+        var voff, npresent = _levels_v1(
+            Span(pg.body), pg.num_values, leaf.max_def, leaf.max_rep, defs
+        )
+        pg.def_levels = defs^
+        pg.value_offset = voff
+        pg.num_present = npresent
+    elif ph.type == PAGE_DATA_V2:
+        ref dph2 = ph.data_page_header_v2.value()
+        pg.num_values = dph2.num_values
+        pg.encoding = dph2.encoding
+        var lvl_len = (
+            dph2.repetition_levels_byte_length
+            + dph2.definition_levels_byte_length
+        )
+        var body = List[UInt8]()
+        body.extend(comp[0:lvl_len])  # levels are never compressed in v2
+        if dph2.is_compressed:
+            body.extend(
+                codecs.decompress(
+                    meta.codec,
+                    comp[lvl_len:],
+                    ph.uncompressed_page_size - lvl_len,
+                )
+            )
+        else:
+            body.extend(comp[lvl_len:])
+        var cursor = dph2.repetition_levels_byte_length
+        var defs = List[Int32]()
+        if leaf.max_def >= 1 and dph2.definition_levels_byte_length > 0:
+            defs = rle_decode(
+                Span(body)[
+                    cursor : cursor + dph2.definition_levels_byte_length
+                ],
+                bit_width(leaf.max_def),
+                pg.num_values,
+            )
+        pg.def_levels = defs^
+        pg.value_offset = lvl_len
+        pg.num_present = pg.num_values - dph2.num_nulls
+        pg.body = body^
+    else:
+        raise Error("parquet: unexpected page type")
+    return pg^
+
+
+def _page_start(meta: ColumnMetaData) -> Int:
+    if meta.dictionary_page_offset != -1:
+        return meta.dictionary_page_offset
+    return meta.data_page_offset
 
 
 # ---------------------------------------------------------------------------
@@ -124,113 +274,83 @@ def _read_primitive[
 ) raises -> AnyArray:
     comptime dt = T.native
     comptime W = size_of[Scalar[dt]]()
-    var builder = PrimitiveBuilder[T](num_rows)
-    var dict = List[Scalar[dt]]()
 
-    var pos = meta.data_page_offset
-    if meta.dictionary_page_offset != -1:
-        pos = meta.dictionary_page_offset
+    var values = Buffer.alloc_uninit[dt](num_rows)
+    var vptr = values.view[dt]().unsafe_ptr()
+    var has_validity = leaf.max_def >= 1
+    var bitmap = Bitmap[mut=True].alloc_zeroed(num_rows if has_validity else 0)
+    var dict = List[Scalar[dt]]()
+    var wpos = 0
+    var null_count = 0
+
+    var pos = _page_start(meta)
     var produced = 0
     while produced < meta.num_values:
-        var pr = CompactReader(data, pos)
-        var ph = PageHeader.read(pr)
-        var body_start = pr.pos
-        var comp = data[body_start : body_start + ph.compressed_page_size]
-        pos = body_start + ph.compressed_page_size
-
-        if ph.type == PAGE_DICTIONARY:
-            var nvals = ph.dictionary_page_header.value().num_values
-            var body = codecs.decompress(
-                meta.codec, comp, ph.uncompressed_page_size
+        var pg = _next_page(data, pos, meta, leaf, codecs)
+        if pg.kind == PAGEKIND_DICT:
+            # dictionary values are a contiguous PLAIN block — bulk copy
+            dict.resize(pg.num_values, 0)
+            memcpy(
+                dest=dict.unsafe_ptr(),
+                src=Span(pg.body).unsafe_ptr().bitcast[Scalar[dt]](),
+                count=pg.num_values,
             )
-            var span = Span(body)
-            var off = 0
-            for _ in range(nvals):
-                dict.append(_read_fixed_le[dt](span, off))
-                off += W
             continue
 
-        var body: List[UInt8]
-        var num_values: Int
-        var encoding: Int
-        var def_levels: List[Int32]
-        var voff: Int
-        var num_present: Int
-
-        if ph.type == PAGE_DATA:
-            ref dph = ph.data_page_header.value()
-            num_values = dph.num_values
-            encoding = dph.encoding
-            body = codecs.decompress(
-                meta.codec, comp, ph.uncompressed_page_size
-            )
-            def_levels = List[Int32]()
-            voff, num_present = _levels_v1(
-                Span(body), num_values, leaf.max_def, leaf.max_rep, def_levels
-            )
-        elif ph.type == PAGE_DATA_V2:
-            ref dph2 = ph.data_page_header_v2.value()
-            num_values = dph2.num_values
-            encoding = dph2.encoding
-            var lvl_len = (
-                dph2.repetition_levels_byte_length
-                + dph2.definition_levels_byte_length
-            )
-            body = List[UInt8]()
-            body.extend(comp[0:lvl_len])
-            if dph2.is_compressed:
-                body.extend(
-                    codecs.decompress(
-                        meta.codec,
-                        comp[lvl_len:],
-                        ph.uncompressed_page_size - lvl_len,
-                    )
-                )
-            else:
-                body.extend(comp[lvl_len:])
-            def_levels = List[Int32]()
-            var cursor = dph2.repetition_levels_byte_length
-            if leaf.max_def >= 1 and dph2.definition_levels_byte_length > 0:
-                def_levels = rle_decode(
-                    Span(body)[
-                        cursor : cursor + dph2.definition_levels_byte_length
-                    ],
-                    bit_width(leaf.max_def),
-                    num_values,
-                )
-            voff = lvl_len
-            num_present = num_values - dph2.num_nulls
-        else:
-            raise Error("parquet: unexpected page type")
-
-        var vspan = Span(body)[voff:]
-        var use_dict = encoding != ENC_PLAIN
-        var indices = List[Int32]()
-        if use_dict:
-            var bw = Int(vspan[0])
-            indices = rle_decode(vspan[1:], bw, num_present)
-
-        var vi = 0  # byte cursor into PLAIN values
-        var di = 0  # cursor into indices
-        for row in range(num_values):
-            var present = leaf.max_def == 0 or Int(def_levels[row]) == (
-                leaf.max_def
-            )
-            if present:
-                var v: Scalar[dt]
-                if use_dict:
-                    v = dict[Int(indices[di])]
-                    di += 1
-                else:
-                    v = _read_fixed_le[dt](vspan, vi)
+        var vspan = Span(pg.body)[pg.value_offset :]
+        if pg.encoding == ENC_PLAIN and pg.num_present == pg.num_values:
+            # fast path — a whole page of present values is a contiguous copy
+            var src = vspan.unsafe_ptr().bitcast[Scalar[dt]]()
+            memcpy(dest=vptr + wpos, src=src, count=pg.num_values)
+            if has_validity:
+                bitmap.set_range(wpos, pg.num_values, True)
+            wpos += pg.num_values
+        elif pg.encoding == ENC_PLAIN:
+            var vi = 0
+            for row in range(pg.num_values):
+                if Int(pg.def_levels[row]) == leaf.max_def:
+                    vptr[wpos] = _read_fixed_le[dt](vspan, vi)
                     vi += W
-                builder.append(v)
-            else:
-                builder.append_null()
-        produced += num_values
+                    bitmap.set(wpos)
+                else:
+                    vptr[wpos] = 0
+                    null_count += 1
+                wpos += 1
+        else:
+            var indices = rle_decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var all_present = pg.num_present == pg.num_values
+            var di = 0
+            for row in range(pg.num_values):
+                var present = all_present or (
+                    Int(pg.def_levels[row]) == leaf.max_def
+                )
+                if present:
+                    vptr[wpos] = dict[Int(indices[di])]
+                    di += 1
+                    if has_validity:
+                        bitmap.set(wpos)
+                else:
+                    vptr[wpos] = 0
+                    null_count += 1
+                wpos += 1
+        produced += pg.num_values
 
-    var out: AnyArray = builder.finish()
-    return out^
+    var buffers = List[Buffer[mut=False]]()
+    buffers.append(values^.to_immutable())
+    var bm: Optional[Bitmap[mut=False]] = None
+    if null_count > 0:
+        bm = bitmap^.to_immutable(length=num_rows)
+    return AnyArray.from_data(
+        ArrayData(
+            dtype=leaf.dtype.copy(),
+            length=num_rows,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm^,
+            buffers=buffers^,
+            children=List[ArrayData](),
+        )
+    )
 
 
 def _read_string(
@@ -243,109 +363,42 @@ def _read_string(
     var builder = StringBuilder(num_rows)
     var dict = List[String]()
 
-    var pos = meta.data_page_offset
-    if meta.dictionary_page_offset != -1:
-        pos = meta.dictionary_page_offset
+    var pos = _page_start(meta)
     var produced = 0
     while produced < meta.num_values:
-        var pr = CompactReader(data, pos)
-        var ph = PageHeader.read(pr)
-        var body_start = pr.pos
-        var comp = data[body_start : body_start + ph.compressed_page_size]
-        pos = body_start + ph.compressed_page_size
-
-        if ph.type == PAGE_DICTIONARY:
-            var nvals = ph.dictionary_page_header.value().num_values
-            var body = codecs.decompress(
-                meta.codec, comp, ph.uncompressed_page_size
-            )
-            var span = Span(body)
+        var pg = _next_page(data, pos, meta, leaf, codecs)
+        if pg.kind == PAGEKIND_DICT:
+            var span = Span(pg.body)
             var off = 0
-            for _ in range(nvals):
+            for _ in range(pg.num_values):
                 var n = _read_u32le(span, off)
                 off += 4
                 dict.append(String(from_utf8=span[off : off + n]))
                 off += n
             continue
 
-        var body: List[UInt8]
-        var num_values: Int
-        var encoding: Int
-        var def_levels: List[Int32]
-        var voff: Int
-        var num_present: Int
-
-        if ph.type == PAGE_DATA:
-            ref dph = ph.data_page_header.value()
-            num_values = dph.num_values
-            encoding = dph.encoding
-            body = codecs.decompress(
-                meta.codec, comp, ph.uncompressed_page_size
-            )
-            def_levels = List[Int32]()
-            voff, num_present = _levels_v1(
-                Span(body), num_values, leaf.max_def, leaf.max_rep, def_levels
-            )
-        elif ph.type == PAGE_DATA_V2:
-            ref dph2 = ph.data_page_header_v2.value()
-            num_values = dph2.num_values
-            encoding = dph2.encoding
-            var lvl_len = (
-                dph2.repetition_levels_byte_length
-                + dph2.definition_levels_byte_length
-            )
-            body = List[UInt8]()
-            body.extend(comp[0:lvl_len])
-            if dph2.is_compressed:
-                body.extend(
-                    codecs.decompress(
-                        meta.codec,
-                        comp[lvl_len:],
-                        ph.uncompressed_page_size - lvl_len,
-                    )
-                )
-            else:
-                body.extend(comp[lvl_len:])
-            def_levels = List[Int32]()
-            var cursor = dph2.repetition_levels_byte_length
-            if leaf.max_def >= 1 and dph2.definition_levels_byte_length > 0:
-                def_levels = rle_decode(
-                    Span(body)[
-                        cursor : cursor + dph2.definition_levels_byte_length
-                    ],
-                    bit_width(leaf.max_def),
-                    num_values,
-                )
-            voff = lvl_len
-            num_present = num_values - dph2.num_nulls
-        else:
-            raise Error("parquet: unexpected page type")
-
-        var vspan = Span(body)[voff:]
-        var use_dict = encoding != ENC_PLAIN
-        var indices = List[Int32]()
-        if use_dict:
-            var bw = Int(vspan[0])
-            indices = rle_decode(vspan[1:], bw, num_present)
-
-        var vi = 0
-        var di = 0
-        for row in range(num_values):
-            var present = leaf.max_def == 0 or Int(def_levels[row]) == (
-                leaf.max_def
-            )
-            if present:
-                if use_dict:
-                    builder.append(dict[Int(indices[di])])
-                    di += 1
-                else:
+        var vspan = Span(pg.body)[pg.value_offset :]
+        var all_present = pg.num_present == pg.num_values
+        if pg.encoding == ENC_PLAIN:
+            var vi = 0
+            for row in range(pg.num_values):
+                if all_present or Int(pg.def_levels[row]) == leaf.max_def:
                     var n = _read_u32le(vspan, vi)
                     vi += 4
                     builder.append(String(from_utf8=vspan[vi : vi + n]))
                     vi += n
-            else:
-                builder.append_null()
-        produced += num_values
+                else:
+                    builder.append_null()
+        else:
+            var indices = rle_decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var di = 0
+            for row in range(pg.num_values):
+                if all_present or Int(pg.def_levels[row]) == leaf.max_def:
+                    builder.append(dict[Int(indices[di])])
+                    di += 1
+                else:
+                    builder.append_null()
+        produced += pg.num_values
 
     var out: AnyArray = builder.finish()
     return out^
@@ -359,55 +412,27 @@ def _read_bool(
     mut codecs: Codecs,
 ) raises -> AnyArray:
     var builder = BoolBuilder(num_rows)
-    var pos = meta.data_page_offset
-    if meta.dictionary_page_offset != -1:
-        pos = meta.dictionary_page_offset
+    var pos = _page_start(meta)
     var produced = 0
     while produced < meta.num_values:
-        var pr = CompactReader(data, pos)
-        var ph = PageHeader.read(pr)
-        var body_start = pr.pos
-        var comp = data[body_start : body_start + ph.compressed_page_size]
-        pos = body_start + ph.compressed_page_size
-
-        if ph.type == PAGE_DICTIONARY:
+        var pg = _next_page(data, pos, meta, leaf, codecs)
+        if pg.kind == PAGEKIND_DICT:
             raise Error("parquet: dictionary-encoded bool not supported")
+        if pg.encoding != ENC_PLAIN:
+            raise Error("parquet: non-plain bool encoding not supported")
 
-        var body: List[UInt8]
-        var num_values: Int
-        var def_levels: List[Int32]
-        var voff: Int
-
-        if ph.type == PAGE_DATA:
-            ref dph = ph.data_page_header.value()
-            num_values = dph.num_values
-            if dph.encoding != ENC_PLAIN:
-                raise Error("parquet: non-plain bool encoding not supported")
-            body = codecs.decompress(
-                meta.codec, comp, ph.uncompressed_page_size
-            )
-            def_levels = List[Int32]()
-            var np: Int
-            voff, np = _levels_v1(
-                Span(body), num_values, leaf.max_def, leaf.max_rep, def_levels
-            )
-        else:
-            raise Error("parquet: bool v2 pages not supported")
-
-        var vspan = Span(body)[voff:]
+        var vspan = Span(pg.body)[pg.value_offset :]
+        var all_present = pg.num_present == pg.num_values
         var bitpos = 0
-        for row in range(num_values):
-            var present = leaf.max_def == 0 or Int(def_levels[row]) == (
-                leaf.max_def
-            )
-            if present:
+        for row in range(pg.num_values):
+            if all_present or Int(pg.def_levels[row]) == leaf.max_def:
                 var byte = vspan[bitpos >> 3]
                 var b = (byte >> UInt8(bitpos & 7)) & 1
                 bitpos += 1
                 builder.append(b == 1)
             else:
                 builder.append_null()
-        produced += num_values
+        produced += pg.num_values
 
     var out: AnyArray = builder.finish()
     return out^
@@ -470,8 +495,8 @@ def _assemble(
 
 def read_table(path: String) raises -> Table:
     """Read a Parquet file into a Marrow `Table`."""
-    var raw = Path(path).read_bytes()
-    var data = Span(raw)
+    var mapped = MappedFile(path)
+    var data = mapped.span()
     var meta = read_footer(data)
     var parsed = parquet_to_arrow(meta)
 
@@ -498,4 +523,8 @@ def read_table(path: String) raises -> Table:
 
     if len(batches) == 0:
         batches.append(RecordBatch.empty(parsed.schema))
-    return Table.from_batches(parsed.schema, batches)
+    var result = Table.from_batches(parsed.schema, batches)
+    # `data` is an untracked view into `mapped`; keep the map alive until every
+    # value has been copied into owned Arrow buffers above, then unmap.
+    _ = mapped^
+    return result^

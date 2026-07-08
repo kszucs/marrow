@@ -73,13 +73,23 @@ def rle_decode(
         var header: UInt64
         header, pos = _read_varint(data, pos)
         if (header & 1) == 1:
-            # bit-packed run
+            # bit-packed run — unpack with a rolling 64-bit accumulator so each
+            # source byte is read once (vs bit-by-bit).
             var num_groups = Int(header >> 1)
             var num_vals = num_groups * 8
-            var base_bit = pos * 8
-            for k in range(num_vals):
+            var bytepos = pos
+            var bitbuf: UInt64 = 0
+            var bitcnt = 0
+            var mask = (UInt64(1) << UInt64(width)) - 1
+            for _ in range(num_vals):
+                while bitcnt < width:
+                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
+                    bytepos += 1
+                    bitcnt += 8
+                var v = bitbuf & mask
+                bitbuf >>= UInt64(width)
+                bitcnt -= width
                 if len(out) < count:
-                    var v = _read_bits(data, base_bit + k * width, width)
                     out.append(Int32(v))
             pos += num_groups * width
         else:
@@ -93,6 +103,45 @@ def rle_decode(
                 if len(out) < count:
                     out.append(val)
     return out^
+
+
+def rle_count_matches(
+    data: Span[UInt8, _], width: Int, count: Int, target: Int32
+) raises -> Int:
+    """Count how many of the first `count` values equal `target`, without
+    materializing them. An all-equal column is a single run, so the common
+    no-null case (every definition level == max_def) is O(1)."""
+    if width == 0:
+        return count if target == 0 else 0
+    var byte_width = (width + 7) // 8
+    var pos = 0
+    var produced = 0
+    var matches = 0
+    while produced < count:
+        var header: UInt64
+        header, pos = _read_varint(data, pos)
+        if (header & 1) == 1:
+            var num_groups = Int(header >> 1)
+            var num_vals = num_groups * 8
+            var base_bit = pos * 8
+            for k in range(num_vals):
+                if produced < count:
+                    var v = Int32(_read_bits(data, base_bit + k * width, width))
+                    if v == target:
+                        matches += 1
+                    produced += 1
+            pos += num_groups * width
+        else:
+            var run_len = Int(header >> 1)
+            var val: Int32 = 0
+            for b in range(byte_width):
+                val |= Int32(Int(data[pos + b]) << (8 * b))
+            pos += byte_width
+            var take = min(run_len, count - produced)
+            if val == target:
+                matches += take
+            produced += take
+    return matches
 
 
 def _write_varint(mut out: List[UInt8], var v: UInt64):
