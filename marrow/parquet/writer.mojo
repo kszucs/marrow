@@ -25,13 +25,7 @@ from ..schema import Schema
 from .thrift import CompactWriter, TC_I32, TC_STRUCT
 from .encoding import rle_encode
 from .compression import Codecs, CODEC_SNAPPY
-from .schema import (
-    arrow_to_parquet,
-    LeafColumn,
-    SchemaNode,
-    NODE_LEAF,
-    NODE_STRUCT,
-)
+from .schema import arrow_to_parquet, LeafColumn, SchemaNode
 from .format import (
     DataPageHeader,
     ColumnMetaData,
@@ -138,7 +132,7 @@ def _write_data_page_header(
     w.write_i32(Int32(uncompressed))
     last = w.write_field_begin(TC_I32, 3, last)
     w.write_i32(Int32(compressed))
-    last = w.write_field_begin(TC_STRUCT, 5, last)
+    _ = w.write_field_begin(TC_STRUCT, 5, last)
     var dph = DataPageHeader()
     dph.num_values = num_values
     dph.encoding = ENC_PLAIN
@@ -146,24 +140,6 @@ def _write_data_page_header(
     dph.repetition_level_encoding = ENC_RLE
     dph.write(w)
     w.write_field_stop()
-
-
-# ---------------------------------------------------------------------------
-# Flatten nested columns into leaf arrays (depth-first, matching leaf order)
-# ---------------------------------------------------------------------------
-
-
-def _flatten(
-    node: SchemaNode, col: AnyArray, mut leaf_arrays: List[AnyArray]
-) raises:
-    if node.kind == NODE_LEAF:
-        leaf_arrays.append(col.copy())
-    elif node.kind == NODE_STRUCT:
-        ref sa = col.as_struct()
-        for i in range(len(node.children)):
-            _flatten(node.children[i], sa.children[i], leaf_arrays)
-    else:
-        raise Error("parquet: unsupported schema node kind")
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +160,7 @@ def write_table(
 
     var leaf_arrays = List[AnyArray]()
     for ci in range(len(nodes)):
-        _flatten(nodes[ci], batch.columns[ci], leaf_arrays)
+        nodes[ci].flatten(batch.columns[ci], leaf_arrays)
 
     var out = List[UInt8]()
     out.extend(String("PAR1").as_bytes())  # header magic

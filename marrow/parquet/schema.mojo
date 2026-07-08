@@ -25,6 +25,7 @@ from ..dtypes import (
     binary,
 )
 from ..schema import Schema
+from ..arrays import AnyArray, StructArray
 from .format import (
     SchemaElement,
     FileMetaData,
@@ -84,6 +85,33 @@ struct SchemaNode(Copyable, Movable):
 
     def __del__(deinit self):
         pass
+
+    def assemble(self, ref leaf_arrays: List[AnyArray]) raises -> AnyArray:
+        """Reconstruct this node's Arrow array from the decoded leaf columns."""
+        if self.kind == NODE_LEAF:
+            return leaf_arrays[self.leaf_index].copy()
+        elif self.kind == NODE_STRUCT:
+            var children = List[AnyArray]()
+            var fields = List[Field]()
+            for ref c in self.children:
+                children.append(c.assemble(leaf_arrays))
+                fields.append(c.field.copy())
+            var out: AnyArray = StructArray.from_arrays(children^, fields, None)
+            return out^
+        else:
+            raise Error("parquet: unsupported schema node kind")
+
+    def flatten(self, col: AnyArray, mut leaf_arrays: List[AnyArray]) raises:
+        """Inverse of `assemble`: collect this node's leaf arrays in column order.
+        """
+        if self.kind == NODE_LEAF:
+            leaf_arrays.append(col.copy())
+        elif self.kind == NODE_STRUCT:
+            ref sa = col.as_struct()
+            for i in range(len(self.children)):
+                self.children[i].flatten(sa.children[i], leaf_arrays)
+        else:
+            raise Error("parquet: unsupported schema node kind")
 
 
 struct ParsedSchema(Movable):

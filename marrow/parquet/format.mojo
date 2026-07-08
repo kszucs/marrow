@@ -602,6 +602,6 @@ struct FileMetaData(Copyable, Movable):
         w.write_list_begin(TC_STRUCT, len(self.row_groups))
         for i in range(len(self.row_groups)):
             self.row_groups[i].write(w, row_group_encodings[i])
-        last = w.write_field_begin(TC_BINARY, 6, last)
+        _ = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
         w.write_field_stop()
