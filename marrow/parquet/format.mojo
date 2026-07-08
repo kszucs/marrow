@@ -113,6 +113,48 @@ def read_footer[
     return FileMetaData.read(r)
 
 
+def read_page_header[
+    o: Origin[mut=False]
+](data: Span[UInt8, o], mut pos: Int) raises -> PageHeader:
+    """Read the page header at `pos`, advancing `pos` to the page body."""
+    var r = CompactReader(data, pos)
+    var ph = PageHeader.read(r)
+    pos = r.pos
+    return ph^
+
+
+def write_magic(mut out: List[UInt8]):
+    """Append the 4-byte `PAR1` magic (file header and footer)."""
+    out.append(0x50)
+    out.append(0x41)
+    out.append(0x52)
+    out.append(0x31)
+
+
+def append_page_header(mut out: List[UInt8], ph: PageHeader) raises -> Int:
+    """Serialize a page header into `out`; return its byte length."""
+    var w = CompactWriter()
+    ph.write(w)
+    out.extend(Span(w.buf))
+    return len(w.buf)
+
+
+def write_footer(
+    mut out: List[UInt8],
+    meta: FileMetaData,
+    row_group_encodings: List[List[Int]],
+) raises:
+    """Serialize the `FileMetaData` thrift blob, then the 4-byte LE length and
+    the `PAR1` magic that close the file."""
+    var w = CompactWriter()
+    meta.write(w, row_group_encodings)
+    var meta_len = len(w.buf)
+    out.extend(Span(w.buf))
+    for i in range(4):
+        out.append(UInt8((meta_len >> (i * 8)) & 0xFF))
+    write_magic(out)
+
+
 # ---------------------------------------------------------------------------
 # SchemaElement — one node of the flattened schema tree
 # ---------------------------------------------------------------------------
@@ -410,6 +452,39 @@ struct PageHeader(Copyable, Movable):
             else:
                 r.skip(ftype)
         return out^
+
+    def write(self, mut w: CompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_I32, 1, last)
+        w.write_i32(Int32(self.type))
+        last = w.write_field_begin(TC_I32, 2, last)
+        w.write_i32(Int32(self.uncompressed_page_size))
+        last = w.write_field_begin(TC_I32, 3, last)
+        w.write_i32(Int32(self.compressed_page_size))
+        if self.data_page_header:
+            _ = w.write_field_begin(TC_STRUCT, 5, last)
+            self.data_page_header.value().write(w)
+        elif self.dictionary_page_header:
+            _ = w.write_field_begin(TC_STRUCT, 7, last)
+            self.dictionary_page_header.value().write(w)
+        w.write_field_stop()
+
+    @staticmethod
+    def data_page(
+        uncompressed_size: Int, compressed_size: Int, num_values: Int
+    ) -> Self:
+        """Build a v1 data-page header (PLAIN values, RLE levels)."""
+        var ph = Self()
+        ph.type = PAGE_DATA
+        ph.uncompressed_page_size = uncompressed_size
+        ph.compressed_page_size = compressed_size
+        var dph = DataPageHeader()
+        dph.num_values = num_values
+        dph.encoding = ENC_PLAIN
+        dph.definition_level_encoding = ENC_RLE
+        dph.repetition_level_encoding = ENC_RLE
+        ph.data_page_header = dph^
+        return ph^
 
 
 # ---------------------------------------------------------------------------

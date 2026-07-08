@@ -37,19 +37,19 @@ from ..dtypes import (
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
-from .thrift import CompactWriter, TC_I32, TC_STRUCT
 from .encoding import rle_encode
 from .compression import Codecs, CODEC_SNAPPY
 from .schema import arrow_to_parquet, LeafColumn, SchemaNode
 from .format import (
-    DataPageHeader,
+    PageHeader,
     ColumnMetaData,
     ColumnChunk,
     RowGroup,
     FileMetaData,
-    PAGE_DATA,
     ENC_PLAIN,
-    ENC_RLE,
+    append_page_header,
+    write_magic,
+    write_footer,
 )
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
@@ -171,10 +171,9 @@ struct ColumnChunkWriter(Movable):
         var compressed_size = len(compressed)
 
         var page_offset = len(out)
-        var hw = CompactWriter()
-        _write_data_page_header(hw, uncompressed_size, compressed_size, n)
-        var header_len = len(hw.buf)
-        out.extend(Span(hw.buf))
+        var header_len = append_page_header(
+            out, PageHeader.data_page(uncompressed_size, compressed_size, n)
+        )
         out.extend(Span(compressed))
 
         var meta = ColumnMetaData()
@@ -194,26 +193,6 @@ struct ColumnChunkWriter(Movable):
         return cc^
 
 
-def _write_data_page_header(
-    mut w: CompactWriter, uncompressed: Int, compressed: Int, num_values: Int
-):
-    var last = 0
-    last = w.write_field_begin(TC_I32, 1, last)
-    w.write_i32(Int32(PAGE_DATA))
-    last = w.write_field_begin(TC_I32, 2, last)
-    w.write_i32(Int32(uncompressed))
-    last = w.write_field_begin(TC_I32, 3, last)
-    w.write_i32(Int32(compressed))
-    _ = w.write_field_begin(TC_STRUCT, 5, last)
-    var dph = DataPageHeader()
-    dph.num_values = num_values
-    dph.encoding = ENC_PLAIN
-    dph.definition_level_encoding = ENC_RLE
-    dph.repetition_level_encoding = ENC_RLE
-    dph.write(w)
-    w.write_field_stop()
-
-
 # ---------------------------------------------------------------------------
 # FileWriter — header, row groups, footer
 # ---------------------------------------------------------------------------
@@ -227,7 +206,7 @@ struct FileWriter(Movable):
 
     def __init__(out self, compression: Int):
         self.out = List[UInt8]()
-        self.out.extend(String("PAR1").as_bytes())  # header magic
+        write_magic(self.out)  # file header magic
         self.codecs = Codecs()
         self.compression = compression
         self.leaves = List[LeafColumn]()
@@ -290,13 +269,7 @@ struct FileWriter(Movable):
         for _ in range(len(fmeta.row_groups)):
             rg_encodings.append(encodings.copy())
 
-        var mw = CompactWriter()
-        fmeta.write(mw, rg_encodings)
-        var meta_len = len(mw.buf)
-        self.out.extend(Span(mw.buf))
-        _append_u32le(self.out, meta_len)
-        self.out.extend(String("PAR1").as_bytes())
-
+        write_footer(self.out, fmeta, rg_encodings)
         Path(path).write_bytes(Span(self.out))
 
 

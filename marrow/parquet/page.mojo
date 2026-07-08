@@ -8,11 +8,11 @@ column decoders in `column.mojo` only deal with already-decoded pages.
 
 from std.sys import size_of
 
-from .thrift import CompactReader
 from .encoding import rle_decode, rle_count_matches, bit_width
 from .compression import Codecs
 from .schema import LeafColumn
 from .format import (
+    read_page_header,
     ColumnMetaData,
     PageHeader,
     PAGE_DICTIONARY,
@@ -169,9 +169,8 @@ struct PageReader[o: Origin[mut=False]](Movable):
         page.value_offset = cursor
 
     def next(mut self, mut codecs: Codecs) raises -> Page:
-        var pr = CompactReader(self.data, self.pos)
-        var ph = PageHeader.read(pr)
-        var body_start = pr.pos
+        var body_start = self.pos
+        var ph = read_page_header(self.data, body_start)  # advances body_start
         var comp = self.data[body_start : body_start + ph.compressed_page_size]
         self.pos = body_start + ph.compressed_page_size
 
