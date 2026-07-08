@@ -34,6 +34,13 @@
 - rapidhash over primitive, string, struct, list, large-list, map and
   fixed-size-list arrays.
 
+### Expressions and the query engine
+
+- One relational plan IR: immutable `Relation` nodes -- `InMemoryTable`,
+  `Filter`, `Project`, `Aggregate`, `Limit`, `Sort`, `Join` -- chained
+  through `.filter()`, `.select()`, `.project()`, `.aggregate()`,
+  `.sort_by()`, `.limit()`, `.join()`, and run by `.execute()`.
+
 ### Arrow IPC
 
 - `read_ipc_file`/`write_ipc_file` and `read_ipc_stream`/

@@ -8,7 +8,7 @@ from marrow.builders import array, PrimitiveBuilder, Int64Builder
 from marrow.dtypes import int64, float64, Int64Type
 from marrow.tabular import record_batch, RecordBatch
 from marrow.expr import (
-    Expr,
+    DynValue,
     col,
     lit,
     in_memory_table,
@@ -40,8 +40,8 @@ def _batch(k: List[Int], v: List[Int]) raises -> RecordBatch:
     return record_batch(cols^, names=["k", "v"])
 
 
-def _keys(v: List[Int]) -> List[Expr]:
-    var r = List[Expr]()
+def _keys(v: List[Int]) -> List[DynValue]:
+    var r = List[DynValue]()
     r.append(col(0))
     return r^
 
@@ -268,6 +268,20 @@ def test_join_then_filter() raises:
         )
     )
     assert_equal(result.num_rows(), 2)
+
+
+def test_join_plan_is_reusable() raises:
+    """The join's built hash index is reset on clone, so re-executing the same
+    plan rebuilds and yields the same result (no single-use state)."""
+    var left_batch = _batch([1, 2, 3], [10, 20, 30])
+    var right_batch = _batch([2, 3, 4], [200, 300, 400])
+    var plan = in_memory_table(left_batch).join(
+        in_memory_table(right_batch), [col("k")], [col("k")]
+    )
+    var r1 = execute(plan)
+    var r2 = execute(plan)
+    assert_equal(r1.num_rows(), 2)
+    assert_equal(r2.num_rows(), 2)
 
 
 def main() raises:

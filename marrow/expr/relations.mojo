@@ -1,24 +1,31 @@
-"""Logical relational plan nodes.
+"""Relational plans: a descriptive IR that opens into pull-based operators.
 
-``Relation``    — the trait every relational plan node must implement.
-``AnyRelation`` — the type-erased, ArcPointer-backed container.
+Two layers, cleanly separated:
 
-Concrete plan nodes
--------------------
-``Scan``           — reads from a named source (leaf node).
-``Filter``         — applies a boolean predicate to its input.
-``Project``        — evaluates a list of expressions to produce output columns.
-``InMemoryTable``  — leaf node backed by a RecordBatch.
-``ParquetScan``    — leaf node that reads from a Parquet file.
-``Join``           — equijoin of two child relations.
+- ``Relation`` nodes are **pure, immutable descriptions** (``kind``/``schema``/
+  ``to_processor``): they hold only their parameters and child relations, no execution
+  state. ``AnyRelation`` erases them behind an ``ArcPointer``, so copying a plan
+  is an O(1) share and the plan is a reusable, inspectable, rewritable template.
+- ``Processor`` (``schema``/``pull``) is the executing layer, built by
+  ``Relation.to_processor(ctx)``; it owns *all* mutable state (scan offset, built hash
+  index, grouper, child operators). ``AnyProcessor`` erases it and drives the
+  pull loop (``collect``). Operators are single-use and move-only.
+
+``execute(plan, ctx)`` opens the plan into a fresh operator tree and drains it,
+so the plan itself is never mutated — run it repeatedly or concurrently.
+
+Concrete nodes / operators: ``InMemoryTable``/``InMemoryTableProcessor``,
+``Filter``/``FilterProcessor``, ``Project``/``ProjectProcessor``, ``Aggregate``/``AggregateProcessor``,
+``Join``/``JoinProcessor``, ``ParquetScan``/``ParquetScanProcessor``.
 
 Plan-building API
 -----------------
 ``AnyRelation.select(*names)``                   — project columns by name.
 ``AnyRelation.filter(pred)``                     — filter rows by predicate.
+``AnyRelation.aggregate(keys, values, funcs)``   — grouped aggregation.
 ``AnyRelation.join(right, left_on, right_on)``   — hash join.
-``in_memory_table(batch)``                       — create an in-memory relation.
-``parquet_scan(path)``                           — create a Parquet file scan.
+``in_memory_table(batch)`` / ``parquet_scan(path)`` — leaf sources.
+``execute(plan)``                                — drain to a single RecordBatch.
 
 Example
 -------
@@ -27,138 +34,104 @@ Example
 """
 
 from std.memory import ArcPointer
-from marrow.dtypes import Field
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.expr.runtime import Expr, col
+
+from ..dtypes import AnyDataType, Field, int64, float64
+from ..schema import Schema
+from ..tabular import RecordBatch
+from .values import AnyValue
+from .dynamic import DynValue, col, LOAD
+from ..kernels.execution import ExecutionContext
+from .execution import (
+    DEFAULT_MORSEL_SIZE,
+    AnyProcessor,
+    InMemoryTableProcessor,
+    ParquetScanProcessor,
+    FilterProcessor,
+    ProjectProcessor,
+    AggregateProcessor,
+    JoinProcessor,
+)
+from ..kernels.join import (
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+    JOIN_ALL,
+    JOIN_ANY,
+)
+
+
+def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
+    """Best-effort dtype of an aggregated value expression: its static dtype, or
+    the input column's dtype when it is a (bound) column reference; else None.
+    """
+    var dt = expr.dtype()
+    if dt:
+        return dt^
+    if expr.kind() == LOAD:
+        return Optional[AnyDataType](
+            input_schema.fields[Int(expr.kind_data())].dtype.copy()
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Relation node kind constants
-# ---------------------------------------------------------------------------
-
-comptime SCAN_NODE: UInt8 = 0
-comptime FILTER_NODE: UInt8 = 1
-comptime PROJECT_NODE: UInt8 = 2
-comptime IN_MEMORY_TABLE_NODE: UInt8 = 3
-comptime PARQUET_SCAN_NODE: UInt8 = 4
-comptime AGGREGATE_NODE: UInt8 = 5
-comptime JOIN_NODE: UInt8 = 6
-
-# ---------------------------------------------------------------------------
-# Join kind constants — what rows appear in output
-# ---------------------------------------------------------------------------
-
-comptime JOIN_INNER: UInt8 = 0
-"""INNER JOIN: only rows with matching keys on both sides."""
-
-comptime JOIN_LEFT: UInt8 = 1
-"""LEFT JOIN: all left rows + matched right rows; NULLs for non-matches."""
-
-comptime JOIN_RIGHT: UInt8 = 2
-"""RIGHT JOIN: all right rows + matched left rows; NULLs for non-matches."""
-
-comptime JOIN_FULL: UInt8 = 3
-"""FULL OUTER JOIN: all rows from both sides; NULLs for non-matches."""
-
-comptime JOIN_SEMI: UInt8 = 4
-"""LEFT SEMI JOIN: left rows that have at least one match in right (left columns only)."""
-
-comptime JOIN_ANTI: UInt8 = 5
-"""LEFT ANTI JOIN: left rows with no match in right (left columns only)."""
-
-comptime JOIN_CROSS: UInt8 = 6
-"""CROSS JOIN: Cartesian product; no key columns required."""
-
-# Internal join kinds — generated by the planner for subquery decorrelation.
-# Not intended for direct use.
-comptime JOIN_MARK: UInt8 = 10
-"""MARK JOIN: adds a boolean marker column for EXISTS/IN subquery rewriting."""
-
-comptime JOIN_SINGLE: UInt8 = 11
-"""SINGLE JOIN: at-most-1 right row per left row; for scalar subqueries."""
-
-# ---------------------------------------------------------------------------
-# Join strictness constants — how many matches are used
-# ---------------------------------------------------------------------------
-
-comptime JOIN_ALL: UInt8 = 0
-"""ALL strictness (default): return all matching rows (Cartesian product for multi-match)."""
-
-comptime JOIN_ANY: UInt8 = 1
-"""ANY strictness: return at most one matching right row per left row (no row duplication)."""
-
-comptime JOIN_ASOF: UInt8 = 2
-"""ASOF strictness: nearest-match on last key (future; requires sorted inputs)."""
-
-# ---------------------------------------------------------------------------
-# Join algorithm hint constants
-# ---------------------------------------------------------------------------
-
-comptime JOIN_ALGO_AUTO: UInt8 = 0
-"""Auto: planner selects the best algorithm based on input properties."""
-
-comptime JOIN_ALGO_HASH: UInt8 = 1
-"""Force hash join."""
-
-comptime JOIN_ALGO_SORT_MERGE: UInt8 = 2
-"""Force sort-merge join (requires sorted inputs)."""
-
-comptime JOIN_ALGO_PIECEWISE: UInt8 = 3
-"""Piecewise merge join for inequality conditions (future)."""
-
-comptime JOIN_ALGO_GRACE_HASH: UInt8 = 4
-"""Grace hash join for out-of-memory joins (future)."""
-
-
-# ---------------------------------------------------------------------------
-# Relation trait — interface every relational plan node must implement
+# Relation trait — the descriptive IR node (pure data; no execution state)
 # ---------------------------------------------------------------------------
 
 
 trait Relation(ImplicitlyDeletable, Movable):
-    """Interface for immutable relational plan nodes."""
+    """A relational plan node: a pure, immutable description of an operation.
 
-    def kind(self) -> UInt8:
-        """Return the node-kind constant."""
-        ...
+    Nodes hold only their parameters and child relations — no execution state.
+    ``to_processor(ctx)`` builds the stateful ``Processor`` that runs (opening children
+    recursively), so a plan is a reusable template you can inspect, copy cheaply
+    (O(1) — nodes are immutable and shared), and rewrite."""
 
     def schema(self) -> Schema:
-        """Return the output schema produced by this plan node."""
+        ...
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        """Build the physical operator for this node (opening its children)."""
         ...
 
     def write_to[W: Writer](self, mut writer: W):
-        """Format this node for display."""
         ...
 
 
 # ---------------------------------------------------------------------------
-# AnyRelation — type-erased, ArcPointer-backed relational plan container
+# AnyRelation — type-erased IR container + plan-building API
 # ---------------------------------------------------------------------------
 
 
 struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
-    """Type-erased relational plan node.
+    """Type-erased plan node behind an ``ArcPointer``.
 
-    Wraps any ``Relation``-conforming type on the heap behind an
-    ``ArcPointer`` so copies are O(1) ref-count bumps.
-    """
+    Nodes are immutable descriptions, so copying an ``AnyRelation`` is an O(1)
+    ``ArcPointer`` share — no deep clone, no reset. ``to_processor(ctx)`` builds the
+    operator tree that executes; the plan is never mutated, so it is a reusable
+    template and copies never share execution state. Carries the plan-building
+    API (``select``/``filter``/``aggregate``/``join``)."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_to_processor: def(
+        ArcPointer[NoneType], ExecutionContext
+    ) thin raises -> AnyProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
-
-    # --- trampolines ---
-
-    @staticmethod
-    def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
-        return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
     def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
         return rebind[ArcPointer[T]](ptr)[].schema()
+
+    @staticmethod
+    def _tramp_to_processor[
+        T: Relation
+    ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> AnyProcessor:
+        return rebind[ArcPointer[T]](ptr)[].to_processor(ctx)
 
     @staticmethod
     def _tramp_write_to_string[
@@ -173,28 +146,27 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var typed = rebind[ArcPointer[T]](ptr^)
         _ = typed^
 
-    # --- construction ---
-
     @implicit
     def __init__[T: Relation](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_kind = Self._tramp_kind[T]
         self._virt_schema = Self._tramp_schema[T]
+        self._virt_to_processor = Self._tramp_to_processor[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
 
     def __init__(out self, *, copy: Self):
+        # O(1) share — nodes are immutable, so aliasing is safe.
         self._data = copy._data
-        self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
+        self._virt_to_processor = copy._virt_to_processor
         self._virt_write_to_string = copy._virt_write_to_string
         self._virt_drop = copy._virt_drop
 
-    # --- public API ---
+    def __del__(deinit self):
+        self._virt_drop(self._data^)
 
-    def kind(self) -> UInt8:
-        return self._virt_kind(self._data)
+    # --- introspection ---
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
@@ -202,13 +174,24 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
 
+    def downcast[T: Relation](self) -> ArcPointer[T]:
+        return rebind[ArcPointer[T]](self._data.copy())
+
+    # --- execution ---
+
+    def to_processor(
+        self, ctx: ExecutionContext = ExecutionContext()
+    ) raises -> AnyProcessor:
+        """Build the operator tree for this plan; the plan is left untouched."""
+        return self._virt_to_processor(self._data, ctx)
+
     # --- plan-building API ---
 
     def select(self, *names: String) raises -> AnyRelation:
         """Project columns by name, returning a new plan node."""
         var schema = self.schema()
         var col_names = List[String]()
-        var exprs = List[Expr]()
+        var exprs = List[AnyValue]()
         var fields = List[Field]()
         for i in range(len(names)):
             var name = names[i]
@@ -216,129 +199,130 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             if idx == -1:
                 raise Error("select: column '" + name + "' not found")
             col_names.append(name)
-            exprs.append(col(idx))
+            exprs.append(AnyValue(col(idx)))
             fields.append(schema.fields[idx].copy())
-        var out_schema = Schema(fields=fields^)
-        var proj = Project(
-            input=self,
-            names=col_names^,
-            exprs_=exprs^,
-            schema_=out_schema,
+        return AnyRelation(
+            Project(
+                input=self,
+                names=col_names^,
+                values=exprs^,
+                schema=Schema(fields=fields^),
+            )
         )
-        return AnyRelation(proj^)
 
-    def filter(self, predicate: Expr) raises -> AnyRelation:
-        """Filter rows by a boolean predicate, returning a new plan node.
-
-        Column references using ``col("name")`` are resolved to positional
-        indices against this node's output schema.
-        """
-        var resolved = predicate.resolve_names(self.schema())
-        var filt = Filter(input=self, predicate=resolved^)
-        return AnyRelation(filt^)
+    def filter(self, var predicate: AnyValue) raises -> AnyRelation:
+        """Filter rows by a boolean predicate. Column references resolve by name
+        against the batch schema when the boxed value executes."""
+        return AnyRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
         self,
-        keys: List[Expr],
-        values: List[Expr],
+        keys: List[DynValue],
+        values: List[DynValue],
         funcs: List[String],
     ) raises -> AnyRelation:
-        """Grouped aggregation, returning a new plan node.
-
-        Args:
-            keys: Grouping key expressions (column references).
-            values: Value expressions to aggregate (one per func).
-            funcs: Aggregation function names ("sum", "min", etc.).
-
-        Returns:
-            Plan node whose schema has key columns + agg result columns.
-        """
-        from marrow.dtypes import float64, int64, AnyDataType
+        """Grouped aggregation: key columns + aggregated value columns."""
+        from marrow.dtypes import int64
 
         var input_schema = self.schema()
-        var resolved_keys = List[Expr]()
-        for ref k in keys:
-            resolved_keys.append(k)
-        var resolved_vals = List[Expr]()
-        for ref v in values:
-            resolved_vals.append(v)
 
-        # Build output schema: key fields + agg result fields.
+        # Bind key/value expressions to positional form once (names -> indices),
+        # so per-morsel eval and the dtype lookups below use positions directly.
+        var resolved_keys = List[DynValue]()
+        for ref k in keys:
+            resolved_keys.append(k.resolve_names(input_schema))
+        var resolved_values = List[DynValue]()
+        for ref v in values:
+            resolved_values.append(v.resolve_names(input_schema))
+
+        # Output schema: one field per key (named after its source column, with
+        # that column's dtype) then one field per aggregate (named after its
+        # function).
         var fields = List[Field]()
-        for ref k in resolved_keys:
-            # Key expression must resolve to a column for naming.
-            var kdt = k.dtype()
-            if kdt:
-                fields.append(Field("key", kdt.value().copy()))
+        for i in range(len(resolved_keys)):
+            ref k = resolved_keys[i]
+            if k.kind() == LOAD:
+                ref src = input_schema.fields[Int(k.kind_data())]
+                fields.append(Field(src.name, src.dtype.copy()))
             else:
-                fields.append(Field("key", input_schema.fields[0].dtype.copy()))
+                var kdt = k.dtype()
+                if not kdt:
+                    raise Error(
+                        "aggregate: cannot infer dtype for computed key "
+                        + String(i)
+                    )
+                fields.append(Field("key" + String(i), kdt.value().copy()))
         for i in range(len(funcs)):
             if funcs[i] == "count":
                 fields.append(Field(funcs[i], AnyDataType(int64)))
             elif funcs[i] == "mean":
                 fields.append(Field(funcs[i], AnyDataType(float64)))
             else:
-                var maybe_dt = resolved_vals[i].dtype()
+                var maybe_dt = _value_dtype(resolved_values[i], input_schema)
                 if maybe_dt and maybe_dt.value().is_integer():
                     fields.append(Field(funcs[i], AnyDataType(int64)))
                 else:
                     fields.append(Field(funcs[i], AnyDataType(float64)))
+        var out_schema = Schema(fields=fields^)
 
-        var agg = Aggregate(
-            input=self,
-            keys=resolved_keys^,
-            agg_exprs=resolved_vals^,
-            agg_funcs=funcs.copy(),
-            schema_=Schema(fields=fields^),
+        # Value accumulator dtypes (the input dtype of each aggregated value
+        # expression). The key fields are the first len(keys) output fields —
+        # the processor derives them from the schema, so we don't store them.
+        var value_dtypes = List[AnyDataType]()
+        for i in range(len(resolved_values)):
+            var dt = _value_dtype(resolved_values[i], input_schema)
+            if dt:
+                value_dtypes.append(dt.value().copy())
+            else:
+                value_dtypes.append(AnyDataType(float64))
+
+        var key_exprs = List[AnyValue]()
+        for ref k in resolved_keys:
+            key_exprs.append(AnyValue(k.copy()))
+        var val_exprs = List[AnyValue]()
+        for ref v in resolved_values:
+            val_exprs.append(AnyValue(v.copy()))
+
+        return AnyRelation(
+            Aggregate(
+                input=self,
+                keys=key_exprs^,
+                aggs=val_exprs^,
+                funcs=funcs.copy(),
+                value_dtypes=value_dtypes^,
+                schema=out_schema,
+            )
         )
-        return AnyRelation(agg^)
 
     def join(
         self,
         right: AnyRelation,
-        left_on: List[Expr],
-        right_on: List[Expr],
+        left_on: List[DynValue],
+        right_on: List[DynValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
-        algorithm: UInt8 = JOIN_ALGO_AUTO,
     ) raises -> AnyRelation:
-        """Hash join with another relation on equijoin key expressions.
-
-        Args:
-            right: Right input relation.
-            left_on: Key expressions referencing this relation's schema.
-                     Column name strings are resolved to positional indices.
-            right_on: Key expressions referencing right's schema.
-            how: Join kind constant (JOIN_INNER, JOIN_LEFT, etc.).
-            strictness: JOIN_ALL (default) or JOIN_ANY.
-            algorithm: Join algorithm hint (JOIN_ALGO_AUTO by default).
-
-        Returns:
-            A new Join plan node whose schema is the concatenation of the
-            left and right schemas (SEMI/ANTI: left schema only).
-        """
+        """Hash join on equijoin key expressions."""
         if len(left_on) != len(right_on):
             raise Error("join: len(left_on) != len(right_on)")
 
         var left_schema = self.schema()
         var right_schema = right.schema()
 
-        # Resolve column-name key expressions to positional indices against
-        # each side's schema.
-        var resolved_left = List[Expr]()
+        # Resolve key expressions to positional column indices (each key must be
+        # a bare column reference — column_index raises otherwise).
+        var left_indices = List[Int]()
         for ref k in left_on:
-            resolved_left.append(k.resolve_names(left_schema))
-        var resolved_right = List[Expr]()
+            left_indices.append(k.column_index(left_schema))
+        var right_indices = List[Int]()
         for ref k in right_on:
-            resolved_right.append(k.resolve_names(right_schema))
+            right_indices.append(k.column_index(right_schema))
 
-        # Build output schema.
+        # Output schema: left columns + (suffixed) right columns.
         var fields = List[Field]()
         for ref f in left_schema.fields:
             fields.append(f.copy())
-        # SEMI/ANTI output only left columns.
-        if how != JOIN_SEMI and how != JOIN_ANTI and how != JOIN_MARK:
-            # Suffix right columns that collide in name with left columns.
+        if how != JOIN_SEMI and how != JOIN_ANTI:
             var left_names = List[String]()
             for ref f in left_schema.fields:
                 left_names.append(f.name)
@@ -353,144 +337,44 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                     name = name + "_right"
                 fields.append(Field(name, f.dtype.copy()))
 
-        var join_node = Join(
-            left=self,
-            right=right,
-            left_keys=resolved_left^,
-            right_keys=resolved_right^,
-            join_kind=how,
-            strictness=strictness,
-            algorithm=algorithm,
-            schema_=Schema(fields=fields^),
+        return AnyRelation(
+            Join(
+                left=self,
+                right=right,
+                left_key_indices=left_indices^,
+                right_key_indices=right_indices^,
+                join_kind=how,
+                strictness=strictness,
+                schema=Schema(fields=fields^),
+            )
         )
-        return AnyRelation(join_node^)
-
-    # --- downcast ---
-
-    def downcast[T: Relation](self) -> ArcPointer[T]:
-        return rebind[ArcPointer[T]](self._data.copy())
-
-    def __del__(deinit self):
-        self._virt_drop(self._data^)
 
 
 # ---------------------------------------------------------------------------
-# Concrete relation nodes
+# Leaf nodes
 # ---------------------------------------------------------------------------
-
-
-struct Scan(Relation):
-    """Table / array scan — leaf node with no child plans.
-
-    ``name``    — identifier for the data source.
-    ``schema_`` — output schema of this scan.
-    """
-
-    var name: String
-    var schema_: Schema
-
-    def __init__(out self, *, var name: String, var schema_: Schema):
-        self.name = name^
-        self.schema_ = schema_^
-
-    def kind(self) -> UInt8:
-        return SCAN_NODE
-
-    def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Scan({self.name})")
-
-
-struct Filter(Relation):
-    """Filter — apply a boolean predicate to the input relation.
-
-    ``input``     — child relation.
-    ``predicate`` — boolean expression; rows where True are kept.
-
-    Output schema equals the input schema.
-    """
-
-    var input: AnyRelation
-    var predicate: Expr
-
-    def __init__(out self, *, var input: AnyRelation, var predicate: Expr):
-        self.input = input^
-        self.predicate = predicate^
-
-    def kind(self) -> UInt8:
-        return FILTER_NODE
-
-    def schema(self) -> Schema:
-        return self.input.schema()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Filter(predicate=")
-        self.predicate.write_to(writer)
-        writer.write(t")")
-
-
-struct Project(Relation):
-    """Projection — evaluate a list of named expressions.
-
-    ``input``   — child relation.
-    ``names``   — output column names (parallel to ``exprs_``).
-    ``exprs_``  — scalar expressions to evaluate.
-    ``schema_`` — pre-computed output schema.
-    """
-
-    var input: AnyRelation
-    var names: List[String]
-    var exprs_: List[Expr]
-    var schema_: Schema
-
-    def __init__(
-        out self,
-        *,
-        var input: AnyRelation,
-        var names: List[String],
-        var exprs_: List[Expr],
-        var schema_: Schema,
-    ):
-        self.input = input^
-        self.names = names^
-        self.exprs_ = exprs_^
-        self.schema_ = schema_^
-
-    def kind(self) -> UInt8:
-        return PROJECT_NODE
-
-    def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Project([")
-        for i in range(len(self.names)):
-            if i > 0:
-                writer.write(t", ")
-            writer.write(self.names[i])
-            writer.write(t"=")
-            self.exprs_[i].write_to(writer)
-        writer.write(t"])")
 
 
 struct InMemoryTable(Relation):
-    """In-memory table — leaf node backed by a RecordBatch.
-
-    Holds actual data in the plan tree. Created via ``in_memory_table(batch)``.
-    """
+    """Leaf backed by a RecordBatch; opens into a morsel-slicing operator."""
 
     var batch: RecordBatch
+    var morsel_size: Int
 
-    def __init__(out self, *, batch: RecordBatch):
+    def __init__(
+        out self, *, batch: RecordBatch, morsel_size: Int = DEFAULT_MORSEL_SIZE
+    ):
         self.batch = RecordBatch(copy=batch)
-
-    def kind(self) -> UInt8:
-        return IN_MEMORY_TABLE_NODE
+        self.morsel_size = morsel_size
 
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return InMemoryTableProcessor(
+            batch=RecordBatch(copy=self.batch),  # shares buffers (O(1))
+            morsel_size=self.morsel_size,
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(
@@ -499,77 +383,163 @@ struct InMemoryTable(Relation):
         )
 
 
-# ---------------------------------------------------------------------------
-# Free-standing factory
-# ---------------------------------------------------------------------------
-
-
 def in_memory_table(batch: RecordBatch) -> AnyRelation:
     """Create a relation backed by an in-memory RecordBatch."""
     return InMemoryTable(batch=batch)
 
 
 struct ParquetScan(Relation):
-    """Parquet file scan — leaf node that reads from a Parquet file.
-
-    ``path``    — filesystem path to the Parquet file.
-    ``schema_`` — output schema inferred from the Parquet footer metadata.
-    """
+    """Leaf describing a Parquet file scan with a known schema."""
 
     var path: String
-    var schema_: Schema
+    var _schema: Schema
+    var morsel_size: Int
 
-    def __init__(out self, *, var path: String, var schema_: Schema):
+    def __init__(
+        out self,
+        *,
+        var path: String,
+        var schema: Schema,
+        morsel_size: Int = DEFAULT_MORSEL_SIZE,
+    ):
         self.path = path^
-        self.schema_ = schema_^
-
-    def kind(self) -> UInt8:
-        return PARQUET_SCAN_NODE
+        self._schema = schema^
+        self.morsel_size = morsel_size
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return ParquetScanProcessor(
+            path=self.path.copy(),
+            schema=Schema(copy=self._schema),
+            morsel_size=self.morsel_size,
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"ParquetScan({self.path})")
 
 
-struct Aggregate(Relation):
-    """Grouped aggregation — groups input by key expressions and applies
-    aggregate functions to value expressions.
+def parquet_scan(path: String, schema: Schema) -> AnyRelation:
+    """Create a Parquet file scan with a known schema."""
+    return ParquetScan(path=path, schema=schema)
 
-    ``input``      — child relation.
-    ``keys``       — grouping key expressions (column references).
-    ``agg_exprs``  — value expressions to aggregate.
-    ``agg_funcs``  — aggregation function names ("sum", "min", "max", etc.).
-    ``schema_``    — output schema: key fields + aggregated value fields.
-    """
+
+# ---------------------------------------------------------------------------
+# Streaming operators
+# ---------------------------------------------------------------------------
+
+
+struct Filter(Relation):
+    """Apply a boolean predicate; keep rows where True (schema unchanged)."""
 
     var input: AnyRelation
-    var keys: List[Expr]
-    var agg_exprs: List[Expr]
-    var agg_funcs: List[String]
-    var schema_: Schema
+    var predicate: AnyValue
+
+    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
+        self.input = input^
+        self.predicate = predicate^
+
+    def schema(self) -> Schema:
+        return self.input.schema()
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return FilterProcessor(
+            input=self.input.to_processor(ctx), predicate=self.predicate.copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Filter(predicate=")
+        self.predicate.write_to(writer)
+        writer.write(t")")
+
+
+struct Project(Relation):
+    """Evaluate a list of named expressions into output columns."""
+
+    var input: AnyRelation
+    var names: List[String]
+    var values: List[AnyValue]
+    var _schema: Schema
 
     def __init__(
         out self,
         *,
         var input: AnyRelation,
-        var keys: List[Expr],
-        var agg_exprs: List[Expr],
-        var agg_funcs: List[String],
-        var schema_: Schema,
+        var names: List[String],
+        var values: List[AnyValue],
+        var schema: Schema,
+    ):
+        self.input = input^
+        self.names = names^
+        self.values = values^
+        self._schema = schema^
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return ProjectProcessor(
+            input=self.input.to_processor(ctx),
+            values=self.values.copy(),
+            schema=Schema(copy=self._schema),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Project([")
+        for i in range(len(self.names)):
+            if i > 0:
+                writer.write(t", ")
+            writer.write(self.names[i])
+            writer.write(t"=")
+            self.values[i].write_to(writer)
+        writer.write(t"])")
+
+
+# ---------------------------------------------------------------------------
+# Blocking operators
+# ---------------------------------------------------------------------------
+
+
+struct Aggregate(Relation):
+    """Grouped aggregation — the descriptive node (keys, aggregates, schema)."""
+
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var aggs: List[AnyValue]
+    var funcs: List[String]
+    var value_dtypes: List[AnyDataType]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var keys: List[AnyValue],
+        var aggs: List[AnyValue],
+        var funcs: List[String],
+        var value_dtypes: List[AnyDataType],
+        var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
-        self.agg_exprs = agg_exprs^
-        self.agg_funcs = agg_funcs^
-        self.schema_ = schema_^
-
-    def kind(self) -> UInt8:
-        return AGGREGATE_NODE
+        self.aggs = aggs^
+        self.funcs = funcs^
+        self.value_dtypes = value_dtypes^
+        self._schema = schema^
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return AggregateProcessor(
+            input=self.input.to_processor(ctx),
+            keys=self.keys.copy(),
+            aggs=self.aggs.copy(),
+            funcs=self.funcs.copy(),
+            value_dtypes=self.value_dtypes.copy(),
+            schema=Schema(copy=self._schema),
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(keys=[")
@@ -577,108 +547,67 @@ struct Aggregate(Relation):
             if i > 0:
                 writer.write(", ")
             self.keys[i].write_to(writer)
-        writer.write("], aggs=[")
-        for i in range(len(self.agg_funcs)):
-            if i > 0:
-                writer.write(", ")
-            writer.write(self.agg_funcs[i])
-            writer.write("(")
-            self.agg_exprs[i].write_to(writer)
-            writer.write(")")
         writer.write("])")
 
 
 struct Join(Relation):
-    """Equijoin of two child relations.
-
-    Supported join kinds: JOIN_INNER, JOIN_LEFT, JOIN_RIGHT, JOIN_FULL,
-    JOIN_SEMI, JOIN_ANTI.
-
-    ``left``        — left input relation (build side).
-    ``right``       — right input relation (probe side).
-    ``left_keys``   — key expressions referencing left schema (positional Column nodes).
-    ``right_keys``  — key expressions referencing right schema (positional Column nodes).
-    ``kind``        — join direction constant (JOIN_INNER … JOIN_ANTI).
-    ``strictness``  — matching behavior (JOIN_ALL or JOIN_ANY).
-    ``algorithm``   — execution hint (JOIN_ALGO_AUTO … JOIN_ALGO_GRACE_HASH).
-    ``schema_``     — pre-computed output schema.
-    """
+    """Equijoin — the descriptive node (key indices, kind, output schema)."""
 
     var left: AnyRelation
     var right: AnyRelation
-    var left_keys: List[Expr]
-    var right_keys: List[Expr]
+    var left_key_indices: List[Int]
+    var right_key_indices: List[Int]
     var join_kind: UInt8
     var strictness: UInt8
-    var algorithm: UInt8
-    var schema_: Schema
+    var _schema: Schema
 
     def __init__(
         out self,
         *,
         var left: AnyRelation,
         var right: AnyRelation,
-        var left_keys: List[Expr],
-        var right_keys: List[Expr],
+        var left_key_indices: List[Int],
+        var right_key_indices: List[Int],
         join_kind: UInt8,
         strictness: UInt8,
-        algorithm: UInt8,
-        var schema_: Schema,
+        var schema: Schema,
     ):
         self.left = left^
         self.right = right^
-        self.left_keys = left_keys^
-        self.right_keys = right_keys^
+        self.left_key_indices = left_key_indices^
+        self.right_key_indices = right_key_indices^
         self.join_kind = join_kind
         self.strictness = strictness
-        self.algorithm = algorithm
-        self.schema_ = schema_^
-
-    def kind(self) -> UInt8:
-        return JOIN_NODE
+        self._schema = schema^
 
     def schema(self) -> Schema:
-        return Schema(copy=self.schema_)
+        return Schema(copy=self._schema)
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return JoinProcessor(
+            left=self.left.to_processor(ctx),
+            right=self.right.to_processor(ctx),
+            left_key_indices=self.left_key_indices.copy(),
+            right_key_indices=self.right_key_indices.copy(),
+            join_kind=self.join_kind,
+            strictness=self.strictness,
+            schema=Schema(copy=self._schema),
+        )
 
     def write_to[W: Writer](self, mut writer: W):
-        var kind_name = String("?")
-        if self.join_kind == JOIN_INNER:
-            kind_name = "INNER"
-        elif self.join_kind == JOIN_LEFT:
-            kind_name = "LEFT"
-        elif self.join_kind == JOIN_RIGHT:
-            kind_name = "RIGHT"
-        elif self.join_kind == JOIN_FULL:
-            kind_name = "FULL"
-        elif self.join_kind == JOIN_SEMI:
-            kind_name = "SEMI"
-        elif self.join_kind == JOIN_ANTI:
-            kind_name = "ANTI"
-        elif self.join_kind == JOIN_CROSS:
-            kind_name = "CROSS"
-        writer.write(t"Join(kind={kind_name}, left_keys=[")
-        for i in range(len(self.left_keys)):
-            if i > 0:
-                writer.write(t", ")
-            self.left_keys[i].write_to(writer)
-        writer.write(t"], right_keys=[")
-        for i in range(len(self.right_keys)):
-            if i > 0:
-                writer.write(t", ")
-            self.right_keys[i].write_to(writer)
-        writer.write(t"])")
+        writer.write(t"Join(kind={self.join_kind})")
 
 
-def parquet_scan(path: String) raises -> AnyRelation:
-    """Create a relation that reads from a Parquet file.
+# ---------------------------------------------------------------------------
+# execute — drain a plan into a single RecordBatch
+# ---------------------------------------------------------------------------
 
-    Reads the schema from the Parquet footer metadata (no data I/O).
-    """
-    from std.python import Python
-    from marrow.c_data import CArrowSchema
 
-    var pq = Python.import_module("pyarrow.parquet")
-    var pa_schema = pq.read_schema(path)
-    var capsule = pa_schema.__arrow_c_schema__()
-    var schema_ = CArrowSchema.from_pycapsule(capsule).to_schema()
-    return ParquetScan(path=path, schema_=schema_^)
+def execute(
+    plan: AnyRelation, ctx: ExecutionContext = ExecutionContext()
+) raises -> RecordBatch:
+    """Execute a plan: open it into a fresh operator tree and drain it. The plan
+    (a pure description) is never mutated, so it can be executed repeatedly and
+    concurrently."""
+    var op = plan.to_processor(ctx)
+    return op.collect()

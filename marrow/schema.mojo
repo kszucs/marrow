@@ -4,7 +4,22 @@
 """
 from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
-from .dtypes import Field
+from std.reflection import reflect
+from .dtypes import DataType, Field
+
+
+def _construct_default[D: Defaultable & DataType]() -> D:
+    """Construct a reflected field's DataType marker.
+
+    A bare ``FieldT()`` call inside a ``comptime for`` over
+    ``reflect[T].field_at[i].T`` fails to resolve — the compiler only sees
+    ``FieldT`` as an opaque type during generic-mode checking of the enclosing
+    generic function, with no constructor visible. Routing the construction
+    through this separately-instantiated generic function (bound on
+    ``Defaultable``) makes the zero-arg constructor visible via the trait
+    witness instead.
+    """
+    return D()
 
 
 struct Schema(
@@ -59,6 +74,42 @@ struct Schema(
         for f in py:
             fields.append(f.downcast_value_ptr[Field]()[].copy())
         self = Schema(fields=fields^)
+
+    @staticmethod
+    def from_struct[T: AnyType]() -> Schema:
+        """Derive a Schema from a struct's fields via compile-time reflection.
+
+        Each field's declared type must conform to `DataType` (e.g.
+        `Int32Type`, `StringType` from `marrow.dtypes`) — the struct declares
+        its schema by naming its fields after columns and typing them with
+        marrow's zero-size Arrow type markers. Fields are always non-nullable;
+        there is no notion of an optional field yet.
+
+        Example:
+            struct Orders:
+                var a: Int32Type
+                var b: StringType
+
+            var s = Schema.from_struct[Orders]()
+            # equivalent to schema([field("a", int32, nullable=False),
+            #                       field("b", string, nullable=False)])
+        """
+        comptime r = reflect[T]
+        comptime assert r.is_struct(), "Schema.from_struct[T] requires a struct"
+        var fields = List[Field]()
+        comptime for i in range(r.field_count()):
+            comptime FieldT = r.field_at[i].T
+            comptime assert conforms_to(
+                FieldT, DataType
+            ), "Schema.from_struct: every field must implement DataType"
+            comptime assert conforms_to(
+                FieldT, Defaultable
+            ), "Schema.from_struct: every field must implement Defaultable"
+            var dt = _construct_default[FieldT]()
+            fields.append(
+                Field(String(r.field_names()[i]), dt^, nullable=False)
+            )
+        return Schema(fields=fields^)
 
     def append(mut self, var field: Field):
         """Appends a field to the schema."""

@@ -293,6 +293,7 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 - Avoid `ImplicitlyCopyable` on array and scalar types. Copies should be explicit (`.copy()`) so ownership is always visible at the call site.
 - **`.as_<type>()` returns a reference** (`ref self` + `-> ref[self._data[]] T`) — zero-cost borrow tied to the heap allocation inside the `ArcPointer`, with no ownership transfer. Callers use `ref x = val.as_type()` to borrow or `.copy()` to take ownership explicitly.
 - **`.to_<type>()` transfers ownership** — use this name for methods that convert a value to a new type or allocate a new representation (e.g. `.to_python_object()`, `.to_device()`, `.to_host()`).
+- **Keep the `marrow.aot`/`marrow.expr` layers small-binary** — preserve the closed-erasure/DCE property (no open dispatchers, fused-only value boxes, closed per-dtype kernels) and gate changes on `benchmarks/binary_size/` (`pixi run binary_size`).
 
 ### Prior Art — Consult C++ and Rust Implementations First
 

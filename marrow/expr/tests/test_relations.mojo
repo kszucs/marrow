@@ -1,374 +1,136 @@
-from std.testing import assert_equal
+"""Tests for the name-resolved column handles in ``marrow.expr.relations``.
+
+- ``Table[Tbl]()`` — the column-access handle over a plain schema struct of
+  dtype-tag fields. ``t.a`` reflects each field's dtype into a
+  ``NumericColumn[T]`` / ``StringColumn`` leaf (columns carry only a runtime
+  ``name``; position is resolved by name against the batch); string fields
+  dispatch to ``StringColumn`` automatically.
+- ``col(name, dtype)`` — the schema-struct-free, polars-style by-name factory
+  producing the same leaves.
+
+(The fully-typed ``Project[*Es]``/``Filter`` layer was removed once the erased
+fat-node relations superseded it; execution is tested in ``test_plan`` /
+``test_streaming``.)
+"""
+
+from std.testing import assert_equal, assert_true
+
 from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray
 from marrow.builders import array
-from marrow.dtypes import field, int64, float64, Int64Type
-from marrow.schema import schema
-from marrow.tabular import record_batch
-from marrow.expr import (
-    col,
-    lit,
-    ADD,
-    LT,
-    in_memory_table,
-    SCAN_NODE,
-    FILTER_NODE,
-    PROJECT_NODE,
-    IN_MEMORY_TABLE_NODE,
-    PARQUET_SCAN_NODE,
-)
-from marrow.expr.relations import (
-    AnyRelation,
-    Scan,
-    Filter,
-    Project,
-    InMemoryTable,
-    ParquetScan,
-)
+from marrow.dtypes import Int64Type, StringType, int64, string
+from marrow.tabular import RecordBatch, record_batch
+from marrow.expr.values import Table
+from marrow.expr.values import Add, Greater, col
 
 
-# ---------------------------------------------------------------------------
-# Scan
-# ---------------------------------------------------------------------------
+struct _Orders:
+    """Two int64 columns and one string column, declared in that order."""
+
+    var a: Int64Type
+    var b: Int64Type
+    var name: StringType
 
 
-def test_scan_schema() raises:
-    """Scan.schema returns the declared schema."""
-    var src = Scan(
-        name="t", schema_=schema([field("x", int64), field("y", float64)])
-    )
-    var s = src.schema()
-    assert_equal(len(s), 2)
-    assert_equal(s.fields[0].name, "x")
-    assert_equal(s.fields[1].name, "y")
-
-
-def test_scan_write_to() raises:
-    var src = AnyRelation(
-        Scan(
-            name="orders",
-            schema_=schema([field("x", int64), field("y", float64)]),
-        )
-    )
-    assert_equal(String(src), "Scan(orders)")
-
-
-# ---------------------------------------------------------------------------
-# Filter
-# ---------------------------------------------------------------------------
-
-
-def test_filter_schema_passthrough() raises:
-    """Filter output schema equals the input schema."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var pred = col(0) > lit[Int64Type](0)
-    var filt = Filter(input=src, predicate=pred)
-    var s = filt.schema()
-    assert_equal(len(s), 2)
-    assert_equal(s.fields[0].name, "x")
-
-
-def test_filter_predicate() raises:
-    """Filter exposes its predicate expression as a field."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var filt = Filter(input=src, predicate=col(0) < col(1))
-    assert_equal(filt.predicate.kind(), LT)
-
-
-def test_filter_write_to() raises:
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var filt = AnyRelation(Filter(input=src, predicate=col(0) < col(1)))
-    assert_equal(String(filt), "Filter(predicate=less(input(0), input(1)))")
-
-
-# ---------------------------------------------------------------------------
-# Project
-# ---------------------------------------------------------------------------
-
-
-def test_project_schema() raises:
-    """Project output schema contains only the projected columns."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var proj = Project(
-        input=src,
-        names=["z"],
-        exprs_=[col(0) + col(1)],
-        schema_=schema([field("z", int64)]),
-    )
-    var s = proj.schema()
-    assert_equal(len(s), 1)
-    assert_equal(s.fields[0].name, "z")
-
-
-def test_project_exprs() raises:
-    """Project exposes its expressions as a field."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var proj = Project(
-        input=src,
-        names=["z"],
-        exprs_=[col(0) + col(1)],
-        schema_=schema([field("z", int64)]),
-    )
-    assert_equal(len(proj.exprs_), 1)
-    assert_equal(proj.exprs_[0].kind(), ADD)
-
-
-def test_project_write_to() raises:
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var proj = AnyRelation(
-        Project(
-            input=src,
-            names=["z"],
-            exprs_=[col(0) + col(1)],
-            schema_=schema([field("z", int64)]),
-        )
-    )
-    assert_equal(String(proj), "Project([z=add(input(0), input(1))])")
-
-
-# ---------------------------------------------------------------------------
-# AnyRelation type erasure / downcast
-# ---------------------------------------------------------------------------
-
-
-def test_anyrelation_downcast_scan() raises:
-    """AnyRelation wrapping a Scan can be downcast back."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    assert_equal(src.downcast[Scan]()[].name, "t")
-
-
-def test_anyrelation_o1_copy() raises:
-    """AnyRelation copies share the same underlying allocation (O(1))."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var copy = src  # O(1) ref-count bump
-    assert_equal(copy.schema().fields[0].name, "x")
-
-
-# ---------------------------------------------------------------------------
-# kind() dispatch
-# ---------------------------------------------------------------------------
-
-
-def test_scan_kind() raises:
-    """Scan reports SCAN_NODE kind."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    assert_equal(src.kind(), SCAN_NODE)
-
-
-def test_filter_kind() raises:
-    """Filter reports FILTER_NODE kind."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var filt = AnyRelation(
-        Filter(input=src, predicate=col(0) > lit[Int64Type](0))
-    )
-    assert_equal(filt.kind(), FILTER_NODE)
-
-
-def test_project_kind() raises:
-    """Project reports PROJECT_NODE kind."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var proj = AnyRelation(
-        Project(
-            input=src,
-            names=["z"],
-            exprs_=[col(0)],
-            schema_=schema([field("z", int64)]),
-        )
-    )
-    assert_equal(proj.kind(), PROJECT_NODE)
-
-
-# ---------------------------------------------------------------------------
-# InMemoryTable
-# ---------------------------------------------------------------------------
-
-
-def test_in_memory_table_kind() raises:
-    """InMemoryTable reports IN_MEMORY_TABLE_NODE kind."""
+def _make_batch() raises -> RecordBatch:
     var a = array([1, 2, 3], int64)
-    var t = in_memory_table(record_batch([a^], names=["a"]))
-    assert_equal(t.kind(), IN_MEMORY_TABLE_NODE)
-
-
-def test_in_memory_table_schema() raises:
-    """InMemoryTable schema matches the batch schema."""
-    var a = array([1, 2, 3], int64)
-    var t = in_memory_table(record_batch([a^], names=["a"]))
-    var s = t.schema()
-    assert_equal(len(s), 1)
-    assert_equal(s.fields[0].name, "a")
-
-
-def test_in_memory_table_downcast() raises:
-    """InMemoryTable can be downcast to access the batch."""
-    var a = array([1, 2, 3], int64)
-    var t = in_memory_table(record_batch([a^], names=["a"]))
-    var imt = t.downcast[InMemoryTable]()
-    assert_equal(imt[].batch.num_rows(), 3)
+    var b = array([10, 20, 30], int64)
+    var s = array(["x", "y", "z"])
+    return record_batch(
+        [a.copy(), b.copy(), s.copy()], names=["a", "b", "name"]
+    )
 
 
 # ---------------------------------------------------------------------------
-# Scan + filter + select plan composition
+# Table[Tbl]() — column-access handle
 # ---------------------------------------------------------------------------
 
 
-def test_scan_filter_kind() raises:
-    """Scan.filter() produces a FILTER_NODE wrapping the scan."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.filter(col("x") > lit[Int64Type](0))
-    assert_equal(plan.kind(), FILTER_NODE)
+def test_column_name_matches_declared_field() raises:
+    """Table[Tbl]().<name> carries the field name; position is resolved by name
+    against the batch schema (columns store no index)."""
+    var t = Table[_Orders]()
+    assert_equal(t.a.name(), "a")
+    assert_equal(t.b.name(), "b")
+    assert_equal(t.name.name(), "name")
 
 
-def test_scan_filter_schema_passthrough() raises:
-    """Scan.filter() preserves the scan's output schema."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.filter(col("x") > lit[Int64Type](0))
-    var s = plan.schema()
-    assert_equal(len(s), 2)
-    assert_equal(s.fields[0].name, "x")
-    assert_equal(s.fields[1].name, "y")
+def test_column_executes_without_runtime_schema() raises:
+    """NumericColumn resolves data by name."""
+    var t = Table[_Orders]()
+    var batch = _make_batch()
+
+    ref result = t.a.execute(batch).to_any().as_int64()
+    assert_true(result.copy() == array([1, 2, 3], int64))
+
+    ref result_b = t.b.execute(batch).to_any().as_int64()
+    assert_true(result_b.copy() == array([10, 20, 30], int64))
 
 
-# FIXME
-# def test_scan_filter_resolves_column_name() raises:
-#     """``col('x')`` inside filter is resolved to a positional col(0)."""
-#     var src = AnyRelation(
-#         Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-#     )
-#     var plan = src.filter(col("x") > lit[Int64Type](0))
-#     var filt = plan.downcast[Filter]()
-#     var pred_inputs = filt[].predicate.inputs()
-#     assert_equal(pred_inputs[0].kind_data(), 0)
+def test_named_column_add_fuses() raises:
+    """Fully-typed columns compose with the Add fusion node."""
+    var t = Table[_Orders]()
+    var batch = _make_batch()
+
+    var added = Add(t.a, t.b)
+    ref result = added.execute(batch).to_any().as_int64()
+    assert_true(result.copy() == array([11, 22, 33], int64))
 
 
-def test_scan_select_kind() raises:
-    """Scan.select() produces a PROJECT_NODE."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.select("x")
-    assert_equal(plan.kind(), PROJECT_NODE)
+def test_named_column_gt_fuses() raises:
+    """Fully-typed columns compose with the Greater comparison node."""
+    var t = Table[_Orders]()
+    var batch = _make_batch()
+
+    var pred = Greater(t.a, t.b)
+    var result = pred.execute(batch)
+    assert_true(result[0].value() == False)
+    assert_true(result[1].value() == False)
+    assert_true(result[2].value() == False)
 
 
-def test_scan_select_schema() raises:
-    """Scan.select('x') yields a single-field schema."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.select("x")
-    var s = plan.schema()
-    assert_equal(len(s), 1)
-    assert_equal(s.fields[0].name, "x")
+def test_named_column_write_to() raises:
+    """NumericColumn.write_to() displays the compile-time name."""
+    var t = Table[_Orders]()
+    assert_equal(String(t.a), "Col[a]")
+    assert_equal(String(t.b), "Col[b]")
 
 
-def test_scan_filter_select_kinds() raises:
-    """Scan.filter().select() chains FILTER_NODE under PROJECT_NODE."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.filter(col("x") > lit[Int64Type](0)).select("x")
-    assert_equal(plan.kind(), PROJECT_NODE)
-    var proj = plan.downcast[Project]()
-    assert_equal(proj[].input.kind(), FILTER_NODE)
+def test_named_string_column_executes() raises:
+    """A string-typed field dispatches to StringColumn and resolves by name."""
+    var t = Table[_Orders]()
+    var batch = _make_batch()
+
+    var result = t.name.execute(batch)
+    assert_equal(result[0].to_string(), "x")
+    assert_equal(result[1].to_string(), "y")
+    assert_equal(result[2].to_string(), "z")
 
 
-def test_scan_filter_select_schema() raises:
-    """Scan.filter().select('y') final schema has only 'y'."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.filter(col("x") > lit[Int64Type](0)).select("y")
-    var s = plan.schema()
-    assert_equal(len(s), 1)
-    assert_equal(s.fields[0].name, "y")
-
-
-def test_scan_select_filter_kinds() raises:
-    """Scan.select().filter() chains PROJECT_NODE under FILTER_NODE."""
-    var src = AnyRelation(
-        Scan(name="t", schema_=schema([field("x", int64), field("y", float64)]))
-    )
-    var plan = src.select("x").filter(col("x") > lit[Int64Type](0))
-    assert_equal(plan.kind(), FILTER_NODE)
-    var filt = plan.downcast[Filter]()
-    assert_equal(filt[].input.kind(), PROJECT_NODE)
+def test_named_string_column_write_to() raises:
+    """StringColumn.write_to() displays the compile-time name."""
+    var t = Table[_Orders]()
+    assert_equal(String(t.name), "StrCol[name]")
 
 
 # ---------------------------------------------------------------------------
-# ParquetScan — structural tests (no I/O)
+# col(name, dtype) — schema-struct-free by-name factory
 # ---------------------------------------------------------------------------
 
 
-def test_parquet_scan_kind() raises:
-    """ParquetScan reports PARQUET_SCAN_NODE kind."""
-    var node = AnyRelation(
-        ParquetScan(
-            path="/tmp/x.parquet",
-            schema_=schema([field("id", int64), field("val", float64)]),
-        )
-    )
-    assert_equal(node.kind(), PARQUET_SCAN_NODE)
+def test_col_resolves_numeric_by_name() raises:
+    """A numeric col resolves its position by name against the batch."""
+    var batch = _make_batch()
+    ref result = col("a", int64).execute(batch).to_any().as_int64()
+    assert_true(result.copy() == array([1, 2, 3], int64))
 
 
-def test_parquet_scan_schema() raises:
-    """ParquetScan.schema returns the declared schema."""
-    var node = ParquetScan(
-        path="/tmp/x.parquet",
-        schema_=schema([field("id", int64), field("val", float64)]),
-    )
-    var s = node.schema()
-    assert_equal(len(s), 2)
-    assert_equal(s.fields[0].name, "id")
-    assert_equal(s.fields[1].name, "val")
-
-
-def test_parquet_scan_write_to() raises:
-    """ParquetScan formats as ParquetScan(path)."""
-    var node = AnyRelation(
-        ParquetScan(
-            path="/tmp/x.parquet",
-            schema_=schema([field("id", int64), field("val", float64)]),
-        )
-    )
-    assert_equal(String(node), "ParquetScan(/tmp/x.parquet)")
-
-
-def test_parquet_scan_downcast() raises:
-    """AnyRelation wrapping a ParquetScan can be downcast to access path."""
-    var node = AnyRelation(
-        ParquetScan(
-            path="/tmp/x.parquet",
-            schema_=schema([field("id", int64), field("val", float64)]),
-        )
-    )
-    assert_equal(node.downcast[ParquetScan]()[].path, "/tmp/x.parquet")
+def test_col_resolves_string_by_name() raises:
+    """A string col dispatches to StringColumn and resolves by name."""
+    var batch = _make_batch()
+    var result = col("name", string).execute(batch)
+    assert_equal(result[0].to_string(), "x")
+    assert_equal(result[2].to_string(), "z")
 
 
 def main() raises:

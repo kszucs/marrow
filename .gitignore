@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Compiled binary-size demo executables (keep the .mojo sources)
+benchmarks/binary_size/query_*
+!benchmarks/binary_size/query_*.mojo
+
 # Distribution / packaging
 .Python
 build/

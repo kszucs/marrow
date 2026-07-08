@@ -1,56 +1,42 @@
-"""Expression and logical plan system for Marrow.
+"""Unified expression + relational-plan system.
 
-Two expression layers
-----------------------
-``values.mojo`` — the **default** comptime-typed layer.  Nodes are generic
-structs (``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``) whose type parameters
-encode the whole expression tree, so the compiler inlines evaluation into a
-single fused SIMD loop with zero intermediate arrays.
+One value box, one interpreter, one relational layer. Which node you box
+decides the binary size: box the fused comptime nodes and the interpreter is
+dead-code-eliminated (~250 KB); box a ``DynValue`` and the runtime interpreter
+links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 
-``runtime.mojo`` — the type-erased runtime layer (``Expr``).  It exists so
-query plans can be built and executed without knowing concrete comptime
-types — this is what the Python bindings drive.  ``Expr`` carries a tag plus
-child args and dispatches its own execution by tag in ``eval()``.
+``values.mojo`` — the fused comptime algebra (``Add``/``Greater``/``Length``…), the
+named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
+and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
+relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
+``to_array``).
 
-A comptime-typed node can be boxed into an ``Expr`` via the
-``Expr(value)`` constructor (tag ``FUSED``); the boxed node's ``eval()``,
-``dtype()``, and ``write_to()`` all delegate back to the concrete comptime
-node, so a fused subtree keeps its single-pass execution even when driven
-through the type-erased path.
+``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
+bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
+and operator overloads.
 
-Scalar expressions (runtime layer)
------------------------------------
-``Expr``   — unified n-ary term expression node
-``Value``  — trait every expression node must implement (shared by both layers)
+``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
+(``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)
+that are pure, immutable, and cheaply copied, plus the plan-building API and
+``execute(plan)``.
 
-Factory functions: ``col()``, ``lit()``, ``if_else()``
-Operator overloads: ``+``, ``-``, ``*``, ``/``, ``>``, ``<``, ``>=``,
-``<=``, ``==``, ``!=``, ``&``, ``|``, ``~``, unary ``-``
-Instance methods: ``.abs()``, ``.is_null()``, ``.length()``, ``.cast(to)``
+``execution.mojo`` — the **execution layer**: the ``Processor`` each
+``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
+hash index, grouper, child processors), erased behind ``AnyProcessor`` which
+drives ``collect()``. ``execute`` opens a plan into a fresh processor tree and
+drains it, so a plan is a reusable template. Depends only on the value box and
+kernels (one-way: ``relations`` → ``execution``).
 
-Comptime-typed expressions
----------------------------
-``NumericValue`` — base trait for numeric comptime nodes with SIMD vectorize execution
-``StringValue`` — base trait for string comptime nodes (resolve/execute, no SIMD core)
+Usage::
 
-Expression nodes: ``Column[T]``, ``Add[L, R]``, ``Sub[L, R]``,
-``StringColumn``, ``Length[S]``
-
-Relational plans
-----------------
-``AnyRelation`` — type-erased relational plan node
-``Relation``    — trait every relational plan node must implement
-
-Concrete plan nodes: ``Scan``, ``Filter``, ``Project``, ``InMemoryTable``,
-``ParquetScan``, ``Aggregate``, ``Join``
-Plan-building: ``AnyRelation.select()``, ``AnyRelation.filter()``
-Factory: ``in_memory_table()``, ``parquet_scan()``
+    var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
+    var result = execute(plan)
 """
 
-from marrow.expr.runtime import (
+from .dynamic import (
     # Unified expression node
-    Expr,
-    # Free-standing factory functions (return Expr)
+    DynValue,
+    # Free-standing factory functions (return DynValue)
     col,
     lit,
     if_else,
@@ -74,14 +60,19 @@ from marrow.expr.runtime import (
     NOT,
     IS_NULL,
     IF_ELSE,
-    CAST,
-    FUSED,
     LENGTH,
 )
-from marrow.expr.relations import (
+from ..kernels.execution import ExecutionContext
+from .execution import (
+    # Execution layer (processors built by Relation.to_processor)
+    Processor,
+    AnyProcessor,
+    Exhausted,
+)
+from .relations import (
+    # Descriptive IR nodes
     Relation,
     AnyRelation,
-    Scan,
     Filter,
     Project,
     InMemoryTable,
@@ -90,60 +81,15 @@ from marrow.expr.relations import (
     Join,
     in_memory_table,
     parquet_scan,
-    # Plan node kind constants
-    SCAN_NODE,
-    FILTER_NODE,
-    PROJECT_NODE,
-    IN_MEMORY_TABLE_NODE,
-    PARQUET_SCAN_NODE,
-    AGGREGATE_NODE,
-    JOIN_NODE,
-    # Join kind constants
+    execute,
+    # Join kind constants (hash join: inner/left/right/full/semi/anti)
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,
     JOIN_FULL,
     JOIN_SEMI,
     JOIN_ANTI,
-    JOIN_CROSS,
-    JOIN_MARK,
-    JOIN_SINGLE,
     # Join strictness constants
     JOIN_ALL,
     JOIN_ANY,
-    JOIN_ASOF,
-    # Join algorithm hints
-    JOIN_ALGO_AUTO,
-    JOIN_ALGO_HASH,
-    JOIN_ALGO_SORT_MERGE,
-    JOIN_ALGO_PIECEWISE,
-    JOIN_ALGO_GRACE_HASH,
-)
-from marrow.expr.executor import (
-    ExecutionContext,
-    # Relation processors
-    RelationProcessor,
-    AnyRelationProcessor,
-    ScanProcessor,
-    ParquetScanProcessor,
-    FilterProcessor,
-    ProjectProcessor,
-    AggregateProcessor,
-    JoinProcessor,
-    Planner,
-    execute,
-)
-from marrow.expr.values import (
-    # Traits
-    Value,
-    NumericValue,
-    StringValue,
-    # Expression nodes
-    Column,
-    Add,
-    Sub,
-    StringColumn,
-    Length,
-    # Vectorize dispatch
-    _vectorize_dispatch,
 )

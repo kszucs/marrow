@@ -31,6 +31,10 @@ build_python = { cmd = "mojo build -O3 -g0 -I . python/bindings/lib.mojo --emit 
 profile = "python scripts/profile.py"
 package = "mkdir -p package && mojo package marrow -o package/marrow.mojopkg"
 publish = { cmd = "find . -name 'marrow-*.conda' | xargs pixi upload https://prefix.dev/api/v1/upload/mojo-community" }
+# Builds the same SELECT/WHERE query via the comptime (AOT), hybrid, and
+# runtime (type-erased) relational layers, strips each, and compares sizes +
+# symbol counts -- see benchmarks/binary_size/README.md.
+binary_size = { cmd = "python3 benchmarks/binary_size/compare.py" }
 
 # Dev — dependencies and tasks for development and testing.
 [feature.dev.dependencies]
