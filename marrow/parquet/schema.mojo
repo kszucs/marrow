@@ -1,9 +1,11 @@
 """Mapping between the Parquet schema (a flat `SchemaElement` list) and Marrow's
 Arrow type tree.
 
-Milestone-1 covers flat columns: primitives, string/binary. Each top-level
-column is one leaf; nullability maps to the `OPTIONAL`/`REQUIRED` repetition and
-a max definition level of 1/0. Struct/list nesting is layered on in follow-ups.
+`SchemaNode` is the shared tree (leaf / struct / list) with `assemble`/`flatten`
+methods; `LeafColumn` is a flat leaf descriptor. The two conversions are objects
+that own their traversal state: `_SchemaReader` (Parquet→Arrow, via
+`ParsedSchema.from_metadata`) and `_SchemaWriter` (Arrow→Parquet, via
+`ParquetSchema.from_arrow`). Covers flat columns, structs, and single-level lists.
 """
 
 from ..dtypes import (
