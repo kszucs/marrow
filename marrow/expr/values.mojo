@@ -4,18 +4,17 @@
 Each node is a generic struct where type parameters encode the expression
 tree structure, enabling the compiler to inline the full ``core[W]()`` call
 chain into a single fused vectorize loop with zero intermediate arrays.
-Columns are referenced by position (``NumericColumn[T](index)``); see
-``marrow.expr.relations`` for the named, reflection-based, ``Table``-schema
-variant used by ``Project``/``Filter``.
+The leaf column nodes (``NumericColumn[T]`` / ``StringColumn``) live in
+``marrow.expr.relations`` — they resolve by name against the batch schema and
+are built by ``Table[Tbl]()`` / ``col(name, dtype)``; this module supplies the
+fused algebra (``Add``/``Gt``/``Length``…) that composes over them.
 
 Expression nodes
 ----------------
-``NumericColumn[T]`` — typed column reference (resolves from RecordBatch at core time)
 ``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
 ``Sub[L, R]`` — fused binary subtract
 ``Lt[L, R]``, ``Gt[L, R]``, ``Eq[L, R]`` — fused binary comparisons; result is
     a bit-packed BoolArray, not a PrimitiveArray (see ``BoolValue`` below)
-``StringColumn`` — typed string column reference
 ``Length[S]`` — fused string byte length
 
 Traits
@@ -40,9 +39,7 @@ driven through the type-erased path.
 
 Usage
 -----
-    var col_a = NumericColumn[Int64Type](0)
-    var col_b = NumericColumn[Int64Type](1)
-    var expr = Add(col_a, col_b)
+    var expr = Add(col("a", int64), col("b", int64))
     var result = expr.execute(batch)  # single fused pass, zero intermediates
 """
 
@@ -102,8 +99,8 @@ trait NumericValue(Value):
     ``core[W]()`` across the entire tree into a single fused vectorize loop.
 
     Provides ``core[W](batch, idx)`` (SIMD lane computation with batch) and
-    ``execute(batch)`` (fused vectorize loop).  Both ``NumericColumn[T]`` and
-    ``Add[L, R]`` implement this trait.
+    ``execute(batch)`` (fused vectorize loop).  Both the named ``NumericColumn``
+    leaf (in ``marrow.expr.relations``) and ``Add[L, R]`` implement this trait.
 
     ``comptime OutType`` — the output ``NumericType``.
     ``comptime NativeType`` — the Mojo scalar type for SIMD operations.
@@ -161,46 +158,6 @@ trait NumericValue(Value):
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](Self.OutType())
-
-
-# ---------------------------------------------------------------------------
-# NumericColumn — typed column reference
-# ---------------------------------------------------------------------------
-
-
-@fieldwise_init
-struct NumericColumn[T: dt.NumericType](NumericValue):
-    """Typed column reference that resolves from a RecordBatch at core time.
-
-    ``index``  — positional index into the batch's column list.
-
-    The column data is resolved on demand from the batch passed to ``core()``,
-    so no separate bind phase is needed.
-
-    Usage::
-
-        var col = NumericColumn[Int64Type](0)
-        var result = col.execute(batch)  # resolves batch.columns[0] internally
-    """
-
-    comptime OutType = Self.T
-    comptime NativeType = Self.T.native
-
-    var index: Int
-
-    @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        return (
-            batch.columns[self.index]
-            .as_primitive[Self.T]()
-            .values()
-            .load[W](idx)
-        )
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Col[{self.index}]")
 
 
 # ---------------------------------------------------------------------------
@@ -465,35 +422,6 @@ trait StringValue(Value):
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](dt.string)
-
-
-# ---------------------------------------------------------------------------
-# StringColumn — typed string column reference
-# ---------------------------------------------------------------------------
-
-
-@fieldwise_init
-struct StringColumn(StringValue):
-    """Typed string column reference that resolves from a RecordBatch.
-
-    ``index``  — positional index into the batch's column list.
-
-    Usage::
-
-        var col = StringColumn(0)
-        var result = col.execute(batch)  # resolves batch.columns[0] internally
-    """
-
-    var index: Int
-
-    def resolve(self, batch: RecordBatch) -> StringArray:
-        return batch.columns[self.index].as_string().copy()
-
-    def execute(self, batch: RecordBatch) raises -> StringArray:
-        return self.resolve(batch)
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"StrCol[{self.index}]")
 
 
 # ---------------------------------------------------------------------------

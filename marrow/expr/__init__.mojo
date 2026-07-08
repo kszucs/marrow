@@ -5,10 +5,11 @@ decides the binary size: box the fused comptime nodes and the interpreter is
 dead-code-eliminated (~250 KB); box a ``DynValue`` and the runtime interpreter
 links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 
-``values.mojo`` — the fused comptime value nodes (``NumericColumn``/``Add``/
-``Gt``/``Length``…), the ``Table[Tbl]()`` / ``col(name, dtype)`` name-resolved
-column handles, and ``AnyValue`` — the universal value box the relational layer
-holds (wraps a fused node *or* a ``DynValue``, exposing only ``to_array``).
+``values.mojo`` — the fused comptime algebra (``Add``/``Gt``/``Length``…), the
+``col(name, dtype)`` factory, and ``AnyValue`` — the universal value box the
+relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
+``to_array``). The named column leaves and ``Table[Tbl]()`` live in
+``relations.mojo``.
 
 ``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
