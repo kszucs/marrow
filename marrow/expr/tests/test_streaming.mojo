@@ -1,9 +1,10 @@
-"""Tests for the pull-based fat relation nodes in ``marrow.expr.relations``.
+"""Tests for the IR-node → operator execution in ``marrow.expr.relations``.
 
-Verifies the fat-node streaming design: each op is its own pull-based executor
-(no ``Planner``), over ``AnyValue`` values (fused or interpreter). Small morsel
+Verifies the descriptive-plan / pull-based-operator design: ``execute`` opens a
+plan into operators over ``AnyValue`` values (fused or interpreter). Small morsel
 sizes exercise the streaming boundary — the same query must produce the same
-result regardless of morsel size, and fused and interpreter values interchange.
+result regardless of morsel size — and plans are reusable templates (opening
+never mutates them).
 """
 
 from std.testing import assert_equal, assert_true
@@ -67,8 +68,8 @@ def _fused_plan(morsel: Int) raises -> AnyRelation:
 
 
 def test_scan_streams_in_morsels() raises:
-    """InMemoryTable yields morsel-sized slices, then Exhausted."""
-    var scan = InMemoryTable(batch=_batch(), morsel_size=2)
+    """Opening an InMemoryTable yields morsel-sized slices, then Exhausted."""
+    var scan = AnyRelation(InMemoryTable(batch=_batch(), morsel_size=2)).open()
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 1)
@@ -83,7 +84,7 @@ def test_scan_streams_in_morsels() raises:
 def test_streaming_filter_project() raises:
     """Full pipeline collected: a > b keeps rows 5 and 8."""
     var plan = _fused_plan(1024)
-    var result = plan.collect()
+    var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     assert_equal(result.schema.fields[0].name, "a")
     assert_equal(result.schema.fields[1].name, "name")
@@ -94,7 +95,7 @@ def test_result_independent_of_morsel_size() raises:
     """Morsel size must not change the result."""
     for morsel in [1, 2, 3, 5, 1024]:
         var plan = _fused_plan(morsel)
-        var result = plan.collect()
+        var result = execute(plan)
         assert_equal(result.num_rows(), 2)
         assert_true(
             result.columns[0].as_int64().copy() == array([5, 8], int64)
@@ -118,7 +119,7 @@ def test_streaming_interpreter_values() raises:
             schema=_out_schema(),
         )
     )
-    var result = plan.collect()
+    var result = execute(plan)
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
 
@@ -129,7 +130,7 @@ def test_streaming_interpreter_values() raises:
 
 
 def test_plan_is_reusable() raises:
-    """execute() clones the plan (resetting state), so the same plan runs
+    """execute() opens a fresh operator tree each run, so the same plan runs
     repeatedly and yields the same result — no single-use leakage."""
     var plan = _fused_plan(2)
     var r1 = execute(plan)
@@ -141,19 +142,19 @@ def test_plan_is_reusable() raises:
 
 
 def test_plan_copy_is_independent() raises:
-    """A copied plan has reset state and shares no cursor: draining the copy
-    in place leaves the original fully runnable."""
+    """A plan is an immutable template: copying it is an O(1) share, and the copy
+    and the original each open their own operator tree — no shared cursor."""
     var plan = _fused_plan(2)
     var clone = plan.copy()
-    var r_clone = clone.collect()  # drains the clone's cursors in place
-    var r_orig = execute(plan)  # original untouched, still yields everything
+    var r_clone = execute(clone)
+    var r_orig = execute(plan)
     assert_true(r_clone.columns[0].as_int64().copy() == array([5, 8], int64))
     assert_true(r_orig.columns[0].as_int64().copy() == array([5, 8], int64))
 
 
 def test_aggregate_plan_is_reusable() raises:
-    """Blocking aggregate builds its grouper lazily per run, so re-executing a
-    plan re-aggregates from scratch (the grouper is reset on clone)."""
+    """Blocking aggregate opens a fresh grouper per run, so re-executing a plan
+    re-aggregates from scratch."""
     var a = array([1, 1, 2, 2, 2], int64)
     var v = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a^, v^], names=["k", "v"])

@@ -15,11 +15,12 @@ relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
 and operator overloads.
 
-``relations.mojo`` — ``AnyRelation`` and its **self-executing** fat nodes
-(``InMemoryTable``, ``Filter``, ``Project``, ``Aggregate``, ``Join``,
-``ParquetScan``, ``Scan``): each node is both the plan node and its own
-pull-based executor (``pull()``/``collect()``) over ``List[AnyValue]`` — no
-separate ``Planner``/``*Processor``. ``execute(plan)`` drains to one batch.
+``relations.mojo`` — a two-layer relational engine: **descriptive IR nodes**
+(``Relation``: ``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/
+``ParquetScan``/``Scan``) that are pure, immutable, and cheaply copied, and the
+**operators** (``Operator``) that ``Relation.open(ctx)`` builds to actually run
+(pull-based, owning all execution state). ``execute(plan)`` opens the plan into a
+fresh operator tree and drains it, so a plan is a reusable template.
 
 Usage::
 
@@ -58,6 +59,7 @@ from marrow.expr.dynamic import (
     LENGTH,
 )
 from marrow.expr.relations import (
+    # Descriptive IR nodes
     Relation,
     AnyRelation,
     Scan,
@@ -69,8 +71,9 @@ from marrow.expr.relations import (
     Join,
     in_memory_table,
     parquet_scan,
-    # Streaming execution (fat nodes; formerly executor.mojo)
-    Relation,
+    # Execution layer (operators built by Relation.open)
+    Operator,
+    AnyOperator,
     Exhausted,
     ExecutionContext,
     execute,

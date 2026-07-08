@@ -4,15 +4,13 @@
 
 ### Fixes
 
-- **Relational plans are reusable templates** (`marrow.expr.relations`): the fat
-  nodes carried mutable execution cursors (scan offset, built hash index,
-  grouper, emitted flag) shared through `AnyRelation`'s `ArcPointer`, so a plan
-  was single-use and copying it aliased the cursors — draining one corrupted the
-  other. `AnyRelation.copy()` now deep-clones the sub-tree with every node's
-  execution state reset (sharing only the immutable leaf batches), and
-  `execute()` runs on a fresh clone, so a plan can be executed repeatedly and
-  copies never share a cursor. The aggregate grouper is built lazily per run so
-  it resets cleanly on clone.
+- **Relational plans are reusable templates** (`marrow.expr.relations`): the
+  relation nodes carried mutable execution cursors (scan offset, built hash
+  index, grouper, emitted flag) shared through `AnyRelation`'s `ArcPointer`, so a
+  plan was single-use and copying it aliased the cursors — draining one corrupted
+  the other. Plans are now immutable descriptions that `open()` into fresh
+  operators (see the IR/operator split under Refactors), so a plan can be
+  executed repeatedly and copies never share execution state.
 - **Correct grouped-aggregation output schema** (`marrow.expr.relations`): a
   multi-key `aggregate` named every key field `"key"` (duplicate names) and fell
   back to the *first* input column's dtype for any key. Each key field is now
@@ -24,6 +22,18 @@
 
 ### Refactors
 
+- **Relational engine split into descriptive IR nodes + pull-based operators**
+  (`marrow.expr.relations`): `Relation` nodes are now pure, immutable
+  descriptions (`kind`/`schema`/`open`) with no execution state, so copying an
+  `AnyRelation` is an O(1) share and a plan is an inspectable, rewritable,
+  reusable template. `Relation.open(ctx)` builds a matching `Operator`
+  (`InMemoryTableOp`/`FilterOp`/`ProjectOp`/`AggregateOp`/`JoinOp`) that owns all
+  mutable state (scan offset, built hash index, grouper, child operators);
+  `execute(plan)` opens a fresh operator tree and drains it, so the plan is never
+  mutated and runs repeatedly or concurrently. This supersedes the reset-on-copy
+  fat-node mechanism — plan reusability now falls out of node immutability for
+  free — and gives an optimizer a clean IR to rewrite. Fused path unchanged
+  (`query_streaming` 448 KB, interpreter DCE'd).
 - **The value box erases behind `Value`** (`marrow.expr.values`): `to_array` and
   `field_name` moved onto the `Value` trait itself (the `NumericValue` /
   `BoolValue` / `StringValue` sub-traits default `to_array` via their fused
