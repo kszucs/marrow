@@ -15,8 +15,14 @@
   new `zstd`/`snappy` conda deps). Covers flat columns (all common primitives,
   string/binary), definition-level nullability, dictionary (RLE_DICTIONARY /
   PLAIN_DICTIONARY) and PLAIN encodings, v1 and v2 data pages, multiple row
-  groups, and struct nesting. List/map columns and struct-level nulls are not
-  yet supported (they raise a clear error). The reader mmaps the file, decodes
+  groups, and struct nesting. The reader additionally handles int8/16 &
+  uint8/16, temporal (date32, timestamp incl. nanosecond, time32/64),
+  binary/large variants, GZIP/LZ4_RAW compression, and single-level
+  List/LargeList columns (Dremel repetition levels). The writer emits multiple
+  row groups, per-column null-count statistics, and widens narrow ints. Map
+  columns, struct-level nulls, list/temporal writing, dictionary-encoding on
+  write, and min/max statistics are follow-ups (all raise a clear error where
+  unsupported). The reader mmaps the file, decodes
   fixed-width PLAIN pages straight into the output buffer (memcpy fast path),
   counts definition levels without materializing them for no-null columns, and
   uses a word-at-a-time bit-unpacker for RLE/dictionary streams — reading within

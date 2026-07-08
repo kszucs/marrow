@@ -426,6 +426,7 @@ struct ColumnMetaData(Copyable, Movable):
     var total_compressed_size: Int
     var data_page_offset: Int
     var dictionary_page_offset: Int  # -1 if absent
+    var null_count: Int  # -1 if unknown; written as Statistics.null_count
 
     def __init__(out self):
         self.type = -1
@@ -436,6 +437,7 @@ struct ColumnMetaData(Copyable, Movable):
         self.total_compressed_size = 0
         self.data_page_offset = 0
         self.dictionary_page_offset = -1
+        self.null_count = -1
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -491,6 +493,12 @@ struct ColumnMetaData(Copyable, Movable):
         w.write_i64(Int64(self.total_compressed_size))
         last = w.write_field_begin(TC_I64, 9, last)
         w.write_i64(Int64(self.data_page_offset))
+        if self.null_count >= 0:
+            # Statistics (field 12) with only null_count (field 3) populated
+            last = w.write_field_begin(TC_STRUCT, 12, last)
+            _ = w.write_field_begin(TC_I64, 3, 0)
+            w.write_i64(Int64(self.null_count))
+            w.write_field_stop()
         w.write_field_stop()
 
 
