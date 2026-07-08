@@ -144,11 +144,11 @@ struct DynValue(
         return self._name
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
-        """Evaluate against *batch*, resolving named ``col(...)`` references
-        against its schema first. This is the ``AnyValue``-box entry point (the
-        fused/streaming relations call it directly), so the executor's separate
-        ``resolve_names`` pass is folded in here."""
-        return self.resolve_names(batch.schema).eval(batch)
+        """Evaluate against *batch*. This is the ``AnyValue``-box entry point the
+        fused/streaming relations call per morsel; ``eval`` resolves named
+        ``col(...)`` references inline (a per-column schema lookup, no tree copy),
+        so there is no per-morsel ``resolve_names`` reconstruction."""
+        return self.eval(batch)
 
     def field_name(self) -> String:
         """Output column name (the LOAD name; empty for computed nodes)."""
@@ -186,6 +186,14 @@ struct DynValue(
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
+            # Named LOADs resolve their position by name here (one schema lookup
+            # per column reference, no tree copy); positional LOADs (from
+            # col(index) / bound keys) use kind_data directly.
+            if self._name.byte_length() > 0:
+                var idx = batch.schema.get_field_index(self._name)
+                if idx == -1:
+                    raise Error("eval: column '" + self._name + "' not found")
+                return batch.columns[idx].copy()
             return batch.columns[Int(self._kind_data)].copy()
         elif self._tag == LITERAL:
             return self._value.value().repeat(batch.num_rows())
