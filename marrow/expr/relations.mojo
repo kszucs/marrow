@@ -16,7 +16,7 @@ so the plan itself is never mutated — run it repeatedly or concurrently.
 
 Concrete nodes / operators: ``InMemoryTable``/``InMemoryTableProcessor``,
 ``Filter``/``FilterProcessor``, ``Project``/``ProjectProcessor``, ``Aggregate``/``AggregateProcessor``,
-``Join``/``JoinProcessor``, ``ParquetScan``/``ParquetScanProcessor``, ``Scan`` (unbound leaf).
+``Join``/``JoinProcessor``, ``ParquetScan``/``ParquetScanProcessor``.
 
 Plan-building API
 -----------------
@@ -40,8 +40,8 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
+from ..kernels.execution import ExecutionContext
 from .execution import (
-    ExecutionContext,
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
     InMemoryTableProcessor,
@@ -265,11 +265,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                     fields.append(Field(funcs[i], AnyDataType(float64)))
         var out_schema = Schema(fields=fields^)
 
-        # Key struct fields (first len(keys) output fields) + value accumulator
-        # dtypes (the input dtype of each aggregated value expression).
-        var key_fields = List[Field]()
-        for i in range(len(resolved_keys)):
-            key_fields.append(out_schema.fields[i].copy())
+        # Value accumulator dtypes (the input dtype of each aggregated value
+        # expression). The key fields are the first len(keys) output fields —
+        # the processor derives them from the schema, so we don't store them.
         var value_dtypes = List[AnyDataType]()
         for i in range(len(resolved_values)):
             var dt = _value_dtype(resolved_values[i], input_schema)
@@ -289,10 +287,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             Aggregate(
                 input=self,
                 keys=key_exprs^,
-                agg_exprs=val_exprs^,
+                aggs=val_exprs^,
                 funcs=funcs.copy(),
                 value_dtypes=value_dtypes^,
-                key_fields=key_fields^,
                 schema=out_schema,
             )
         )
@@ -509,10 +506,9 @@ struct Aggregate(Relation):
 
     var input: AnyRelation
     var keys: List[AnyValue]
-    var agg_exprs: List[AnyValue]
+    var aggs: List[AnyValue]
     var funcs: List[String]
     var value_dtypes: List[AnyDataType]
-    var key_fields: List[Field]
     var _schema: Schema
 
     def __init__(
@@ -520,18 +516,16 @@ struct Aggregate(Relation):
         *,
         var input: AnyRelation,
         var keys: List[AnyValue],
-        var agg_exprs: List[AnyValue],
+        var aggs: List[AnyValue],
         var funcs: List[String],
         var value_dtypes: List[AnyDataType],
-        var key_fields: List[Field],
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
-        self.agg_exprs = agg_exprs^
+        self.aggs = aggs^
         self.funcs = funcs^
         self.value_dtypes = value_dtypes^
-        self.key_fields = key_fields^
         self._schema = schema^
 
     def schema(self) -> Schema:
@@ -541,10 +535,9 @@ struct Aggregate(Relation):
         return AggregateProcessor(
             input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
-            agg_exprs=self.agg_exprs.copy(),
+            aggs=self.aggs.copy(),
             funcs=self.funcs.copy(),
             value_dtypes=self.value_dtypes.copy(),
-            key_fields=self.key_fields.copy(),
             schema=Schema(copy=self._schema),
         )
 

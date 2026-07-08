@@ -19,7 +19,6 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 """
 
 from std.memory import ArcPointer
-from std.gpu.host import DeviceContext
 
 from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
@@ -50,32 +49,6 @@ struct Exhausted(TrivialRegisterPassable, Writable):
 
     def write_to(self, mut writer: Some[Writer]):
         writer.write("Exhausted")
-
-
-# ---------------------------------------------------------------------------
-# ExecutionContext — runtime configuration (morsel size, optional GPU)
-# ---------------------------------------------------------------------------
-
-
-struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
-    """Runtime configuration for query execution."""
-
-    var device_ctx: Optional[DeviceContext]
-    var num_cpu_workers: Int
-    var morsel_size: Int
-    var gpu_threshold: Int
-
-    def __init__(out self):
-        self.device_ctx = None
-        self.num_cpu_workers = 0
-        self.morsel_size = DEFAULT_MORSEL_SIZE
-        self.gpu_threshold = 1_000_000
-
-    def __init__(out self, ctx: DeviceContext, gpu_threshold: Int = 1_000_000):
-        self.device_ctx = ctx
-        self.num_cpu_workers = 0
-        self.morsel_size = DEFAULT_MORSEL_SIZE
-        self.gpu_threshold = gpu_threshold
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +292,7 @@ struct AggregateProcessor(Processor):
 
     var input: AnyProcessor
     var keys: List[AnyValue]
-    var agg_exprs: List[AnyValue]
-    var key_fields: List[dt.Field]
+    var aggs: List[AnyValue]
     var _schema: Schema
     var _grouper: HashGrouper
     var _emitted: Bool
@@ -330,22 +302,28 @@ struct AggregateProcessor(Processor):
         *,
         var input: AnyProcessor,
         var keys: List[AnyValue],
-        var agg_exprs: List[AnyValue],
+        var aggs: List[AnyValue],
         var funcs: List[String],
         var value_dtypes: List[dt.AnyDataType],
-        var key_fields: List[dt.Field],
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
-        self.agg_exprs = agg_exprs^
-        self.key_fields = key_fields^
+        self.aggs = aggs^
         self._schema = schema^
         self._grouper = HashGrouper(funcs^, value_dtypes^)
         self._emitted = False
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
+
+    def _key_fields(self) -> List[dt.Field]:
+        # The output schema is key fields followed by aggregate fields, so the
+        # first len(keys) fields are the group keys.
+        var fields = List[dt.Field]()
+        for i in range(len(self.keys)):
+            fields.append(self._schema.fields[i].copy())
+        return fields^
 
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
@@ -354,12 +332,10 @@ struct AggregateProcessor(Processor):
             try:
                 var batch = self.input.pull()
                 var key_children = List[AnyArray]()
-                var key_struct_fields = List[dt.Field]()
                 for i in range(len(self.keys)):
                     key_children.append(self.keys[i].to_array(batch))
-                    key_struct_fields.append(self.key_fields[i].copy())
                 var key_struct = StructArray(
-                    dtype=dt.struct_(key_struct_fields^),
+                    dtype=dt.struct_(self._key_fields()),
                     length=batch.num_rows(),
                     nulls=0,
                     offset=0,
@@ -368,8 +344,8 @@ struct AggregateProcessor(Processor):
                 )
                 var gids = self._grouper.consume_keys(key_struct)
                 var val_arrays = List[AnyArray]()
-                for i in range(len(self.agg_exprs)):
-                    val_arrays.append(self.agg_exprs[i].to_array(batch))
+                for i in range(len(self.aggs)):
+                    val_arrays.append(self.aggs[i].to_array(batch))
                 self._grouper.consume_values(gids, val_arrays)
             except Exhausted:
                 break
@@ -377,7 +353,7 @@ struct AggregateProcessor(Processor):
         # The grouper generates its own aggregate column names (col{i}_{func}).
         # Re-label with the plan's declared schema so plan.schema() matches the
         # executed output exactly (columns are in the same key-then-agg order).
-        var raw = self._grouper.finish(self.key_fields)
+        var raw = self._grouper.finish(self._key_fields())
         var cols = List[AnyArray]()
         for ref c in raw.columns:
             cols.append(c.copy())

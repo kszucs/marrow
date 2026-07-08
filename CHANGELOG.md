@@ -22,6 +22,12 @@
 
 ### Refactors
 
+- **Aggregate field cleanup + single `ExecutionContext`** (`marrow.expr`):
+  `agg_exprs` renamed to `aggs`; the redundant `key_fields` field dropped (the
+  key fields are the first `len(keys)` output-schema fields, so the processor
+  derives them); and the unused expr-local `ExecutionContext` removed in favour
+  of `marrow.kernels.execution.ExecutionContext` — one context type, threaded
+  through `to_processor(ctx)` / `execute(ctx)`.
 - **`Relation.open()` renamed to `to_processor()`** (`marrow.expr`): it converts a
   descriptive IR node into its executing `Processor`, matching the
   `.to_<type>()` convention.

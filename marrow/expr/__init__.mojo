@@ -62,12 +62,12 @@ from .dynamic import (
     IF_ELSE,
     LENGTH,
 )
+from ..kernels.execution import ExecutionContext
 from .execution import (
     # Execution layer (processors built by Relation.to_processor)
     Processor,
     AnyProcessor,
     Exhausted,
-    ExecutionContext,
 )
 from .relations import (
     # Descriptive IR nodes
