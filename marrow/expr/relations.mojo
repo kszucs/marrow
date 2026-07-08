@@ -85,17 +85,8 @@ from marrow.kernels.join import (
     JOIN_FULL,
     JOIN_SEMI,
     JOIN_ANTI,
-    JOIN_CROSS,
-    JOIN_MARK,
-    JOIN_SINGLE,
     JOIN_ALL,
     JOIN_ANY,
-    JOIN_ASOF,
-    JOIN_ALGO_AUTO,
-    JOIN_ALGO_HASH,
-    JOIN_ALGO_SORT_MERGE,
-    JOIN_ALGO_PIECEWISE,
-    JOIN_ALGO_GRACE_HASH,
 )
 
 
@@ -455,7 +446,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         right_on: List[DynValue],
         how: UInt8 = JOIN_INNER,
         strictness: UInt8 = JOIN_ALL,
-        algorithm: UInt8 = JOIN_ALGO_AUTO,
     ) raises -> AnyRelation:
         """Hash join on equijoin key expressions."""
         if len(left_on) != len(right_on):
@@ -476,7 +466,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var fields = List[Field]()
         for ref f in left_schema.fields:
             fields.append(f.copy())
-        if how != JOIN_SEMI and how != JOIN_ANTI and how != JOIN_MARK:
+        if how != JOIN_SEMI and how != JOIN_ANTI:
             var left_names = List[String]()
             for ref f in left_schema.fields:
                 left_names.append(f.name)
