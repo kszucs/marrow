@@ -23,6 +23,14 @@ from ..dtypes import (
     float64,
     string,
     binary,
+    date32,
+    timestamp,
+    time32,
+    time64,
+    TimeUnit,
+    millisecond,
+    microsecond,
+    nanosecond,
 )
 from ..schema import Schema
 from ..arrays import AnyArray, StructArray
@@ -42,6 +50,11 @@ from .format import (
     CT_UTF8,
     CT_LIST,
     CT_MAP,
+    CT_DATE,
+    CT_TIME_MILLIS,
+    CT_TIME_MICROS,
+    CT_TIMESTAMP_MILLIS,
+    CT_TIMESTAMP_MICROS,
     CT_INT_8,
     CT_INT_16,
     CT_INT_32,
@@ -53,6 +66,9 @@ from .format import (
     LT_STRING,
     LT_LIST,
     LT_MAP,
+    LT_DATE,
+    LT_TIME,
+    LT_TIMESTAMP,
 )
 
 comptime NODE_LEAF: Int = 0
@@ -160,6 +176,24 @@ struct LeafColumn(Copyable, Movable):
         self.nullable = nullable
 
 
+def _time_unit(el: SchemaElement) -> TimeUnit:
+    """The Arrow TimeUnit for a temporal leaf (logical TimeUnit, else converted).
+    """
+    if el.logical_unit == 1:
+        return millisecond
+    elif el.logical_unit == 2:
+        return microsecond
+    elif el.logical_unit == 3:
+        return nanosecond
+    elif (
+        el.converted_type == CT_TIMESTAMP_MILLIS
+        or el.converted_type == CT_TIME_MILLIS
+    ):
+        return millisecond
+    else:
+        return microsecond
+
+
 def _leaf_arrow_dtype(el: SchemaElement) raises -> AnyDataType:
     """Arrow value type for a Parquet leaf `SchemaElement`."""
     var pt = el.type
@@ -168,7 +202,11 @@ def _leaf_arrow_dtype(el: SchemaElement) raises -> AnyDataType:
     if pt == PT_BOOLEAN:
         return bool_
     elif pt == PT_INT32:
-        if ct == CT_INT_8:
+        if ct == CT_DATE or lt == LT_DATE:
+            return date32()
+        elif ct == CT_TIME_MILLIS or lt == LT_TIME:
+            return time32(millisecond)
+        elif ct == CT_INT_8:
             return int8
         elif ct == CT_INT_16:
             return int16
@@ -181,7 +219,17 @@ def _leaf_arrow_dtype(el: SchemaElement) raises -> AnyDataType:
         else:
             return int32
     elif pt == PT_INT64:
-        if ct == CT_UINT_64:
+        if (
+            ct == CT_TIMESTAMP_MILLIS
+            or ct == CT_TIMESTAMP_MICROS
+            or (lt == LT_TIMESTAMP)
+        ):
+            return timestamp(
+                _time_unit(el), "UTC" if el.logical_utc else String("")
+            )
+        elif ct == CT_TIME_MICROS or lt == LT_TIME:
+            return time64(_time_unit(el))
+        elif ct == CT_UINT_64:
             return uint64
         else:
             return int64

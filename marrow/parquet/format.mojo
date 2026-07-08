@@ -129,6 +129,8 @@ struct SchemaElement(Copyable, Movable):
     var precision: Int
     var field_id: Int
     var logical_type: Int  # LT_* union member id, -1 if absent
+    var logical_unit: Int  # TimeUnit for TIMESTAMP/TIME: 1=ms 2=us 3=ns, else -1
+    var logical_utc: Bool  # isAdjustedToUTC for TIMESTAMP/TIME
 
     def __init__(out self):
         self.type = -1
@@ -141,6 +143,8 @@ struct SchemaElement(Copyable, Movable):
         self.precision = 0
         self.field_id = -1
         self.logical_type = -1
+        self.logical_unit = -1
+        self.logical_utc = False
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -170,7 +174,7 @@ struct SchemaElement(Copyable, Movable):
             elif fid == 9:
                 out.field_id = Int(r.read_i32())
             elif fid == 10:
-                out.logical_type = _read_union_tag(r)
+                _read_logical_type(r, out)
             else:
                 r.skip(ftype)
         return out^
@@ -197,21 +201,42 @@ struct SchemaElement(Copyable, Movable):
         w.write_field_stop()
 
 
-def _read_union_tag[
+def _read_logical_type[
     o: Origin[mut=False]
-](mut r: CompactReader[o]) raises -> Int:
-    """A Thrift union is a struct with a single set field; return that field id
-    and skip its value."""
-    var tag = -1
+](mut r: CompactReader[o], mut out: SchemaElement) raises:
+    """Parse the `LogicalType` union into `out.logical_type`, and for TIMESTAMP /
+    TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`."""
     var last = 0
     while True:
         var ftype, fid = r.read_field_header(last)
         if ftype == TC_STOP:
             break
         last = fid
-        tag = fid
-        r.skip(ftype)
-    return tag
+        out.logical_type = fid
+        if fid == LT_TIMESTAMP or fid == LT_TIME:
+            # TimestampType/TimeType = {1: bool isAdjustedToUTC, 2: TimeUnit unit}
+            var l2 = 0
+            while True:
+                var ft2, fid2 = r.read_field_header(l2)
+                if ft2 == TC_STOP:
+                    break
+                l2 = fid2
+                if fid2 == 1:
+                    out.logical_utc = r.read_bool(ft2)
+                elif fid2 == 2:
+                    # TimeUnit union: the single set field id is the unit
+                    var l3 = 0
+                    while True:
+                        var ft3, fid3 = r.read_field_header(l3)
+                        if ft3 == TC_STOP:
+                            break
+                        l3 = fid3
+                        out.logical_unit = fid3
+                        r.skip(ft3)
+                else:
+                    r.skip(ft2)
+        else:
+            r.skip(ftype)
 
 
 # ---------------------------------------------------------------------------

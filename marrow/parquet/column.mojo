@@ -20,8 +20,12 @@ from ..dtypes import (
     BinaryType,
     LargeBinaryType,
     bool_,
+    int8,
+    int16,
     int32,
     int64,
+    uint8,
+    uint16,
     uint32,
     uint64,
     float32,
@@ -50,16 +54,25 @@ trait LeafBuilder(ImplicitlyDeletable, Movable):
         ...
 
 
-struct PrimitiveLeafBuilder[dt: DType](LeafBuilder):
-    """Fixed-width values decoded straight into a contiguous buffer. Contiguous
-    all-present PLAIN pages are a single memcpy; nulls/dictionary scatter."""
+struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
+    LeafBuilder
+):
+    """Fixed-width values decoded straight into a contiguous buffer.
+
+    `phys_dt` is the Parquet physical width read from the file, `store_dt` the
+    Arrow storage width. When they match (the common case, incl. temporal types)
+    a whole all-present PLAIN page is one memcpy; when they differ (int8/16 stored
+    as physical INT32) each value is read wide and narrowed.
+    """
+
+    comptime SAME = Self.store_dt == Self.phys_dt
 
     var dtype: AnyDataType
     var max_def: Int
     var values: Buffer[mut=True]
     var bitmap: Bitmap[mut=True]
     var has_validity: Bool
-    var dict: List[Scalar[Self.dt]]
+    var dict: List[Scalar[Self.store_dt]]
     var wpos: Int
     var null_count: Int
 
@@ -67,42 +80,58 @@ struct PrimitiveLeafBuilder[dt: DType](LeafBuilder):
         self.dtype = leaf.dtype.copy()
         self.max_def = leaf.max_def
         self.has_validity = leaf.max_def >= 1
-        self.values = Buffer.alloc_uninit[Self.dt](num_rows)
+        self.values = Buffer.alloc_uninit[Self.store_dt](num_rows)
         self.bitmap = Bitmap[mut=True].alloc_zeroed(
             num_rows if self.has_validity else 0
         )
-        self.dict = List[Scalar[Self.dt]]()
+        self.dict = List[Scalar[Self.store_dt]]()
         self.wpos = 0
         self.null_count = 0
 
+    def _read(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.store_dt]:
+        return read_fixed_le[Self.phys_dt](span, off).cast[Self.store_dt]()
+
     def consume(mut self, var page: Page) raises:
-        comptime W = size_of[Scalar[Self.dt]]()
+        comptime PW = size_of[Scalar[Self.phys_dt]]()
         if page.kind == PAGEKIND_DICT:
-            self.dict.resize(unsafe_uninit_length=page.num_values)
-            memcpy(
-                dest=self.dict.unsafe_ptr(),
-                src=Span(page.body).unsafe_ptr().bitcast[Scalar[Self.dt]](),
-                count=page.num_values,
-            )
+            comptime if Self.SAME:
+                self.dict.resize(unsafe_uninit_length=page.num_values)
+                memcpy(
+                    dest=self.dict.unsafe_ptr(),
+                    src=Span(page.body)
+                    .unsafe_ptr()
+                    .bitcast[Scalar[Self.store_dt]](),
+                    count=page.num_values,
+                )
+            else:
+                var span = Span(page.body)
+                for i in range(page.num_values):
+                    self.dict.append(self._read(span, i * PW))
             return
 
         var vspan = page.values()
-        var vptr = self.values.view[Self.dt]().unsafe_ptr()
+        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if page.is_plain() and page.all_present():
-            memcpy(
-                dest=vptr + self.wpos,
-                src=vspan.unsafe_ptr().bitcast[Scalar[Self.dt]](),
-                count=page.num_values,
-            )
+            var start = self.wpos
+            comptime if Self.SAME:
+                memcpy(
+                    dest=vptr + start,
+                    src=vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
+                    count=page.num_values,
+                )
+                self.wpos += page.num_values
+            else:
+                for i in range(page.num_values):
+                    vptr[self.wpos] = self._read(vspan, i * PW)
+                    self.wpos += 1
             if self.has_validity:
-                self.bitmap.set_range(self.wpos, page.num_values, True)
-            self.wpos += page.num_values
+                self.bitmap.set_range(start, page.num_values, True)
         elif page.is_plain():
             var vi = 0
             for row in range(page.num_values):
                 if Int(page.def_levels[row]) == self.max_def:
-                    vptr[self.wpos] = read_fixed_le[Self.dt](vspan, vi)
-                    vi += W
+                    vptr[self.wpos] = self._read(vspan, vi)
+                    vi += PW
                     self.bitmap.set(self.wpos)
                 else:
                     vptr[self.wpos] = 0
@@ -314,6 +343,47 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         elif dt == float64:
             return self._build(
                 PrimitiveLeafBuilder[DType.float64](self.num_rows, leaf), codecs
+            )
+        elif dt == int8:
+            return self._build(
+                PrimitiveLeafBuilder[DType.int8, DType.int32](
+                    self.num_rows, leaf
+                ),
+                codecs,
+            )
+        elif dt == int16:
+            return self._build(
+                PrimitiveLeafBuilder[DType.int16, DType.int32](
+                    self.num_rows, leaf
+                ),
+                codecs,
+            )
+        elif dt == uint8:
+            return self._build(
+                PrimitiveLeafBuilder[DType.uint8, DType.int32](
+                    self.num_rows, leaf
+                ),
+                codecs,
+            )
+        elif dt == uint16:
+            return self._build(
+                PrimitiveLeafBuilder[DType.uint16, DType.int32](
+                    self.num_rows, leaf
+                ),
+                codecs,
+            )
+        elif dt.is_date32() or dt.is_time32():
+            return self._build(
+                PrimitiveLeafBuilder[DType.int32](self.num_rows, leaf), codecs
+            )
+        elif (
+            dt.is_timestamp()
+            or dt.is_time64()
+            or dt.is_date64()
+            or dt.is_duration()
+        ):
+            return self._build(
+                PrimitiveLeafBuilder[DType.int64](self.num_rows, leaf), codecs
             )
         elif dt == bool_:
             return self._build(BoolLeafBuilder(self.num_rows, leaf), codecs)
