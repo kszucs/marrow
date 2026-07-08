@@ -35,7 +35,36 @@ from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
 
 from marrow.arrays import AnyArray, StructArray
-from marrow.dtypes import AnyDataType, Field, float64, struct_
+from marrow.builders import PrimitiveBuilder, BoolBuilder, StringBuilder
+from marrow.dtypes import (
+    AnyDataType,
+    Field,
+    PrimitiveType,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+    struct_,
+)
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
 from marrow.kernels.concat import concat
@@ -121,6 +150,72 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
         self.num_cpu_workers = 0
         self.morsel_size = DEFAULT_MORSEL_SIZE
         self.gpu_threshold = gpu_threshold
+
+
+# ---------------------------------------------------------------------------
+# _concat — a CLOSED, flat-only column concat for collect()
+# ---------------------------------------------------------------------------
+#
+# `collect()` merges morsels by concatenating each column. The general
+# `marrow.kernels.concat` routes through `AnyBuilder(dtype)` — an open switch
+# that instantiates a builder for *every* dtype (incl. nested) whenever it is
+# reachable, so it is never DCE'd and inflates the binary ~6x (measured). The
+# relational layer's projections produce only flat columns, so `collect()` uses
+# this local concat instead: typed builders for primitive/bool/string and a
+# `raise` otherwise (like `filter`), keeping the fused path closed and small.
+
+
+def _concat_primitive[
+    T: PrimitiveType
+](arrays: List[AnyArray]) raises -> AnyArray:
+    var total = 0
+    for ref a in arrays:
+        total += a.length()
+    var builder = PrimitiveBuilder[T](
+        arrays[0].as_primitive[T]().dtype.copy(), total
+    )
+    for ref a in arrays:
+        builder.extend(a.as_primitive[T]())
+    return builder.finish().to_any()
+
+
+def _concat(arrays: List[AnyArray]) raises -> AnyArray:
+    """Concatenate same-dtype flat columns; raises on nested/other dtypes."""
+    var dtype = arrays[0].dtype()
+    if dtype == bool_:
+        var builder = BoolBuilder(capacity=0)
+        for ref a in arrays:
+            builder.extend(a.as_bool())
+        return builder.finish().to_any()
+    elif dtype == int8:
+        return _concat_primitive[Int8Type](arrays)
+    elif dtype == int16:
+        return _concat_primitive[Int16Type](arrays)
+    elif dtype == int32:
+        return _concat_primitive[Int32Type](arrays)
+    elif dtype == int64:
+        return _concat_primitive[Int64Type](arrays)
+    elif dtype == uint8:
+        return _concat_primitive[UInt8Type](arrays)
+    elif dtype == uint16:
+        return _concat_primitive[UInt16Type](arrays)
+    elif dtype == uint32:
+        return _concat_primitive[UInt32Type](arrays)
+    elif dtype == uint64:
+        return _concat_primitive[UInt64Type](arrays)
+    elif dtype == float16:
+        return _concat_primitive[Float16Type](arrays)
+    elif dtype == float32:
+        return _concat_primitive[Float32Type](arrays)
+    elif dtype == float64:
+        return _concat_primitive[Float64Type](arrays)
+    elif dtype.is_string():
+        var builder = StringBuilder(capacity=0)
+        for ref a in arrays:
+            builder.extend(a.as_string())
+        return builder.finish().to_any()
+    else:
+        raise Error("collect: unsupported column dtype ", dtype)
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +344,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             var col_arrays = List[AnyArray](capacity=len(batches))
             for b in range(len(batches)):
                 col_arrays.append(batches[b].columns[c].copy())
-            result_cols.append(concat(col_arrays))
+            result_cols.append(_concat(col_arrays))
         return RecordBatch(schema=Schema(copy=schema), columns=result_cols^)
 
     # --- plan-building API ---
