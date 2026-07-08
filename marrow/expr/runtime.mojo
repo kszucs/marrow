@@ -1,21 +1,12 @@
 """Type-erased runtime expression nodes for the marrow expression system.
 
-``DynValue`` is the runtime counterpart to the comptime-typed layer in
-``marrow.expr.values``.  It exists so that query plans can be built and
-executed without knowing concrete comptime types — this is what the Python
-bindings (and any other runtime-typed caller) drive.  A single ``DynValue`` node
-carries a tag plus its child args, and dispatches its own execution by tag in
-``eval()`` — there is no separate "processor" hierarchy mirroring the tree.
-
-A comptime-typed node from ``marrow.expr.values`` can be boxed into an
-``DynValue`` via the ``DynValue(value)`` constructor (tag ``FUSED``); ``eval()``/
-``dtype()``/``write_to()`` on a boxed node all delegate back to the concrete
-comptime node through trampolines, so a fused subtree keeps its single fused
-pass even when driven through this type-erased path. This is the one
-dependency between the two ``marrow.expr`` / ``marrow.expr`` packages — ``dyn``
-imports the ``NumericValue``/``BoolValue`` traits from ``aot.values`` to
-declare the boxing constructors' generic bounds; ``aot`` never imports
-anything from ``dyn``.
+``DynValue`` is the runtime counterpart to the comptime-typed nodes in
+``marrow.expr.values``.  It lets query plans be built and executed without
+knowing concrete comptime types — this is what the Python bindings (and any
+other runtime-typed caller) drive.  A single ``DynValue`` node carries a tag
+plus its child args, and dispatches its own execution by tag in ``eval()``.
+To mix it with fused values, box it into ``AnyValue`` (``marrow.expr.values``)
+— the one box the relational layer holds.
 
 Factory functions
 -----------------
@@ -37,17 +28,15 @@ NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
 CAST - Type cast (not yet implemented — see DynValue.eval)
-FUSED - Carries a boxed comptime-typed node (see marrow.expr.values)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
-from std.memory import ArcPointer
 from marrow.arrays import AnyArray
 from marrow.dtypes import AnyDataType, NumericType
 from marrow.scalars import AnyScalar, PrimitiveScalar
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import Value, NumericValue, BoolValue
+from marrow.expr.values import Value
 from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from marrow.kernels.boolean import and_, or_, not_, is_null, select
 from marrow.kernels.compare import (
@@ -85,66 +74,7 @@ comptime NOT: UInt8 = 16
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime CAST: UInt8 = 19
-comptime FUSED: UInt8 = 20
-"""Tag for DynValue nodes that carry a boxed comptime-typed node in _fused."""
-comptime LENGTH: UInt8 = 21
-
-
-# ---------------------------------------------------------------------------
-# Trampoline helpers for boxing comptime-typed expressions into DynValue
-# ---------------------------------------------------------------------------
-
-
-def _fused_dtype_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
-    """Thin trampoline: delegate dtype() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].dtype()
-
-
-def _fused_write_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType],) -> String:
-    """Thin trampoline: delegate write_to() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    var s = String()
-    typed[].write_to(s)
-    return s^
-
-
-def _fused_eval_tramp[
-    T: NumericValue
-](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    """Thin trampoline: delegate execute() to a concrete NumericValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].execute(batch).to_any()
-
-
-def _fused_dtype_tramp_bool[
-    T: BoolValue
-](ptr: ArcPointer[NoneType],) -> Optional[AnyDataType]:
-    """Thin trampoline: delegate dtype() to a concrete BoolValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].dtype()
-
-
-def _fused_write_tramp_bool[
-    T: BoolValue
-](ptr: ArcPointer[NoneType],) -> String:
-    """Thin trampoline: delegate write_to() to a concrete BoolValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    var s = String()
-    typed[].write_to(s)
-    return s^
-
-
-def _fused_eval_tramp_bool[
-    T: BoolValue
-](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    """Thin trampoline: delegate execute() to a concrete BoolValue."""
-    var typed = rebind[ArcPointer[T]](ptr)
-    return typed[].execute(batch).to_any()
+comptime LENGTH: UInt8 = 20
 
 
 # ---------------------------------------------------------------------------
@@ -172,14 +102,6 @@ struct DynValue(
     var _kind_data: UInt8
     var _value: Optional[AnyScalar]
     var _name: String
-    var _fused: Optional[ArcPointer[NoneType]]
-    var _virt_fused_dtype: def(ArcPointer[NoneType]) thin -> Optional[
-        AnyDataType
-    ]
-    var _virt_fused_write: def(ArcPointer[NoneType]) thin -> String
-    var _virt_fused_eval: def(
-        ArcPointer[NoneType], RecordBatch
-    ) thin raises -> AnyArray
 
     def __init__(
         out self,
@@ -194,47 +116,6 @@ struct DynValue(
         self._kind_data = kind_data
         self._value = value.copy()
         self._name = name^
-        self._fused = None
-        self._virt_fused_dtype = Self._tramp_fused_dtype_default
-        self._virt_fused_write = Self._tramp_fused_write_default
-        self._virt_fused_eval = Self._tramp_fused_eval_default
-
-    def __init__[T: NumericValue](out self, value: T):
-        """Box a comptime-typed expression node into a runtime DynValue.
-
-        The resulting ``DynValue`` carries the comptime node in its ``_fused``
-        slot, so ``dtype()``, ``write_to()``, and ``eval()`` all delegate to
-        the comptime-typed implementation — including a single fused pass
-        for ``eval()``, with no intermediate arrays.
-        """
-        var ptr = ArcPointer[T](value.copy())
-        self._tag = FUSED
-        self._args = List[DynValue]()
-        self._kind_data = 0
-        self._value = None
-        self._name = String()
-        self._fused = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_fused_dtype = _fused_dtype_tramp[T]
-        self._virt_fused_write = _fused_write_tramp[T]
-        self._virt_fused_eval = _fused_eval_tramp[T]
-
-    def __init__[T: BoolValue](out self, value: T):
-        """Box a comptime-typed predicate node (``Lt``/``Gt``/``Eq``) into a
-        runtime ``DynValue``. Mirrors the ``NumericValue`` overload above — same
-        ``FUSED`` tag, same trampoline mechanism, just a ``BoolValue``
-        trampoline set so ``eval()`` produces a bit-packed ``BoolArray``
-        instead of a ``PrimitiveArray``.
-        """
-        var ptr = ArcPointer[T](value.copy())
-        self._tag = FUSED
-        self._args = List[DynValue]()
-        self._kind_data = 0
-        self._value = None
-        self._name = String()
-        self._fused = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_fused_dtype = _fused_dtype_tramp_bool[T]
-        self._virt_fused_write = _fused_write_tramp_bool[T]
-        self._virt_fused_eval = _fused_eval_tramp_bool[T]
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
@@ -244,32 +125,12 @@ struct DynValue(
         self._kind_data = copy._kind_data
         self._value = copy._value.copy()
         self._name = copy._name.copy()
-        self._fused = copy._fused
-        self._virt_fused_dtype = copy._virt_fused_dtype
-        self._virt_fused_write = copy._virt_fused_write
-        self._virt_fused_eval = copy._virt_fused_eval
 
     # Explicit (empty) destructor so this self-referential struct
     # (`_args: List[DynValue]`) is ImplicitlyDeletable; fields are still destroyed
     # automatically after the body runs.
     def __del__(deinit self):
         pass
-
-    @staticmethod
-    def _tramp_fused_dtype_default(
-        ptr: ArcPointer[NoneType],
-    ) -> Optional[AnyDataType]:
-        return None
-
-    @staticmethod
-    def _tramp_fused_write_default(ptr: ArcPointer[NoneType]) -> String:
-        return String()
-
-    @staticmethod
-    def _tramp_fused_eval_default(
-        ptr: ArcPointer[NoneType], batch: RecordBatch
-    ) raises -> AnyArray:
-        raise Error("DynValue.eval: FUSED tag set without a bound comptime node")
 
     def kind(self) -> UInt8:
         return self._tag
@@ -312,11 +173,6 @@ struct DynValue(
         return result^
 
     def dtype(self) -> Optional[AnyDataType]:
-        if self._fused:
-            try:
-                return self._virt_fused_dtype(self._fused[])
-            except:
-                return None
         if self._tag == LITERAL:
             return self._value.value().type()
         return None
@@ -328,16 +184,8 @@ struct DynValue(
         return result^
 
     def eval(self, batch: RecordBatch) raises -> AnyArray:
-        """Evaluate this expression tree against *batch*, dispatching on tag.
-
-        A boxed comptime-typed node (``FUSED`` tag) delegates to its own
-        ``execute()`` via a trampoline, running as a single fused pass with
-        no intermediate arrays even though it arrived through this
-        type-erased tree.
-        """
-        if self._fused:
-            return self._virt_fused_eval(self._fused.value(), batch)
-        elif self._tag == LOAD:
+        """Evaluate this expression tree against *batch*, dispatching on tag."""
+        if self._tag == LOAD:
             return batch.columns[Int(self._kind_data)].copy()
         elif self._tag == LITERAL:
             return self._value.value().repeat(batch.num_rows())
@@ -440,9 +288,7 @@ struct DynValue(
             return String()
 
     def write_to[W: Writer](self, mut writer: W):
-        if self._fused:
-            writer.write(self._virt_fused_write(self._fused.value()))
-        elif self._tag == LOAD:
+        if self._tag == LOAD:
             writer.write(t"input({self._kind_data})")
         elif self._tag == LITERAL:
             writer.write("literal(...)")

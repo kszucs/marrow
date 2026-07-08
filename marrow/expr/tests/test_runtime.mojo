@@ -38,7 +38,6 @@ from marrow.expr import (
     IS_NULL,
     IF_ELSE,
     CAST,
-    FUSED,
     LENGTH,
 )
 

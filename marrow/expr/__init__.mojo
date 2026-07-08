@@ -54,7 +54,6 @@ from marrow.expr.runtime import (
     IS_NULL,
     IF_ELSE,
     CAST,
-    FUSED,
     LENGTH,
 )
 from marrow.expr.relations import (
