@@ -1,12 +1,23 @@
 # `marrow.expr` unification — merging `aot` + `dyn` into one runtime layer
 
-**Status: relocation done; consolidation fold in progress.** Phases 1–2 (value
-box + streaming fat-nodes) are verified; Phase 3's *relocation* into a single
-`marrow/expr/` package is complete and green (**153 tests passing**, `aot`/`dyn`
-deleted, all builds pass). Remaining: the *consolidation fold* — collapse the
-value layer (`Expr`→`DynValue`) and the relational layer
-(`executor`+`plan`+`streaming` → one streaming `relations.mojo`). See *Phase 3*
-below.
+**Status: consolidation complete (naming cleanup optional).** Delivered across
+five commits on `deepseek`:
+
+1. `aot`+`dyn` merged into one `marrow/expr/` package.
+2. `Expr` merged into `DynValue` — one interpreter node.
+3. `executor.mojo` + `Planner` deleted — processors folded into self-executing
+   fat relation nodes.
+4. Relation nodes migrated to hold `AnyValue` — fused and Python-built
+   (`DynValue`) values interchange through one value box.
+5. `streaming.mojo` deleted — its fat nodes were a duplicate; the relational
+   execution is now a single file (`plan.mojo`).
+
+Net: one value box (`AnyValue`), one interpreter (`DynValue`), one relational
+layer (`plan.mojo`, self-executing fat nodes, no `Planner`). Full suite green
+(123 passed, 18 skipped). Optional remaining cleanup: rename `plan.mojo` →
+`relations.mojo` (moving `Table`/`col` out of today's `relations.mojo` into
+`values.mojo` and dropping the typed `Project[*Es]`/`Filter`), and the
+`marrow.kernels.concat` closedness follow-up noted below.
 
 **Value-model clarification (confirmed with the user).** `DynValue` is what the
 **Python bindings build** — it *is* the reworked `Expr` (there is no separate
