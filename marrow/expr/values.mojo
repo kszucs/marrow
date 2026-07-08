@@ -56,8 +56,6 @@ from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
 from marrow.tabular import RecordBatch
-from marrow.expr.relations import Column
-from marrow.expr.dynamic import DynValue
 
 
 # ---------------------------------------------------------------------------
@@ -72,18 +70,34 @@ trait Value(
     Movable,
     Writable,
 ):
-    """Interface every expression node must implement.
+    """Interface every expression node must implement — and the one interface
+    ``AnyValue`` erases behind.
 
-    This is the single canonical trait implemented by both the comptime-typed
-    expressions in this module and the type-erased ``DynValue`` in ``dynamic.mojo``.
+    Implemented by the comptime-typed expressions in this module and the
+    type-erased ``DynValue`` in ``dynamic.mojo``. Two members make a value
+    boxable into ``AnyValue``:
 
-    ``dtype()`` is declared by the ``NumericValue`` / ``StringValue`` sub-traits
-    (which supply a default implementation); ``write_to()`` comes from the
-    inherited ``Writable`` requirement. Declaring them here too would make calls
-    on a generic ``Value`` ambiguous between the base and sub-trait candidates.
+    - ``to_array(batch)`` — evaluate against a batch and erase to ``AnyArray``.
+      A bare requirement here; the ``NumericValue`` / ``BoolValue`` /
+      ``StringValue`` sub-traits each supply a default that runs their fused
+      ``execute()`` and calls ``.to_any()``.
+    - ``field_name()`` — the output column name, empty for anonymous computed
+      values (the default below). The named column leaves override it. It is a
+      method rather than a ``comptime name`` alias because a ``StringLiteral``
+      type parameter only converts to ``String`` reliably from inside the
+      concrete node's own method body (see ``docs/aot-relations-design.md``).
+
+    ``dtype()`` is declared by the sub-traits (which supply a default), not here;
+    ``write_to()`` comes from the inherited ``Writable`` requirement. Declaring
+    those here too would make calls on a generic ``Value`` ambiguous between the
+    base and sub-trait candidates.
     """
 
-    pass
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        ...
+
+    def field_name(self) -> String:
+        return String()
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +168,10 @@ trait NumericValue(Value):
         )
 
     # Default Value trait implementation (write_to comes from Writable)
+
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        """Materialise the fused result and erase to ``AnyArray``."""
+        return self.execute(batch).to_any()
 
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
@@ -300,6 +318,12 @@ trait BoolValue(Value):
         """Return the output data type (always bool)."""
         return Optional[AnyDataType](dt.bool_)
 
+    # to_array materialises the predicate's BoolArray; field_name defaults to
+    # anonymous (Value's default).
+
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        return self.execute(batch).to_any()
+
 
 # ---------------------------------------------------------------------------
 # Lt — comptime-typed binary less-than
@@ -419,6 +443,10 @@ trait StringValue(Value):
 
     # Default Value trait implementation (write_to comes from Writable)
 
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        """Materialise the string result and erase to ``AnyArray``."""
+        return self.execute(batch).to_any()
+
     def dtype(self) -> Optional[AnyDataType]:
         """Return the output data type."""
         return Optional[AnyDataType](dt.string)
@@ -523,48 +551,23 @@ def col[T: dt.StringLikeType](var name: String, dtype: T) -> rel.StringColumn:
 # AnyValue — the universal, type-erased value box
 # ===========================================================================
 #
-# Wraps any concrete value node behind a thin trampoline exposing only
-# ``to_array(batch)`` (no tag, no ``eval()`` switch): the fusable comptime nodes
-# above (``Column``/``Add``/``Gt``) *and* the runtime ``DynValue`` interpreter.
-# The fused-vs-interpreted choice is which node you box — boxing a ``DynValue``
-# links the interpreter; a program that only boxes fused nodes leaves it
-# dead-code-eliminated and stays ~250 KB. The relational layer holds
-# ``List[AnyValue]``.
+# Wraps any ``Value`` node behind a thin trampoline exposing only
+# ``to_array(batch)`` + ``field_name()`` (no tag, no ``eval()`` switch): the
+# named column leaves and fused expressions/predicates *and* the runtime
+# ``DynValue`` interpreter. The fused-vs-interpreted choice is which node you box
+# — boxing a ``DynValue`` links the interpreter; a program that only boxes fused
+# nodes leaves it dead-code-eliminated and stays ~250 KB. The relational layer
+# holds ``List[AnyValue]``.
 
 
-def _col_to_array_tramp[
-    V: Column
+def _value_to_array_tramp[
+    V: Value
 ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    var typed = rebind[ArcPointer[V]](ptr)
-    return typed[].to_array(batch)
+    return rebind[ArcPointer[V]](ptr)[].to_array(batch)
 
 
-def _col_name_tramp[V: Column](ptr: ArcPointer[NoneType]) -> String:
-    var typed = rebind[ArcPointer[V]](ptr)
-    return typed[].field_name()
-
-
-def _pred_to_array_tramp[
-    V: BoolValue
-](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    var typed = rebind[ArcPointer[V]](ptr)
-    return typed[].execute(batch).to_any()
-
-
-def _no_name_tramp(ptr: ArcPointer[NoneType]) -> String:
-    return String()
-
-
-def _dyn_to_array_tramp(
-    ptr: ArcPointer[NoneType], batch: RecordBatch
-) raises -> AnyArray:
-    var typed = rebind[ArcPointer[DynValue]](ptr)
-    return typed[].to_array(batch)
-
-
-def _dyn_name_tramp(ptr: ArcPointer[NoneType]) -> String:
-    var typed = rebind[ArcPointer[DynValue]](ptr)
-    return typed[].field_name()
+def _value_name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+    return rebind[ArcPointer[V]](ptr)[].field_name()
 
 
 def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -588,33 +591,16 @@ struct AnyValue(Copyable, Movable, Writable):
     var _write_to_str: def(ArcPointer[NoneType]) thin -> String
 
     @implicit
-    def __init__[V: Column](out self, value: V):
-        """Box a projected column (``NumericColumn`` / ``StringColumn``)."""
+    def __init__[V: Value](out self, value: V):
+        """Box any ``Value`` — a named column, a fused expression/predicate, or a
+        ``DynValue`` interpreter. The interpreter's code links only when a
+        ``DynValue`` is boxed here; otherwise it is dead-code-eliminated and the
+        fused-only path stays tiny."""
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._to_array = _col_to_array_tramp[V]
-        self._field_name = _col_name_tramp[V]
+        self._to_array = _value_to_array_tramp[V]
+        self._field_name = _value_name_tramp[V]
         self._write_to_str = _write_tramp[V]
-
-    @implicit
-    def __init__[V: BoolValue](out self, value: V):
-        """Box a fused predicate node (``Lt`` / ``Gt`` / ``Eq``)."""
-        var ptr = ArcPointer[V](value.copy())
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._to_array = _pred_to_array_tramp[V]
-        self._field_name = _no_name_tramp
-        self._write_to_str = _write_tramp[V]
-
-    @implicit
-    def __init__(out self, var value: DynValue):
-        """Box the runtime ``DynValue`` interpreter (what the Python bindings
-        build). Links its ``to_array`` only when constructed; otherwise it is
-        dead-code-eliminated and the fused-only path stays tiny."""
-        var ptr = ArcPointer[DynValue](value^)
-        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._to_array = _dyn_to_array_tramp
-        self._field_name = _dyn_name_tramp
-        self._write_to_str = _write_tramp[DynValue]
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self._to_array(self._boxed, batch)

@@ -1,7 +1,7 @@
 """Tests for the universal value box ``AnyValue`` in ``marrow.expr.values``.
 
-``AnyValue`` wraps any value node behind a ``to_array(batch)`` trampoline:
-- fusable comptime nodes (``Column``/``Add``/``Gt``) — the AOT path;
+``AnyValue`` wraps any ``Value`` node behind a ``to_array(batch)`` trampoline:
+- fused comptime nodes (named columns, ``Gt``/``Lt``/``Eq``) — the AOT path;
 - the runtime ``DynValue`` interpreter (built via ``col()`` + operators).
 
 The load-bearing property is that fused and interpreted values interchange

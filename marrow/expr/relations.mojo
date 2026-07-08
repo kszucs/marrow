@@ -77,7 +77,7 @@ from marrow.kernels.hashing import rapidhash
 from marrow.parquet import read_table
 from marrow.expr.values import AnyValue
 from marrow.expr.dynamic import DynValue, col, LOAD
-from marrow.expr.values import NumericValue, StringValue, Value
+from marrow.expr.values import NumericValue, StringValue
 from marrow.kernels.join import (
     JOIN_INNER,
     JOIN_LEFT,
@@ -887,31 +887,14 @@ def execute(
 # ===========================================================================
 
 
-trait Named:
-    """Trait for expression nodes with a compile-time column name (a method,
-    not a bare ``comptime name`` alias — a ``StringLiteral`` type parameter only
-    converts to ``String`` reliably from inside the concrete node's own method
-    body; see ``docs/aot-relations-design.md``)."""
-
-    def field_name(self) -> String:
-        ...
-
-
-trait Column(Named, Value):
-    """Base trait for the named leaf column nodes (``NumericColumn`` /
-    ``StringColumn``), unifying them behind ``field_name()`` and ``to_array()``
-    so a projection can assemble a heterogeneous column pack uniformly."""
-
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
-        """Execute this column against *batch* and erase to ``AnyArray``."""
-        ...
-
-
-struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
+struct NumericColumn[T: dt.NumericType](NumericValue):
     """Named typed numeric column reference — carries only its ``name`` (runtime
     field); the type parameter is just the dtype that drives the SIMD ``core``.
     The position is resolved by name against ``batch.schema`` at execution. Built
-    by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly."""
+    by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly.
+
+    ``to_array`` comes from ``NumericValue``'s default; only ``field_name`` is
+    overridden here (columns are named, unlike anonymous computed values)."""
 
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
@@ -935,17 +918,14 @@ struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
     def field_name(self) -> String:
         return self.name.copy()
 
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
-        return self.execute(batch).to_any()
-
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Col[", self.name, "]")
 
 
-struct StringColumn(Column, Named, StringValue):
+struct StringColumn(StringValue):
     """Named typed string column reference — the string counterpart of
     ``NumericColumn[T]`` (one type across all string columns; position resolved
-    by name)."""
+    by name). ``to_array`` comes from ``StringValue``'s default."""
 
     var name: String
 
@@ -964,9 +944,6 @@ struct StringColumn(Column, Named, StringValue):
 
     def field_name(self) -> String:
         return self.name.copy()
-
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
-        return self.execute(batch).to_any()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("StrCol[", self.name, "]")

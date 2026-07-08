@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds query_comptime.mojo, query_hybrid.mojo, and query_runtime.mojo,
+"""Builds query_streaming.mojo, query_dynvalue.mojo, and query_runtime.mojo,
 strips each, and reports a size/symbol-count comparison table plus a
 per-module symbol breakdown so regressions (or improvements) can be traced
 back to a specific package.
@@ -42,7 +42,7 @@ MODULE_BUCKETS = [
     "marrow::scalars",
     "marrow::buffers",
     "marrow::expr::values",
-    "marrow::expr::runtime",
+    "marrow::expr::dynamic",
     "marrow::expr::relations",
     "marrow::tabular",
     "marrow::c_data",
