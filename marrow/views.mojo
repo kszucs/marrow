@@ -72,6 +72,19 @@ def _pack_bools[
     return bits << iota[T, W]()
 
 
+@always_inline
+def load_word_le[
+    mut: Bool, //, o: Origin[mut=mut]
+](data: Span[UInt8, o], byte_idx: Int) -> UInt64:
+    """Unaligned little-endian 64-bit load from a byte span.
+
+    Confined to views.mojo so decode kernels (e.g. Parquet bit-unpacking) can do
+    wide word loads without calling `unsafe_ptr()` themselves. The caller
+    guarantees 8 readable bytes at `byte_idx` (mmap has trailing bytes; the
+    decompression scratch is padded)."""
+    return (data.unsafe_ptr() + byte_idx).bitcast[UInt64]()[0]
+
+
 # ---------------------------------------------------------------------------
 # BufferView — typed element view
 # ---------------------------------------------------------------------------

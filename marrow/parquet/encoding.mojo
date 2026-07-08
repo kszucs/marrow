@@ -14,6 +14,8 @@ ULEB128 header. `header & 1` selects the run kind:
                       LSB-first, `bit_width` bits each.
 """
 
+from ..views import load_word_le
+
 
 def bit_width(max_value: Int) -> Int:
     """Number of bits needed to represent values in `[0, max_value]`."""
@@ -42,13 +44,6 @@ def _read_varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
 
 
 @always_inline
-def _load_u64(data: Span[UInt8, _], byte_idx: Int) -> UInt64:
-    """Unaligned little-endian 64-bit load. Callers guarantee 8 readable bytes
-    at `byte_idx` (mmap has trailing bytes; scratch is padded)."""
-    return (data.unsafe_ptr() + byte_idx).bitcast[UInt64]()[0]
-
-
-@always_inline
 def _unpack8(
     data: Span[UInt8, _],
     byte_base: Int,
@@ -57,18 +52,22 @@ def _unpack8(
     maskv: SIMD[DType.uint64, 8],
 ) -> SIMD[DType.uint64, 8]:
     """Unpack 8 bit-packed values in one shot: one unaligned 64-bit load per
-    lane, then a *vector* shift + mask over all 8 lanes. `width <= 32` keeps the
-    top read bit (`7 + width`) inside the 64-bit word, so a single load per lane
-    covers every value. ~3x faster than the scalar word-at-a-time loop."""
-    var wbuf = InlineArray[UInt64, 8](fill=0)
-    var sbuf = InlineArray[UInt64, 8](fill=0)
+    lane, then a *vector* shift + mask over all 8 lanes. ~3x faster than the
+    scalar word-at-a-time loop.
 
+    Requires `width <= 32` so the top read bit (`7 + width`) stays inside the
+    64-bit word and a single load per lane covers every value — always true for
+    dictionary indices (`bit_width(dict_size)`) and definition/repetition
+    levels."""
+    debug_assert(
+        width <= 32, "_unpack8 requires width <= 32 (one 64-bit load per lane)"
+    )
+    var words = SIMD[DType.uint64, 8](0)
+    var shifts = SIMD[DType.uint64, 8](0)
     comptime for j in range(8):
         var ab = base_bit + j * width
-        wbuf[j] = _load_u64(data, byte_base + (ab >> 3))
-        sbuf[j] = UInt64(ab & 7)
-    var words = wbuf.unsafe_ptr().load[width=8](0)
-    var shifts = sbuf.unsafe_ptr().load[width=8](0)
+        words[j] = load_word_le(data, byte_base + (ab >> 3))
+        shifts[j] = UInt64(ab & 7)
     return (words >> shifts) & maskv
 
 
