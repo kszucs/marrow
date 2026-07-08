@@ -17,6 +17,7 @@ from .compression import Codecs
 from .schema import parquet_to_arrow
 from .format import read_footer
 from .column import ColumnReader
+from .nested import DecodedLeaf, LeveledColumnReader
 
 
 # ---------------------------------------------------------------------------
@@ -73,18 +74,27 @@ def read_table(path: String) raises -> Table:
     var codecs = Codecs()
     var batches = List[RecordBatch]()
     for ref rg in meta.row_groups:
-        var leaf_arrays = List[AnyArray]()
+        var decoded = List[DecodedLeaf]()
         for ci in range(len(parsed.leaves)):
-            var reader = ColumnReader(
-                data,
-                rg.columns[ci].meta_data.copy(),
-                parsed.leaves[ci].copy(),
-                rg.num_rows,
-            )
-            leaf_arrays.append(reader.read(codecs))
+            if parsed.leaves[ci].max_rep >= 1:
+                var reader = LeveledColumnReader(
+                    data,
+                    rg.columns[ci].meta_data.copy(),
+                    parsed.leaves[ci].copy(),
+                    rg.num_rows,
+                )
+                decoded.append(reader.read(codecs))
+            else:
+                var reader = ColumnReader(
+                    data,
+                    rg.columns[ci].meta_data.copy(),
+                    parsed.leaves[ci].copy(),
+                    rg.num_rows,
+                )
+                decoded.append(DecodedLeaf.flat(reader.read(codecs)))
         var cols = List[AnyArray]()
         for ref node in parsed.nodes:
-            cols.append(node.assemble(leaf_arrays))
+            cols.append(node.assemble(decoded))
         batches.append(
             RecordBatch(schema=Schema(copy=parsed.schema), columns=cols^)
         )

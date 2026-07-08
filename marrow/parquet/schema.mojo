@@ -27,6 +27,7 @@ from ..dtypes import (
     timestamp,
     time32,
     time64,
+    list_,
     TimeUnit,
     millisecond,
     microsecond,
@@ -34,6 +35,7 @@ from ..dtypes import (
 )
 from ..schema import Schema
 from ..arrays import AnyArray, StructArray
+from .nested import DecodedLeaf, assemble_list
 from .format import (
     SchemaElement,
     FileMetaData,
@@ -73,6 +75,7 @@ from .format import (
 
 comptime NODE_LEAF: Int = 0
 comptime NODE_STRUCT: Int = 1
+comptime NODE_LIST: Int = 2
 
 
 struct SchemaNode(Copyable, Movable):
@@ -102,15 +105,17 @@ struct SchemaNode(Copyable, Movable):
     def __del__(deinit self):
         pass
 
-    def assemble(self, ref leaf_arrays: List[AnyArray]) raises -> AnyArray:
+    def assemble(self, ref decoded: List[DecodedLeaf]) raises -> AnyArray:
         """Reconstruct this node's Arrow array from the decoded leaf columns."""
         if self.kind == NODE_LEAF:
-            return leaf_arrays[self.leaf_index].copy()
+            return decoded[self.leaf_index].array.copy()
+        elif self.kind == NODE_LIST:
+            return assemble_list(decoded[self.children[0].leaf_index])
         elif self.kind == NODE_STRUCT:
             var children = List[AnyArray]()
             var fields = List[Field]()
             for ref c in self.children:
-                children.append(c.assemble(leaf_arrays))
+                children.append(c.assemble(decoded))
                 fields.append(c.field.copy())
             var out: AnyArray = StructArray.from_arrays(children^, fields, None)
             return out^
@@ -277,16 +282,22 @@ def _parse_node(
             NODE_LEAF, Field(el.name, dtype^, nullable), List[SchemaNode](), li
         )
 
-    if (
-        el.converted_type == CT_LIST
-        or el.logical_type == LT_LIST
-        or el.converted_type == CT_MAP
-        or el.logical_type == LT_MAP
-    ):
+    if el.converted_type == CT_MAP or el.logical_type == LT_MAP:
         raise Error(
-            "parquet: list/map columns not supported yet (column '"
-            + el.name
-            + "')"
+            "parquet: map columns not supported yet (column '" + el.name + "')"
+        )
+
+    if el.converted_type == CT_LIST or el.logical_type == LT_LIST:
+        # LIST = optional group(LIST) { repeated group { <element> } }. Skip the
+        # repeated middle group (it adds one def + one rep level) and parse the
+        # element as this list's single child.
+        idx += 1  # consume the repeated middle group
+        var elem = _parse_node(schema, idx, d + 1, r + 1, leaves)
+        var item_dtype: AnyDataType = list_(elem.field.dtype.copy())
+        var children = List[SchemaNode]()
+        children.append(elem^)
+        return SchemaNode(
+            NODE_LIST, Field(el.name, item_dtype^, nullable), children^, -1
         )
 
     # plain group → Arrow struct

@@ -46,6 +46,14 @@ def read_fixed_le[dt: DType](body: Span[UInt8, _], off: Int) -> Scalar[dt]:
     return SIMD[dt, 1].from_bytes[big_endian=False](arr)
 
 
+def _count_equal(levels: List[Int32], target: Int) -> Int:
+    var c = 0
+    for d in levels:
+        if Int(d) == target:
+            c += 1
+    return c
+
+
 # ---------------------------------------------------------------------------
 # Page — one decoded page
 # ---------------------------------------------------------------------------
@@ -61,6 +69,7 @@ struct Page(Movable):
     var kind: Int
     var body: List[UInt8]
     var def_levels: List[Int32]
+    var rep_levels: List[Int32]  # only populated for repeated (list) leaves
     var value_offset: Int
     var num_present: Int
     var encoding: Int
@@ -70,6 +79,7 @@ struct Page(Movable):
         self.kind = PAGEKIND_DATA
         self.body = List[UInt8]()
         self.def_levels = List[Int32]()
+        self.rep_levels = List[Int32]()
         self.value_offset = 0
         self.num_present = 0
         self.encoding = ENC_PLAIN
@@ -125,22 +135,36 @@ struct PageReader[o: Origin[mut=False]](Movable):
     def _decode_levels_v1(mut self, mut page: Page) raises:
         var body = Span(page.body)
         var cursor = 0
-        if self.leaf.max_rep >= 1:
+        var leveled = self.leaf.max_rep >= 1
+        if leveled:
             var l = read_u32le(body, cursor)
-            cursor += 4 + l  # repetition levels (flat columns ignore them)
+            cursor += 4
+            page.rep_levels = rle_decode(
+                body[cursor : cursor + l],
+                bit_width(self.leaf.max_rep),
+                page.num_values,
+            )
+            cursor += l
         page.num_present = page.num_values
         if self.leaf.max_def >= 1:
             var bw = bit_width(self.leaf.max_def)
             var l = read_u32le(body, cursor)
             cursor += 4
             var levels = body[cursor : cursor + l]
-            # Count present values first (O(1) for the all-present run); only
-            # materialize the level list when there are actually nulls.
-            page.num_present = rle_count_matches(
-                levels, bw, page.num_values, Int32(self.leaf.max_def)
-            )
-            if page.num_present != page.num_values:
+            if leveled:
+                # nested columns need the full def levels to rebuild offsets
                 page.def_levels = rle_decode(levels, bw, page.num_values)
+                page.num_present = _count_equal(
+                    page.def_levels, self.leaf.max_def
+                )
+            else:
+                # flat: count present in O(1) for the all-present run; only
+                # materialize the level list when there are actually nulls.
+                page.num_present = rle_count_matches(
+                    levels, bw, page.num_values, Int32(self.leaf.max_def)
+                )
+                if page.num_present != page.num_values:
+                    page.def_levels = rle_decode(levels, bw, page.num_values)
             cursor += l
         page.value_offset = cursor
 
@@ -188,6 +212,15 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 )
             else:
                 body.extend(comp[lvl_len:])
+            if (
+                self.leaf.max_rep >= 1
+                and dph2.repetition_levels_byte_length > 0
+            ):
+                page.rep_levels = rle_decode(
+                    Span(body)[0 : dph2.repetition_levels_byte_length],
+                    bit_width(self.leaf.max_rep),
+                    page.num_values,
+                )
             var cursor = dph2.repetition_levels_byte_length
             if (
                 self.leaf.max_def >= 1
