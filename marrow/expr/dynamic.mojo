@@ -27,7 +27,6 @@ ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
 NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
-CAST - Type cast (not yet implemented — see DynValue.eval)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
@@ -73,7 +72,6 @@ comptime ABS: UInt8 = 15
 comptime NOT: UInt8 = 16
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
-comptime CAST: UInt8 = 19
 comptime LENGTH: UInt8 = 20
 
 
@@ -150,10 +148,6 @@ struct DynValue(
         so there is no per-morsel ``resolve_names`` reconstruction."""
         return self.eval(batch)
 
-    def field_name(self) -> String:
-        """Output column name (the LOAD name; empty for computed nodes)."""
-        return self._name.copy()
-
     def column_index(self, schema: Schema) raises -> Int:
         """Resolve this expression to a column position for use as a join/group
         key. Requires a bare column reference (``col(...)``); raises on a
@@ -188,12 +182,6 @@ struct DynValue(
         if self._tag == LITERAL:
             return self._value.value().type()
         return None
-
-    def inputs(self) -> List[DynValue]:
-        var result = List[DynValue](capacity=len(self._args))
-        for ref a in self._args:
-            result.append(a.copy())
-        return result^
 
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
@@ -259,8 +247,6 @@ struct DynValue(
                 self._args[1].eval(batch),
                 self._args[2].eval(batch),
             )
-        elif self._tag == CAST:
-            raise Error("DynValue.eval: cast not implemented")
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
 
@@ -302,8 +288,6 @@ struct DynValue(
             return "length"
         elif self._tag == IF_ELSE:
             return "if_else"
-        elif self._tag == CAST:
-            return "cast"
         else:
             return String()
 
@@ -394,9 +378,6 @@ struct DynValue(
 
     def length(self) -> DynValue:
         return self._unary(LENGTH)
-
-    def cast(self, to: AnyDataType) -> DynValue:
-        return self._unary(CAST)
 
 
 # ---------------------------------------------------------------------------

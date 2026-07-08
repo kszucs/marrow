@@ -69,7 +69,9 @@ def _fused_plan(morsel: Int) raises -> AnyRelation:
 
 def test_scan_streams_in_morsels() raises:
     """Opening an InMemoryTable yields morsel-sized slices, then Exhausted."""
-    var scan = AnyRelation(InMemoryTable(batch=_batch(), morsel_size=2)).open()
+    var scan = AnyRelation(
+        InMemoryTable(batch=_batch(), morsel_size=2)
+    ).to_processor()
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 2)
     assert_equal(scan.pull().num_rows(), 1)

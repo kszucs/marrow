@@ -3,11 +3,11 @@
 Two layers, cleanly separated:
 
 - ``Relation`` nodes are **pure, immutable descriptions** (``kind``/``schema``/
-  ``open``): they hold only their parameters and child relations, no execution
+  ``to_processor``): they hold only their parameters and child relations, no execution
   state. ``AnyRelation`` erases them behind an ``ArcPointer``, so copying a plan
   is an O(1) share and the plan is a reusable, inspectable, rewritable template.
 - ``Processor`` (``schema``/``pull``) is the executing layer, built by
-  ``Relation.open(ctx)``; it owns *all* mutable state (scan offset, built hash
+  ``Relation.to_processor(ctx)``; it owns *all* mutable state (scan offset, built hash
   index, grouper, child operators). ``AnyProcessor`` erases it and drives the
   pull loop (``collect``). Operators are single-use and move-only.
 
@@ -86,14 +86,14 @@ trait Relation(ImplicitlyDeletable, Movable):
     """A relational plan node: a pure, immutable description of an operation.
 
     Nodes hold only their parameters and child relations — no execution state.
-    ``open(ctx)`` builds the stateful ``Processor`` that runs (opening children
+    ``to_processor(ctx)`` builds the stateful ``Processor`` that runs (opening children
     recursively), so a plan is a reusable template you can inspect, copy cheaply
     (O(1) — nodes are immutable and shared), and rewrite."""
 
     def schema(self) -> Schema:
         ...
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         """Build the physical operator for this node (opening its children)."""
         ...
 
@@ -110,14 +110,14 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     """Type-erased plan node behind an ``ArcPointer``.
 
     Nodes are immutable descriptions, so copying an ``AnyRelation`` is an O(1)
-    ``ArcPointer`` share — no deep clone, no reset. ``open(ctx)`` builds the
+    ``ArcPointer`` share — no deep clone, no reset. ``to_processor(ctx)`` builds the
     operator tree that executes; the plan is never mutated, so it is a reusable
     template and copies never share execution state. Carries the plan-building
     API (``select``/``filter``/``aggregate``/``join``)."""
 
     var _data: ArcPointer[NoneType]
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
-    var _virt_open: def(
+    var _virt_to_processor: def(
         ArcPointer[NoneType], ExecutionContext
     ) thin raises -> AnyProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
@@ -128,10 +128,10 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         return rebind[ArcPointer[T]](ptr)[].schema()
 
     @staticmethod
-    def _tramp_open[
+    def _tramp_to_processor[
         T: Relation
     ](ptr: ArcPointer[NoneType], ctx: ExecutionContext) raises -> AnyProcessor:
-        return rebind[ArcPointer[T]](ptr)[].open(ctx)
+        return rebind[ArcPointer[T]](ptr)[].to_processor(ctx)
 
     @staticmethod
     def _tramp_write_to_string[
@@ -151,7 +151,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
         self._virt_schema = Self._tramp_schema[T]
-        self._virt_open = Self._tramp_open[T]
+        self._virt_to_processor = Self._tramp_to_processor[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
 
@@ -159,7 +159,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         # O(1) share — nodes are immutable, so aliasing is safe.
         self._data = copy._data
         self._virt_schema = copy._virt_schema
-        self._virt_open = copy._virt_open
+        self._virt_to_processor = copy._virt_to_processor
         self._virt_write_to_string = copy._virt_write_to_string
         self._virt_drop = copy._virt_drop
 
@@ -179,11 +179,11 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     # --- execution ---
 
-    def open(
+    def to_processor(
         self, ctx: ExecutionContext = ExecutionContext()
     ) raises -> AnyProcessor:
         """Build the operator tree for this plan; the plan is left untouched."""
-        return self._virt_open(self._data, ctx)
+        return self._virt_to_processor(self._data, ctx)
 
     # --- plan-building API ---
 
@@ -358,26 +358,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 
 
-struct Scan(Relation):
-    """Unbound named scan — a leaf with no data (cannot execute directly)."""
-
-    var name: String
-    var _schema: Schema
-
-    def __init__(out self, *, var name: String, var schema: Schema):
-        self.name = name^
-        self._schema = schema^
-
-    def schema(self) -> Schema:
-        return Schema(copy=self._schema)
-
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
-        raise Error("Scan requires external data source binding")
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Scan({self.name})")
-
-
 struct InMemoryTable(Relation):
     """Leaf backed by a RecordBatch; opens into a morsel-slicing operator."""
 
@@ -393,7 +373,7 @@ struct InMemoryTable(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return InMemoryTableProcessor(
             batch=RecordBatch(copy=self.batch),  # shares buffers (O(1))
             morsel_size=self.morsel_size,
@@ -432,7 +412,7 @@ struct ParquetScan(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return ParquetScanProcessor(
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
@@ -466,9 +446,9 @@ struct Filter(Relation):
     def schema(self) -> Schema:
         return self.input.schema()
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return FilterProcessor(
-            input=self.input.open(ctx), predicate=self.predicate.copy()
+            input=self.input.to_processor(ctx), predicate=self.predicate.copy()
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -501,9 +481,9 @@ struct Project(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return ProjectProcessor(
-            input=self.input.open(ctx),
+            input=self.input.to_processor(ctx),
             values=self.values.copy(),
             schema=Schema(copy=self._schema),
         )
@@ -557,9 +537,9 @@ struct Aggregate(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return AggregateProcessor(
-            input=self.input.open(ctx),
+            input=self.input.to_processor(ctx),
             keys=self.keys.copy(),
             agg_exprs=self.agg_exprs.copy(),
             funcs=self.funcs.copy(),
@@ -610,10 +590,10 @@ struct Join(Relation):
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def open(self, ctx: ExecutionContext) raises -> AnyProcessor:
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return JoinProcessor(
-            left=self.left.open(ctx),
-            right=self.right.open(ctx),
+            left=self.left.to_processor(ctx),
+            right=self.right.to_processor(ctx),
             left_key_indices=self.left_key_indices.copy(),
             right_key_indices=self.right_key_indices.copy(),
             join_kind=self.join_kind,
@@ -636,5 +616,5 @@ def execute(
     """Execute a plan: open it into a fresh operator tree and drain it. The plan
     (a pure description) is never mutated, so it can be executed repeatedly and
     concurrently."""
-    var op = plan.open(ctx)
+    var op = plan.to_processor(ctx)
     return op.collect()

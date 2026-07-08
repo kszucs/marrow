@@ -16,12 +16,12 @@ bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
 and operator overloads.
 
 ``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
-(``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``/
-``Scan``) that are pure, immutable, and cheaply copied, plus the plan-building
-API and ``execute(plan)``.
+(``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``)
+that are pure, immutable, and cheaply copied, plus the plan-building API and
+``execute(plan)``.
 
 ``execution.mojo`` — the **execution layer**: the ``Processor`` each
-``Relation.open(ctx)`` builds (pull-based, owning all mutable state — offset,
+``Relation.to_processor(ctx)`` builds (pull-based, owning all mutable state — offset,
 hash index, grouper, child processors), erased behind ``AnyProcessor`` which
 drives ``collect()``. ``execute`` opens a plan into a fresh processor tree and
 drains it, so a plan is a reusable template. Depends only on the value box and
@@ -60,11 +60,10 @@ from .dynamic import (
     NOT,
     IS_NULL,
     IF_ELSE,
-    CAST,
     LENGTH,
 )
 from .execution import (
-    # Execution layer (processors built by Relation.open)
+    # Execution layer (processors built by Relation.to_processor)
     Processor,
     AnyProcessor,
     Exhausted,
@@ -74,7 +73,6 @@ from .relations import (
     # Descriptive IR nodes
     Relation,
     AnyRelation,
-    Scan,
     Filter,
     Project,
     InMemoryTable,

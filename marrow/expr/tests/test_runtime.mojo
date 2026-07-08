@@ -37,7 +37,6 @@ from marrow.expr import (
     NOT,
     IS_NULL,
     IF_ELSE,
-    CAST,
     LENGTH,
 )
 
@@ -326,19 +325,6 @@ def test_kind_binary() raises:
     """Binary node reports its op as kind."""
     var expr = col(0) + col(1)
     assert_equal(expr.kind(), ADD)
-
-
-def test_inputs_binary() raises:
-    """Binary.inputs() returns two children."""
-    var expr = col(0) - col(1)
-    var children = expr.inputs()
-    assert_equal(len(children), 2)
-
-
-def test_inputs_leaf() raises:
-    """Column.inputs() returns empty list."""
-    var expr = col(0)
-    assert_equal(len(expr.inputs()), 0)
 
 
 def main() raises:

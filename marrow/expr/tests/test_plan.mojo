@@ -16,7 +16,6 @@ from marrow.expr import (
 )
 from marrow.expr.relations import (
     AnyRelation,
-    Scan,
     Filter,
     Project,
     InMemoryTable,
@@ -25,29 +24,8 @@ from marrow.expr.relations import (
 
 
 # ---------------------------------------------------------------------------
-# Scan
+# Source nodes
 # ---------------------------------------------------------------------------
-
-
-def test_scan_schema() raises:
-    """Scan.schema returns the declared schema."""
-    var src = Scan(
-        name="t", schema=schema([field("x", int64), field("y", float64)])
-    )
-    var s = src.schema()
-    assert_equal(len(s), 2)
-    assert_equal(s.fields[0].name, "x")
-    assert_equal(s.fields[1].name, "y")
-
-
-def test_scan_write_to() raises:
-    var src = AnyRelation(
-        Scan(
-            name="orders",
-            schema=schema([field("x", int64), field("y", float64)]),
-        )
-    )
-    assert_equal(String(src), "Scan(orders)")
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +36,9 @@ def test_scan_write_to() raises:
 def test_filter_schema_passthrough() raises:
     """Filter output schema equals the input schema."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var pred = col(0) > lit[Int64Type](0)
     var filt = Filter(input=src, predicate=pred)
@@ -70,7 +50,9 @@ def test_filter_schema_passthrough() raises:
 def test_filter_predicate() raises:
     """Filter exposes its predicate expression as a field."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var filt = Filter(input=src, predicate=col(0) < col(1))
     assert_true(String(filt.predicate).find("less") != -1)
@@ -78,7 +60,9 @@ def test_filter_predicate() raises:
 
 def test_filter_write_to() raises:
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var filt = AnyRelation(Filter(input=src, predicate=col(0) < col(1)))
     assert_equal(String(filt), "Filter(predicate=less(input(0), input(1)))")
@@ -92,7 +76,9 @@ def test_filter_write_to() raises:
 def test_project_schema() raises:
     """Project output schema contains only the projected columns."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var proj = Project(
         input=src,
@@ -108,7 +94,9 @@ def test_project_schema() raises:
 def test_project_exprs() raises:
     """Project exposes its expressions as a field."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var proj = Project(
         input=src,
@@ -122,7 +110,9 @@ def test_project_exprs() raises:
 
 def test_project_write_to() raises:
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var proj = AnyRelation(
         Project(
@@ -140,18 +130,12 @@ def test_project_write_to() raises:
 # ---------------------------------------------------------------------------
 
 
-def test_anyrelation_downcast_scan() raises:
-    """AnyRelation wrapping a Scan can be downcast back."""
-    var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
-    )
-    assert_equal(src.downcast[Scan]()[].name, "t")
-
-
 def test_anyrelation_o1_copy() raises:
     """AnyRelation copies share the same underlying allocation (O(1))."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var copy = src  # O(1) ref-count bump
     assert_equal(copy.schema().fields[0].name, "x")
@@ -181,14 +165,16 @@ def test_in_memory_table_downcast() raises:
 
 
 # ---------------------------------------------------------------------------
-# Scan + filter + select plan composition
+# filter + select plan composition
 # ---------------------------------------------------------------------------
 
 
 def test_scan_filter_schema_passthrough() raises:
-    """Scan.filter() preserves the scan's output schema."""
+    """source.filter() preserves the scan's output schema."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var plan = src.filter(col("x") > lit[Int64Type](0))
     var s = plan.schema()
@@ -197,22 +183,12 @@ def test_scan_filter_schema_passthrough() raises:
     assert_equal(s.fields[1].name, "y")
 
 
-# FIXME
-# def test_scan_filter_resolves_column_name() raises:
-#     """``col('x')`` inside filter is resolved to a positional col(0)."""
-#     var src = AnyRelation(
-#         Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
-#     )
-#     var plan = src.filter(col("x") > lit[Int64Type](0))
-#     var filt = plan.downcast[Filter]()
-#     var pred_inputs = filt[].predicate.inputs()
-#     assert_equal(pred_inputs[0].kind_data(), 0)
-
-
 def test_scan_select_schema() raises:
-    """Scan.select('x') yields a single-field schema."""
+    """source.select('x') yields a single-field schema."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var plan = src.select("x")
     var s = plan.schema()
@@ -221,9 +197,11 @@ def test_scan_select_schema() raises:
 
 
 def test_scan_filter_select_schema() raises:
-    """Scan.filter().select('y') final schema has only 'y'."""
+    """source.filter().select('y') final schema has only 'y'."""
     var src = AnyRelation(
-        Scan(name="t", schema=schema([field("x", int64), field("y", float64)]))
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
     )
     var plan = src.filter(col("x") > lit[Int64Type](0)).select("y")
     var s = plan.schema()

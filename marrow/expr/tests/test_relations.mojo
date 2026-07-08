@@ -50,9 +50,9 @@ def test_column_name_matches_declared_field() raises:
     """Table[Tbl]().<name> carries the field name; position is resolved by name
     against the batch schema (columns store no index)."""
     var t = Table[_Orders]()
-    assert_equal(t.a.field_name(), "a")
-    assert_equal(t.b.field_name(), "b")
-    assert_equal(t.name.field_name(), "name")
+    assert_equal(t.a.name(), "a")
+    assert_equal(t.b.name(), "b")
+    assert_equal(t.name.name(), "name")
 
 
 def test_column_executes_without_runtime_schema() raises:

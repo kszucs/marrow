@@ -22,6 +22,19 @@
 
 ### Refactors
 
+- **`Relation.open()` renamed to `to_processor()`** (`marrow.expr`): it converts a
+  descriptive IR node into its executing `Processor`, matching the
+  `.to_<type>()` convention.
+- **`field_name()` renamed to `name()`** on the value interface
+  (`marrow.expr.values`): columns/predicates/`DynValue` expose their output name
+  as `name()`; the column leaf's field is now `_name`.
+- **Removed dead expression API** (`marrow.expr`): `DynValue.inputs()`, the
+  unimplemented `CAST` cast (tag + `.cast()` + eval branch), and the unbound
+  `Scan` relation node (use `in_memory_table` / `parquet_scan` sources).
+- **`collect()` uses the shared `kernels.concat`** (`marrow.expr.execution`)
+  instead of a local closed copy — removes the duplication, at the cost of
+  `query_streaming` growing 448 KB → 878 KB (the generic concat links
+  `AnyBuilder`'s open per-dtype switch, incl. nested builders).
 - **Column handles moved into `values.mojo`** (`marrow.expr`): the named
   `NumericColumn`/`StringColumn` leaves and the `Table[Tbl]()` handle now live
   beside the fused algebra and the `col(name, dtype)` factory, removing the

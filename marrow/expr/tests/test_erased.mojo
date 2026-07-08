@@ -40,7 +40,7 @@ def test_box_fused_column() raises:
     """A fused named column boxed into AnyValue resolves by name."""
     var t = Table[_Orders]()
     var v = AnyValue(t.a)
-    assert_equal(v.field_name(), "a")
+    assert_equal(v.name(), "a")
     assert_true(
         v.to_array(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
     )

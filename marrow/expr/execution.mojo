@@ -1,7 +1,7 @@
 """The execution layer for ``marrow.expr`` relational plans.
 
 ``Relation`` nodes (in ``relations.mojo``) are pure, immutable descriptions;
-this module is where they actually *run*. ``Relation.open(ctx)`` builds a
+this module is where they actually *run*. ``Relation.to_processor(ctx)`` builds a
 ``Processor`` — the executing counterpart of a node — that owns all mutable
 execution state (scan offset, built hash index, grouper, child processors) and
 yields morsels through ``pull()``.
@@ -21,8 +21,7 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
 
-from ..arrays import AnyArray, StringArray, StructArray
-from ..builders import PrimitiveBuilder, BoolBuilder, StringBuilder
+from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -80,73 +79,6 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
 
 
 # ---------------------------------------------------------------------------
-# _concat — a CLOSED, flat-only column concat for collect()
-# ---------------------------------------------------------------------------
-#
-# `collect()` merges morsels by concatenating each column. The general
-# `marrow.kernels.concat` routes through `AnyBuilder(dtype)` — an open switch
-# that instantiates a builder for *every* dtype (incl. nested) whenever it is
-# reachable, so it links into the fused path and roughly doubles the binary
-# (measured: query_streaming 448 KB -> 878 KB). The relational layer's
-# projections produce only flat columns, so `collect()` uses this local concat
-# instead: typed builders for primitive/bool/string and a `raise` otherwise
-# (like `filter`), keeping the fused path closed and small.
-
-
-def _concat_primitive[
-    T: dt.PrimitiveType
-](arrays: List[AnyArray]) raises -> AnyArray:
-    var total = 0
-    for ref a in arrays:
-        total += a.length()
-    var builder = PrimitiveBuilder[T](
-        arrays[0].as_primitive[T]().dtype.copy(), total
-    )
-    for ref a in arrays:
-        builder.extend(a.as_primitive[T]())
-    return builder.finish().to_any()
-
-
-def _concat(arrays: List[AnyArray]) raises -> AnyArray:
-    """Concatenate same-dtype flat columns; raises on nested/other dtypes."""
-    var dtype = arrays[0].dtype()
-    if dtype == dt.bool_:
-        var builder = BoolBuilder(capacity=0)
-        for ref a in arrays:
-            builder.extend(a.as_bool())
-        return builder.finish().to_any()
-    elif dtype == dt.int8:
-        return _concat_primitive[dt.Int8Type](arrays)
-    elif dtype == dt.int16:
-        return _concat_primitive[dt.Int16Type](arrays)
-    elif dtype == dt.int32:
-        return _concat_primitive[dt.Int32Type](arrays)
-    elif dtype == dt.int64:
-        return _concat_primitive[dt.Int64Type](arrays)
-    elif dtype == dt.uint8:
-        return _concat_primitive[dt.UInt8Type](arrays)
-    elif dtype == dt.uint16:
-        return _concat_primitive[dt.UInt16Type](arrays)
-    elif dtype == dt.uint32:
-        return _concat_primitive[dt.UInt32Type](arrays)
-    elif dtype == dt.uint64:
-        return _concat_primitive[dt.UInt64Type](arrays)
-    elif dtype == dt.float16:
-        return _concat_primitive[dt.Float16Type](arrays)
-    elif dtype == dt.float32:
-        return _concat_primitive[dt.Float32Type](arrays)
-    elif dtype == dt.float64:
-        return _concat_primitive[dt.Float64Type](arrays)
-    elif dtype.is_string():
-        var builder = StringBuilder(capacity=0)
-        for ref a in arrays:
-            builder.extend(a.as_string())
-        return builder.finish().to_any()
-    else:
-        raise Error("collect: unsupported column dtype ", dtype)
-
-
-# ---------------------------------------------------------------------------
 # Processor trait + AnyProcessor
 # ---------------------------------------------------------------------------
 
@@ -154,7 +86,7 @@ def _concat(arrays: List[AnyArray]) raises -> AnyArray:
 trait Processor(ImplicitlyDeletable, Movable):
     """The executing counterpart of a ``Relation`` node.
 
-    Created by ``Relation.open(ctx)``; owns all mutable execution state — scan
+    Created by ``Relation.to_processor(ctx)``; owns all mutable execution state — scan
     offset, built hash index, grouper, child processors. ``pull()`` yields the
     next morsel or raises ``Exhausted``. Processors are single-use and move-only;
     the descriptive plan they were opened from is never touched."""
@@ -227,7 +159,7 @@ struct AnyProcessor(Movable):
             var col_arrays = List[AnyArray](capacity=len(batches))
             for b in range(len(batches)):
                 col_arrays.append(batches[b].columns[c].copy())
-            result_cols.append(_concat(col_arrays))
+            result_cols.append(concat(col_arrays))
         return RecordBatch(schema=Schema(copy=schema), columns=result_cols^)
 
 

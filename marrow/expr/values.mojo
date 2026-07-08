@@ -81,7 +81,7 @@ trait Value(
       A bare requirement here; the ``NumericValue`` / ``BoolValue`` /
       ``StringValue`` sub-traits each supply a default that runs their fused
       ``execute()`` and calls ``.to_any()``.
-    - ``field_name()`` — the output column name, empty for anonymous computed
+    - ``name()`` — the output column name, empty for anonymous computed
       values (the default below). The named column leaves override it. It is a
       method rather than a ``comptime name`` alias because a ``StringLiteral``
       type parameter only converts to ``String`` reliably from inside the
@@ -96,7 +96,7 @@ trait Value(
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         ...
 
-    def field_name(self) -> String:
+    def name(self) -> String:
         return String()
 
 
@@ -318,7 +318,7 @@ trait BoolValue(Value):
         """Return the output data type (always bool)."""
         return AnyDataType(dt.bool_)
 
-    # to_array materialises the predicate's BoolArray; field_name defaults to
+    # to_array materialises the predicate's BoolArray; name defaults to
     # anonymous (Value's default).
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
@@ -552,7 +552,7 @@ def col[T: dt.StringLikeType](var name: String, dtype: T) -> StringColumn:
 # ===========================================================================
 #
 # Wraps any ``Value`` node behind a thin trampoline exposing only
-# ``to_array(batch)`` + ``field_name()`` (no tag, no ``eval()`` switch): the
+# ``to_array(batch)`` + ``name()`` (no tag, no ``eval()`` switch): the
 # named column leaves and fused expressions/predicates *and* the runtime
 # ``DynValue`` interpreter. The fused-vs-interpreted choice is which node you box
 # — boxing a ``DynValue`` links the interpreter; a program that only boxes fused
@@ -567,7 +567,7 @@ def _value_to_array_tramp[
 
 
 def _value_name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-    return rebind[ArcPointer[V]](ptr)[].field_name()
+    return rebind[ArcPointer[V]](ptr)[].name()
 
 
 def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
@@ -587,7 +587,7 @@ struct AnyValue(Copyable, Movable, Writable):
     var _to_array: def(
         ArcPointer[NoneType], RecordBatch
     ) thin raises -> AnyArray
-    var _field_name: def(ArcPointer[NoneType]) thin -> String
+    var _name_fn: def(ArcPointer[NoneType]) thin -> String
     var _write_to_str: def(ArcPointer[NoneType]) thin -> String
 
     @implicit
@@ -599,14 +599,14 @@ struct AnyValue(Copyable, Movable, Writable):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._to_array = _value_to_array_tramp[V]
-        self._field_name = _value_name_tramp[V]
+        self._name_fn = _value_name_tramp[V]
         self._write_to_str = _write_tramp[V]
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self._to_array(self._boxed, batch)
 
-    def field_name(self) -> String:
-        return self._field_name(self._boxed)
+    def name(self) -> String:
+        return self._name_fn(self._boxed)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_to_str(self._boxed))
@@ -623,33 +623,33 @@ struct NumericColumn[T: dt.NumericType](NumericValue):
     The position is resolved by name against ``batch.schema`` at execution. Built
     by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly.
 
-    ``to_array`` comes from ``NumericValue``'s default; only ``field_name`` is
+    ``to_array`` comes from ``NumericValue``'s default; only ``name`` is
     overridden here (columns are named, unlike anonymous computed values)."""
 
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
 
-    var name: String
+    var _name: String
 
     def __init__(out self, var name: String):
-        self.name = name^
+        self._name = name^
 
     @always_inline
     def core[
         W: Int
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
         return (
-            batch.columns[batch.schema.get_field_index(self.name)]
+            batch.columns[batch.schema.get_field_index(self._name)]
             .as_primitive[Self.T]()
             .values()
             .load[W](idx)
         )
 
-    def field_name(self) -> String:
-        return self.name.copy()
+    def name(self) -> String:
+        return self._name.copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("Col[", self.name, "]")
+        writer.write("Col[", self._name, "]")
 
 
 struct StringColumn(StringValue):
@@ -657,14 +657,14 @@ struct StringColumn(StringValue):
     ``NumericColumn[T]`` (one type across all string columns; position resolved
     by name). ``to_array`` comes from ``StringValue``'s default."""
 
-    var name: String
+    var _name: String
 
     def __init__(out self, var name: String):
-        self.name = name^
+        self._name = name^
 
     def resolve(self, batch: RecordBatch) -> StringArray:
         return (
-            batch.columns[batch.schema.get_field_index(self.name)]
+            batch.columns[batch.schema.get_field_index(self._name)]
             .as_string()
             .copy()
         )
@@ -672,11 +672,11 @@ struct StringColumn(StringValue):
     def execute(self, batch: RecordBatch) raises -> StringArray:
         return self.resolve(batch)
 
-    def field_name(self) -> String:
-        return self.name.copy()
+    def name(self) -> String:
+        return self._name.copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("StrCol[", self.name, "]")
+        writer.write("StrCol[", self._name, "]")
 
 
 struct Table[T: AnyType](Copyable, Movable):
