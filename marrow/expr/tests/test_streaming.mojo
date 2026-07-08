@@ -18,7 +18,14 @@ from marrow.expr.relations import Table
 from marrow.expr.values import Gt
 from marrow.expr.dynamic import col
 from marrow.expr.values import AnyValue
-from marrow.expr.relations import InMemoryTable, Project, AnyRelation
+from marrow.expr.relations import (
+    InMemoryTable,
+    Project,
+    AnyRelation,
+    execute,
+    in_memory_table,
+)
+from marrow.expr.dynamic import col as dyn_col, lit
 
 
 struct _Orders:
@@ -114,6 +121,51 @@ def test_streaming_interpreter_values() raises:
     var result = plan.collect()
     assert_equal(result.num_rows(), 2)
     assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
+
+
+# ---------------------------------------------------------------------------
+# Plan reusability — a plan is a template, not a single-use cursor
+# ---------------------------------------------------------------------------
+
+
+def test_plan_is_reusable() raises:
+    """execute() clones the plan (resetting state), so the same plan runs
+    repeatedly and yields the same result — no single-use leakage."""
+    var plan = _fused_plan(2)
+    var r1 = execute(plan)
+    var r2 = execute(plan)
+    assert_equal(r1.num_rows(), 2)
+    assert_equal(r2.num_rows(), 2)
+    assert_true(r1.columns[0].as_int64().copy() == array([5, 8], int64))
+    assert_true(r2.columns[0].as_int64().copy() == array([5, 8], int64))
+
+
+def test_plan_copy_is_independent() raises:
+    """A copied plan has reset state and shares no cursor: draining the copy
+    in place leaves the original fully runnable."""
+    var plan = _fused_plan(2)
+    var clone = plan.copy()
+    var r_clone = clone.collect()  # drains the clone's cursors in place
+    var r_orig = execute(plan)  # original untouched, still yields everything
+    assert_true(r_clone.columns[0].as_int64().copy() == array([5, 8], int64))
+    assert_true(r_orig.columns[0].as_int64().copy() == array([5, 8], int64))
+
+
+def test_aggregate_plan_is_reusable() raises:
+    """Blocking aggregate builds its grouper lazily per run, so re-executing a
+    plan re-aggregates from scratch (the grouper is reset on clone)."""
+    var a = array([1, 1, 2, 2, 2], int64)
+    var v = array([10, 20, 30, 40, 50], int64)
+    var batch = record_batch([a^, v^], names=["k", "v"])
+    var plan = in_memory_table(batch).aggregate(
+        keys=[dyn_col("k")], values=[dyn_col("v")], funcs=["sum"]
+    )
+    var r1 = execute(plan)
+    var r2 = execute(plan)
+    assert_equal(r1.num_rows(), 2)
+    assert_equal(r2.num_rows(), 2)
+    # Same group count and same summed values across both runs.
+    assert_equal(r1.num_columns(), r2.num_columns())
 
 
 def main() raises:

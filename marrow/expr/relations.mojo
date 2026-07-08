@@ -27,8 +27,10 @@ Example
     var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
     var result = execute(plan)
 
-Nodes carry execution state (scan offset, built hash index, ...), so a plan is
-single-use per ``execute()`` — build it, run it once.
+Nodes carry execution state (scan offset, built hash index, ...), but that
+state is reset when a plan is copied, and ``execute()`` runs on a fresh clone —
+so a plan is a **reusable template**: build it once, run it as many times as you
+like, and copies never share a cursor.
 """
 
 from std.memory import ArcPointer
@@ -217,8 +219,14 @@ def _concat(arrays: List[AnyArray]) raises -> AnyArray:
 # ---------------------------------------------------------------------------
 
 
-trait Relation(ImplicitlyDeletable, Movable):
-    """A relational node that describes itself and executes itself."""
+trait Relation(Copyable, ImplicitlyDeletable, Movable):
+    """A relational node that describes itself and executes itself.
+
+    ``pull()`` mutates per-node execution state (scan offset, built hash index,
+    …). To keep the *plan* a reusable template, ``copy()`` must return an
+    independent node with that execution state **reset** and its child relations
+    deep-copied — never a shared cursor. ``execute`` clones the plan via this
+    before draining, so the original is never consumed."""
 
     def kind(self) -> UInt8:
         ...
@@ -240,7 +248,13 @@ trait Relation(ImplicitlyDeletable, Movable):
 
 
 struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
-    """Type-erased relational node behind an ``ArcPointer`` (O(1) copies).
+    """Type-erased relational node behind an ``ArcPointer``.
+
+    A plan is a **reusable template**: copying an ``AnyRelation`` (which is what
+    ``execute`` does before draining) deep-clones the whole sub-tree with every
+    node's execution state reset, so the original is never consumed and two
+    copies never share a cursor. Only the immutable leaf data (batches) stays
+    shared, cheaply, through its own ``ArcPointer``.
 
     Also the pull driver: ``pull()``/``collect()`` fold in the former
     ``AnyRelationProcessor``."""
@@ -250,7 +264,15 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_pull: def(ArcPointer[NoneType]) thin raises -> RecordBatch
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
+    var _virt_copy: def(ArcPointer[NoneType]) thin -> ArcPointer[NoneType]
     var _virt_drop: def(var ArcPointer[NoneType]) thin
+
+    @staticmethod
+    def _tramp_copy[T: Relation](ptr: ArcPointer[NoneType]) -> ArcPointer[NoneType]:
+        # Deep, state-reset clone: T.copy() resets this node's cursors and
+        # deep-copies its child relations (see the Relation trait contract).
+        var cloned = ArcPointer[T](rebind[ArcPointer[T]](ptr)[].copy())
+        return rebind[ArcPointer[NoneType]](cloned^)
 
     @staticmethod
     def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
@@ -287,14 +309,19 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_schema = Self._tramp_schema[T]
         self._virt_pull = Self._tramp_pull[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
+        self._virt_copy = Self._tramp_copy[T]
         self._virt_drop = Self._tramp_drop[T]
 
     def __init__(out self, *, copy: Self):
-        self._data = copy._data
+        """Deep, independent clone with execution state reset — a plan is a
+        reusable template, so copying (hence ``execute``) never consumes or
+        aliases the original's cursors."""
+        self._data = copy._virt_copy(copy._data)
         self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
         self._virt_pull = copy._virt_pull
         self._virt_write_to_string = copy._virt_write_to_string
+        self._virt_copy = copy._virt_copy
         self._virt_drop = copy._virt_drop
 
     def __del__(deinit self):
@@ -433,7 +460,8 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 input=self,
                 keys=key_exprs^,
                 agg_exprs=val_exprs^,
-                grouper=HashGrouper(funcs.copy(), value_dtypes^),
+                funcs=funcs.copy(),
+                value_dtypes=value_dtypes^,
                 key_fields=key_fields^,
                 schema=out_schema,
             )
@@ -509,6 +537,10 @@ struct Scan(Relation):
         self.name = name^
         self._schema = schema^
 
+    def __init__(out self, *, copy: Self):
+        self.name = copy.name.copy()
+        self._schema = Schema(copy=copy._schema)
+
     def kind(self) -> UInt8:
         return SCAN_NODE
 
@@ -535,6 +567,11 @@ struct InMemoryTable(Relation):
         self.batch = RecordBatch(copy=batch)
         self.morsel_size = morsel_size
         self._offset = 0
+
+    def __init__(out self, *, copy: Self):
+        self.batch = RecordBatch(copy=copy.batch)  # shares buffers (O(1))
+        self.morsel_size = copy.morsel_size
+        self._offset = 0  # reset scan cursor
 
     def kind(self) -> UInt8:
         return IN_MEMORY_TABLE_NODE
@@ -584,6 +621,13 @@ struct ParquetScan(Relation):
         self.morsel_size = morsel_size
         self._batch = None
         self._offset = 0
+
+    def __init__(out self, *, copy: Self):
+        self.path = copy.path.copy()
+        self._schema = Schema(copy=copy._schema)
+        self.morsel_size = copy.morsel_size
+        self._batch = copy._batch.copy()  # share cached read (immutable)
+        self._offset = 0  # reset scan cursor
 
     def kind(self) -> UInt8:
         return PARQUET_SCAN_NODE
@@ -645,6 +689,10 @@ struct Filter(Relation):
         self.input = input^
         self.predicate = predicate^
 
+    def __init__(out self, *, copy: Self):
+        self.input = copy.input.copy()  # deep-clones the child sub-tree
+        self.predicate = copy.predicate.copy()
+
     def kind(self) -> UInt8:
         return FILTER_NODE
 
@@ -690,6 +738,12 @@ struct Project(Relation):
         self.values = values^
         self._schema = schema^
 
+    def __init__(out self, *, copy: Self):
+        self.input = copy.input.copy()  # deep-clones the child sub-tree
+        self.names = copy.names.copy()
+        self.values = copy.values.copy()
+        self._schema = Schema(copy=copy._schema)
+
     def kind(self) -> UInt8:
         return PROJECT_NODE
 
@@ -725,9 +779,13 @@ struct Aggregate(Relation):
     var input: AnyRelation
     var keys: List[AnyValue]
     var agg_exprs: List[AnyValue]
-    var grouper: HashGrouper
+    var funcs: List[String]
+    var value_dtypes: List[AnyDataType]
     var key_fields: List[Field]
     var _schema: Schema
+    # Execution state (reset on copy): the grouper is built lazily on first
+    # pull from funcs/value_dtypes, so a plan clone starts with a clean one.
+    var _grouper: Optional[HashGrouper]
     var _emitted: Bool
 
     def __init__(
@@ -736,17 +794,31 @@ struct Aggregate(Relation):
         var input: AnyRelation,
         var keys: List[AnyValue],
         var agg_exprs: List[AnyValue],
-        var grouper: HashGrouper,
+        var funcs: List[String],
+        var value_dtypes: List[AnyDataType],
         var key_fields: List[Field],
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
         self.agg_exprs = agg_exprs^
-        self.grouper = grouper^
+        self.funcs = funcs^
+        self.value_dtypes = value_dtypes^
         self.key_fields = key_fields^
         self._schema = schema^
+        self._grouper = None
         self._emitted = False
+
+    def __init__(out self, *, copy: Self):
+        self.input = copy.input.copy()  # deep-clones the child sub-tree
+        self.keys = copy.keys.copy()
+        self.agg_exprs = copy.agg_exprs.copy()
+        self.funcs = copy.funcs.copy()
+        self.value_dtypes = copy.value_dtypes.copy()
+        self.key_fields = copy.key_fields.copy()
+        self._schema = Schema(copy=copy._schema)
+        self._grouper = None  # reset accumulator
+        self._emitted = False  # reset
 
     def kind(self) -> UInt8:
         return AGGREGATE_NODE
@@ -757,6 +829,10 @@ struct Aggregate(Relation):
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
             raise Exhausted()
+        if not self._grouper:
+            self._grouper = HashGrouper(
+                self.funcs.copy(), self.value_dtypes.copy()
+            )
         while True:
             try:
                 var batch = self.input.pull()
@@ -773,15 +849,15 @@ struct Aggregate(Relation):
                     bitmap=None,
                     children=key_children^,
                 )
-                var gids = self.grouper.consume_keys(key_struct)
+                var gids = self._grouper.value().consume_keys(key_struct)
                 var val_arrays = List[AnyArray]()
                 for i in range(len(self.agg_exprs)):
                     val_arrays.append(self.agg_exprs[i].to_array(batch))
-                self.grouper.consume_values(gids, val_arrays)
+                self._grouper.value().consume_values(gids, val_arrays)
             except Exhausted:
                 break
         self._emitted = True
-        return self.grouper.finish(self.key_fields)
+        return self._grouper.value().finish(self.key_fields)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Aggregate(keys=[")
@@ -826,6 +902,17 @@ struct Join(Relation):
         self._index = None
         self._exhausted = False
 
+    def __init__(out self, *, copy: Self):
+        self.left = copy.left.copy()  # deep-clones the build side
+        self.right = copy.right.copy()  # deep-clones the probe side
+        self.left_key_indices = copy.left_key_indices.copy()
+        self.right_key_indices = copy.right_key_indices.copy()
+        self.join_kind = copy.join_kind
+        self.strictness = copy.strictness
+        self._schema = Schema(copy=copy._schema)
+        self._index = None  # reset built hash index
+        self._exhausted = False  # reset
+
     def kind(self) -> UInt8:
         return JOIN_NODE
 
@@ -867,7 +954,10 @@ struct Join(Relation):
 def execute(
     plan: AnyRelation, ctx: ExecutionContext = ExecutionContext()
 ) raises -> RecordBatch:
-    """Execute a relational plan, materialising the full result."""
+    """Execute a relational plan, materialising the full result.
+
+    ``var p = plan`` deep-clones the plan with execution state reset (see
+    ``AnyRelation``), so ``plan`` is left untouched and can be executed again."""
     var p = plan
     return p.collect()
 

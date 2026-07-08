@@ -270,5 +270,19 @@ def test_join_then_filter() raises:
     assert_equal(result.num_rows(), 2)
 
 
+def test_join_plan_is_reusable() raises:
+    """The join's built hash index is reset on clone, so re-executing the same
+    plan rebuilds and yields the same result (no single-use state)."""
+    var left_batch = _batch([1, 2, 3], [10, 20, 30])
+    var right_batch = _batch([2, 3, 4], [200, 300, 400])
+    var plan = in_memory_table(left_batch).join(
+        in_memory_table(right_batch), [col("k")], [col("k")]
+    )
+    var r1 = execute(plan)
+    var r2 = execute(plan)
+    assert_equal(r1.num_rows(), 2)
+    assert_equal(r2.num_rows(), 2)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
