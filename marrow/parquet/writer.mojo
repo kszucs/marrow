@@ -39,7 +39,7 @@ from ..schema import Schema
 
 from .encoding import rle_encode
 from .compression import Codecs, CODEC_SNAPPY
-from .schema import arrow_to_parquet, LeafColumn, SchemaNode
+from .schema import ParquetSchema, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
     ColumnMetaData,
@@ -55,13 +55,6 @@ from .format import (
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 
 
-def _append_u32le(mut out: List[UInt8], v: Int):
-    out.append(UInt8(v & 0xFF))
-    out.append(UInt8((v >> 8) & 0xFF))
-    out.append(UInt8((v >> 16) & 0xFF))
-    out.append(UInt8((v >> 24) & 0xFF))
-
-
 # ---------------------------------------------------------------------------
 # ColumnChunkWriter — encode one leaf column chunk into the output buffer
 # ---------------------------------------------------------------------------
@@ -74,6 +67,13 @@ struct ColumnChunkWriter(Movable):
     def __init__(out self, var leaf: LeafColumn, compression: Int):
         self.leaf = leaf^
         self.compression = compression
+
+    @staticmethod
+    def _u32le(mut out: List[UInt8], v: Int):
+        out.append(UInt8(v & 0xFF))
+        out.append(UInt8((v >> 8) & 0xFF))
+        out.append(UInt8((v >> 16) & 0xFF))
+        out.append(UInt8((v >> 24) & 0xFF))
 
     def _plain[
         store: NumericType, phys: DType
@@ -106,7 +106,7 @@ struct ColumnChunkWriter(Movable):
         for i in range(arr.length):
             if arr.is_valid(i):
                 var b = String(arr[i]).as_bytes()
-                _append_u32le(out, len(b))
+                Self._u32le(out, len(b))
                 out.extend(b)
 
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
@@ -155,7 +155,7 @@ struct ColumnChunkWriter(Movable):
                     defs.append(Int32(0))
                     null_count += 1
             var enc = rle_encode(defs, 1)
-            _append_u32le(body, len(enc))
+            Self._u32le(body, len(enc))
             body.extend(Span(enc))
         self._encode_values(col, body)
         return body^
@@ -243,12 +243,12 @@ struct FileWriter(Movable):
         var batch = table.combine_chunks()
         var n = batch.num_rows()
 
-        var nodes = List[SchemaNode]()
-        var elems = arrow_to_parquet(table.schema, self.leaves, nodes)
+        var ps = ParquetSchema.from_arrow(table.schema)
+        self.leaves = ps.leaves.copy()
 
         var fmeta = FileMetaData()
         fmeta.version = 1
-        fmeta.schema = elems^
+        fmeta.schema = ps.elements.copy()
         fmeta.num_rows = n
         fmeta.created_by = "marrow"
 
@@ -256,7 +256,7 @@ struct FileWriter(Movable):
         while start < n or (n == 0 and start == 0):
             var length = min(row_group_size, n - start)
             var slice = batch.slice(start, length)
-            fmeta.row_groups.append(self._write_row_group(slice, nodes))
+            fmeta.row_groups.append(self._write_row_group(slice, ps.nodes))
             start += length
             if length == 0:
                 break

@@ -153,6 +153,21 @@ struct ParsedSchema(Movable):
         self.leaves = leaves^
         self.nodes = nodes^
 
+    @staticmethod
+    def from_metadata(meta: FileMetaData) raises -> ParsedSchema:
+        """Parse a Parquet schema into the Arrow schema, flat leaf descriptors,
+        and the assembly tree (flat columns, structs, single-level lists)."""
+        var reader = _SchemaReader(meta.schema.copy())
+        var nodes = List[SchemaNode]()
+        var fields = List[Field]()
+        for _ in range(meta.schema[0].num_children):
+            var node = reader.node(0, 0)
+            fields.append(node.field.copy())
+            nodes.append(node^)
+        return ParsedSchema(
+            Schema(fields=fields^), reader.leaves.copy(), nodes^
+        )
+
 
 struct LeafColumn(Copyable, Movable):
     """A single Parquet leaf column and how it maps to an Arrow value type."""
@@ -181,237 +196,271 @@ struct LeafColumn(Copyable, Movable):
         self.nullable = nullable
 
 
-def _time_unit(el: SchemaElement) -> TimeUnit:
-    """The Arrow TimeUnit for a temporal leaf (logical TimeUnit, else converted).
-    """
-    if el.logical_unit == 1:
-        return millisecond
-    elif el.logical_unit == 2:
-        return microsecond
-    elif el.logical_unit == 3:
-        return nanosecond
-    elif (
-        el.converted_type == CT_TIMESTAMP_MILLIS
-        or el.converted_type == CT_TIME_MILLIS
-    ):
-        return millisecond
-    else:
-        return microsecond
+# ---------------------------------------------------------------------------
+# Parquet schema -> Arrow (parse)
+# ---------------------------------------------------------------------------
 
 
-def _leaf_arrow_dtype(el: SchemaElement) raises -> AnyDataType:
-    """Arrow value type for a Parquet leaf `SchemaElement`."""
-    var pt = el.type
-    var ct = el.converted_type
-    var lt = el.logical_type
-    if pt == PT_BOOLEAN:
-        return bool_
-    elif pt == PT_INT32:
-        if ct == CT_DATE or lt == LT_DATE:
-            return date32()
-        elif ct == CT_TIME_MILLIS or lt == LT_TIME:
-            return time32(millisecond)
-        elif ct == CT_INT_8:
-            return int8
-        elif ct == CT_INT_16:
-            return int16
-        elif ct == CT_UINT_8:
-            return uint8
-        elif ct == CT_UINT_16:
-            return uint16
-        elif ct == CT_UINT_32:
-            return uint32
-        else:
-            return int32
-    elif pt == PT_INT64:
-        if (
-            ct == CT_TIMESTAMP_MILLIS
-            or ct == CT_TIMESTAMP_MICROS
-            or (lt == LT_TIMESTAMP)
+struct _SchemaReader(Movable):
+    """Depth-first walk over the flat Parquet `SchemaElement` list. Owns the
+    cursor and the leaf accumulator, so the recursion carries no threaded
+    out-params. Used via `ParsedSchema.from_metadata`."""
+
+    var elements: List[SchemaElement]
+    var idx: Int
+    var leaves: List[LeafColumn]
+
+    def __init__(out self, var elements: List[SchemaElement]):
+        self.elements = elements^
+        self.idx = 1  # schema[0] is the root group
+        self.leaves = List[LeafColumn]()
+
+    @staticmethod
+    def _time_unit(el: SchemaElement) -> TimeUnit:
+        """Arrow TimeUnit for a temporal leaf (logical unit, else converted)."""
+        if el.logical_unit == 1:
+            return millisecond
+        elif el.logical_unit == 2:
+            return microsecond
+        elif el.logical_unit == 3:
+            return nanosecond
+        elif (
+            el.converted_type == CT_TIMESTAMP_MILLIS
+            or el.converted_type == CT_TIME_MILLIS
         ):
-            return timestamp(
-                _time_unit(el), "UTC" if el.logical_utc else String("")
-            )
-        elif ct == CT_TIME_MICROS or lt == LT_TIME:
-            return time64(_time_unit(el))
-        elif ct == CT_UINT_64:
-            return uint64
+            return millisecond
         else:
-            return int64
-    elif pt == PT_FLOAT:
-        return float32
-    elif pt == PT_DOUBLE:
-        return float64
-    elif pt == PT_BYTE_ARRAY:
-        if ct == CT_UTF8 or lt == LT_STRING:
-            return string
+            return microsecond
+
+    @staticmethod
+    def _leaf_dtype(el: SchemaElement) raises -> AnyDataType:
+        """Arrow value type for a Parquet leaf `SchemaElement`."""
+        var pt = el.type
+        var ct = el.converted_type
+        var lt = el.logical_type
+        if pt == PT_BOOLEAN:
+            return bool_
+        elif pt == PT_INT32:
+            if ct == CT_DATE or lt == LT_DATE:
+                return date32()
+            elif ct == CT_TIME_MILLIS or lt == LT_TIME:
+                return time32(millisecond)
+            elif ct == CT_INT_8:
+                return int8
+            elif ct == CT_INT_16:
+                return int16
+            elif ct == CT_UINT_8:
+                return uint8
+            elif ct == CT_UINT_16:
+                return uint16
+            elif ct == CT_UINT_32:
+                return uint32
+            else:
+                return int32
+        elif pt == PT_INT64:
+            if (
+                ct == CT_TIMESTAMP_MILLIS
+                or ct == CT_TIMESTAMP_MICROS
+                or lt == LT_TIMESTAMP
+            ):
+                return timestamp(
+                    Self._time_unit(el),
+                    "UTC" if el.logical_utc else String(""),
+                )
+            elif ct == CT_TIME_MICROS or lt == LT_TIME:
+                return time64(Self._time_unit(el))
+            elif ct == CT_UINT_64:
+                return uint64
+            else:
+                return int64
+        elif pt == PT_FLOAT:
+            return float32
+        elif pt == PT_DOUBLE:
+            return float64
+        elif pt == PT_BYTE_ARRAY:
+            if ct == CT_UTF8 or lt == LT_STRING:
+                return string
+            else:
+                return binary
         else:
-            return binary
-    else:
-        raise Error("parquet: unsupported physical type " + String(pt))
+            raise Error("parquet: unsupported physical type " + String(pt))
 
+    def node(mut self, def_base: Int, rep_base: Int) raises -> SchemaNode:
+        """Consume the element at the cursor and return its Arrow node."""
+        var el = self.elements[self.idx].copy()
+        self.idx += 1
+        var rep = el.repetition_type
+        var d = def_base + (1 if rep == REP_OPTIONAL else 0)
+        var r = rep_base + (1 if rep == REP_REPEATED else 0)
+        var nullable = rep != REP_REQUIRED
 
-def _parse_node(
-    schema: List[SchemaElement],
-    mut idx: Int,
-    def_base: Int,
-    rep_base: Int,
-    mut leaves: List[LeafColumn],
-) raises -> SchemaNode:
-    ref el = schema[idx]
-    idx += 1
-    var rep = el.repetition_type
-    var d = def_base + (1 if rep == REP_OPTIONAL else 0)
-    var r = rep_base + (1 if rep == REP_REPEATED else 0)
-    var nullable = rep != REP_REQUIRED
-
-    if el.num_children == 0:
-        var dtype = _leaf_arrow_dtype(el)
-        var li = len(leaves)
-        leaves.append(
-            LeafColumn(
-                el.name,
-                dtype.copy(),
-                physical=el.type,
-                max_def=d,
-                max_rep=r,
-                nullable=nullable,
+        if el.num_children == 0:
+            var dtype = Self._leaf_dtype(el)
+            var li = len(self.leaves)
+            self.leaves.append(
+                LeafColumn(
+                    el.name,
+                    dtype.copy(),
+                    physical=el.type,
+                    max_def=d,
+                    max_rep=r,
+                    nullable=nullable,
+                )
             )
-        )
-        return SchemaNode(
-            NODE_LEAF, Field(el.name, dtype^, nullable), List[SchemaNode](), li
-        )
+            return SchemaNode(
+                NODE_LEAF,
+                Field(el.name, dtype^, nullable),
+                List[SchemaNode](),
+                li,
+            )
 
-    if el.converted_type == CT_MAP or el.logical_type == LT_MAP:
-        raise Error(
-            "parquet: map columns not supported yet (column '" + el.name + "')"
-        )
+        if el.converted_type == CT_MAP or el.logical_type == LT_MAP:
+            raise Error(
+                "parquet: map columns not supported yet (column '"
+                + el.name
+                + "')"
+            )
 
-    if el.converted_type == CT_LIST or el.logical_type == LT_LIST:
-        # LIST = optional group(LIST) { repeated group { <element> } }. Skip the
-        # repeated middle group (it adds one def + one rep level) and parse the
-        # element as this list's single child.
-        idx += 1  # consume the repeated middle group
-        var elem = _parse_node(schema, idx, d + 1, r + 1, leaves)
-        var item_dtype: AnyDataType = list_(elem.field.dtype.copy())
-        var children = List[SchemaNode]()
-        children.append(elem^)
-        return SchemaNode(
-            NODE_LIST, Field(el.name, item_dtype^, nullable), children^, -1
-        )
+        if el.converted_type == CT_LIST or el.logical_type == LT_LIST:
+            # LIST = optional group(LIST) { repeated group { <element> } }. Skip
+            # the repeated middle group (adds one def + one rep level) and parse
+            # the element as this list's single child.
+            self.idx += 1
+            var elem = self.node(d + 1, r + 1)
+            var item: AnyDataType = list_(elem.field.dtype.copy())
+            var children = List[SchemaNode]()
+            children.append(elem^)
+            return SchemaNode(
+                NODE_LIST, Field(el.name, item^, nullable), children^, -1
+            )
 
-    # plain group → Arrow struct
-    var child_nodes = List[SchemaNode]()
-    var child_fields = List[Field]()
-    for _ in range(el.num_children):
-        var cn = _parse_node(schema, idx, d, r, leaves)
-        child_fields.append(cn.field.copy())
-        child_nodes.append(cn^)
-    var dtype = struct_(child_fields^)
-    return SchemaNode(
-        NODE_STRUCT, Field(el.name, dtype^, nullable), child_nodes^, -1
-    )
-
-
-def parquet_to_arrow(meta: FileMetaData) raises -> ParsedSchema:
-    """Parse a Parquet schema into the Arrow schema, flat leaf descriptors, and
-    an assembly tree. Supports flat columns and struct nesting."""
-    var leaves = List[LeafColumn]()
-    var nodes = List[SchemaNode]()
-    var fields = List[Field]()
-    var idx = 1  # schema[0] is the root group
-    var n_top = meta.schema[0].num_children
-    for _ in range(n_top):
-        var node = _parse_node(meta.schema, idx, 0, 0, leaves)
-        fields.append(node.field.copy())
-        nodes.append(node^)
-    return ParsedSchema(Schema(fields=fields^), leaves^, nodes^)
-
-
-def _arrow_physical(dtype: AnyDataType) raises -> Tuple[Int, Int, Int]:
-    """Return `(physical_type, converted_type, logical_type)` for an Arrow leaf
-    value type. -1 denotes an absent annotation."""
-    if dtype == bool_:
-        return (PT_BOOLEAN, -1, -1)
-    elif dtype == int8:
-        return (PT_INT32, CT_INT_8, -1)
-    elif dtype == int16:
-        return (PT_INT32, CT_INT_16, -1)
-    elif dtype == int32:
-        return (PT_INT32, -1, -1)
-    elif dtype == uint8:
-        return (PT_INT32, CT_UINT_8, -1)
-    elif dtype == uint16:
-        return (PT_INT32, CT_UINT_16, -1)
-    elif dtype == uint32:
-        return (PT_INT32, CT_UINT_32, -1)
-    elif dtype == int64:
-        return (PT_INT64, -1, -1)
-    elif dtype == uint64:
-        return (PT_INT64, CT_UINT_64, -1)
-    elif dtype == float32:
-        return (PT_FLOAT, -1, -1)
-    elif dtype == float64:
-        return (PT_DOUBLE, -1, -1)
-    elif dtype.is_string():
-        return (PT_BYTE_ARRAY, CT_UTF8, LT_STRING)
-    elif dtype.is_binary():
-        return (PT_BYTE_ARRAY, -1, -1)
-    else:
-        raise Error("parquet: cannot write Arrow type " + String(dtype))
-
-
-def _emit_node(
-    field: Field,
-    mut elems: List[SchemaElement],
-    mut leaves: List[LeafColumn],
-    def_base: Int,
-) raises -> SchemaNode:
-    if field.dtype.is_struct():
-        ref st = field.dtype.as_struct()
-        var el = SchemaElement()
-        el.name = field.name
-        el.repetition_type = REP_REQUIRED  # struct-level nulls not written yet
-        el.num_children = len(st.fields)
-        elems.append(el^)
+        # plain group -> Arrow struct
         var child_nodes = List[SchemaNode]()
-        for ref cf in st.fields:
-            child_nodes.append(_emit_node(cf, elems, leaves, def_base))
-        return SchemaNode(NODE_STRUCT, field.copy(), child_nodes^, -1)
-    else:
-        var phys, conv, logi = _arrow_physical(field.dtype)
-        var el = SchemaElement()
-        el.type = phys
-        el.name = field.name
-        el.repetition_type = REP_OPTIONAL if field.nullable else REP_REQUIRED
-        el.converted_type = conv
-        el.logical_type = logi
-        elems.append(el^)
-        var li = len(leaves)
-        leaves.append(
-            LeafColumn(
-                field.name,
-                field.dtype.copy(),
-                physical=phys,
-                max_def=def_base + (1 if field.nullable else 0),
-                max_rep=0,
-                nullable=field.nullable,
-            )
+        var child_fields = List[Field]()
+        for _ in range(el.num_children):
+            var cn = self.node(d, r)
+            child_fields.append(cn.field.copy())
+            child_nodes.append(cn^)
+        var dtype = struct_(child_fields^)
+        return SchemaNode(
+            NODE_STRUCT, Field(el.name, dtype^, nullable), child_nodes^, -1
         )
-        return SchemaNode(NODE_LEAF, field.copy(), List[SchemaNode](), li)
 
 
-def arrow_to_parquet(
-    schema: Schema, mut leaves: List[LeafColumn], mut nodes: List[SchemaNode]
-) raises -> List[SchemaElement]:
-    """Build the Parquet `SchemaElement` list, leaf descriptors, and assembly
-    tree from an Arrow `Schema`. Supports flat columns and (required) structs.
-    """
-    var elems = List[SchemaElement]()
-    var root = SchemaElement()
-    root.name = "schema"
-    root.num_children = len(schema.fields)
-    elems.append(root^)
-    for ref f in schema.fields:
-        nodes.append(_emit_node(f, elems, leaves, 0))
-    return elems^
+# ---------------------------------------------------------------------------
+# Arrow schema -> Parquet (emit)
+# ---------------------------------------------------------------------------
+
+
+struct _SchemaWriter(Movable):
+    """Depth-first walk over Arrow fields, accumulating the Parquet
+    `SchemaElement` list and leaf descriptors. Structs are emitted as required
+    groups (struct-level nulls are a follow-up). Used via `ParquetSchema`."""
+
+    var elements: List[SchemaElement]
+    var leaves: List[LeafColumn]
+
+    def __init__(out self):
+        self.elements = List[SchemaElement]()
+        self.leaves = List[LeafColumn]()
+
+    @staticmethod
+    def _physical(dtype: AnyDataType) raises -> Tuple[Int, Int, Int]:
+        """`(physical, converted, logical)` for an Arrow leaf; -1 = absent."""
+        if dtype == bool_:
+            return (PT_BOOLEAN, -1, -1)
+        elif dtype == int8:
+            return (PT_INT32, CT_INT_8, -1)
+        elif dtype == int16:
+            return (PT_INT32, CT_INT_16, -1)
+        elif dtype == int32:
+            return (PT_INT32, -1, -1)
+        elif dtype == uint8:
+            return (PT_INT32, CT_UINT_8, -1)
+        elif dtype == uint16:
+            return (PT_INT32, CT_UINT_16, -1)
+        elif dtype == uint32:
+            return (PT_INT32, CT_UINT_32, -1)
+        elif dtype == int64:
+            return (PT_INT64, -1, -1)
+        elif dtype == uint64:
+            return (PT_INT64, CT_UINT_64, -1)
+        elif dtype == float32:
+            return (PT_FLOAT, -1, -1)
+        elif dtype == float64:
+            return (PT_DOUBLE, -1, -1)
+        elif dtype.is_string():
+            return (PT_BYTE_ARRAY, CT_UTF8, LT_STRING)
+        elif dtype.is_binary():
+            return (PT_BYTE_ARRAY, -1, -1)
+        else:
+            raise Error("parquet: cannot write Arrow type " + String(dtype))
+
+    def emit(mut self, field: Field, def_base: Int) raises -> SchemaNode:
+        if field.dtype.is_struct():
+            ref st = field.dtype.as_struct()
+            var el = SchemaElement()
+            el.name = field.name
+            el.repetition_type = REP_REQUIRED
+            el.num_children = len(st.fields)
+            self.elements.append(el^)
+            var child_nodes = List[SchemaNode]()
+            for ref cf in st.fields:
+                child_nodes.append(self.emit(cf, def_base))
+            return SchemaNode(NODE_STRUCT, field.copy(), child_nodes^, -1)
+        else:
+            var phys, conv, logi = Self._physical(field.dtype)
+            var el = SchemaElement()
+            el.type = phys
+            el.name = field.name
+            el.repetition_type = (
+                REP_OPTIONAL if field.nullable else REP_REQUIRED
+            )
+            el.converted_type = conv
+            el.logical_type = logi
+            self.elements.append(el^)
+            var li = len(self.leaves)
+            self.leaves.append(
+                LeafColumn(
+                    field.name,
+                    field.dtype.copy(),
+                    physical=phys,
+                    max_def=def_base + (1 if field.nullable else 0),
+                    max_rep=0,
+                    nullable=field.nullable,
+                )
+            )
+            return SchemaNode(NODE_LEAF, field.copy(), List[SchemaNode](), li)
+
+
+struct ParquetSchema(Movable):
+    """The Parquet side of an Arrow schema: the flat `SchemaElement` list plus
+    the leaf descriptors and node tree the writer uses to flatten columns."""
+
+    var elements: List[SchemaElement]
+    var leaves: List[LeafColumn]
+    var nodes: List[SchemaNode]
+
+    def __init__(
+        out self,
+        var elements: List[SchemaElement],
+        var leaves: List[LeafColumn],
+        var nodes: List[SchemaNode],
+    ):
+        self.elements = elements^
+        self.leaves = leaves^
+        self.nodes = nodes^
+
+    @staticmethod
+    def from_arrow(schema: Schema) raises -> ParquetSchema:
+        var writer = _SchemaWriter()
+        var root = SchemaElement()
+        root.name = "schema"
+        root.num_children = len(schema.fields)
+        writer.elements.append(root^)
+        var nodes = List[SchemaNode]()
+        for ref f in schema.fields:
+            nodes.append(writer.emit(f, 0))
+        return ParquetSchema(
+            writer.elements.copy(), writer.leaves.copy(), nodes^
+        )

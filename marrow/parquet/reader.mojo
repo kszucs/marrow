@@ -14,7 +14,7 @@ from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
 from .compression import Codecs
-from .schema import parquet_to_arrow
+from .schema import ParsedSchema
 from .format import read_footer
 from .column import ColumnReader
 from .nested import DecodedLeaf, LeveledColumnReader
@@ -69,7 +69,7 @@ def read_table(path: String) raises -> Table:
     var mapped = MappedFile(path)
     var data = mapped.span()
     var meta = read_footer(data)
-    var parsed = parquet_to_arrow(meta)
+    var parsed = ParsedSchema.from_metadata(meta)
 
     var codecs = Codecs()
     var batches = List[RecordBatch]()
