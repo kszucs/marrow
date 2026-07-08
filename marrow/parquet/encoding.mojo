@@ -105,6 +105,61 @@ def rle_decode(
     return out^
 
 
+def rle_gather[
+    dt: DType, do: Origin[mut=True]
+](
+    data: Span[UInt8, _],
+    width: Int,
+    count: Int,
+    dict: UnsafePointer[Scalar[dt], _],
+    dest: UnsafePointer[Scalar[dt], do],
+) raises:
+    """Decode `count` RLE/bit-packed dictionary indices and write `dict[idx]`
+    straight to `out` — fuses index decode and gather (no index buffer)."""
+    if count == 0:
+        return
+    if width == 0:
+        for i in range(count):
+            dest[i] = dict[0]
+        return
+    var byte_width = (width + 7) // 8
+    var pos = 0
+    var produced = 0
+    while produced < count:
+        var header: UInt64
+        header, pos = _read_varint(data, pos)
+        if (header & 1) == 1:
+            var num_groups = Int(header >> 1)
+            var num_vals = num_groups * 8
+            var bytepos = pos
+            var bitbuf: UInt64 = 0
+            var bitcnt = 0
+            var mask = (UInt64(1) << UInt64(width)) - 1
+            for _ in range(num_vals):
+                while bitcnt < width:
+                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
+                    bytepos += 1
+                    bitcnt += 8
+                var idx = Int(bitbuf & mask)
+                bitbuf >>= UInt64(width)
+                bitcnt -= width
+                if produced < count:
+                    dest[produced] = dict[idx]
+                    produced += 1
+            pos += num_groups * width
+        else:
+            var run_len = Int(header >> 1)
+            var val: Int32 = 0
+            for b in range(byte_width):
+                val |= Int32(Int(data[pos + b]) << (8 * b))
+            pos += byte_width
+            var idx = Int(val)
+            var take = min(run_len, count - produced)
+            for _ in range(take):
+                dest[produced] = dict[idx]
+                produced += 1
+
+
 def rle_count_matches(
     data: Span[UInt8, _], width: Int, count: Int, target: Int32
 ) raises -> Int:

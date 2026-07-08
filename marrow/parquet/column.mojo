@@ -33,7 +33,7 @@ from ..dtypes import (
 )
 
 from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
-from .encoding import rle_decode
+from .encoding import rle_decode, rle_gather
 from .compression import Codecs
 from .schema import LeafColumn
 from .format import ColumnMetaData
@@ -149,24 +149,33 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     self.null_count += 1
                 self.wpos += 1
         elif page.is_dictionary():
-            var indices = rle_decode(vspan[1:], Int(vspan[0]), page.num_present)
-            var all_present = page.all_present()
-            if not all_present:
-                self._ensure_bitmap()
-            var di = 0
-            for row in range(page.num_values):
-                var present = all_present or (
-                    Int(page.def_levels[row]) == self.max_def
+            var dptr = self.dict.unsafe_ptr()
+            if page.all_present():
+                # fused index-decode + gather straight into the output buffer
+                rle_gather[Self.store_dt](
+                    vspan[1:],
+                    Int(vspan[0]),
+                    page.num_values,
+                    dptr,
+                    vptr + self.wpos,
                 )
-                if present:
-                    vptr[self.wpos] = self.dict[Int(indices[di])]
-                    di += 1
-                    if self.has_bitmap:
+                self.wpos += page.num_values
+            else:
+                self._ensure_bitmap()
+                var indices = rle_decode(
+                    vspan[1:], Int(vspan[0]), page.num_present
+                )
+                var iptr = indices.unsafe_ptr()
+                var di = 0
+                for row in range(page.num_values):
+                    if Int(page.def_levels[row]) == self.max_def:
+                        vptr[self.wpos] = dptr[Int(iptr[di])]
+                        di += 1
                         self.bitmap.set(self.wpos)
-                else:
-                    vptr[self.wpos] = 0
-                    self.null_count += 1
-                self.wpos += 1
+                    else:
+                        vptr[self.wpos] = 0
+                        self.null_count += 1
+                    self.wpos += 1
         else:
             raise Error(
                 "parquet: unsupported data page encoding "
