@@ -5,11 +5,11 @@ decides the binary size: box the fused comptime nodes and the interpreter is
 dead-code-eliminated (~250 KB); box a ``DynValue`` and the runtime interpreter
 links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 
-``values.mojo`` — the fused comptime algebra (``Add``/``Gt``/``Length``…), the
-``col(name, dtype)`` factory, and ``AnyValue`` — the universal value box the
+``values.mojo`` — the fused comptime algebra (``Add``/``Greater``/``Length``…), the
+named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
+and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
 relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
-``to_array``). The named column leaves and ``Table[Tbl]()`` live in
-``relations.mojo``.
+``to_array``).
 
 ``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
@@ -33,7 +33,7 @@ Usage::
     var result = execute(plan)
 """
 
-from marrow.expr.dynamic import (
+from .dynamic import (
     # Unified expression node
     DynValue,
     # Free-standing factory functions (return DynValue)
@@ -63,14 +63,14 @@ from marrow.expr.dynamic import (
     CAST,
     LENGTH,
 )
-from marrow.expr.execution import (
+from .execution import (
     # Execution layer (processors built by Relation.open)
     Processor,
     AnyProcessor,
     Exhausted,
     ExecutionContext,
 )
-from marrow.expr.relations import (
+from .relations import (
     # Descriptive IR nodes
     Relation,
     AnyRelation,
@@ -84,14 +84,6 @@ from marrow.expr.relations import (
     in_memory_table,
     parquet_scan,
     execute,
-    # Plan node kind constants
-    SCAN_NODE,
-    FILTER_NODE,
-    PROJECT_NODE,
-    IN_MEMORY_TABLE_NODE,
-    PARQUET_SCAN_NODE,
-    AGGREGATE_NODE,
-    JOIN_NODE,
     # Join kind constants (hash join: inner/left/right/full/semi/anti)
     JOIN_INNER,
     JOIN_LEFT,

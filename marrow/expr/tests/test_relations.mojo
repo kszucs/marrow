@@ -20,8 +20,8 @@ from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.relations import Table
-from marrow.expr.values import Add, Gt, col
+from marrow.expr.values import Table
+from marrow.expr.values import Add, Greater, col
 
 
 struct _Orders:
@@ -78,11 +78,11 @@ def test_named_column_add_fuses() raises:
 
 
 def test_named_column_gt_fuses() raises:
-    """Fully-typed columns compose with the Gt comparison node."""
+    """Fully-typed columns compose with the Greater comparison node."""
     var t = Table[_Orders]()
     var batch = _make_batch()
 
-    var pred = Gt(t.a, t.b)
+    var pred = Greater(t.a, t.b)
     var result = pred.execute(batch)
     assert_true(result[0].value() == False)
     assert_true(result[1].value() == False)

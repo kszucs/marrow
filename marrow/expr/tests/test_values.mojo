@@ -5,12 +5,12 @@ Two families, both exercising the single-fused-vectorize-pass execution model:
 - ``NumericValue`` nodes — ``Add``/``Sub``/``Length`` (over the named column
   leaves) evaluate an expression tree via ``execute(batch)`` with zero
   intermediate arrays.
-- ``BoolValue`` nodes — ``Lt``/``Gt``/``Eq`` bit-pack the comparison mask
+- ``BoolValue`` nodes — ``Less``/``Greater``/``Equal`` bit-pack the comparison mask
   directly into a ``BoolArray``, and compose with ``NumericValue`` children in
   the same fused pass.
 
 The leaf columns come from ``col(name, dtype)`` (the named ``NumericColumn`` /
-``StringColumn`` in ``marrow.expr.relations``); positions resolve by name.
+``StringColumn`` in ``marrow.expr.values``); positions resolve by name.
 """
 
 from std.testing import assert_equal, assert_true
@@ -21,7 +21,7 @@ from marrow.arrays import PrimitiveArray
 from marrow.builders import array
 from marrow.dtypes import Int64Type, int64, uint32, string
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.values import Add, Sub, Lt, Gt, Eq, Length, col
+from marrow.expr.values import Add, Sub, Less, Greater, Equal, Length, col
 
 
 # ---------------------------------------------------------------------------
@@ -242,17 +242,17 @@ def test_fused_add_copy() raises:
 
 
 # ---------------------------------------------------------------------------
-# BoolValue nodes — Lt / Gt / Eq
+# BoolValue nodes — Less / Greater / Equal
 # ---------------------------------------------------------------------------
 
 
 def test_lt_fuses() raises:
-    """Lt(col, col) produces the correct bit-packed BoolArray."""
+    """Less(col, col) produces the correct bit-packed BoolArray."""
     var a = array([1, 5, 3, 8, 2], int64)
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var lt = Lt(col("a", int64), col("b", int64))
+    var lt = Less(col("a", int64), col("b", int64))
     var result = lt.execute(batch)
     assert_true(result[0].value())
     assert_true(not result[1].value())
@@ -262,12 +262,12 @@ def test_lt_fuses() raises:
 
 
 def test_gt_fuses() raises:
-    """Gt(col, col) produces the correct bit-packed BoolArray."""
+    """Greater(col, col) produces the correct bit-packed BoolArray."""
     var a = array([1, 5, 3, 8, 2], int64)
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var gt = Gt(col("a", int64), col("b", int64))
+    var gt = Greater(col("a", int64), col("b", int64))
     var result = gt.execute(batch)
     assert_true(not result[0].value())
     assert_true(result[1].value())
@@ -277,12 +277,12 @@ def test_gt_fuses() raises:
 
 
 def test_eq_fuses() raises:
-    """Eq(col, col) produces the correct bit-packed BoolArray."""
+    """Equal(col, col) produces the correct bit-packed BoolArray."""
     var a = array([1, 4, 3, 4, 2], int64)
     var b = array([4, 4, 4, 4, 4], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
-    var eq = Eq(col("a", int64), col("b", int64))
+    var eq = Equal(col("a", int64), col("b", int64))
     var result = eq.execute(batch)
     assert_true(not result[0].value())
     assert_true(result[1].value())
@@ -292,7 +292,7 @@ def test_eq_fuses() raises:
 
 
 def test_comparison_composes_with_add() raises:
-    """Gt((a + b), b) composes NumericValue and BoolValue nodes in one fused
+    """Greater((a + b), b) composes NumericValue and BoolValue nodes in one fused
     pass -- no intermediate arrays for either the add or the comparison.
     """
     var a = array([1, 5, 3, 8, 2], int64)
@@ -300,7 +300,7 @@ def test_comparison_composes_with_add() raises:
     var batch = record_batch([a.copy(), b.copy()], names=["a", "b"])
 
     var added = Add(col("a", int64), col("b", int64))
-    var pred = Gt(added, col("b", int64))
+    var pred = Greater(added, col("b", int64))
     var result = pred.execute(batch)
     # a + b = [5, 9, 7, 12, 6]; compared to b = [4, 4, 4, 4, 4] -> all True
     for i in range(5):
@@ -308,22 +308,24 @@ def test_comparison_composes_with_add() raises:
 
 
 def test_comparison_write_to() raises:
-    """Lt/Gt/Eq.write_to() display the expected nested structure."""
+    """Less/Greater/Equal.write_to() display the expected nested structure."""
     assert_equal(
-        String(Lt(col("a", int64), col("b", int64))), "Lt(Col[a], Col[b])"
+        String(Less(col("a", int64), col("b", int64))), "Less(Col[a], Col[b])"
     )
     assert_equal(
-        String(Gt(col("a", int64), col("b", int64))), "Gt(Col[a], Col[b])"
+        String(Greater(col("a", int64), col("b", int64))),
+        "Greater(Col[a], Col[b])",
     )
     assert_equal(
-        String(Eq(col("a", int64), col("b", int64))), "Eq(Col[a], Col[b])"
+        String(Equal(col("a", int64), col("b", int64))), "Equal(Col[a], Col[b])"
     )
 
 
 def test_comparison_dtype_is_bool() raises:
-    """Lt/Gt/Eq.dtype() reports bool_, matching BoolValue's default impl."""
-    var lt = Lt(col("a", int64), col("b", int64))
-    assert_true(lt.dtype().value().is_bool())
+    """Less/Greater/Equal.dtype() reports bool_, matching BoolValue's default impl.
+    """
+    var lt = Less(col("a", int64), col("b", int64))
+    assert_true(lt.dtype().is_bool())
 
 
 def main() raises:

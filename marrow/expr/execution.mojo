@@ -21,46 +21,18 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 from std.memory import ArcPointer
 from std.gpu.host import DeviceContext
 
-from marrow.arrays import AnyArray, StringArray, StructArray
-from marrow.builders import PrimitiveBuilder, BoolBuilder, StringBuilder
-from marrow.dtypes import (
-    AnyDataType,
-    Field,
-    PrimitiveType,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
-    bool_,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-    struct_,
-)
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.kernels.concat import concat
-from marrow.kernels.filter import filter
-from marrow.kernels.groupby import HashGrouper
-from marrow.kernels.join import HashJoin
-from marrow.kernels.hashing import rapidhash
-from marrow.parquet import read_table
-from marrow.expr.values import AnyValue
+from ..arrays import AnyArray, StringArray, StructArray
+from ..builders import PrimitiveBuilder, BoolBuilder, StringBuilder
+from .. import dtypes as dt
+from ..schema import Schema
+from ..tabular import RecordBatch
+from ..kernels.concat import concat
+from ..kernels.filter import filter
+from ..kernels.groupby import HashGrouper
+from ..kernels.join import HashJoin
+from ..kernels.hashing import rapidhash
+from ..parquet import read_table
+from .values import AnyValue
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -114,14 +86,15 @@ struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
 # `collect()` merges morsels by concatenating each column. The general
 # `marrow.kernels.concat` routes through `AnyBuilder(dtype)` — an open switch
 # that instantiates a builder for *every* dtype (incl. nested) whenever it is
-# reachable, so it is never DCE'd and inflates the binary ~6x (measured). The
-# relational layer's projections produce only flat columns, so `collect()` uses
-# this local concat instead: typed builders for primitive/bool/string and a
-# `raise` otherwise (like `filter`), keeping the fused path closed and small.
+# reachable, so it links into the fused path and roughly doubles the binary
+# (measured: query_streaming 448 KB -> 878 KB). The relational layer's
+# projections produce only flat columns, so `collect()` uses this local concat
+# instead: typed builders for primitive/bool/string and a `raise` otherwise
+# (like `filter`), keeping the fused path closed and small.
 
 
 def _concat_primitive[
-    T: PrimitiveType
+    T: dt.PrimitiveType
 ](arrays: List[AnyArray]) raises -> AnyArray:
     var total = 0
     for ref a in arrays:
@@ -137,33 +110,33 @@ def _concat_primitive[
 def _concat(arrays: List[AnyArray]) raises -> AnyArray:
     """Concatenate same-dtype flat columns; raises on nested/other dtypes."""
     var dtype = arrays[0].dtype()
-    if dtype == bool_:
+    if dtype == dt.bool_:
         var builder = BoolBuilder(capacity=0)
         for ref a in arrays:
             builder.extend(a.as_bool())
         return builder.finish().to_any()
-    elif dtype == int8:
-        return _concat_primitive[Int8Type](arrays)
-    elif dtype == int16:
-        return _concat_primitive[Int16Type](arrays)
-    elif dtype == int32:
-        return _concat_primitive[Int32Type](arrays)
-    elif dtype == int64:
-        return _concat_primitive[Int64Type](arrays)
-    elif dtype == uint8:
-        return _concat_primitive[UInt8Type](arrays)
-    elif dtype == uint16:
-        return _concat_primitive[UInt16Type](arrays)
-    elif dtype == uint32:
-        return _concat_primitive[UInt32Type](arrays)
-    elif dtype == uint64:
-        return _concat_primitive[UInt64Type](arrays)
-    elif dtype == float16:
-        return _concat_primitive[Float16Type](arrays)
-    elif dtype == float32:
-        return _concat_primitive[Float32Type](arrays)
-    elif dtype == float64:
-        return _concat_primitive[Float64Type](arrays)
+    elif dtype == dt.int8:
+        return _concat_primitive[dt.Int8Type](arrays)
+    elif dtype == dt.int16:
+        return _concat_primitive[dt.Int16Type](arrays)
+    elif dtype == dt.int32:
+        return _concat_primitive[dt.Int32Type](arrays)
+    elif dtype == dt.int64:
+        return _concat_primitive[dt.Int64Type](arrays)
+    elif dtype == dt.uint8:
+        return _concat_primitive[dt.UInt8Type](arrays)
+    elif dtype == dt.uint16:
+        return _concat_primitive[dt.UInt16Type](arrays)
+    elif dtype == dt.uint32:
+        return _concat_primitive[dt.UInt32Type](arrays)
+    elif dtype == dt.uint64:
+        return _concat_primitive[dt.UInt64Type](arrays)
+    elif dtype == dt.float16:
+        return _concat_primitive[dt.Float16Type](arrays)
+    elif dtype == dt.float32:
+        return _concat_primitive[dt.Float32Type](arrays)
+    elif dtype == dt.float64:
+        return _concat_primitive[dt.Float64Type](arrays)
     elif dtype.is_string():
         var builder = StringBuilder(capacity=0)
         for ref a in arrays:
@@ -415,7 +388,7 @@ struct AggregateProcessor(Processor):
     var input: AnyProcessor
     var keys: List[AnyValue]
     var agg_exprs: List[AnyValue]
-    var key_fields: List[Field]
+    var key_fields: List[dt.Field]
     var _schema: Schema
     var _grouper: HashGrouper
     var _emitted: Bool
@@ -427,8 +400,8 @@ struct AggregateProcessor(Processor):
         var keys: List[AnyValue],
         var agg_exprs: List[AnyValue],
         var funcs: List[String],
-        var value_dtypes: List[AnyDataType],
-        var key_fields: List[Field],
+        var value_dtypes: List[dt.AnyDataType],
+        var key_fields: List[dt.Field],
         var schema: Schema,
     ):
         self.input = input^
@@ -449,12 +422,12 @@ struct AggregateProcessor(Processor):
             try:
                 var batch = self.input.pull()
                 var key_children = List[AnyArray]()
-                var key_struct_fields = List[Field]()
+                var key_struct_fields = List[dt.Field]()
                 for i in range(len(self.keys)):
                     key_children.append(self.keys[i].to_array(batch))
                     key_struct_fields.append(self.key_fields[i].copy())
                 var key_struct = StructArray(
-                    dtype=struct_(key_struct_fields^),
+                    dtype=dt.struct_(key_struct_fields^),
                     length=batch.num_rows(),
                     nulls=0,
                     offset=0,

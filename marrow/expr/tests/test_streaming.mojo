@@ -15,8 +15,8 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import Schema, schema
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.relations import Table
-from marrow.expr.values import Gt
+from marrow.expr.values import Table
+from marrow.expr.values import Greater
 from marrow.expr.dynamic import col
 from marrow.expr.values import AnyValue
 from marrow.expr.relations import (
@@ -53,7 +53,7 @@ def _fused_plan(morsel: Int) raises -> AnyRelation:
     var t = Table[_Orders]()
     var filtered = AnyRelation(
         InMemoryTable(batch=_batch(), morsel_size=morsel)
-    ).filter(AnyValue(Gt(t.a, t.b)))
+    ).filter(AnyValue(Greater(t.a, t.b)))
     var values = List[AnyValue]()
     values.append(AnyValue(t.a))
     values.append(AnyValue(t.name))
@@ -97,9 +97,7 @@ def test_result_independent_of_morsel_size() raises:
         var plan = _fused_plan(morsel)
         var result = execute(plan)
         assert_equal(result.num_rows(), 2)
-        assert_true(
-            result.columns[0].as_int64().copy() == array([5, 8], int64)
-        )
+        assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
 
 
 def test_streaming_interpreter_values() raises:

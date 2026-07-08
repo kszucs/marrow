@@ -34,16 +34,13 @@ Example
 """
 
 from std.memory import ArcPointer
-from std.reflection import reflect
 
-import marrow.dtypes as dt
-from marrow.arrays import StringArray
-from marrow.dtypes import AnyDataType, Field, int64, float64
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.expr.values import AnyValue, NumericValue, StringValue
-from marrow.expr.dynamic import DynValue, col, LOAD
-from marrow.expr.execution import (
+from ..dtypes import AnyDataType, Field, int64, float64
+from ..schema import Schema
+from ..tabular import RecordBatch
+from .values import AnyValue
+from .dynamic import DynValue, col, LOAD
+from .execution import (
     ExecutionContext,
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -54,7 +51,7 @@ from marrow.expr.execution import (
     AggregateProcessor,
     JoinProcessor,
 )
-from marrow.kernels.join import (
+from ..kernels.join import (
     JOIN_INNER,
     JOIN_LEFT,
     JOIN_RIGHT,
@@ -64,19 +61,6 @@ from marrow.kernels.join import (
     JOIN_ALL,
     JOIN_ANY,
 )
-
-
-# ---------------------------------------------------------------------------
-# Relation node kind constants
-# ---------------------------------------------------------------------------
-
-comptime SCAN_NODE: UInt8 = 0
-comptime FILTER_NODE: UInt8 = 1
-comptime PROJECT_NODE: UInt8 = 2
-comptime IN_MEMORY_TABLE_NODE: UInt8 = 3
-comptime PARQUET_SCAN_NODE: UInt8 = 4
-comptime AGGREGATE_NODE: UInt8 = 5
-comptime JOIN_NODE: UInt8 = 6
 
 
 def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
@@ -106,9 +90,6 @@ trait Relation(ImplicitlyDeletable, Movable):
     recursively), so a plan is a reusable template you can inspect, copy cheaply
     (O(1) — nodes are immutable and shared), and rewrite."""
 
-    def kind(self) -> UInt8:
-        ...
-
     def schema(self) -> Schema:
         ...
 
@@ -135,17 +116,12 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     API (``select``/``filter``/``aggregate``/``join``)."""
 
     var _data: ArcPointer[NoneType]
-    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
     var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
     var _virt_open: def(
         ArcPointer[NoneType], ExecutionContext
     ) thin raises -> AnyProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
-
-    @staticmethod
-    def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
-        return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
     def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
@@ -174,7 +150,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def __init__[T: Relation](out self, var value: T):
         var ptr = ArcPointer(value^)
         self._data = rebind[ArcPointer[NoneType]](ptr^)
-        self._virt_kind = Self._tramp_kind[T]
         self._virt_schema = Self._tramp_schema[T]
         self._virt_open = Self._tramp_open[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
@@ -183,7 +158,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     def __init__(out self, *, copy: Self):
         # O(1) share — nodes are immutable, so aliasing is safe.
         self._data = copy._data
-        self._virt_kind = copy._virt_kind
         self._virt_schema = copy._virt_schema
         self._virt_open = copy._virt_open
         self._virt_write_to_string = copy._virt_write_to_string
@@ -193,9 +167,6 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_drop(self._data^)
 
     # --- introspection ---
-
-    def kind(self) -> UInt8:
-        return self._virt_kind(self._data)
 
     def schema(self) -> Schema:
         return self._virt_schema(self._data)
@@ -397,9 +368,6 @@ struct Scan(Relation):
         self.name = name^
         self._schema = schema^
 
-    def kind(self) -> UInt8:
-        return SCAN_NODE
-
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
@@ -421,9 +389,6 @@ struct InMemoryTable(Relation):
     ):
         self.batch = RecordBatch(copy=batch)
         self.morsel_size = morsel_size
-
-    def kind(self) -> UInt8:
-        return IN_MEMORY_TABLE_NODE
 
     def schema(self) -> Schema:
         return Schema(copy=self.batch.schema)
@@ -464,9 +429,6 @@ struct ParquetScan(Relation):
         self._schema = schema^
         self.morsel_size = morsel_size
 
-    def kind(self) -> UInt8:
-        return PARQUET_SCAN_NODE
-
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
@@ -500,9 +462,6 @@ struct Filter(Relation):
     def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
         self.input = input^
         self.predicate = predicate^
-
-    def kind(self) -> UInt8:
-        return FILTER_NODE
 
     def schema(self) -> Schema:
         return self.input.schema()
@@ -538,9 +497,6 @@ struct Project(Relation):
         self.names = names^
         self.values = values^
         self._schema = schema^
-
-    def kind(self) -> UInt8:
-        return PROJECT_NODE
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
@@ -598,9 +554,6 @@ struct Aggregate(Relation):
         self.key_fields = key_fields^
         self._schema = schema^
 
-    def kind(self) -> UInt8:
-        return AGGREGATE_NODE
-
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
@@ -654,9 +607,6 @@ struct Join(Relation):
         self.strictness = strictness
         self._schema = schema^
 
-    def kind(self) -> UInt8:
-        return JOIN_NODE
-
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
@@ -688,105 +638,3 @@ def execute(
     concurrently."""
     var op = plan.open(ctx)
     return op.collect()
-
-
-# ===========================================================================
-# Name-resolved column handles — Table[T]() / col() produce these fused leaves
-# ===========================================================================
-
-
-struct NumericColumn[T: dt.NumericType](NumericValue):
-    """Named typed numeric column reference — carries only its ``name`` (runtime
-    field); the type parameter is just the dtype that drives the SIMD ``core``.
-    The position is resolved by name against ``batch.schema`` at execution. Built
-    by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly.
-
-    ``to_array`` comes from ``NumericValue``'s default; only ``field_name`` is
-    overridden here (columns are named, unlike anonymous computed values)."""
-
-    comptime OutType = Self.T
-    comptime NativeType = Self.T.native
-
-    var name: String
-
-    def __init__(out self, var name: String):
-        self.name = name^
-
-    @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        return (
-            batch.columns[batch.schema.get_field_index(self.name)]
-            .as_primitive[Self.T]()
-            .values()
-            .load[W](idx)
-        )
-
-    def field_name(self) -> String:
-        return self.name.copy()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("Col[", self.name, "]")
-
-
-struct StringColumn(StringValue):
-    """Named typed string column reference — the string counterpart of
-    ``NumericColumn[T]`` (one type across all string columns; position resolved
-    by name). ``to_array`` comes from ``StringValue``'s default."""
-
-    var name: String
-
-    def __init__(out self, var name: String):
-        self.name = name^
-
-    def resolve(self, batch: RecordBatch) -> StringArray:
-        return (
-            batch.columns[batch.schema.get_field_index(self.name)]
-            .as_string()
-            .copy()
-        )
-
-    def execute(self, batch: RecordBatch) raises -> StringArray:
-        return self.resolve(batch)
-
-    def field_name(self) -> String:
-        return self.name.copy()
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write("StrCol[", self.name, "]")
-
-
-struct Table[T: AnyType](Copyable, Movable):
-    """Column-access handle over a plain schema struct — ``Table[Orders]()``.
-
-    ``T`` is any struct of plain dtype-tag fields (``var a: Int64Type``).
-    ``t.a`` reflects field ``a``'s dtype on ``T`` at compile time
-    (``reflect[T].field[name].T``) to pick the column type; the position is
-    resolved by name at execution. A companion handle is required because
-    ``T``'s own fields shadow ``__getattr_param__``; ``T`` is never instantiated
-    (only reflected). The two overloads route numeric/string fields to
-    ``NumericColumn``/``StringColumn`` via a ``where`` clause the constraint
-    solver can prove (the reflection query folds to a builtin KGEN attribute).
-    """
-
-    comptime _dtype[name: StringLiteral] = reflect[Self.T].field[name].T
-
-    def __init__(out self):
-        pass
-
-    @always_inline
-    def __getattr_param__[
-        name: StringLiteral
-    ](self) -> NumericColumn[Self._dtype[name]] where conforms_to(
-        Self._dtype[name], dt.NumericType
-    ):
-        return NumericColumn[Self._dtype[name]](String(name))
-
-    @always_inline
-    def __getattr_param__[
-        name: StringLiteral
-    ](self) -> StringColumn where conforms_to(
-        Self._dtype[name], dt.StringLikeType
-    ):
-        return StringColumn(String(name))

@@ -31,15 +31,15 @@ CAST - Type cast (not yet implemented — see DynValue.eval)
 LENGTH - String byte length (dispatches to kernels.string.string_lengths)
 """
 
-from marrow.arrays import AnyArray
-from marrow.dtypes import AnyDataType, NumericType
-from marrow.scalars import AnyScalar, PrimitiveScalar
-from marrow.schema import Schema
-from marrow.tabular import RecordBatch
-from marrow.expr.values import Value
-from marrow.kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
-from marrow.kernels.boolean import and_, or_, not_, is_null, select
-from marrow.kernels.compare import (
+from ..arrays import AnyArray
+from ..dtypes import AnyDataType, NumericType
+from ..scalars import AnyScalar, PrimitiveScalar
+from ..schema import Schema
+from ..tabular import RecordBatch
+from .values import Value
+from ..kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
+from ..kernels.boolean import and_, or_, not_, is_null, select
+from ..kernels.compare import (
     equal,
     not_equal,
     less,
@@ -47,7 +47,7 @@ from marrow.kernels.compare import (
     greater,
     greater_equal,
 )
-from marrow.kernels.string import string_lengths
+from ..kernels.string import string_lengths
 
 
 # ---------------------------------------------------------------------------

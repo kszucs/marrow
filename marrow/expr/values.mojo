@@ -4,16 +4,16 @@
 Each node is a generic struct where type parameters encode the expression
 tree structure, enabling the compiler to inline the full ``core[W]()`` call
 chain into a single fused vectorize loop with zero intermediate arrays.
-The leaf column nodes (``NumericColumn[T]`` / ``StringColumn``) live in
-``marrow.expr.relations`` — they resolve by name against the batch schema and
-are built by ``Table[Tbl]()`` / ``col(name, dtype)``; this module supplies the
-fused algebra (``Add``/``Gt``/``Length``…) that composes over them.
+The named leaf column nodes (``NumericColumn[T]`` / ``StringColumn``) live at the
+bottom of this module — they resolve by name against the batch schema and are
+built by ``Table[Tbl]()`` / ``col(name, dtype)``; the fused algebra
+(``Add``/``Greater``/``Length``…) composes over them.
 
 Expression nodes
 ----------------
 ``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
 ``Sub[L, R]`` — fused binary subtract
-``Lt[L, R]``, ``Gt[L, R]``, ``Eq[L, R]`` — fused binary comparisons; result is
+``Less[L, R]``, ``Greater[L, R]``, ``Equal[L, R]`` — fused binary comparisons; result is
     a bit-packed BoolArray, not a PrimitiveArray (see ``BoolValue`` below)
 ``Length[S]`` — fused string byte length
 
@@ -49,13 +49,13 @@ from std.sys import size_of
 from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
 from std.memory import ArcPointer
+from std.reflection import reflect
 
-import marrow.dtypes as dt
-import marrow.expr.relations as rel
-from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
-from marrow.buffers import Bitmap, Buffer
-from marrow.dtypes import AnyDataType, DType, NumericType
-from marrow.tabular import RecordBatch
+from .. import dtypes as dt
+from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
+from ..buffers import Bitmap, Buffer
+from ..dtypes import AnyDataType, DType, NumericType
+from ..tabular import RecordBatch
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +114,7 @@ trait NumericValue(Value):
 
     Provides ``core[W](batch, idx)`` (SIMD lane computation with batch) and
     ``execute(batch)`` (fused vectorize loop).  Both the named ``NumericColumn``
-    leaf (in ``marrow.expr.relations``) and ``Add[L, R]`` implement this trait.
+    leaf (below) and ``Add[L, R]`` implement this trait.
 
     ``comptime OutType`` — the output ``NumericType``.
     ``comptime NativeType`` — the Mojo scalar type for SIMD operations.
@@ -173,9 +173,9 @@ trait NumericValue(Value):
         """Materialise the fused result and erase to ``AnyArray``."""
         return self.execute(batch).to_any()
 
-    def dtype(self) -> Optional[AnyDataType]:
-        """Return the output data type."""
-        return Optional[AnyDataType](Self.OutType())
+    def dtype(self) -> AnyDataType:
+        """Return the output data type (always known at compile time)."""
+        return AnyDataType(Self.OutType())
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +314,9 @@ trait BoolValue(Value):
 
     # Default Value trait implementation (write_to comes from Writable)
 
-    def dtype(self) -> Optional[AnyDataType]:
+    def dtype(self) -> AnyDataType:
         """Return the output data type (always bool)."""
-        return Optional[AnyDataType](dt.bool_)
+        return AnyDataType(dt.bool_)
 
     # to_array materialises the predicate's BoolArray; field_name defaults to
     # anonymous (Value's default).
@@ -326,12 +326,12 @@ trait BoolValue(Value):
 
 
 # ---------------------------------------------------------------------------
-# Lt — comptime-typed binary less-than
+# Less — comptime-typed binary less-than
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct Lt[L: NumericValue, R: NumericValue](BoolValue):
+struct Less[L: NumericValue, R: NumericValue](BoolValue):
     """Fused binary less-than: evaluates left < right in a single vectorized
     pass, producing a bit-packed BoolArray with zero intermediate arrays.
     """
@@ -348,7 +348,7 @@ struct Lt[L: NumericValue, R: NumericValue](BoolValue):
         return l.lt(r)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Lt(")
+        writer.write(t"Less(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)
@@ -356,12 +356,12 @@ struct Lt[L: NumericValue, R: NumericValue](BoolValue):
 
 
 # ---------------------------------------------------------------------------
-# Gt — comptime-typed binary greater-than
+# Greater — comptime-typed binary greater-than
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct Gt[L: NumericValue, R: NumericValue](BoolValue):
+struct Greater[L: NumericValue, R: NumericValue](BoolValue):
     """Fused binary greater-than: evaluates left > right in a single
     vectorized pass, producing a bit-packed BoolArray with zero intermediate
     arrays.
@@ -379,7 +379,7 @@ struct Gt[L: NumericValue, R: NumericValue](BoolValue):
         return l.gt(r)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Gt(")
+        writer.write(t"Greater(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)
@@ -387,12 +387,12 @@ struct Gt[L: NumericValue, R: NumericValue](BoolValue):
 
 
 # ---------------------------------------------------------------------------
-# Eq — comptime-typed binary equality
+# Equal — comptime-typed binary equality
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct Eq[L: NumericValue, R: NumericValue](BoolValue):
+struct Equal[L: NumericValue, R: NumericValue](BoolValue):
     """Fused binary equality: evaluates left == right in a single vectorized
     pass, producing a bit-packed BoolArray with zero intermediate arrays.
     """
@@ -409,7 +409,7 @@ struct Eq[L: NumericValue, R: NumericValue](BoolValue):
         return l.eq(r)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Eq(")
+        writer.write(t"Equal(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)
@@ -447,9 +447,9 @@ trait StringValue(Value):
         """Materialise the string result and erase to ``AnyArray``."""
         return self.execute(batch).to_any()
 
-    def dtype(self) -> Optional[AnyDataType]:
-        """Return the output data type."""
-        return Optional[AnyDataType](dt.string)
+    def dtype(self) -> AnyDataType:
+        """Return the output data type (always string)."""
+        return AnyDataType(dt.string)
 
 
 # ---------------------------------------------------------------------------
@@ -522,29 +522,29 @@ def _vectorize_dispatch[
 # ---------------------------------------------------------------------------
 
 
-def col[T: dt.NumericType](var name: String, dtype: T) -> rel.NumericColumn[T]:
+def col[T: dt.NumericType](var name: String, dtype: T) -> NumericColumn[T]:
     """Reference a numeric column by name — ``col("a", int64)``.
 
     A schema-struct-free, polars-style leaf: the dtype is given explicitly (the
     AOT layer needs it as a type parameter to stay fused), and the position is
     resolved by name against the batch schema at execution. Overloaded on the
     dtype's trait, so ``col("a", int64)`` returns a numeric column and
-    ``col("s", string)`` a string one — both the named leaves from
-    ``marrow.expr.relations`` (``NumericColumn[T]`` / ``StringColumn``), so they
-    compose with ``Add``/``Gt`` and drop into ``Project``/``Filter``.
+    ``col("s", string)`` a string one — both the named leaves defined below
+    (``NumericColumn[T]`` / ``StringColumn``), so they compose with
+    ``Add``/``Greater`` and drop into ``Project``/``Filter``.
 
     Usage::
 
         var plan = Project(Tuple(col("a", int64), col("name", string)))
-        var plan = ... .filter(Gt(col("a", int64), col("b", int64)))
+        var plan = ... .filter(Greater(col("a", int64), col("b", int64)))
     """
-    return rel.NumericColumn[T](name^)
+    return NumericColumn[T](name^)
 
 
-def col[T: dt.StringLikeType](var name: String, dtype: T) -> rel.StringColumn:
+def col[T: dt.StringLikeType](var name: String, dtype: T) -> StringColumn:
     """Reference a string column by name — ``col("name", string)``. See the
     numeric overload above."""
-    return rel.StringColumn(name^)
+    return StringColumn(name^)
 
 
 # ===========================================================================
@@ -610,3 +610,105 @@ struct AnyValue(Copyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_to_str(self._boxed))
+
+
+# ===========================================================================
+# Name-resolved column handles — Table[T]() / col() produce these fused leaves
+# ===========================================================================
+
+
+struct NumericColumn[T: dt.NumericType](NumericValue):
+    """Named typed numeric column reference — carries only its ``name`` (runtime
+    field); the type parameter is just the dtype that drives the SIMD ``core``.
+    The position is resolved by name against ``batch.schema`` at execution. Built
+    by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly.
+
+    ``to_array`` comes from ``NumericValue``'s default; only ``field_name`` is
+    overridden here (columns are named, unlike anonymous computed values)."""
+
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+
+    var name: String
+
+    def __init__(out self, var name: String):
+        self.name = name^
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return (
+            batch.columns[batch.schema.get_field_index(self.name)]
+            .as_primitive[Self.T]()
+            .values()
+            .load[W](idx)
+        )
+
+    def field_name(self) -> String:
+        return self.name.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Col[", self.name, "]")
+
+
+struct StringColumn(StringValue):
+    """Named typed string column reference — the string counterpart of
+    ``NumericColumn[T]`` (one type across all string columns; position resolved
+    by name). ``to_array`` comes from ``StringValue``'s default."""
+
+    var name: String
+
+    def __init__(out self, var name: String):
+        self.name = name^
+
+    def resolve(self, batch: RecordBatch) -> StringArray:
+        return (
+            batch.columns[batch.schema.get_field_index(self.name)]
+            .as_string()
+            .copy()
+        )
+
+    def execute(self, batch: RecordBatch) raises -> StringArray:
+        return self.resolve(batch)
+
+    def field_name(self) -> String:
+        return self.name.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("StrCol[", self.name, "]")
+
+
+struct Table[T: AnyType](Copyable, Movable):
+    """Column-access handle over a plain schema struct — ``Table[Orders]()``.
+
+    ``T`` is any struct of plain dtype-tag fields (``var a: Int64Type``).
+    ``t.a`` reflects field ``a``'s dtype on ``T`` at compile time
+    (``reflect[T].field[name].T``) to pick the column type; the position is
+    resolved by name at execution. A companion handle is required because
+    ``T``'s own fields shadow ``__getattr_param__``; ``T`` is never instantiated
+    (only reflected). The two overloads route numeric/string fields to
+    ``NumericColumn``/``StringColumn`` via a ``where`` clause the constraint
+    solver can prove (the reflection query folds to a builtin KGEN attribute).
+    """
+
+    comptime _dtype[name: StringLiteral] = reflect[Self.T].field[name].T
+
+    def __init__(out self):
+        pass
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral
+    ](self) -> NumericColumn[Self._dtype[name]] where conforms_to(
+        Self._dtype[name], dt.NumericType
+    ):
+        return NumericColumn[Self._dtype[name]](String(name))
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral
+    ](self) -> StringColumn where conforms_to(
+        Self._dtype[name], dt.StringLikeType
+    ):
+        return StringColumn(String(name))

@@ -13,8 +13,8 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.relations import Table
-from marrow.expr.values import Gt
+from marrow.expr.values import Table
+from marrow.expr.values import Greater
 from marrow.expr.values import AnyValue
 from marrow.expr.relations import InMemoryTable, Project, AnyRelation, execute
 
@@ -35,7 +35,7 @@ def main() raises:
 
     var t = Table[Orders]()
     var filtered = AnyRelation(InMemoryTable(batch=batch)).filter(
-        AnyValue(Gt(t.a, t.b))
+        AnyValue(Greater(t.a, t.b))
     )
     var values = List[AnyValue]()
     values.append(AnyValue(t.a))

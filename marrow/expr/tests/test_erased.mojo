@@ -1,7 +1,7 @@
 """Tests for the universal value box ``AnyValue`` in ``marrow.expr.values``.
 
 ``AnyValue`` wraps any ``Value`` node behind a ``to_array(batch)`` trampoline:
-- fused comptime nodes (named columns, ``Gt``/``Lt``/``Eq``) — the AOT path;
+- fused comptime nodes (named columns, ``Greater``/``Less``/``Equal``) — the AOT path;
 - the runtime ``DynValue`` interpreter (built via ``col()`` + operators).
 
 The load-bearing property is that fused and interpreted values interchange
@@ -16,7 +16,7 @@ from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.relations import Table
+from marrow.expr.values import Table
 from marrow.expr.values import AnyValue
 from marrow.expr.dynamic import col
 
@@ -47,7 +47,8 @@ def test_box_fused_column() raises:
 
 
 def test_box_dynvalue_arithmetic() raises:
-    """A DynValue (col()+col()) boxed into AnyValue interprets over the batch."""
+    """A DynValue (col()+col()) boxed into AnyValue interprets over the batch.
+    """
     var v = AnyValue(col("a") + col("b"))
     assert_true(
         v.to_array(_batch()).as_int64().copy() == array([5, 9, 7, 12, 6], int64)

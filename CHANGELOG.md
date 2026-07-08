@@ -22,6 +22,24 @@
 
 ### Refactors
 
+- **Column handles moved into `values.mojo`** (`marrow.expr`): the named
+  `NumericColumn`/`StringColumn` leaves and the `Table[Tbl]()` handle now live
+  beside the fused algebra and the `col(name, dtype)` factory, removing the
+  `values`↔`relations` import cycle — the expr dependency graph is now acyclic
+  (`dynamic`/`execution`/`relations` → `values`).
+- **Comparison value nodes renamed** `Gt`/`Lt`/`Eq` → `Greater`/`Less`/`Equal`
+  (`marrow.expr.values`), matching the compare-kernel vocabulary
+  (`greater`/`less`/`equal`).
+- **Fused `dtype()` is now total** (`marrow.expr.values`): the
+  `NumericValue`/`BoolValue`/`StringValue` traits return `AnyDataType` (always
+  known at compile time) instead of `Optional[AnyDataType]`; the runtime
+  `DynValue.dtype()` stays optional (a column's type is unknown without a schema).
+- **Dropped the relation `kind()` tag** (`marrow.expr`): the `Relation.kind()`
+  method and the `*_NODE` constants had no consumer beyond a tautological test —
+  node type is available through `write_to()` and `downcast[T]`. An optimizer can
+  re-add a tag trivially if it ever wants fast dispatch.
+- **`marrow.expr` submodules use relative imports** (`..dtypes`, `.values`, …)
+  and `from .. import dtypes as dt`, matching the rest of the package.
 - **Relational engine split into a descriptive IR and an execution layer**
   (`marrow.expr.relations` + new `marrow.expr.execution`): `Relation` nodes are
   now pure, immutable descriptions (`kind`/`schema`/`open`) with no execution
