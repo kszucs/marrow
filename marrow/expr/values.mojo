@@ -639,21 +639,11 @@ def _dyn_name_tramp(ptr: ArcPointer[NoneType]) -> String:
     return typed[].field_name()
 
 
-def _col_write_tramp[V: Column](ptr: ArcPointer[NoneType]) -> String:
+def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+    """One write trampoline for every boxed type (all conform to ``Value``,
+    which is ``Writable``)."""
     var s = String()
     rebind[ArcPointer[V]](ptr)[].write_to(s)
-    return s^
-
-
-def _pred_write_tramp[V: BoolValue](ptr: ArcPointer[NoneType]) -> String:
-    var s = String()
-    rebind[ArcPointer[V]](ptr)[].write_to(s)
-    return s^
-
-
-def _dyn_write_tramp(ptr: ArcPointer[NoneType]) -> String:
-    var s = String()
-    rebind[ArcPointer[DynValue]](ptr)[].write_to(s)
     return s^
 
 
@@ -676,7 +666,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._to_array = _col_to_array_tramp[V]
         self._field_name = _col_name_tramp[V]
-        self._write_to_str = _col_write_tramp[V]
+        self._write_to_str = _write_tramp[V]
 
     @implicit
     def __init__[V: BoolValue](out self, value: V):
@@ -685,7 +675,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._to_array = _pred_to_array_tramp[V]
         self._field_name = _no_name_tramp
-        self._write_to_str = _pred_write_tramp[V]
+        self._write_to_str = _write_tramp[V]
 
     @implicit
     def __init__(out self, var value: DynValue):
@@ -696,7 +686,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._to_array = _dyn_to_array_tramp
         self._field_name = _dyn_name_tramp
-        self._write_to_str = _dyn_write_tramp
+        self._write_to_str = _write_tramp[DynValue]
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self._to_array(self._boxed, batch)
