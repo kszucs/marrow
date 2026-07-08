@@ -106,13 +106,11 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 self.dict.resize(unsafe_uninit_length=page.num_values)
                 memcpy(
                     dest=self.dict.unsafe_ptr(),
-                    src=Span(page.body)
-                    .unsafe_ptr()
-                    .bitcast[Scalar[Self.store_dt]](),
+                    src=page.body.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
                     count=page.num_values,
                 )
             else:
-                var span = Span(page.body)
+                var span = page.body
                 for i in range(page.num_values):
                     self.dict.append(self._read(span, i * PW))
             return
@@ -224,7 +222,7 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
     def consume(mut self, var page: Page) raises:
         if page.kind == PAGEKIND_DICT:
             self.dict_body = List[UInt8]()
-            self.dict_body.extend(Span(page.body))
+            self.dict_body.extend(page.body)
             var span = Span(self.dict_body)
             var off = 0
             for _ in range(page.num_values):

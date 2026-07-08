@@ -123,7 +123,7 @@ struct PrimChild[T: NumericType, phys: DType](ChildBuilder):
 
     def dict_page(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys]]()
-        var span = Span(page.body)
+        var span = page.body
         for i in range(page.num_values):
             self.dict.append(
                 read_fixed_le[Self.phys](span, i * PW).cast[Self.T.native]()
@@ -162,7 +162,7 @@ struct BytesChild[BT: BinaryLikeType](ChildBuilder):
 
     def dict_page(mut self, var page: Page) raises:
         self.dict_body = List[UInt8]()
-        self.dict_body.extend(Span(page.body))
+        self.dict_body.extend(page.body)
         var span = Span(self.dict_body)
         var off = 0
         for _ in range(page.num_values):

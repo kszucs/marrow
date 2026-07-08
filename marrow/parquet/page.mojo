@@ -9,7 +9,7 @@ column decoders in `column.mojo` only deal with already-decoded pages.
 from std.sys import size_of
 
 from .encoding import rle_decode, rle_count_matches, bit_width
-from .compression import Codecs
+from .compression import Codecs, CODEC_UNCOMPRESSED
 from .schema import LeafColumn
 from .format import (
     read_page_header,
@@ -62,12 +62,20 @@ comptime PAGEKIND_DICT: Int = 0
 comptime PAGEKIND_DATA: Int = 1
 
 
+def _erase(s: Span[UInt8, _]) -> Span[UInt8, ImmutUntrackedOrigin]:
+    """Drop origin tracking on a byte span. The reader keeps the backing storage
+    (the mmap, or the PageReader's decompression scratch) alive for as long as
+    each page is consumed, so the untracked view is always valid in use."""
+    return rebind[Span[UInt8, ImmutUntrackedOrigin]](s)
+
+
 struct Page(Movable):
-    """A decoded page: the (decompressed) body plus, for data pages, the
-    definition levels, the byte offset where values start, and value counts."""
+    """A decoded page. `body` is a *view* — into the mmap for uncompressed pages
+    (zero copy) or into the `PageReader`'s reused scratch for compressed pages —
+    not an owned buffer, so no per-page allocation."""
 
     var kind: Int
-    var body: List[UInt8]
+    var body: Span[UInt8, ImmutUntrackedOrigin]
     var def_levels: List[Int32]
     var rep_levels: List[Int32]  # only populated for repeated (list) leaves
     var value_offset: Int
@@ -75,9 +83,9 @@ struct Page(Movable):
     var encoding: Int
     var num_values: Int
 
-    def __init__(out self):
+    def __init__(out self, body: Span[UInt8, ImmutUntrackedOrigin]):
         self.kind = PAGEKIND_DATA
-        self.body = List[UInt8]()
+        self.body = body
         self.def_levels = List[Int32]()
         self.rep_levels = List[Int32]()
         self.value_offset = 0
@@ -97,9 +105,9 @@ struct Page(Movable):
             or self.encoding == ENC_PLAIN_DICTIONARY
         )
 
-    def values(ref self) -> Span[UInt8, origin_of(self.body)]:
+    def values(self) -> Span[UInt8, ImmutUntrackedOrigin]:
         """The value bytes (after any level prefix)."""
-        return Span(self.body)[self.value_offset :]
+        return self.body[self.value_offset :]
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +121,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
     var leaf: LeafColumn
     var pos: Int
     var produced: Int  # data-page values yielded so far
+    var scratch: List[UInt8]  # reused decompression buffer for compressed pages
 
     def __init__(
         out self,
@@ -128,12 +137,28 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.meta = meta^
         self.leaf = leaf^
         self.produced = 0
+        self.scratch = List[UInt8]()
+
+    def _body(
+        mut self,
+        comp: Span[UInt8, _],
+        uncompressed_size: Int,
+        mut codecs: Codecs,
+    ) raises -> Span[UInt8, ImmutUntrackedOrigin]:
+        """A view of the page body: the mmap bytes directly for uncompressed
+        pages, or the reused scratch after decompressing."""
+        if self.meta.codec == CODEC_UNCOMPRESSED:
+            return _erase(comp)
+        codecs.decompress_into(
+            self.meta.codec, comp, uncompressed_size, self.scratch
+        )
+        return _erase(Span(self.scratch))
 
     def has_next(self) -> Bool:
         return self.produced < self.meta.num_values
 
     def _decode_levels_v1(mut self, mut page: Page) raises:
-        var body = Span(page.body)
+        var body = page.body
         var cursor = 0
         var leveled = self.leaf.max_rep >= 1
         if leveled:
@@ -174,49 +199,52 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var comp = self.data[body_start : body_start + ph.compressed_page_size]
         self.pos = body_start + ph.compressed_page_size
 
-        var page = Page()
         if ph.type == PAGE_DICTIONARY:
+            var page = Page(self._body(comp, ph.uncompressed_page_size, codecs))
             page.kind = PAGEKIND_DICT
             page.num_values = ph.dictionary_page_header.value().num_values
-            page.body = codecs.decompress(
-                self.meta.codec, comp, ph.uncompressed_page_size
-            )
             return page^
 
         if ph.type == PAGE_DATA:
+            var page = Page(self._body(comp, ph.uncompressed_page_size, codecs))
             ref dph = ph.data_page_header.value()
             page.num_values = dph.num_values
             page.encoding = dph.encoding
-            page.body = codecs.decompress(
-                self.meta.codec, comp, ph.uncompressed_page_size
-            )
             self._decode_levels_v1(page)
+            self.produced += page.num_values
+            return page^
         elif ph.type == PAGE_DATA_V2:
+            # v2 keeps the (uncompressed) levels ahead of the (maybe compressed)
+            # values; assemble both into scratch, then view it.
             ref dph2 = ph.data_page_header_v2.value()
-            page.num_values = dph2.num_values
-            page.encoding = dph2.encoding
             var lvl_len = (
                 dph2.repetition_levels_byte_length
                 + dph2.definition_levels_byte_length
             )
-            var body = List[UInt8]()
-            body.extend(comp[0:lvl_len])  # levels are never compressed in v2
+            self.scratch.clear()
+            self.scratch.extend(comp[0:lvl_len])
             if dph2.is_compressed:
-                body.extend(
-                    codecs.decompress(
-                        self.meta.codec,
-                        comp[lvl_len:],
-                        ph.uncompressed_page_size - lvl_len,
+                self.scratch.extend(
+                    Span(
+                        codecs.decompress(
+                            self.meta.codec,
+                            comp[lvl_len:],
+                            ph.uncompressed_page_size - lvl_len,
+                        )
                     )
                 )
             else:
-                body.extend(comp[lvl_len:])
+                self.scratch.extend(comp[lvl_len:])
+
+            var page = Page(_erase(Span(self.scratch)))
+            page.num_values = dph2.num_values
+            page.encoding = dph2.encoding
             if (
                 self.leaf.max_rep >= 1
                 and dph2.repetition_levels_byte_length > 0
             ):
                 page.rep_levels = rle_decode(
-                    Span(body)[0 : dph2.repetition_levels_byte_length],
+                    page.body[0 : dph2.repetition_levels_byte_length],
                     bit_width(self.leaf.max_rep),
                     page.num_values,
                 )
@@ -226,7 +254,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 and dph2.definition_levels_byte_length > 0
             ):
                 page.def_levels = rle_decode(
-                    Span(body)[
+                    page.body[
                         cursor : cursor + dph2.definition_levels_byte_length
                     ],
                     bit_width(self.leaf.max_def),
@@ -234,9 +262,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 )
             page.value_offset = lvl_len
             page.num_present = page.num_values - dph2.num_nulls
-            page.body = body^
+            self.produced += page.num_values
+            return page^
         else:
             raise Error("parquet: unexpected page type")
-
-        self.produced += page.num_values
-        return page^

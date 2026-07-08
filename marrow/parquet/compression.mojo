@@ -15,7 +15,7 @@ Parquet `CompressionCodec` enum:
 
 from std.ffi import OwnedDLHandle, _try_find_dylib
 from std.pathlib import Path
-from std.memory import alloc, memset_zero
+from std.memory import alloc, memset_zero, memcpy
 
 comptime CODEC_UNCOMPRESSED: Int = 0
 comptime CODEC_SNAPPY: Int = 1
@@ -58,12 +58,14 @@ struct Codecs(Movable):
     var _snappy: Optional[OwnedDLHandle]
     var _lz4: Optional[OwnedDLHandle]
     var _zlib: Optional[OwnedDLHandle]
+    var _sz: List[UInt]  # reusable size out-param for snappy
 
     def __init__(out self):
         self._zstd = None
         self._snappy = None
         self._lz4 = None
         self._zlib = None
+        self._sz = [UInt(0)]
 
     def _ensure_zstd(mut self) raises:
         if not self._zstd:
@@ -105,14 +107,11 @@ struct Codecs(Movable):
         out_size: Int,
     ) raises:
         self._ensure_snappy()
-        var sz = alloc[UInt](1)
-        sz[0] = UInt(out_size)
+        self._sz[0] = UInt(out_size)
         var status = self._snappy.value().call["snappy_uncompress", Int32](
-            src.unsafe_ptr(), len(src), dst, sz
+            src.unsafe_ptr(), len(src), dst, self._sz.unsafe_ptr()
         )
-        var produced = Int(sz[0])
-        sz.free()
-        if status != 0 or produced != out_size:
+        if status != 0 or Int(self._sz[0]) != out_size:
             raise Error("snappy: decompress failed")
 
     def _lz4_raw_decompress(
@@ -165,19 +164,19 @@ struct Codecs(Movable):
         if produced != out_size:
             raise Error("gzip: decompressed size mismatch")
 
-    def decompress(
-        mut self, codec: Int, src: Span[UInt8, _], out_size: Int
-    ) raises -> List[UInt8]:
-        """Decompress `src` into a fresh `out_size`-byte list."""
+    def decompress_into(
+        mut self,
+        codec: Int,
+        src: Span[UInt8, _],
+        out_size: Int,
+        mut scratch: List[UInt8],
+    ) raises:
+        """Decompress `src` into `scratch` (resized, reused across pages)."""
+        scratch.resize(unsafe_uninit_length=out_size)
+        var ptr = scratch.unsafe_ptr()
         if codec == CODEC_UNCOMPRESSED:
-            var out = List[UInt8]()
-            out.extend(src)
-            return out^
-
-        var dst = List[UInt8]()
-        dst.resize(unsafe_uninit_length=out_size)  # codec fills every byte
-        var ptr = dst.unsafe_ptr()
-        if codec == CODEC_ZSTD:
+            memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
+        elif codec == CODEC_ZSTD:
             self._zstd_decompress(src, ptr, out_size)
         elif codec == CODEC_SNAPPY:
             self._snappy_decompress(src, ptr, out_size)
@@ -189,6 +188,13 @@ struct Codecs(Movable):
             raise Error(
                 "parquet: unsupported compression codec " + String(codec)
             )
+
+    def decompress(
+        mut self, codec: Int, src: Span[UInt8, _], out_size: Int
+    ) raises -> List[UInt8]:
+        """Decompress `src` into a fresh `out_size`-byte list."""
+        var dst = List[UInt8]()
+        self.decompress_into(codec, src, out_size, dst)
         return dst^
 
     def compress(
