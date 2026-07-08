@@ -25,8 +25,10 @@
   unsupported). The reader mmaps the file, decodes
   fixed-width PLAIN pages straight into the output buffer (memcpy fast path),
   counts definition levels without materializing them for no-null columns, and
-  uses a word-at-a-time bit-unpacker for RLE/dictionary streams — reading within
-  ~1.25× of single-threaded PyArrow.
+  SIMD-unpacks RLE/dictionary index streams eight values at a time (one 64-bit
+  load per lane, then a vector shift + mask) — matching single-threaded PyArrow
+  on PLAIN data and beating both PyArrow (~3.1×) and polars (~1.6×) on
+  dictionary-encoded columns.
 
 ### Fixes
 

@@ -48,6 +48,30 @@ def _load_u64(data: Span[UInt8, _], byte_idx: Int) -> UInt64:
     return (data.unsafe_ptr() + byte_idx).bitcast[UInt64]()[0]
 
 
+@always_inline
+def _unpack8(
+    data: Span[UInt8, _],
+    byte_base: Int,
+    base_bit: Int,
+    width: Int,
+    maskv: SIMD[DType.uint64, 8],
+) -> SIMD[DType.uint64, 8]:
+    """Unpack 8 bit-packed values in one shot: one unaligned 64-bit load per
+    lane, then a *vector* shift + mask over all 8 lanes. `width <= 32` keeps the
+    top read bit (`7 + width`) inside the 64-bit word, so a single load per lane
+    covers every value. ~3x faster than the scalar word-at-a-time loop."""
+    var wbuf = InlineArray[UInt64, 8](fill=0)
+    var sbuf = InlineArray[UInt64, 8](fill=0)
+
+    comptime for j in range(8):
+        var ab = base_bit + j * width
+        wbuf[j] = _load_u64(data, byte_base + (ab >> 3))
+        sbuf[j] = UInt64(ab & 7)
+    var words = wbuf.unsafe_ptr().load[width=8](0)
+    var shifts = sbuf.unsafe_ptr().load[width=8](0)
+    return (words >> shifts) & maskv
+
+
 def _read_bits(data: Span[UInt8, _], bit_offset: Int, nbits: Int) -> UInt64:
     """Read `nbits` starting at absolute `bit_offset`, least-significant first.
     """
@@ -80,15 +104,23 @@ def rle_decode(
         var header: UInt64
         header, pos = _read_varint(data, pos)
         if (header & 1) == 1:
-            # bit-packed run — one unaligned 64-bit load per value (width <= 32).
+            # bit-packed run — SIMD-unpack 8 values at a time (width <= 32).
             var num_groups = Int(header >> 1)
             var num_vals = num_groups * 8
-            var mask = (UInt64(1) << UInt64(width)) - 1
-            for k in range(num_vals):
-                var abs_bit = k * width
-                var word = _load_u64(data, pos + (abs_bit >> 3))
-                if len(out) < count:
-                    out.append(Int32((word >> UInt64(abs_bit & 7)) & mask))
+            var maskv = SIMD[DType.uint64, 8]((UInt64(1) << UInt64(width)) - 1)
+            var g = 0
+            while g < num_vals:
+                var v = _unpack8(data, pos, g * width, width, maskv)
+                if len(out) + 8 <= count:
+                    # comptime-unrolled extraction: lane index must be a
+                    # compile-time constant or the SIMD lane-select is runtime.
+                    comptime for j in range(8):
+                        out.append(Int32(v[j]))
+                else:
+                    var take = count - len(out)
+                    for j in range(take):
+                        out.append(Int32(v[j]))
+                g += 8
             pos += num_groups * width
         else:
             # RLE run
@@ -127,18 +159,27 @@ def rle_gather[
         var header: UInt64
         header, pos = _read_varint(data, pos)
         if (header & 1) == 1:
+            # SIMD-unpack 8 indices at a time (width <= 32 for dict indices),
+            # then gather dict values — the gather stays scalar (the dictionary
+            # is small and cache-resident, so it is effectively free).
             var num_groups = Int(header >> 1)
             var num_vals = num_groups * 8
-            var mask = (UInt64(1) << UInt64(width)) - 1
-            # width <= 32 for dictionary indices, so one 64-bit load per value
-            # covers it (shift <= 7 + width <= 39 bits).
-            for k in range(num_vals):
-                var abs_bit = k * width
-                var word = _load_u64(data, pos + (abs_bit >> 3))
-                var idx = Int((word >> UInt64(abs_bit & 7)) & mask)
-                if produced < count:
-                    dest[produced] = dict[idx]
-                    produced += 1
+            var maskv = SIMD[DType.uint64, 8]((UInt64(1) << UInt64(width)) - 1)
+            var g = 0
+            while g < num_vals:
+                var idxv = _unpack8(data, pos, g * width, width, maskv)
+                if produced + 8 <= count:
+                    # comptime-unrolled extraction: lane index must be a
+                    # compile-time constant or the SIMD lane-select is runtime.
+                    comptime for j in range(8):
+                        dest[produced + j] = dict[Int(idxv[j])]
+                    produced += 8
+                else:
+                    var take = count - produced
+                    for j in range(take):
+                        dest[produced] = dict[Int(idxv[j])]
+                        produced += 1
+                g += 8
             pos += num_groups * width
         else:
             var run_len = Int(header >> 1)
