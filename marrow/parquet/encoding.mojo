@@ -1,0 +1,235 @@
+"""Parquet value/level encodings.
+
+The RLE / bit-packed *hybrid* encoding carries both the definition/repetition
+levels and the dictionary index streams, so it is the workhorse here. PLAIN
+fixed-width and BYTE_ARRAY decoding is done directly in `reader.mojo` (a straight
+memcpy / length-prefixed walk), so this module only needs the hybrid codec plus
+the bit-width helper.
+
+Wire format (per the Parquet spec): a sequence of runs, each introduced by a
+ULEB128 header. `header & 1` selects the run kind:
+    - RLE run:        `header >> 1` = repeat count, followed by the value in
+                      `ceil(bit_width/8)` little-endian bytes.
+    - bit-packed run: `header >> 1` = number of 8-value groups; the values follow
+                      LSB-first, `bit_width` bits each.
+"""
+
+
+def bit_width(max_value: Int) -> Int:
+    """Number of bits needed to represent values in `[0, max_value]`."""
+    var w = 0
+    var v = max_value
+    while v > 0:
+        w += 1
+        v >>= 1
+    return w
+
+
+def _read_varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
+    var result: UInt64 = 0
+    var shift: Int = 0
+    var p = pos
+    while True:
+        if p >= len(data):
+            raise Error("rle: varint out of bounds")
+        var b = data[p]
+        p += 1
+        result |= UInt64(b & 0x7F) << UInt64(shift)
+        if b & 0x80 == 0:
+            break
+        shift += 7
+    return (result, p)
+
+
+def _read_bits(data: Span[UInt8, _], bit_offset: Int, nbits: Int) -> UInt64:
+    """Read `nbits` starting at absolute `bit_offset`, least-significant first.
+    """
+    var result: UInt64 = 0
+    for i in range(nbits):
+        var abs_bit = bit_offset + i
+        var byte_idx = abs_bit >> 3
+        var bit_idx = abs_bit & 7
+        var bit = (UInt64(data[byte_idx]) >> UInt64(bit_idx)) & 1
+        result |= bit << UInt64(i)
+    return result
+
+
+def rle_decode(
+    data: Span[UInt8, _], width: Int, count: Int
+) raises -> List[Int32]:
+    """Decode `count` values from an RLE/bit-packed hybrid stream."""
+    var out = List[Int32]()
+    if count == 0:
+        return out^
+    out.reserve(count)
+    if width == 0:
+        for _ in range(count):
+            out.append(0)
+        return out^
+
+    var byte_width = (width + 7) // 8
+    var pos = 0
+    while len(out) < count:
+        var header: UInt64
+        header, pos = _read_varint(data, pos)
+        if (header & 1) == 1:
+            # bit-packed run — unpack with a rolling 64-bit accumulator so each
+            # source byte is read once (vs bit-by-bit).
+            var num_groups = Int(header >> 1)
+            var num_vals = num_groups * 8
+            var bytepos = pos
+            var bitbuf: UInt64 = 0
+            var bitcnt = 0
+            var mask = (UInt64(1) << UInt64(width)) - 1
+            for _ in range(num_vals):
+                while bitcnt < width:
+                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
+                    bytepos += 1
+                    bitcnt += 8
+                var v = bitbuf & mask
+                bitbuf >>= UInt64(width)
+                bitcnt -= width
+                if len(out) < count:
+                    out.append(Int32(v))
+            pos += num_groups * width
+        else:
+            # RLE run
+            var run_len = Int(header >> 1)
+            var val: Int32 = 0
+            for b in range(byte_width):
+                val |= Int32(Int(data[pos + b]) << (8 * b))
+            pos += byte_width
+            for _ in range(run_len):
+                if len(out) < count:
+                    out.append(val)
+    return out^
+
+
+def rle_gather[
+    dt: DType, do: Origin[mut=True]
+](
+    data: Span[UInt8, _],
+    width: Int,
+    count: Int,
+    dict: UnsafePointer[Scalar[dt], _],
+    dest: UnsafePointer[Scalar[dt], do],
+) raises:
+    """Decode `count` RLE/bit-packed dictionary indices and write `dict[idx]`
+    straight to `out` — fuses index decode and gather (no index buffer)."""
+    if count == 0:
+        return
+    if width == 0:
+        for i in range(count):
+            dest[i] = dict[0]
+        return
+    var byte_width = (width + 7) // 8
+    var pos = 0
+    var produced = 0
+    while produced < count:
+        var header: UInt64
+        header, pos = _read_varint(data, pos)
+        if (header & 1) == 1:
+            var num_groups = Int(header >> 1)
+            var num_vals = num_groups * 8
+            var bytepos = pos
+            var bitbuf: UInt64 = 0
+            var bitcnt = 0
+            var mask = (UInt64(1) << UInt64(width)) - 1
+            for _ in range(num_vals):
+                while bitcnt < width:
+                    bitbuf |= UInt64(data[bytepos]) << UInt64(bitcnt)
+                    bytepos += 1
+                    bitcnt += 8
+                var idx = Int(bitbuf & mask)
+                bitbuf >>= UInt64(width)
+                bitcnt -= width
+                if produced < count:
+                    dest[produced] = dict[idx]
+                    produced += 1
+            pos += num_groups * width
+        else:
+            var run_len = Int(header >> 1)
+            var val: Int32 = 0
+            for b in range(byte_width):
+                val |= Int32(Int(data[pos + b]) << (8 * b))
+            pos += byte_width
+            var idx = Int(val)
+            var take = min(run_len, count - produced)
+            for _ in range(take):
+                dest[produced] = dict[idx]
+                produced += 1
+
+
+def rle_count_matches(
+    data: Span[UInt8, _], width: Int, count: Int, target: Int32
+) raises -> Int:
+    """Count how many of the first `count` values equal `target`, without
+    materializing them. An all-equal column is a single run, so the common
+    no-null case (every definition level == max_def) is O(1)."""
+    if width == 0:
+        return count if target == 0 else 0
+    var byte_width = (width + 7) // 8
+    var pos = 0
+    var produced = 0
+    var matches = 0
+    while produced < count:
+        var header: UInt64
+        header, pos = _read_varint(data, pos)
+        if (header & 1) == 1:
+            var num_groups = Int(header >> 1)
+            var num_vals = num_groups * 8
+            var base_bit = pos * 8
+            for k in range(num_vals):
+                if produced < count:
+                    var v = Int32(_read_bits(data, base_bit + k * width, width))
+                    if v == target:
+                        matches += 1
+                    produced += 1
+            pos += num_groups * width
+        else:
+            var run_len = Int(header >> 1)
+            var val: Int32 = 0
+            for b in range(byte_width):
+                val |= Int32(Int(data[pos + b]) << (8 * b))
+            pos += byte_width
+            var take = min(run_len, count - produced)
+            if val == target:
+                matches += take
+            produced += take
+    return matches
+
+
+def _write_varint(mut out: List[UInt8], var v: UInt64):
+    while True:
+        var b = UInt8(v & 0x7F)
+        v >>= 7
+        if v != 0:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            break
+
+
+def rle_encode(values: List[Int32], width: Int) -> List[UInt8]:
+    """Encode `values` as an all-RLE-run hybrid stream (runs of equal values).
+
+    Levels are highly repetitive (often all-1s), so run-length runs compress
+    them well and keep the encoder trivial.
+    """
+    var out = List[UInt8]()
+    if width == 0:
+        return out^
+    var byte_width = (width + 7) // 8
+    var i = 0
+    var n = len(values)
+    while i < n:
+        var v = values[i]
+        var j = i + 1
+        while j < n and values[j] == v:
+            j += 1
+        var run_len = j - i
+        _write_varint(out, UInt64(run_len) << 1)  # RLE run (low bit 0)
+        for b in range(byte_width):
+            out.append(UInt8((Int(v) >> (8 * b)) & 0xFF))
+        i = j
+    return out^

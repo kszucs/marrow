@@ -41,6 +41,11 @@
   through `.filter()`, `.select()`, `.project()`, `.aggregate()`,
   `.sort_by()`, `.limit()`, `.join()`, and run by `.execute()`.
 
+### Parquet
+
+- A from-scratch reader and writer with no Arrow C++ dependency:
+  `read_table(path, columns=None)` and `write_table(table, path, ...)`.
+
 ### Arrow IPC
 
 - `read_ipc_file`/`write_ipc_file` and `read_ipc_stream`/
@@ -66,6 +71,8 @@
 - `marrow.compute` exposes the kernel library: arithmetic, comparison,
   aggregates, `filter`/`take`/`drop_null`, `sort`/`sort_indices`, `cast`
   and the distinct counts.
+- `marrow.parquet` mirrors `pyarrow.parquet`: `pq.read_table(...)` and
+  `pq.write_table(...)`.
 
 ### Ahead-of-time compilation
 
