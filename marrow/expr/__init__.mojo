@@ -1,30 +1,24 @@
-"""Type-erased, runtime-dispatched expression and relational-plan system.
+"""Unified expression + relational-plan system.
 
-Pick this package when the query isn't known until the program runs — this
-is what the Python bindings drive, and what any dynamic-SQL or user-supplied-
-schema caller needs. ``DynValue`` and ``AnyRelation`` build and execute plans
-without knowing concrete comptime types, at the cost of tag/vtable dispatch
-and a much larger compiled surface (~33x, stripped, in the measured
-``benchmarks/binary_size/`` case) than the comptime counterpart in
-``marrow.expr``, which pick that package instead when the query is fixed
-at compile time.
+One value box, one interpreter, one relational layer. Which node you box
+decides the binary size: box the fused comptime nodes and the interpreter is
+dead-code-eliminated (~250 KB); box a ``DynValue`` and the runtime interpreter
+links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 
-A comptime-typed node from ``marrow.expr.values`` can be boxed into an
-``DynValue`` via the ``DynValue(value)`` constructor (tag ``FUSED``); ``eval()``,
-``dtype()``, and ``write_to()`` on a boxed node all delegate back to the
-concrete comptime node, so a fused subtree keeps its single-pass execution
-even when driven through this type-erased path.
+``values.mojo`` — the fused comptime value nodes (``NumericColumn``/``Add``/
+``Gt``/``Length``…), the ``Table[Tbl]()`` / ``col(name, dtype)`` name-resolved
+column handles, and ``AnyValue`` — the universal value box the relational layer
+holds (wraps a fused node *or* a ``DynValue``, exposing only ``to_array``).
 
-``expr.mojo`` — ``DynValue`` (unified n-ary expression node), factory functions
-(``col()``, ``lit()``, ``if_else()``), and the expression tag constants.
+``runtime.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
+bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
+and operator overloads.
 
-``plan.mojo`` — ``AnyRelation`` and its **self-executing** node kinds
-(``Scan``, ``Filter``, ``Project``, ``InMemoryTable``, ``ParquetScan``,
-``Aggregate``, ``Join``): each node is both the plan node and its own
-pull-based executor (``pull()``/``collect()``), so there is no separate
-``Planner``/``*Processor`` hierarchy. ``execute(plan)`` drains to one batch.
-
-See ``docs/aot-relations-design.md`` for the full design.
+``relations.mojo`` — ``AnyRelation`` and its **self-executing** fat nodes
+(``InMemoryTable``, ``Filter``, ``Project``, ``Aggregate``, ``Join``,
+``ParquetScan``, ``Scan``): each node is both the plan node and its own
+pull-based executor (``pull()``/``collect()``) over ``List[AnyValue]`` — no
+separate ``Planner``/``*Processor``. ``execute(plan)`` drains to one batch.
 
 Usage::
 

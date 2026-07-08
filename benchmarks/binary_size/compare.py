@@ -18,7 +18,6 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent.parent
 
 NAMES = [
-    "query_erased_aot",
     "query_streaming",
     "query_dynvalue",
     "query_hybrid",
@@ -46,7 +45,6 @@ MODULE_BUCKETS = [
     "marrow::expr::values",
     "marrow::expr::runtime",
     "marrow::expr::relations",
-    "marrow::expr::erased",
     "marrow::tabular",
     "marrow::c_data",
     "marrow::schema",
@@ -159,9 +157,9 @@ def main() -> None:
             f"{r['syms']:>8,} {r['syms_stripped']:>12,} {r['text']:>12,}"
         )
 
-    base = next(r for r in rows if r["name"] == "query_erased_aot")
+    base = next(r for r in rows if r["name"] == "query_streaming")
     print()
-    print("ratio vs. query_erased_aot (stripped size):")
+    print("ratio vs. query_streaming (stripped size):")
     for r in rows:
         ratio = r["stripped"] / base["stripped"]
         print(f"  {r['name']:<16} {ratio:>6.1f}x")

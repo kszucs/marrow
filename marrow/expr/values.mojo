@@ -51,6 +51,7 @@ from std.builtin.simd import Scalar
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 from std.utils.index import IndexList
+from std.memory import ArcPointer
 
 import marrow.dtypes as dt
 import marrow.expr.relations as rel
@@ -58,6 +59,8 @@ from marrow.arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
 from marrow.tabular import RecordBatch
+from marrow.expr.relations import Column
+from marrow.expr.runtime import DynValue
 
 
 # ---------------------------------------------------------------------------
@@ -586,3 +589,120 @@ def col[T: dt.StringLikeType](var name: String, dtype: T) -> rel.StringColumn:
     """Reference a string column by name — ``col("name", string)``. See the
     numeric overload above."""
     return rel.StringColumn(name^)
+
+
+# ===========================================================================
+# AnyValue — the universal, type-erased value box
+# ===========================================================================
+#
+# Wraps any concrete value node behind a thin trampoline exposing only
+# ``to_array(batch)`` (no tag, no ``eval()`` switch): the fusable comptime nodes
+# above (``Column``/``Add``/``Gt``) *and* the runtime ``DynValue`` interpreter.
+# The fused-vs-interpreted choice is which node you box — boxing a ``DynValue``
+# links the interpreter; a program that only boxes fused nodes leaves it
+# dead-code-eliminated and stays ~250 KB. The relational layer holds
+# ``List[AnyValue]``.
+
+
+def _col_to_array_tramp[
+    V: Column
+](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    var typed = rebind[ArcPointer[V]](ptr)
+    return typed[].to_array(batch)
+
+
+def _col_name_tramp[V: Column](ptr: ArcPointer[NoneType]) -> String:
+    var typed = rebind[ArcPointer[V]](ptr)
+    return typed[].field_name()
+
+
+def _pred_to_array_tramp[
+    V: BoolValue
+](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+    var typed = rebind[ArcPointer[V]](ptr)
+    return typed[].execute(batch).to_any()
+
+
+def _no_name_tramp(ptr: ArcPointer[NoneType]) -> String:
+    return String()
+
+
+def _dyn_to_array_tramp(
+    ptr: ArcPointer[NoneType], batch: RecordBatch
+) raises -> AnyArray:
+    var typed = rebind[ArcPointer[DynValue]](ptr)
+    return typed[].to_array(batch)
+
+
+def _dyn_name_tramp(ptr: ArcPointer[NoneType]) -> String:
+    var typed = rebind[ArcPointer[DynValue]](ptr)
+    return typed[].field_name()
+
+
+def _col_write_tramp[V: Column](ptr: ArcPointer[NoneType]) -> String:
+    var s = String()
+    rebind[ArcPointer[V]](ptr)[].write_to(s)
+    return s^
+
+
+def _pred_write_tramp[V: BoolValue](ptr: ArcPointer[NoneType]) -> String:
+    var s = String()
+    rebind[ArcPointer[V]](ptr)[].write_to(s)
+    return s^
+
+
+def _dyn_write_tramp(ptr: ArcPointer[NoneType]) -> String:
+    var s = String()
+    rebind[ArcPointer[DynValue]](ptr)[].write_to(s)
+    return s^
+
+
+struct AnyValue(Copyable, Movable, Writable):
+    """Type-erased handle over a single value node — the one value box the
+    relational layer holds. No tag and no ``eval()`` switch of its own, so
+    boxing a fused node never links the interpreter."""
+
+    var _boxed: ArcPointer[NoneType]
+    var _to_array: def(
+        ArcPointer[NoneType], RecordBatch
+    ) thin raises -> AnyArray
+    var _field_name: def(ArcPointer[NoneType]) thin -> String
+    var _write_to_str: def(ArcPointer[NoneType]) thin -> String
+
+    @implicit
+    def __init__[V: Column](out self, value: V):
+        """Box a projected column (``NumericColumn`` / ``StringColumn``)."""
+        var ptr = ArcPointer[V](value.copy())
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._to_array = _col_to_array_tramp[V]
+        self._field_name = _col_name_tramp[V]
+        self._write_to_str = _col_write_tramp[V]
+
+    @implicit
+    def __init__[V: BoolValue](out self, value: V):
+        """Box a fused predicate node (``Lt`` / ``Gt`` / ``Eq``)."""
+        var ptr = ArcPointer[V](value.copy())
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._to_array = _pred_to_array_tramp[V]
+        self._field_name = _no_name_tramp
+        self._write_to_str = _pred_write_tramp[V]
+
+    @implicit
+    def __init__(out self, var value: DynValue):
+        """Box the runtime ``DynValue`` interpreter (what the Python bindings
+        build). Links its ``to_array`` only when constructed; otherwise it is
+        dead-code-eliminated and the fused-only path stays tiny."""
+        var ptr = ArcPointer[DynValue](value^)
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._to_array = _dyn_to_array_tramp
+        self._field_name = _dyn_name_tramp
+        self._write_to_str = _dyn_write_tramp
+
+    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+        return self._to_array(self._boxed, batch)
+
+    def field_name(self) -> String:
+        return self._field_name(self._boxed)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._write_to_str(self._boxed))

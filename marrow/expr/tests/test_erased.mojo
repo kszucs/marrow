@@ -1,15 +1,12 @@
-"""Tests for the erased/unified value layer in ``marrow.expr.erased``.
+"""Tests for the universal value box ``AnyValue`` in ``marrow.expr.values``.
 
-Covers the two halves of the ``marrow.expr`` unification
-(``docs/expr-unification-plan.md``):
+``AnyValue`` wraps any value node behind a ``to_array(batch)`` trampoline:
+- fusable comptime nodes (``Column``/``Add``/``Gt``) — the AOT path;
+- the runtime ``DynValue`` interpreter (built via ``col()`` + operators).
 
-- ``AnyValue`` + self-executing runtime ``Project``/``Filter`` — a walkable,
-  rewritable plan tree over boxed values. Same result as the typed layer, at the
-  same (measured) binary size.
-- ``DynValue`` (from ``marrow.expr.runtime``, built the Python way via ``col``
-  and operators) boxed into the *same* ``AnyValue``. The load-bearing property
-  is that fused and interpreted values interchange: a plan built from either
-  produces the same result, and a single ``Project`` can hold both at once.
+The load-bearing property is that fused and interpreted values interchange
+through the one box, and a heterogeneous list can hold both. Relational
+execution over ``List[AnyValue]`` is covered by ``test_streaming``/``test_plan``.
 """
 
 from std.testing import assert_equal, assert_true
@@ -20,9 +17,8 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.relations import Table
-from marrow.expr.values import Gt
+from marrow.expr.values import AnyValue
 from marrow.expr.runtime import col
-from marrow.expr.erased import AnyValue, Project
 
 
 struct _Orders:
@@ -40,94 +36,54 @@ def _batch() raises -> RecordBatch:
     )
 
 
-# ---------------------------------------------------------------------------
-# Fused path — AnyValue over the fused named columns
-# ---------------------------------------------------------------------------
-
-
-def test_fused_project() raises:
-    """Project over boxed fused columns assembles the right RecordBatch."""
+def test_box_fused_column() raises:
+    """A fused named column boxed into AnyValue resolves by name."""
     var t = Table[_Orders]()
-    var batch = _batch()
-    var exprs = List[AnyValue]()
-    exprs.append(AnyValue(t.a))
-    exprs.append(AnyValue(t.name))
-    var result = Project(exprs^).execute(batch)
-
-    assert_equal(result.num_rows(), 5)
-    assert_equal(len(result.columns), 2)
-    assert_equal(result.schema.fields[0].name, "a")
-    assert_equal(result.schema.fields[1].name, "name")
+    var v = AnyValue(t.a)
+    assert_equal(v.field_name(), "a")
     assert_true(
-        result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+        v.to_array(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
     )
 
 
-def test_fused_filter() raises:
-    """SELECT a, name WHERE a > b over the fused path keeps rows 5 and 8."""
-    var t = Table[_Orders]()
-    var batch = _batch()
-    var exprs = List[AnyValue]()
-    exprs.append(AnyValue(t.a))
-    exprs.append(AnyValue(t.name))
-    var result = Project(exprs^).filter(AnyValue(Gt(t.a, t.b))).execute(batch)
-
-    assert_equal(result.num_rows(), 2)
-    assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
-
-
-# ---------------------------------------------------------------------------
-# Interpreter path — DynValue (col/operators) boxed into the same AnyValue
-# ---------------------------------------------------------------------------
-
-
-def test_dynvalue_arithmetic() raises:
-    """A DynValue built from col()+col() interprets over the batch."""
-    var batch = _batch()
-    var expr = col("a") + col("b")
-    ref result = expr.to_array(batch).as_int64()
-    assert_true(result.copy() == array([5, 9, 7, 12, 6], int64))
-
-
-def test_dynvalue_load_resolves_by_name() raises:
-    """col("a") resolves by name against the batch schema."""
-    var batch = _batch()
-    var expr = col("a")
-    ref result = expr.to_array(batch).as_int64()
-    assert_true(result.copy() == array([1, 5, 3, 8, 2], int64))
-
-
-def test_dynvalue_matches_fused() raises:
-    """The same query built from DynValue interpreter nodes produces the same
-    result as the fused path — fused and interpreted values interchange."""
-    var batch = _batch()
-    var exprs = List[AnyValue]()
-    exprs.append(AnyValue(col("a")))
-    exprs.append(AnyValue(col("name")))
-    var pred = AnyValue(col("a") > col("b"))
-    var result = Project(exprs^).filter(pred^).execute(batch)
-
-    assert_equal(result.num_rows(), 2)
-    assert_true(result.columns[0].as_int64().copy() == array([5, 8], int64))
-
-
-def test_cobox_fused_and_dynvalue() raises:
-    """A single Project holds a fused column *and* an interpreter column — the
-    box is shared, the choice is per-node."""
-    var t = Table[_Orders]()
-    var batch = _batch()
-    var exprs = List[AnyValue]()
-    exprs.append(AnyValue(t.a))  # fused
-    exprs.append(AnyValue(col("b")))  # interpreter
-    var result = Project(exprs^).execute(batch)
-
-    assert_equal(result.num_rows(), 5)
+def test_box_dynvalue_arithmetic() raises:
+    """A DynValue (col()+col()) boxed into AnyValue interprets over the batch."""
+    var v = AnyValue(col("a") + col("b"))
     assert_true(
-        result.columns[0].as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+        v.to_array(_batch()).as_int64().copy() == array([5, 9, 7, 12, 6], int64)
+    )
+
+
+def test_box_dynvalue_resolves_by_name() raises:
+    """A DynValue col() boxed into AnyValue resolves by name."""
+    var v = AnyValue(col("a"))
+    assert_true(
+        v.to_array(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+    )
+
+
+def test_fused_and_dynvalue_interchange() raises:
+    """A heterogeneous list holds a fused *and* an interpreter value; both run
+    through the same to_array — fused-vs-interpreted is which node you boxed."""
+    var t = Table[_Orders]()
+    var values = List[AnyValue]()
+    values.append(AnyValue(t.a))  # fused
+    values.append(AnyValue(col("b")))  # interpreter
+    var batch = _batch()
+    assert_true(
+        values[0].to_array(batch).as_int64().copy()
+        == array([1, 5, 3, 8, 2], int64)
     )
     assert_true(
-        result.columns[1].as_int64().copy() == array([4, 4, 4, 4, 4], int64)
+        values[1].to_array(batch).as_int64().copy()
+        == array([4, 4, 4, 4, 4], int64)
     )
+
+
+def test_write_to_delegates() raises:
+    """AnyValue.write_to delegates to the boxed node."""
+    var t = Table[_Orders]()
+    assert_equal(String(AnyValue(t.a)), "Col[a]")
 
 
 def main() raises:
