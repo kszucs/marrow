@@ -15,12 +15,17 @@ relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
 and operator overloads.
 
-``relations.mojo`` — a two-layer relational engine: **descriptive IR nodes**
-(``Relation``: ``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/
-``ParquetScan``/``Scan``) that are pure, immutable, and cheaply copied, and the
-**operators** (``Operator``) that ``Relation.open(ctx)`` builds to actually run
-(pull-based, owning all execution state). ``execute(plan)`` opens the plan into a
-fresh operator tree and drains it, so a plan is a reusable template.
+``relations.mojo`` — the **descriptive IR**: ``Relation`` nodes
+(``InMemoryTable``/``Filter``/``Project``/``Aggregate``/``Join``/``ParquetScan``/
+``Scan``) that are pure, immutable, and cheaply copied, plus the plan-building
+API and ``execute(plan)``.
+
+``execution.mojo`` — the **execution layer**: the ``Processor`` each
+``Relation.open(ctx)`` builds (pull-based, owning all mutable state — offset,
+hash index, grouper, child processors), erased behind ``AnyProcessor`` which
+drives ``collect()``. ``execute`` opens a plan into a fresh processor tree and
+drains it, so a plan is a reusable template. Depends only on the value box and
+kernels (one-way: ``relations`` → ``execution``).
 
 Usage::
 
@@ -58,6 +63,13 @@ from marrow.expr.dynamic import (
     CAST,
     LENGTH,
 )
+from marrow.expr.execution import (
+    # Execution layer (processors built by Relation.open)
+    Processor,
+    AnyProcessor,
+    Exhausted,
+    ExecutionContext,
+)
 from marrow.expr.relations import (
     # Descriptive IR nodes
     Relation,
@@ -71,11 +83,6 @@ from marrow.expr.relations import (
     Join,
     in_memory_table,
     parquet_scan,
-    # Execution layer (operators built by Relation.open)
-    Operator,
-    AnyOperator,
-    Exhausted,
-    ExecutionContext,
     execute,
     # Plan node kind constants
     SCAN_NODE,

@@ -22,18 +22,22 @@
 
 ### Refactors
 
-- **Relational engine split into descriptive IR nodes + pull-based operators**
-  (`marrow.expr.relations`): `Relation` nodes are now pure, immutable
-  descriptions (`kind`/`schema`/`open`) with no execution state, so copying an
-  `AnyRelation` is an O(1) share and a plan is an inspectable, rewritable,
-  reusable template. `Relation.open(ctx)` builds a matching `Operator`
-  (`InMemoryTableOp`/`FilterOp`/`ProjectOp`/`AggregateOp`/`JoinOp`) that owns all
-  mutable state (scan offset, built hash index, grouper, child operators);
-  `execute(plan)` opens a fresh operator tree and drains it, so the plan is never
-  mutated and runs repeatedly or concurrently. This supersedes the reset-on-copy
-  fat-node mechanism — plan reusability now falls out of node immutability for
-  free — and gives an optimizer a clean IR to rewrite. Fused path unchanged
-  (`query_streaming` 448 KB, interpreter DCE'd).
+- **Relational engine split into a descriptive IR and an execution layer**
+  (`marrow.expr.relations` + new `marrow.expr.execution`): `Relation` nodes are
+  now pure, immutable descriptions (`kind`/`schema`/`open`) with no execution
+  state, so copying an `AnyRelation` is an O(1) share and a plan is an
+  inspectable, rewritable, reusable template. `Relation.open(ctx)` builds a
+  matching `Processor` (`InMemoryTableProcessor`/`FilterProcessor`/
+  `ProjectProcessor`/`AggregateProcessor`/`JoinProcessor`, in `execution.mojo`)
+  that owns all mutable state (scan offset, built hash index, grouper, child
+  processors), erased behind `AnyProcessor` which drives `collect()`.
+  `execute(plan)` opens a fresh processor tree and drains it, so the plan is
+  never mutated and runs repeatedly or concurrently. The dependency is one-way
+  (`relations` → `execution`; the execution layer needs only the value box and
+  kernels). This supersedes the reset-on-copy fat-node mechanism — plan
+  reusability now falls out of node immutability for free — and gives an
+  optimizer a clean IR to rewrite. Fused path unchanged (`query_streaming`
+  448 KB, interpreter DCE'd).
 - **The value box erases behind `Value`** (`marrow.expr.values`): `to_array` and
   `field_name` moved onto the `Value` trait itself (the `NumericValue` /
   `BoolValue` / `StringValue` sub-traits default `to_array` via their fused

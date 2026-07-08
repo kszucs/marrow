@@ -44,6 +44,7 @@ MODULE_BUCKETS = [
     "marrow::expr::values",
     "marrow::expr::dynamic",
     "marrow::expr::relations",
+    "marrow::expr::execution",
     "marrow::tabular",
     "marrow::c_data",
     "marrow::schema",
