@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Features
+
+- **Native Parquet reader/writer** (`marrow.parquet`): a from-scratch Parquet
+  implementation that reads and writes Arrow directly, replacing the PyArrow
+  bridge (`read_table`/`write_table` are now native; PyArrow is only a test
+  oracle). Includes a hand-written Thrift Compact Protocol codec
+  (`thrift.mojo`) and metadata structs (`format.mojo`) — no Thrift runtime or
+  code generator — modelled on arrow-rs's `parquet_thrift.rs`; page/level
+  decoding via the RLE/bit-packed hybrid and PLAIN encodings (`encoding.mojo`);
+  and Snappy/Zstd compression through runtime `dlopen` FFI (`compression.mojo`,
+  new `zstd`/`snappy` conda deps). Covers flat columns (all common primitives,
+  string/binary), definition-level nullability, dictionary (RLE_DICTIONARY /
+  PLAIN_DICTIONARY) and PLAIN encodings, v1 and v2 data pages, multiple row
+  groups, and struct nesting. List/map columns and struct-level nulls are not
+  yet supported (they raise a clear error).
+
 ### Fixes
 
 - **Relational plans are reusable templates** (`marrow.expr.relations`): the

@@ -233,8 +233,7 @@ struct _OrdersSchema:
 
 
 def test_schema_from_struct() raises:
-    """Schema.from_struct[T] reflects a marker struct's fields into a Schema.
-    """
+    """Schema.from_struct[T] reflects a marker struct's fields into a Schema."""
     var s = Schema.from_struct[_OrdersSchema]()
     var expected = schema(
         [
