@@ -63,7 +63,7 @@ from marrow.expr.runtime import (
     FUSED,
     LENGTH,
 )
-from marrow.expr.plan import (
+from marrow.expr.relations import (
     Relation,
     AnyRelation,
     Scan,

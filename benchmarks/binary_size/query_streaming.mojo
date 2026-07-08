@@ -1,7 +1,7 @@
 """Binary-size demo: fused values through the fat-node relational layer.
 
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`),
-built with `marrow.expr.plan` — the self-executing fat nodes (`InMemoryTable`
+built with `marrow.expr.relations` — the self-executing fat nodes (`InMemoryTable`
 /`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `AnyValue` values.
 `collect()` uses the closed flat concat, so the fused path never links the open
 `AnyBuilder`. This should land near `query_erased_aot`, not the runtime path.
@@ -16,7 +16,7 @@ from marrow.tabular import record_batch
 from marrow.expr.relations import Table
 from marrow.expr.values import Gt
 from marrow.expr.erased import AnyValue
-from marrow.expr.plan import InMemoryTable, Project, AnyRelation, execute
+from marrow.expr.relations import InMemoryTable, Project, AnyRelation, execute
 
 
 struct Orders:

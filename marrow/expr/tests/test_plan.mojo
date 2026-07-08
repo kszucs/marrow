@@ -19,7 +19,7 @@ from marrow.expr import (
     IN_MEMORY_TABLE_NODE,
     PARQUET_SCAN_NODE,
 )
-from marrow.expr.plan import (
+from marrow.expr.relations import (
     AnyRelation,
     Scan,
     Filter,

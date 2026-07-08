@@ -1,154 +1,917 @@
-"""Named comptime-typed expression nodes for the fully-monomorphized (AOT)
-relational layer.
+"""Relational plan = execution: self-executing (fat) relation nodes.
 
-The leaf nodes here — ``NumericColumn[T]`` and ``StringColumn`` — carry only
-their ``name`` (a runtime field); the column *type* encodes just the dtype
-(which is what drives the SIMD ``core``). A query with many int64 columns
-instantiates ``NumericColumn[Int64Type]`` once, not one type per column: the
-field name is metadata that never affects the generated compute. The column
-position is resolved by name against ``batch.schema`` at execution — a
-loop-invariant lookup, hoisted out of the fused loop.
+Each node is both the logical plan node *and* its own pull-based executor —
+there is no separate ``Planner``/``*Processor`` hierarchy. ``pull()`` yields
+morsel-sized ``RecordBatch`` values (raising ``Exhausted`` when done); a node
+drives its children by pulling from them. This folds the former
+``marrow.expr.executor`` processors onto the nodes.
 
-You never spell those leaf nodes by hand. Instead you declare a plain struct
-of dtype-tag fields and access columns through a handle:
+``Relation``    — the trait every node implements (``kind``/``schema``/``pull``).
+``AnyRelation`` — the type-erased, ArcPointer-backed container; also the
+                  streaming driver (``pull``/``collect``) and plan-building API.
 
-    struct Orders:
-        var a: Int64Type
-        var b: Int64Type
-        var name: StringType
+Concrete nodes: ``InMemoryTable``, ``Filter``, ``Project``, ``Aggregate``,
+``Join``, ``ParquetScan``, ``Scan`` (unbound leaf).
 
-    var t = Table[Orders]()
-    t.a     # NumericColumn[Int64Type]("a")   (numeric)
-    t.name  # StringColumn("name")            (string)
+Plan-building API
+-----------------
+``AnyRelation.select(*names)``                   — project columns by name.
+``AnyRelation.filter(pred)``                     — filter rows by predicate.
+``AnyRelation.aggregate(keys, values, funcs)``   — grouped aggregation.
+``AnyRelation.join(right, left_on, right_on)``   — hash join.
+``in_memory_table(batch)`` / ``parquet_scan(path)`` — leaf sources.
+``execute(plan)``                                — drain to a single RecordBatch.
 
-``Table[Orders]()`` is a column-access handle whose ``__getattr_param__``
-reflects each field's *dtype* on ``Orders`` at compile time
-(``reflect[Orders].field[name].T``), then a ``where`` clause picks the numeric
-(``NumericColumn``) or string (``StringColumn``) overload — passing the name as
-a runtime constructor argument. The struct's fields are plain dtype tags used
-*only* for reflection — they are never instantiated, so ``Orders`` needs no
-``__init__``.
+Example
+-------
+    var plan = in_memory_table(batch).filter(col("x") > lit[Int64Type](0)).select("x")
+    var result = execute(plan)
 
-For a schema-struct-free, polars-style surface, ``col(name, dtype)`` (defined in
-``values.mojo``) references a column by name (``col("a", int64)``,
-``col("name", string)``) and resolves its position against the batch at
-execution. It produces the same ``NumericColumn[T]`` / ``StringColumn`` leaves,
-so it composes identically (``Add(col("a", int64), col("b", int64))``,
-``Project``/``Filter``).
-
-This file's one ``AnyArray`` erasure boundary (``Project``/``Filter``
-assembling heterogeneous columns) stays cheap because it's *closed* —
-nothing outside this file constructs an ``AnyArray`` of a dtype a given
-query doesn't use, so the compiler can prove and prune the rest of
-``filter()``'s/kernels' per-dtype branches. Calling into
-``marrow.expr.executor`` (``Planner``, ``*Processor``) or
-``marrow.expr.runtime.DynValue.eval()`` instead reaches a genuinely *open*
-dispatcher built to stay ready for dtypes/node-kinds it can't know ahead of
-time, and nothing there can be pruned. Measured in ``benchmarks/binary_size/``:
-a ``Project``+``Filter`` plan compiles ~31x smaller (stripped) than the same
-query on ``marrow.expr``'s ``AnyRelation``/``DynValue``; a hybrid variant
-that only fuses the *predicate* but still calls into the executor is the
-same size as the fully runtime one.
-
-See ``docs/aot-relations-design.md`` for the full design.
-
-Usage::
-
-    struct Orders:
-        var a: Int32Type
-        var b: StringType
-
-    var t = Table[Orders]()
-    var result = t.a.execute(batch)  # resolves the "a" column against the batch
+Nodes carry execution state (scan offset, built hash index, ...), so a plan is
+single-use per ``execute()`` — build it, run it once.
 """
 
+from std.memory import ArcPointer
+from std.gpu.host import DeviceContext
 from std.reflection import reflect
 
 import marrow.dtypes as dt
-from marrow.arrays import AnyArray, StringArray
-from marrow.dtypes import Field
-from marrow.kernels.filter import filter
+from marrow.arrays import AnyArray, StringArray, StructArray
+from marrow.builders import PrimitiveBuilder, BoolBuilder, StringBuilder
+from marrow.dtypes import (
+    AnyDataType,
+    Field,
+    PrimitiveType,
+    Int8Type,
+    Int16Type,
+    Int32Type,
+    Int64Type,
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    Float16Type,
+    Float32Type,
+    Float64Type,
+    bool_,
+    int8,
+    int16,
+    int32,
+    int64,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+    float16,
+    float32,
+    float64,
+    struct_,
+)
 from marrow.schema import Schema
 from marrow.tabular import RecordBatch
-from marrow.expr.values import BoolValue, NumericValue, StringValue, Value
+from marrow.kernels.concat import concat
+from marrow.kernels.filter import filter
+from marrow.kernels.groupby import HashGrouper
+from marrow.kernels.join import HashJoin
+from marrow.kernels.hashing import rapidhash
+from marrow.parquet import read_table
+from marrow.expr.erased import AnyValue
+from marrow.expr.runtime import DynValue, col, LOAD
+from marrow.expr.values import NumericValue, StringValue, Value
+from marrow.kernels.join import (
+    JOIN_INNER,
+    JOIN_LEFT,
+    JOIN_RIGHT,
+    JOIN_FULL,
+    JOIN_SEMI,
+    JOIN_ANTI,
+    JOIN_CROSS,
+    JOIN_MARK,
+    JOIN_SINGLE,
+    JOIN_ALL,
+    JOIN_ANY,
+    JOIN_ASOF,
+    JOIN_ALGO_AUTO,
+    JOIN_ALGO_HASH,
+    JOIN_ALGO_SORT_MERGE,
+    JOIN_ALGO_PIECEWISE,
+    JOIN_ALGO_GRACE_HASH,
+)
 
 
 # ---------------------------------------------------------------------------
-# Named — trait for expression nodes carrying a compile-time field name
+# Relation node kind constants
 # ---------------------------------------------------------------------------
+
+comptime SCAN_NODE: UInt8 = 0
+comptime FILTER_NODE: UInt8 = 1
+comptime PROJECT_NODE: UInt8 = 2
+comptime IN_MEMORY_TABLE_NODE: UInt8 = 3
+comptime PARQUET_SCAN_NODE: UInt8 = 4
+comptime AGGREGATE_NODE: UInt8 = 5
+comptime JOIN_NODE: UInt8 = 6
+
+comptime DEFAULT_MORSEL_SIZE: Int = 65_536
+
+
+# ---------------------------------------------------------------------------
+# Exhausted — signals a node has no more morsels
+# ---------------------------------------------------------------------------
+
+
+struct Exhausted(TrivialRegisterPassable, Writable):
+    """Raised by ``pull()`` when a node has no more batches to yield."""
+
+    def __init__(out self):
+        pass
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write("Exhausted")
+
+
+# ---------------------------------------------------------------------------
+# ExecutionContext — runtime configuration (morsel size, optional GPU)
+# ---------------------------------------------------------------------------
+
+
+struct ExecutionContext(Copyable, ImplicitlyCopyable, Movable):
+    """Runtime configuration for query execution."""
+
+    var device_ctx: Optional[DeviceContext]
+    var num_cpu_workers: Int
+    var morsel_size: Int
+    var gpu_threshold: Int
+
+    def __init__(out self):
+        self.device_ctx = None
+        self.num_cpu_workers = 0
+        self.morsel_size = DEFAULT_MORSEL_SIZE
+        self.gpu_threshold = 1_000_000
+
+    def __init__(out self, ctx: DeviceContext, gpu_threshold: Int = 1_000_000):
+        self.device_ctx = ctx
+        self.num_cpu_workers = 0
+        self.morsel_size = DEFAULT_MORSEL_SIZE
+        self.gpu_threshold = gpu_threshold
+
+
+# ---------------------------------------------------------------------------
+# _concat — a CLOSED, flat-only column concat for collect()
+# ---------------------------------------------------------------------------
+#
+# `collect()` merges morsels by concatenating each column. The general
+# `marrow.kernels.concat` routes through `AnyBuilder(dtype)` — an open switch
+# that instantiates a builder for *every* dtype (incl. nested) whenever it is
+# reachable, so it is never DCE'd and inflates the binary ~6x (measured). The
+# relational layer's projections produce only flat columns, so `collect()` uses
+# this local concat instead: typed builders for primitive/bool/string and a
+# `raise` otherwise (like `filter`), keeping the fused path closed and small.
+
+
+def _concat_primitive[
+    T: PrimitiveType
+](arrays: List[AnyArray]) raises -> AnyArray:
+    var total = 0
+    for ref a in arrays:
+        total += a.length()
+    var builder = PrimitiveBuilder[T](
+        arrays[0].as_primitive[T]().dtype.copy(), total
+    )
+    for ref a in arrays:
+        builder.extend(a.as_primitive[T]())
+    return builder.finish().to_any()
+
+
+def _concat(arrays: List[AnyArray]) raises -> AnyArray:
+    """Concatenate same-dtype flat columns; raises on nested/other dtypes."""
+    var dtype = arrays[0].dtype()
+    if dtype == bool_:
+        var builder = BoolBuilder(capacity=0)
+        for ref a in arrays:
+            builder.extend(a.as_bool())
+        return builder.finish().to_any()
+    elif dtype == int8:
+        return _concat_primitive[Int8Type](arrays)
+    elif dtype == int16:
+        return _concat_primitive[Int16Type](arrays)
+    elif dtype == int32:
+        return _concat_primitive[Int32Type](arrays)
+    elif dtype == int64:
+        return _concat_primitive[Int64Type](arrays)
+    elif dtype == uint8:
+        return _concat_primitive[UInt8Type](arrays)
+    elif dtype == uint16:
+        return _concat_primitive[UInt16Type](arrays)
+    elif dtype == uint32:
+        return _concat_primitive[UInt32Type](arrays)
+    elif dtype == uint64:
+        return _concat_primitive[UInt64Type](arrays)
+    elif dtype == float16:
+        return _concat_primitive[Float16Type](arrays)
+    elif dtype == float32:
+        return _concat_primitive[Float32Type](arrays)
+    elif dtype == float64:
+        return _concat_primitive[Float64Type](arrays)
+    elif dtype.is_string():
+        var builder = StringBuilder(capacity=0)
+        for ref a in arrays:
+            builder.extend(a.as_string())
+        return builder.finish().to_any()
+    else:
+        raise Error("collect: unsupported column dtype ", dtype)
+
+
+# ---------------------------------------------------------------------------
+# Relation trait — node = structure + self-execution
+# ---------------------------------------------------------------------------
+
+
+trait Relation(ImplicitlyDeletable, Movable):
+    """A relational node that describes itself and executes itself."""
+
+    def kind(self) -> UInt8:
+        ...
+
+    def schema(self) -> Schema:
+        ...
+
+    def pull(mut self) raises -> RecordBatch:
+        """Yield the next morsel, or raise ``Exhausted`` when done."""
+        ...
+
+    def write_to[W: Writer](self, mut writer: W):
+        ...
+
+
+# ---------------------------------------------------------------------------
+# AnyRelation — type-erased container + streaming driver + plan-building API
+# ---------------------------------------------------------------------------
+
+
+struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
+    """Type-erased relational node behind an ``ArcPointer`` (O(1) copies).
+
+    Also the pull driver: ``pull()``/``collect()`` fold in the former
+    ``AnyRelationProcessor``."""
+
+    var _data: ArcPointer[NoneType]
+    var _virt_kind: def(ArcPointer[NoneType]) thin -> UInt8
+    var _virt_schema: def(ArcPointer[NoneType]) thin -> Schema
+    var _virt_pull: def(ArcPointer[NoneType]) thin raises -> RecordBatch
+    var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
+    var _virt_drop: def(var ArcPointer[NoneType]) thin
+
+    @staticmethod
+    def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> UInt8:
+        return rebind[ArcPointer[T]](ptr)[].kind()
+
+    @staticmethod
+    def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
+        return rebind[ArcPointer[T]](ptr)[].schema()
+
+    @staticmethod
+    def _tramp_pull[
+        T: Relation
+    ](ptr: ArcPointer[NoneType]) raises -> RecordBatch:
+        return rebind[ArcPointer[T]](ptr)[].pull()
+
+    @staticmethod
+    def _tramp_write_to_string[
+        T: Relation
+    ](ptr: ArcPointer[NoneType]) -> String:
+        var s = String()
+        rebind[ArcPointer[T]](ptr)[].write_to(s)
+        return s^
+
+    @staticmethod
+    def _tramp_drop[T: Relation](var ptr: ArcPointer[NoneType]):
+        var typed = rebind[ArcPointer[T]](ptr^)
+        _ = typed^
+
+    @implicit
+    def __init__[T: Relation](out self, var value: T):
+        var ptr = ArcPointer(value^)
+        self._data = rebind[ArcPointer[NoneType]](ptr^)
+        self._virt_kind = Self._tramp_kind[T]
+        self._virt_schema = Self._tramp_schema[T]
+        self._virt_pull = Self._tramp_pull[T]
+        self._virt_write_to_string = Self._tramp_write_to_string[T]
+        self._virt_drop = Self._tramp_drop[T]
+
+    def __init__(out self, *, copy: Self):
+        self._data = copy._data
+        self._virt_kind = copy._virt_kind
+        self._virt_schema = copy._virt_schema
+        self._virt_pull = copy._virt_pull
+        self._virt_write_to_string = copy._virt_write_to_string
+        self._virt_drop = copy._virt_drop
+
+    def __del__(deinit self):
+        self._virt_drop(self._data^)
+
+    # --- introspection ---
+
+    def kind(self) -> UInt8:
+        return self._virt_kind(self._data)
+
+    def schema(self) -> Schema:
+        return self._virt_schema(self._data)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._virt_write_to_string(self._data))
+
+    def downcast[T: Relation](self) -> ArcPointer[T]:
+        return rebind[ArcPointer[T]](self._data.copy())
+
+    # --- streaming driver ---
+
+    def pull(mut self) raises -> RecordBatch:
+        return self._virt_pull(self._data)
+
+    def collect(mut self) raises -> RecordBatch:
+        """Drain all morsels into a single RecordBatch."""
+        var batches = List[RecordBatch]()
+        while True:
+            try:
+                batches.append(self.pull())
+            except Exhausted:
+                break
+        if len(batches) == 0:
+            return RecordBatch(schema=self.schema(), columns=List[AnyArray]())
+        if len(batches) == 1:
+            return RecordBatch(copy=batches[0])
+        var schema = batches[0].schema
+        var num_cols = batches[0].num_columns()
+        var result_cols = List[AnyArray](capacity=num_cols)
+        for c in range(num_cols):
+            var col_arrays = List[AnyArray](capacity=len(batches))
+            for b in range(len(batches)):
+                col_arrays.append(batches[b].columns[c].copy())
+            result_cols.append(_concat(col_arrays))
+        return RecordBatch(schema=Schema(copy=schema), columns=result_cols^)
+
+    # --- plan-building API ---
+
+    def select(self, *names: String) raises -> AnyRelation:
+        """Project columns by name, returning a new plan node."""
+        var schema = self.schema()
+        var col_names = List[String]()
+        var exprs = List[AnyValue]()
+        var fields = List[Field]()
+        for i in range(len(names)):
+            var name = names[i]
+            var idx = schema.get_field_index(name)
+            if idx == -1:
+                raise Error("select: column '" + name + "' not found")
+            col_names.append(name)
+            exprs.append(AnyValue(col(idx)))
+            fields.append(schema.fields[idx].copy())
+        return AnyRelation(
+            Project(
+                input=self,
+                names=col_names^,
+                exprs_=exprs^,
+                schema_=Schema(fields=fields^),
+            )
+        )
+
+    def filter(self, var predicate: AnyValue) raises -> AnyRelation:
+        """Filter rows by a boolean predicate. Column references resolve by name
+        against the batch schema when the boxed value executes."""
+        return AnyRelation(Filter(input=self, predicate=predicate^))
+
+    def aggregate(
+        self,
+        keys: List[DynValue],
+        values: List[DynValue],
+        funcs: List[String],
+    ) raises -> AnyRelation:
+        """Grouped aggregation: key columns + aggregated value columns."""
+        from marrow.dtypes import int64
+
+        var input_schema = self.schema()
+
+        # Output schema: key fields + agg result fields.
+        var fields = List[Field]()
+        for ref k in keys:
+            var kdt = k.dtype()
+            if kdt:
+                fields.append(Field("key", kdt.value().copy()))
+            else:
+                fields.append(Field("key", input_schema.fields[0].dtype.copy()))
+        for i in range(len(funcs)):
+            if funcs[i] == "count":
+                fields.append(Field(funcs[i], AnyDataType(int64)))
+            elif funcs[i] == "mean":
+                fields.append(Field(funcs[i], AnyDataType(float64)))
+            else:
+                var maybe_dt = values[i].dtype()
+                if maybe_dt and maybe_dt.value().is_integer():
+                    fields.append(Field(funcs[i], AnyDataType(int64)))
+                else:
+                    fields.append(Field(funcs[i], AnyDataType(float64)))
+        var out_schema = Schema(fields=fields^)
+
+        # Key struct fields (first len(keys) output fields) + value accumulator
+        # dtypes (resolve LOAD nodes against the input schema).
+        var key_fields = List[Field]()
+        for i in range(len(keys)):
+            key_fields.append(out_schema.fields[i].copy())
+        var value_dtypes = List[AnyDataType]()
+        for i in range(len(values)):
+            ref agg_expr = values[i]
+            var dt = agg_expr.dtype()
+            if not dt and agg_expr.kind() == LOAD:
+                dt = Optional[AnyDataType](
+                    input_schema.fields[Int(agg_expr.kind_data())].dtype.copy()
+                )
+            if dt:
+                value_dtypes.append(dt.value().copy())
+            else:
+                value_dtypes.append(AnyDataType(float64))
+
+        var key_exprs = List[AnyValue]()
+        for ref k in keys:
+            key_exprs.append(AnyValue(k.copy()))
+        var val_exprs = List[AnyValue]()
+        for ref v in values:
+            val_exprs.append(AnyValue(v.copy()))
+
+        return AnyRelation(
+            Aggregate(
+                input=self,
+                keys=key_exprs^,
+                agg_exprs=val_exprs^,
+                grouper=HashGrouper(funcs.copy(), value_dtypes^),
+                key_fields=key_fields^,
+                schema_=out_schema,
+            )
+        )
+
+    def join(
+        self,
+        right: AnyRelation,
+        left_on: List[DynValue],
+        right_on: List[DynValue],
+        how: UInt8 = JOIN_INNER,
+        strictness: UInt8 = JOIN_ALL,
+        algorithm: UInt8 = JOIN_ALGO_AUTO,
+    ) raises -> AnyRelation:
+        """Hash join on equijoin key expressions."""
+        if len(left_on) != len(right_on):
+            raise Error("join: len(left_on) != len(right_on)")
+
+        var left_schema = self.schema()
+        var right_schema = right.schema()
+
+        # Resolve key expressions to positional column indices.
+        var left_indices = List[Int]()
+        for ref k in left_on:
+            left_indices.append(Int(k.resolve_names(left_schema)._kind_data))
+        var right_indices = List[Int]()
+        for ref k in right_on:
+            right_indices.append(Int(k.resolve_names(right_schema)._kind_data))
+
+        # Output schema: left columns + (suffixed) right columns.
+        var fields = List[Field]()
+        for ref f in left_schema.fields:
+            fields.append(f.copy())
+        if how != JOIN_SEMI and how != JOIN_ANTI and how != JOIN_MARK:
+            var left_names = List[String]()
+            for ref f in left_schema.fields:
+                left_names.append(f.name)
+            for ref f in right_schema.fields:
+                var name = f.name
+                var collides = False
+                for ref ln in left_names:
+                    if ln == name:
+                        collides = True
+                        break
+                if collides:
+                    name = name + "_right"
+                fields.append(Field(name, f.dtype.copy()))
+
+        return AnyRelation(
+            Join(
+                left=self,
+                right=right,
+                left_key_indices=left_indices^,
+                right_key_indices=right_indices^,
+                join_kind=how,
+                strictness=strictness,
+                schema_=Schema(fields=fields^),
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Leaf nodes
+# ---------------------------------------------------------------------------
+
+
+struct Scan(Relation):
+    """Unbound named scan — a leaf with no data (cannot execute directly)."""
+
+    var name: String
+    var schema_: Schema
+
+    def __init__(out self, *, var name: String, var schema_: Schema):
+        self.name = name^
+        self.schema_ = schema_^
+
+    def kind(self) -> UInt8:
+        return SCAN_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def pull(mut self) raises -> RecordBatch:
+        raise Error("Scan requires external data source binding")
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Scan({self.name})")
+
+
+struct InMemoryTable(Relation):
+    """Leaf backed by a RecordBatch; yields morsel-sized slices."""
+
+    var batch: RecordBatch
+    var morsel_size: Int
+    var _offset: Int
+
+    def __init__(
+        out self, *, batch: RecordBatch, morsel_size: Int = DEFAULT_MORSEL_SIZE
+    ):
+        self.batch = RecordBatch(copy=batch)
+        self.morsel_size = morsel_size
+        self._offset = 0
+
+    def kind(self) -> UInt8:
+        return IN_MEMORY_TABLE_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.batch.schema)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._offset >= self.batch.num_rows():
+            raise Exhausted()
+        var remaining = self.batch.num_rows() - self._offset
+        var length = self.morsel_size if self.morsel_size < remaining else remaining
+        var result = self.batch.slice(self._offset, length)
+        self._offset += length
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(
+            t"InMemoryTable(num_rows={self.batch.num_rows()},"
+            t" schema={self.batch.schema})"
+        )
+
+
+def in_memory_table(batch: RecordBatch) -> AnyRelation:
+    """Create a relation backed by an in-memory RecordBatch."""
+    return InMemoryTable(batch=batch)
+
+
+struct ParquetScan(Relation):
+    """Leaf that reads a Parquet file on first pull, then yields morsels."""
+
+    var path: String
+    var schema_: Schema
+    var morsel_size: Int
+    var _batch: Optional[RecordBatch]
+    var _offset: Int
+
+    def __init__(
+        out self,
+        *,
+        var path: String,
+        var schema_: Schema,
+        morsel_size: Int = DEFAULT_MORSEL_SIZE,
+    ):
+        self.path = path^
+        self.schema_ = schema_^
+        self.morsel_size = morsel_size
+        self._batch = None
+        self._offset = 0
+
+    def kind(self) -> UInt8:
+        return PARQUET_SCAN_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def pull(mut self) raises -> RecordBatch:
+        if not self._batch:
+            var table = read_table(self.path)
+            var batches = table.to_batches()
+            if len(batches) == 0:
+                self._batch = RecordBatch(
+                    schema=table.schema, columns=List[AnyArray]()
+                )
+            elif len(batches) == 1:
+                self._batch = RecordBatch(copy=batches[0])
+            else:
+                var num_cols = batches[0].num_columns()
+                var cols = List[AnyArray](capacity=num_cols)
+                for c in range(num_cols):
+                    var col_arrays = List[AnyArray](capacity=len(batches))
+                    for b in range(len(batches)):
+                        col_arrays.append(batches[b].columns[c].copy())
+                    cols.append(concat(col_arrays))
+                self._batch = RecordBatch(
+                    schema=Schema(copy=batches[0].schema), columns=cols^
+                )
+        ref batch = self._batch.value()
+        if self._offset >= batch.num_rows():
+            raise Exhausted()
+        var remaining = batch.num_rows() - self._offset
+        var length = self.morsel_size if self.morsel_size < remaining else remaining
+        var result = batch.slice(self._offset, length)
+        self._offset += length
+        return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"ParquetScan({self.path})")
+
+
+def parquet_scan(path: String, schema: Schema) -> AnyRelation:
+    """Create a Parquet file scan with a known schema."""
+    return ParquetScan(path=path, schema_=schema)
+
+
+# ---------------------------------------------------------------------------
+# Streaming operators
+# ---------------------------------------------------------------------------
+
+
+struct Filter(Relation):
+    """Apply a boolean predicate; keep rows where True (schema unchanged)."""
+
+    var input: AnyRelation
+    var predicate: AnyValue
+
+    def __init__(out self, *, var input: AnyRelation, var predicate: AnyValue):
+        self.input = input^
+        self.predicate = predicate^
+
+    def kind(self) -> UInt8:
+        return FILTER_NODE
+
+    def schema(self) -> Schema:
+        return self.input.schema()
+
+    def pull(mut self) raises -> RecordBatch:
+        # Skip morsels that filter to 0 rows; Exhausted propagates from input.
+        while True:
+            var batch = self.input.pull()
+            var mask = self.predicate.to_array(batch)
+            var cols = List[AnyArray]()
+            for i in range(batch.num_columns()):
+                cols.append(filter(batch.columns[i].copy(), mask.copy()))
+            var result = RecordBatch(schema=batch.schema.copy(), columns=cols^)
+            if result.num_rows() > 0:
+                return result^
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Filter(predicate=")
+        self.predicate.write_to(writer)
+        writer.write(t")")
+
+
+struct Project(Relation):
+    """Evaluate a list of named expressions into output columns."""
+
+    var input: AnyRelation
+    var names: List[String]
+    var exprs_: List[AnyValue]
+    var schema_: Schema
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var names: List[String],
+        var exprs_: List[AnyValue],
+        var schema_: Schema,
+    ):
+        self.input = input^
+        self.names = names^
+        self.exprs_ = exprs_^
+        self.schema_ = schema_^
+
+    def kind(self) -> UInt8:
+        return PROJECT_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def pull(mut self) raises -> RecordBatch:
+        var batch = self.input.pull()  # raises Exhausted when done
+        var cols = List[AnyArray]()
+        for ref v in self.exprs_:
+            cols.append(v.to_array(batch))
+        return RecordBatch(schema=self.schema_.copy(), columns=cols^)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Project([")
+        for i in range(len(self.names)):
+            if i > 0:
+                writer.write(t", ")
+            writer.write(self.names[i])
+            writer.write(t"=")
+            self.exprs_[i].write_to(writer)
+        writer.write(t"])")
+
+
+# ---------------------------------------------------------------------------
+# Blocking operators
+# ---------------------------------------------------------------------------
+
+
+struct Aggregate(Relation):
+    """Grouped aggregation — blocking: consume all input, then emit once."""
+
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var agg_exprs: List[AnyValue]
+    var grouper: HashGrouper
+    var key_fields: List[Field]
+    var schema_: Schema
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var keys: List[AnyValue],
+        var agg_exprs: List[AnyValue],
+        var grouper: HashGrouper,
+        var key_fields: List[Field],
+        var schema_: Schema,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.agg_exprs = agg_exprs^
+        self.grouper = grouper^
+        self.key_fields = key_fields^
+        self.schema_ = schema_^
+        self._emitted = False
+
+    def kind(self) -> UInt8:
+        return AGGREGATE_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._emitted:
+            raise Exhausted()
+        while True:
+            try:
+                var batch = self.input.pull()
+                var key_children = List[AnyArray]()
+                var key_struct_fields = List[Field]()
+                for i in range(len(self.keys)):
+                    key_children.append(self.keys[i].to_array(batch))
+                    key_struct_fields.append(self.key_fields[i].copy())
+                var key_struct = StructArray(
+                    dtype=struct_(key_struct_fields^),
+                    length=batch.num_rows(),
+                    nulls=0,
+                    offset=0,
+                    bitmap=None,
+                    children=key_children^,
+                )
+                var gids = self.grouper.consume_keys(key_struct)
+                var val_arrays = List[AnyArray]()
+                for i in range(len(self.agg_exprs)):
+                    val_arrays.append(self.agg_exprs[i].to_array(batch))
+                self.grouper.consume_values(gids, val_arrays)
+            except Exhausted:
+                break
+        self._emitted = True
+        return self.grouper.finish(self.key_fields)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Aggregate(keys=[")
+        for i in range(len(self.keys)):
+            if i > 0:
+                writer.write(", ")
+            self.keys[i].write_to(writer)
+        writer.write("])")
+
+
+struct Join(Relation):
+    """Equijoin — build the left side fully, then stream the right side."""
+
+    var left: AnyRelation
+    var right: AnyRelation
+    var left_key_indices: List[Int]
+    var right_key_indices: List[Int]
+    var join_kind: UInt8
+    var strictness: UInt8
+    var schema_: Schema
+    var _index: Optional[HashJoin[rapidhash]]
+    var _exhausted: Bool
+
+    def __init__(
+        out self,
+        *,
+        var left: AnyRelation,
+        var right: AnyRelation,
+        var left_key_indices: List[Int],
+        var right_key_indices: List[Int],
+        join_kind: UInt8,
+        strictness: UInt8,
+        var schema_: Schema,
+    ):
+        self.left = left^
+        self.right = right^
+        self.left_key_indices = left_key_indices^
+        self.right_key_indices = right_key_indices^
+        self.join_kind = join_kind
+        self.strictness = strictness
+        self.schema_ = schema_^
+        self._index = None
+        self._exhausted = False
+
+    def kind(self) -> UInt8:
+        return JOIN_NODE
+
+    def schema(self) -> Schema:
+        return Schema(copy=self.schema_)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._exhausted:
+            raise Exhausted()
+        if not self._index:
+            var left_struct = self.left.collect().to_struct_array()
+            var index = HashJoin[rapidhash]()
+            index.build(left_struct, self.left_key_indices)
+            self._index = index^
+        try:
+            var right_morsel = self.right.pull()
+            var result = self._index.value().probe(
+                right_morsel.to_struct_array(),
+                self.right_key_indices,
+                self.join_kind,
+                self.strictness,
+            )
+            return RecordBatch(
+                schema=self.schema_.copy(), columns=result.children.copy()
+            )
+        except Exhausted:
+            self._exhausted = True
+        raise Exhausted()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Join(kind={self.join_kind})")
+
+
+# ---------------------------------------------------------------------------
+# execute — drain a plan into a single RecordBatch
+# ---------------------------------------------------------------------------
+
+
+def execute(
+    plan: AnyRelation, ctx: ExecutionContext = ExecutionContext()
+) raises -> RecordBatch:
+    """Execute a relational plan, materialising the full result."""
+    var p = plan
+    return p.collect()
+
+
+# ===========================================================================
+# Name-resolved column handles — Table[T]() / col() produce these fused leaves
+# ===========================================================================
 
 
 trait Named:
-    """Trait for expression nodes with a compile-time column name, used by
-    ``Project`` to derive output field names from the expression tree's type
-    alone. Declared as a method (not a bare ``comptime name`` alias) because
-    converting a ``StringLiteral`` type parameter to ``String`` only resolves
-    reliably from inside the concrete node's own method body — accessing
-    ``E.name`` from a separate generic function parameterized over
-    ``E: Named`` hits compiler limitations (confirmed against the pinned
-    toolchain; see ``docs/aot-relations-design.md``).
-    """
+    """Trait for expression nodes with a compile-time column name (a method,
+    not a bare ``comptime name`` alias — a ``StringLiteral`` type parameter only
+    converts to ``String`` reliably from inside the concrete node's own method
+    body; see ``docs/aot-relations-design.md``)."""
 
     def field_name(self) -> String:
         ...
 
 
-# ---------------------------------------------------------------------------
-# Column — base trait for the named leaf column nodes
-# ---------------------------------------------------------------------------
-
-
 trait Column(Named, Value):
     """Base trait for the named leaf column nodes (``NumericColumn`` /
-    ``StringColumn``).
-
-    Unifies them behind ``field_name()`` (from ``Named``) and ``to_array()``,
-    so ``Project`` can assemble a projection over a heterogeneous column pack
-    without dispatching on the numeric-vs-string execution split — each column
-    knows how to erase its own fused result to ``AnyArray``.
-    """
+    ``StringColumn``), unifying them behind ``field_name()`` and ``to_array()``
+    so a projection can assemble a heterogeneous column pack uniformly."""
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
-        """Execute this column against *batch* and erase the result to
-        ``AnyArray`` (the one deliberate erasure boundary in ``Project``)."""
+        """Execute this column against *batch* and erase to ``AnyArray``."""
         ...
-
-
-# ---------------------------------------------------------------------------
-# Relation — trait for fully-typed relational plan nodes
-# ---------------------------------------------------------------------------
-
-
-trait Relation(ImplicitlyDeletable, Movable):
-    """Trait for nodes in the fully-typed relational layer (``Project``,
-    ``Filter``, ...). Mirrors ``marrow.expr.plan``'s ``Relation``
-    trait but for the comptime-typed plan tree — ``execute(batch)`` runs the
-    whole plan against a source batch and returns the result directly, with
-    no processor/pull-based pipeline (every node here is a single pass).
-    """
-
-    def execute(self, batch: RecordBatch) raises -> RecordBatch:
-        ...
-
-
-# ---------------------------------------------------------------------------
-# NumericColumn — named typed column reference
-# ---------------------------------------------------------------------------
 
 
 struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
-    """Named typed numeric column reference.
-
-    Carries only its ``name`` (a runtime field); the type parameter is just the
-    dtype, which drives the SIMD ``core``. A query with 20 int64 columns
-    instantiates ``NumericColumn[Int64Type]`` once, not 20 distinct types — the
-    field name is metadata and never affects the generated compute. The column
-    position is resolved by name against ``batch.schema`` at execution (a
-    loop-invariant lookup, hoisted out of the fused loop).
-
-    You never construct this directly — ``Table[Tbl]()`` and ``col(name, dtype)``
-    produce it.
-    """
+    """Named typed numeric column reference — carries only its ``name`` (runtime
+    field); the type parameter is just the dtype that drives the SIMD ``core``.
+    The position is resolved by name against ``batch.schema`` at execution. Built
+    by ``Table[Tbl]()`` and ``col(name, dtype)``, never directly."""
 
     comptime OutType = Self.T
     comptime NativeType = Self.T.native
@@ -179,20 +942,10 @@ struct NumericColumn[T: dt.NumericType](Column, Named, NumericValue):
         writer.write("Col[", self.name, "]")
 
 
-# ---------------------------------------------------------------------------
-# StringColumn — named typed string column reference, resolved by name
-# ---------------------------------------------------------------------------
-
-
 struct StringColumn(Column, Named, StringValue):
-    """Named typed string column reference.
-
-    The string counterpart of ``NumericColumn[T]``, produced by ``Table[Tbl]()``
-    for string-typed fields. Carries only its ``name`` (there is no dtype
-    parameter — string is a single physical type), so there is exactly one
-    ``StringColumn`` type across all string columns; the position is resolved by
-    name against ``batch.schema``.
-    """
+    """Named typed string column reference — the string counterpart of
+    ``NumericColumn[T]`` (one type across all string columns; position resolved
+    by name)."""
 
     var name: String
 
@@ -219,35 +972,17 @@ struct StringColumn(Column, Named, StringValue):
         writer.write("StrCol[", self.name, "]")
 
 
-# ---------------------------------------------------------------------------
-# Table — column-access handle over a plain schema struct
-# ---------------------------------------------------------------------------
-
-
 struct Table[T: AnyType](Copyable, Movable):
     """Column-access handle over a plain schema struct — ``Table[Orders]()``.
 
-    ``T`` is any struct whose fields are plain dtype tags (``var a: Int64Type``).
-    Attribute access reflects the named field's **dtype** on ``T`` at compile
-    time (``reflect[T].field[name].T``, via the ``_dtype`` alias) to pick the
-    column type; the position is resolved by name at execution, same as
-    ``col(name, dtype)``. So ``Table[Orders]()`` is really just the ``col``
-    surface with the dtypes read off a struct instead of spelled per reference.
-
-    A handle is needed because ``T``'s own fields shadow ``__getattr_param__``:
-    ``T().a`` would read the ``Int64Type`` field value, not a column node.
-    ``T`` itself is never instantiated (only reflected), so it needs no
-    ``__init__``.
-
-    The two ``__getattr_param__`` overloads are irreducible — they return
-    different node types (``NumericColumn`` vs ``StringColumn``), and Mojo has
-    no way to pick a return type by a ``comptime`` condition — so a ``where``
-    clause routes numeric fields to one and string fields to the other. The
-    ``_dtype`` alias folds to a builtin KGEN attribute, so the constraint solver
-    can prove the ``where`` clause during overload selection (a plain ``def``
-    lookup would not fold, which is why reflection on a declared struct is the
-    only way to do this dispatch from a *name*).
-    """
+    ``T`` is any struct of plain dtype-tag fields (``var a: Int64Type``).
+    ``t.a`` reflects field ``a``'s dtype on ``T`` at compile time
+    (``reflect[T].field[name].T``) to pick the column type; the position is
+    resolved by name at execution. A companion handle is required because
+    ``T``'s own fields shadow ``__getattr_param__``; ``T`` is never instantiated
+    (only reflected). The two overloads route numeric/string fields to
+    ``NumericColumn``/``StringColumn`` via a ``where`` clause the constraint
+    solver can prove (the reflection query folds to a builtin KGEN attribute)."""
 
     comptime _dtype[name: StringLiteral] = reflect[Self.T].field[name].T
 
@@ -269,107 +1004,3 @@ struct Table[T: AnyType](Copyable, Movable):
         Self._dtype[name], dt.StringLikeType
     ):
         return StringColumn(String(name))
-
-
-# ---------------------------------------------------------------------------
-# Project — variadic, fully-typed projection over named expression nodes
-# ---------------------------------------------------------------------------
-
-
-struct Project[*Es: Column](Relation):
-    """Fully-typed projection: evaluates a fixed, heterogeneous list of named
-    columns and assembles the results into a ``RecordBatch``.
-
-    Each ``Es[i]`` is a ``Column`` (``NumericColumn`` or ``StringColumn``) that
-    executes as its own fully-monomorphized, fused kernel. The *only* dynamic
-    step is collecting the heterogeneous per-column results into
-    ``List[AnyArray]`` / ``RecordBatch`` via ``Column.to_array()`` — inherently
-    heterogeneous and O(#columns) — the one deliberate erasure boundary (see
-    ``docs/aot-relations-design.md``). Bounding on ``Column`` (rather than the
-    broader ``Value``) lets ``execute`` call ``to_array()``/``field_name()``
-    uniformly, with no numeric-vs-string branching.
-
-    Construction takes an already-built ``Tuple[*Es]``, not bare variadic
-    args (``Project(t.a, t.b)``) — a ``VariadicPack`` captured by one
-    function cannot be forwarded to another function's variadic parameter in
-    current Mojo (confirmed against the pinned toolchain); only a
-    freshly-constructed ``Tuple(a, b, ...)`` at the call site works. Usage::
-
-        var proj = Project(Tuple(t.a, t.b))
-        var result = proj.execute(batch)
-    """
-
-    var exprs: Tuple[*Self.Es]
-
-    def __init__(out self, var exprs: Tuple[*Self.Es]):
-        self.exprs = exprs^
-
-    def execute(self, batch: RecordBatch) raises -> RecordBatch:
-        var cols = List[AnyArray]()
-        var fields = List[Field]()
-
-        comptime for i in range(Self.Es.__len__()):
-            ref e = self.exprs[i]
-            var arr = e.to_array(batch)
-            fields.append(Field(e.field_name(), arr.dtype()))
-            cols.append(arr^)
-
-        return RecordBatch(Schema(fields=fields^), cols^)
-
-    def filter[P: BoolValue](var self, var predicate: P) -> Filter[Self, P]:
-        """Wrap this projection in a row filter, returning a new plan node."""
-        return Filter(self^, predicate^)
-
-
-# ---------------------------------------------------------------------------
-# Filter — row filter over a fully-typed relation, by a fused predicate
-# ---------------------------------------------------------------------------
-
-
-struct Filter[Input: Relation, Pred: BoolValue](Relation):
-    """Filter — apply a boolean predicate to a typed relation's rows.
-
-    ``predicate`` is evaluated against the *original* input ``batch`` passed
-    to ``execute`` (not against ``input``'s projected output) — the
-    predicate's ``NumericColumn`` nodes are typed against the source ``Table``, so
-    they must resolve against the batch matching that table's column order,
-    exactly like SQL's ``WHERE`` clause can reference columns absent from the
-    ``SELECT`` list.
-
-    Usage::
-
-        var plan = Project(Tuple(t.a, t.b)).filter(Gt(t.a, t.b))
-        var result = plan.execute(batch)
-    """
-
-    var input: Self.Input
-    var predicate: Self.Pred
-
-    def __init__(out self, var input: Self.Input, var predicate: Self.Pred):
-        self.input = input^
-        self.predicate = predicate^
-
-    def execute(self, batch: RecordBatch) raises -> RecordBatch:
-        var mask = self.predicate.execute(batch).to_any()
-        var projected = self.input.execute(batch)
-        var cols = List[AnyArray]()
-        for i in range(len(projected.columns)):
-            cols.append(filter(projected.columns[i].copy(), mask.copy()))
-        return RecordBatch(projected.schema.copy(), cols^)
-
-
-# ---------------------------------------------------------------------------
-# execute — free-function entry point, mirrors marrow.expr.execute(plan)
-# ---------------------------------------------------------------------------
-
-
-def execute[T: Relation](plan: T, batch: RecordBatch) raises -> RecordBatch:
-    """Execute a fully-typed relational plan against a batch.
-
-    Equivalent to calling ``plan.execute(batch)`` directly — provided so the
-    ``marrow.expr`` / ``marrow.expr`` packages read the same at the call site
-    (``execute(plan)`` on the ``dyn`` side takes an already-bound
-    ``AnyRelation``; here ``batch`` is passed alongside since the typed plan
-    itself carries no data).
-    """
-    return plan.execute(batch)

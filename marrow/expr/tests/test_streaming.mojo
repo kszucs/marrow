@@ -1,4 +1,4 @@
-"""Tests for the pull-based fat relation nodes in ``marrow.expr.plan``.
+"""Tests for the pull-based fat relation nodes in ``marrow.expr.relations``.
 
 Verifies the fat-node streaming design: each op is its own pull-based executor
 (no ``Planner``), over ``AnyValue`` values (fused or interpreter). Small morsel
@@ -18,7 +18,7 @@ from marrow.expr.relations import Table
 from marrow.expr.values import Gt
 from marrow.expr.runtime import col
 from marrow.expr.erased import AnyValue
-from marrow.expr.plan import InMemoryTable, Project, AnyRelation
+from marrow.expr.relations import InMemoryTable, Project, AnyRelation
 
 
 struct _Orders:
