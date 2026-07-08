@@ -18,7 +18,7 @@ from marrow.dtypes import Int64Type, StringType, int64
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.relations import Table
 from marrow.expr.values import AnyValue
-from marrow.expr.runtime import col
+from marrow.expr.dynamic import col
 
 
 struct _Orders:

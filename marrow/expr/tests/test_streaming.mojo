@@ -16,7 +16,7 @@ from marrow.schema import Schema, schema
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.relations import Table
 from marrow.expr.values import Gt
-from marrow.expr.runtime import col
+from marrow.expr.dynamic import col
 from marrow.expr.values import AnyValue
 from marrow.expr.relations import InMemoryTable, Project, AnyRelation
 

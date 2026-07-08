@@ -14,7 +14,7 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.runtime import col
+from marrow.expr.dynamic import col
 from marrow.expr.values import AnyValue
 from marrow.expr.relations import InMemoryTable, Project, AnyRelation, execute
 

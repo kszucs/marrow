@@ -22,7 +22,7 @@ Traits
 ------
 ``Value`` — base trait for every expression node (dtype, write_to;
     Copyable/Writable/etc.), shared with the type-erased ``DynValue`` in
-    ``marrow.expr.runtime`` — that module imports these traits directly
+    ``marrow.expr.dynamic`` — that module imports these traits directly
     from here (``aot`` has no dependency on ``dyn``; the reverse does).
 ``NumericValue`` — numeric nodes (core[W](batch, idx), execute(batch))
 ``BoolValue`` — boolean/predicate nodes (core[W] returns SIMD[bool, W];
@@ -30,7 +30,7 @@ Traits
 
 Bridging to the runtime layer
 -----------------------------
-The ``DynValue(value)`` constructor (see ``marrow.expr.runtime``) boxes a
+The ``DynValue(value)`` constructor (see ``marrow.expr.dynamic``) boxes a
 comptime node from this module into a runtime ``DynValue``, so it can flow
 through APIs that build/execute plans without knowing the concrete comptime
 type (e.g. the Python bindings). The boxed ``DynValue`` fully delegates
@@ -60,11 +60,11 @@ from marrow.buffers import Bitmap, Buffer
 from marrow.dtypes import AnyDataType, DType, NumericType
 from marrow.tabular import RecordBatch
 from marrow.expr.relations import Column
-from marrow.expr.runtime import DynValue
+from marrow.expr.dynamic import DynValue
 
 
 # ---------------------------------------------------------------------------
-# Value trait — base for all expression nodes (shared with runtime.mojo)
+# Value trait — base for all expression nodes (shared with dynamic.mojo)
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +78,7 @@ trait Value(
     """Interface every expression node must implement.
 
     This is the single canonical trait implemented by both the comptime-typed
-    expressions in this module and the type-erased ``DynValue`` in ``runtime.mojo``.
+    expressions in this module and the type-erased ``DynValue`` in ``dynamic.mojo``.
 
     ``dtype()`` is declared by the ``NumericValue`` / ``StringValue`` sub-traits
     (which supply a default implementation); ``write_to()`` comes from the

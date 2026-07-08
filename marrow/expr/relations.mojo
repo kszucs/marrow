@@ -76,7 +76,7 @@ from marrow.kernels.join import HashJoin
 from marrow.kernels.hashing import rapidhash
 from marrow.parquet import read_table
 from marrow.expr.values import AnyValue
-from marrow.expr.runtime import DynValue, col, LOAD
+from marrow.expr.dynamic import DynValue, col, LOAD
 from marrow.expr.values import NumericValue, StringValue, Value
 from marrow.kernels.join import (
     JOIN_INNER,

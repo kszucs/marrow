@@ -10,7 +10,7 @@ links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 column handles, and ``AnyValue`` — the universal value box the relational layer
 holds (wraps a fused node *or* a ``DynValue``, exposing only ``to_array``).
 
-``runtime.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
+``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)
 and operator overloads.
 
@@ -26,7 +26,7 @@ Usage::
     var result = execute(plan)
 """
 
-from marrow.expr.runtime import (
+from marrow.expr.dynamic import (
     # Unified expression node
     DynValue,
     # Free-standing factory functions (return DynValue)
