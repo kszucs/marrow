@@ -199,22 +199,22 @@ def _zigzag(u: UInt64) -> Int64:
     return Int64(u >> 1) ^ -Int64(u & 1)
 
 
-def delta_binary_packed_decode(
-    data: Span[UInt8, _], count: Int
-) raises -> List[Int64]:
-    """Decode `count` DELTA_BINARY_PACKED integers.
+def delta_decode(
+    data: Span[UInt8, _], start: Int, count: Int, mut out: List[Int64]
+) raises -> Int:
+    """Decode `count` DELTA_BINARY_PACKED integers starting at byte `start`,
+    appending to `out`; return the byte position just past the stream (so
+    callers like DELTA_LENGTH_BYTE_ARRAY can find the data that follows).
 
     Layout (Parquet spec): a header of `block_size`, `miniblocks_per_block`,
     `total_value_count`, and the zigzag `first_value`; then blocks, each a
     zigzag `min_delta`, one bit-width byte per miniblock, and the bit-packed
     miniblock deltas. Each value is `prev + min_delta + unpacked_delta`.
     """
-    var out = List[Int64]()
     if count == 0:
-        return out^
-    out.reserve(count)
+        return start
 
-    var pos = 0
+    var pos = start
     var block_size: UInt64
     block_size, pos = _read_varint(data, pos)
     var miniblocks: UInt64
@@ -229,8 +229,9 @@ def delta_binary_packed_decode(
 
     var value = _zigzag(first_z)
     out.append(value)
+    var produced = 1
 
-    while len(out) < count:
+    while produced < count:
         var min_delta_z: UInt64
         min_delta_z, pos = _read_varint(data, pos)
         var min_delta = _zigzag(min_delta_z)
@@ -246,8 +247,19 @@ def delta_binary_packed_decode(
                     delta = _read_bits(data, base_bit + j * w, w)
                 value += min_delta + Int64(delta)
                 out.append(value)
-                if len(out) == count:
-                    return out^
+                produced += 1
+                if produced == count:
+                    return pos
+    return pos
+
+
+def delta_binary_packed_decode(
+    data: Span[UInt8, _], count: Int
+) raises -> List[Int64]:
+    """Decode `count` DELTA_BINARY_PACKED integers (whole value stream)."""
+    var out = List[Int64]()
+    out.reserve(count)
+    _ = delta_decode(data, 0, count, out)
     return out^
 
 

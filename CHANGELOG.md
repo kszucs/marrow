@@ -4,6 +4,14 @@
 
 ### Features
 
+- **DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY read support** (`marrow.parquet`):
+  the reader now decodes the delta string/binary encodings (PyArrow
+  `use_dictionary=False`) — DELTA_LENGTH_BYTE_ARRAY (delta-packed lengths then
+  concatenated bytes) and DELTA_BYTE_ARRAY (incremental prefix + suffix
+  reconstruction). Handles nulls; reads compressed and uncompressed. With
+  DELTA_BINARY_PACKED and BYTE_STREAM_SPLIT this completes the common
+  non-dictionary encodings.
+
 - **BYTE_STREAM_SPLIT read support** (`marrow.parquet`): the reader now decodes
   the BYTE_STREAM_SPLIT encoding (float32/float64; PyArrow
   `use_byte_stream_split=True`), reassembling each value from its strided byte

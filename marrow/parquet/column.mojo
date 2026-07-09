@@ -33,12 +33,19 @@ from ..dtypes import (
 )
 
 from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
-from .encoding import rle_decode, rle_gather, delta_binary_packed_decode
+from .encoding import (
+    rle_decode,
+    rle_gather,
+    delta_binary_packed_decode,
+    delta_decode,
+)
 from .compression import Codecs
 from .schema import LeafColumn
 from .format import (
     ColumnMetaData,
     ENC_DELTA_BINARY_PACKED,
+    ENC_DELTA_LENGTH_BYTE_ARRAY,
+    ENC_DELTA_BYTE_ARRAY,
     ENC_BYTE_STREAM_SPLIT,
 )
 
@@ -252,6 +259,18 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
     def _append(mut self, span: Span[UInt8, _]) raises:
         self.builder.append(StringSlice(unsafe_from_utf8=span))
 
+    def _scatter_values(mut self, page: Page, values: List[List[UInt8]]) raises:
+        """Append the `page.num_present` decoded present values into the builder,
+        honoring definition levels — the shared placement path for the encodings
+        that materialize their values (dictionary, DELTA_*)."""
+        var vi = 0
+        for row in range(page.num_values):
+            if page.all_present() or Int(page.def_levels[row]) == self.max_def:
+                self._append(Span(values[vi]))
+                vi += 1
+            else:
+                self.builder.append_null()
+
     def consume(mut self, var page: Page) raises:
         if page.kind == PAGEKIND_DICT:
             self.dict_body = List[UInt8]()
@@ -267,11 +286,15 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             return
 
         var vspan = page.values()
-        var all_present = page.all_present()
+        var np = page.num_present
         if page.is_plain():
+            # PLAIN is decoded in place (no per-value copy): walk the length-
+            # prefixed present values, appending or emitting nulls by def level.
             var vi = 0
             for row in range(page.num_values):
-                if all_present or Int(page.def_levels[row]) == self.max_def:
+                if page.all_present() or Int(page.def_levels[row]) == (
+                    self.max_def
+                ):
                     var n = read_u32le(vspan, vi)
                     vi += 4
                     self._append(vspan[vi : vi + n])
@@ -279,21 +302,48 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                 else:
                     self.builder.append_null()
         elif page.is_dictionary():
-            var indices = rle_decode(vspan[1:], Int(vspan[0]), page.num_present)
-            var di = 0
-            for row in range(page.num_values):
-                if all_present or Int(page.def_levels[row]) == self.max_def:
-                    var idx = Int(indices[di])
-                    di += 1
-                    var start = self.dict_off[idx]
-                    # copy to a local so the append doesn't borrow self twice
-                    var entry = List[UInt8]()
-                    entry.extend(
-                        Span(self.dict_body)[start : start + self.dict_len[idx]]
-                    )
-                    self._append(Span(entry))
-                else:
-                    self.builder.append_null()
+            var indices = rle_decode(vspan[1:], Int(vspan[0]), np)
+            var values = List[List[UInt8]]()
+            for i in range(np):
+                var start = self.dict_off[Int(indices[i])]
+                var v = List[UInt8]()
+                v.extend(
+                    Span(self.dict_body)[
+                        start : start + self.dict_len[Int(indices[i])]
+                    ]
+                )
+                values.append(v^)
+            self._scatter_values(page, values)
+        elif page.encoding == ENC_DELTA_LENGTH_BYTE_ARRAY:
+            # delta-packed lengths, then all value bytes concatenated.
+            var lengths = List[Int64]()
+            var pos = delta_decode(vspan, 0, np, lengths)
+            var values = List[List[UInt8]]()
+            for i in range(np):
+                var n = Int(lengths[i])
+                var v = List[UInt8]()
+                v.extend(vspan[pos : pos + n])
+                values.append(v^)
+                pos += n
+            self._scatter_values(page, values)
+        elif page.encoding == ENC_DELTA_BYTE_ARRAY:
+            # delta-packed prefix lengths, then DELTA_LENGTH-encoded suffixes;
+            # value[i] = value[i-1][:prefix] + suffix.
+            var prefixes = List[Int64]()
+            var pos = delta_decode(vspan, 0, np, prefixes)
+            var suffix_lens = List[Int64]()
+            pos = delta_decode(vspan, pos, np, suffix_lens)
+            var values = List[List[UInt8]]()
+            var prev = List[UInt8]()
+            for i in range(np):
+                var v = List[UInt8]()
+                v.extend(Span(prev)[0 : Int(prefixes[i])])
+                var sl = Int(suffix_lens[i])
+                v.extend(vspan[pos : pos + sl])
+                pos += sl
+                values.append(v.copy())
+                prev = v^
+            self._scatter_values(page, values)
         else:
             raise Error(
                 "parquet: unsupported byte-array encoding "
