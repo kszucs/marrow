@@ -4,6 +4,21 @@
 
 ### Features
 
+- **Min/max statistics** (`marrow.parquet`): the writer now computes and emits
+  per-column-chunk `min_value`/`max_value` bounds (with `is_min/max_value_exact`)
+  alongside the existing `null_count`, and declares `column_orders`
+  (`TypeDefinedOrder`) so readers trust the logical ordering. Bounds use the
+  correct comparator per type — signed vs unsigned integers, IEEE floats
+  (NaN-skipped, signed-zero normalised so the bound brackets ±0.0), and
+  byte-wise string ordering — and are PLAIN-encoded (little-endian numerics; raw
+  bytes for strings). PyArrow reads the bounds marrow writes, including the
+  unsigned-int and string cases. On read, `read_metadata(path)` exposes the raw
+  footer (row groups, offsets, codecs, `null_count`, and the min/max bytes)
+  mirroring `pyarrow.parquet.read_metadata`, and `read_statistics(path)` returns
+  decoded typed `min`/`max` scalars per (row group, leaf column) for the numeric,
+  boolean, and string types (temporal/binary bounds are a follow-up). This is the
+  foundation for row-group/page skipping (predicate pushdown).
+
 - **Arbitrarily nested read support** (`marrow.parquet`): the reader now
   reconstructs any nesting of structs and lists — `list<struct>`, `list<list<…>>`
   to any depth, `struct<list>`, lists of nullable structs, and struct-level nulls
@@ -135,6 +150,16 @@
 
 ### Tests
 
+- **Parquet multi-page, temporal-unit, and integer BYTE_STREAM_SPLIT coverage**
+  (additions to `test_reader.mojo`, `test_codecs.mojo`, `test_nested.mojo`): more
+  modern-Parquet read cases modelled on the PyArrow suite — multiple data pages
+  within a single column chunk (tiny `data_page_size`) for PLAIN ints,
+  dictionary-encoded strings, and variable-length strings with nulls, plus the
+  same for a nested list column (rep/def levels stitched across page
+  boundaries); millisecond temporal units (`time32(ms)`, `timestamp(ms)`) and a
+  timezone-adjusted (`isAdjustedToUTC`) timestamp; `large_binary` reads; and
+  `BYTE_STREAM_SPLIT` for int32/int64 columns (Parquet 2.8+), complementing the
+  existing float coverage.
 - **Parquet value / boundary edge cases** (`marrow/parquet/tests/test_values.mojo`
   + additions to `test_writer.mojo`): modelled on the PyArrow parquet test
   suite, covering cases the reader/writer had not exercised — all-null and

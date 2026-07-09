@@ -14,8 +14,25 @@ from std.sys.info import num_physical_cores
 from ..arrays import AnyArray
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
+from ..scalars import (
+    AnyScalar,
+    BoolScalar,
+    StringScalar,
+    Int8Scalar,
+    Int16Scalar,
+    Int32Scalar,
+    Int64Scalar,
+    UInt8Scalar,
+    UInt16Scalar,
+    UInt32Scalar,
+    UInt64Scalar,
+    Float32Scalar,
+    Float64Scalar,
+)
+from .. import dtypes as dt
 
 from .utils import CompressionLibs
+from .codecs import LittleEndian
 from .schema import SchemaMapping, Projection, DecodedLeaf
 from .format import FileMetaData
 from .column import ColumnReader
@@ -151,3 +168,115 @@ def read_table(
     # value has been copied into owned Arrow buffers above, then unmap.
     _ = mapped^
     return result^
+
+
+# ---------------------------------------------------------------------------
+# Metadata / statistics — read the footer without decoding any column data.
+# Mirrors PyArrow's `read_metadata` / `ColumnChunkMetaData.statistics`.
+# ---------------------------------------------------------------------------
+
+
+def read_metadata(path: String) raises -> FileMetaData:
+    """Read only the file footer: schema, row groups, and per-column-chunk
+    metadata (offsets, sizes, codec, null_count, and the raw min/max statistic
+    bytes). No column data is decoded. Mirrors `pyarrow.parquet.read_metadata`.
+    """
+    var mapped = MappedFile(path)
+    var meta = FileMetaData.read_footer(mapped.span())
+    _ = mapped^  # read_footer copies every field into owned storage
+    return meta^
+
+
+struct ColumnStatistics(Copyable, Movable):
+    """Decoded per-column-chunk statistics: `null_count` (-1 if absent) plus the
+    `min`/`max` bounds as typed scalars, valid only when `has_min_max`."""
+
+    var has_min_max: Bool
+    var null_count: Int
+    var min: AnyScalar
+    var max: AnyScalar
+
+    def __init__(out self):
+        self.has_min_max = False
+        self.null_count = -1
+        self.min = BoolScalar(is_valid=False)
+        self.max = BoolScalar(is_valid=False)
+
+
+def _decode_stat(
+    dtype: dt.AnyDataType, b: List[UInt8]
+) raises -> Optional[AnyScalar]:
+    """Decode one PLAIN-encoded min/max value to a typed scalar, mirroring the
+    writer's encoding (`LittleEndian.fixed` reads `size_of[dt]` LE bytes and
+    reinterprets — the inverse of the writer's byte emission). Returns None for
+    types this reader does not yet decode (raw bytes stay in `read_metadata`).
+    """
+    var s = Span(b)
+    if dtype == dt.int8:
+        return AnyScalar(
+            Int8Scalar(LittleEndian.fixed[DType.int32](s, 0).cast[DType.int8]())
+        )
+    elif dtype == dt.int16:
+        return AnyScalar(
+            Int16Scalar(
+                LittleEndian.fixed[DType.int32](s, 0).cast[DType.int16]()
+            )
+        )
+    elif dtype == dt.int32:
+        return AnyScalar(Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)))
+    elif dtype == dt.uint8:
+        return AnyScalar(
+            UInt8Scalar(
+                LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint8]()
+            )
+        )
+    elif dtype == dt.uint16:
+        return AnyScalar(
+            UInt16Scalar(
+                LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint16]()
+            )
+        )
+    elif dtype == dt.uint32:
+        return AnyScalar(UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)))
+    elif dtype == dt.int64:
+        return AnyScalar(Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)))
+    elif dtype == dt.uint64:
+        return AnyScalar(UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)))
+    elif dtype == dt.float32:
+        return AnyScalar(Float32Scalar(LittleEndian.fixed[DType.float32](s, 0)))
+    elif dtype == dt.float64:
+        return AnyScalar(Float64Scalar(LittleEndian.fixed[DType.float64](s, 0)))
+    elif dtype == dt.bool_:
+        return AnyScalar(BoolScalar(len(b) > 0 and b[0] != 0))
+    elif dtype.is_string():
+        return AnyScalar(
+            StringScalar(String(StringSlice(unsafe_from_utf8=Span(b))))
+        )
+    else:
+        return None
+
+
+def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:
+    """Per-(row group, leaf column) decoded statistics, indexed
+    `result[row_group][leaf]`. `min`/`max` are typed scalars matching each
+    column's Arrow type; `has_min_max` is false when the file stored no bounds
+    or the type's bounds are not yet decoded."""
+    var meta = read_metadata(path)
+    var mapping = SchemaMapping.from_parquet(meta)
+    var out = List[List[ColumnStatistics]]()
+    for ref rg in meta.row_groups:
+        var row = List[ColumnStatistics]()
+        for ci in range(len(rg.columns)):
+            ref cm = rg.columns[ci].meta_data
+            var cs = ColumnStatistics()
+            cs.null_count = cm.null_count
+            if cm.has_min_max:
+                var mn = _decode_stat(mapping.leaves[ci].dtype, cm.min_value)
+                var mx = _decode_stat(mapping.leaves[ci].dtype, cm.max_value)
+                if Bool(mn) and Bool(mx):
+                    cs.min = mn.value().copy()
+                    cs.max = mx.value().copy()
+                    cs.has_min_max = True
+            row.append(cs^)
+        out.append(row^)
+    return out^

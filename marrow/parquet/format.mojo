@@ -823,6 +823,11 @@ struct ColumnMetaData(Copyable, Movable):
     var data_page_offset: Int
     var dictionary_page_offset: Int  # -1 if absent
     var null_count: Int  # -1 if unknown; written as Statistics.null_count
+    var has_min_max: Bool  # Statistics.min_value/max_value present
+    var min_value: List[
+        UInt8
+    ]  # PLAIN-encoded min (no length prefix for BYTE_ARRAY)
+    var max_value: List[UInt8]  # PLAIN-encoded max
 
     def __init__(out self):
         self.type = -1
@@ -834,6 +839,9 @@ struct ColumnMetaData(Copyable, Movable):
         self.data_page_offset = 0
         self.dictionary_page_offset = -1
         self.null_count = -1
+        self.has_min_max = False
+        self.min_value = List[UInt8]()
+        self.max_value = List[UInt8]()
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -862,9 +870,40 @@ struct ColumnMetaData(Copyable, Movable):
                 out.data_page_offset = Int(r.read_i64())
             elif fid == 11:
                 out.dictionary_page_offset = Int(r.read_i64())
+            elif fid == 12:
+                out._read_statistics(r)
             else:
                 r.skip(ftype)
         return out^
+
+    def _read_statistics[
+        o: Origin[mut=False]
+    ](mut self, mut r: CompactReader[o]) raises:
+        """Parse the nested Statistics struct, keeping null_count and the modern
+        min_value/max_value (fields 6/5). The deprecated min/max (fields 2/1) are
+        skipped — modern writers populate min_value/max_value."""
+        var last = 0
+        var seen_min = False
+        var seen_max = False
+        while True:
+            var ftype, fid = r.read_field_header(last)
+            if ftype == TC_STOP:
+                break
+            last = fid
+            if fid == 3:
+                self.null_count = Int(r.read_i64())
+            elif fid == 5:
+                var bytes = r.read_bytes()
+                self.max_value = List[UInt8](Span(bytes))
+                seen_max = True
+            elif fid == 6:
+                var bytes = r.read_bytes()
+                self.min_value = List[UInt8](Span(bytes))
+                seen_min = True
+            else:
+                r.skip(ftype)
+        # min/max are only usable when both bounds are present.
+        self.has_min_max = seen_min and seen_max
 
     def write(self, mut w: CompactWriter):
         var last = 0
@@ -890,11 +929,22 @@ struct ColumnMetaData(Copyable, Movable):
         w.write_i64(Int64(self.total_compressed_size))
         last = w.write_field_begin(TC_I64, 9, last)
         w.write_i64(Int64(self.data_page_offset))
-        if self.null_count >= 0:
-            # Statistics (field 12) with only null_count (field 3) populated
+        if self.null_count >= 0 or self.has_min_max:
+            # Statistics (field 12): null_count (3), and the modern
+            # max_value (5) / min_value (6) with their exactness flags (7/8).
+            # Fields are written in ascending id order per the compact protocol.
             last = w.write_field_begin(TC_STRUCT, 12, last)
-            _ = w.write_field_begin(TC_I64, 3, 0)
-            w.write_i64(Int64(self.null_count))
+            var slast = 0
+            if self.null_count >= 0:
+                slast = w.write_field_begin(TC_I64, 3, slast)
+                w.write_i64(Int64(self.null_count))
+            if self.has_min_max:
+                slast = w.write_field_begin(TC_BINARY, 5, slast)
+                w.write_bytes(Span(self.max_value))
+                slast = w.write_field_begin(TC_BINARY, 6, slast)
+                w.write_bytes(Span(self.min_value))
+                slast = w.write_bool_field(True, 7, slast)  # is_max_value_exact
+                slast = w.write_bool_field(True, 8, slast)  # is_min_value_exact
             w.write_field_stop()
         w.write_field_stop()
 
@@ -1032,8 +1082,23 @@ struct FileMetaData(Copyable, Movable):
         w.write_list_begin(TC_STRUCT, len(self.row_groups))
         for i in range(len(self.row_groups)):
             self.row_groups[i].write(w)
-        _ = w.write_field_begin(TC_BINARY, 6, last)
+        last = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
+        # column_orders (7): one ColumnOrder per leaf column, each the
+        # TYPE_ORDER (TypeDefinedOrder) union member — declares that min_value/
+        # max_value follow the column's logical (type-defined) ordering, so
+        # readers trust unsigned-int and byte-array bounds.
+        var num_leaves = 0
+        for s in self.schema:
+            if s.num_children == 0:
+                num_leaves += 1
+        _ = w.write_field_begin(TC_LIST, 7, last)
+        w.write_list_begin(TC_STRUCT, num_leaves)
+        for _ in range(num_leaves):
+            # ColumnOrder union: field 1 = TypeDefinedOrder (empty struct)
+            _ = w.write_field_begin(TC_STRUCT, 1, 0)
+            w.write_field_stop()  # empty TypeDefinedOrder
+            w.write_field_stop()  # end ColumnOrder union
         w.write_field_stop()
 
     @staticmethod

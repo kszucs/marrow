@@ -1,6 +1,6 @@
-from std.testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_true, assert_false
 from std.math import isnan, isinf
-from std.python import Python
+from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, write_table
@@ -104,6 +104,92 @@ def test_null_count_statistic() raises:
     var pf = pq.ParquetFile(path)
     var stats = pf.metadata.row_group(0).column(0).statistics
     assert_equal(Int(py=stats.null_count), 2)
+    remove(path)
+
+
+# ---------------------------------------------------------------------------
+# min/max statistics — PyArrow reads the bounds marrow writes. Covers the
+# logical orderings that matter: signed vs unsigned ints, IEEE floats (with
+# negatives), and byte-wise string ordering. The writer also emits column_orders
+# (TypeDefinedOrder), so PyArrow trusts the unsigned/byte-array bounds.
+# ---------------------------------------------------------------------------
+
+
+def _col_stats(path: String, col: Int) raises -> PythonObject:
+    var pq = Python.import_module("pyarrow.parquet")
+    return pq.ParquetFile(path).metadata.row_group(0).column(col).statistics
+
+
+def test_minmax_signed_int() raises:
+    var t = _pa_table(
+        "__import__('pyarrow').table({'x':"
+        " __import__('pyarrow').array([5, -1, None, 9, -3],"
+        " type=__import__('pyarrow').int64())})"
+    )
+    var path = String("/tmp/marrow_mm_int.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_equal(Int(py=s.min), -3)
+    assert_equal(Int(py=s.max), 9)
+    assert_equal(Int(py=s.null_count), 1)
+    remove(path)
+
+
+def test_minmax_unsigned_int() raises:
+    # unsigned ordering: 3e9 > 1 even though it is negative as signed int32
+    var t = _pa_table(
+        "__import__('pyarrow').table({'x':"
+        " __import__('pyarrow').array([1, 3000000000, 2],"
+        " type=__import__('pyarrow').uint32())})"
+    )
+    var path = String("/tmp/marrow_mm_uint.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_equal(Int(py=s.min), 1)
+    assert_equal(Int(py=s.max), 3000000000)
+    remove(path)
+
+
+def test_minmax_float_with_negatives() raises:
+    var t = _pa_table(
+        "__import__('pyarrow').table({'x':"
+        " __import__('pyarrow').array([1.5, -2.5, 3.25, None],"
+        " type=__import__('pyarrow').float64())})"
+    )
+    var path = String("/tmp/marrow_mm_float.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_true(Float64(py=s.min) == -2.5)
+    assert_true(Float64(py=s.max) == 3.25)
+    remove(path)
+
+
+def test_minmax_string_lexicographic() raises:
+    var t = _pa_table(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['banana', 'apple', 'cherry', None])})"
+    )
+    var path = String("/tmp/marrow_mm_str.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_equal(String(py=s.min), "apple")
+    assert_equal(String(py=s.max), "cherry")
+    assert_equal(Int(py=s.null_count), 1)
+    remove(path)
+
+
+def test_minmax_absent_for_all_null() raises:
+    # an all-null column carries null_count but no min/max bound
+    var t = _pa_table(
+        "__import__('pyarrow').table({'x':"
+        " __import__('pyarrow').array([None, None, None],"
+        " type=__import__('pyarrow').int64())})"
+    )
+    var path = String("/tmp/marrow_mm_allnull.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_false(Bool(py=s.has_min_max))
+    assert_equal(Int(py=s.null_count), 3)
     remove(path)
 
 

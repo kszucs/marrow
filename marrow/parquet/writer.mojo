@@ -3,21 +3,23 @@
 `FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the
 table (bounded by `row_group_size`), then the footer. `ColumnWriter` owns
 one leaf column chunk — encoding a data page (RLE definition levels + PLAIN
-values), compressing it, and producing the `ColumnMetaData` (with a null-count
-statistic). `version` selects the page format: v1 (levels + values compressed
-together) or v2 (levels stored uncompressed ahead of the compressed values).
-Value encoding is dispatched by Arrow type to typed methods, so the writer
-mirrors the reader's structure.
+values), compressing it, and producing the `ColumnMetaData` (with null-count and
+min/max statistics). `version` selects the page format: v1 (levels + values
+compressed together) or v2 (levels stored uncompressed ahead of the compressed
+values). Value encoding is dispatched by Arrow type to typed methods, so the
+writer mirrors the reader's structure.
 
 Milestone: flat columns + struct; primitives (incl. int8/16 widened to INT32),
 string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD/LZ4_RAW; v1 and v2 data
-pages. Dictionary encoding, page splitting, temporal/list writing, and min/max
-statistics are follow-ups.
+pages; per-column null-count and min/max statistics (with column_orders).
+Dictionary encoding, page splitting, and temporal/list writing are follow-ups.
 """
 
 from std.pathlib import Path
+from std.math import isnan
 
-from ..arrays import AnyArray
+from ..arrays import AnyArray, PrimitiveArray
+from ..dtypes import PrimitiveType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
@@ -106,6 +108,206 @@ struct ColumnWriter(Movable):
             out = Rle.encode(defs, 1)
         return out^
 
+    # -----------------------------------------------------------------------
+    # min/max statistics — PLAIN-encoded bounds over the non-null values, in
+    # the column's logical (type-defined) ordering (see ColumnOrder emission).
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _le_bytes(bits: UInt64, width: Int, mut out: List[UInt8]):
+        for i in range(width):
+            out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
+
+    @staticmethod
+    def _mm[
+        T: PrimitiveType
+    ](arr: PrimitiveArray[T]) raises -> Tuple[
+        Scalar[T.native], Scalar[T.native], Bool
+    ]:
+        """min/max over valid values using T's native (signed/unsigned) order.
+        """
+        var seen = False
+        var mn = Scalar[T.native](0)
+        var mx = Scalar[T.native](0)
+        for i in range(len(arr)):
+            if arr.is_valid(i):
+                var v = arr[i].value()
+                if not seen:
+                    mn = v
+                    mx = v
+                    seen = True
+                else:
+                    if v < mn:
+                        mn = v
+                    if v > mx:
+                        mx = v
+        return (mn, mx, seen)
+
+    @staticmethod
+    def _mm_float[
+        T: PrimitiveType
+    ](arr: PrimitiveArray[T]) raises -> Tuple[
+        Scalar[T.native], Scalar[T.native], Bool
+    ]:
+        """min/max skipping NaN (NaN participates in no bound, per the spec)."""
+        var seen = False
+        var mn = Scalar[T.native](0)
+        var mx = Scalar[T.native](0)
+        for i in range(len(arr)):
+            if arr.is_valid(i):
+                var v = arr[i].value()
+                if isnan(v):
+                    continue
+                if not seen:
+                    mn = v
+                    mx = v
+                    seen = True
+                else:
+                    if v < mn:
+                        mn = v
+                    if v > mx:
+                        mx = v
+        return (mn, mx, seen)
+
+    @staticmethod
+    def _bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
+        var n = min(len(a), len(b))
+        for i in range(n):
+            if a[i] != b[i]:
+                return a[i] < b[i]
+        return len(a) < len(b)
+
+    def _stats(
+        self, col: AnyArray, mut min_out: List[UInt8], mut max_out: List[UInt8]
+    ) raises -> Bool:
+        """Fill `min_out`/`max_out` with the PLAIN-encoded bounds; return False
+        when there is nothing to summarise (all-null / empty) or the type carries
+        no statistics. Integers are widened to their physical width (INT32/INT64)
+        and stored little-endian; floats store their IEEE bits (min/max with
+        signed-zero normalised so the bound brackets both ±0.0); byte arrays
+        store raw bytes with no length prefix."""
+        ref vt = self.leaf.dtype
+        if vt == dt.int8:
+            var r = Self._mm(col.as_int8())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.int16:
+            var r = Self._mm(col.as_int16())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.int32:
+            var r = Self._mm(col.as_int32())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.uint8:
+            var r = Self._mm(col.as_uint8())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.uint16:
+            var r = Self._mm(col.as_uint16())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.uint32:
+            var r = Self._mm(col.as_uint32())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
+            return True
+        elif vt == dt.int64:
+            var r = Self._mm(col.as_int64())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 8, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 8, max_out)
+            return True
+        elif vt == dt.uint64:
+            var r = Self._mm(col.as_uint64())
+            if not r[2]:
+                return False
+            Self._le_bytes(r[0].cast[DType.uint64](), 8, min_out)
+            Self._le_bytes(r[1].cast[DType.uint64](), 8, max_out)
+            return True
+        elif vt == dt.float32:
+            var r = Self._mm_float(col.as_float32())
+            if not r[2]:
+                return False
+            var mn = -Float32(0) if r[0] == Float32(0) else r[0]
+            var mx = Float32(0) if r[1] == Float32(0) else r[1]
+            Self._le_bytes(UInt64(mn.to_bits()), 4, min_out)
+            Self._le_bytes(UInt64(mx.to_bits()), 4, max_out)
+            return True
+        elif vt == dt.float64:
+            var r = Self._mm_float(col.as_float64())
+            if not r[2]:
+                return False
+            var mn = -Float64(0) if r[0] == Float64(0) else r[0]
+            var mx = Float64(0) if r[1] == Float64(0) else r[1]
+            Self._le_bytes(UInt64(mn.to_bits()), 8, min_out)
+            Self._le_bytes(UInt64(mx.to_bits()), 8, max_out)
+            return True
+        elif vt == dt.bool_:
+            ref b = col.as_bool()
+            var seen = False
+            var any_true = False
+            var any_false = False
+            for i in range(len(b)):
+                if b.is_valid(i):
+                    seen = True
+                    if b[i].value():
+                        any_true = True
+                    else:
+                        any_false = True
+            if not seen:
+                return False
+            min_out.append(UInt8(0) if any_false else UInt8(1))
+            max_out.append(UInt8(1) if any_true else UInt8(0))
+            return True
+        elif vt.is_string():
+            ref s = col.as_string()
+            var seen = False
+            var lo = String()
+            var hi = String()
+            for i in range(len(s)):
+                if s.is_valid(i):
+                    var v = String(s[i])
+                    if not seen:
+                        lo = v.copy()
+                        hi = v.copy()
+                        seen = True
+                    else:
+                        if Self._bytes_less(v.as_bytes(), lo.as_bytes()):
+                            lo = v.copy()
+                        if Self._bytes_less(hi.as_bytes(), v.as_bytes()):
+                            hi = v.copy()
+            if not seen:
+                return False
+            # keep the footer small: skip stats for very long byte-array bounds
+            # rather than truncate (a missing bound is always valid).
+            if lo.byte_length() > 4096 or hi.byte_length() > 4096:
+                return False
+            min_out = List[UInt8](lo.as_bytes())
+            max_out = List[UInt8](hi.as_bytes())
+            return True
+        else:
+            return False
+
     def write(
         self, col: AnyArray, mut out: List[UInt8], mut codecs: CompressionLibs
     ) raises -> ColumnChunk:
@@ -162,6 +364,12 @@ struct ColumnWriter(Movable):
         meta.data_page_offset = page_offset
         if self.leaf.max_def >= 1:
             meta.null_count = null_count
+        var min_v = List[UInt8]()
+        var max_v = List[UInt8]()
+        if self._stats(col, min_v, max_v):
+            meta.has_min_max = True
+            meta.min_value = min_v^
+            meta.max_value = max_v^
 
         var cc = ColumnChunk()
         cc.file_offset = page_offset
