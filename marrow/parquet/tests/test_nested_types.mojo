@@ -1,4 +1,9 @@
-"""Nested type reconstruction beyond single-level lists: list<struct>, etc."""
+"""Nested type reconstruction: (nullable) structs and arbitrarily nested lists.
+
+Each case gives a plain Python data literal plus the Arrow type built with the
+`pyarrow` module object — Marrow's read is compared to PyArrow's own read of the
+same file.
+"""
 
 from std.testing import assert_true
 from std.python import Python, PythonObject
@@ -10,85 +15,128 @@ from marrow.c_data import CArrowArrayStream
 
 
 def _to_pa(var t: Table) raises -> PythonObject:
-    var pa = Python.import_module("pyarrow")
     var caps = CArrowArrayStream.from_batches(
         t.schema.copy(), t.to_batches()
     ).to_pycapsule()
+    var pa = Python.import_module("pyarrow")
     return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
 
 
-def _assert_reads(expr: String, compression: String) raises:
+def _check(data: String, dtype: PythonObject, compression: String) raises:
+    var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var want = Python.evaluate(expr)
+    var want = pa.table(
+        Python.dict(v=pa.array(Python.evaluate(data), type=dtype))
+    )
     var path = String("/tmp/marrow_nested.parquet")
     pq.write_table(want, path, compression=compression)
-    var got = _to_pa(read_table(path))
     # oracle is PyArrow's own read of the same file
-    var ref_ = pq.read_table(path)
-    for i in range(Int(py=want.num_columns)):
-        assert_true(
-            Bool(got.column(i).to_pylist() == ref_.column(i).to_pylist()),
-            "column mismatch",
-        )
+    var got = _to_pa(read_table(path))
+    assert_true(
+        Bool(
+            got.column(0).to_pylist()
+            == pq.read_table(path).column(0).to_pylist()
+        ),
+        "value mismatch",
+    )
     remove(path)
 
 
+def _struct(*fields: PythonObject) raises -> PythonObject:
+    var pa = Python.import_module("pyarrow")
+    var fs = Python.list()
+    for f in fields:
+        fs.append(f)
+    return pa.struct(fs)
+
+
 def test_list_of_struct() raises:
-    # includes an empty list and a null list alongside populated ones
-    _assert_reads(
+    var pa = Python.import_module("pyarrow")
+    _check(
         (
-            "__import__('pyarrow').table({'ls': __import__('pyarrow').array("
-            "[[{'a': 1, 'b': 'x'}, {'a': 2, 'b': 'y'}], [], None,"
-            " [{'a': 3, 'b': 'z'}]],"
-            " type=__import__('pyarrow').list_(__import__('pyarrow').struct("
-            "[__import__('pyarrow').field('a', __import__('pyarrow').int64()),"
-            " __import__('pyarrow').field('b',"
-            " __import__('pyarrow').string())])))})"
+            "[[{'a': 1, 'b': 'x'}, {'a': 2, 'b': 'y'}], [], None, [{'a': 3,"
+            " 'b': 'z'}]]"
+        ),
+        pa.list_(
+            _struct(pa.field("a", pa.int64()), pa.field("b", pa.string()))
         ),
         "none",
     )
 
 
+def test_list_of_struct_snappy() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[{'x': i, 'y': i * 2}] * (i % 3) for i in range(50)]",
+        pa.list_(_struct(pa.field("x", pa.int32()), pa.field("y", pa.int64()))),
+        "snappy",
+    )
+
+
 def test_nullable_struct() raises:
-    # struct-level nulls, with nullable fields too (field-null vs struct-null)
-    _assert_reads(
+    var pa = Python.import_module("pyarrow")
+    _check(
         (
-            "__import__('pyarrow').table({'s': __import__('pyarrow').array("
             "[{'a': 1, 'b': 'x'}, None, {'a': None, 'b': 'z'}, {'a': 4, 'b':"
-            " None}, None],"
-            " type=__import__('pyarrow').struct("
-            "[__import__('pyarrow').field('a', __import__('pyarrow').int64()),"
-            " __import__('pyarrow').field('b',"
-            " __import__('pyarrow').string())]))})"
+            " None}, None]"
         ),
+        _struct(pa.field("a", pa.int64()), pa.field("b", pa.string())),
         "none",
     )
 
 
 def test_nullable_struct_of_struct() raises:
-    # nested nullable structs
-    _assert_reads(
-        (
-            "__import__('pyarrow').table({'s': __import__('pyarrow').array("
-            "[{'p': {'x': 1}}, None, {'p': None}, {'p': {'x': 4}}],"
-            " type=__import__('pyarrow').struct([__import__('pyarrow').field("
-            "'p', __import__('pyarrow').struct([__import__('pyarrow').field("
-            "'x', __import__('pyarrow').int64())]))]))})"
-        ),
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{'p': {'x': 1}}, None, {'p': None}, {'p': {'x': 4}}]",
+        _struct(pa.field("p", _struct(pa.field("x", pa.int64())))),
         "snappy",
     )
 
 
-def test_list_of_struct_snappy() raises:
-    _assert_reads(
-        (
-            "__import__('pyarrow').table({'ls': __import__('pyarrow').array("
-            "[[{'x': i, 'y': i * 2}] * (i % 3) for i in range(50)],"
-            " type=__import__('pyarrow').list_(__import__('pyarrow').struct("
-            "[__import__('pyarrow').field('x', __import__('pyarrow').int32()),"
-            " __import__('pyarrow').field('y',"
-            " __import__('pyarrow').int64())])))})"
-        ),
+def test_list_of_list() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[[1, 2], [3]], [[4]], None, []]",
+        pa.list_(pa.list_(pa.int64())),
+        "none",
+    )
+
+
+def test_list_of_list_of_list() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[[[1], [2, 3]]], [[[4]]], []]",
+        pa.list_(pa.list_(pa.list_(pa.int64()))),
+        "snappy",
+    )
+
+
+def test_list_of_list_of_struct() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[[{'a': 1}], [{'a': 2}, {'a': 3}]], []]",
+        pa.list_(pa.list_(_struct(pa.field("a", pa.int64())))),
+        "none",
+    )
+
+
+def test_struct_with_list_child() raises:
+    # nullable struct whose field is a list; includes a null struct row
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{'xs': [1, 2]}, {'xs': []}, None]",
+        _struct(pa.field("xs", pa.list_(pa.int64()))),
+        "none",
+    )
+
+
+def test_list_of_nullable_struct() raises:
+    # struct nulls *inside* a list
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[{'a': 1}, None, {'a': 3}], [], None]",
+        pa.list_(_struct(pa.field("a", pa.int64()))),
         "snappy",
     )
 

@@ -83,21 +83,47 @@ comptime NODE_STRUCT: Int = 1
 comptime NODE_LIST: Int = 2
 
 
+struct NodeGeom(Copyable, Movable):
+    """Dremel geometry for a schema node, in absolute definition/repetition
+    levels — computed once during schema parsing so the assembler never
+    re-derives thresholds. A struct uses `present_def` + `optional`; a list uses
+    all fields, which lets its offset scan reconstruct any nesting depth on its
+    own (no dependence on parent levels)."""
+
+    var present_def: Int  # def at/above which this node is non-null
+    var optional: Bool  # whether this node can be null
+    var rep_level: Int  # NODE_LIST: repetition level of its repeated group
+    var element_floor: Int  # NODE_LIST: def at/above which it holds a child element
+    var entry_floor: Int  # NODE_LIST: def at/above which this list exists as an entry
+
+    def __init__(
+        out self,
+        present_def: Int = 0,
+        optional: Bool = False,
+        rep_level: Int = 0,
+        element_floor: Int = 0,
+        entry_floor: Int = 0,
+    ):
+        self.present_def = present_def
+        self.optional = optional
+        self.rep_level = rep_level
+        self.element_floor = element_floor
+        self.entry_floor = entry_floor
+
+
 struct SchemaNode(Copyable, Movable):
     """A node of the Arrow type tree, tying nested structure back to flat leaves.
 
-    Leaf nodes carry a `leaf_index` into the flat leaf-column list; struct nodes
-    carry child nodes. The reader assembles arrays bottom-up from this tree.
+    Leaf nodes carry a `leaf_index` into the flat leaf-column list; struct/list
+    nodes carry child nodes and their `geom`. The reader assembles arrays
+    bottom-up from this tree.
     """
 
     var kind: Int
     var field: Field
     var children: List[SchemaNode]
     var leaf_index: Int
-    # Dremel geometry, in absolute definition levels:
-    var present_def: Int  # def at/above which this node (list/struct) is non-null
-    var element_floor: Int  # NODE_LIST only: def at/above which it holds an element
-    var optional: Bool  # whether this node can be null
+    var geom: NodeGeom
 
     def __init__(
         out self,
@@ -105,17 +131,13 @@ struct SchemaNode(Copyable, Movable):
         var field: Field,
         var children: List[SchemaNode],
         leaf_index: Int,
-        present_def: Int = 0,
-        element_floor: Int = 0,
-        optional: Bool = False,
+        var geom: NodeGeom = NodeGeom(),
     ):
         self.kind = kind
         self.field = field^
         self.children = children^
         self.leaf_index = leaf_index
-        self.present_def = present_def
-        self.element_floor = element_floor
-        self.optional = optional
+        self.geom = geom^
 
     def __del__(deinit self):
         pass
@@ -132,22 +154,17 @@ struct SchemaNode(Copyable, Movable):
         if self.kind == NODE_LEAF:
             return decoded[self.leaf_index].array.copy()
         elif self.kind == NODE_LIST:
-            if self.children[0].kind == NODE_LIST:
-                raise Error(
-                    "parquet: nested lists (list<list<...>>) not supported yet"
-                )
-            # The element is the list's child — a leaf column or an assembled
-            # struct; both are one entry per present element. Any leaf under it
-            # carries the shared rep/def levels this list folds into offsets.
+            # Assemble the element (leaf, struct, or another list) — one entry
+            # per present element — then fold this list's own offsets over those
+            # entries. The recursion composes to any depth because each list's
+            # geom carries every threshold its scan needs.
             var element = self.children[0].assemble(decoded)
-            var li = self.children[0].first_leaf_index()
+            var li = self.first_leaf_index()
             return assemble_list(
                 element^,
                 decoded[li].rep_levels,
                 decoded[li].def_levels,
-                self.present_def,
-                self.element_floor,
-                self.optional,
+                self.geom,
             )
         elif self.kind == NODE_STRUCT:
             var children = List[AnyArray]()
@@ -155,21 +172,28 @@ struct SchemaNode(Copyable, Movable):
             for ref c in self.children:
                 children.append(c.assemble(decoded))
                 fields.append(c.field.copy())
-            # A nullable *flat* struct is null wherever a representative leaf's
-            # def level is below the struct's present level. (Struct nulls inside
-            # a list — where def levels are per-slot, not per-row — are a
-            # follow-up, so only reconstruct for non-leveled leaves.)
+            # A nullable struct is null wherever a representative leaf's def is
+            # below the struct's present level. One validity bit per struct entry
+            # — the records where this struct has a slot (`rep <= rep_level` and
+            # `def >= entry_floor`) — so it aligns with the child arrays at any
+            # position (top level, holding a list, or as a list element).
             var mask: Optional[BoolArray] = None
-            if self.optional:
+            if self.geom.optional:
                 var li = self.first_leaf_index()
                 ref defs = decoded[li].def_levels
-                if not decoded[li].leveled and len(defs) > 0:
+                ref reps = decoded[li].rep_levels
+                if len(defs) > 0:
                     var mb = BoolBuilder(len(defs))
                     var any_null = False
                     for i in range(len(defs)):
-                        var is_null = Int(defs[i]) < self.present_def
-                        mb.append(is_null)
-                        any_null = any_null or is_null
+                        var r = Int(reps[i]) if len(reps) > 0 else 0
+                        var d = Int(defs[i])
+                        if r <= self.geom.rep_level and (
+                            d >= self.geom.entry_floor
+                        ):
+                            var is_null = d < self.geom.present_def
+                            mb.append(is_null)
+                            any_null = any_null or is_null
                     if any_null:
                         mask = mb.finish()
             var out: AnyArray = StructArray.from_arrays(
@@ -216,9 +240,7 @@ struct SchemaNode(Copyable, Movable):
             self.field.copy(),
             new_children^,
             new_leaf,
-            self.present_def,
-            self.element_floor,
-            self.optional,
+            self.geom.copy(),
         )
 
 
@@ -441,14 +463,24 @@ struct _SchemaReader(Movable):
             var item: AnyDataType = list_(elem.field.dtype.copy())
             var children = List[SchemaNode]()
             children.append(elem^)
+            # rep_level = the repeated group's level (r + 1); entry_floor =
+            # `rep_floor`, the innermost *enclosing list's* element floor (0 at
+            # top / under a struct) — an optional struct being null still leaves
+            # a row-slot, so the list gets a (null) entry there. With every
+            # threshold on the node, the scan needs nothing from its parent, so
+            # any nesting depth composes by recursion.
             return SchemaNode(
                 NODE_LIST,
                 Field(el.name, item^, nullable),
                 children^,
                 -1,
-                present_def=d,
-                element_floor=d + 1,
-                optional=rep == REP_OPTIONAL,
+                NodeGeom(
+                    present_def=d,
+                    optional=rep == REP_OPTIONAL,
+                    rep_level=r + 1,
+                    element_floor=d + 1,
+                    entry_floor=rep_floor,
+                ),
             )
 
         # plain group -> Arrow struct. A nullable struct is reconstructed from
@@ -469,8 +501,12 @@ struct _SchemaReader(Movable):
             Field(el.name, dtype^, nullable),
             child_nodes^,
             -1,
-            present_def=d,
-            optional=nullable,
+            NodeGeom(
+                present_def=d,
+                optional=nullable,
+                rep_level=r,
+                entry_floor=rep_floor,
+            ),
         )
 
 

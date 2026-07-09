@@ -48,7 +48,7 @@ from ..dtypes import (
 from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
 from .encoding import rle_decode
 from .compression import Codecs
-from .schema import LeafColumn
+from .schema import LeafColumn, NodeGeom
 from .format import ColumnMetaData
 
 
@@ -320,37 +320,46 @@ def assemble_list(
     var element: AnyArray,
     rep_levels: List[Int32],
     def_levels: List[Int32],
-    list_def: Int,
-    element_floor: Int,
-    list_optional: Bool,
+    geom: NodeGeom,
 ) raises -> AnyArray:
     """Fold a decoded element array + its Dremel levels into an Arrow
-    `ListArray`.
+    `ListArray`, for any nesting depth.
 
-    A new list starts at every `rep == 0` slot; a slot holds an element when its
-    definition level reaches `element_floor`; the list itself is null when the
-    definition level is below `list_def`. `element` is the list's child array
-    (a leaf column or an assembled struct) — one entry per present element.
+    Reading one leaf's `(rep, def)` records left to right, using only this list's
+    own `geom`:
 
-    This handles a single level of repetition (`list<T>`, `list<struct<...>>`).
+    - a **new instance** of this list begins where `rep < rep_level` (the
+      repetition is shallower than this list, so its parent moved on) *and*
+      `def >= entry_floor` (this list is actually reached — otherwise an ancestor
+      is empty/null and this list has no entry here);
+    - a **new child element** (one entry of `element`) is added where
+      `rep <= rep_level` (a repetition at this level or shallower starts a fresh
+      element) *and* `def >= element_floor` (the element is present, not an
+      empty/null structural slot);
+    - the instance is **null** where `def < present_def`.
+
+    Because every threshold lives in `geom`, the scan needs nothing from the
+    parent, so nested lists compose by recursion: the child array is itself an
+    assembled (possibly nested) list.
     """
     var n = len(rep_levels)
     var offsets = PrimitiveBuilder[Int32Type](n + 1)
     var mask = BoolBuilder(n)
     var any_null = False
     var child_idx = 0
+    var started = False
     offsets.append(Int32(0))
     for i in range(n):
         var r = Int(rep_levels[i])
         var d = Int(def_levels[i])
-        if r == 0:
-            if i > 0:
-                offsets.append(Int32(child_idx))
-            var is_null = list_optional and d < list_def
+        if r < geom.rep_level and d >= geom.entry_floor:
+            if started:
+                offsets.append(Int32(child_idx))  # close the previous instance
+            started = True
+            var is_null = geom.optional and d < geom.present_def
             mask.append(is_null)
-            if is_null:
-                any_null = True
-        if d >= element_floor:
+            any_null = any_null or is_null
+        if r <= geom.rep_level and d >= geom.element_floor:
             child_idx += 1
     offsets.append(Int32(child_idx))
 

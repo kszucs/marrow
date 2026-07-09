@@ -4,23 +4,17 @@
 
 ### Features
 
-- **Struct-level nulls on read** (`marrow.parquet`): a nullable (flat) struct
-  column now reconstructs its validity — a null struct reads back as null
-  instead of a struct of null fields — including nested nullable structs and
-  structs with nullable fields (field-null vs struct-null are distinguished).
-  Flat leaves under a nullable struct now carry their definition levels
-  (`LeafColumn.carry_def`), and the struct node reconstructs validity from a
-  representative leaf's def levels against its `present_def` threshold. Struct
-  nulls *inside a list* remain a follow-up. The node geometry was generalized
-  (`list_def`→`present_def`, shared by lists and structs).
-
-- **List-of-struct read support** (`marrow.parquet`): the reader now reconstructs
-  `list<struct<...>>` columns (arrays of records — previously it crashed). List
-  geometry (which definition levels mean the list is null / empty / holds an
-  element) moved from the decoded leaf onto the schema nodes, computed once where
-  the def/rep bases are known, so the assembler is a clean recursive walk and
-  leaves stay plain data records. Handles empty and null lists. Nested lists
-  (`list<list<...>>`) raise a clear error for now.
+- **Arbitrarily nested read support** (`marrow.parquet`): the reader now
+  reconstructs any nesting of structs and lists — `list<struct>`, `list<list<…>>`
+  to any depth, `struct<list>`, lists of nullable structs, and struct-level nulls
+  at any position (top level, holding a list, or as a list element). A nullable
+  struct reads back as null (not a struct of null fields), with field-null and
+  struct-null distinguished. Each schema node carries its Dremel geometry
+  (`NodeGeom`: `present_def`, `rep_level`, `element_floor`, `entry_floor`,
+  `optional`), computed once during schema parsing, so every list's offset scan
+  is self-contained and the assembler composes by recursion to any depth — no
+  per-level special-casing. Flat leaves under a nullable struct keep their def
+  levels (`LeafColumn.carry_def`); all others stay on the fast path.
 
 - **DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY read support** (`marrow.parquet`):
   the reader now decodes the delta string/binary encodings (PyArrow
