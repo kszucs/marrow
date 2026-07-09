@@ -8,6 +8,8 @@ nesting; primitives, string/binary; PLAIN and dictionary encodings; v1/v2 pages.
 
 from std.ffi import external_call
 from std.io.file import FileHandle
+from std.algorithm.functional import sync_parallelize
+from std.sys.info import num_physical_cores
 
 from ..arrays import AnyArray
 from ..schema import Schema
@@ -64,18 +66,48 @@ struct MappedFile(Movable):
 # ---------------------------------------------------------------------------
 
 
+# Below this many rows a file is decoded on one thread — the thread-dispatch
+# overhead is not worth it for small files.
+comptime _PARALLEL_MIN_ROWS = 4096
+
+
 def read_table(path: String) raises -> Table:
-    """Read a Parquet file into a Marrow `Table`."""
+    """Read a Parquet file into a Marrow `Table`.
+
+    Every (row group, leaf column) pair decodes independently — each reads a
+    disjoint byte range of the shared read-only mmap and writes its own result
+    slot — so the whole grid is decoded across `num_physical_cores()` workers.
+    Each worker owns a `Codecs` (the lazy `dlopen` handles and reused size cell
+    are not shareable across threads); the mmap and metadata are read-only.
+    """
     var mapped = MappedFile(path)
     var data = mapped.span()
     var meta = read_footer(data)
     var parsed = ParsedSchema.from_metadata(meta)
 
-    var codecs = Codecs()
-    var batches = List[RecordBatch]()
-    for ref rg in meta.row_groups:
-        var decoded = List[DecodedLeaf]()
-        for ci in range(len(parsed.leaves)):
+    var num_leaves = len(parsed.leaves)
+    var num_rg = len(meta.row_groups)
+    var total = num_rg * num_leaves
+
+    var nt = 1
+    if total >= 2 and meta.num_rows >= _PARALLEL_MIN_ROWS:
+        nt = min(num_physical_cores(), total)
+
+    # One result slot per (row group, leaf), pre-sized so workers assign by
+    # index without racing on list growth. (DecodedLeaf is move-only, so the
+    # slots are filled by appending rather than the copy-based `fill=`.)
+    var grid = List[Optional[DecodedLeaf]](capacity=total)
+    for _ in range(total):
+        grid.append(None)
+
+    @parameter
+    def worker(w: Int) raises:
+        var codecs = Codecs()  # per-worker: lazy dlopen handles are not shared
+        var t = w
+        while t < total:
+            var rg_idx = t // num_leaves
+            var ci = t % num_leaves
+            ref rg = meta.row_groups[rg_idx]
             if parsed.leaves[ci].max_rep >= 1:
                 var reader = LeveledColumnReader(
                     data,
@@ -83,7 +115,7 @@ def read_table(path: String) raises -> Table:
                     parsed.leaves[ci].copy(),
                     rg.num_rows,
                 )
-                decoded.append(reader.read(codecs))
+                grid[t] = reader.read(codecs)
             else:
                 var reader = ColumnReader(
                     data,
@@ -91,7 +123,17 @@ def read_table(path: String) raises -> Table:
                     parsed.leaves[ci].copy(),
                     rg.num_rows,
                 )
-                decoded.append(DecodedLeaf.flat(reader.read(codecs)))
+                grid[t] = DecodedLeaf.flat(reader.read(codecs))
+            t += nt
+
+    sync_parallelize[worker](nt)
+
+    # Fold each row group's decoded leaves back into the Arrow type tree.
+    var batches = List[RecordBatch]()
+    for rg_idx in range(num_rg):
+        var decoded = List[DecodedLeaf]()
+        for ci in range(num_leaves):
+            decoded.append(grid[rg_idx * num_leaves + ci].take())
         var cols = List[AnyArray]()
         for ref node in parsed.nodes:
             cols.append(node.assemble(decoded))

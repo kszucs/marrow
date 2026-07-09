@@ -30,6 +30,15 @@
   on PLAIN data and beating both PyArrow (~3.1×) and polars (~1.6×) on
   dictionary-encoded columns.
 
+- **Parallel Parquet reads** (`marrow.parquet`): `read_table` decodes every
+  (row group, leaf column) pair concurrently across `num_physical_cores()`
+  workers — each reads a disjoint byte range of the shared read-only mmap and
+  writes its own result slot, and each owns a `Codecs` (the lazy `dlopen`
+  handles are not shareable). Files below 4096 rows stay single-threaded to
+  avoid dispatch overhead. ~4.9× faster on a 2M×8 multi-row-group snappy file
+  (54 ms → 11 ms on 16 cores), bringing multi-column reads level with polars and
+  PyArrow. ASAN-clean under the concurrent path.
+
 ### Fixes
 
 - **Empty (zero-chunk) `ChunkedArray.combine_chunks()`** (`marrow.arrays`): a
