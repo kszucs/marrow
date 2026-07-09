@@ -54,17 +54,15 @@ from .format import ColumnMetaData
 
 struct DecodedLeaf(Movable):
     """One decoded leaf column. A flat leaf carries just its array; a repeated
-    (list-element) leaf also carries the per-slot rep/def levels and the list
-    geometry needed to rebuild offsets. Geometry is derived from the leaf's own
-    `max_def`/nullability (single-level lists)."""
+    (list-element) leaf also carries the per-slot rep/def levels. All leaves
+    under the same list share these levels, and the list geometry (which def
+    levels mean present/empty/null) lives on the schema node, so this stays a
+    plain data record."""
 
     var leveled: Bool
     var array: AnyArray  # flat column, or the list's element/child array
     var rep_levels: List[Int32]
     var def_levels: List[Int32]
-    var list_optional: Bool
-    var list_def: Int  # def level at/above which the list is non-null
-    var element_floor: Int  # def level at/above which a slot holds an element
 
     def __init__(
         out self,
@@ -72,23 +70,15 @@ struct DecodedLeaf(Movable):
         var array: AnyArray,
         var rep_levels: List[Int32],
         var def_levels: List[Int32],
-        list_optional: Bool,
-        list_def: Int,
-        element_floor: Int,
     ):
         self.leveled = leveled
         self.array = array^
         self.rep_levels = rep_levels^
         self.def_levels = def_levels^
-        self.list_optional = list_optional
-        self.list_def = list_def
-        self.element_floor = element_floor
 
     @staticmethod
     def flat(var array: AnyArray) -> DecodedLeaf:
-        return DecodedLeaf(
-            False, array^, List[Int32](), List[Int32](), False, 0, 0
-        )
+        return DecodedLeaf(False, array^, List[Int32](), List[Int32]())
 
 
 # ---------------------------------------------------------------------------
@@ -250,24 +240,19 @@ struct LeveledColumnReader[o: Origin[mut=False]](Movable):
                 else:
                     child.null()
         var values = child^.finish()
-        # single-level list geometry, derived from the leaf:
-        #   element_floor = list_def + 1,  max_def = list_def + 1 + elem_optional
-        var elem_optional = 1 if self.pages.leaf.nullable else 0
-        var list_def = max_def - 1 - elem_optional
         return DecodedLeaf(
             leveled=True,
             array=values^,
             rep_levels=rep_out^,
             def_levels=def_out^,
-            list_optional=list_def >= 1,
-            list_def=list_def,
-            element_floor=floor,
         )
 
     def read(mut self, mut codecs: Codecs) raises -> DecodedLeaf:
         ref leaf = self.pages.leaf
         ref dt = leaf.dtype
-        var floor = leaf.max_def - (1 if leaf.nullable else 0)
+        # a value slot exists at/above the leaf's repetition floor (the innermost
+        # enclosing list's element level); the value is present at max_def.
+        var floor = leaf.rep_floor
         var md = leaf.max_def
         var cap = self.num_rows
         if dt == int32:
@@ -331,29 +316,41 @@ struct LeveledColumnReader[o: Origin[mut=False]](Movable):
 # ---------------------------------------------------------------------------
 
 
-def assemble_list(leaf: DecodedLeaf) raises -> AnyArray:
-    """Fold a decoded repeated leaf into an Arrow `ListArray`.
+def assemble_list(
+    var element: AnyArray,
+    rep_levels: List[Int32],
+    def_levels: List[Int32],
+    list_def: Int,
+    element_floor: Int,
+    list_optional: Bool,
+) raises -> AnyArray:
+    """Fold a decoded element array + its Dremel levels into an Arrow
+    `ListArray`.
 
     A new list starts at every `rep == 0` slot; a slot holds an element when its
     definition level reaches `element_floor`; the list itself is null when the
-    definition level is below `list_def`."""
-    var n = len(leaf.rep_levels)
+    definition level is below `list_def`. `element` is the list's child array
+    (a leaf column or an assembled struct) — one entry per present element.
+
+    This handles a single level of repetition (`list<T>`, `list<struct<...>>`).
+    """
+    var n = len(rep_levels)
     var offsets = PrimitiveBuilder[Int32Type](n + 1)
     var mask = BoolBuilder(n)
     var any_null = False
     var child_idx = 0
     offsets.append(Int32(0))
     for i in range(n):
-        var r = Int(leaf.rep_levels[i])
-        var d = Int(leaf.def_levels[i])
+        var r = Int(rep_levels[i])
+        var d = Int(def_levels[i])
         if r == 0:
             if i > 0:
                 offsets.append(Int32(child_idx))
-            var is_null = leaf.list_optional and d < leaf.list_def
+            var is_null = list_optional and d < list_def
             mask.append(is_null)
             if is_null:
                 any_null = True
-        if d >= leaf.element_floor:
+        if d >= element_floor:
             child_idx += 1
     offsets.append(Int32(child_idx))
 
@@ -361,7 +358,7 @@ def assemble_list(leaf: DecodedLeaf) raises -> AnyArray:
     var out: AnyArray
     if any_null:
         var m = mask.finish()
-        out = ListArray.from_arrays(offsets_arr, leaf.array.copy(), m^)
+        out = ListArray.from_arrays(offsets_arr, element^, m^)
     else:
-        out = ListArray.from_arrays(offsets_arr, leaf.array.copy(), None)
+        out = ListArray.from_arrays(offsets_arr, element^, None)
     return out^

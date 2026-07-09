@@ -4,6 +4,14 @@
 
 ### Features
 
+- **List-of-struct read support** (`marrow.parquet`): the reader now reconstructs
+  `list<struct<...>>` columns (arrays of records — previously it crashed). List
+  geometry (which definition levels mean the list is null / empty / holds an
+  element) moved from the decoded leaf onto the schema nodes, computed once where
+  the def/rep bases are known, so the assembler is a clean recursive walk and
+  leaves stay plain data records. Handles empty and null lists. Nested lists
+  (`list<list<...>>`) raise a clear error for now.
+
 - **DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY read support** (`marrow.parquet`):
   the reader now decodes the delta string/binary encodings (PyArrow
   `use_dictionary=False`) — DELTA_LENGTH_BYTE_ARRAY (delta-packed lengths then
