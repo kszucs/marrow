@@ -335,5 +335,38 @@ def test_list_of_byte_stream_split_float() raises:
     )
 
 
+def test_list_across_many_pages() raises:
+    # a list column whose leaf/levels span many data pages within one chunk;
+    # the reader must stitch rep/def levels across page boundaries.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        Python.dict(
+            v=pa.array(
+                Python.evaluate(
+                    "[list(range(i % 5)) if i % 11 else None for i in"
+                    " range(3000)]"
+                ),
+                type=pa.list_(pa.int64()),
+            )
+        )
+    )
+    var path = String("/tmp/marrow_nested_pages.parquet")
+    pq.write_table(
+        want, path, data_page_size=256, use_dictionary=False, compression="none"
+    )
+    assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
+
+    var got = _to_pa(read_table(path))
+    assert_true(
+        Bool(
+            got.column(0).to_pylist()
+            == pq.read_table(path).column(0).to_pylist()
+        ),
+        "value mismatch",
+    )
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

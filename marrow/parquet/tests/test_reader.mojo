@@ -178,6 +178,54 @@ def test_read_temporal() raises:
     remove(path)
 
 
+def test_read_temporal_ms_units() raises:
+    # time32(ms) and timestamp(ms) — the millisecond leaf paths (only us/ns and
+    # time64 were previously covered).
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            tm=pa.array(Python.list(0, 1000, 2000), type=pa.time32("ms")),
+            ts=pa.array(Python.list(1, 2, 3), type=pa.timestamp("ms")),
+        )
+    )
+    var path = String("/tmp/marrow_types_ms.parquet")
+    pq.write_table(tbl, path, compression="none")
+
+    var t = read_table(path)
+    assert_true(t.schema.field(index=0).dtype.is_time32())
+    assert_true(t.schema.field(index=1).dtype.is_timestamp())
+    var b = t.to_batches()[0].copy()
+    assert_equal(b.columns[0].copy().as_time32()[1].value(), 1000)
+    assert_equal(b.columns[1].copy().as_timestamp()[2].value(), 3)
+    remove(path)
+
+
+def test_read_timestamp_with_timezone() raises:
+    # An isAdjustedToUTC (tz-aware) timestamp: Parquet stores only the UTC flag,
+    # so the instant values must survive intact and the type stays a timestamp.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            ts=pa.array(
+                Python.list(1000, 2000, 3000),
+                type=pa.timestamp("us", tz="America/New_York"),
+            )
+        )
+    )
+    var path = String("/tmp/marrow_types_tstz.parquet")
+    pq.write_table(tbl, path, compression="none")
+
+    var t = read_table(path)
+    assert_true(t.schema.field(index=0).dtype.is_timestamp())
+    var b = t.to_batches()[0].copy()
+    ref ts = b.columns[0].copy().as_timestamp()
+    assert_equal(ts[0].value(), 1000)
+    assert_equal(ts[2].value(), 3000)
+    remove(path)
+
+
 def test_read_binary() raises:
     var pq = Python.import_module("pyarrow.parquet")
     var tbl = Python.evaluate(
@@ -193,6 +241,26 @@ def test_read_binary() raises:
     var col = b.columns[0].copy()
     assert_true(t.schema.field(index=0).dtype.is_binary())
     assert_equal(col.length(), 3)
+    remove(path)
+
+
+def test_read_large_binary() raises:
+    # large_binary has no distinct Parquet physical type -> reads back as binary.
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = Python.evaluate(
+        "__import__('pyarrow').table({'b':"
+        " __import__('pyarrow').array([b'ab', None, b'cdef'],"
+        " type=__import__('pyarrow').large_binary())})"
+    )
+    var path = String("/tmp/marrow_types_lbin.parquet")
+    pq.write_table(tbl, path, compression="snappy")
+
+    var t = read_table(path)
+    assert_true(t.schema.field(index=0).dtype.is_binary())
+    var b = t.to_batches()[0].copy()
+    var col = b.columns[0].copy()
+    assert_equal(col.length(), 3)
+    assert_equal(col.null_count(), 1)
     remove(path)
 
 
@@ -291,6 +359,99 @@ def test_project_missing_column() raises:
     var cols: List[String] = ["nope"]
     with assert_raises():
         _ = read_table(path, columns=cols^)
+    remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Multiple data pages within a single column chunk (small data_page_size).
+# The reader must loop over every page and concatenate their values; a single
+# row group here holds many pages, distinct from the multi-row-group cases.
+# ---------------------------------------------------------------------------
+
+
+def test_many_pages_plain_int() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            x=pa.array(Python.evaluate("list(range(10000))"), type=pa.int64())
+        )
+    )
+    var path = String("/tmp/marrow_pages_plain.parquet")
+    # tiny page size forces many PLAIN pages inside one chunk
+    pq.write_table(
+        tbl, path, data_page_size=256, use_dictionary=False, compression="none"
+    )
+    # sanity: a single row group holding many pages
+    assert_equal(Int(py=pq.ParquetFile(path).metadata.num_row_groups), 1)
+
+    var t = read_table(path)
+    assert_equal(t.num_rows(), 10000)
+    var b = t.to_batches()[0].copy()
+    ref a = b.columns[0].copy().as_int64()
+    assert_equal(a[0].value(), 0)
+    assert_equal(a[5000].value(), 5000)
+    assert_equal(a[9999].value(), 9999)
+    remove(path)
+
+
+def test_many_pages_dict_string() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    # low cardinality -> dictionary-encoded data pages, split across many pages
+    var tbl = pa.table(
+        Python.dict(
+            s=pa.array(
+                Python.evaluate(
+                    "[['red', 'green', 'blue'][i % 3] for i in range(6000)]"
+                )
+            )
+        )
+    )
+    var path = String("/tmp/marrow_pages_dict.parquet")
+    pq.write_table(
+        tbl, path, data_page_size=128, use_dictionary=True, compression="snappy"
+    )
+    var t = read_table(path)
+    assert_equal(t.num_rows(), 6000)
+    var b = t.to_batches()[0].copy()
+    ref s = b.columns[0].copy().as_string()
+    assert_equal(String(s[0]), "red")
+    assert_equal(String(s[3001]), "green")  # 3001 % 3 == 1
+    assert_equal(String(s[5999]), "blue")  # 5999 % 3 == 2
+    remove(path)
+
+
+def test_many_pages_string_with_nulls() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    # variable-length strings with every 4th null, spanning many pages
+    var tbl = pa.table(
+        Python.dict(
+            s=pa.array(
+                Python.evaluate(
+                    "[None if i % 4 == 0 else 'v%d' % i for i in range(4000)]"
+                ),
+                type=pa.string(),
+            )
+        )
+    )
+    var path = String("/tmp/marrow_pages_strnull.parquet")
+    pq.write_table(
+        tbl, path, data_page_size=200, use_dictionary=False, compression="none"
+    )
+    var t = read_table(path)
+    assert_equal(t.num_rows(), 4000)
+    var total_nulls = 0
+    for ref bat in t.to_batches():
+        total_nulls += bat.columns[0].copy().as_string().null_count()
+    assert_equal(total_nulls, 1000)  # i%4==0 over [0,4000)
+
+    var b = t.to_batches()[0].copy()
+    ref s = b.columns[0].copy().as_string()
+    assert_false(s.is_valid(0))
+    assert_equal(String(s[1]), "v1")
+    assert_equal(String(s[3999]), "v3999")
     remove(path)
 
 
