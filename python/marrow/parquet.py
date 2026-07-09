@@ -11,15 +11,19 @@ from . import Table
 from . import libmarrow as _ma
 
 
-def read_table(source):
+def read_table(source, columns=None):
     """Read a Parquet file into a marrow :class:`Table`.
 
     Parameters
     ----------
     source : str or path-like
         Path to the Parquet file.
+    columns : list of str, optional
+        Only read these top-level columns, in the given order. Reads all
+        columns when ``None``.
     """
-    return Table.wrap(_ma.parquet_read_table(str(source)))
+    cols = list(columns) if columns is not None else None
+    return Table.wrap(_ma.parquet_read_table(str(source), cols))
 
 
 def write_table(table, where, compression="snappy"):

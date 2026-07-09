@@ -34,8 +34,16 @@ def _codec(name: String) raises -> Int:
         raise Error("parquet: unsupported compression '" + name + "'")
 
 
-def parquet_read_table(path: PythonObject) raises -> PythonObject:
-    return _read_table(String(py=path)).to_python_object()
+def parquet_read_table(
+    path: PythonObject, columns: PythonObject
+) raises -> PythonObject:
+    var builtins = Python.import_module("builtins")
+    if columns.__is__(builtins.None):
+        return _read_table(String(py=path)).to_python_object()
+    var cols = List[String]()
+    for i in range(Int(py=columns.__len__())):
+        cols.append(String(py=columns[i]))
+    return _read_table(String(py=path), columns=cols^).to_python_object()
 
 
 def parquet_write_table(

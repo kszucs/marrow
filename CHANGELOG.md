@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Column projection on read** (`marrow.parquet`): `read_table(path,
+  columns=[...])` reads only the named top-level columns, in the given order —
+  only those columns' chunks are decoded (the rest are never touched). Works for
+  flat, struct (whole subtree), and list columns; raises on an unknown name.
+  Implemented by selecting the assembly nodes and remapping their leaf indices
+  onto a compact decoded grid, so the parallel decode skips unselected columns
+  entirely. Exposed through the Python binding as `columns=` too.
+
 - **Native Parquet reader/writer** (`marrow.parquet`): a from-scratch Parquet
   implementation that reads and writes Arrow directly, replacing the PyArrow
   bridge (`read_table`/`write_table` are now native; PyArrow is only a test

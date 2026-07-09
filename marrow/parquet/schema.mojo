@@ -136,6 +136,28 @@ struct SchemaNode(Copyable, Movable):
         else:
             raise Error("parquet: unsupported schema node kind")
 
+    def collect_leaf_indices(self, mut out: List[Int]):
+        """Append the flat leaf-column indices this node's subtree reads, in the
+        same DFS/column-chunk order the schema was parsed in. Used by column
+        projection to decide which column chunks to decode."""
+        if self.kind == NODE_LEAF:
+            out.append(self.leaf_index)
+        else:
+            for ref c in self.children:
+                c.collect_leaf_indices(out)
+
+    def remapped(self, mapping: List[Int]) -> SchemaNode:
+        """A copy of this node with every leaf index rewritten through `mapping`
+        (original flat index -> compact index), so a projected node assembles
+        from a decoded list that holds only the selected columns."""
+        var new_children = List[SchemaNode]()
+        for ref c in self.children:
+            new_children.append(c.remapped(mapping))
+        var new_leaf = self.leaf_index
+        if self.kind == NODE_LEAF:
+            new_leaf = mapping[self.leaf_index]
+        return SchemaNode(self.kind, self.field.copy(), new_children^, new_leaf)
+
 
 struct ParsedSchema(Movable):
     """Result of parsing a Parquet schema: the Arrow schema, the flat leaf
