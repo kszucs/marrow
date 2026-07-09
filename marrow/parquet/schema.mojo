@@ -36,7 +36,8 @@ from ..dtypes import (
     nanosecond,
 )
 from ..schema import Schema
-from ..arrays import AnyArray, StructArray
+from ..arrays import AnyArray, StructArray, BoolArray
+from ..builders import BoolBuilder
 from .nested import DecodedLeaf, assemble_list
 from .format import (
     SchemaElement,
@@ -91,10 +92,10 @@ struct SchemaNode(Copyable, Movable):
     var field: Field
     var children: List[SchemaNode]
     var leaf_index: Int
-    # List geometry (NODE_LIST only), in absolute definition levels:
-    var list_def: Int  # def at/above which the list itself is non-null
-    var element_floor: Int  # def at/above which the list holds an element
-    var list_optional: Bool
+    # Dremel geometry, in absolute definition levels:
+    var present_def: Int  # def at/above which this node (list/struct) is non-null
+    var element_floor: Int  # NODE_LIST only: def at/above which it holds an element
+    var optional: Bool  # whether this node can be null
 
     def __init__(
         out self,
@@ -102,17 +103,17 @@ struct SchemaNode(Copyable, Movable):
         var field: Field,
         var children: List[SchemaNode],
         leaf_index: Int,
-        list_def: Int = 0,
+        present_def: Int = 0,
         element_floor: Int = 0,
-        list_optional: Bool = False,
+        optional: Bool = False,
     ):
         self.kind = kind
         self.field = field^
         self.children = children^
         self.leaf_index = leaf_index
-        self.list_def = list_def
+        self.present_def = present_def
         self.element_floor = element_floor
-        self.list_optional = list_optional
+        self.optional = optional
 
     def __del__(deinit self):
         pass
@@ -142,9 +143,9 @@ struct SchemaNode(Copyable, Movable):
                 element^,
                 decoded[li].rep_levels,
                 decoded[li].def_levels,
-                self.list_def,
+                self.present_def,
                 self.element_floor,
-                self.list_optional,
+                self.optional,
             )
         elif self.kind == NODE_STRUCT:
             var children = List[AnyArray]()
@@ -152,7 +153,26 @@ struct SchemaNode(Copyable, Movable):
             for ref c in self.children:
                 children.append(c.assemble(decoded))
                 fields.append(c.field.copy())
-            var out: AnyArray = StructArray.from_arrays(children^, fields, None)
+            # A nullable *flat* struct is null wherever a representative leaf's
+            # def level is below the struct's present level. (Struct nulls inside
+            # a list — where def levels are per-slot, not per-row — are a
+            # follow-up, so only reconstruct for non-leveled leaves.)
+            var mask: Optional[BoolArray] = None
+            if self.optional:
+                var li = self.first_leaf_index()
+                ref defs = decoded[li].def_levels
+                if not decoded[li].leveled and len(defs) > 0:
+                    var mb = BoolBuilder(len(defs))
+                    var any_null = False
+                    for i in range(len(defs)):
+                        var is_null = Int(defs[i]) < self.present_def
+                        mb.append(is_null)
+                        any_null = any_null or is_null
+                    if any_null:
+                        mask = mb.finish()
+            var out: AnyArray = StructArray.from_arrays(
+                children^, fields, mask^
+            )
             return out^
         else:
             raise Error("parquet: unsupported schema node kind")
@@ -194,9 +214,9 @@ struct SchemaNode(Copyable, Movable):
             self.field.copy(),
             new_children^,
             new_leaf,
-            self.list_def,
+            self.present_def,
             self.element_floor,
-            self.list_optional,
+            self.optional,
         )
 
 
@@ -244,6 +264,7 @@ struct LeafColumn(Copyable, Movable):
     var max_rep: Int
     var nullable: Bool
     var rep_floor: Int  # def level at/above which this leaf's value slot exists
+    var carry_def: Bool  # keep def levels (leaf is under a nullable struct)
 
     def __init__(
         out self,
@@ -254,6 +275,7 @@ struct LeafColumn(Copyable, Movable):
         max_rep: Int,
         nullable: Bool,
         rep_floor: Int = 0,
+        carry_def: Bool = False,
     ):
         self.name = name^
         self.dtype = dtype^
@@ -262,6 +284,7 @@ struct LeafColumn(Copyable, Movable):
         self.max_rep = max_rep
         self.nullable = nullable
         self.rep_floor = rep_floor
+        self.carry_def = carry_def
 
 
 # ---------------------------------------------------------------------------
@@ -354,13 +377,19 @@ struct _SchemaReader(Movable):
             raise Error("parquet: unsupported physical type " + String(pt))
 
     def node(
-        mut self, def_base: Int, rep_base: Int, rep_floor: Int = 0
+        mut self,
+        def_base: Int,
+        rep_base: Int,
+        rep_floor: Int = 0,
+        under_optional: Bool = False,
     ) raises -> SchemaNode:
         """Consume the element at the cursor and return its Arrow node.
 
         `rep_floor` is the definition level at/above which this element's value
         slot exists — bumped past each enclosing list's repeated group so leaves
-        under nested lists read the right present/absent slots."""
+        under nested lists read the right present/absent slots. `under_optional`
+        marks that a nullable struct ancestor exists, so flat leaves must keep
+        their def levels for the struct-null reconstruction."""
         var el = self.elements[self.idx].copy()
         self.idx += 1
         var rep = el.repetition_type
@@ -380,6 +409,7 @@ struct _SchemaReader(Movable):
                     max_rep=r,
                     nullable=nullable,
                     rep_floor=rep_floor,
+                    carry_def=under_optional,
                 )
             )
             return SchemaNode(
@@ -403,7 +433,9 @@ struct _SchemaReader(Movable):
             # when the leaf def reaches `d + 1` (repeated group present); the
             # list itself is non-null at `d` (its own optional level).
             self.idx += 1
-            var elem = self.node(d + 1, r + 1, rep_floor=d + 1)
+            var elem = self.node(
+                d + 1, r + 1, rep_floor=d + 1, under_optional=under_optional
+            )
             var item: AnyDataType = list_(elem.field.dtype.copy())
             var children = List[SchemaNode]()
             children.append(elem^)
@@ -412,21 +444,31 @@ struct _SchemaReader(Movable):
                 Field(el.name, item^, nullable),
                 children^,
                 -1,
-                list_def=d,
+                present_def=d,
                 element_floor=d + 1,
-                list_optional=rep == REP_OPTIONAL,
+                optional=rep == REP_OPTIONAL,
             )
 
-        # plain group -> Arrow struct
+        # plain group -> Arrow struct. A nullable struct is reconstructed from
+        # its leaves' def levels (below `d` -> struct null), so its descendants
+        # must carry def levels.
         var child_nodes = List[SchemaNode]()
         var child_fields = List[Field]()
+        var child_optional = under_optional or nullable
         for _ in range(el.num_children):
-            var cn = self.node(d, r, rep_floor=rep_floor)
+            var cn = self.node(
+                d, r, rep_floor=rep_floor, under_optional=child_optional
+            )
             child_fields.append(cn.field.copy())
             child_nodes.append(cn^)
         var dtype = struct_(child_fields^)
         return SchemaNode(
-            NODE_STRUCT, Field(el.name, dtype^, nullable), child_nodes^, -1
+            NODE_STRUCT,
+            Field(el.name, dtype^, nullable),
+            child_nodes^,
+            -1,
+            present_def=d,
+            optional=nullable,
         )
 
 

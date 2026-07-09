@@ -49,6 +49,36 @@ def test_list_of_struct() raises:
     )
 
 
+def test_nullable_struct() raises:
+    # struct-level nulls, with nullable fields too (field-null vs struct-null)
+    _assert_reads(
+        (
+            "__import__('pyarrow').table({'s': __import__('pyarrow').array("
+            "[{'a': 1, 'b': 'x'}, None, {'a': None, 'b': 'z'}, {'a': 4, 'b':"
+            " None}, None],"
+            " type=__import__('pyarrow').struct("
+            "[__import__('pyarrow').field('a', __import__('pyarrow').int64()),"
+            " __import__('pyarrow').field('b',"
+            " __import__('pyarrow').string())]))})"
+        ),
+        "none",
+    )
+
+
+def test_nullable_struct_of_struct() raises:
+    # nested nullable structs
+    _assert_reads(
+        (
+            "__import__('pyarrow').table({'s': __import__('pyarrow').array("
+            "[{'p': {'x': 1}}, None, {'p': None}, {'p': {'x': 4}}],"
+            " type=__import__('pyarrow').struct([__import__('pyarrow').field("
+            "'p', __import__('pyarrow').struct([__import__('pyarrow').field("
+            "'x', __import__('pyarrow').int64())]))]))})"
+        ),
+        "snappy",
+    )
+
+
 def test_list_of_struct_snappy() raises:
     _assert_reads(
         (

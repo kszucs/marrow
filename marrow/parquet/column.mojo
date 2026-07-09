@@ -41,6 +41,7 @@ from .encoding import (
 )
 from .compression import Codecs
 from .schema import LeafColumn
+from .nested import DecodedLeaf
 from .format import (
     ColumnMetaData,
     ENC_DELTA_BINARY_PACKED,
@@ -397,6 +398,7 @@ struct BoolLeafBuilder(LeafBuilder):
 struct ColumnReader[o: Origin[mut=False]](Movable):
     var pages: PageReader[Self.o]
     var num_rows: Int
+    var def_out: List[Int32]  # per-row def levels, kept only when carry_def
 
     def __init__(
         out self,
@@ -407,12 +409,24 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     ):
         self.pages = PageReader(data, meta^, leaf^)
         self.num_rows = num_rows
+        self.def_out = List[Int32]()
 
     def _run[
         B: LeafBuilder
     ](mut self, mut builder: B, mut codecs: Codecs) raises:
+        var carry = self.pages.leaf.carry_def
+        var md = self.pages.leaf.max_def
         while self.pages.has_next():
-            builder.consume(self.pages.next(codecs))
+            var pg = self.pages.next(codecs)
+            if carry and pg.kind != PAGEKIND_DICT:
+                # a page materializes def levels only when it has nulls; an
+                # all-present page implies every slot is at max_def.
+                if len(pg.def_levels) == pg.num_values:
+                    self.def_out.extend(Span(pg.def_levels))
+                else:
+                    for _ in range(pg.num_values):
+                        self.def_out.append(Int32(md))
+            builder.consume(pg^)
 
     def _build[
         B: LeafBuilder
@@ -420,7 +434,13 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         self._run(builder, codecs)
         return builder^.finish()
 
-    def read(mut self, mut codecs: Codecs) raises -> AnyArray:
+    def read(mut self, mut codecs: Codecs) raises -> DecodedLeaf:
+        var arr = self._read_array(codecs)
+        var defs = self.def_out^
+        self.def_out = List[Int32]()
+        return DecodedLeaf(False, arr^, List[Int32](), defs^)
+
+    def _read_array(mut self, mut codecs: Codecs) raises -> AnyArray:
         ref leaf = self.pages.leaf
         ref dt = leaf.dtype
         if dt == int32:

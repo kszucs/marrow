@@ -4,6 +4,16 @@
 
 ### Features
 
+- **Struct-level nulls on read** (`marrow.parquet`): a nullable (flat) struct
+  column now reconstructs its validity — a null struct reads back as null
+  instead of a struct of null fields — including nested nullable structs and
+  structs with nullable fields (field-null vs struct-null are distinguished).
+  Flat leaves under a nullable struct now carry their definition levels
+  (`LeafColumn.carry_def`), and the struct node reconstructs validity from a
+  representative leaf's def levels against its `present_def` threshold. Struct
+  nulls *inside a list* remain a follow-up. The node geometry was generalized
+  (`list_def`→`present_def`, shared by lists and structs).
+
 - **List-of-struct read support** (`marrow.parquet`): the reader now reconstructs
   `list<struct<...>>` columns (arrays of records — previously it crashed). List
   geometry (which definition levels mean the list is null / empty / holds an

@@ -172,7 +172,7 @@ def read_table(
                     parsed.leaves[orig].copy(),
                     rg.num_rows,
                 )
-                grid[t] = DecodedLeaf.flat(reader.read(codecs))
+                grid[t] = reader.read(codecs)
             t += nt
 
     sync_parallelize[worker](nt)
