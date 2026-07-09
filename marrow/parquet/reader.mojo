@@ -34,7 +34,7 @@ from .. import dtypes as dt
 from .utils import CompressionLibs
 from .codecs import LittleEndian
 from .schema import SchemaMapping, Projection, DecodedLeaf
-from .format import FileMetaData
+from .format import FileMetaData, CompactReader, ColumnIndex, OffsetIndex
 from .column import ColumnReader
 
 
@@ -185,6 +185,45 @@ def read_metadata(path: String) raises -> FileMetaData:
     var meta = FileMetaData.read_footer(mapped.span())
     _ = mapped^  # read_footer copies every field into owned storage
     return meta^
+
+
+struct PageIndex(Copyable, Movable):
+    """One column chunk's page index: `offset_index` locates each data page,
+    `column_index` holds its per-page min/max/null stats. Either may be absent
+    (a file without a page index)."""
+
+    var offset_index: Optional[OffsetIndex]
+    var column_index: Optional[ColumnIndex]
+
+    def __init__(out self):
+        self.offset_index = None
+        self.column_index = None
+
+
+def read_page_index(path: String) raises -> List[List[PageIndex]]:
+    """Read the page index (OffsetIndex + ColumnIndex) for every (row group,
+    leaf column), indexed `result[row_group][leaf]`. Follows the offsets stored
+    in each `ColumnChunk`; a chunk without a page index yields empty optionals.
+    """
+    var mapped = MappedFile(path)
+    var data = mapped.span()
+    var meta = FileMetaData.read_footer(data)
+    var out = List[List[PageIndex]]()
+    for ref rg in meta.row_groups:
+        var row = List[PageIndex]()
+        for ci in range(len(rg.columns)):
+            ref cc = rg.columns[ci]
+            var pi = PageIndex()
+            if cc.offset_index_offset >= 0:
+                var r = CompactReader(data, cc.offset_index_offset)
+                pi.offset_index = OffsetIndex.read(r)
+            if cc.column_index_offset >= 0:
+                var r = CompactReader(data, cc.column_index_offset)
+                pi.column_index = ColumnIndex.read(r)
+            row.append(pi^)
+        out.append(row^)
+    _ = mapped^  # OffsetIndex/ColumnIndex copy their bytes into owned storage
+    return out^
 
 
 struct ColumnStatistics(Copyable, Movable):

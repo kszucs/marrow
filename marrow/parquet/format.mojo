@@ -949,13 +949,140 @@ struct ColumnMetaData(Copyable, Movable):
         w.write_field_stop()
 
 
+# ---------------------------------------------------------------------------
+# Page index — OffsetIndex / ColumnIndex, stored near the footer and pointed to
+# by ColumnChunk.{offset,column}_index_offset. Read on demand (selective scans
+# only); a full-row-group scan never touches them.
+# ---------------------------------------------------------------------------
+
+
+struct PageLocation(Copyable, Movable):
+    """Locates one data page: byte `offset` in the file, `compressed_page_size`
+    (header included), and `first_row_index` (row-group-relative, on a row
+    boundary)."""
+
+    var offset: Int
+    var compressed_page_size: Int
+    var first_row_index: Int
+
+    def __init__(out self):
+        self.offset = 0
+        self.compressed_page_size = 0
+        self.first_row_index = 0
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var last = 0
+        while True:
+            var ftype, fid = r.read_field_header(last)
+            if ftype == TC_STOP:
+                break
+            last = fid
+            if fid == 1:
+                out.offset = Int(r.read_i64())
+            elif fid == 2:
+                out.compressed_page_size = Int(r.read_i32())
+            elif fid == 3:
+                out.first_row_index = Int(r.read_i64())
+            else:
+                r.skip(ftype)
+        return out^
+
+
+struct OffsetIndex(Copyable, Movable):
+    """Per-page locations for one column chunk (field 1 = list<PageLocation>)."""
+
+    var page_locations: List[PageLocation]
+
+    def __init__(out self):
+        self.page_locations = List[PageLocation]()
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var last = 0
+        while True:
+            var ftype, fid = r.read_field_header(last)
+            if ftype == TC_STOP:
+                break
+            last = fid
+            if fid == 1:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.page_locations.append(PageLocation.read(r))
+            else:
+                r.skip(ftype)
+        return out^
+
+
+struct ColumnIndex(Copyable, Movable):
+    """Per-page statistics for one column chunk: `null_pages[i]` (page holds only
+    nulls → its min/max are empty), the PLAIN-encoded `min_values`/`max_values`
+    bounds, `boundary_order` (0 UNORDERED, 1 ASCENDING, 2 DESCENDING), and the
+    optional per-page `null_counts`. Bounds follow the column's ColumnOrder."""
+
+    var null_pages: List[Bool]
+    var min_values: List[List[UInt8]]
+    var max_values: List[List[UInt8]]
+    var boundary_order: Int
+    var null_counts: List[Int]
+
+    def __init__(out self):
+        self.null_pages = List[Bool]()
+        self.min_values = List[List[UInt8]]()
+        self.max_values = List[List[UInt8]]()
+        self.boundary_order = 0
+        self.null_counts = List[Int]()
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var last = 0
+        while True:
+            var ftype, fid = r.read_field_header(last)
+            if ftype == TC_STOP:
+                break
+            last = fid
+            if fid == 1:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    # list bool elements: 1 = true, 2 = false (compact protocol)
+                    out.null_pages.append(Int(r.read_byte()) == 1)
+            elif fid == 2:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.min_values.append(List[UInt8](Span(r.read_bytes())))
+            elif fid == 3:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.max_values.append(List[UInt8](Span(r.read_bytes())))
+            elif fid == 4:
+                out.boundary_order = Int(r.read_i32())
+            elif fid == 5:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.null_counts.append(Int(r.read_i64()))
+            else:
+                r.skip(ftype)
+        return out^
+
+
 struct ColumnChunk(Copyable, Movable):
     var file_offset: Int
     var meta_data: ColumnMetaData
+    var offset_index_offset: Int  # -1 if absent
+    var offset_index_length: Int
+    var column_index_offset: Int  # -1 if absent
+    var column_index_length: Int
 
     def __init__(out self):
         self.file_offset = 0
         self.meta_data = ColumnMetaData()
+        self.offset_index_offset = -1
+        self.offset_index_length = 0
+        self.column_index_offset = -1
+        self.column_index_length = 0
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -970,6 +1097,14 @@ struct ColumnChunk(Copyable, Movable):
                 out.file_offset = Int(r.read_i64())
             elif fid == 3:
                 out.meta_data = ColumnMetaData.read(r)
+            elif fid == 4:
+                out.offset_index_offset = Int(r.read_i64())
+            elif fid == 5:
+                out.offset_index_length = Int(r.read_i32())
+            elif fid == 6:
+                out.column_index_offset = Int(r.read_i64())
+            elif fid == 7:
+                out.column_index_length = Int(r.read_i32())
             else:
                 r.skip(ftype)
         return out^
