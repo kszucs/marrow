@@ -5,7 +5,9 @@ Arrow type tree.
 methods; `LeafColumn` is a flat leaf descriptor. The two conversions are objects
 that own their traversal state: `_SchemaReader` (Parquet→Arrow, via
 `ParsedSchema.from_metadata`) and `_SchemaWriter` (Arrow→Parquet, via
-`ParquetSchema.from_arrow`). Covers flat columns, structs, and single-level lists.
+`ParquetSchema.from_arrow`). Covers flat columns, (nullable) structs, single-level
+lists, and lists of structs. Each node carries its Dremel geometry (`present_def`,
+`element_floor`) computed once here so `assemble` stays a clean recursive walk.
 """
 
 from ..dtypes import (
