@@ -4,6 +4,14 @@
 
 ### Features
 
+- **DataPage V2 write support** (`marrow.parquet`): the writer can now emit v2
+  data pages (`write_table(..., version=2)` in Mojo, `data_page_version="2.0"`
+  in Python) in addition to the default v1 — the reader already read both. v2
+  stores the definition levels uncompressed ahead of the compressed values
+  (`DataPageHeaderV2` with `is_compressed`), matching arrow-rs's
+  `WriterVersion` (PARQUET_1_0 default, PARQUET_2_0 opt-in). PyArrow reads
+  marrow's v2 output and marrow round-trips it, compressed and uncompressed.
+
 - **Column projection on read** (`marrow.parquet`): `read_table(path,
   columns=[...])` reads only the named top-level columns, in the given order —
   only those columns' chunks are decoded (the rest are never touched). Works for

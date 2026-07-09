@@ -2,14 +2,17 @@
 
 `FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the
 table (bounded by `row_group_size`), then the footer. `ColumnChunkWriter` owns
-one leaf column chunk — encoding a v1 data page (RLE definition levels + PLAIN
+one leaf column chunk — encoding a data page (RLE definition levels + PLAIN
 values), compressing it, and producing the `ColumnMetaData` (with a null-count
-statistic). Value encoding is dispatched by Arrow type to typed methods, so the
-writer mirrors the reader's structure.
+statistic). `version` selects the page format: v1 (levels + values compressed
+together) or v2 (levels stored uncompressed ahead of the compressed values).
+Value encoding is dispatched by Arrow type to typed methods, so the writer
+mirrors the reader's structure.
 
 Milestone: flat columns + struct; primitives (incl. int8/16 widened to INT32),
-string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD. Dictionary encoding, page
-splitting, temporal/list writing, and min/max statistics are follow-ups.
+string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD/LZ4_RAW; v1 and v2 data
+pages. Dictionary encoding, page splitting, temporal/list writing, and min/max
+statistics are follow-ups.
 """
 
 from std.sys import size_of
@@ -38,7 +41,7 @@ from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
 from .encoding import rle_encode
-from .compression import Codecs, CODEC_SNAPPY
+from .compression import Codecs, CODEC_SNAPPY, CODEC_UNCOMPRESSED
 from .schema import ParquetSchema, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
@@ -63,10 +66,14 @@ comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 struct ColumnChunkWriter(Movable):
     var leaf: LeafColumn
     var compression: Int
+    var version: Int  # data-page version: 1 or 2
 
-    def __init__(out self, var leaf: LeafColumn, compression: Int):
+    def __init__(
+        out self, var leaf: LeafColumn, compression: Int, version: Int = 1
+    ):
         self.leaf = leaf^
         self.compression = compression
+        self.version = version
 
     @staticmethod
     def _u32le(mut out: List[UInt8], v: Int):
@@ -160,21 +167,67 @@ struct ColumnChunkWriter(Movable):
         self._encode_values(col, body)
         return body^
 
+    def _def_levels(
+        self, col: AnyArray, mut null_count: Int
+    ) raises -> List[UInt8]:
+        """RLE definition levels (bit width 1), no length prefix — for v2 pages,
+        where the levels sit uncompressed ahead of the values."""
+        var out = List[UInt8]()
+        null_count = 0
+        if self.leaf.max_def >= 1:
+            var defs = List[Int32]()
+            for i in range(col.length()):
+                if col.is_valid(i):
+                    defs.append(Int32(1))
+                else:
+                    defs.append(Int32(0))
+                    null_count += 1
+            out = rle_encode(defs, 1)
+        return out^
+
     def write(
         self, col: AnyArray, mut out: List[UInt8], mut codecs: Codecs
     ) raises -> ColumnChunk:
         var n = col.length()
         var null_count = 0
-        var body = self._encode_body(col, null_count)
-        var uncompressed_size = len(body)
-        var compressed = codecs.compress(self.compression, Span(body))
-        var compressed_size = len(compressed)
-
         var page_offset = len(out)
-        var header_len = append_page_header(
-            out, PageHeader.data_page(uncompressed_size, compressed_size, n)
-        )
-        out.extend(Span(compressed))
+        var uncompressed_size: Int
+        var compressed_size: Int
+        var header_len: Int
+        if self.version == 2:
+            # v2: uncompressed levels, then separately-compressed values.
+            var def_bytes = self._def_levels(col, null_count)
+            var values = List[UInt8]()
+            self._encode_values(col, values)
+            var is_comp = self.compression != CODEC_UNCOMPRESSED
+            var comp_values = codecs.compress(self.compression, Span(values))
+            uncompressed_size = len(def_bytes) + len(values)
+            compressed_size = len(def_bytes) + len(comp_values)
+            header_len = append_page_header(
+                out,
+                PageHeader.data_page_v2(
+                    uncompressed_size,
+                    compressed_size,
+                    n,
+                    null_count,
+                    n,  # flat columns: num_rows == num_values
+                    len(def_bytes),
+                    is_comp,
+                ),
+            )
+            out.extend(Span(def_bytes))
+            out.extend(Span(comp_values))
+        else:
+            # v1: levels + values compressed together.
+            var body = self._encode_body(col, null_count)
+            uncompressed_size = len(body)
+            var compressed = codecs.compress(self.compression, Span(body))
+            compressed_size = len(compressed)
+            header_len = append_page_header(
+                out,
+                PageHeader.data_page(uncompressed_size, compressed_size, n),
+            )
+            out.extend(Span(compressed))
 
         var meta = ColumnMetaData()
         meta.type = self.leaf.physical
@@ -202,13 +255,15 @@ struct FileWriter(Movable):
     var out: List[UInt8]
     var codecs: Codecs
     var compression: Int
+    var version: Int  # data-page version: 1 (default) or 2
     var leaves: List[LeafColumn]
 
-    def __init__(out self, compression: Int):
+    def __init__(out self, compression: Int, version: Int = 1):
         self.out = List[UInt8]()
         write_magic(self.out)  # file header magic
         self.codecs = Codecs()
         self.compression = compression
+        self.version = version
         self.leaves = List[LeafColumn]()
 
     def _write_row_group(
@@ -222,7 +277,7 @@ struct FileWriter(Movable):
         var total = 0
         for ci in range(len(self.leaves)):
             var ccw = ColumnChunkWriter(
-                self.leaves[ci].copy(), self.compression
+                self.leaves[ci].copy(), self.compression, self.version
             )
             var cc = ccw.write(leaf_arrays[ci], self.out, self.codecs)
             total += cc.meta_data.total_uncompressed_size
@@ -247,7 +302,7 @@ struct FileWriter(Movable):
         self.leaves = ps.leaves.copy()
 
         var fmeta = FileMetaData()
-        fmeta.version = 1
+        fmeta.version = self.version
         fmeta.schema = ps.elements.copy()
         fmeta.num_rows = n
         fmeta.created_by = "marrow"
@@ -274,8 +329,13 @@ struct FileWriter(Movable):
 
 
 def write_table(
-    table: Table, path: String, compression: Int = CODEC_SNAPPY
+    table: Table,
+    path: String,
+    compression: Int = CODEC_SNAPPY,
+    version: Int = 1,
 ) raises:
-    """Write a Marrow `Table` to a Parquet file."""
-    var writer = FileWriter(compression)
+    """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
+    format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
+    """
+    var writer = FileWriter(compression, version)
     writer.write(table, path)

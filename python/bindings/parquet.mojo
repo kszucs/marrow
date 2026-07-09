@@ -47,10 +47,15 @@ def parquet_read_table(
 
 
 def parquet_write_table(
-    table: PythonObject, path: PythonObject, compression: PythonObject
+    table: PythonObject,
+    path: PythonObject,
+    compression: PythonObject,
+    version: PythonObject,
 ) raises -> PythonObject:
     var t = Table(py=table)
-    _write_table(t, String(py=path), _codec(String(py=compression)))
+    _write_table(
+        t, String(py=path), _codec(String(py=compression)), Int(py=version)
+    )
     return Python.evaluate("None")
 
 

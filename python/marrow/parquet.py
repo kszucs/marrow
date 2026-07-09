@@ -26,7 +26,10 @@ def read_table(source, columns=None):
     return Table.wrap(_ma.parquet_read_table(str(source), cols))
 
 
-def write_table(table, where, compression="snappy"):
+_PAGE_VERSIONS = {"1.0": 1, "2.0": 2, 1: 1, 2: 2}
+
+
+def write_table(table, where, compression="snappy", data_page_version="1.0"):
     """Write a table to a Parquet file.
 
     Parameters
@@ -37,6 +40,12 @@ def write_table(table, where, compression="snappy"):
         Output path.
     compression : {"snappy", "zstd", "lz4", "none"}, default "snappy"
         Page compression codec.
+    data_page_version : {"1.0", "2.0"}, default "1.0"
+        Parquet data page format version.
     """
+    try:
+        version = _PAGE_VERSIONS[data_page_version]
+    except KeyError:
+        raise ValueError(f"unsupported data_page_version: {data_page_version!r}")
     binding = table.unwrap() if isinstance(table, Table) else table
-    _ma.parquet_write_table(binding, str(where), compression)
+    _ma.parquet_write_table(binding, str(where), compression, version)

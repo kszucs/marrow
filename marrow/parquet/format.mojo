@@ -377,6 +377,23 @@ struct DataPageHeaderV2(Copyable, Movable):
                 r.skip(ftype)
         return out^
 
+    def write(self, mut w: CompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_I32, 1, last)
+        w.write_i32(Int32(self.num_values))
+        last = w.write_field_begin(TC_I32, 2, last)
+        w.write_i32(Int32(self.num_nulls))
+        last = w.write_field_begin(TC_I32, 3, last)
+        w.write_i32(Int32(self.num_rows))
+        last = w.write_field_begin(TC_I32, 4, last)
+        w.write_i32(Int32(self.encoding))
+        last = w.write_field_begin(TC_I32, 5, last)
+        w.write_i32(Int32(self.definition_levels_byte_length))
+        last = w.write_field_begin(TC_I32, 6, last)
+        w.write_i32(Int32(self.repetition_levels_byte_length))
+        last = w.write_bool_field(self.is_compressed, 7, last)
+        w.write_field_stop()
+
 
 struct DictionaryPageHeader(Copyable, Movable):
     var num_values: Int
@@ -467,6 +484,9 @@ struct PageHeader(Copyable, Movable):
         elif self.dictionary_page_header:
             _ = w.write_field_begin(TC_STRUCT, 7, last)
             self.dictionary_page_header.value().write(w)
+        elif self.data_page_header_v2:
+            _ = w.write_field_begin(TC_STRUCT, 8, last)
+            self.data_page_header_v2.value().write(w)
         w.write_field_stop()
 
     @staticmethod
@@ -484,6 +504,33 @@ struct PageHeader(Copyable, Movable):
         dph.definition_level_encoding = ENC_RLE
         dph.repetition_level_encoding = ENC_RLE
         ph.data_page_header = dph^
+        return ph^
+
+    @staticmethod
+    def data_page_v2(
+        uncompressed_size: Int,
+        compressed_size: Int,
+        num_values: Int,
+        num_nulls: Int,
+        num_rows: Int,
+        def_levels_byte_length: Int,
+        is_compressed: Bool,
+    ) -> Self:
+        """Build a v2 data-page header (PLAIN values; RLE levels stored
+        uncompressed ahead of the — optionally compressed — values)."""
+        var ph = Self()
+        ph.type = PAGE_DATA_V2
+        ph.uncompressed_page_size = uncompressed_size
+        ph.compressed_page_size = compressed_size
+        var dph = DataPageHeaderV2()
+        dph.num_values = num_values
+        dph.num_nulls = num_nulls
+        dph.num_rows = num_rows
+        dph.encoding = ENC_PLAIN
+        dph.definition_levels_byte_length = def_levels_byte_length
+        dph.repetition_levels_byte_length = 0
+        dph.is_compressed = is_compressed
+        ph.data_page_header_v2 = dph^
         return ph^
 
 
