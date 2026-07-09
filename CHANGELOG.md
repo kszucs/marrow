@@ -4,6 +4,11 @@
 
 ### Features
 
+- **BYTE_STREAM_SPLIT read support** (`marrow.parquet`): the reader now decodes
+  the BYTE_STREAM_SPLIT encoding (float32/float64; PyArrow
+  `use_byte_stream_split=True`), reassembling each value from its strided byte
+  planes. Handles nulls; reads compressed and uncompressed.
+
 - **DELTA_BINARY_PACKED read support** (`marrow.parquet`): the reader now decodes
   the DELTA_BINARY_PACKED integer encoding (block / miniblock zigzag deltas) that
   modern writers — PyArrow with `use_dictionary=False`, and v2 defaults — emit for

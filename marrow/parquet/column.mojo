@@ -36,7 +36,11 @@ from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
 from .encoding import rle_decode, rle_gather, delta_binary_packed_decode
 from .compression import Codecs
 from .schema import LeafColumn
-from .format import ColumnMetaData, ENC_DELTA_BINARY_PACKED
+from .format import (
+    ColumnMetaData,
+    ENC_DELTA_BINARY_PACKED,
+    ENC_BYTE_STREAM_SPLIT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +103,37 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             self.bitmap.set_range(0, self.wpos, True)
             self.has_bitmap = True
 
+    def _scatter(
+        mut self,
+        page: Page,
+        present: UnsafePointer[Scalar[Self.store_dt], _],
+    ) raises:
+        """Place `page.num_present` contiguous decoded values into the output
+        buffer, honoring definition levels — one memcpy when the page is
+        all-present, else a per-row scatter that materializes the validity
+        bitmap. Every encoding funnels its decoded present values through here.
+        """
+        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
+        if page.all_present():
+            memcpy(dest=vptr + self.wpos, src=present, count=page.num_present)
+            self.wpos += page.num_present
+            if self.has_bitmap:
+                self.bitmap.set_range(
+                    self.wpos - page.num_present, page.num_present, True
+                )
+        else:
+            self._ensure_bitmap()
+            var vi = 0
+            for row in range(page.num_values):
+                if Int(page.def_levels[row]) == self.max_def:
+                    vptr[self.wpos] = present[vi]
+                    vi += 1
+                    self.bitmap.set(self.wpos)
+                else:
+                    vptr[self.wpos] = 0
+                    self.null_count += 1
+                self.wpos += 1
+
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
         if page.kind == PAGEKIND_DICT:
@@ -116,82 +151,62 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             return
 
         var vspan = page.values()
-        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
-        if page.is_plain() and page.all_present():
-            # fast path: contiguous present values, no validity to track
+        var np = page.num_present
+        if page.is_plain():
             comptime if Self.SAME:
-                memcpy(
-                    dest=vptr + self.wpos,
-                    src=vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
-                    count=page.num_values,
+                # PLAIN stores only present values, contiguous — the store type
+                # matches the physical width, so scatter straight from the page.
+                self._scatter(
+                    page, vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]]()
                 )
-                self.wpos += page.num_values
             else:
-                for i in range(page.num_values):
-                    vptr[self.wpos] = self._read(vspan, i * PW)
-                    self.wpos += 1
-            if self.has_bitmap:
-                self.bitmap.set_range(
-                    self.wpos - page.num_values, page.num_values, True
-                )
-        elif page.is_plain():
-            self._ensure_bitmap()  # this page has nulls
-            var vi = 0
-            for row in range(page.num_values):
-                if Int(page.def_levels[row]) == self.max_def:
-                    vptr[self.wpos] = self._read(vspan, vi)
-                    vi += PW
-                    self.bitmap.set(self.wpos)
-                else:
-                    vptr[self.wpos] = 0
-                    self.null_count += 1
-                self.wpos += 1
+                # narrow physical (e.g. int8 stored as INT32): widen each value.
+                var vals = List[Scalar[Self.store_dt]](capacity=np)
+                for i in range(np):
+                    vals.append(self._read(vspan, i * PW))
+                self._scatter(page, vals.unsafe_ptr())
         elif page.is_dictionary():
-            var dptr = self.dict.unsafe_ptr()
             if page.all_present():
                 # fused index-decode + gather straight into the output buffer
                 rle_gather[Self.store_dt](
                     vspan[1:],
                     Int(vspan[0]),
                     page.num_values,
-                    dptr,
-                    vptr + self.wpos,
+                    self.dict.unsafe_ptr(),
+                    self.values.view[Self.store_dt]().unsafe_ptr() + self.wpos,
                 )
                 self.wpos += page.num_values
             else:
-                self._ensure_bitmap()
-                var indices = rle_decode(
-                    vspan[1:], Int(vspan[0]), page.num_present
+                var vals = List[Scalar[Self.store_dt]](unsafe_uninit_length=np)
+                rle_gather[Self.store_dt](
+                    vspan[1:],
+                    Int(vspan[0]),
+                    np,
+                    self.dict.unsafe_ptr(),
+                    vals.unsafe_ptr(),
                 )
-                var iptr = indices.unsafe_ptr()
-                var di = 0
-                for row in range(page.num_values):
-                    if Int(page.def_levels[row]) == self.max_def:
-                        vptr[self.wpos] = dptr[Int(iptr[di])]
-                        di += 1
-                        self.bitmap.set(self.wpos)
-                    else:
-                        vptr[self.wpos] = 0
-                        self.null_count += 1
-                    self.wpos += 1
+                self._scatter(page, vals.unsafe_ptr())
         elif page.encoding == ENC_DELTA_BINARY_PACKED:
-            var vals = delta_binary_packed_decode(vspan, page.num_present)
-            if page.all_present():
-                for i in range(page.num_values):
-                    vptr[self.wpos] = vals[i].cast[Self.store_dt]()
-                    self.wpos += 1
-            else:
-                self._ensure_bitmap()
-                var vi = 0
-                for row in range(page.num_values):
-                    if Int(page.def_levels[row]) == self.max_def:
-                        vptr[self.wpos] = vals[vi].cast[Self.store_dt]()
-                        vi += 1
-                        self.bitmap.set(self.wpos)
-                    else:
-                        vptr[self.wpos] = 0
-                        self.null_count += 1
-                    self.wpos += 1
+            var decoded = delta_binary_packed_decode(vspan, np)
+            var vals = List[Scalar[Self.store_dt]](capacity=np)
+            for i in range(np):
+                vals.append(decoded[i].cast[Self.store_dt]())
+            self._scatter(page, vals.unsafe_ptr())
+        elif page.encoding == ENC_BYTE_STREAM_SPLIT:
+            # each value's bytes are split across `np`-strided planes:
+            # byte k of value i lives at vspan[k*np + i].
+            var vals = List[Scalar[Self.store_dt]](capacity=np)
+            for i in range(np):
+                var raw = InlineArray[UInt8, PW](fill=0)
+
+                comptime for k in range(PW):
+                    raw[k] = vspan[k * np + i]
+                vals.append(
+                    SIMD[Self.phys_dt, 1]
+                    .from_bytes[big_endian=False](raw)
+                    .cast[Self.store_dt]()
+                )
+            self._scatter(page, vals.unsafe_ptr())
         else:
             raise Error(
                 "parquet: unsupported data page encoding "
