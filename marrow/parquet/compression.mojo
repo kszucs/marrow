@@ -3,27 +3,19 @@
 Parquet compresses each page body with one of a handful of codecs. Rather than
 reimplement them, we `dlopen` the standard C libraries (`libzstd`, `libsnappy`,
 `liblz4`, `libz`) at runtime and call their block APIs — the same approach
-arrow-rs/duckdb take, just without a link-time dependency. Handles are opened
-lazily and cached in a `Codecs` value that lives for one read/write.
+arrow-rs/duckdb take, just without a link-time dependency.
 
-The uncompressed page size is always known from the page header, so decompress
-never has to probe the frame for an output size.
-
-Parquet `CompressionCodec` enum:
-    0 UNCOMPRESSED  1 SNAPPY  2 GZIP  3 LZO  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
+`Compression` is the codec identity (a Parquet `CompressionCodec` enum value)
+and owns the high-level `compress` / `decompress` dispatch. `CompressionLibs` is
+the lazily-opened, per-read/write handle pool the dispatch calls into; the two
+are split so the codec stays a cheap copyable value while the (thread-unsafe)
+`dlopen` handles live in one place. The uncompressed page size is always known
+from the page header, so decompress never has to probe the frame for a size.
 """
 
 from std.ffi import OwnedDLHandle, _try_find_dylib
 from std.pathlib import Path
 from std.memory import alloc, memset_zero, memcpy
-
-comptime CODEC_UNCOMPRESSED: Int = 0
-comptime CODEC_SNAPPY: Int = 1
-comptime CODEC_GZIP: Int = 2
-comptime CODEC_BROTLI: Int = 4
-comptime CODEC_LZ4: Int = 5
-comptime CODEC_ZSTD: Int = 6
-comptime CODEC_LZ4_RAW: Int = 7
 
 comptime _ZSTD_PATHS: List[Path] = [
     "libzstd.dylib",
@@ -49,10 +41,13 @@ comptime _ZLIB_PATHS: List[Path] = [
 ]
 
 
-struct Codecs(Movable):
-    """Lazily-opened handles to the compression libraries, cached per file. Each
-    codec's decode logic lives in its own `_*_decompress` method so `decompress`
-    stays a thin dispatch."""
+struct CompressionLibs(Movable):
+    """Lazily-opened handles to the compression libraries, plus the primitive
+    block calls each codec needs, cached per read/write. Held by one worker at a
+    time — the `dlopen` handles and the reused size cell are not thread-safe to
+    share. `Compression` dispatches into these; each fills exactly `out_size`
+    bytes at `dst` (decompress) or returns the codec's output (compress).
+    """
 
     var _zstd: Optional[OwnedDLHandle]
     var _snappy: Optional[OwnedDLHandle]
@@ -85,9 +80,9 @@ struct Codecs(Movable):
         if not self._zlib:
             self._zlib = _try_find_dylib["z"](materialize[_ZLIB_PATHS]())
 
-    # --- per-codec decoders (write exactly `out_size` bytes to `dst`) ---
+    # --- decompress: write exactly `out_size` bytes to `dst` ---
 
-    def _zstd_decompress(
+    def zstd_decompress(
         mut self,
         src: Span[UInt8, _],
         dst: UnsafePointer[UInt8, _],
@@ -100,7 +95,7 @@ struct Codecs(Movable):
         if n != out_size:
             raise Error("zstd: decompressed size mismatch")
 
-    def _snappy_decompress(
+    def snappy_decompress(
         mut self,
         src: Span[UInt8, _],
         dst: UnsafePointer[UInt8, _],
@@ -114,7 +109,7 @@ struct Codecs(Movable):
         if status != 0 or Int(self._sz[0]) != out_size:
             raise Error("snappy: decompress failed")
 
-    def _lz4_raw_decompress(
+    def lz4_raw_decompress(
         mut self,
         src: Span[UInt8, _],
         dst: UnsafePointer[UInt8, _],
@@ -127,7 +122,7 @@ struct Codecs(Movable):
         if Int(n) != out_size:
             raise Error("lz4: decompressed size mismatch")
 
-    def _gzip_decompress(
+    def gzip_decompress(
         mut self,
         src: Span[UInt8, _],
         dst: UnsafePointer[UInt8, _],
@@ -164,9 +159,88 @@ struct Codecs(Movable):
         if produced != out_size:
             raise Error("gzip: decompressed size mismatch")
 
+    # --- compress: return the codec's output bytes ---
+
+    def zstd_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
+        self._ensure_zstd()
+        var bound = self._zstd.value().call["ZSTD_compressBound", Int](len(src))
+        var dst = alloc[UInt8](bound)
+        var n = self._zstd.value().call["ZSTD_compress", Int](
+            dst, bound, src.unsafe_ptr(), len(src), Int32(1)
+        )
+        var out = List[UInt8]()
+        for i in range(n):
+            out.append(dst[i])
+        dst.free()
+        return out^
+
+    def snappy_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
+        self._ensure_snappy()
+        var bound = self._snappy.value().call[
+            "snappy_max_compressed_length", Int
+        ](len(src))
+        var dst = alloc[UInt8](bound)
+        var sz = alloc[UInt](1)
+        sz[0] = UInt(bound)
+        _ = self._snappy.value().call["snappy_compress", Int32](
+            src.unsafe_ptr(), len(src), dst, sz
+        )
+        var produced = Int(sz[0])
+        var out = List[UInt8]()
+        for i in range(produced):
+            out.append(dst[i])
+        dst.free()
+        sz.free()
+        return out^
+
+    def lz4_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
+        self._ensure_lz4()
+        var bound = Int(
+            self._lz4.value().call["LZ4_compressBound", Int32](Int32(len(src)))
+        )
+        var dst = alloc[UInt8](bound)
+        var n = self._lz4.value().call["LZ4_compress_default", Int32](
+            src.unsafe_ptr(), dst, Int32(len(src)), Int32(bound)
+        )
+        if n == 0:
+            dst.free()
+            raise Error("lz4: compression failed")
+        var out = List[UInt8]()
+        for i in range(Int(n)):
+            out.append(dst[i])
+        dst.free()
+        return out^
+
+
+struct Compression(Equatable, ImplicitlyCopyable, Movable):
+    """A Parquet `CompressionCodec` value: the codec identity plus the
+    `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
+    handle pool. Enum values:
+        0 UNCOMPRESSED  1 SNAPPY  2 GZIP  4 BROTLI  5 LZ4  6 ZSTD  7 LZ4_RAW
+    """
+
+    var code: Int
+
+    comptime UNCOMPRESSED = Self(0)
+    comptime SNAPPY = Self(1)
+    comptime GZIP = Self(2)
+    comptime BROTLI = Self(4)
+    comptime LZ4 = Self(5)
+    comptime ZSTD = Self(6)
+    comptime LZ4_RAW = Self(7)
+
+    def __init__(out self, code: Int):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.code != other.code
+
     def decompress_into(
-        mut self,
-        codec: Int,
+        self,
+        mut libs: CompressionLibs,
         src: Span[UInt8, _],
         out_size: Int,
         mut scratch: List[UInt8],
@@ -177,93 +251,46 @@ struct Codecs(Movable):
         loads past the last value without overrunning the buffer."""
         scratch.resize(unsafe_uninit_length=out_size + 8)
         var ptr = scratch.unsafe_ptr()
-        if codec == CODEC_UNCOMPRESSED:
+        if self == Self.UNCOMPRESSED:
             memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
-        elif codec == CODEC_ZSTD:
-            self._zstd_decompress(src, ptr, out_size)
-        elif codec == CODEC_SNAPPY:
-            self._snappy_decompress(src, ptr, out_size)
-        elif codec == CODEC_LZ4_RAW:
-            self._lz4_raw_decompress(src, ptr, out_size)
-        elif codec == CODEC_GZIP:
-            self._gzip_decompress(src, ptr, out_size)
+        elif self == Self.ZSTD:
+            libs.zstd_decompress(src, ptr, out_size)
+        elif self == Self.SNAPPY:
+            libs.snappy_decompress(src, ptr, out_size)
+        elif self == Self.LZ4_RAW:
+            libs.lz4_raw_decompress(src, ptr, out_size)
+        elif self == Self.GZIP:
+            libs.gzip_decompress(src, ptr, out_size)
         else:
             raise Error(
-                "parquet: unsupported compression codec " + String(codec)
+                "parquet: unsupported compression codec " + String(self.code)
             )
 
     def decompress(
-        mut self, codec: Int, src: Span[UInt8, _], out_size: Int
+        self, mut libs: CompressionLibs, src: Span[UInt8, _], out_size: Int
     ) raises -> List[UInt8]:
         """Decompress `src` into a fresh `out_size`-byte list."""
         var dst = List[UInt8]()
-        self.decompress_into(codec, src, out_size, dst)
+        self.decompress_into(libs, src, out_size, dst)
         dst.resize(unsafe_uninit_length=out_size)  # drop the scratch slack
         return dst^
 
     def compress(
-        mut self, codec: Int, src: Span[UInt8, _]
+        self, mut libs: CompressionLibs, src: Span[UInt8, _]
     ) raises -> List[UInt8]:
         """Compress `src`, returning the codec's output bytes. Writers currently
         emit UNCOMPRESSED, SNAPPY, ZSTD, or LZ4_RAW."""
-        if codec == CODEC_UNCOMPRESSED:
+        if self == Self.UNCOMPRESSED:
             var out = List[UInt8]()
             out.extend(src)
             return out^
-
-        var src_ptr = src.unsafe_ptr()
-        if codec == CODEC_ZSTD:
-            self._ensure_zstd()
-            var bound = self._zstd.value().call["ZSTD_compressBound", Int](
-                len(src)
-            )
-            var dst = alloc[UInt8](bound)
-            var n = self._zstd.value().call["ZSTD_compress", Int](
-                dst, bound, src_ptr, len(src), Int32(1)
-            )
-            var out = List[UInt8]()
-            for i in range(n):
-                out.append(dst[i])
-            dst.free()
-            return out^
-        elif codec == CODEC_SNAPPY:
-            self._ensure_snappy()
-            var bound = self._snappy.value().call[
-                "snappy_max_compressed_length", Int
-            ](len(src))
-            var dst = alloc[UInt8](bound)
-            var sz = alloc[UInt](1)
-            sz[0] = UInt(bound)
-            _ = self._snappy.value().call["snappy_compress", Int32](
-                src_ptr, len(src), dst, sz
-            )
-            var produced = Int(sz[0])
-            var out = List[UInt8]()
-            for i in range(produced):
-                out.append(dst[i])
-            dst.free()
-            sz.free()
-            return out^
-        elif codec == CODEC_LZ4_RAW:
-            self._ensure_lz4()
-            var bound = Int(
-                self._lz4.value().call["LZ4_compressBound", Int32](
-                    Int32(len(src))
-                )
-            )
-            var dst = alloc[UInt8](bound)
-            var n = self._lz4.value().call["LZ4_compress_default", Int32](
-                src_ptr, dst, Int32(len(src)), Int32(bound)
-            )
-            if n == 0:
-                dst.free()
-                raise Error("lz4: compression failed")
-            var out = List[UInt8]()
-            for i in range(Int(n)):
-                out.append(dst[i])
-            dst.free()
-            return out^
+        elif self == Self.ZSTD:
+            return libs.zstd_compress(src)
+        elif self == Self.SNAPPY:
+            return libs.snappy_compress(src)
+        elif self == Self.LZ4_RAW:
+            return libs.lz4_compress(src)
         else:
             raise Error(
-                "parquet: unsupported compression codec " + String(codec)
+                "parquet: unsupported compression codec " + String(self.code)
             )

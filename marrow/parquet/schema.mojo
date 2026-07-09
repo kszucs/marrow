@@ -10,72 +10,17 @@ lists, and lists of structs. Each node carries its Dremel geometry (`present_def
 `element_floor`) computed once here so `assemble` stays a clean recursive walk.
 """
 
-from ..dtypes import (
-    AnyDataType,
-    Field,
-    struct_,
-    bool_,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float32,
-    float64,
-    string,
-    binary,
-    date32,
-    timestamp,
-    time32,
-    time64,
-    list_,
-    TimeUnit,
-    millisecond,
-    microsecond,
-    nanosecond,
-)
+from .. import dtypes as dt
 from ..schema import Schema
-from ..arrays import AnyArray, StructArray, BoolArray
-from ..builders import BoolBuilder
-from .nested import DecodedLeaf, assemble_list
+from ..arrays import AnyArray, StructArray, BoolArray, ListArray
+from ..builders import BoolBuilder, PrimitiveBuilder
 from .format import (
     SchemaElement,
     FileMetaData,
-    PT_BOOLEAN,
-    PT_INT32,
-    PT_INT64,
-    PT_FLOAT,
-    PT_DOUBLE,
-    PT_BYTE_ARRAY,
-    PT_FIXED_LEN_BYTE_ARRAY,
-    REP_REQUIRED,
-    REP_OPTIONAL,
-    REP_REPEATED,
-    CT_UTF8,
-    CT_LIST,
-    CT_MAP,
-    CT_DATE,
-    CT_TIME_MILLIS,
-    CT_TIME_MICROS,
-    CT_TIMESTAMP_MILLIS,
-    CT_TIMESTAMP_MICROS,
-    CT_INT_8,
-    CT_INT_16,
-    CT_INT_32,
-    CT_INT_64,
-    CT_UINT_8,
-    CT_UINT_16,
-    CT_UINT_32,
-    CT_UINT_64,
-    LT_STRING,
-    LT_LIST,
-    LT_MAP,
-    LT_DATE,
-    LT_TIME,
-    LT_TIMESTAMP,
+    PhysicalType,
+    Repetition,
+    ConvertedType,
+    LogicalType,
 )
 
 comptime NODE_LEAF: Int = 0
@@ -120,7 +65,7 @@ struct SchemaNode(Copyable, Movable):
     """
 
     var kind: Int
-    var field: Field
+    var field: dt.Field
     var children: List[SchemaNode]
     var leaf_index: Int
     var geom: NodeGeom
@@ -128,7 +73,7 @@ struct SchemaNode(Copyable, Movable):
     def __init__(
         out self,
         kind: Int,
-        var field: Field,
+        var field: dt.Field,
         var children: List[SchemaNode],
         leaf_index: Int,
         var geom: NodeGeom = NodeGeom(),
@@ -168,7 +113,7 @@ struct SchemaNode(Copyable, Movable):
             )
         elif self.kind == NODE_STRUCT:
             var children = List[AnyArray]()
-            var fields = List[Field]()
+            var fields = List[dt.Field]()
             for ref c in self.children:
                 children.append(c.assemble(decoded))
                 fields.append(c.field.copy())
@@ -268,7 +213,7 @@ struct ParsedSchema(Movable):
         and the assembly tree (flat columns, structs, single-level lists)."""
         var reader = _SchemaReader(meta.schema.copy())
         var nodes = List[SchemaNode]()
-        var fields = List[Field]()
+        var fields = List[dt.Field]()
         for _ in range(meta.schema[0].num_children):
             var node = reader.node(0, 0)
             fields.append(node.field.copy())
@@ -282,8 +227,8 @@ struct LeafColumn(Copyable, Movable):
     """A single Parquet leaf column and how it maps to an Arrow value type."""
 
     var name: String
-    var dtype: AnyDataType  # Arrow value type of the leaf
-    var physical: Int  # PT_*
+    var dtype: dt.AnyDataType  # Arrow value type of the leaf
+    var physical: PhysicalType
     var max_def: Int
     var max_rep: Int
     var nullable: Bool
@@ -293,8 +238,8 @@ struct LeafColumn(Copyable, Movable):
     def __init__(
         out self,
         var name: String,
-        var dtype: AnyDataType,
-        physical: Int,
+        var dtype: dt.AnyDataType,
+        physical: PhysicalType,
         max_def: Int,
         max_rep: Int,
         nullable: Bool,
@@ -331,74 +276,74 @@ struct _SchemaReader(Movable):
         self.leaves = List[LeafColumn]()
 
     @staticmethod
-    def _time_unit(el: SchemaElement) -> TimeUnit:
+    def _time_unit(el: SchemaElement) -> dt.TimeUnit:
         """Arrow TimeUnit for a temporal leaf (logical unit, else converted)."""
         if el.logical_unit == 1:
-            return millisecond
+            return dt.millisecond
         elif el.logical_unit == 2:
-            return microsecond
+            return dt.microsecond
         elif el.logical_unit == 3:
-            return nanosecond
+            return dt.nanosecond
         elif (
-            el.converted_type == CT_TIMESTAMP_MILLIS
-            or el.converted_type == CT_TIME_MILLIS
+            el.converted_type == ConvertedType.TIMESTAMP_MILLIS
+            or el.converted_type == ConvertedType.TIME_MILLIS
         ):
-            return millisecond
+            return dt.millisecond
         else:
-            return microsecond
+            return dt.microsecond
 
     @staticmethod
-    def _leaf_dtype(el: SchemaElement) raises -> AnyDataType:
+    def _leaf_dtype(el: SchemaElement) raises -> dt.AnyDataType:
         """Arrow value type for a Parquet leaf `SchemaElement`."""
         var pt = el.type
         var ct = el.converted_type
         var lt = el.logical_type
-        if pt == PT_BOOLEAN:
-            return bool_
-        elif pt == PT_INT32:
-            if ct == CT_DATE or lt == LT_DATE:
-                return date32()
-            elif ct == CT_TIME_MILLIS or lt == LT_TIME:
-                return time32(millisecond)
-            elif ct == CT_INT_8:
-                return int8
-            elif ct == CT_INT_16:
-                return int16
-            elif ct == CT_UINT_8:
-                return uint8
-            elif ct == CT_UINT_16:
-                return uint16
-            elif ct == CT_UINT_32:
-                return uint32
+        if pt == PhysicalType.BOOLEAN:
+            return dt.bool_
+        elif pt == PhysicalType.INT32:
+            if ct == ConvertedType.DATE or lt == LogicalType.DATE:
+                return dt.date32()
+            elif ct == ConvertedType.TIME_MILLIS or lt == LogicalType.TIME:
+                return dt.time32(dt.millisecond)
+            elif ct == ConvertedType.INT_8:
+                return dt.int8
+            elif ct == ConvertedType.INT_16:
+                return dt.int16
+            elif ct == ConvertedType.UINT_8:
+                return dt.uint8
+            elif ct == ConvertedType.UINT_16:
+                return dt.uint16
+            elif ct == ConvertedType.UINT_32:
+                return dt.uint32
             else:
-                return int32
-        elif pt == PT_INT64:
+                return dt.int32
+        elif pt == PhysicalType.INT64:
             if (
-                ct == CT_TIMESTAMP_MILLIS
-                or ct == CT_TIMESTAMP_MICROS
-                or lt == LT_TIMESTAMP
+                ct == ConvertedType.TIMESTAMP_MILLIS
+                or ct == ConvertedType.TIMESTAMP_MICROS
+                or lt == LogicalType.TIMESTAMP
             ):
-                return timestamp(
+                return dt.timestamp(
                     Self._time_unit(el),
                     "UTC" if el.logical_utc else String(""),
                 )
-            elif ct == CT_TIME_MICROS or lt == LT_TIME:
-                return time64(Self._time_unit(el))
-            elif ct == CT_UINT_64:
-                return uint64
+            elif ct == ConvertedType.TIME_MICROS or lt == LogicalType.TIME:
+                return dt.time64(Self._time_unit(el))
+            elif ct == ConvertedType.UINT_64:
+                return dt.uint64
             else:
-                return int64
-        elif pt == PT_FLOAT:
-            return float32
-        elif pt == PT_DOUBLE:
-            return float64
-        elif pt == PT_BYTE_ARRAY:
-            if ct == CT_UTF8 or lt == LT_STRING:
-                return string
+                return dt.int64
+        elif pt == PhysicalType.FLOAT:
+            return dt.float32
+        elif pt == PhysicalType.DOUBLE:
+            return dt.float64
+        elif pt == PhysicalType.BYTE_ARRAY:
+            if ct == ConvertedType.UTF8 or lt == LogicalType.STRING:
+                return dt.string
             else:
-                return binary
+                return dt.binary
         else:
-            raise Error("parquet: unsupported physical type " + String(pt))
+            raise Error("parquet: unsupported physical type " + String(pt.code))
 
     def node(
         mut self,
@@ -417,9 +362,9 @@ struct _SchemaReader(Movable):
         var el = self.elements[self.idx].copy()
         self.idx += 1
         var rep = el.repetition_type
-        var d = def_base + (1 if rep == REP_OPTIONAL else 0)
-        var r = rep_base + (1 if rep == REP_REPEATED else 0)
-        var nullable = rep != REP_REQUIRED
+        var d = def_base + (1 if rep == Repetition.OPTIONAL else 0)
+        var r = rep_base + (1 if rep == Repetition.REPEATED else 0)
+        var nullable = rep != Repetition.REQUIRED
 
         if el.num_children == 0:
             var dtype = Self._leaf_dtype(el)
@@ -438,19 +383,25 @@ struct _SchemaReader(Movable):
             )
             return SchemaNode(
                 NODE_LEAF,
-                Field(el.name, dtype^, nullable),
+                dt.Field(el.name, dtype^, nullable),
                 List[SchemaNode](),
                 li,
             )
 
-        if el.converted_type == CT_MAP or el.logical_type == LT_MAP:
+        if (
+            el.converted_type == ConvertedType.MAP
+            or el.logical_type == LogicalType.MAP
+        ):
             raise Error(
                 "parquet: map columns not supported yet (column '"
                 + el.name
                 + "')"
             )
 
-        if el.converted_type == CT_LIST or el.logical_type == LT_LIST:
+        if (
+            el.converted_type == ConvertedType.LIST
+            or el.logical_type == LogicalType.LIST
+        ):
             # LIST = optional group(LIST) { repeated group { <element> } }. Skip
             # the repeated middle group (adds one def + one rep level) and parse
             # the element as this list's single child. The list holds an element
@@ -460,7 +411,7 @@ struct _SchemaReader(Movable):
             var elem = self.node(
                 d + 1, r + 1, rep_floor=d + 1, under_optional=under_optional
             )
-            var item: AnyDataType = list_(elem.field.dtype.copy())
+            var item: dt.AnyDataType = dt.list_(elem.field.dtype.copy())
             var children = List[SchemaNode]()
             children.append(elem^)
             # rep_level = the repeated group's level (r + 1); entry_floor =
@@ -471,12 +422,12 @@ struct _SchemaReader(Movable):
             # any nesting depth composes by recursion.
             return SchemaNode(
                 NODE_LIST,
-                Field(el.name, item^, nullable),
+                dt.Field(el.name, item^, nullable),
                 children^,
                 -1,
                 NodeGeom(
                     present_def=d,
-                    optional=rep == REP_OPTIONAL,
+                    optional=rep == Repetition.OPTIONAL,
                     rep_level=r + 1,
                     element_floor=d + 1,
                     entry_floor=rep_floor,
@@ -487,7 +438,7 @@ struct _SchemaReader(Movable):
         # its leaves' def levels (below `d` -> struct null), so its descendants
         # must carry def levels.
         var child_nodes = List[SchemaNode]()
-        var child_fields = List[Field]()
+        var child_fields = List[dt.Field]()
         var child_optional = under_optional or nullable
         for _ in range(el.num_children):
             var cn = self.node(
@@ -495,10 +446,10 @@ struct _SchemaReader(Movable):
             )
             child_fields.append(cn.field.copy())
             child_nodes.append(cn^)
-        var dtype = struct_(child_fields^)
+        var dtype = dt.struct_(child_fields^)
         return SchemaNode(
             NODE_STRUCT,
-            Field(el.name, dtype^, nullable),
+            dt.Field(el.name, dtype^, nullable),
             child_nodes^,
             -1,
             NodeGeom(
@@ -528,43 +479,51 @@ struct _SchemaWriter(Movable):
         self.leaves = List[LeafColumn]()
 
     @staticmethod
-    def _physical(dtype: AnyDataType) raises -> Tuple[Int, Int, Int]:
-        """`(physical, converted, logical)` for an Arrow leaf; -1 = absent."""
-        if dtype == bool_:
-            return (PT_BOOLEAN, -1, -1)
-        elif dtype == int8:
-            return (PT_INT32, CT_INT_8, -1)
-        elif dtype == int16:
-            return (PT_INT32, CT_INT_16, -1)
-        elif dtype == int32:
-            return (PT_INT32, -1, -1)
-        elif dtype == uint8:
-            return (PT_INT32, CT_UINT_8, -1)
-        elif dtype == uint16:
-            return (PT_INT32, CT_UINT_16, -1)
-        elif dtype == uint32:
-            return (PT_INT32, CT_UINT_32, -1)
-        elif dtype == int64:
-            return (PT_INT64, -1, -1)
-        elif dtype == uint64:
-            return (PT_INT64, CT_UINT_64, -1)
-        elif dtype == float32:
-            return (PT_FLOAT, -1, -1)
-        elif dtype == float64:
-            return (PT_DOUBLE, -1, -1)
+    def _physical(
+        dtype: dt.AnyDataType,
+    ) raises -> Tuple[PhysicalType, ConvertedType, LogicalType]:
+        """`(physical, converted, logical)` for an Arrow leaf; NONE = absent."""
+        comptime NO_CT = ConvertedType.NONE
+        comptime NO_LT = LogicalType.NONE
+        if dtype == dt.bool_:
+            return (PhysicalType.BOOLEAN, NO_CT, NO_LT)
+        elif dtype == dt.int8:
+            return (PhysicalType.INT32, ConvertedType.INT_8, NO_LT)
+        elif dtype == dt.int16:
+            return (PhysicalType.INT32, ConvertedType.INT_16, NO_LT)
+        elif dtype == dt.int32:
+            return (PhysicalType.INT32, NO_CT, NO_LT)
+        elif dtype == dt.uint8:
+            return (PhysicalType.INT32, ConvertedType.UINT_8, NO_LT)
+        elif dtype == dt.uint16:
+            return (PhysicalType.INT32, ConvertedType.UINT_16, NO_LT)
+        elif dtype == dt.uint32:
+            return (PhysicalType.INT32, ConvertedType.UINT_32, NO_LT)
+        elif dtype == dt.int64:
+            return (PhysicalType.INT64, NO_CT, NO_LT)
+        elif dtype == dt.uint64:
+            return (PhysicalType.INT64, ConvertedType.UINT_64, NO_LT)
+        elif dtype == dt.float32:
+            return (PhysicalType.FLOAT, NO_CT, NO_LT)
+        elif dtype == dt.float64:
+            return (PhysicalType.DOUBLE, NO_CT, NO_LT)
         elif dtype.is_string():
-            return (PT_BYTE_ARRAY, CT_UTF8, LT_STRING)
+            return (
+                PhysicalType.BYTE_ARRAY,
+                ConvertedType.UTF8,
+                LogicalType.STRING,
+            )
         elif dtype.is_binary():
-            return (PT_BYTE_ARRAY, -1, -1)
+            return (PhysicalType.BYTE_ARRAY, NO_CT, NO_LT)
         else:
             raise Error("parquet: cannot write Arrow type " + String(dtype))
 
-    def emit(mut self, field: Field, def_base: Int) raises -> SchemaNode:
+    def emit(mut self, field: dt.Field, def_base: Int) raises -> SchemaNode:
         if field.dtype.is_struct():
             ref st = field.dtype.as_struct()
             var el = SchemaElement()
             el.name = field.name
-            el.repetition_type = REP_REQUIRED
+            el.repetition_type = Repetition.REQUIRED
             el.num_children = len(st.fields)
             self.elements.append(el^)
             var child_nodes = List[SchemaNode]()
@@ -577,7 +536,7 @@ struct _SchemaWriter(Movable):
             el.type = phys
             el.name = field.name
             el.repetition_type = (
-                REP_OPTIONAL if field.nullable else REP_REQUIRED
+                Repetition.OPTIONAL if field.nullable else Repetition.REQUIRED
             )
             el.converted_type = conv
             el.logical_type = logi
@@ -627,3 +586,94 @@ struct ParquetSchema(Movable):
         return ParquetSchema(
             writer.elements.copy(), writer.leaves.copy(), nodes^
         )
+
+
+# ---------------------------------------------------------------------------
+# DecodedLeaf — the reader's per-column output, consumed by SchemaNode.assemble
+# ---------------------------------------------------------------------------
+
+
+struct DecodedLeaf(Movable):
+    """One decoded leaf column. A flat leaf carries just its array; a repeated
+    (list-element) leaf also carries the per-slot rep/def levels. All leaves
+    under the same list share these levels, and the list geometry (which def
+    levels mean present/empty/null) lives on the schema node, so this stays a
+    plain data record."""
+
+    var leveled: Bool
+    var array: AnyArray  # flat column, or the list's element/child array
+    var rep_levels: List[Int32]
+    var def_levels: List[Int32]
+
+    def __init__(
+        out self,
+        leveled: Bool,
+        var array: AnyArray,
+        var rep_levels: List[Int32],
+        var def_levels: List[Int32],
+    ):
+        self.leveled = leveled
+        self.array = array^
+        self.rep_levels = rep_levels^
+        self.def_levels = def_levels^
+
+    @staticmethod
+    def flat(var array: AnyArray) -> DecodedLeaf:
+        return DecodedLeaf(False, array^, List[Int32](), List[Int32]())
+
+
+def assemble_list(
+    var element: AnyArray,
+    rep_levels: List[Int32],
+    def_levels: List[Int32],
+    geom: NodeGeom,
+) raises -> AnyArray:
+    """Fold a decoded element array + its Dremel levels into an Arrow
+    `ListArray`, for any nesting depth.
+
+    Reading one leaf's `(rep, def)` records left to right, using only this list's
+    own `geom`:
+
+    - a **new instance** of this list begins where `rep < rep_level` (the
+      repetition is shallower than this list, so its parent moved on) *and*
+      `def >= entry_floor` (this list is actually reached — otherwise an ancestor
+      is empty/null and this list has no entry here);
+    - a **new child element** (one entry of `element`) is added where
+      `rep <= rep_level` (a repetition at this level or shallower starts a fresh
+      element) *and* `def >= element_floor` (the element is present, not an
+      empty/null structural slot);
+    - the instance is **null** where `def < present_def`.
+
+    Because every threshold lives in `geom`, the scan needs nothing from the
+    parent, so nested lists compose by recursion: the child array is itself an
+    assembled (possibly nested) list.
+    """
+    var n = len(rep_levels)
+    var offsets = PrimitiveBuilder[dt.Int32Type](n + 1)
+    var mask = BoolBuilder(n)
+    var any_null = False
+    var child_idx = 0
+    var started = False
+    offsets.append(Int32(0))
+    for i in range(n):
+        var r = Int(rep_levels[i])
+        var d = Int(def_levels[i])
+        if r < geom.rep_level and d >= geom.entry_floor:
+            if started:
+                offsets.append(Int32(child_idx))  # close the previous instance
+            started = True
+            var is_null = geom.optional and d < geom.present_def
+            mask.append(is_null)
+            any_null = any_null or is_null
+        if r <= geom.rep_level and d >= geom.element_floor:
+            child_idx += 1
+    offsets.append(Int32(child_idx))
+
+    var offsets_arr = offsets.finish()
+    var out: AnyArray
+    if any_null:
+        var m = mask.finish()
+        out = ListArray.from_arrays(offsets_arr, element^, m^)
+    else:
+        out = ListArray.from_arrays(offsets_arr, element^, None)
+    return out^

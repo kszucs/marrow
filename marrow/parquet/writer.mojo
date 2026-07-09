@@ -19,29 +19,12 @@ from std.sys import size_of
 from std.pathlib import Path
 
 from ..arrays import AnyArray, PrimitiveArray, StringArray, BoolArray
-from ..dtypes import (
-    NumericType,
-    Int8Type,
-    Int16Type,
-    UInt8Type,
-    UInt16Type,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float32,
-    float64,
-    bool_,
-)
+from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
-from .encoding import rle_encode
-from .compression import Codecs, CODEC_SNAPPY, CODEC_UNCOMPRESSED
+from .encoding import Encoding, rle_encode
+from .compression import Compression, CompressionLibs
 from .schema import ParquetSchema, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
@@ -49,10 +32,6 @@ from .format import (
     ColumnChunk,
     RowGroup,
     FileMetaData,
-    ENC_PLAIN,
-    append_page_header,
-    write_magic,
-    write_footer,
 )
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
@@ -65,11 +44,14 @@ comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 
 struct ColumnChunkWriter(Movable):
     var leaf: LeafColumn
-    var compression: Int
+    var compression: Compression
     var version: Int  # data-page version: 1 or 2
 
     def __init__(
-        out self, var leaf: LeafColumn, compression: Int, version: Int = 1
+        out self,
+        var leaf: LeafColumn,
+        compression: Compression,
+        version: Int = 1,
     ):
         self.leaf = leaf^
         self.compression = compression
@@ -83,7 +65,7 @@ struct ColumnChunkWriter(Movable):
         out.append(UInt8((v >> 24) & 0xFF))
 
     def _plain[
-        store: NumericType, phys: DType
+        store: dt.NumericType, phys: DType
     ](self, arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
         comptime W = size_of[Scalar[phys]]()
         for i in range(arr.length):
@@ -117,61 +99,40 @@ struct ColumnChunkWriter(Movable):
                 out.extend(b)
 
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
-        ref dt = self.leaf.dtype
-        if dt == int32:
+        ref vt = self.leaf.dtype
+        if vt == dt.int32:
             self._plain[phys=DType.int32](col.as_int32(), body)
-        elif dt == int64:
+        elif vt == dt.int64:
             self._plain[phys=DType.int64](col.as_int64(), body)
-        elif dt == uint32:
+        elif vt == dt.uint32:
             self._plain[phys=DType.uint32](col.as_uint32(), body)
-        elif dt == uint64:
+        elif vt == dt.uint64:
             self._plain[phys=DType.uint64](col.as_uint64(), body)
-        elif dt == float32:
+        elif vt == dt.float32:
             self._plain[phys=DType.float32](col.as_float32(), body)
-        elif dt == float64:
+        elif vt == dt.float64:
             self._plain[phys=DType.float64](col.as_float64(), body)
-        elif dt == int8:
+        elif vt == dt.int8:
             self._plain[phys=DType.int32](col.as_int8(), body)
-        elif dt == int16:
+        elif vt == dt.int16:
             self._plain[phys=DType.int32](col.as_int16(), body)
-        elif dt == uint8:
+        elif vt == dt.uint8:
             self._plain[phys=DType.int32](col.as_uint8(), body)
-        elif dt == uint16:
+        elif vt == dt.uint16:
             self._plain[phys=DType.int32](col.as_uint16(), body)
-        elif dt == bool_:
+        elif vt == dt.bool_:
             self._plain_bool(col.as_bool(), body)
-        elif dt.is_string():
+        elif vt.is_string():
             self._plain_bytes(col.as_string(), body)
         else:
-            raise Error("parquet: cannot write column type " + String(dt))
-
-    def _encode_body(
-        self, col: AnyArray, mut null_count: Int
-    ) raises -> List[UInt8]:
-        """v1 data page body: RLE definition levels (if nullable) then PLAIN
-        values. Also reports the null count."""
-        var n = col.length()
-        var body = List[UInt8]()
-        null_count = 0
-        if self.leaf.max_def >= 1:
-            var defs = List[Int32]()
-            for i in range(n):
-                if col.is_valid(i):
-                    defs.append(Int32(1))
-                else:
-                    defs.append(Int32(0))
-                    null_count += 1
-            var enc = rle_encode(defs, 1)
-            Self._u32le(body, len(enc))
-            body.extend(Span(enc))
-        self._encode_values(col, body)
-        return body^
+            raise Error("parquet: cannot write column type " + String(vt))
 
     def _def_levels(
         self, col: AnyArray, mut null_count: Int
     ) raises -> List[UInt8]:
-        """RLE definition levels (bit width 1), no length prefix — for v2 pages,
-        where the levels sit uncompressed ahead of the values."""
+        """RLE definition levels (bit width 1), no length prefix — the shared
+        level encoding for both page versions. Reports the null count; returns
+        empty for a non-nullable column (`max_def == 0`)."""
         var out = List[UInt8]()
         null_count = 0
         if self.leaf.max_def >= 1:
@@ -186,7 +147,7 @@ struct ColumnChunkWriter(Movable):
         return out^
 
     def write(
-        self, col: AnyArray, mut out: List[UInt8], mut codecs: Codecs
+        self, col: AnyArray, mut out: List[UInt8], mut codecs: CompressionLibs
     ) raises -> ColumnChunk:
         var n = col.length()
         var null_count = 0
@@ -199,40 +160,42 @@ struct ColumnChunkWriter(Movable):
             var def_bytes = self._def_levels(col, null_count)
             var values = List[UInt8]()
             self._encode_values(col, values)
-            var is_comp = self.compression != CODEC_UNCOMPRESSED
-            var comp_values = codecs.compress(self.compression, Span(values))
+            var is_comp = self.compression != Compression.UNCOMPRESSED
+            var comp_values = self.compression.compress(codecs, Span(values))
             uncompressed_size = len(def_bytes) + len(values)
             compressed_size = len(def_bytes) + len(comp_values)
-            header_len = append_page_header(
-                out,
-                PageHeader.data_page_v2(
-                    uncompressed_size,
-                    compressed_size,
-                    n,
-                    null_count,
-                    n,  # flat columns: num_rows == num_values
-                    len(def_bytes),
-                    is_comp,
-                ),
-            )
+            header_len = PageHeader.data_page_v2(
+                uncompressed_size,
+                compressed_size,
+                n,
+                null_count,
+                n,  # flat columns: num_rows == num_values
+                len(def_bytes),
+                is_comp,
+            ).append_to(out)
             out.extend(Span(def_bytes))
             out.extend(Span(comp_values))
         else:
-            # v1: levels + values compressed together.
-            var body = self._encode_body(col, null_count)
+            # v1: length-prefixed RLE levels then PLAIN values, compressed
+            # together.
+            var body = List[UInt8]()
+            if self.leaf.max_def >= 1:
+                var def_bytes = self._def_levels(col, null_count)
+                Self._u32le(body, len(def_bytes))
+                body.extend(Span(def_bytes))
+            self._encode_values(col, body)
             uncompressed_size = len(body)
-            var compressed = codecs.compress(self.compression, Span(body))
+            var compressed = self.compression.compress(codecs, Span(body))
             compressed_size = len(compressed)
-            header_len = append_page_header(
-                out,
-                PageHeader.data_page(uncompressed_size, compressed_size, n),
-            )
+            header_len = PageHeader.data_page(
+                uncompressed_size, compressed_size, n
+            ).append_to(out)
             out.extend(Span(compressed))
 
         var meta = ColumnMetaData()
-        meta.type = self.leaf.physical
+        meta.type = self.leaf.physical.code
         meta.path_in_schema.append(self.leaf.name)
-        meta.codec = self.compression
+        meta.codec = self.compression.code
         meta.num_values = n
         meta.total_uncompressed_size = uncompressed_size + header_len
         meta.total_compressed_size = compressed_size + header_len
@@ -253,15 +216,15 @@ struct ColumnChunkWriter(Movable):
 
 struct FileWriter(Movable):
     var out: List[UInt8]
-    var codecs: Codecs
-    var compression: Int
+    var codecs: CompressionLibs
+    var compression: Compression
     var version: Int  # data-page version: 1 (default) or 2
     var leaves: List[LeafColumn]
 
-    def __init__(out self, compression: Int, version: Int = 1):
+    def __init__(out self, compression: Compression, version: Int = 1):
         self.out = List[UInt8]()
-        write_magic(self.out)  # file header magic
-        self.codecs = Codecs()
+        FileMetaData.write_magic(self.out)  # file header magic
+        self.codecs = CompressionLibs()
         self.compression = compression
         self.version = version
         self.leaves = List[LeafColumn]()
@@ -319,19 +282,19 @@ struct FileWriter(Movable):
         # PLAIN encoding for every column in every row group
         var encodings = List[Int]()
         for _ in range(len(self.leaves)):
-            encodings.append(ENC_PLAIN)
+            encodings.append(Encoding.PLAIN.code)
         var rg_encodings = List[List[Int]]()
         for _ in range(len(fmeta.row_groups)):
             rg_encodings.append(encodings.copy())
 
-        write_footer(self.out, fmeta, rg_encodings)
+        fmeta.write_footer(self.out, rg_encodings)
         Path(path).write_bytes(Span(self.out))
 
 
 def write_table(
     table: Table,
     path: String,
-    compression: Int = CODEC_SNAPPY,
+    compression: Compression = Compression.SNAPPY,
     version: Int = 1,
 ) raises:
     """Write a Marrow `Table` to a Parquet file. `version` selects the data-page

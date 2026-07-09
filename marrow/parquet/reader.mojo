@@ -12,15 +12,14 @@ from std.algorithm.functional import sync_parallelize
 from std.sys.info import num_physical_cores
 
 from ..arrays import AnyArray
-from ..dtypes import Field
+from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
-from .compression import Codecs
-from .schema import ParsedSchema, SchemaNode
-from .format import read_footer
+from .compression import CompressionLibs
+from .schema import ParsedSchema, SchemaNode, DecodedLeaf
+from .format import FileMetaData
 from .column import ColumnReader
-from .nested import DecodedLeaf, LeveledColumnReader
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +82,7 @@ def _project(
     fields), `nodes` (assembly nodes remapped to a compact decoded list), and
     `decode_order` (original flat leaf/column-chunk indices to decode, in
     compact order)."""
-    var fields = List[Field]()
+    var fields = List[dt.Field]()
     var mapping = List[Int](length=len(parsed.leaves), fill=-1)
     for ci in range(len(columns)):
         var found = -1
@@ -115,12 +114,12 @@ def read_table(
     Every (row group, selected leaf) pair decodes independently — each reads a
     disjoint byte range of the shared read-only mmap and writes its own result
     slot — so the whole grid is decoded across `num_physical_cores()` workers.
-    Each worker owns a `Codecs` (the lazy `dlopen` handles and reused size cell
+    Each worker owns a `CompressionLibs` (the lazy `dlopen` handles and reused size cell
     are not shareable across threads); the mmap and metadata are read-only.
     """
     var mapped = MappedFile(path)
     var data = mapped.span()
-    var meta = read_footer(data)
+    var meta = FileMetaData.read_footer(data)
     var parsed = ParsedSchema.from_metadata(meta)
 
     # compact leaf slot -> original column-chunk index
@@ -151,28 +150,23 @@ def read_table(
 
     @parameter
     def worker(w: Int) raises:
-        var codecs = Codecs()  # per-worker: lazy dlopen handles are not shared
+        var codecs = (
+            CompressionLibs()
+        )  # per-worker: lazy dlopen handles are not shared
         var t = w
         while t < total:
             var rg_idx = t // num_leaves
             var orig = decode_order[t % num_leaves]  # original column-chunk idx
             ref rg = meta.row_groups[rg_idx]
-            if parsed.leaves[orig].max_rep >= 1:
-                var reader = LeveledColumnReader(
-                    data,
-                    rg.columns[orig].meta_data.copy(),
-                    parsed.leaves[orig].copy(),
-                    rg.num_rows,
-                )
-                grid[t] = reader.read(codecs)
-            else:
-                var reader = ColumnReader(
-                    data,
-                    rg.columns[orig].meta_data.copy(),
-                    parsed.leaves[orig].copy(),
-                    rg.num_rows,
-                )
-                grid[t] = reader.read(codecs)
+            # ColumnReader.decode picks the flat vs leveled path from the leaf's
+            # max repetition, so the same call serves every column shape.
+            var reader = ColumnReader(
+                data,
+                rg.columns[orig].meta_data.copy(),
+                parsed.leaves[orig].copy(),
+                rg.num_rows,
+            )
+            grid[t] = reader.decode(codecs)
             t += nt
 
     sync_parallelize[worker](nt)

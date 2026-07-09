@@ -12,24 +12,19 @@ from marrow.parquet import (
     read_table as _read_table,
     write_table as _write_table,
 )
-from marrow.parquet.compression import (
-    CODEC_UNCOMPRESSED,
-    CODEC_SNAPPY,
-    CODEC_ZSTD,
-    CODEC_LZ4_RAW,
-)
+from marrow.parquet.compression import Compression
 from marrow.tabular import Table
 
 
-def _codec(name: String) raises -> Int:
+def _codec(name: String) raises -> Compression:
     if name == "none" or name == "uncompressed":
-        return CODEC_UNCOMPRESSED
+        return Compression.UNCOMPRESSED
     elif name == "snappy":
-        return CODEC_SNAPPY
+        return Compression.SNAPPY
     elif name == "zstd":
-        return CODEC_ZSTD
+        return Compression.ZSTD
     elif name == "lz4":
-        return CODEC_LZ4_RAW
+        return Compression.LZ4_RAW
     else:
         raise Error("parquet: unsupported compression '" + name + "'")
 

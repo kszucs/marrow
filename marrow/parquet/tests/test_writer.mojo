@@ -4,7 +4,7 @@ from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, write_table
 from marrow.parquet.writer import FileWriter
-from marrow.parquet.compression import CODEC_SNAPPY, CODEC_UNCOMPRESSED
+from marrow.parquet.compression import Compression
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
@@ -14,7 +14,7 @@ def _pa_table(code: String) raises -> Table:
     return CArrowArrayStream.from_pycapsule(caps).to_table()
 
 
-def _v2_roundtrip(codec: Int) raises:
+def _v2_roundtrip(codec: Compression) raises:
     var pq = Python.import_module("pyarrow.parquet")
     var t = _pa_table(
         "__import__('pyarrow').table({'i':"
@@ -55,11 +55,11 @@ def _v2_roundtrip(codec: Int) raises:
 
 
 def test_write_v2_snappy() raises:
-    _v2_roundtrip(CODEC_SNAPPY)
+    _v2_roundtrip(Compression.SNAPPY)
 
 
 def test_write_v2_uncompressed() raises:
-    _v2_roundtrip(CODEC_UNCOMPRESSED)
+    _v2_roundtrip(Compression.UNCOMPRESSED)
 
 
 def test_multiple_row_groups() raises:
@@ -70,7 +70,7 @@ def test_multiple_row_groups() raises:
         " type=__import__('pyarrow').int64())})"
     )
     var path = String("/tmp/marrow_rg.parquet")
-    var w = FileWriter(CODEC_SNAPPY)
+    var w = FileWriter(Compression.SNAPPY)
     w.write(t, path, row_group_size=1000)
 
     # pyarrow sees 3 row groups

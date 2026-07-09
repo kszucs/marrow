@@ -10,9 +10,4 @@ oracle.
 
 from .reader import read_table
 from .writer import write_table
-from .compression import (
-    CODEC_UNCOMPRESSED,
-    CODEC_SNAPPY,
-    CODEC_ZSTD,
-    CODEC_LZ4_RAW,
-)
+from .compression import Compression

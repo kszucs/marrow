@@ -16,12 +16,7 @@ from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, write_table
-from marrow.parquet.compression import (
-    CODEC_UNCOMPRESSED,
-    CODEC_SNAPPY,
-    CODEC_ZSTD,
-    CODEC_LZ4_RAW,
-)
+from marrow.parquet.compression import Compression
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
@@ -98,7 +93,7 @@ def _marrow_reads_pyarrow(want: PythonObject, compression: String) raises:
     remove(path)
 
 
-def _pyarrow_reads_marrow(want: PythonObject, codec: Int) raises:
+def _pyarrow_reads_marrow(want: PythonObject, codec: Compression) raises:
     var pq = Python.import_module("pyarrow.parquet")
     var path = String("/tmp/marrow_iop_b.parquet")
     write_table(_to_marrow(want), path, compression=codec)
@@ -106,7 +101,7 @@ def _pyarrow_reads_marrow(want: PythonObject, codec: Int) raises:
     remove(path)
 
 
-def _marrow_roundtrip(want: PythonObject, codec: Int) raises:
+def _marrow_roundtrip(want: PythonObject, codec: Compression) raises:
     var path = String("/tmp/marrow_iop_c.parquet")
     write_table(_to_marrow(want), path, compression=codec)
     _assert_equiv(_to_pyarrow(read_table(path)), want)
@@ -118,13 +113,13 @@ def _all_shapes(want: PythonObject) raises:
     _marrow_reads_pyarrow(want, "none")
     _marrow_reads_pyarrow(want, "snappy")
     _marrow_reads_pyarrow(want, "zstd")
-    _pyarrow_reads_marrow(want, CODEC_UNCOMPRESSED)
-    _pyarrow_reads_marrow(want, CODEC_SNAPPY)
-    _pyarrow_reads_marrow(want, CODEC_ZSTD)
-    _pyarrow_reads_marrow(want, CODEC_LZ4_RAW)
-    _marrow_roundtrip(want, CODEC_UNCOMPRESSED)
-    _marrow_roundtrip(want, CODEC_SNAPPY)
-    _marrow_roundtrip(want, CODEC_LZ4_RAW)
+    _pyarrow_reads_marrow(want, Compression.UNCOMPRESSED)
+    _pyarrow_reads_marrow(want, Compression.SNAPPY)
+    _pyarrow_reads_marrow(want, Compression.ZSTD)
+    _pyarrow_reads_marrow(want, Compression.LZ4_RAW)
+    _marrow_roundtrip(want, Compression.UNCOMPRESSED)
+    _marrow_roundtrip(want, Compression.SNAPPY)
+    _marrow_roundtrip(want, Compression.LZ4_RAW)
 
 
 def _read_only(want: PythonObject) raises:

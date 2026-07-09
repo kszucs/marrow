@@ -1,20 +1,232 @@
-"""Parquet value/level encodings.
+"""Parquet value and level encodings.
 
-The RLE / bit-packed *hybrid* encoding carries both the definition/repetition
-levels and the dictionary index streams, so it is the workhorse here. PLAIN
-fixed-width and BYTE_ARRAY decoding is done directly in `reader.mojo` (a straight
-memcpy / length-prefixed walk), so this module only needs the hybrid codec plus
-the bit-width helper.
+`Encoding` is a Parquet `Encoding` enum value that also *owns* the decode of a
+data page's present values: `decode_primitive` / `decode_bytes` / `decode_bool`
+each dispatch on the encoding and turn a value byte-span into decoded values, so
+the flat and nested reader paths share one decoder per physical layout. The
+free-standing primitives below (RLE/bit-packed hybrid, DELTA_BINARY_PACKED,
+byte helpers) do the actual bit twiddling; the decoders compose them.
 
-Wire format (per the Parquet spec): a sequence of runs, each introduced by a
-ULEB128 header. `header & 1` selects the run kind:
+RLE / bit-packed *hybrid* wire format (per the Parquet spec): a sequence of
+runs, each introduced by a ULEB128 header. `header & 1` selects the run kind:
     - RLE run:        `header >> 1` = repeat count, followed by the value in
                       `ceil(bit_width/8)` little-endian bytes.
     - bit-packed run: `header >> 1` = number of 8-value groups; the values follow
                       LSB-first, `bit_width` bits each.
 """
 
+from std.sys import size_of
+
 from ..views import load_word_le
+
+
+# ---------------------------------------------------------------------------
+# Little-endian byte primitives (shared by the encoders and the page reader)
+# ---------------------------------------------------------------------------
+
+
+def read_u32le(body: Span[UInt8, _], off: Int) -> Int:
+    return (
+        Int(body[off])
+        | (Int(body[off + 1]) << 8)
+        | (Int(body[off + 2]) << 16)
+        | (Int(body[off + 3]) << 24)
+    )
+
+
+def read_fixed_le[dt: DType](body: Span[UInt8, _], off: Int) -> Scalar[dt]:
+    comptime W = size_of[Scalar[dt]]()
+    var arr = InlineArray[UInt8, W](fill=0)
+    for i in range(W):
+        arr[i] = body[off + i]
+    return SIMD[dt, 1].from_bytes[big_endian=False](arr)
+
+
+# ---------------------------------------------------------------------------
+# Encoding — a Parquet Encoding value plus its present-value decoders
+# ---------------------------------------------------------------------------
+
+
+struct Encoding(Equatable, ImplicitlyCopyable, Movable):
+    """A Parquet `Encoding` enum value and the decode of a data page's *present*
+    values under it. The decoders append `num_present` values from a value
+    byte-span (nulls are placed later by the caller from the definition levels),
+    so the same logic serves the flat and nested reader paths.
+    """
+
+    var code: Int
+
+    comptime PLAIN = Self(0)
+    comptime PLAIN_DICTIONARY = Self(2)
+    comptime RLE = Self(3)
+    comptime BIT_PACKED = Self(4)
+    comptime DELTA_BINARY_PACKED = Self(5)
+    comptime DELTA_LENGTH_BYTE_ARRAY = Self(6)
+    comptime DELTA_BYTE_ARRAY = Self(7)
+    comptime RLE_DICTIONARY = Self(8)
+    comptime BYTE_STREAM_SPLIT = Self(9)
+
+    def __init__(out self, code: Int):
+        self.code = code
+
+    def __eq__(self, other: Self) -> Bool:
+        return self.code == other.code
+
+    def __ne__(self, other: Self) -> Bool:
+        return self.code != other.code
+
+    def is_plain(self) -> Bool:
+        return self == Self.PLAIN
+
+    def is_dictionary(self) -> Bool:
+        return self == Self.RLE_DICTIONARY or self == Self.PLAIN_DICTIONARY
+
+    def decode_primitive[
+        store: DType, phys: DType
+    ](
+        self,
+        values: Span[UInt8, _],
+        num_present: Int,
+        dict: List[Scalar[store]],
+        mut out: List[Scalar[store]],
+    ) raises:
+        """Append the present fixed-width values (widened `phys` -> `store`)."""
+        comptime PW = size_of[Scalar[phys]]()
+        var np = num_present
+        if self.is_plain():
+            for i in range(np):
+                out.append(read_fixed_le[phys](values, i * PW).cast[store]())
+        elif self.is_dictionary():
+            var base = len(out)
+            out.resize(unsafe_uninit_length=base + np)
+            rle_gather[store](
+                values[1:],
+                Int(values[0]),
+                np,
+                dict.unsafe_ptr(),
+                out.unsafe_ptr() + base,
+            )
+        elif self == Self.DELTA_BINARY_PACKED:
+            var decoded = delta_binary_packed_decode(values, np)
+            for i in range(np):
+                out.append(decoded[i].cast[store]())
+        elif self == Self.BYTE_STREAM_SPLIT:
+            # byte k of value i lives at values[k*np + i]
+            for i in range(np):
+                var raw = InlineArray[UInt8, PW](fill=0)
+
+                comptime for k in range(PW):
+                    raw[k] = values[k * np + i]
+                out.append(
+                    SIMD[phys, 1]
+                    .from_bytes[big_endian=False](raw)
+                    .cast[store]()
+                )
+        else:
+            raise Error(
+                "parquet: unsupported data page encoding " + String(self.code)
+            )
+
+    def decode_bytes(
+        self,
+        values: Span[UInt8, _],
+        num_present: Int,
+        dict_body: List[UInt8],
+        dict_off: List[Int],
+        dict_len: List[Int],
+    ) raises -> List[List[UInt8]]:
+        """Return the present variable-length byte values."""
+        var np = num_present
+        var out = List[List[UInt8]]()
+        if self.is_plain():
+            var vi = 0
+            for _ in range(np):
+                var n = read_u32le(values, vi)
+                vi += 4
+                var v = List[UInt8]()
+                v.extend(values[vi : vi + n])
+                out.append(v^)
+                vi += n
+        elif self.is_dictionary():
+            var indices = rle_decode(values[1:], Int(values[0]), np)
+            for i in range(np):
+                var idx = Int(indices[i])
+                var start = dict_off[idx]
+                var v = List[UInt8]()
+                v.extend(Span(dict_body)[start : start + dict_len[idx]])
+                out.append(v^)
+        elif self == Self.DELTA_LENGTH_BYTE_ARRAY:
+            var lengths = List[Int64]()
+            var pos = delta_decode(values, 0, np, lengths)
+            for i in range(np):
+                var n = Int(lengths[i])
+                var v = List[UInt8]()
+                v.extend(values[pos : pos + n])
+                out.append(v^)
+                pos += n
+        elif self == Self.DELTA_BYTE_ARRAY:
+            var prefixes = List[Int64]()
+            var pos = delta_decode(values, 0, np, prefixes)
+            var suffix_lens = List[Int64]()
+            pos = delta_decode(values, pos, np, suffix_lens)
+            var prev = List[UInt8]()
+            for i in range(np):
+                var v = List[UInt8]()
+                v.extend(Span(prev)[0 : Int(prefixes[i])])
+                var sl = Int(suffix_lens[i])
+                v.extend(values[pos : pos + sl])
+                pos += sl
+                out.append(v.copy())
+                prev = v^
+        else:
+            raise Error(
+                "parquet: unsupported byte-array encoding " + String(self.code)
+            )
+        return out^
+
+    def decode_bool(
+        self, values: Span[UInt8, _], num_present: Int
+    ) raises -> List[Bool]:
+        """Return the present PLAIN bit-packed booleans."""
+        if not self.is_plain():
+            raise Error("parquet: non-plain bool encoding not supported")
+        var out = List[Bool]()
+        for i in range(num_present):
+            var byte = values[i >> 3]
+            out.append(((byte >> UInt8(i & 7)) & 1) == 1)
+        return out^
+
+    @staticmethod
+    def decode_dict_primitive[
+        store: DType, phys: DType
+    ](
+        body: Span[UInt8, _], num_values: Int, mut dict: List[Scalar[store]]
+    ) raises:
+        """Decode a primitive dictionary page (PLAIN fixed-width) into `dict`.
+        """
+        comptime PW = size_of[Scalar[phys]]()
+        for i in range(num_values):
+            dict.append(read_fixed_le[phys](body, i * PW).cast[store]())
+
+    @staticmethod
+    def decode_dict_bytes(
+        body: Span[UInt8, _],
+        num_values: Int,
+        mut dict_body: List[UInt8],
+        mut dict_off: List[Int],
+        mut dict_len: List[Int],
+    ) raises:
+        """Decode a byte-array dictionary page (length-prefixed values)."""
+        dict_body.clear()
+        dict_body.extend(body)
+        var span = Span(dict_body)
+        var off = 0
+        for _ in range(num_values):
+            var n = read_u32le(span, off)
+            off += 4
+            dict_off.append(off)
+            dict_len.append(n)
+            off += n
 
 
 def bit_width(max_value: Int) -> Int:

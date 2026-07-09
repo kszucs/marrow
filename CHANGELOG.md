@@ -147,6 +147,30 @@
 
 ### Refactors
 
+- **Parquet module overhaul — enum types, one decoder, one column reader**
+  (`marrow.parquet`): the flat integer-constant families are gone, replaced by
+  small namespaced value types that own their behaviour. `Compression`
+  (`.compress` / `.decompress`, with a `CompressionLibs` handle pool),
+  `Encoding` (`.decode_primitive` / `.decode_bytes` / `.decode_bool`, absorbing
+  the former `values.mojo`), and `PhysicalType` / `ConvertedType` /
+  `LogicalType` / `Repetition` / `PageType` (from the old `PT_*` / `CT_*` /
+  `LT_*` / `REP_*` / `PAGE_*` constants) — so `schema.mojo` imports four type
+  names instead of ~30 bare constants. `PageHeader` / `SchemaElement` carry the
+  typed discriminants directly. The flat and repeated (list-element) column
+  readers merged into one `ColumnReader.decode()` that picks the path from the
+  leaf's max repetition (its `DecodedLeaf` and `assemble_list` moved next to
+  `SchemaNode.assemble` in `schema.mojo`), so `read_table` no longer branches on
+  column shape. A second consolidation pass merged `thrift.mojo` into
+  `format.mojo` (the wire-protocol codec lives with the metadata structs it
+  serializes) and `page.mojo` into `column.mojo` (one column-read pipeline),
+  turned the free-standing footer/header functions into methods
+  (`FileMetaData.read_footer` / `write_footer`, `PageHeader.read_at` /
+  `append_to`) and the dictionary-page decoders into `Encoding` static methods,
+  and switched the per-file `from ..dtypes import (…)` lists to the
+  `from .. import dtypes as dt` shorthand. Module count went 12 → 8
+  (`values.mojo`, `nested.mojo`, `thrift.mojo`, `page.mojo` deleted); the test
+  files were likewise regrouped by module (17 → 8). Behaviour and performance
+  unchanged (same test matrix and pyarrow interop).
 - **Aggregate field cleanup + single `ExecutionContext`** (`marrow.expr`):
   `agg_exprs` renamed to `aggs`; the redundant `key_fields` field dropped (the
   key fields are the first `len(keys)` output-schema fields, so the processor
