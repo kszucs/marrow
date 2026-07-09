@@ -12,12 +12,11 @@ from std.algorithm.functional import sync_parallelize
 from std.sys.info import num_physical_cores
 
 from ..arrays import AnyArray
-from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
-from .compression import CompressionLibs
-from .schema import ParsedSchema, SchemaNode, DecodedLeaf
+from .utils import CompressionLibs
+from .schema import ParsedSchema, Projection, DecodedLeaf
 from .format import FileMetaData
 from .column import ColumnReader
 
@@ -71,38 +70,6 @@ struct MappedFile(Movable):
 comptime _PARALLEL_MIN_ROWS = 4096
 
 
-def _project(
-    parsed: ParsedSchema,
-    columns: List[String],
-    mut out_schema: Schema,
-    mut nodes: List[SchemaNode],
-    mut decode_order: List[Int],
-) raises:
-    """Select the requested top-level columns, filling `out_schema` (selected
-    fields), `nodes` (assembly nodes remapped to a compact decoded list), and
-    `decode_order` (original flat leaf/column-chunk indices to decode, in
-    compact order)."""
-    var fields = List[dt.Field]()
-    var mapping = List[Int](length=len(parsed.leaves), fill=-1)
-    for ci in range(len(columns)):
-        var found = -1
-        for ni in range(len(parsed.nodes)):
-            if parsed.nodes[ni].field.name == columns[ci]:
-                found = ni
-                break
-        if found == -1:
-            raise Error("parquet: column not found: " + columns[ci])
-        ref node = parsed.nodes[found]
-        var node_leaves = List[Int]()
-        node.collect_leaf_indices(node_leaves)
-        for orig in node_leaves:
-            mapping[orig] = len(decode_order)
-            decode_order.append(orig)
-        nodes.append(node.remapped(mapping))
-        fields.append(node.field.copy())
-    out_schema = Schema(fields=fields^)
-
-
 def read_table(
     path: String, columns: Optional[List[String]] = None
 ) raises -> Table:
@@ -122,18 +89,10 @@ def read_table(
     var meta = FileMetaData.read_footer(data)
     var parsed = ParsedSchema.from_metadata(meta)
 
-    # compact leaf slot -> original column-chunk index
-    var out_schema = Schema(copy=parsed.schema)  # full schema unless projecting
-    var nodes = List[SchemaNode]()
-    var decode_order = List[Int]()
-    if columns:
-        _project(parsed, columns.value(), out_schema, nodes, decode_order)
-    else:
-        nodes = parsed.nodes.copy()
-        for i in range(len(parsed.leaves)):
-            decode_order.append(i)
+    # the read plan: which column chunks to decode and how to reassemble them
+    var plan = parsed.project(columns.value()) if columns else parsed.full()
 
-    var num_leaves = len(decode_order)
+    var num_leaves = len(plan.decode_order)
     var num_rg = len(meta.row_groups)
     var total = num_rg * num_leaves
 
@@ -156,7 +115,8 @@ def read_table(
         var t = w
         while t < total:
             var rg_idx = t // num_leaves
-            var orig = decode_order[t % num_leaves]  # original column-chunk idx
+            # original column-chunk index for this compact slot
+            var orig = plan.decode_order[t % num_leaves]
             ref rg = meta.row_groups[rg_idx]
             # ColumnReader.decode picks the flat vs leveled path from the leaf's
             # max repetition, so the same call serves every column shape.
@@ -178,15 +138,15 @@ def read_table(
         for ci in range(num_leaves):
             decoded.append(grid[rg_idx * num_leaves + ci].take())
         var cols = List[AnyArray]()
-        for ref node in nodes:
+        for ref node in plan.nodes:
             cols.append(node.assemble(decoded))
         batches.append(
-            RecordBatch(schema=Schema(copy=out_schema), columns=cols^)
+            RecordBatch(schema=Schema(copy=plan.schema), columns=cols^)
         )
 
     if len(batches) == 0:
-        batches.append(RecordBatch.empty(out_schema))
-    var result = Table.from_batches(out_schema, batches)
+        batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
+    var result = Table.from_batches(Schema(copy=plan.schema), batches)
     # `data` is an untracked view into `mapped`; keep the map alive until every
     # value has been copied into owned Arrow buffers above, then unmap.
     _ = mapped^

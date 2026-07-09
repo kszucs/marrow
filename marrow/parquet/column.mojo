@@ -17,16 +17,9 @@ from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder, BoolBuilder, PrimitiveBuilder
 from .. import dtypes as dt
 
-from .encoding import (
-    Encoding,
-    rle_gather,
-    rle_decode,
-    rle_count_matches,
-    bit_width,
-    read_u32le,
-    read_fixed_le,
-)
-from .compression import Compression, CompressionLibs
+from .codecs import Encoding, Rle, LittleEndian
+from .codecs import Compression
+from .utils import CompressionLibs
 from .schema import LeafColumn, DecodedLeaf
 from .format import ColumnMetaData, PageHeader, PageType
 
@@ -35,31 +28,14 @@ from .format import ColumnMetaData, PageHeader, PageType
 # Page — one decoded page
 # ---------------------------------------------------------------------------
 
-comptime PAGEKIND_DICT: Int = 0
-comptime PAGEKIND_DATA: Int = 1
-
-
-def _count_equal(levels: List[Int32], target: Int) -> Int:
-    var c = 0
-    for d in levels:
-        if Int(d) == target:
-            c += 1
-    return c
-
-
-def _erase(s: Span[UInt8, _]) -> Span[UInt8, ImmutUntrackedOrigin]:
-    """Drop origin tracking on a byte span. The reader keeps the backing storage
-    (the mmap, or the PageReader's decompression scratch) alive for as long as
-    each page is consumed, so the untracked view is always valid in use."""
-    return rebind[Span[UInt8, ImmutUntrackedOrigin]](s)
-
 
 struct Page(Movable):
     """A decoded page. `body` is a *view* — into the mmap for uncompressed pages
     (zero copy) or into the `PageReader`'s reused scratch for compressed pages —
-    not an owned buffer, so no per-page allocation."""
+    not an owned buffer, so no per-page allocation. `dictionary` marks the
+    column chunk's dictionary page (vs a data page)."""
 
-    var kind: Int
+    var dictionary: Bool
     var body: Span[UInt8, ImmutUntrackedOrigin]
     var def_levels: List[Int32]
     var rep_levels: List[Int32]  # only populated for repeated (list) leaves
@@ -69,7 +45,7 @@ struct Page(Movable):
     var num_values: Int
 
     def __init__(out self, body: Span[UInt8, ImmutUntrackedOrigin]):
-        self.kind = PAGEKIND_DATA
+        self.dictionary = False
         self.body = body
         self.def_levels = List[Int32]()
         self.rep_levels = List[Int32]()
@@ -123,6 +99,13 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.produced = 0
         self.scratch = List[UInt8]()
 
+    @staticmethod
+    def _untracked(s: Span[UInt8, _]) -> Span[UInt8, ImmutUntrackedOrigin]:
+        """Drop origin tracking on a byte span. The backing storage (the mmap,
+        or this reader's decompression scratch) is kept alive for as long as each
+        page is consumed, so the untracked view is always valid in use."""
+        return rebind[Span[UInt8, ImmutUntrackedOrigin]](s)
+
     def _body(
         mut self,
         comp: Span[UInt8, _],
@@ -133,9 +116,9 @@ struct PageReader[o: Origin[mut=False]](Movable):
         pages, or the reused scratch after decompressing."""
         var codec = Compression(self.meta.codec)
         if codec == Compression.UNCOMPRESSED:
-            return _erase(comp)
+            return Self._untracked(comp)
         codec.decompress_into(codecs, comp, uncompressed_size, self.scratch)
-        return _erase(Span(self.scratch))
+        return Self._untracked(Span(self.scratch))
 
     def has_next(self) -> Bool:
         return self.produced < self.meta.num_values
@@ -145,34 +128,36 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var cursor = 0
         var leveled = self.leaf.max_rep >= 1
         if leveled:
-            var l = read_u32le(body, cursor)
+            var l = LittleEndian.u32(body, cursor)
             cursor += 4
-            page.rep_levels = rle_decode(
+            page.rep_levels = Rle.decode(
                 body[cursor : cursor + l],
-                bit_width(self.leaf.max_rep),
+                Rle.bit_width(self.leaf.max_rep),
                 page.num_values,
             )
             cursor += l
         page.num_present = page.num_values
         if self.leaf.max_def >= 1:
-            var bw = bit_width(self.leaf.max_def)
-            var l = read_u32le(body, cursor)
+            var bw = Rle.bit_width(self.leaf.max_def)
+            var l = LittleEndian.u32(body, cursor)
             cursor += 4
             var levels = body[cursor : cursor + l]
             if leveled:
                 # nested columns need the full def levels to rebuild offsets
-                page.def_levels = rle_decode(levels, bw, page.num_values)
-                page.num_present = _count_equal(
-                    page.def_levels, self.leaf.max_def
-                )
+                page.def_levels = Rle.decode(levels, bw, page.num_values)
+                var present = 0
+                for d in page.def_levels:
+                    if Int(d) == self.leaf.max_def:
+                        present += 1
+                page.num_present = present
             else:
                 # flat: count present in O(1) for the all-present run; only
                 # materialize the level list when there are actually nulls.
-                page.num_present = rle_count_matches(
+                page.num_present = Rle.count_matches(
                     levels, bw, page.num_values, Int32(self.leaf.max_def)
                 )
                 if page.num_present != page.num_values:
-                    page.def_levels = rle_decode(levels, bw, page.num_values)
+                    page.def_levels = Rle.decode(levels, bw, page.num_values)
             cursor += l
         page.value_offset = cursor
 
@@ -185,7 +170,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
 
         if ph.type == PageType.DICTIONARY:
             var page = Page(self._body(comp, ph.uncompressed_page_size, codecs))
-            page.kind = PAGEKIND_DICT
+            page.dictionary = True
             page.num_values = ph.dictionary_page_header.value().num_values
             return page^
 
@@ -220,16 +205,16 @@ struct PageReader[o: Origin[mut=False]](Movable):
             else:
                 self.scratch.extend(comp[lvl_len:])
 
-            var page = Page(_erase(Span(self.scratch)))
+            var page = Page(Self._untracked(Span(self.scratch)))
             page.num_values = dph2.num_values
             page.encoding = dph2.encoding
             if (
                 self.leaf.max_rep >= 1
                 and dph2.repetition_levels_byte_length > 0
             ):
-                page.rep_levels = rle_decode(
+                page.rep_levels = Rle.decode(
                     page.body[0 : dph2.repetition_levels_byte_length],
-                    bit_width(self.leaf.max_rep),
+                    Rle.bit_width(self.leaf.max_rep),
                     page.num_values,
                 )
             var cursor = dph2.repetition_levels_byte_length
@@ -237,11 +222,11 @@ struct PageReader[o: Origin[mut=False]](Movable):
                 self.leaf.max_def >= 1
                 and dph2.definition_levels_byte_length > 0
             ):
-                page.def_levels = rle_decode(
+                page.def_levels = Rle.decode(
                     page.body[
                         cursor : cursor + dph2.definition_levels_byte_length
                     ],
-                    bit_width(self.leaf.max_def),
+                    Rle.bit_width(self.leaf.max_def),
                     page.num_values,
                 )
             page.value_offset = lvl_len
@@ -302,7 +287,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         self.null_count = 0
 
     def _read(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.store_dt]:
-        return read_fixed_le[Self.phys_dt](span, off).cast[Self.store_dt]()
+        return LittleEndian.fixed[Self.phys_dt](span, off).cast[Self.store_dt]()
 
     def _ensure_bitmap(mut self):
         """Allocate the validity bitmap on first null, backfilling all values
@@ -345,7 +330,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
-        if page.kind == PAGEKIND_DICT:
+        if page.dictionary:
             comptime if Self.SAME:
                 self.dict.resize(unsafe_uninit_length=page.num_values)
                 memcpy(
@@ -368,7 +353,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             )
         elif page.is_dictionary() and page.all_present():
             # fast path: fused index-decode + gather straight to the output.
-            rle_gather[Self.store_dt](
+            Rle.gather[Self.store_dt](
                 vspan[1:],
                 Int(vspan[0]),
                 page.num_values,
@@ -437,13 +422,13 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
                 self.builder.append_null()
 
     def consume(mut self, var page: Page) raises:
-        if page.kind == PAGEKIND_DICT:
+        if page.dictionary:
             self.dict_body = List[UInt8]()
             self.dict_body.extend(page.body)
             var span = Span(self.dict_body)
             var off = 0
             for _ in range(page.num_values):
-                var n = read_u32le(span, off)
+                var n = LittleEndian.u32(span, off)
                 off += 4
                 self.dict_off.append(off)
                 self.dict_len.append(n)
@@ -459,7 +444,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
                 if page.all_present() or Int(page.def_levels[row]) == (
                     self.max_def
                 ):
-                    var n = read_u32le(vspan, vi)
+                    var n = LittleEndian.u32(vspan, vi)
                     vi += 4
                     self._append(vspan[vi : vi + n])
                     vi += n
@@ -493,7 +478,7 @@ struct BoolLeafBuilder(LeafBuilder):
         self.max_def = leaf.max_def
 
     def consume(mut self, var page: Page) raises:
-        if page.kind == PAGEKIND_DICT:
+        if page.dictionary:
             raise Error("parquet: dictionary-encoded bool not supported")
         if not page.is_plain():
             raise Error("parquet: non-plain bool encoding not supported")
@@ -563,7 +548,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var md = self.pages.leaf.max_def
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
-            if carry and pg.kind != PAGEKIND_DICT:
+            if carry and not pg.dictionary:
                 # a page materializes def levels only when it has nulls; an
                 # all-present page implies every slot is at max_def.
                 if len(pg.def_levels) == pg.num_values:
@@ -696,7 +681,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var def_out = List[Int32]()
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
-            if pg.kind == PAGEKIND_DICT:
+            if pg.dictionary:
                 Encoding.decode_dict_primitive[T.native, phys](
                     pg.body, pg.num_values, dict
                 )
@@ -733,7 +718,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var def_out = List[Int32]()
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
-            if pg.kind == PAGEKIND_DICT:
+            if pg.dictionary:
                 Encoding.decode_dict_bytes(
                     pg.body, pg.num_values, dict_body, dict_off, dict_len
                 )
@@ -766,7 +751,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var def_out = List[Int32]()
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
-            if pg.kind == PAGEKIND_DICT:
+            if pg.dictionary:
                 raise Error("parquet: dictionary-encoded bool not supported")
             rep_out.extend(Span(pg.rep_levels))
             def_out.extend(Span(pg.def_levels))

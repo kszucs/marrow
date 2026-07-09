@@ -105,11 +105,8 @@ struct SchemaNode(Copyable, Movable):
             # geom carries every threshold its scan needs.
             var element = self.children[0].assemble(decoded)
             var li = self.first_leaf_index()
-            return assemble_list(
-                element^,
-                decoded[li].rep_levels,
-                decoded[li].def_levels,
-                self.geom,
+            return self._assemble_list(
+                element^, decoded[li].rep_levels, decoded[li].def_levels
             )
         elif self.kind == NODE_STRUCT:
             var children = List[AnyArray]()
@@ -147,6 +144,63 @@ struct SchemaNode(Copyable, Movable):
             return out^
         else:
             raise Error("parquet: unsupported schema node kind")
+
+    def _assemble_list(
+        self,
+        var element: AnyArray,
+        rep_levels: List[Int32],
+        def_levels: List[Int32],
+    ) raises -> AnyArray:
+        """Fold a decoded element array + its Dremel levels into an Arrow
+        `ListArray` for this (list) node, using only its own `geom`, to any
+        nesting depth.
+
+        Reading one leaf's `(rep, def)` records left to right:
+
+        - a **new instance** of this list begins where `rep < rep_level` (the
+          repetition is shallower than this list, so its parent moved on) *and*
+          `def >= entry_floor` (this list is actually reached — otherwise an
+          ancestor is empty/null and this list has no entry here);
+        - a **new child element** (one entry of `element`) is added where
+          `rep <= rep_level` (a repetition at this level or shallower starts a
+          fresh element) *and* `def >= element_floor` (the element is present,
+          not an empty/null structural slot);
+        - the instance is **null** where `def < present_def`.
+
+        Because every threshold lives in `geom`, the scan needs nothing from the
+        parent, so nested lists compose by recursion: the child array is itself
+        an assembled (possibly nested) list.
+        """
+        ref geom = self.geom
+        var n = len(rep_levels)
+        var offsets = PrimitiveBuilder[dt.Int32Type](n + 1)
+        var mask = BoolBuilder(n)
+        var any_null = False
+        var child_idx = 0
+        var started = False
+        offsets.append(Int32(0))
+        for i in range(n):
+            var r = Int(rep_levels[i])
+            var d = Int(def_levels[i])
+            if r < geom.rep_level and d >= geom.entry_floor:
+                if started:
+                    offsets.append(Int32(child_idx))  # close previous instance
+                started = True
+                var is_null = geom.optional and d < geom.present_def
+                mask.append(is_null)
+                any_null = any_null or is_null
+            if r <= geom.rep_level and d >= geom.element_floor:
+                child_idx += 1
+        offsets.append(Int32(child_idx))
+
+        var offsets_arr = offsets.finish()
+        var out: AnyArray
+        if any_null:
+            var m = mask.finish()
+            out = ListArray.from_arrays(offsets_arr, element^, m^)
+        else:
+            out = ListArray.from_arrays(offsets_arr, element^, None)
+        return out^
 
     def flatten(self, col: AnyArray, mut leaf_arrays: List[AnyArray]) raises:
         """Inverse of `assemble`: collect this node's leaf arrays in column order.
@@ -221,6 +275,61 @@ struct ParsedSchema(Movable):
         return ParsedSchema(
             Schema(fields=fields^), reader.leaves.copy(), nodes^
         )
+
+    def full(self) -> Projection:
+        """Read plan for every column, in column-chunk order."""
+        var decode_order = List[Int]()
+        for i in range(len(self.leaves)):
+            decode_order.append(i)
+        return Projection(
+            Schema(copy=self.schema), self.nodes.copy(), decode_order^
+        )
+
+    def project(self, columns: List[String]) raises -> Projection:
+        """Read plan for the named top-level columns, in the given order. The
+        assembly nodes are remapped onto a compact decoded list holding only the
+        selected columns' leaves; unselected column chunks are never decoded."""
+        var fields = List[dt.Field]()
+        var nodes = List[SchemaNode]()
+        var decode_order = List[Int]()
+        var mapping = List[Int](length=len(self.leaves), fill=-1)
+        for ci in range(len(columns)):
+            var found = -1
+            for ni in range(len(self.nodes)):
+                if self.nodes[ni].field.name == columns[ci]:
+                    found = ni
+                    break
+            if found == -1:
+                raise Error("parquet: column not found: " + columns[ci])
+            ref node = self.nodes[found]
+            var node_leaves = List[Int]()
+            node.collect_leaf_indices(node_leaves)
+            for orig in node_leaves:
+                mapping[orig] = len(decode_order)
+                decode_order.append(orig)
+            nodes.append(node.remapped(mapping))
+            fields.append(node.field.copy())
+        return Projection(Schema(fields=fields^), nodes^, decode_order^)
+
+
+struct Projection(Movable):
+    """A read plan: the output Arrow schema, the assembly nodes (leaf indices
+    remapped to a compact decoded list), and `decode_order` — the original flat
+    leaf/column-chunk indices to decode, in that compact order."""
+
+    var schema: Schema
+    var nodes: List[SchemaNode]
+    var decode_order: List[Int]
+
+    def __init__(
+        out self,
+        var schema: Schema,
+        var nodes: List[SchemaNode],
+        var decode_order: List[Int],
+    ):
+        self.schema = schema^
+        self.nodes = nodes^
+        self.decode_order = decode_order^
 
 
 struct LeafColumn(Copyable, Movable):
@@ -620,60 +729,3 @@ struct DecodedLeaf(Movable):
     @staticmethod
     def flat(var array: AnyArray) -> DecodedLeaf:
         return DecodedLeaf(False, array^, List[Int32](), List[Int32]())
-
-
-def assemble_list(
-    var element: AnyArray,
-    rep_levels: List[Int32],
-    def_levels: List[Int32],
-    geom: NodeGeom,
-) raises -> AnyArray:
-    """Fold a decoded element array + its Dremel levels into an Arrow
-    `ListArray`, for any nesting depth.
-
-    Reading one leaf's `(rep, def)` records left to right, using only this list's
-    own `geom`:
-
-    - a **new instance** of this list begins where `rep < rep_level` (the
-      repetition is shallower than this list, so its parent moved on) *and*
-      `def >= entry_floor` (this list is actually reached — otherwise an ancestor
-      is empty/null and this list has no entry here);
-    - a **new child element** (one entry of `element`) is added where
-      `rep <= rep_level` (a repetition at this level or shallower starts a fresh
-      element) *and* `def >= element_floor` (the element is present, not an
-      empty/null structural slot);
-    - the instance is **null** where `def < present_def`.
-
-    Because every threshold lives in `geom`, the scan needs nothing from the
-    parent, so nested lists compose by recursion: the child array is itself an
-    assembled (possibly nested) list.
-    """
-    var n = len(rep_levels)
-    var offsets = PrimitiveBuilder[dt.Int32Type](n + 1)
-    var mask = BoolBuilder(n)
-    var any_null = False
-    var child_idx = 0
-    var started = False
-    offsets.append(Int32(0))
-    for i in range(n):
-        var r = Int(rep_levels[i])
-        var d = Int(def_levels[i])
-        if r < geom.rep_level and d >= geom.entry_floor:
-            if started:
-                offsets.append(Int32(child_idx))  # close the previous instance
-            started = True
-            var is_null = geom.optional and d < geom.present_def
-            mask.append(is_null)
-            any_null = any_null or is_null
-        if r <= geom.rep_level and d >= geom.element_floor:
-            child_idx += 1
-    offsets.append(Int32(child_idx))
-
-    var offsets_arr = offsets.finish()
-    var out: AnyArray
-    if any_null:
-        var m = mask.finish()
-        out = ListArray.from_arrays(offsets_arr, element^, m^)
-    else:
-        out = ListArray.from_arrays(offsets_arr, element^, None)
-    return out^

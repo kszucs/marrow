@@ -23,8 +23,9 @@ from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
-from .encoding import Encoding, rle_encode
-from .compression import Compression, CompressionLibs
+from .codecs import Encoding, Rle
+from .codecs import Compression
+from .utils import CompressionLibs
 from .schema import ParquetSchema, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
@@ -143,7 +144,7 @@ struct ColumnChunkWriter(Movable):
                 else:
                     defs.append(Int32(0))
                     null_count += 1
-            out = rle_encode(defs, 1)
+            out = Rle.encode(defs, 1)
         return out^
 
     def write(

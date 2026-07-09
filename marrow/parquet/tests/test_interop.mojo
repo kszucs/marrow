@@ -16,7 +16,7 @@ from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, write_table
-from marrow.parquet.compression import Compression
+from marrow.parquet.codecs import Compression
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 

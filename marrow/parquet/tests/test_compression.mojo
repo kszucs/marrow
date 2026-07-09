@@ -6,7 +6,8 @@ from std.python import Python
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table
-from marrow.parquet.compression import Compression, CompressionLibs
+from marrow.parquet.codecs import Compression
+from marrow.parquet.utils import CompressionLibs
 
 
 def _sample() -> List[UInt8]:

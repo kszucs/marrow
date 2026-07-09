@@ -7,7 +7,7 @@ from std.python import Python
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table
-from marrow.parquet.encoding import bit_width, rle_decode, rle_encode
+from marrow.parquet.codecs import Rle
 
 
 # ---------------------------------------------------------------------------
@@ -16,17 +16,17 @@ from marrow.parquet.encoding import bit_width, rle_decode, rle_encode
 
 
 def test_bit_width() raises:
-    assert_equal(bit_width(0), 0)
-    assert_equal(bit_width(1), 1)
-    assert_equal(bit_width(2), 2)
-    assert_equal(bit_width(7), 3)
-    assert_equal(bit_width(8), 4)
-    assert_equal(bit_width(255), 8)
+    assert_equal(Rle.bit_width(0), 0)
+    assert_equal(Rle.bit_width(1), 1)
+    assert_equal(Rle.bit_width(2), 2)
+    assert_equal(Rle.bit_width(7), 3)
+    assert_equal(Rle.bit_width(8), 4)
+    assert_equal(Rle.bit_width(255), 8)
 
 
 def _check(values: List[Int32], width: Int) raises:
-    var encoded = rle_encode(values, width)
-    var decoded = rle_decode(Span(encoded), width, len(values))
+    var encoded = Rle.encode(values, width)
+    var decoded = Rle.decode(Span(encoded), width, len(values))
     assert_equal(len(decoded), len(values))
     for i in range(len(values)):
         assert_equal(decoded[i], values[i])
@@ -65,7 +65,7 @@ def test_rle_bitpacked_decode() raises:
     data.append(0x88)
     data.append(0xC6)  # continue packing
     data.append(0xFA)
-    var decoded = rle_decode(Span(data), 3, 8)
+    var decoded = Rle.decode(Span(data), 3, 8)
     assert_equal(len(decoded), 8)
     for i in range(8):
         assert_equal(decoded[i], Int32(i))

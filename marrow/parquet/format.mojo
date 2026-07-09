@@ -14,7 +14,7 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 
 from std.memory import bitcast
 
-from .encoding import Encoding
+from .codecs import Encoding
 
 
 # ---------------------------------------------------------------------------
@@ -40,15 +40,17 @@ comptime TC_MAP: UInt8 = 11
 comptime TC_STRUCT: UInt8 = 12
 
 
-def zigzag_encode(v: Int64) -> UInt64:
-    """Map a signed integer to an unsigned one so small magnitudes stay small.
-    """
-    return UInt64((v << 1) ^ (v >> 63))
+struct Zigzag:
+    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
+    as varints. Stateless; a namespace of static methods."""
 
+    @staticmethod
+    def encode(v: Int64) -> UInt64:
+        return UInt64((v << 1) ^ (v >> 63))
 
-def zigzag_decode(v: UInt64) -> Int64:
-    """Inverse of `zigzag_encode`."""
-    return Int64(v >> 1) ^ (-(Int64(v & 1)))
+    @staticmethod
+    def decode(v: UInt64) -> Int64:
+        return Int64(v >> 1) ^ (-(Int64(v & 1)))
 
 
 struct CompactReader[o: Origin[mut=False]](Movable):
@@ -93,13 +95,13 @@ struct CompactReader[o: Origin[mut=False]](Movable):
         return result
 
     def read_i16(mut self) raises -> Int16:
-        return Int16(zigzag_decode(self.read_varint()))
+        return Int16(Zigzag.decode(self.read_varint()))
 
     def read_i32(mut self) raises -> Int32:
-        return Int32(zigzag_decode(self.read_varint()))
+        return Int32(Zigzag.decode(self.read_varint()))
 
     def read_i64(mut self) raises -> Int64:
-        return zigzag_decode(self.read_varint())
+        return Zigzag.decode(self.read_varint())
 
     def read_byte(mut self) raises -> Int8:
         return Int8(self._u8())
@@ -217,13 +219,13 @@ struct CompactWriter(Movable):
                 break
 
     def write_i16(mut self, v: Int16):
-        self.write_varint(zigzag_encode(Int64(v)))
+        self.write_varint(Zigzag.encode(Int64(v)))
 
     def write_i32(mut self, v: Int32):
-        self.write_varint(zigzag_encode(Int64(v)))
+        self.write_varint(Zigzag.encode(Int64(v)))
 
     def write_i64(mut self, v: Int64):
-        self.write_varint(zigzag_encode(v))
+        self.write_varint(Zigzag.encode(v))
 
     def write_byte(mut self, v: Int8):
         self.buf.append(UInt8(v))
@@ -468,10 +470,51 @@ struct SchemaElement(Copyable, Movable):
             elif fid == 9:
                 out.field_id = Int(r.read_i32())
             elif fid == 10:
-                _read_logical_type(r, out)
+                out._read_logical_type(r)
             else:
                 r.skip(ftype)
         return out^
+
+    def _read_logical_type[
+        o: Origin[mut=False]
+    ](mut self, mut r: CompactReader[o]) raises:
+        """Parse the `LogicalType` union into `logical_type`, and for TIMESTAMP /
+        TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`.
+        """
+        var last = 0
+        while True:
+            var ftype, fid = r.read_field_header(last)
+            if ftype == TC_STOP:
+                break
+            last = fid
+            self.logical_type = LogicalType(fid)
+            if (
+                self.logical_type == LogicalType.TIMESTAMP
+                or self.logical_type == LogicalType.TIME
+            ):
+                # TimestampType/TimeType = {1: isAdjustedToUTC, 2: TimeUnit unit}
+                var l2 = 0
+                while True:
+                    var ft2, fid2 = r.read_field_header(l2)
+                    if ft2 == TC_STOP:
+                        break
+                    l2 = fid2
+                    if fid2 == 1:
+                        self.logical_utc = r.read_bool(ft2)
+                    elif fid2 == 2:
+                        # TimeUnit union: the single set field id is the unit
+                        var l3 = 0
+                        while True:
+                            var ft3, fid3 = r.read_field_header(l3)
+                            if ft3 == TC_STOP:
+                                break
+                            l3 = fid3
+                            self.logical_unit = fid3
+                            r.skip(ft3)
+                    else:
+                        r.skip(ft2)
+            else:
+                r.skip(ftype)
 
     def write(self, mut w: CompactWriter):
         var last = 0
@@ -493,47 +536,6 @@ struct SchemaElement(Copyable, Movable):
             last = w.write_field_begin(TC_I32, 6, last)
             w.write_i32(Int32(self.converted_type.code))
         w.write_field_stop()
-
-
-def _read_logical_type[
-    o: Origin[mut=False]
-](mut r: CompactReader[o], mut out: SchemaElement) raises:
-    """Parse the `LogicalType` union into `out.logical_type`, and for TIMESTAMP /
-    TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`."""
-    var last = 0
-    while True:
-        var ftype, fid = r.read_field_header(last)
-        if ftype == TC_STOP:
-            break
-        last = fid
-        out.logical_type = LogicalType(fid)
-        if (
-            out.logical_type == LogicalType.TIMESTAMP
-            or out.logical_type == LogicalType.TIME
-        ):
-            # TimestampType/TimeType = {1: bool isAdjustedToUTC, 2: TimeUnit unit}
-            var l2 = 0
-            while True:
-                var ft2, fid2 = r.read_field_header(l2)
-                if ft2 == TC_STOP:
-                    break
-                l2 = fid2
-                if fid2 == 1:
-                    out.logical_utc = r.read_bool(ft2)
-                elif fid2 == 2:
-                    # TimeUnit union: the single set field id is the unit
-                    var l3 = 0
-                    while True:
-                        var ft3, fid3 = r.read_field_header(l3)
-                        if ft3 == TC_STOP:
-                            break
-                        l3 = fid3
-                        out.logical_unit = fid3
-                        r.skip(ft3)
-                else:
-                    r.skip(ft2)
-        else:
-            r.skip(ftype)
 
 
 # ---------------------------------------------------------------------------

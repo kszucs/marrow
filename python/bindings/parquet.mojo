@@ -12,7 +12,7 @@ from marrow.parquet import (
     read_table as _read_table,
     write_table as _write_table,
 )
-from marrow.parquet.compression import Compression
+from marrow.parquet.codecs import Compression
 from marrow.tabular import Table
 
 

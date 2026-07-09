@@ -12,8 +12,7 @@ from marrow.parquet.format import (
     Repetition,
     CompactReader,
     CompactWriter,
-    zigzag_encode,
-    zigzag_decode,
+    Zigzag,
     TC_I32,
     TC_I64,
     TC_BINARY,
@@ -29,7 +28,7 @@ from marrow.parquet.format import (
 
 def test_zigzag_roundtrip() raises:
     for v in [Int64(0), 1, -1, 2, -2, 63, -64, 2147483647, -2147483648]:
-        assert_equal(zigzag_decode(zigzag_encode(v)), v)
+        assert_equal(Zigzag.decode(Zigzag.encode(v)), v)
 
 
 def test_varint_roundtrip() raises:

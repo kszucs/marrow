@@ -169,8 +169,17 @@
   and switched the per-file `from ..dtypes import (…)` lists to the
   `from .. import dtypes as dt` shorthand. Module count went 12 → 8
   (`values.mojo`, `nested.mojo`, `thrift.mojo`, `page.mojo` deleted); the test
-  files were likewise regrouped by module (17 → 8). Behaviour and performance
-  unchanged (same test matrix and pyarrow interop).
+  files were likewise regrouped by module (17 → 8). A final pass eliminated the
+  remaining free-standing/glue functions in favour of cohesive types: the RLE,
+  delta, and byte/varint primitives are grouped as `Rle` / `DeltaBinaryPacked` /
+  `LittleEndian` codec namespaces that `Encoding` dispatches to; `zigzag` became
+  `Zigzag`; `assemble_list` is now `SchemaNode._assemble_list`; column
+  projection is `ParsedSchema.project` / `.full` returning a `Projection`;
+  `Page.kind` (with its `PAGEKIND_*` ints) became a `Page.dictionary` flag; and
+  the loose `_project` / `_erase` / `_count_equal` / `_read_logical_type`
+  helpers were folded into methods — leaving `read_table` / `write_table` as the
+  only module-level functions. Behaviour and performance unchanged (same test
+  matrix and pyarrow interop).
 - **Aggregate field cleanup + single `ExecutionContext`** (`marrow.expr`):
   `agg_exprs` renamed to `aggs`; the redundant `key_fields` field dropped (the
   key fields are the first `len(keys)` output-schema fields, so the processor

@@ -10,4 +10,4 @@ oracle.
 
 from .reader import read_table
 from .writer import write_table
-from .compression import Compression
+from .codecs import Compression
