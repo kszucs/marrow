@@ -16,7 +16,7 @@ def make_session() -> SessionContext:
     ctx = SessionContext()
 
     def mojo_add(a: pa.Array, b: pa.Array) -> pa.Array:
-        return pa.array(ma.add(a, b))
+        return pa.array(ma.add(a, b, None))
 
     ctx.register_udf(
         udf(mojo_add, [pa.int64(), pa.int64()], pa.int64(), "immutable", name="mojo_add")

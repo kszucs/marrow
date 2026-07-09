@@ -1,44 +1,109 @@
 project:
   type: website
   output-dir: _site
+  render:
+    - index.qmd
+    - tutorials/*.qmd
+    - guide/*.qmd
+    - examples/*.qmd
 
 website:
   title: "Marrow"
-  description: "Apache Arrow in Mojo"
+  description: "Apache Arrow in Mojo — a columnar in-memory format with SIMD kernels, GPU acceleration, and zero-copy PyArrow interop."
+  image: assets/logo.png
+  favicon: assets/logo.png
+  open-graph: true
+  twitter-card: true
+  site-url: https://kszucs.github.io/marrow
+  repo-url: https://github.com/kszucs/marrow
+  page-navigation: true
+  back-to-top-navigation: true
+
   navbar:
-    logo: ../logo.png
+    logo: assets/logo.png
     logo-alt: "marrow"
+    pinned: true
+    collapse-below: lg
     left:
-      - text: "Quickstart"
+      - text: "Home"
         href: index.qmd
-      - text: "Guides"
-        menu:
-          - text: "Arrays"
-            href: guide/arrays.qmd
-          - text: "Compute"
-            href: guide/compute.qmd
-          - text: "Expressions"
-            href: guide/expressions.qmd
-          - text: "Type System"
-            href: guide/types.qmd
-          - text: "PyArrow Interop"
-            href: guide/interop.qmd
+      - text: "Tutorials"
+        href: tutorials/quickstart.qmd
+      - text: "Guide"
+        href: guide/arrays.qmd
       - text: "Examples"
-        menu:
-          - text: "DataFusion UDFs"
-            href: examples/datafusion.qmd
+        href: examples/datafusion.qmd
     right:
       - text: "Benchmarks"
         href: /benchmarks/
       - icon: github
         href: https://github.com/kszucs/marrow
+        aria-label: GitHub
+
+  sidebar:
+    style: floating
+    collapse-level: 2
+    contents:
+      - section: "Tutorials"
+        contents:
+          - text: "10-minute quickstart"
+            href: tutorials/quickstart.qmd
+          - text: "Build a data pipeline"
+            href: tutorials/data-pipeline.qmd
+      - section: "Guide"
+        contents:
+          - text: "Arrays"
+            href: guide/arrays.qmd
+          - text: "Type system"
+            href: guide/types.qmd
+          - text: "Scalars"
+            href: guide/scalars.qmd
+          - text: "Builders"
+            href: guide/builders.qmd
+          - text: "Compute kernels"
+            href: guide/compute.qmd
+          - text: "Sorting"
+            href: guide/sorting.qmd
+          - text: "Tables & joins"
+            href: guide/tables.qmd
+          - text: "Expressions"
+            href: guide/expressions.qmd
+          - text: "File I/O"
+            href: guide/io.qmd
+          - text: "GPU acceleration"
+            href: guide/gpu.qmd
+          - text: "PyArrow interop"
+            href: guide/interop.qmd
+      - section: "Examples"
+        contents:
+          - text: "DataFusion UDFs"
+            href: examples/datafusion.qmd
+
+  page-footer:
+    border: true
+    left: "Marrow — Apache Arrow in Mojo. Built with [Quarto](https://quarto.org)."
+    right:
+      - icon: github
+        href: https://github.com/kszucs/marrow
 
 format:
   html:
-    theme: cosmo
+    theme:
+      dark: theme/marrow-dark.scss
+      light: theme/marrow-light.scss
+    css: theme/marrow.css
+    include-in-header:
+      - theme/head.html
     toc: true
+    toc-depth: 3
+    toc-title: "On this page"
     code-copy: true
-    highlight-style: github
+    code-overflow: wrap
+    link-external-newwindow: true
+    link-external-icon: false
+    grid:
+      sidebar-width: 260px
+      body-width: 860px
 
 execute:
   freeze: auto

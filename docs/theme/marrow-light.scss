@@ -1,0 +1,55 @@
+/*-- scss:defaults --*/
+
+// ===========================================================================
+// Marrow — light theme. Same molten brand ramp, warm paper surfaces.
+// ===========================================================================
+
+$mr-red:    #d62c17;
+$mr-orange: #ea5a00;
+$mr-amber:  #f5a300;
+
+$mr-bg:     #ffffff;
+$mr-bg-2:   #faf9f7;
+$mr-bg-3:   #f4f2ee;
+$mr-border: #e6e2dc;
+$mr-text:   #1c1e26;
+$mr-muted:  #6b7280;
+
+$font-family-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+$headings-font-family:   "Space Grotesk", "Inter", sans-serif;
+$font-family-monospace:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+$headings-font-weight:   600;
+
+$body-bg:      $mr-bg;
+$body-color:   $mr-text;
+$primary:      $mr-orange;
+$link-color:   #c74800;
+$link-hover-color: $mr-red;
+$border-color: $mr-border;
+
+$navbar-bg:    rgba(255, 255, 255, 0.8);
+$navbar-fg:    $mr-text;
+$navbar-hl:    $mr-orange;
+
+$code-color:      #b5410a;
+$code-bg:         rgba(234, 90, 0, 0.07);
+$code-block-bg:   #0e1017;
+
+$table-border-color: $mr-border;
+$toc-color: $mr-muted;
+
+/*-- scss:rules --*/
+
+:root {
+  --mr-red:    #{$mr-red};
+  --mr-orange: #{$mr-orange};
+  --mr-amber:  #{$mr-amber};
+  --mr-bg:     #{$mr-bg};
+  --mr-bg-2:   #{$mr-bg-2};
+  --mr-bg-3:   #{$mr-bg-3};
+  --mr-border: #{$mr-border};
+  --mr-text:   #{$mr-text};
+  --mr-muted:  #{$mr-muted};
+  --mr-grad:   linear-gradient(100deg, #{$mr-red} 0%, #{$mr-orange} 48%, #{$mr-amber} 100%);
+  --mr-glow:   0 0 40px rgba(234, 90, 0, 0.18);
+}

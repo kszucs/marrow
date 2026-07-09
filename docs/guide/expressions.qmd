@@ -4,6 +4,11 @@ title: "Expression Execution"
 
 The `marrow/expr` module provides a lazy expression system for building and executing query plans. Expressions are composed into a logical plan tree, then compiled by a `Planner` into a pull-based processor hierarchy that streams `RecordBatch` results.
 
+::: {.callout-note}
+The examples on this page use the Mojo `marrow.expr` API. They illustrate the
+native expression layer rather than the Python bindings.
+:::
+
 ```{python}
 #| echo: false
 import sys
@@ -103,10 +108,10 @@ adults = source.filter(col("age") > lit(30))
 `.select(*exprs)` evaluates expressions and returns a new schema with the selected/computed columns.
 
 ```python
-projected = adults.select(col("name"), col("age"), (col("age") - lit(18)).alias("years_of_work"))
+projected = adults.select(col("name"), col("age"), col("age") - lit(18))
 ```
 
-Note: `alias()` is not yet implemented in the expression layer — column names in `Project` follow the expression tree structure.
+Note: there is no `alias()` yet — output column names follow the structure of the expression tree.
 
 ## Executing a plan
 
@@ -123,7 +128,7 @@ batches = execute(plan, ctx)
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `morsel_size` | 1024 | Number of rows per output batch |
+| `morsel_size` | 65536 | Number of rows per output batch |
 
 ## End-to-end example
 

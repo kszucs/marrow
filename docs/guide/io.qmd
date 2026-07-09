@@ -1,0 +1,106 @@
+---
+title: "File I/O"
+---
+
+Marrow reads and writes two on-disk formats: the **Arrow IPC** format (both the
+file and stream framings) for zero-overhead round trips of the in-memory layout,
+and **Parquet** for compact, columnar long-term storage.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## Arrow IPC
+
+The Arrow IPC format serialises `RecordBatch`es with essentially no
+transformation of the columnar buffers, so writing and reading it back is fast
+and lossless across every implemented type — nested, dictionary, temporal and
+null columns included.
+
+### Writing and reading a file
+
+```{python}
+import tempfile, os
+
+batch = ma.record_batch({
+    "id":   ma.array([1, 2, 3, 4]),
+    "name": ma.array(["Alice", "Bob", None, "Dave"]),
+})
+
+path = os.path.join(tempfile.mkdtemp(), "people.arrow")
+
+ma.write_ipc_file(path, batches=[batch])
+restored = ma.read_ipc_file(path)
+
+print("batches read:", len(restored))
+print(restored[0].to_pylist())
+```
+
+`read_ipc_file` returns a list of `RecordBatch`es. Round-tripping preserves
+nulls and types exactly:
+
+```{python}
+print("null preserved:", restored[0].column("name"))
+print("schema matches: ", restored[0].schema())
+```
+
+### Reading just the schema
+
+When you only need the column layout, `read_ipc_file_schema` reads the header
+and returns a zero-row batch:
+
+```{python}
+header = ma.read_ipc_file_schema(path)
+print(header.schema())
+print("rows:", header.num_rows())
+```
+
+### File vs. stream
+
+The IPC **file** format is seekable and carries a footer, ideal for random
+access. The IPC **stream** format is a flat sequence of batches, ideal for
+pipes and sockets. The API mirrors PyArrow:
+
+| Operation | File | Stream |
+|-----------|------|--------|
+| Write | `write_ipc_file(path, batches=[...])` | `write_ipc_stream(path, batches=[...])` |
+| Read | `read_ipc_file(path)` | `read_ipc_stream(path)` |
+| Schema only | `read_ipc_file_schema(path)` | `read_ipc_stream_schema(path)` |
+
+```{python}
+stream_path = os.path.join(tempfile.mkdtemp(), "people.arrows")
+ma.write_ipc_stream(stream_path, batches=[batch])
+print(ma.read_ipc_stream(stream_path)[0].to_pydict())
+```
+
+## Parquet
+
+Parquet support lives in the Mojo `marrow.parquet` module and works at the
+`Table` level:
+
+```mojo
+from marrow.parquet import read_table, write_table
+
+var table = read_table("data.parquet")
+
+# ... transform the table ...
+
+write_table(table, "output.parquet")
+```
+
+::: {.callout-note}
+Parquet reading and writing bridge through PyArrow's `pyarrow.parquet`, exchanging
+data over the Arrow C Stream Interface. Marrow does not decode the Parquet format
+itself — it hands the bytes to PyArrow and takes the resulting Arrow data back
+without a copy.
+:::
+
+## Choosing a format
+
+- **Arrow IPC** — you want the fastest possible read/write and are staying inside
+  the Arrow ecosystem. The bytes on disk are the columnar buffers.
+- **Parquet** — you want compression, column pruning and predicate push-down for
+  archival or interchange with data-lake tooling.

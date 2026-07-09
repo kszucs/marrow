@@ -52,8 +52,8 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - Hashing: `hash_` for primitive, string, and struct arrays
 - Selection: `filter_`, `drop_nulls`
 - Sort: `argsort` (returns index array), `sort` (stable sort); LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `sort(StructArray, key_indices, ascending)`
+- Join: `hash_join` — inner, left, right, full, semi, anti; partition-parallel
 - Strings: `string_lengths`
-- Similarity: `cosine_similarity` (batch N-vectors vs 1 query, CPU SIMD + GPU)
 
 **Expression execution** — two independent implementations behind one API shape (see `docs/aot-relations-design.md`)
 - `marrow.dyn` — type-erased, runtime-dispatched. Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …); relational plan nodes `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate` with `.filter()`, `.select()`, `.aggregate()` chaining; pull-based streaming executor (`Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results). This is what the Python bindings drive.
@@ -304,41 +304,31 @@ Run the benchmarks yourself:
 ```bash
 pixi run -e bench bench_python       # Python array construction vs PyArrow
 pixi run -e bench bench              # CPU SIMD arithmetic benchmarks
-pixi run -e bench bench_similarity   # cosine similarity: CPU vs GPU
 
 # Side-by-side comparison table: marrow vs polars vs pyarrow vs duckdb
 pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_compute.py --competition
 pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_join.py --competition
 ```
 
-## GPU Acceleration
+## GPU Execution (experimental)
 
-GPU kernels are available for compute-intensive operations when a `DeviceContext` is provided. Benchmarked on Apple Silicon (M-series, Metal, unified memory):
-
-**Cosine similarity** (batch N-vectors vs 1 query, dim=768):
-
-| Vectors | CPU SIMD | GPU (upload per call) | GPU (pre-loaded) |
-|--------:|---------:|----------------------:|-----------------:|
-|    10 K |  baseline |         2–3x slower   |    ~1x (crossover) |
-|   100 K |  baseline |          ~1x           |      ~3x faster  |
-|   500 K |  baseline |           —            |     ~13x faster  |
-
-The key pattern: upload data to the GPU once, run multiple kernels, download results at the end. The crossover vs CPU SIMD is around 10K vectors at dim≥384.
-
-Element-wise arithmetic (`add`, `mul`, etc.) is faster on CPU SIMD — data transfer overhead dominates for low arithmetic-intensity operations.
+A few element-wise kernels — arithmetic, comparisons, and hashing — can dispatch
+to the GPU (Metal on Apple Silicon, CUDA on NVIDIA) when an `ExecutionContext`
+carries a `DeviceContext`. The GPU and CPU paths share the same kernel source.
 
 ```mojo
-from std.gpu.host import DeviceContext
-from marrow.kernels.similarity import cosine_similarity
+from gpu.host import DeviceContext
+from marrow.kernels.execution import ExecutionContext
+from marrow.kernels.arithmetic import add
 
-# Pre-load data onto the GPU once
-var ctx = DeviceContext()
-var vectors_gpu = vectors.to_device(ctx)
-var query_gpu = query.to_device(ctx)
-
-# Run many similarity searches without re-uploading
-var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
+var result = add(a, b, ExecutionContext.gpu(DeviceContext()))
 ```
+
+These kernels are all low arithmetic intensity (~1 op per element), so for most
+workloads CPU SIMD is competitive or faster — device transfer dominates. Treat
+GPU dispatch as infrastructure for data that is already device-resident. Sort,
+join, aggregate and filter run on the CPU only, and GPU binary kernels do not yet
+propagate null bitmaps.
 
 ## Known Limitations
 
@@ -348,7 +338,7 @@ var scores = cosine_similarity(vectors_gpu, query_gpu, ctx)
 
 3. **Type coverage**: Boolean, numeric, string, binary, fixed-size binary, list, fixed-size list, large binary/string/list, struct, dictionary, null, temporal (date32/64, time32/64, timestamp, duration), and decimal (32/64/128/256) types are implemented. Union types are not yet supported.
 
-4. **Parquet I/O**: Parquet support currently bridges through PyArrow. Native Mojo Parquet reading is planned for a future release.
+4. **Parquet I/O**: `read_table` / `write_table` bridge through PyArrow's `pyarrow.parquet` over the Arrow C Stream Interface — Marrow does not decode the Parquet format itself.
 
 5. **GPU null handling**: Binary arithmetic kernels on the GPU do not propagate null bitmaps (GPU `bitmap_and` is not yet implemented). Null-aware GPU arithmetic is CPU-only for now.
 

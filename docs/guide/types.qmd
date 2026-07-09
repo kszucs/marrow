@@ -28,13 +28,27 @@ import marrow as ma
 | `ma.float32()` | `float32` | — |
 | `ma.float64()` | `float64` | `float` |
 | `ma.string()` | `utf8` | `str` |
+| `ma.binary()` | `binary` | `bytes` |
+| `ma.fixed_size_binary(n)` | fixed-width `binary` | — |
+| `ma.null()` | `null` | `None` |
 
-For nested types, types are constructed with helper functions:
+Temporal types take a resolution unit (and, for timestamps, an optional time zone):
 
 | Constructor | Arrow type |
 |-------------|-----------|
-| `ma.field("name", dtype)` | named field descriptor |
+| `ma.date32()` / `ma.date64()` | calendar date |
+| `ma.time32(unit)` / `ma.time64(unit)` | time of day |
+| `ma.timestamp(unit, tz=None)` | timestamp |
+| `ma.duration(unit)` | elapsed time |
+
+Nested and named types are built from helper functions:
+
+| Constructor | Arrow type |
+|-------------|-----------|
+| `ma.field("name", dtype, nullable, metadata)` | named field descriptor |
 | `ma.struct([field, ...])` | struct with named fields |
+| `ma.list_(value_type)` | variable-length list |
+| `ma.fixed_size_list_(value_type, size)` | fixed-width list |
 
 ```{python}
 # Type objects are just values — print them to inspect
@@ -141,9 +155,16 @@ nested_f = ma.array([[1.0, 2.0], [3.0]])
 print(nested_f.type())  # list<float64>
 ```
 
-::: {.callout-note}
-Explicit list type construction via `type=` is not yet exposed at the Python level. For full schema control over nested lists, use the Mojo API with `ListBuilder` and an explicit child builder type.
-:::
+For full control, build the nested type explicitly with `ma.list_(value_type)`
+or `ma.fixed_size_list_(value_type, size)` and pass it as `type=`:
+
+```{python}
+lst = ma.array([[1, 2], [3, 4, 5]], type=ma.list_(ma.int32()))
+print(lst.type())   # list<int32>
+
+fsl = ma.array([[1.0, 2.0], [3.0, 4.0]], type=ma.fixed_size_list_(ma.float64(), 2))
+print(fsl.type())   # fixed_size_list<item: float64>
+```
 
 ## Checking types at runtime
 

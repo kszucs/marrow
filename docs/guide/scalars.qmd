@@ -1,0 +1,81 @@
+---
+title: "Scalars"
+---
+
+A **scalar** is a single, typed value drawn from an array — the result of
+indexing into a column, or of reducing one with an aggregate. Scalars carry
+their Arrow type and know whether they are null, so a missing value stays
+distinct from a zero or an empty string.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## Getting a scalar
+
+Indexing an array with `[]` returns a scalar:
+
+```{python}
+a = ma.array([10, None, 30])
+
+first = a[0]
+print(first)              # the scalar
+print(first.as_py())      # 10 — as a native Python value
+print(first.type())       # int64
+```
+
+Aggregate kernels also return scalars:
+
+```{python}
+total = ma.sum_(a, None)
+print(total, "|", total.as_py(), "|", total.type())
+```
+
+## Null scalars
+
+A null position yields a scalar that reports `is_null()` and converts to Python
+`None`:
+
+```{python}
+missing = a[1]
+print("is_null: ", missing.is_null())
+print("is_valid:", missing.is_valid())
+print("as_py:   ", missing.as_py())
+```
+
+::: {.callout-note}
+`is_valid()` and `is_null()` are exact opposites — a scalar is either present or
+absent. Absence is not the same as the value `0`.
+:::
+
+## Scalars of every type
+
+Any array type produces a matching scalar, including strings and structs:
+
+```{python}
+s = ma.array(["hi", None, "there"])
+print(s[0], "->", s[0].as_py())
+
+people = ma.array([{"x": 1, "y": 2.0}])
+print(people[0], "->", people[0].as_py())
+```
+
+## The scalar API
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `.as_py()` | Python object | Native value, or `None` if null |
+| `.is_valid()` | `bool` | `True` if the value is present |
+| `.is_null()` | `bool` | `True` if the value is absent |
+| `.type()` | `DataType` | The Arrow type of the value |
+
+Scalars are also truthy through `__bool__`, so a boolean scalar can be used
+directly in a condition:
+
+```{python}
+flag = ma.array([True, False])[0]
+print("truthy:", bool(flag))
+```

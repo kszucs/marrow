@@ -1,0 +1,171 @@
+---
+title: "Tables & joins"
+---
+
+A `RecordBatch` is a schema paired with a list of equal-length column arrays —
+the fundamental tabular unit in Arrow. A `Table` is a schema paired with
+*chunked* columns, so it can span many batches without copying them into one
+contiguous block. Both mirror their PyArrow namesakes.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## Creating a RecordBatch
+
+The most direct constructor takes a dict mapping column names to arrays:
+
+```{python}
+batch = ma.record_batch({
+    "id":    ma.array([1, 2, 3, 4]),
+    "name":  ma.array(["Alice", "Bob", "Carol", "Dave"]),
+    "score": ma.array([9.5, 8.2, 7.8, 9.1]),
+})
+print(batch)
+```
+
+You can also pass a list of arrays with explicit `names=`:
+
+```{python}
+batch2 = ma.record_batch(
+    [ma.array([1, 2, 3]), ma.array(["x", "y", "z"])],
+    names=["id", "label"],
+)
+print(batch2.column_names())
+```
+
+## Inspecting a batch
+
+```{python}
+print("shape:       ", batch.shape())        # (rows, columns)
+print("num_rows:    ", batch.num_rows())
+print("num_columns: ", batch.num_columns())
+print("column_names:", batch.column_names())
+print("schema:      ", batch.schema())
+```
+
+Reach a single column by name or position — both return an array:
+
+```{python}
+print(batch.column("name"))
+print(batch.column(0))
+```
+
+Convert the whole batch to native Python, either column-oriented
+(`to_pydict`) or row-oriented (`to_pylist`):
+
+```{python}
+print(batch.to_pydict())
+print(batch.to_pylist())
+```
+
+## Selecting, slicing, reshaping
+
+`select` keeps a subset of columns (by name or index); `slice` takes a
+zero-copy window of rows:
+
+```{python}
+print(batch.select(["name", "score"]).to_pydict())
+print(batch.slice(1, 2).to_pylist())         # offset 1, length 2
+```
+
+Column mutations return a **new** batch — arrays are immutable. Each takes a
+`Field` describing the new column, built with
+`ma.field(name, type, nullable, metadata)`:
+
+```{python}
+rank = ma.field("rank", ma.int64(), True, None)
+
+with_rank    = batch.append_column(rank, ma.array([1, 2, 3, 4]))
+inserted     = batch.add_column(0, rank, ma.array([1, 2, 3, 4]))
+renamed      = batch.rename_columns(["ID", "NAME", "SCORE"])
+without_score = batch.remove_column(2)
+
+print("appended: ", with_rank.column_names())
+print("inserted: ", inserted.column_names())
+print("renamed:  ", renamed.column_names())
+print("removed:  ", without_score.column_names())
+```
+
+## Sorting
+
+`sort_by` orders a batch by a column. The second argument is null placement
+(`None` for the default, or `"at_start"` / `"at_end"`):
+
+```{python}
+print(batch.sort_by([("score", "descending")], None).to_pylist())
+```
+
+::: {.callout-note}
+Single-key `sort_by` is available from Python today. The Mojo sort kernel
+supports multi-column keys — see [Sorting](sorting.qmd) for the full story.
+:::
+
+## Joins
+
+`join` runs a hash join between two batches on named key columns:
+
+```{python}
+people = ma.record_batch({
+    "dept_id": ma.array([1, 2, 1, 3]),
+    "name":    ma.array(["Alice", "Bob", "Carol", "Dave"]),
+})
+depts = ma.record_batch({
+    "dept_id": ma.array([1, 2, 3]),
+    "dept":    ma.array(["Engineering", "Sales", "Marketing"]),
+})
+
+inner = people.join(depts, ["dept_id"], None, "inner", 0)
+print(inner.to_pylist())
+```
+
+The signature is `join(right, keys, right_keys, join_type, num_threads)`:
+
+| Argument | Meaning |
+|----------|---------|
+| `right` | the right-hand `RecordBatch` |
+| `keys` | list of left-side key column names |
+| `right_keys` | right-side names, or `None` to reuse `keys` |
+| `join_type` | `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`, `"anti"` |
+| `num_threads` | `0` auto-selects cores; `1` forces the serial path |
+
+The supported join types:
+
+```{python}
+for kind in ["inner", "left", "right", "full", "semi", "anti"]:
+    out = people.join(depts, ["dept_id"], None, kind, 0)
+    print(f"{kind:>6}: {out.num_rows()} rows, columns={out.column_names()}")
+```
+
+Columns whose names collide across the two inputs are suffixed with `_right`,
+matching PyArrow.
+
+## Tables
+
+A `Table` holds chunked columns and is built the same way as a batch, from a
+dict or from arrays with `names=`:
+
+```{python}
+table = ma.table({
+    "id":   ma.array([1, 2, 3, 4, 5]),
+    "city": ma.array(["NYC", "LA", "SF", "CHI", "SEA"]),
+})
+print(table)
+print("shape:", table.shape())
+```
+
+Tables share the inspection API with batches — `schema`, `column_names`,
+`column`, `to_pydict`, `to_pylist` — and expose their underlying batches:
+
+```{python}
+print(table.column("city"))
+print(table.to_pydict())
+print("batches:", len(table.to_batches()))
+```
+
+A table can carry many batches at once. Because each batch is a separate chunk,
+appending data never re-copies the columns already present — the reason Arrow
+tables scale to streaming and out-of-core workloads.

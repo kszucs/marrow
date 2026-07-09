@@ -1,0 +1,396 @@
+/* =========================================================================
+   Marrow docs — shared component styling.
+   Theme-agnostic: reads the --mr-* custom properties defined per theme in
+   marrow-dark.scss / marrow-light.scss.
+   ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ---- base ------------------------------------------------------------- */
+html { scroll-behavior: smooth; }
+
+body,
+.mr-card p,
+p.lead,
+.mr-badge,
+.mr-lbl {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  letter-spacing: -0.006em;
+}
+
+::selection {
+  background: rgba(255, 106, 0, 0.28);
+  color: inherit;
+}
+
+a { text-decoration: none; }
+a:hover { text-decoration: none; }
+
+h1, h2, h3, h4,
+.mr-hero h1,
+.mr-section-title,
+.mr-card h3,
+.mr-num {
+  font-family: "Space Grotesk", "Inter", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+code, pre, kbd, .mr-install {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Gradient text utility */
+.mr-gradient {
+  background: var(--mr-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* ---- navbar ----------------------------------------------------------- */
+.navbar {
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  border-bottom: 1px solid var(--mr-border);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+}
+
+.navbar-brand img { height: 30px; width: auto; }
+
+.navbar .nav-link {
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+.navbar .nav-link:hover { color: var(--mr-amber) !important; }
+
+.navbar .navbar-nav .nav-link.active {
+  color: var(--mr-orange) !important;
+}
+
+/* ---- section headings ------------------------------------------------- */
+.quarto-title-block .quarto-title h1.title {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 2.6rem;
+  line-height: 1.05;
+}
+
+h2 {
+  margin-top: 2.4rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--mr-border);
+}
+
+/* Anchor accent bar for h2 on content pages */
+#quarto-document-content h2::before,
+main h2::before {
+  content: "";
+  display: inline-block;
+  width: 0.55rem;
+  height: 1.05rem;
+  margin-right: 0.6rem;
+  vertical-align: -0.08rem;
+  border-radius: 2px;
+  background: var(--mr-grad);
+}
+
+/* ---- links in content ------------------------------------------------- */
+main a:not(.btn):not(.nav-link) {
+  border-bottom: 1px solid rgba(255, 106, 0, 0.35);
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+main a:not(.btn):not(.nav-link):hover {
+  border-bottom-color: var(--mr-amber);
+}
+
+/* ---- code ------------------------------------------------------------- */
+div.sourceCode,
+pre.sourceCode,
+pre {
+  border-radius: 12px !important;
+  border: 1px solid var(--mr-border);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+}
+
+div.sourceCode { position: relative; }
+
+pre code { font-size: 0.86rem; line-height: 1.6; }
+
+code:not(.sourceCode):not(pre code) {
+  padding: 0.15em 0.4em;
+  border-radius: 6px;
+  font-size: 0.86em;
+}
+
+/* code copy button */
+.code-copy-button {
+  color: var(--mr-muted);
+}
+.code-copy-button:hover { color: var(--mr-amber); }
+
+/* jupyter cell output blocks */
+.cell-output pre {
+  background: var(--mr-bg-3) !important;
+  color: var(--mr-text);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+/* ---- tables ----------------------------------------------------------- */
+table.table {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--mr-border);
+}
+.table > thead {
+  background: var(--mr-bg-3);
+  border-bottom: 2px solid var(--mr-orange);
+}
+.table > thead th { font-weight: 600; }
+.table > tbody tr:hover { background: rgba(255, 106, 0, 0.05); }
+
+/* ---- callouts --------------------------------------------------------- */
+.callout {
+  border-radius: 10px !important;
+  border-left-width: 4px !important;
+}
+.callout.callout-note { border-left-color: var(--mr-orange) !important; }
+.callout.callout-tip  { border-left-color: var(--mr-amber) !important; }
+
+/* ---- TOC -------------------------------------------------------------- */
+#TOC .active,
+nav[role="doc-toc"] a.active {
+  color: var(--mr-orange) !important;
+  border-left: 2px solid var(--mr-orange);
+  font-weight: 600;
+}
+
+/* =========================================================================
+   Landing page
+   ========================================================================= */
+
+.mr-hero {
+  position: relative;
+  text-align: center;
+  padding: clamp(2.5rem, 6vw, 4.5rem) 1.25rem clamp(2.2rem, 4vw, 3.2rem);
+  margin: 0 0 2rem;
+  overflow: hidden;
+  border-bottom: 1px solid var(--mr-border);
+}
+
+.mr-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(60% 55% at 50% -5%, rgba(255, 106, 0, 0.22), transparent 70%),
+    radial-gradient(40% 40% at 85% 10%, rgba(255, 196, 0, 0.15), transparent 70%),
+    radial-gradient(40% 40% at 12% 8%, rgba(229, 52, 31, 0.15), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.mr-hero > * { position: relative; z-index: 1; }
+
+.mr-hero-logo {
+  max-width: 560px;
+  width: 82%;
+  height: auto;
+  filter: drop-shadow(0 12px 44px rgba(255, 106, 0, 0.28));
+  margin-bottom: 1.4rem;
+}
+
+.mr-hero h1 {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: clamp(1.9rem, 4.2vw, 3.1rem);
+  line-height: 1.08;
+  max-width: 22ch;
+  margin: 0.6rem auto 0.9rem;
+  border: none;
+  padding: 0;
+}
+.mr-hero h1::before { display: none !important; }
+
+.mr-hero p.lead {
+  font-size: clamp(1.05rem, 2.1vw, 1.35rem);
+  color: var(--mr-muted);
+  max-width: 640px;
+  margin: 0 auto 1.8rem;
+  line-height: 1.55;
+}
+
+/* badges row */
+.mr-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 1.8rem;
+}
+.mr-badge {
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 0.32rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid var(--mr-border);
+  background: var(--mr-bg-2);
+  color: var(--mr-muted);
+}
+.mr-badge strong { color: var(--mr-orange); font-weight: 700; }
+
+/* buttons */
+.mr-cta { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
+
+.mr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 600;
+  font-size: 0.98rem;
+  padding: 0.7rem 1.4rem;
+  border-radius: 10px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  border: 1px solid transparent;
+}
+.mr-btn-primary {
+  background: var(--mr-grad);
+  color: #150b02 !important;
+  box-shadow: var(--mr-glow);
+}
+.mr-btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 40px rgba(255, 106, 0, 0.5);
+  color: #150b02 !important;
+}
+.mr-btn-ghost {
+  background: var(--mr-bg-2);
+  border-color: var(--mr-border);
+  color: var(--mr-text) !important;
+}
+.mr-btn-ghost:hover {
+  transform: translateY(-2px);
+  border-color: var(--mr-orange);
+  color: var(--mr-text) !important;
+}
+
+/* install line */
+.mr-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.92rem;
+  background: var(--mr-bg-3);
+  border: 1px solid var(--mr-border);
+  border-radius: 10px;
+  padding: 0.6rem 1.1rem;
+  margin: 1.6rem auto 0;
+  color: var(--mr-text);
+}
+.mr-install .mr-prompt { color: var(--mr-orange); user-select: none; }
+.mr-install .mr-dot { color: var(--mr-muted); opacity: 0.6; padding: 0 0.2rem; }
+
+/* ---- feature grid ----------------------------------------------------- */
+.mr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.mr-card {
+  display: block;
+  background: var(--mr-bg-2);
+  border: 1px solid var(--mr-border);
+  border-radius: 14px;
+  padding: 1.4rem 1.4rem 1.5rem;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  color: inherit !important;
+  height: 100%;
+}
+.mr-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 106, 0, 0.55);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.28);
+}
+.mr-card .mr-ico {
+  font-size: 1.5rem;
+  line-height: 1;
+  display: inline-block;
+  margin-bottom: 0.7rem;
+}
+.mr-card h3 {
+  font-size: 1.08rem;
+  font-weight: 600;
+  margin: 0 0 0.35rem;
+}
+.mr-card p {
+  font-size: 0.9rem;
+  color: var(--mr-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+main a.mr-card { border-bottom: none; }
+
+/* ---- stat row --------------------------------------------------------- */
+.mr-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin: 2.2rem 0;
+  text-align: center;
+}
+.mr-stat {
+  padding: 1.3rem 1rem;
+  border: 1px solid var(--mr-border);
+  border-radius: 14px;
+  background: var(--mr-bg-2);
+}
+.mr-stat .mr-num {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 2rem;
+  font-weight: 700;
+  display: block;
+  line-height: 1;
+}
+.mr-stat .mr-lbl {
+  font-size: 0.82rem;
+  color: var(--mr-muted);
+  margin-top: 0.4rem;
+  display: block;
+}
+
+/* ---- section label ---------------------------------------------------- */
+.mr-eyebrow {
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mr-orange);
+  margin: 2.6rem 0 0.2rem;
+}
+.mr-section-title {
+  text-align: center;
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 1.8rem;
+  border: none;
+  margin: 0.2rem 0 0.4rem;
+}
+.mr-section-title::before { display: none !important; }
+
+/* footer */
+.nav-footer { border-top: 1px solid var(--mr-border); }
+
+@media (max-width: 600px) {
+  .mr-hero { padding-top: 2rem; }
+  .mr-install { font-size: 0.8rem; flex-wrap: wrap; }
+}

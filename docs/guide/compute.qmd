@@ -70,25 +70,36 @@ print("min:    ", ma.min_(arr, None))
 print("max:    ", ma.max_(arr, None))
 ```
 
-Aggregates always return `float64` regardless of input type:
+Aggregates return a scalar that **preserves the input type** — an `int32` array
+sums to an `int32` scalar:
 
 ```{python}
-ints = ma.array([10, 20, 30], type=ma.int32())
+ints   = ma.array([10, 20, 30], type=ma.int32())
 result = ma.sum_(ints, None)
-print(result, type(result))
+print(result, "of type", result.type())
 ```
 
 ### Identity values for empty / all-null input
+
+An empty or all-null array returns the operation's identity value: `0` for
+`sum`, `1` for `product`, and the extreme values of the type for `min` / `max`.
 
 ```{python}
 empty    = ma.array([], type=ma.int64())
 all_null = ma.array([None, None], type=ma.int64())
 
-print("sum of empty:      ", ma.sum_(empty, None))      # 0.0
-print("sum of all-null:   ", ma.sum_(all_null, None))    # 0.0
-print("product of empty:  ", ma.product(empty, None))    # 1.0
-print("min of empty:      ", ma.min_(empty, None))       # inf
-print("max of empty:      ", ma.max_(empty, None))       # -inf
+print("sum of empty:      ", ma.sum_(empty, None))      # 0
+print("sum of all-null:   ", ma.sum_(all_null, None))   # 0
+print("product of empty:  ", ma.product(empty, None))   # 1
+```
+
+For `min` / `max` the identity is the largest / smallest representable value of
+the type — using `float64` makes this readable:
+
+```{python}
+empty_f = ma.array([], type=ma.float64())
+print("min of empty:", ma.min_(empty_f, None))   # +max float
+print("max of empty:", ma.max_(empty_f, None))   # -max float
 ```
 
 ### Boolean aggregates

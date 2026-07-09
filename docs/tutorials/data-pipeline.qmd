@@ -1,0 +1,143 @@
+---
+title: "Build a data pipeline"
+subtitle: "Filter, sort and join two datasets end to end"
+---
+
+This tutorial builds a small analytics pipeline over two related datasets —
+employees and the departments they belong to. Along the way you'll use array
+construction, compute kernels, row filtering, sorting and a hash join. Every
+cell runs when the docs are built.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## The data
+
+We start with two `RecordBatch`es. The first holds employees; the second maps
+department ids to names.
+
+```{python}
+employees = ma.record_batch({
+    "name":    ma.array(["Alice", "Bob", "Carol", "Dave", "Eve", "Frank"]),
+    "dept_id": ma.array([1, 2, 1, 3, 2, 1]),
+    "salary":  ma.array([95_000, 72_000, 120_000, 88_000, 61_000, 105_000]),
+    "age":     ma.array([34, 28, 45, 52, 24, 39]),
+})
+
+departments = ma.record_batch({
+    "dept_id": ma.array([1, 2, 3]),
+    "dept":    ma.array(["Engineering", "Sales", "Marketing"]),
+})
+
+print(employees)
+print(departments)
+```
+
+## Step 1 — filter rows
+
+Marrow's compute kernels operate on columns, so filtering *rows* of a table is
+a two-part idea: build a boolean mask from the columns, then apply it to each
+column. Let's wrap that in a small helper — it's a pattern you'll reuse
+constantly.
+
+```{python}
+def filter_rows(batch, mask):
+    """Keep the rows of `batch` where boolean `mask` is True."""
+    cols = [ma.filter_(batch.column(n), mask) for n in batch.column_names()]
+    return ma.record_batch(cols, names=batch.column_names())
+```
+
+Now keep only the employees earning more than 80,000. A comparison kernel
+produces the mask; both operands must share a dtype, so we compare against an
+array of the threshold:
+
+```{python}
+threshold = ma.array([80_000] * employees.num_rows())
+well_paid = ma.greater(employees.column("salary"), threshold, None)
+print("mask:", well_paid)
+
+top_earners = filter_rows(employees, well_paid)
+print(top_earners.to_pylist())
+```
+
+## Step 2 — sort
+
+`sort_by` orders a batch by one or more keys. Pass a list of
+`(column, "ascending" | "descending")` tuples; the second argument controls
+null placement (`None` uses the default):
+
+```{python}
+by_salary = top_earners.sort_by([("salary", "descending")], None)
+print(by_salary.to_pylist())
+```
+
+::: {.callout-note}
+Sorting by a **single** key is supported from Python today; multi-key
+`sort_by` at the Python layer is still in progress. The underlying Mojo sort
+kernel already handles multi-column keys — see [Sorting](../guide/sorting.qmd).
+:::
+
+## Step 3 — join
+
+`join` performs a hash join between two record batches on named key columns.
+The signature is `join(right, keys, right_keys, join_type, num_threads)`:
+
+- `keys` — list of left-side key column names,
+- `right_keys` — right-side names, or `None` to reuse `keys`,
+- `join_type` — `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"` or `"anti"`,
+- `num_threads` — `0` auto-selects, `1` forces the serial path.
+
+Enrich each employee with their department name:
+
+```{python}
+enriched = employees.join(departments, ["dept_id"], None, "inner", 0)
+print(enriched.to_pylist())
+```
+
+Columns that collide between the two sides are suffixed with `_right`, matching
+PyArrow's behaviour.
+
+## Step 4 — put it together
+
+The whole pipeline reads as a short sequence of transformations: join, filter,
+sort, project.
+
+```{python}
+# 1. join employees to their departments
+joined = employees.join(departments, ["dept_id"], None, "inner", 0)
+
+# 2. keep the well-paid rows
+mask = ma.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()), None)
+filtered = filter_rows(joined, mask)
+
+# 3. sort by salary, highest first
+sorted_ = filtered.sort_by([("salary", "descending")], None)
+
+# 4. project the columns we care about
+report = sorted_.select(["name", "dept", "salary"])
+print(report.to_pylist())
+```
+
+## Step 5 — aggregate a column
+
+Reduce a column to a single figure with an aggregate kernel — nulls are skipped
+automatically:
+
+```{python}
+salaries = report.column("salary")
+print("headcount:  ", report.num_rows())
+print("total spend:", ma.sum_(salaries, None))
+print("top salary: ", ma.max_(salaries, None))
+```
+
+## Where to go next
+
+- **[Tables & joins](../guide/tables.qmd)** — the full `RecordBatch` / `Table` API.
+- **[Compute kernels](../guide/compute.qmd)** — every kernel and its null rules.
+- **[Expressions](../guide/expressions.qmd)** — build lazy query plans instead of
+  chaining eager calls.
+- **[File I/O](../guide/io.qmd)** — read and write Parquet and Arrow IPC.

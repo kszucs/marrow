@@ -27,27 +27,26 @@ print("type:   ", pa_arr.type)
 
 ## Construction performance
 
-When converting Python data to Arrow arrays, Marrow is faster than PyArrow for numeric and string types when an explicit type is provided. Results below are from `pixi run bench_python` on Apple M-series hardware (n=100,000 elements, mean time):
+When converting Python data to Arrow arrays with an explicit type, Marrow's
+builder path is faster than PyArrow for numeric types and roughly on par for
+strings. The figures below are indicative — best of several runs on Apple
+M-series hardware, `n = 100,000`, explicit type provided:
 
-| Array type | marrow | PyArrow | speedup |
-|------------|-------:|--------:|---------|
-| `int64` (explicit type) | 0.37 ms | 0.89 ms | **2.4x** |
-| `int64` + nulls (explicit) | 0.36 ms | 0.87 ms | **2.4x** |
-| `float64` (explicit) | 0.34 ms | 0.48 ms | **1.4x** |
-| `float64` + nulls | 0.34 ms | 0.51 ms | **1.5x** |
-| `string` (explicit) | 0.72 ms | 1.06 ms | **1.5x** |
-| `string` + nulls | 0.70 ms | 1.04 ms | **1.5x** |
-| struct, primitive fields (explicit) | 5.41 ms | 6.54 ms | **1.2x** |
-| `int64` (inferred) | 1.40 ms | 1.27 ms | 1.1x slower |
-| `string` (inferred) | 1.57 ms | 1.02 ms | 1.5x slower |
-| nested list (inferred) | 3.92 ms | 2.36 ms | 1.7x slower |
+| Array type | marrow | PyArrow | ratio |
+|------------|-------:|--------:|-------|
+| `int64`   | ~0.28 ms | ~0.89 ms | **~3.1× faster** |
+| `float64` | ~0.28 ms | ~0.48 ms | **~1.7× faster** |
+| `string`  | ~1.1 ms  | ~1.0 ms  | ~parity |
 
-The pattern: **provide an explicit type when you know it**. Marrow's builder path is highly optimized for known types. When the type must be inferred from a scan of Python objects, PyArrow currently wins for complex nested structures.
+The pattern: **provide an explicit type when you know it**. Marrow's builder path
+is optimized for known types. When the type must instead be inferred from a scan
+of Python objects, that inference pass adds overhead and PyArrow is often faster —
+so pass `type=` on any hot path.
 
-Reproduce with:
+Reproduce (numbers will vary by machine) with:
 
 ```bash
-pixi run bench_python
+pixi run -e bench bench_python
 ```
 
 ## Zero-copy C Data Interface
