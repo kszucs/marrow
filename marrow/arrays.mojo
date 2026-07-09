@@ -1858,19 +1858,14 @@ struct ChunkedArray(Copyable, Movable, Writable):
     def combine_chunks(var self) raises -> AnyArray:
         """Combines all chunks into a single array."""
         from .kernels.concat import concat
+        from .builders import AnyBuilder
 
         if len(self.chunks) == 0:
-            return AnyArray.from_data(
-                ArrayData(
-                    dtype=self.dtype.copy(),
-                    length=0,
-                    nulls=0,
-                    offset=0,
-                    bitmap=None,
-                    buffers=[],
-                    children=[],
-                )
-            )
+            # An empty ArrayData with no buffers is not a valid array for most
+            # dtypes (a primitive needs its data buffer, a string its offsets,
+            # etc.), so build a properly-structured empty array of the dtype.
+            var builder = AnyBuilder(self.dtype)
+            return builder.finish()
         return concat(self.chunks)
 
 

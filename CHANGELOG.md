@@ -32,6 +32,15 @@
 
 ### Fixes
 
+- **Empty (zero-chunk) `ChunkedArray.combine_chunks()`** (`marrow.arrays`): a
+  chunked array with no chunks — e.g. a column materialized from an Arrow C
+  stream that yields zero batches, as PyArrow does for an empty table — combined
+  into an `ArrayData` with no buffers, which is not a valid array for most dtypes
+  (a primitive needs its data buffer, a string its offsets), so materializing it
+  raised "PrimitiveArray requires exactly one buffer". It now builds a
+  properly-structured empty array of the dtype. Surfaced by the new Parquet
+  interop tests writing an empty table.
+
 - **Relational plans are reusable templates** (`marrow.expr.relations`): the
   relation nodes carried mutable execution cursors (scan offset, built hash
   index, grouper, emitted flag) shared through `AnyRelation`'s `ArcPointer`, so a
@@ -47,6 +56,18 @@
   relabelled to the plan's declared schema, so `plan.schema()` matches the
   executed result exactly (previously the grouper emitted `col{i}_{func}` names
   the declared schema did not carry).
+
+### Tests
+
+- **Parquet cross-compatibility suite** (`marrow/parquet/tests/test_interop.mojo`):
+  asserts Marrow and PyArrow read each other's Parquet output identically,
+  across three shapes — Marrow-reads-PyArrow, PyArrow-reads-Marrow, and
+  Marrow-round-trip — over primitives, narrow ints, nullable columns, structs,
+  empty tables, dictionary-encoded columns (all codecs incl. GZIP/LZ4), and the
+  read-only surface (temporal, binary/large_string, lists). Tables are compared
+  column-by-column via the Arrow C stream interface (values plus a type check
+  that normalizes the Arrow-only distinctions Parquet drops), tolerating
+  chunk-boundary and field-metadata differences.
 
 ### Refactors
 
