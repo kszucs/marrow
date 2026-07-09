@@ -39,6 +39,14 @@
   (54 ms → 11 ms on 16 cores), bringing multi-column reads level with polars and
   PyArrow. ASAN-clean under the concurrent path.
 
+- **LZ4 (LZ4_RAW) write support** (`marrow.parquet`): the writer can now emit
+  `CODEC_LZ4_RAW` (via `LZ4_compress_default`), joining UNCOMPRESSED/SNAPPY/ZSTD;
+  LZ4_RAW was already readable. PyArrow reads marrow's LZ4 output and vice versa
+  (covered by the interop suite). LZ4 is the fastest real codec through the
+  reader — a 2M×8 file reads in 6.9 ms vs 10.7 (snappy) / 15.3 (zstd) at
+  essentially snappy's file size (58 vs 59 MB), so LZ4 gives near-uncompressed
+  read speed with compression.
+
 ### Fixes
 
 - **Empty (zero-chunk) `ChunkedArray.combine_chunks()`** (`marrow.arrays`): a

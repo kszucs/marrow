@@ -20,6 +20,7 @@ from marrow.parquet.compression import (
     CODEC_UNCOMPRESSED,
     CODEC_SNAPPY,
     CODEC_ZSTD,
+    CODEC_LZ4_RAW,
 )
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
@@ -120,8 +121,10 @@ def _all_shapes(want: PythonObject) raises:
     _pyarrow_reads_marrow(want, CODEC_UNCOMPRESSED)
     _pyarrow_reads_marrow(want, CODEC_SNAPPY)
     _pyarrow_reads_marrow(want, CODEC_ZSTD)
+    _pyarrow_reads_marrow(want, CODEC_LZ4_RAW)
     _marrow_roundtrip(want, CODEC_UNCOMPRESSED)
     _marrow_roundtrip(want, CODEC_SNAPPY)
+    _marrow_roundtrip(want, CODEC_LZ4_RAW)
 
 
 def _read_only(want: PythonObject) raises:

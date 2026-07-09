@@ -205,7 +205,7 @@ struct Codecs(Movable):
         mut self, codec: Int, src: Span[UInt8, _]
     ) raises -> List[UInt8]:
         """Compress `src`, returning the codec's output bytes. Writers currently
-        emit UNCOMPRESSED, SNAPPY, or ZSTD."""
+        emit UNCOMPRESSED, SNAPPY, ZSTD, or LZ4_RAW."""
         if codec == CODEC_UNCOMPRESSED:
             var out = List[UInt8]()
             out.extend(src)
@@ -243,6 +243,25 @@ struct Codecs(Movable):
                 out.append(dst[i])
             dst.free()
             sz.free()
+            return out^
+        elif codec == CODEC_LZ4_RAW:
+            self._ensure_lz4()
+            var bound = Int(
+                self._lz4.value().call["LZ4_compressBound", Int32](
+                    Int32(len(src))
+                )
+            )
+            var dst = alloc[UInt8](bound)
+            var n = self._lz4.value().call["LZ4_compress_default", Int32](
+                src_ptr, dst, Int32(len(src)), Int32(bound)
+            )
+            if n == 0:
+                dst.free()
+                raise Error("lz4: compression failed")
+            var out = List[UInt8]()
+            for i in range(Int(n)):
+                out.append(dst[i])
+            dst.free()
             return out^
         else:
             raise Error(

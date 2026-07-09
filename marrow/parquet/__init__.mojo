@@ -14,4 +14,5 @@ from .compression import (
     CODEC_UNCOMPRESSED,
     CODEC_SNAPPY,
     CODEC_ZSTD,
+    CODEC_LZ4_RAW,
 )
