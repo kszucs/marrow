@@ -45,6 +45,13 @@
 
 - A from-scratch reader and writer with no Arrow C++ dependency:
   `read_table(path, columns=None)` and `write_table(table, path, ...)`.
+- Every encoding: plain, RLE/dictionary, DELTA_BINARY_PACKED,
+  DELTA_BYTE_ARRAY, DELTA_LENGTH_BYTE_ARRAY and BYTE_STREAM_SPLIT, on
+  read and on write, with per-column selection and dictionary fallback.
+- Arbitrarily nested reconstruction -- any depth of list and struct,
+  struct-level nulls included -- and general nested writes.
+- Reads parallelize across row groups and columns; page bodies are
+  zero-copy out of the mapped file.
 
 ### Arrow IPC
 

@@ -8,16 +8,17 @@ nesting; primitives, string/binary; PLAIN and dictionary encodings; v1/v2 pages.
 
 from std.ffi import external_call
 from std.io.file import FileHandle
+from std.algorithm.functional import sync_parallelize
+from std.sys.info import num_physical_cores
 
 from ..arrays import AnyArray
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
-from .compression import Codecs
-from .schema import ParsedSchema
-from .format import read_footer
+from .utils import CompressionLibs
+from .schema import SchemaMapping, Projection, DecodedLeaf
+from .format import FileMetaData
 from .column import ColumnReader
-from .nested import DecodedLeaf, LeveledColumnReader
 
 
 # ---------------------------------------------------------------------------
@@ -64,44 +65,88 @@ struct MappedFile(Movable):
 # ---------------------------------------------------------------------------
 
 
-def read_table(path: String) raises -> Table:
-    """Read a Parquet file into a Marrow `Table`."""
+# Below this many rows a file is decoded on one thread — the thread-dispatch
+# overhead is not worth it for small files.
+comptime _PARALLEL_MIN_ROWS = 4096
+
+
+def read_table(
+    path: String, columns: Optional[List[String]] = None
+) raises -> Table:
+    """Read a Parquet file into a Marrow `Table`.
+
+    `columns` projects the read to the named top-level columns (in the given
+    order); `None` reads all. Only the selected columns' chunks are touched.
+
+    Every (row group, selected leaf) pair decodes independently — each reads a
+    disjoint byte range of the shared read-only mmap and writes its own result
+    slot — so the whole grid is decoded across `num_physical_cores()` workers.
+    Each worker owns a `CompressionLibs` (the lazy `dlopen` handles and reused size cell
+    are not shareable across threads); the mmap and metadata are read-only.
+    """
     var mapped = MappedFile(path)
     var data = mapped.span()
-    var meta = read_footer(data)
-    var parsed = ParsedSchema.from_metadata(meta)
+    var meta = FileMetaData.read_footer(data)
+    var mapping = SchemaMapping.from_parquet(meta)
 
-    var codecs = Codecs()
+    # the read plan: which column chunks to decode and how to reassemble them
+    var plan = mapping.project(columns.value()) if columns else mapping.full()
+
+    var num_leaves = len(plan.decode_order)
+    var num_rg = len(meta.row_groups)
+    var total = num_rg * num_leaves
+
+    var nt = 1
+    if total >= 2 and meta.num_rows >= _PARALLEL_MIN_ROWS:
+        nt = min(num_physical_cores(), total)
+
+    # One result slot per (row group, selected leaf), pre-sized so workers assign
+    # by index without racing on list growth. (DecodedLeaf is move-only, so the
+    # slots are filled by appending rather than the copy-based `fill=`.)
+    var grid = List[Optional[DecodedLeaf]](capacity=total)
+    for _ in range(total):
+        grid.append(None)
+
+    @parameter
+    def worker(w: Int) raises:
+        var codecs = (
+            CompressionLibs()
+        )  # per-worker: lazy dlopen handles are not shared
+        var t = w
+        while t < total:
+            var rg_idx = t // num_leaves
+            # original column-chunk index for this compact slot
+            var orig = plan.decode_order[t % num_leaves]
+            ref rg = meta.row_groups[rg_idx]
+            # ColumnReader.decode picks the flat vs leveled path from the leaf's
+            # max repetition, so the same call serves every column shape.
+            var reader = ColumnReader(
+                data,
+                rg.columns[orig].meta_data.copy(),
+                mapping.leaves[orig].copy(),
+                rg.num_rows,
+            )
+            grid[t] = reader.decode(codecs)
+            t += nt
+
+    sync_parallelize[worker](nt)
+
+    # Fold each row group's decoded leaves back into the Arrow type tree.
     var batches = List[RecordBatch]()
-    for ref rg in meta.row_groups:
+    for rg_idx in range(num_rg):
         var decoded = List[DecodedLeaf]()
-        for ci in range(len(parsed.leaves)):
-            if parsed.leaves[ci].max_rep >= 1:
-                var reader = LeveledColumnReader(
-                    data,
-                    rg.columns[ci].meta_data.copy(),
-                    parsed.leaves[ci].copy(),
-                    rg.num_rows,
-                )
-                decoded.append(reader.read(codecs))
-            else:
-                var reader = ColumnReader(
-                    data,
-                    rg.columns[ci].meta_data.copy(),
-                    parsed.leaves[ci].copy(),
-                    rg.num_rows,
-                )
-                decoded.append(DecodedLeaf.flat(reader.read(codecs)))
+        for ci in range(num_leaves):
+            decoded.append(grid[rg_idx * num_leaves + ci].take())
         var cols = List[AnyArray]()
-        for ref node in parsed.nodes:
+        for ref node in plan.nodes:
             cols.append(node.assemble(decoded))
         batches.append(
-            RecordBatch(schema=Schema(copy=parsed.schema), columns=cols^)
+            RecordBatch(schema=Schema(copy=plan.schema), columns=cols^)
         )
 
     if len(batches) == 0:
-        batches.append(RecordBatch.empty(parsed.schema))
-    var result = Table.from_batches(parsed.schema, batches)
+        batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
+    var result = Table.from_batches(Schema(copy=plan.schema), batches)
     # `data` is an untracked view into `mapped`; keep the map alive until every
     # value has been copied into owned Arrow buffers above, then unmap.
     _ = mapped^
