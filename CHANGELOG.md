@@ -97,6 +97,17 @@
 
 ### Fixes
 
+- **Encodings and booleans inside lists** (`marrow.parquet`): a list element
+  encoded as DELTA_BINARY_PACKED / DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT, or a
+  `list<bool>`, previously crashed — the nested reader had its own value decoders
+  that only understood PLAIN and dictionary. The flat and nested paths now share
+  one set of per-encoding decoders (`values.mojo`: `decode_primitive_present` /
+  `decode_bytes_present` / `decode_bool_present` + the dict-page decoders), so
+  every encoding works identically in both. This also removes the duplicated
+  decode logic (two dtype-dispatch ladders, four dict-page copies) and the
+  `ChildBuilder`/`PrimChild`/`BytesChild` hierarchy; the flat all-present fast
+  paths (PLAIN memcpy, fused dictionary gather) are unchanged.
+
 - **Empty (zero-chunk) `ChunkedArray.combine_chunks()`** (`marrow.arrays`): a
   chunked array with no chunks — e.g. a column materialized from an Arrow C
   stream that yields zero batches, as PyArrow does for an empty table — combined

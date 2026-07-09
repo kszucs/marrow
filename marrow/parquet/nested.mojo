@@ -1,17 +1,15 @@
-"""List (single-level) decoding via Dremel repetition/definition levels.
+"""List decoding via Dremel repetition/definition levels, to any nesting depth.
 
 A repeated leaf yields, per page, a value for each *present* element plus full
-rep/def levels for every slot. `LeveledColumnReader` drives a `PageReader`
-through a growable `ChildBuilder` (one per element type) to build the element
-child array, while accumulating the levels; `assemble_list` then turns the levels
-into Arrow list offsets and list-level validity.
+rep/def levels for every slot. `LeveledColumnReader` builds the element child
+array (a growable builder, since list children are data-sized, not `num_rows`)
+while accumulating the levels; `assemble_list` then folds the levels into Arrow
+list offsets and list-level validity — recursing for nested lists.
 
-This is a separate path from the flat `ColumnReader`: list child arrays are
-data-sized (not `num_rows`), so they use growable builders rather than the flat
-memcpy fast path. Value reading reuses the shared `read_*` helpers.
+Value decoding is shared with the flat path via `values.mojo`, so a list element
+supports every encoding a flat column does (PLAIN, dictionary, DELTA_*,
+BYTE_STREAM_SPLIT) plus booleans.
 """
-
-from std.sys import size_of
 
 from ..arrays import AnyArray, ListArray
 from ..builders import PrimitiveBuilder, BinaryLikeBuilder, BoolBuilder
@@ -45,11 +43,17 @@ from ..dtypes import (
     float64,
 )
 
-from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
-from .encoding import rle_decode
+from .page import Page, PageReader, PAGEKIND_DICT
 from .compression import Codecs
 from .schema import LeafColumn, NodeGeom
 from .format import ColumnMetaData
+from .values import (
+    decode_primitive_present,
+    decode_bytes_present,
+    decode_bool_present,
+    decode_dict_primitive,
+    decode_dict_bytes,
+)
 
 
 struct DecodedLeaf(Movable):
@@ -82,109 +86,7 @@ struct DecodedLeaf(Movable):
 
 
 # ---------------------------------------------------------------------------
-# ChildBuilder — accumulates the element (child) array, growing as needed
-# ---------------------------------------------------------------------------
-
-
-trait ChildBuilder(ImplicitlyDeletable, Movable):
-    def dict_page(mut self, var page: Page) raises:
-        ...
-
-    def present_plain(mut self, vspan: Span[UInt8, _], mut vi: Int) raises:
-        ...
-
-    def present_dict(mut self, idx: Int) raises:
-        ...
-
-    def null(mut self) raises:
-        ...
-
-    def finish(deinit self) raises -> AnyArray:
-        ...
-
-
-struct PrimChild[T: NumericType, phys: DType](ChildBuilder):
-    var builder: PrimitiveBuilder[Self.T]
-    var dict: List[Scalar[Self.T.native]]
-
-    def __init__(out self, capacity: Int):
-        self.builder = PrimitiveBuilder[Self.T](capacity)
-        self.dict = List[Scalar[Self.T.native]]()
-
-    def dict_page(mut self, var page: Page) raises:
-        comptime PW = size_of[Scalar[Self.phys]]()
-        var span = page.body
-        for i in range(page.num_values):
-            self.dict.append(
-                read_fixed_le[Self.phys](span, i * PW).cast[Self.T.native]()
-            )
-
-    def present_plain(mut self, vspan: Span[UInt8, _], mut vi: Int) raises:
-        comptime PW = size_of[Scalar[Self.phys]]()
-        self.builder.append(
-            read_fixed_le[Self.phys](vspan, vi).cast[Self.T.native]()
-        )
-        vi += PW
-
-    def present_dict(mut self, idx: Int) raises:
-        self.builder.append(self.dict[idx])
-
-    def null(mut self) raises:
-        self.builder.append_null()
-
-    def finish(deinit self) raises -> AnyArray:
-        var b = self.builder^
-        var out: AnyArray = b.finish()
-        return out^
-
-
-struct BytesChild[BT: BinaryLikeType](ChildBuilder):
-    var builder: BinaryLikeBuilder[Self.BT]
-    var dict_body: List[UInt8]
-    var dict_off: List[Int]
-    var dict_len: List[Int]
-
-    def __init__(out self, capacity: Int):
-        self.builder = BinaryLikeBuilder[Self.BT](capacity)
-        self.dict_body = List[UInt8]()
-        self.dict_off = List[Int]()
-        self.dict_len = List[Int]()
-
-    def dict_page(mut self, var page: Page) raises:
-        self.dict_body = List[UInt8]()
-        self.dict_body.extend(page.body)
-        var span = Span(self.dict_body)
-        var off = 0
-        for _ in range(page.num_values):
-            var n = read_u32le(span, off)
-            off += 4
-            self.dict_off.append(off)
-            self.dict_len.append(n)
-            off += n
-
-    def present_plain(mut self, vspan: Span[UInt8, _], mut vi: Int) raises:
-        var n = read_u32le(vspan, vi)
-        vi += 4
-        self.builder.append(StringSlice(unsafe_from_utf8=vspan[vi : vi + n]))
-        vi += n
-
-    def present_dict(mut self, idx: Int) raises:
-        var start = self.dict_off[idx]
-        var entry = List[UInt8]()
-        entry.extend(Span(self.dict_body)[start : start + self.dict_len[idx]])
-        self.builder.append(StringSlice(unsafe_from_utf8=Span(entry)))
-
-    def null(mut self) raises:
-        self.builder.append_null()
-
-    def finish(deinit self) raises -> AnyArray:
-        var b = self.builder^
-        var out: AnyArray = b.finish()
-        return out^
-
-
-# ---------------------------------------------------------------------------
-# LeveledColumnReader — drive pages through a ChildBuilder
+# LeveledColumnReader — build a list element array from leveled pages
 # ---------------------------------------------------------------------------
 
 
@@ -202,111 +104,139 @@ struct LeveledColumnReader[o: Origin[mut=False]](Movable):
         self.pages = PageReader(data, meta^, leaf^)
         self.num_rows = num_rows
 
-    def _drive[
-        B: ChildBuilder
-    ](
-        mut self,
-        var child: B,
-        mut codecs: Codecs,
-        floor: Int,
-        max_def: Int,
-    ) raises -> DecodedLeaf:
+    # Each `_drive_*` builds the element child array. A slot holds an element
+    # when its def reaches `floor`; the element is present at `max_def`, else
+    # null. Present values come from the shared `values.mojo` decoders, so every
+    # encoding works here just as on the flat path.
+
+    def _drive_primitive[
+        T: NumericType, phys: DType
+    ](mut self, mut codecs: Codecs, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        var builder = PrimitiveBuilder[T](self.num_rows)
+        var dict = List[Scalar[T.native]]()
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
             if pg.kind == PAGEKIND_DICT:
-                child.dict_page(pg^)
+                decode_dict_primitive[T.native, phys](pg, dict)
                 continue
             rep_out.extend(Span(pg.rep_levels))
             def_out.extend(Span(pg.def_levels))
-            var vspan = pg.values()
-            var use_dict = pg.is_dictionary()
-            var indices = List[Int32]()
-            if use_dict:
-                indices = rle_decode(vspan[1:], Int(vspan[0]), pg.num_present)
+            var present = List[Scalar[T.native]]()
+            decode_primitive_present[T.native, phys](pg, dict, present)
             var vi = 0
-            var di = 0
             for k in range(pg.num_values):
                 var d = Int(pg.def_levels[k])
                 if d < floor:
-                    continue  # list null/empty — no element in this slot
+                    continue
                 if d == max_def:
-                    if use_dict:
-                        child.present_dict(Int(indices[di]))
-                        di += 1
-                    else:
-                        child.present_plain(vspan, vi)
+                    builder.append(present[vi])
+                    vi += 1
                 else:
-                    child.null()
-        var values = child^.finish()
-        return DecodedLeaf(
-            leveled=True,
-            array=values^,
-            rep_levels=rep_out^,
-            def_levels=def_out^,
-        )
+                    builder.append_null()
+        var arr = builder.finish()
+        return DecodedLeaf(True, arr^, rep_out^, def_out^)
+
+    def _drive_bytes[
+        BT: BinaryLikeType
+    ](mut self, mut codecs: Codecs, floor: Int, max_def: Int) raises -> DecodedLeaf:
+        var builder = BinaryLikeBuilder[BT](self.num_rows)
+        var dict_body = List[UInt8]()
+        var dict_off = List[Int]()
+        var dict_len = List[Int]()
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+        while self.pages.has_next():
+            var pg = self.pages.next(codecs)
+            if pg.kind == PAGEKIND_DICT:
+                decode_dict_bytes(pg, dict_body, dict_off, dict_len)
+                continue
+            rep_out.extend(Span(pg.rep_levels))
+            def_out.extend(Span(pg.def_levels))
+            var values = decode_bytes_present(
+                pg, dict_body, dict_off, dict_len
+            )
+            var vi = 0
+            for k in range(pg.num_values):
+                var d = Int(pg.def_levels[k])
+                if d < floor:
+                    continue
+                if d == max_def:
+                    builder.append(StringSlice(unsafe_from_utf8=Span(values[vi])))
+                    vi += 1
+                else:
+                    builder.append_null()
+        var arr = builder.finish()
+        return DecodedLeaf(True, arr^, rep_out^, def_out^)
+
+    def _drive_bool(
+        mut self, mut codecs: Codecs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        var builder = BoolBuilder(self.num_rows)
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+        while self.pages.has_next():
+            var pg = self.pages.next(codecs)
+            if pg.kind == PAGEKIND_DICT:
+                raise Error("parquet: dictionary-encoded bool not supported")
+            rep_out.extend(Span(pg.rep_levels))
+            def_out.extend(Span(pg.def_levels))
+            var present = decode_bool_present(pg)
+            var vi = 0
+            for k in range(pg.num_values):
+                var d = Int(pg.def_levels[k])
+                if d < floor:
+                    continue
+                if d == max_def:
+                    builder.append(present[vi])
+                    vi += 1
+                else:
+                    builder.append_null()
+        var arr = builder.finish()
+        return DecodedLeaf(True, arr^, rep_out^, def_out^)
 
     def read(mut self, mut codecs: Codecs) raises -> DecodedLeaf:
         ref leaf = self.pages.leaf
         ref dt = leaf.dtype
         # a value slot exists at/above the leaf's repetition floor (the innermost
         # enclosing list's element level); the value is present at max_def.
-        var floor = leaf.rep_floor
+        var f = leaf.rep_floor
         var md = leaf.max_def
-        var cap = self.num_rows
         if dt == int32:
-            return self._drive(
-                PrimChild[Int32Type, DType.int32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[Int32Type, DType.int32](codecs, f, md)
         elif dt == int64:
-            return self._drive(
-                PrimChild[Int64Type, DType.int64](cap), codecs, floor, md
-            )
+            return self._drive_primitive[Int64Type, DType.int64](codecs, f, md)
         elif dt == uint32:
-            return self._drive(
-                PrimChild[UInt32Type, DType.uint32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[UInt32Type, DType.uint32](codecs, f, md)
         elif dt == uint64:
-            return self._drive(
-                PrimChild[UInt64Type, DType.uint64](cap), codecs, floor, md
-            )
+            return self._drive_primitive[UInt64Type, DType.uint64](codecs, f, md)
         elif dt == float32:
-            return self._drive(
-                PrimChild[Float32Type, DType.float32](cap), codecs, floor, md
+            return self._drive_primitive[Float32Type, DType.float32](
+                codecs, f, md
             )
         elif dt == float64:
-            return self._drive(
-                PrimChild[Float64Type, DType.float64](cap), codecs, floor, md
+            return self._drive_primitive[Float64Type, DType.float64](
+                codecs, f, md
             )
         elif dt == int8:
-            return self._drive(
-                PrimChild[Int8Type, DType.int32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[Int8Type, DType.int32](codecs, f, md)
         elif dt == int16:
-            return self._drive(
-                PrimChild[Int16Type, DType.int32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[Int16Type, DType.int32](codecs, f, md)
         elif dt == uint8:
-            return self._drive(
-                PrimChild[UInt8Type, DType.int32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[UInt8Type, DType.int32](codecs, f, md)
         elif dt == uint16:
-            return self._drive(
-                PrimChild[UInt16Type, DType.int32](cap), codecs, floor, md
-            )
+            return self._drive_primitive[UInt16Type, DType.int32](codecs, f, md)
+        elif dt == bool_:
+            return self._drive_bool(codecs, f, md)
         elif dt.is_string():
-            return self._drive(BytesChild[StringType](cap), codecs, floor, md)
+            return self._drive_bytes[StringType](codecs, f, md)
         elif dt.is_large_string():
-            return self._drive(
-                BytesChild[LargeStringType](cap), codecs, floor, md
-            )
+            return self._drive_bytes[LargeStringType](codecs, f, md)
         elif dt.is_binary():
-            return self._drive(BytesChild[BinaryType](cap), codecs, floor, md)
+            return self._drive_bytes[BinaryType](codecs, f, md)
         elif dt.is_large_binary():
-            return self._drive(
-                BytesChild[LargeBinaryType](cap), codecs, floor, md
-            )
+            return self._drive_bytes[LargeBinaryType](codecs, f, md)
         else:
             raise Error("parquet: unsupported list element type " + String(dt))
 

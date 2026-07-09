@@ -33,22 +33,12 @@ from ..dtypes import (
 )
 
 from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
-from .encoding import (
-    rle_decode,
-    rle_gather,
-    delta_binary_packed_decode,
-    delta_decode,
-)
+from .encoding import rle_gather
 from .compression import Codecs
 from .schema import LeafColumn
 from .nested import DecodedLeaf
-from .format import (
-    ColumnMetaData,
-    ENC_DELTA_BINARY_PACKED,
-    ENC_DELTA_LENGTH_BYTE_ARRAY,
-    ENC_DELTA_BYTE_ARRAY,
-    ENC_BYTE_STREAM_SPLIT,
-)
+from .values import decode_primitive_present, decode_bytes_present
+from .format import ColumnMetaData
 
 
 # ---------------------------------------------------------------------------
@@ -159,67 +149,32 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             return
 
         var vspan = page.values()
-        var np = page.num_present
-        if page.is_plain():
-            comptime if Self.SAME:
-                # PLAIN stores only present values, contiguous — the store type
-                # matches the physical width, so scatter straight from the page.
-                self._scatter(
-                    page, vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]]()
-                )
-            else:
-                # narrow physical (e.g. int8 stored as INT32): widen each value.
-                var vals = List[Scalar[Self.store_dt]](capacity=np)
-                for i in range(np):
-                    vals.append(self._read(vspan, i * PW))
-                self._scatter(page, vals.unsafe_ptr())
-        elif page.is_dictionary():
-            if page.all_present():
-                # fused index-decode + gather straight into the output buffer
-                rle_gather[Self.store_dt](
-                    vspan[1:],
-                    Int(vspan[0]),
-                    page.num_values,
-                    self.dict.unsafe_ptr(),
-                    self.values.view[Self.store_dt]().unsafe_ptr() + self.wpos,
-                )
-                self.wpos += page.num_values
-            else:
-                var vals = List[Scalar[Self.store_dt]](unsafe_uninit_length=np)
-                rle_gather[Self.store_dt](
-                    vspan[1:],
-                    Int(vspan[0]),
-                    np,
-                    self.dict.unsafe_ptr(),
-                    vals.unsafe_ptr(),
-                )
-                self._scatter(page, vals.unsafe_ptr())
-        elif page.encoding == ENC_DELTA_BINARY_PACKED:
-            var decoded = delta_binary_packed_decode(vspan, np)
-            var vals = List[Scalar[Self.store_dt]](capacity=np)
-            for i in range(np):
-                vals.append(decoded[i].cast[Self.store_dt]())
-            self._scatter(page, vals.unsafe_ptr())
-        elif page.encoding == ENC_BYTE_STREAM_SPLIT:
-            # each value's bytes are split across `np`-strided planes:
-            # byte k of value i lives at vspan[k*np + i].
-            var vals = List[Scalar[Self.store_dt]](capacity=np)
-            for i in range(np):
-                var raw = InlineArray[UInt8, PW](fill=0)
-
-                comptime for k in range(PW):
-                    raw[k] = vspan[k * np + i]
-                vals.append(
-                    SIMD[Self.phys_dt, 1]
-                    .from_bytes[big_endian=False](raw)
-                    .cast[Self.store_dt]()
-                )
-            self._scatter(page, vals.unsafe_ptr())
-        else:
-            raise Error(
-                "parquet: unsupported data page encoding "
-                + String(page.encoding)
+        if page.is_plain() and Self.SAME:
+            # fast path: PLAIN stores only present values, contiguous and already
+            # the store width — scatter straight from the page (no copy).
+            self._scatter(
+                page, vspan.unsafe_ptr().bitcast[Scalar[Self.store_dt]]()
             )
+        elif page.is_dictionary() and page.all_present():
+            # fast path: fused index-decode + gather straight to the output.
+            rle_gather[Self.store_dt](
+                vspan[1:],
+                Int(vspan[0]),
+                page.num_values,
+                self.dict.unsafe_ptr(),
+                self.values.view[Self.store_dt]().unsafe_ptr() + self.wpos,
+            )
+            self.wpos += page.num_values
+        else:
+            # every other encoding (narrow PLAIN, nullable dict, DELTA,
+            # BYTE_STREAM_SPLIT) shares one decoder with the nested path.
+            var present = List[Scalar[Self.store_dt]](
+                capacity=page.num_present
+            )
+            decode_primitive_present[Self.store_dt, Self.phys_dt](
+                page, self.dict, present
+            )
+            self._scatter(page, present.unsafe_ptr())
 
     def finish(deinit self) raises -> AnyArray:
         var buffers = List[Buffer[mut=False]]()
@@ -287,7 +242,6 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
             return
 
         var vspan = page.values()
-        var np = page.num_present
         if page.is_plain():
             # PLAIN is decoded in place (no per-value copy): walk the length-
             # prefixed present values, appending or emitting nulls by def level.
@@ -302,54 +256,12 @@ struct ByteArrayLeafBuilder[BT: BinaryLikeType](LeafBuilder):
                     vi += n
                 else:
                     self.builder.append_null()
-        elif page.is_dictionary():
-            var indices = rle_decode(vspan[1:], Int(vspan[0]), np)
-            var values = List[List[UInt8]]()
-            for i in range(np):
-                var start = self.dict_off[Int(indices[i])]
-                var v = List[UInt8]()
-                v.extend(
-                    Span(self.dict_body)[
-                        start : start + self.dict_len[Int(indices[i])]
-                    ]
-                )
-                values.append(v^)
-            self._scatter_values(page, values)
-        elif page.encoding == ENC_DELTA_LENGTH_BYTE_ARRAY:
-            # delta-packed lengths, then all value bytes concatenated.
-            var lengths = List[Int64]()
-            var pos = delta_decode(vspan, 0, np, lengths)
-            var values = List[List[UInt8]]()
-            for i in range(np):
-                var n = Int(lengths[i])
-                var v = List[UInt8]()
-                v.extend(vspan[pos : pos + n])
-                values.append(v^)
-                pos += n
-            self._scatter_values(page, values)
-        elif page.encoding == ENC_DELTA_BYTE_ARRAY:
-            # delta-packed prefix lengths, then DELTA_LENGTH-encoded suffixes;
-            # value[i] = value[i-1][:prefix] + suffix.
-            var prefixes = List[Int64]()
-            var pos = delta_decode(vspan, 0, np, prefixes)
-            var suffix_lens = List[Int64]()
-            pos = delta_decode(vspan, pos, np, suffix_lens)
-            var values = List[List[UInt8]]()
-            var prev = List[UInt8]()
-            for i in range(np):
-                var v = List[UInt8]()
-                v.extend(Span(prev)[0 : Int(prefixes[i])])
-                var sl = Int(suffix_lens[i])
-                v.extend(vspan[pos : pos + sl])
-                pos += sl
-                values.append(v.copy())
-                prev = v^
-            self._scatter_values(page, values)
         else:
-            raise Error(
-                "parquet: unsupported byte-array encoding "
-                + String(page.encoding)
+            # dictionary and DELTA_* share one decoder with the nested path.
+            var values = decode_bytes_present(
+                page, self.dict_body, self.dict_off, self.dict_len
             )
+            self._scatter_values(page, values)
 
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^

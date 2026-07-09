@@ -22,14 +22,28 @@ def _to_pa(var t: Table) raises -> PythonObject:
     return pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
 
 
-def _check(data: String, dtype: PythonObject, compression: String) raises:
+def _check(
+    data: String,
+    dtype: PythonObject,
+    compression: String,
+    encoding: String = "",
+) raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var want = pa.table(
         Python.dict(v=pa.array(Python.evaluate(data), type=dtype))
     )
     var path = String("/tmp/marrow_nested.parquet")
-    pq.write_table(want, path, compression=compression)
+    if encoding != "":
+        pq.write_table(
+            want,
+            path,
+            compression=compression,
+            use_dictionary=False,
+            column_encoding=encoding,
+        )
+    else:
+        pq.write_table(want, path, compression=compression)
     # oracle is PyArrow's own read of the same file
     var got = _to_pa(read_table(path))
     assert_true(
@@ -138,6 +152,38 @@ def test_list_of_nullable_struct() raises:
         "[[{'a': 1}, None, {'a': 3}], [], None]",
         pa.list_(_struct(pa.field("a", pa.int64()))),
         "snappy",
+    )
+
+
+def test_list_of_bool() raises:
+    # booleans inside a list — the nested path used to lack a bool decoder
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[True, False], [None, True], None, []]",
+        pa.list_(pa.bool_()),
+        "none",
+    )
+
+
+def test_list_of_delta_int() raises:
+    # a DELTA_BINARY_PACKED-encoded list element — the nested path used to read
+    # it as PLAIN and crash; it now shares the flat path's decoders
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[i, i * 2, i - 5] for i in range(40)]",
+        pa.list_(pa.int64()),
+        "snappy",
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_list_of_byte_stream_split_float() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[1.5, 2.5], [3.5], None]",
+        pa.list_(pa.float64()),
+        "none",
+        "BYTE_STREAM_SPLIT",
     )
 
 
