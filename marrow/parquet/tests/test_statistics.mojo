@@ -53,10 +53,10 @@ def test_read_int_minmax() raises:
     var st = read_statistics(path)
     assert_equal(len(st), 1)  # one row group
     ref cs = st[0][0]
-    assert_true(cs.has_min_max)
+    assert_true(Bool(cs.min))
     assert_equal(cs.null_count, 1)
-    assert_equal(cs.min.as_int64().value(), -3)
-    assert_equal(cs.max.as_int64().value(), 9)
+    assert_equal(cs.min.value().as_int64().value(), -3)
+    assert_equal(cs.max.value().as_int64().value(), 9)
     remove(path)
 
 
@@ -70,9 +70,9 @@ def test_read_uint_minmax() raises:
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
-    assert_equal(cs.min.as_uint32().value(), UInt32(1))
+    assert_equal(cs.min.value().as_uint32().value(), UInt32(1))
     assert_equal(
-        cs.max.as_uint32().value(), UInt32(3000000000)
+        cs.max.value().as_uint32().value(), UInt32(3000000000)
     )  # unsigned order
     remove(path)
 
@@ -87,8 +87,8 @@ def test_read_float_minmax() raises:
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
-    assert_true(cs.min.as_float64().value() == -2.5)
-    assert_true(cs.max.as_float64().value() == 3.25)
+    assert_true(cs.min.value().as_float64().value() == -2.5)
+    assert_true(cs.max.value().as_float64().value() == 3.25)
     remove(path)
 
 
@@ -102,9 +102,9 @@ def test_read_string_minmax() raises:
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
-    assert_true(cs.has_min_max)
-    assert_equal(cs.min.as_string().to_string(), "apple")
-    assert_equal(cs.max.as_string().to_string(), "cherry")
+    assert_true(Bool(cs.min))
+    assert_equal(cs.min.value().as_string().to_string(), "apple")
+    assert_equal(cs.max.value().as_string().to_string(), "cherry")
     remove(path)
 
 
@@ -123,11 +123,11 @@ def test_read_stats_multiple_row_groups() raises:
     var st = read_statistics(path)
     assert_equal(len(st), 3)  # 3 row groups
     # first row group covers rows [0, 1000)
-    assert_equal(st[0][0].min.as_int64().value(), 0)
-    assert_equal(st[0][0].max.as_int64().value(), 999)
+    assert_equal(st[0][0].min.value().as_int64().value(), 0)
+    assert_equal(st[0][0].max.value().as_int64().value(), 999)
     # last row group covers [2000, 2500)
-    assert_equal(st[2][0].min.as_int64().value(), 2000)
-    assert_equal(st[2][0].max.as_int64().value(), 2499)
+    assert_equal(st[2][0].min.value().as_int64().value(), 2000)
+    assert_equal(st[2][0].max.value().as_int64().value(), 2499)
     remove(path)
 
 
@@ -145,11 +145,11 @@ def test_roundtrip_own_stats() raises:
     write_table(t, path)
 
     var st = read_statistics(path)
-    assert_equal(st[0][0].min.as_int64().value(), 2)
-    assert_equal(st[0][0].max.as_int64().value(), 11)
+    assert_equal(st[0][0].min.value().as_int64().value(), 2)
+    assert_equal(st[0][0].max.value().as_int64().value(), 11)
     assert_equal(st[0][0].null_count, 1)
-    assert_equal(st[0][1].min.as_string().to_string(), "a")
-    assert_equal(st[0][1].max.as_string().to_string(), "z")
+    assert_equal(st[0][1].min.value().as_string().to_string(), "a")
+    assert_equal(st[0][1].max.value().as_string().to_string(), "z")
     remove(path)
 
 

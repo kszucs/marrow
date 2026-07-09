@@ -88,12 +88,18 @@ comptime _PARALLEL_MIN_ROWS = 4096
 
 
 def read_table(
-    path: String, columns: Optional[List[String]] = None
+    path: String,
+    columns: Optional[List[String]] = None,
+    row_groups: Optional[List[Int]] = None,
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table`.
 
     `columns` projects the read to the named top-level columns (in the given
     order); `None` reads all. Only the selected columns' chunks are touched.
+
+    `row_groups` restricts the read to the given row-group indices (in that
+    order); `None` reads all. Unselected row groups are never decoded — this is
+    what predicate pushdown uses to skip groups that cannot match a filter.
 
     Every (row group, selected leaf) pair decodes independently — each reads a
     disjoint byte range of the shared read-only mmap and writes its own result
@@ -109,12 +115,28 @@ def read_table(
     # the read plan: which column chunks to decode and how to reassemble them
     var plan = mapping.project(columns.value()) if columns else mapping.full()
 
+    # which row groups to decode (all, or the given subset in order)
+    var rg_list = List[Int]()
+    if row_groups:
+        for rg in row_groups.value():
+            if rg < 0 or rg >= len(meta.row_groups):
+                raise Error("parquet: row group index out of range")
+            rg_list.append(rg)
+    else:
+        for rg in range(len(meta.row_groups)):
+            rg_list.append(rg)
+
     var num_leaves = len(plan.decode_order)
-    var num_rg = len(meta.row_groups)
+    var num_rg = len(rg_list)
     var total = num_rg * num_leaves
 
+    # rows across the selected groups — governs the parallel-dispatch threshold
+    var selected_rows = 0
+    for rg in rg_list:
+        selected_rows += meta.row_groups[rg].num_rows
+
     var nt = 1
-    if total >= 2 and meta.num_rows >= _PARALLEL_MIN_ROWS:
+    if total >= 2 and selected_rows >= _PARALLEL_MIN_ROWS:
         nt = min(num_physical_cores(), total)
 
     # One result slot per (row group, selected leaf), pre-sized so workers assign
@@ -131,7 +153,7 @@ def read_table(
         )  # per-worker: lazy dlopen handles are not shared
         var t = w
         while t < total:
-            var rg_idx = t // num_leaves
+            var rg_idx = rg_list[t // num_leaves]
             # original column-chunk index for this compact slot
             var orig = plan.decode_order[t % num_leaves]
             ref rg = meta.row_groups[rg_idx]
@@ -148,12 +170,12 @@ def read_table(
 
     sync_parallelize[worker](nt)
 
-    # Fold each row group's decoded leaves back into the Arrow type tree.
+    # Fold each selected row group's decoded leaves back into the Arrow tree.
     var batches = List[RecordBatch]()
-    for rg_idx in range(num_rg):
+    for i in range(num_rg):
         var decoded = List[DecodedLeaf]()
         for ci in range(num_leaves):
-            decoded.append(grid[rg_idx * num_leaves + ci].take())
+            decoded.append(grid[i * num_leaves + ci].take())
         var cols = List[AnyArray]()
         for ref node in plan.nodes:
             cols.append(node.assemble(decoded))
@@ -227,19 +249,18 @@ def read_page_index(path: String) raises -> List[List[PageIndex]]:
 
 
 struct ColumnStatistics(Copyable, Movable):
-    """Decoded per-column-chunk statistics: `null_count` (-1 if absent) plus the
-    `min`/`max` bounds as typed scalars, valid only when `has_min_max`."""
+    """Decoded per-column-chunk statistics: `null_count` (-1 if absent) and the
+    `min`/`max` bounds as typed scalars (each `None` when the file stored no
+    usable bound, so absence is in the type rather than a separate flag)."""
 
-    var has_min_max: Bool
     var null_count: Int
-    var min: AnyScalar
-    var max: AnyScalar
+    var min: Optional[AnyScalar]
+    var max: Optional[AnyScalar]
 
     def __init__(out self):
-        self.has_min_max = False
         self.null_count = -1
-        self.min = BoolScalar(is_valid=False)
-        self.max = BoolScalar(is_valid=False)
+        self.min = None
+        self.max = None
 
 
 def _decode_stat(
@@ -313,9 +334,8 @@ def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:
                 var mn = _decode_stat(mapping.leaves[ci].dtype, cm.min_value)
                 var mx = _decode_stat(mapping.leaves[ci].dtype, cm.max_value)
                 if Bool(mn) and Bool(mx):
-                    cs.min = mn.value().copy()
-                    cs.max = mx.value().copy()
-                    cs.has_min_max = True
+                    cs.min = mn^
+                    cs.max = mx^
             row.append(cs^)
         out.append(row^)
     return out^

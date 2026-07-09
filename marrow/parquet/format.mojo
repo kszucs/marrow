@@ -991,7 +991,8 @@ struct PageLocation(Copyable, Movable):
 
 
 struct OffsetIndex(Copyable, Movable):
-    """Per-page locations for one column chunk (field 1 = list<PageLocation>)."""
+    """Per-page locations for one column chunk (field 1 = list<PageLocation>).
+    """
 
     var page_locations: List[PageLocation]
 

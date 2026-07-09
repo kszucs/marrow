@@ -82,6 +82,12 @@ def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
 # ---------------------------------------------------------------------------
 
 
+# Relation kind discriminants — let a plan-building step recognise a node behind
+# `AnyRelation` (e.g. to push a filter into a `ParquetScan`) without a full RTTI.
+comptime RELATION_GENERIC: Int = 0
+comptime RELATION_PARQUET_SCAN: Int = 1
+
+
 trait Relation(ImplicitlyDeletable, Movable):
     """A relational plan node: a pure, immutable description of an operation.
 
@@ -99,6 +105,10 @@ trait Relation(ImplicitlyDeletable, Movable):
 
     def write_to[W: Writer](self, mut writer: W):
         ...
+
+    def kind(self) -> Int:
+        """Node discriminant for plan rewrites; generic unless overridden."""
+        return RELATION_GENERIC
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +132,11 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
     ) thin raises -> AnyProcessor
     var _virt_write_to_string: def(ArcPointer[NoneType]) thin -> String
     var _virt_drop: def(var ArcPointer[NoneType]) thin
+    var _virt_kind: def(ArcPointer[NoneType]) thin -> Int
+
+    @staticmethod
+    def _tramp_kind[T: Relation](ptr: ArcPointer[NoneType]) -> Int:
+        return rebind[ArcPointer[T]](ptr)[].kind()
 
     @staticmethod
     def _tramp_schema[T: Relation](ptr: ArcPointer[NoneType]) -> Schema:
@@ -154,6 +169,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_to_processor = Self._tramp_to_processor[T]
         self._virt_write_to_string = Self._tramp_write_to_string[T]
         self._virt_drop = Self._tramp_drop[T]
+        self._virt_kind = Self._tramp_kind[T]
 
     def __init__(out self, *, copy: Self):
         # O(1) share — nodes are immutable, so aliasing is safe.
@@ -162,6 +178,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         self._virt_to_processor = copy._virt_to_processor
         self._virt_write_to_string = copy._virt_write_to_string
         self._virt_drop = copy._virt_drop
+        self._virt_kind = copy._virt_kind
 
     def __del__(deinit self):
         self._virt_drop(self._data^)
@@ -173,6 +190,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._virt_write_to_string(self._data))
+
+    def kind(self) -> Int:
+        return self._virt_kind(self._data)
 
     def downcast[T: Relation](self) -> ArcPointer[T]:
         return rebind[ArcPointer[T]](self._data.copy())
@@ -212,7 +232,23 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
 
     def filter(self, var predicate: AnyValue) raises -> AnyRelation:
         """Filter rows by a boolean predicate. Column references resolve by name
-        against the batch schema when the boxed value executes."""
+        against the batch schema when the boxed value executes.
+
+        When the input is a `ParquetScan`, the predicate is also pushed into the
+        scan as pruning metadata (row-group / page skipping); the `Filter` is
+        kept so the rows returned are exactly those that satisfy the predicate.
+        """
+        if self.kind() == RELATION_PARQUET_SCAN:
+            ref scan = self.downcast[ParquetScan]()[]
+            var pushed = ParquetScan(
+                path=scan.path.copy(),
+                schema=scan.schema(),
+                morsel_size=scan.morsel_size,
+                predicate=Optional(predicate.copy()),
+            )
+            return AnyRelation(
+                Filter(input=AnyRelation(pushed^), predicate=predicate^)
+            )
         return AnyRelation(Filter(input=self, predicate=predicate^))
 
     def aggregate(
@@ -389,11 +425,18 @@ def in_memory_table(batch: RecordBatch) -> AnyRelation:
 
 
 struct ParquetScan(Relation):
-    """Leaf describing a Parquet file scan with a known schema."""
+    """Leaf describing a Parquet file scan with a known schema.
+
+    An optional `predicate` is pushed-down pruning metadata: the scan uses it to
+    skip row groups (and, later, pages) whose statistics prove no row can match.
+    It never changes the rows returned — a `Filter` above the scan applies the
+    predicate exactly — so it is safe to carry a partial/over-approximate one.
+    """
 
     var path: String
     var _schema: Schema
     var morsel_size: Int
+    var predicate: Optional[AnyValue]
 
     def __init__(
         out self,
@@ -401,19 +444,25 @@ struct ParquetScan(Relation):
         var path: String,
         var schema: Schema,
         morsel_size: Int = DEFAULT_MORSEL_SIZE,
+        var predicate: Optional[AnyValue] = None,
     ):
         self.path = path^
         self._schema = schema^
         self.morsel_size = morsel_size
+        self.predicate = predicate^
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
+
+    def kind(self) -> Int:
+        return RELATION_PARQUET_SCAN
 
     def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
         return ParquetScanProcessor(
             path=self.path.copy(),
             schema=Schema(copy=self._schema),
             morsel_size=self.morsel_size,
+            predicate=self.predicate.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):

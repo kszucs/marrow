@@ -359,9 +359,7 @@ struct Less[L: NumericValue, R: NumericValue](BoolValue):
 
     def prune_bound(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_lt(
-                self.right.prune_bound(stats)
-            )
+            self.left.prune_bound(stats).maybe_lt(self.right.prune_bound(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -397,9 +395,7 @@ struct Greater[L: NumericValue, R: NumericValue](BoolValue):
 
     def prune_bound(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_gt(
-                self.right.prune_bound(stats)
-            )
+            self.left.prune_bound(stats).maybe_gt(self.right.prune_bound(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -434,9 +430,7 @@ struct Equal[L: NumericValue, R: NumericValue](BoolValue):
 
     def prune_bound(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_eq(
-                self.right.prune_bound(stats)
-            )
+            self.left.prune_bound(stats).maybe_eq(self.right.prune_bound(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):

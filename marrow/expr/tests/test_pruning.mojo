@@ -14,9 +14,7 @@ from marrow.expr.values import AnyValue, Greater, col as vcol
 from marrow.expr.dynamic import col, lit
 
 
-def _stats(
-    xmin: Int, xmax: Int, ymin: Int, ymax: Int
-) raises -> PruneStats:
+def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
     """Two int64 columns x, y with the given [min,max] bounds."""
     var fields = List[Field]()
     fields.append(Field("x", int64))

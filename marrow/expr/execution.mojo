@@ -29,8 +29,10 @@ from ..kernels.filter import filter
 from ..kernels.groupby import HashGrouper
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
-from ..parquet import read_table
+from ..parquet import read_table, read_statistics
+from ..scalars import AnyScalar
 from .values import AnyValue
+from .pruning import PruneStats
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -169,29 +171,67 @@ struct InMemoryTableProcessor(Processor):
 
 
 struct ParquetScanProcessor(Processor):
-    """Reads the Parquet file on first pull, then yields morsels."""
+    """Reads the Parquet file on first pull, then yields morsels.
+
+    When a `predicate` is pushed down, row groups whose column statistics prove
+    the predicate can never match are skipped (never decoded). The predicate is
+    only a pruning hint — a `Filter` above the scan still applies it exactly — so
+    pushdown only ever reduces I/O, never changes results."""
 
     var path: String
     var _schema: Schema
     var morsel_size: Int
+    var _predicate: Optional[AnyValue]
     var _batch: Optional[RecordBatch]
     var _offset: Int
 
     def __init__(
-        out self, *, var path: String, var schema: Schema, morsel_size: Int
+        out self,
+        *,
+        var path: String,
+        var schema: Schema,
+        morsel_size: Int,
+        var predicate: Optional[AnyValue] = None,
     ):
         self.path = path^
         self._schema = schema^
         self.morsel_size = morsel_size
+        self._predicate = predicate^
         self._batch = None
         self._offset = 0
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    def _surviving_row_groups(self) raises -> Optional[List[Int]]:
+        """Row groups that may contain a matching row, by pruning on per-column
+        min/max statistics. Returns None (read everything) when there is no
+        predicate or the file is nested (leaf count != top-level column count),
+        which this row-group pruner does not map."""
+        if not self._predicate:
+            return None
+        var stats = read_statistics(self.path)
+        var ncols = len(self._schema.fields)
+        var keep = List[Int]()
+        for rg in range(len(stats)):
+            ref rg_stats = stats[rg]
+            if len(rg_stats) != ncols:
+                keep.append(rg)  # nested layout: cannot prune -> keep
+                continue
+            var mins = List[Optional[AnyScalar]]()
+            var maxs = List[Optional[AnyScalar]]()
+            for c in range(ncols):
+                mins.append(rg_stats[c].min.copy())
+                maxs.append(rg_stats[c].max.copy())
+            var pstats = PruneStats(Schema(copy=self._schema), mins^, maxs^)
+            if self._predicate.value().prune_bound(pstats).maybe_true:
+                keep.append(rg)
+        return keep^
+
     def pull(mut self) raises -> RecordBatch:
         if not self._batch:
-            var table = read_table(self.path)
+            var rgs = self._surviving_row_groups()
+            var table = read_table(self.path, row_groups=rgs^)
             var batches = table.to_batches()
             if len(batches) == 0:
                 self._batch = RecordBatch(

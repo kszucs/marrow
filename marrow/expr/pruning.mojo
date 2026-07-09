@@ -23,7 +23,8 @@ from .. import dtypes as dt
 
 struct PruneBound(Copyable, Movable):
     """Result of pruning one expression node: numeric nodes fill the interval
-    `[lo, hi]` (`None` bound = unknown); boolean predicates fill `maybe_true`."""
+    `[lo, hi]` (`None` bound = unknown); boolean predicates fill `maybe_true`.
+    """
 
     var lo: Optional[AnyScalar]
     var hi: Optional[AnyScalar]
@@ -45,7 +46,9 @@ struct PruneBound(Copyable, Movable):
         return Self(None, None, True)
 
     @staticmethod
-    def interval(var lo: Optional[AnyScalar], var hi: Optional[AnyScalar]) -> Self:
+    def interval(
+        var lo: Optional[AnyScalar], var hi: Optional[AnyScalar]
+    ) -> Self:
         return Self(lo^, hi^, True)
 
     @staticmethod
@@ -160,28 +163,36 @@ def _cmp_scalar(a: AnyScalar, b: AnyScalar) raises -> Optional[Int]:
 
 
 # `a <op> b`, or True when either bound is unknown / incomparable (conservative).
-def gt_or_unknown(a: Optional[AnyScalar], b: Optional[AnyScalar]) raises -> Bool:
+def gt_or_unknown(
+    a: Optional[AnyScalar], b: Optional[AnyScalar]
+) raises -> Bool:
     if not a or not b:
         return True
     var c = _cmp_scalar(a.value(), b.value())
     return True if not c else c.value() > 0
 
 
-def ge_or_unknown(a: Optional[AnyScalar], b: Optional[AnyScalar]) raises -> Bool:
+def ge_or_unknown(
+    a: Optional[AnyScalar], b: Optional[AnyScalar]
+) raises -> Bool:
     if not a or not b:
         return True
     var c = _cmp_scalar(a.value(), b.value())
     return True if not c else c.value() >= 0
 
 
-def lt_or_unknown(a: Optional[AnyScalar], b: Optional[AnyScalar]) raises -> Bool:
+def lt_or_unknown(
+    a: Optional[AnyScalar], b: Optional[AnyScalar]
+) raises -> Bool:
     if not a or not b:
         return True
     var c = _cmp_scalar(a.value(), b.value())
     return True if not c else c.value() < 0
 
 
-def le_or_unknown(a: Optional[AnyScalar], b: Optional[AnyScalar]) raises -> Bool:
+def le_or_unknown(
+    a: Optional[AnyScalar], b: Optional[AnyScalar]
+) raises -> Bool:
     if not a or not b:
         return True
     var c = _cmp_scalar(a.value(), b.value())

@@ -259,7 +259,9 @@ struct DynValue(
         maybe-true, so a caller only ever skips data it has proven cannot match.
         """
         if self._tag == LOAD:
-            var iv = stats.by_name(self._name) if self._name.byte_length() > 0 else stats.by_index(
+            var iv = stats.by_name(
+                self._name
+            ) if self._name.byte_length() > 0 else stats.by_index(
                 Int(self._kind_data)
             )
             return PruneBound.interval(iv[0].copy(), iv[1].copy())
