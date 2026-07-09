@@ -56,6 +56,7 @@ from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from ..buffers import Bitmap, Buffer
 from ..dtypes import AnyDataType, DType, NumericType
 from ..tabular import RecordBatch
+from .pruning import PruneStats, PruneBound
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +99,15 @@ trait Value(
 
     def name(self) -> String:
         return String()
+
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        """Evaluate this node against per-column statistics for pruning. The
+        conservative default returns unknown bounds / maybe-true; nodes that can
+        do better (columns, literals, comparisons) override it. Shared by the
+        fused static nodes here and the runtime ``DynValue`` interpreter, so a
+        predicate of either kind can be evaluated against a row-group or page
+        index (see ``marrow.expr.pruning``)."""
+        return PruneBound.unknown()
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +357,13 @@ struct Less[L: NumericValue, R: NumericValue](BoolValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.lt(r)
 
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        return PruneBound.boolean(
+            self.left.prune_bound(stats).maybe_lt(
+                self.right.prune_bound(stats)
+            )
+        )
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Less(")
         self.left.write_to(writer)
@@ -378,6 +395,13 @@ struct Greater[L: NumericValue, R: NumericValue](BoolValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.gt(r)
 
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        return PruneBound.boolean(
+            self.left.prune_bound(stats).maybe_gt(
+                self.right.prune_bound(stats)
+            )
+        )
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Greater(")
         self.left.write_to(writer)
@@ -407,6 +431,13 @@ struct Equal[L: NumericValue, R: NumericValue](BoolValue):
         var l = self.left.core[W](batch, idx)
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.eq(r)
+
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        return PruneBound.boolean(
+            self.left.prune_bound(stats).maybe_eq(
+                self.right.prune_bound(stats)
+            )
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(t"Equal(")
@@ -578,6 +609,12 @@ def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
     return s^
 
 
+def _prune_bound_tramp[
+    V: Value
+](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
+    return rebind[ArcPointer[V]](ptr)[].prune_bound(stats)
+
+
 struct AnyValue(Copyable, Movable, Writable):
     """Type-erased handle over a single value node — the one value box the
     relational layer holds. No tag and no ``eval()`` switch of its own, so
@@ -589,6 +626,9 @@ struct AnyValue(Copyable, Movable, Writable):
     ) thin raises -> AnyArray
     var _name_fn: def(ArcPointer[NoneType]) thin -> String
     var _write_to_str: def(ArcPointer[NoneType]) thin -> String
+    var _prune_bound_fn: def(
+        ArcPointer[NoneType], PruneStats
+    ) thin raises -> PruneBound
 
     @implicit
     def __init__[V: Value](out self, value: V):
@@ -601,12 +641,20 @@ struct AnyValue(Copyable, Movable, Writable):
         self._to_array = _value_to_array_tramp[V]
         self._name_fn = _value_name_tramp[V]
         self._write_to_str = _write_tramp[V]
+        self._prune_bound_fn = _prune_bound_tramp[V]
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self._to_array(self._boxed, batch)
 
     def name(self) -> String:
         return self._name_fn(self._boxed)
+
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        """Evaluate the boxed predicate against per-column statistics, returning
+        whether it could be true (see ``marrow.expr.pruning``). Works for both a
+        fused static predicate and a ``DynValue`` — the trampoline forwards to
+        whichever node is boxed."""
+        return self._prune_bound_fn(self._boxed, stats)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_to_str(self._boxed))
@@ -647,6 +695,10 @@ struct NumericColumn[T: dt.NumericType](NumericValue):
 
     def name(self) -> String:
         return self._name.copy()
+
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        var iv = stats.by_name(self._name)
+        return PruneBound.interval(iv[0].copy(), iv[1].copy())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("Col[", self._name, "]")
