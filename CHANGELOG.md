@@ -135,6 +135,14 @@
 
 ### Tests
 
+- **Parquet value / boundary edge cases** (`marrow/parquet/tests/test_values.mojo`
+  + additions to `test_writer.mojo`): modelled on the PyArrow parquet test
+  suite, covering cases the reader/writer had not exercised — all-null and
+  single-row columns, integer extremes (int32/int64 min/max, uint64 max), NaN /
+  ±Inf floats (read and marrow-write round-trip), empty / multibyte-unicode /
+  5 000-byte strings, booleans with nulls, dictionary-encoded (`RLE_DICTIONARY`)
+  reads, a 40-column wide table, nulls spanning ten row groups, pre-epoch
+  (negative) `date32`, and a zero-row table round-trip.
 - **Parquet cross-compatibility suite** (`marrow/parquet/tests/test_interop.mojo`):
   asserts Marrow and PyArrow read each other's Parquet output identically,
   across three shapes — Marrow-reads-PyArrow, PyArrow-reads-Marrow, and

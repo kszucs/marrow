@@ -1,4 +1,5 @@
 from std.testing import assert_equal, assert_true
+from std.math import isnan, isinf
 from std.python import Python
 from std.os import remove
 from marrow.testing import TestSuite
@@ -122,6 +123,68 @@ def test_narrow_int_roundtrip() raises:
     assert_equal(ca.as_int8()[2].value(), -3)
     var cb = bat.columns[1].copy()
     assert_equal(cb.as_uint16()[2].value(), 30)
+    remove(path)
+
+
+def test_write_empty_table() raises:
+    # a zero-row table must write a valid file and read back empty
+    var t = _pa_table(
+        "__import__('pyarrow').table({'i': __import__('pyarrow').array([],"
+        " type=__import__('pyarrow').int64()), 's':"
+        " __import__('pyarrow').array([],"
+        " type=__import__('pyarrow').string())})"
+    )
+    var path = String("/tmp/marrow_empty.parquet")
+    write_table(t, path)
+
+    # pyarrow reads it: 0 rows, schema preserved
+    var pq = Python.import_module("pyarrow.parquet")
+    var pf = pq.ParquetFile(path)
+    assert_equal(Int(py=pf.metadata.num_rows), 0)
+
+    var back = read_table(path)
+    assert_equal(back.num_rows(), 0)
+    assert_equal(back.num_columns(), 2)
+    remove(path)
+
+
+def test_write_all_null_roundtrip() raises:
+    var t = _pa_table(
+        "__import__('pyarrow').table({'x': __import__('pyarrow').array("
+        "[None, None, None, None, None],"
+        " type=__import__('pyarrow').int64())})"
+    )
+    var path = String("/tmp/marrow_allnull.parquet")
+    write_table(t, path)
+    var back = read_table(path)
+    var c = back.to_batches()[0].copy().columns[0].copy()
+    assert_equal(c.as_int64().null_count(), 5)
+
+    # pyarrow agrees the column is entirely null
+    var pq = Python.import_module("pyarrow.parquet")
+    assert_equal(
+        Int(py=pq.read_table(path).column(0).null_count),
+        5,
+    )
+    remove(path)
+
+
+def test_write_float_special_roundtrip() raises:
+    # NaN / +Inf / -Inf must survive marrow write -> read byte-exact
+    var t = _pa_table(
+        "__import__('pyarrow').table({'f': __import__('pyarrow').array("
+        "[float('nan'), float('inf'), float('-inf'), -0.0, 3.25],"
+        " type=__import__('pyarrow').float64())})"
+    )
+    var path = String("/tmp/marrow_fspecial.parquet")
+    write_table(t, path)
+    var back = read_table(path)
+    var c = back.to_batches()[0].copy().columns[0].copy()
+    ref f = c.as_float64()
+    assert_true(isnan(f[0].value()))
+    assert_true(isinf(f[1].value()) and f[1].value() > 0)
+    assert_true(isinf(f[2].value()) and f[2].value() < 0)
+    assert_true(f[4].value() == 3.25)
     remove(path)
 
 
