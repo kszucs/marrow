@@ -4,6 +4,13 @@
 
 ### Features
 
+- **DELTA_BINARY_PACKED read support** (`marrow.parquet`): the reader now decodes
+  the DELTA_BINARY_PACKED integer encoding (block / miniblock zigzag deltas) that
+  modern writers — PyArrow with `use_dictionary=False`, and v2 defaults — emit for
+  int32/int64 columns. Handles negatives, nulls, and multi-block streams;
+  previously it raised "unsupported data page encoding". Reads compressed and
+  uncompressed.
+
 - **DataPage V2 write support** (`marrow.parquet`): the writer can now emit v2
   data pages (`write_table(..., version=2)` in Mojo, `data_page_version="2.0"`
   in Python) in addition to the default v1 — the reader already read both. v2

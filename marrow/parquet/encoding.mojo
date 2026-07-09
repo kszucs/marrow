@@ -193,6 +193,64 @@ def rle_gather[
                 produced += 1
 
 
+@always_inline
+def _zigzag(u: UInt64) -> Int64:
+    """ULEB128 zigzag -> signed."""
+    return Int64(u >> 1) ^ -Int64(u & 1)
+
+
+def delta_binary_packed_decode(
+    data: Span[UInt8, _], count: Int
+) raises -> List[Int64]:
+    """Decode `count` DELTA_BINARY_PACKED integers.
+
+    Layout (Parquet spec): a header of `block_size`, `miniblocks_per_block`,
+    `total_value_count`, and the zigzag `first_value`; then blocks, each a
+    zigzag `min_delta`, one bit-width byte per miniblock, and the bit-packed
+    miniblock deltas. Each value is `prev + min_delta + unpacked_delta`.
+    """
+    var out = List[Int64]()
+    if count == 0:
+        return out^
+    out.reserve(count)
+
+    var pos = 0
+    var block_size: UInt64
+    block_size, pos = _read_varint(data, pos)
+    var miniblocks: UInt64
+    miniblocks, pos = _read_varint(data, pos)
+    var _total: UInt64
+    _total, pos = _read_varint(data, pos)
+    var first_z: UInt64
+    first_z, pos = _read_varint(data, pos)
+
+    var num_miniblocks = Int(miniblocks)
+    var vals_per_mb = Int(block_size) // num_miniblocks
+
+    var value = _zigzag(first_z)
+    out.append(value)
+
+    while len(out) < count:
+        var min_delta_z: UInt64
+        min_delta_z, pos = _read_varint(data, pos)
+        var min_delta = _zigzag(min_delta_z)
+        var widths_at = pos
+        pos += num_miniblocks  # one bit-width byte per miniblock
+        for mb in range(num_miniblocks):
+            var w = Int(data[widths_at + mb])
+            var base_bit = pos * 8
+            pos += (vals_per_mb * w) // 8  # miniblock is full even if padded
+            for j in range(vals_per_mb):
+                var delta: UInt64 = 0
+                if w > 0:
+                    delta = _read_bits(data, base_bit + j * w, w)
+                value += min_delta + Int64(delta)
+                out.append(value)
+                if len(out) == count:
+                    return out^
+    return out^
+
+
 def rle_count_matches(
     data: Span[UInt8, _], width: Int, count: Int, target: Int32
 ) raises -> Int:

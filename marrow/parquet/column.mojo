@@ -33,10 +33,10 @@ from ..dtypes import (
 )
 
 from .page import Page, PageReader, PAGEKIND_DICT, read_u32le, read_fixed_le
-from .encoding import rle_decode, rle_gather
+from .encoding import rle_decode, rle_gather, delta_binary_packed_decode
 from .compression import Codecs
 from .schema import LeafColumn
-from .format import ColumnMetaData
+from .format import ColumnMetaData, ENC_DELTA_BINARY_PACKED
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +169,24 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     if Int(page.def_levels[row]) == self.max_def:
                         vptr[self.wpos] = dptr[Int(iptr[di])]
                         di += 1
+                        self.bitmap.set(self.wpos)
+                    else:
+                        vptr[self.wpos] = 0
+                        self.null_count += 1
+                    self.wpos += 1
+        elif page.encoding == ENC_DELTA_BINARY_PACKED:
+            var vals = delta_binary_packed_decode(vspan, page.num_present)
+            if page.all_present():
+                for i in range(page.num_values):
+                    vptr[self.wpos] = vals[i].cast[Self.store_dt]()
+                    self.wpos += 1
+            else:
+                self._ensure_bitmap()
+                var vi = 0
+                for row in range(page.num_values):
+                    if Int(page.def_levels[row]) == self.max_def:
+                        vptr[self.wpos] = vals[vi].cast[Self.store_dt]()
+                        vi += 1
                         self.bitmap.set(self.wpos)
                     else:
                         vptr[self.wpos] = 0
