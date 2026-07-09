@@ -17,8 +17,7 @@ from ..buffers import Buffer, Bitmap
 from ..builders import BinaryLikeBuilder, BoolBuilder, PrimitiveBuilder
 from .. import dtypes as dt
 
-from .codecs import Encoding, Rle, LittleEndian
-from .codecs import Compression
+from .codecs import Encoding, Rle, LittleEndian, Dictionary, Compression
 from .utils import CompressionLibs
 from .schema import LeafColumn, DecodedLeaf
 from .format import ColumnMetaData, PageHeader, PageType
@@ -682,7 +681,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
             if pg.dictionary:
-                Encoding.decode_dict_primitive[T.native, phys](
+                Dictionary.decode_page_primitive[T.native, phys](
                     pg.body, pg.num_values, dict
                 )
                 continue
@@ -719,7 +718,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         while self.pages.has_next():
             var pg = self.pages.next(codecs)
             if pg.dictionary:
-                Encoding.decode_dict_bytes(
+                Dictionary.decode_page_bytes(
                     pg.body, pg.num_values, dict_body, dict_off, dict_len
                 )
                 continue

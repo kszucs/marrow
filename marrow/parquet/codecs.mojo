@@ -1,13 +1,17 @@
-"""Parquet value and level encodings.
+"""Parquet codecs — one small type per coding scheme.
 
-Each encoding scheme is a small codec type; `Encoding` is the dispatcher that
-turns a data page's *present* value bytes into decoded values under the right
-scheme, so the flat and nested reader paths share one decoder per layout:
+Each encoding is its own stateless codec (`encode`/`decode` static methods);
+`Encoding` is the enum that dispatches a data page's *present* values to the
+right one, so the flat and nested reader paths share one decoder per layout:
 
-- `LittleEndian` — the byte/bit/varint reads the codecs are built from.
-- `Rle` — the RLE / bit-packed *hybrid* codec that carries definition/repetition
+- `LittleEndian` — the byte/bit/varint reads and writes the codecs are built on.
+- `Rle` — the RLE / bit-packed *hybrid* codec carrying definition/repetition
   levels and dictionary indices (the workhorse; SIMD bit-unpack).
 - `DeltaBinaryPacked` — the block/miniblock zigzag-delta integer codec.
+- `Plain` · `Dictionary` · `ByteStreamSplit` · `DeltaLengthByteArray` ·
+  `DeltaByteArray` — the data-page value codecs `Encoding` dispatches to.
+- `Compression` — the page compression codec (dispatches onto `CompressionLibs`
+  in `utils.mojo`).
 
 RLE / bit-packed hybrid wire format (per the Parquet spec): a sequence of runs,
 each introduced by a ULEB128 header. `header & 1` selects the run kind:
@@ -20,6 +24,8 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
 from std.sys import size_of
 from std.memory import memcpy
 
+from ..arrays import PrimitiveArray, StringArray, BoolArray
+from .. import dtypes as dt
 from ..views import load_word_le
 from .utils import CompressionLibs
 
@@ -63,6 +69,13 @@ struct LittleEndian:
                 break
             shift += 7
         return (result, p)
+
+    @staticmethod
+    def put_u32(mut out: List[UInt8], v: Int):
+        out.append(UInt8(v & 0xFF))
+        out.append(UInt8((v >> 8) & 0xFF))
+        out.append(UInt8((v >> 16) & 0xFF))
+        out.append(UInt8((v >> 24) & 0xFF))
 
     @staticmethod
     def put_varint(mut out: List[UInt8], var v: UInt64):
@@ -386,13 +399,226 @@ struct DeltaBinaryPacked:
         return out^
 
 
-struct Encoding(Equatable, ImplicitlyCopyable, Movable):
-    """A Parquet `Encoding` enum value and the decode of a data page's *present*
-    values under it: it dispatches to the codec types above (or decodes PLAIN /
-    BYTE_STREAM_SPLIT inline). The decoders append `num_present` values from a
-    value byte-span (nulls are placed later by the caller from the definition
-    levels), so the same logic serves the flat and nested reader paths.
+struct Plain:
+    """The PLAIN codec — values laid out in order: fixed-width little-endian for
+    primitives, bit-packed for booleans, 4-byte-length-prefixed for byte arrays.
+    Encode takes a present-value Arrow array; decode returns the present values.
     """
+
+    @staticmethod
+    def encode_primitive[
+        store: dt.NumericType, phys: DType
+    ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
+        comptime W = size_of[Scalar[phys]]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var bytes = (
+                    arr[i].value().cast[phys]().as_bytes[big_endian=False]()
+                )
+                for b in range(W):
+                    out.append(bytes[b])
+
+    @staticmethod
+    def encode_bool(arr: BoolArray, mut out: List[UInt8]) raises:
+        var acc: UInt8 = 0
+        var nbits = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                if arr[i].value():
+                    acc |= UInt8(1) << UInt8(nbits)
+                nbits += 1
+                if nbits == 8:
+                    out.append(acc)
+                    acc = 0
+                    nbits = 0
+        if nbits > 0:
+            out.append(acc)
+
+    @staticmethod
+    def encode_bytes(arr: StringArray, mut out: List[UInt8]) raises:
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = String(arr[i]).as_bytes()
+                LittleEndian.put_u32(out, len(b))
+                out.extend(b)
+
+    @staticmethod
+    def decode_primitive[
+        store: DType, phys: DType
+    ](values: Span[UInt8, _], np: Int, mut out: List[Scalar[store]]) raises:
+        comptime PW = size_of[Scalar[phys]]()
+        for i in range(np):
+            out.append(LittleEndian.fixed[phys](values, i * PW).cast[store]())
+
+    @staticmethod
+    def decode_bytes(
+        values: Span[UInt8, _], np: Int
+    ) raises -> List[List[UInt8]]:
+        var out = List[List[UInt8]]()
+        var vi = 0
+        for _ in range(np):
+            var n = LittleEndian.u32(values, vi)
+            vi += 4
+            var v = List[UInt8]()
+            v.extend(values[vi : vi + n])
+            out.append(v^)
+            vi += n
+        return out^
+
+    @staticmethod
+    def decode_bool(values: Span[UInt8, _], np: Int) raises -> List[Bool]:
+        var out = List[Bool]()
+        for i in range(np):
+            var byte = values[i >> 3]
+            out.append(((byte >> UInt8(i & 7)) & 1) == 1)
+        return out^
+
+
+struct Dictionary:
+    """The dictionary codec — a dictionary page of distinct values, then data
+    pages of RLE/bit-packed indices into it. `decode_page_*` reads the dictionary
+    page; `decode_*` reads a data page's indices and gathers the values."""
+
+    @staticmethod
+    def decode_page_primitive[
+        store: DType, phys: DType
+    ](
+        body: Span[UInt8, _], num_values: Int, mut dict: List[Scalar[store]]
+    ) raises:
+        """Read a primitive dictionary page (PLAIN fixed-width) into `dict`."""
+        comptime PW = size_of[Scalar[phys]]()
+        for i in range(num_values):
+            dict.append(LittleEndian.fixed[phys](body, i * PW).cast[store]())
+
+    @staticmethod
+    def decode_page_bytes(
+        body: Span[UInt8, _],
+        num_values: Int,
+        mut dict_body: List[UInt8],
+        mut dict_off: List[Int],
+        mut dict_len: List[Int],
+    ) raises:
+        """Read a byte-array dictionary page (length-prefixed values)."""
+        dict_body.clear()
+        dict_body.extend(body)
+        var span = Span(dict_body)
+        var off = 0
+        for _ in range(num_values):
+            var n = LittleEndian.u32(span, off)
+            off += 4
+            dict_off.append(off)
+            dict_len.append(n)
+            off += n
+
+    @staticmethod
+    def decode_primitive[
+        store: DType
+    ](
+        values: Span[UInt8, _],
+        np: Int,
+        dict: List[Scalar[store]],
+        mut out: List[Scalar[store]],
+    ) raises:
+        var base = len(out)
+        out.resize(unsafe_uninit_length=base + np)
+        Rle.gather[store](
+            values[1:],
+            Int(values[0]),
+            np,
+            dict.unsafe_ptr(),
+            out.unsafe_ptr() + base,
+        )
+
+    @staticmethod
+    def decode_bytes(
+        values: Span[UInt8, _],
+        np: Int,
+        dict_body: List[UInt8],
+        dict_off: List[Int],
+        dict_len: List[Int],
+    ) raises -> List[List[UInt8]]:
+        var out = List[List[UInt8]]()
+        var indices = Rle.decode(values[1:], Int(values[0]), np)
+        for i in range(np):
+            var idx = Int(indices[i])
+            var start = dict_off[idx]
+            var v = List[UInt8]()
+            v.extend(Span(dict_body)[start : start + dict_len[idx]])
+            out.append(v^)
+        return out^
+
+
+struct ByteStreamSplit:
+    """The BYTE_STREAM_SPLIT codec — each value's bytes are transposed into
+    per-byte planes (byte `k` of value `i` at `values[k*np + i]`)."""
+
+    @staticmethod
+    def decode_primitive[
+        store: DType, phys: DType
+    ](values: Span[UInt8, _], np: Int, mut out: List[Scalar[store]]) raises:
+        comptime PW = size_of[Scalar[phys]]()
+        for i in range(np):
+            var raw = InlineArray[UInt8, PW](fill=0)
+
+            comptime for k in range(PW):
+                raw[k] = values[k * np + i]
+            out.append(
+                SIMD[phys, 1].from_bytes[big_endian=False](raw).cast[store]()
+            )
+
+
+struct DeltaLengthByteArray:
+    """The DELTA_LENGTH_BYTE_ARRAY codec — a delta-packed length stream followed
+    by the concatenated value bytes."""
+
+    @staticmethod
+    def decode_bytes(
+        values: Span[UInt8, _], np: Int
+    ) raises -> List[List[UInt8]]:
+        var out = List[List[UInt8]]()
+        var lengths = List[Int64]()
+        var pos = DeltaBinaryPacked.decode_into(values, 0, np, lengths)
+        for i in range(np):
+            var n = Int(lengths[i])
+            var v = List[UInt8]()
+            v.extend(values[pos : pos + n])
+            out.append(v^)
+            pos += n
+        return out^
+
+
+struct DeltaByteArray:
+    """The DELTA_BYTE_ARRAY codec — incremental prefix reconstruction: a
+    delta-packed shared-prefix-length stream, then a delta-packed suffix-length
+    stream, then the suffix bytes; each value is `prev[:prefix] + suffix`."""
+
+    @staticmethod
+    def decode_bytes(
+        values: Span[UInt8, _], np: Int
+    ) raises -> List[List[UInt8]]:
+        var out = List[List[UInt8]]()
+        var prefixes = List[Int64]()
+        var pos = DeltaBinaryPacked.decode_into(values, 0, np, prefixes)
+        var suffix_lens = List[Int64]()
+        pos = DeltaBinaryPacked.decode_into(values, pos, np, suffix_lens)
+        var prev = List[UInt8]()
+        for i in range(np):
+            var v = List[UInt8]()
+            v.extend(Span(prev)[0 : Int(prefixes[i])])
+            var sl = Int(suffix_lens[i])
+            v.extend(values[pos : pos + sl])
+            pos += sl
+            out.append(v.copy())
+            prev = v^
+        return out^
+
+
+struct Encoding(Equatable, ImplicitlyCopyable, Movable):
+    """A Parquet `Encoding` enum value. The decode methods dispatch a data page's
+    *present* values to the per-encoding codec above; each appends `num_present`
+    values from a value byte-span (nulls are placed later by the caller from the
+    definition levels), so the same logic serves the flat and nested reader
+    paths."""
 
     var code: Int
 
@@ -431,39 +657,18 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         mut out: List[Scalar[store]],
     ) raises:
         """Append the present fixed-width values (widened `phys` -> `store`)."""
-        comptime PW = size_of[Scalar[phys]]()
-        var np = num_present
         if self.is_plain():
-            for i in range(np):
-                out.append(
-                    LittleEndian.fixed[phys](values, i * PW).cast[store]()
-                )
+            Plain.decode_primitive[store, phys](values, num_present, out)
         elif self.is_dictionary():
-            var base = len(out)
-            out.resize(unsafe_uninit_length=base + np)
-            Rle.gather[store](
-                values[1:],
-                Int(values[0]),
-                np,
-                dict.unsafe_ptr(),
-                out.unsafe_ptr() + base,
-            )
+            Dictionary.decode_primitive[store](values, num_present, dict, out)
         elif self == Self.DELTA_BINARY_PACKED:
-            var decoded = DeltaBinaryPacked.decode(values, np)
-            for i in range(np):
+            var decoded = DeltaBinaryPacked.decode(values, num_present)
+            for i in range(num_present):
                 out.append(decoded[i].cast[store]())
         elif self == Self.BYTE_STREAM_SPLIT:
-            # byte k of value i lives at values[k*np + i]
-            for i in range(np):
-                var raw = InlineArray[UInt8, PW](fill=0)
-
-                comptime for k in range(PW):
-                    raw[k] = values[k * np + i]
-                out.append(
-                    SIMD[phys, 1]
-                    .from_bytes[big_endian=False](raw)
-                    .cast[store]()
-                )
+            ByteStreamSplit.decode_primitive[store, phys](
+                values, num_present, out
+            )
         else:
             raise Error(
                 "parquet: unsupported data page encoding " + String(self.code)
@@ -478,53 +683,20 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         dict_len: List[Int],
     ) raises -> List[List[UInt8]]:
         """Return the present variable-length byte values."""
-        var np = num_present
-        var out = List[List[UInt8]]()
         if self.is_plain():
-            var vi = 0
-            for _ in range(np):
-                var n = LittleEndian.u32(values, vi)
-                vi += 4
-                var v = List[UInt8]()
-                v.extend(values[vi : vi + n])
-                out.append(v^)
-                vi += n
+            return Plain.decode_bytes(values, num_present)
         elif self.is_dictionary():
-            var indices = Rle.decode(values[1:], Int(values[0]), np)
-            for i in range(np):
-                var idx = Int(indices[i])
-                var start = dict_off[idx]
-                var v = List[UInt8]()
-                v.extend(Span(dict_body)[start : start + dict_len[idx]])
-                out.append(v^)
+            return Dictionary.decode_bytes(
+                values, num_present, dict_body, dict_off, dict_len
+            )
         elif self == Self.DELTA_LENGTH_BYTE_ARRAY:
-            var lengths = List[Int64]()
-            var pos = DeltaBinaryPacked.decode_into(values, 0, np, lengths)
-            for i in range(np):
-                var n = Int(lengths[i])
-                var v = List[UInt8]()
-                v.extend(values[pos : pos + n])
-                out.append(v^)
-                pos += n
+            return DeltaLengthByteArray.decode_bytes(values, num_present)
         elif self == Self.DELTA_BYTE_ARRAY:
-            var prefixes = List[Int64]()
-            var pos = DeltaBinaryPacked.decode_into(values, 0, np, prefixes)
-            var suffix_lens = List[Int64]()
-            pos = DeltaBinaryPacked.decode_into(values, pos, np, suffix_lens)
-            var prev = List[UInt8]()
-            for i in range(np):
-                var v = List[UInt8]()
-                v.extend(Span(prev)[0 : Int(prefixes[i])])
-                var sl = Int(suffix_lens[i])
-                v.extend(values[pos : pos + sl])
-                pos += sl
-                out.append(v.copy())
-                prev = v^
+            return DeltaByteArray.decode_bytes(values, num_present)
         else:
             raise Error(
                 "parquet: unsupported byte-array encoding " + String(self.code)
             )
-        return out^
 
     def decode_bool(
         self, values: Span[UInt8, _], num_present: Int
@@ -532,43 +704,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         """Return the present PLAIN bit-packed booleans."""
         if not self.is_plain():
             raise Error("parquet: non-plain bool encoding not supported")
-        var out = List[Bool]()
-        for i in range(num_present):
-            var byte = values[i >> 3]
-            out.append(((byte >> UInt8(i & 7)) & 1) == 1)
-        return out^
-
-    @staticmethod
-    def decode_dict_primitive[
-        store: DType, phys: DType
-    ](
-        body: Span[UInt8, _], num_values: Int, mut dict: List[Scalar[store]]
-    ) raises:
-        """Decode a primitive dictionary page (PLAIN fixed-width) into `dict`.
-        """
-        comptime PW = size_of[Scalar[phys]]()
-        for i in range(num_values):
-            dict.append(LittleEndian.fixed[phys](body, i * PW).cast[store]())
-
-    @staticmethod
-    def decode_dict_bytes(
-        body: Span[UInt8, _],
-        num_values: Int,
-        mut dict_body: List[UInt8],
-        mut dict_off: List[Int],
-        mut dict_len: List[Int],
-    ) raises:
-        """Decode a byte-array dictionary page (length-prefixed values)."""
-        dict_body.clear()
-        dict_body.extend(body)
-        var span = Span(dict_body)
-        var off = 0
-        for _ in range(num_values):
-            var n = LittleEndian.u32(span, off)
-            off += 4
-            dict_off.append(off)
-            dict_len.append(n)
-            off += n
+        return Plain.decode_bool(values, num_present)
 
 
 struct Compression(Equatable, ImplicitlyCopyable, Movable):

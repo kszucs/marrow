@@ -16,7 +16,7 @@ from ..schema import Schema
 from ..tabular import Table, RecordBatch
 
 from .utils import CompressionLibs
-from .schema import ParsedSchema, Projection, DecodedLeaf
+from .schema import SchemaMapping, Projection, DecodedLeaf
 from .format import FileMetaData
 from .column import ColumnReader
 
@@ -87,10 +87,10 @@ def read_table(
     var mapped = MappedFile(path)
     var data = mapped.span()
     var meta = FileMetaData.read_footer(data)
-    var parsed = ParsedSchema.from_metadata(meta)
+    var mapping = SchemaMapping.from_parquet(meta)
 
     # the read plan: which column chunks to decode and how to reassemble them
-    var plan = parsed.project(columns.value()) if columns else parsed.full()
+    var plan = mapping.project(columns.value()) if columns else mapping.full()
 
     var num_leaves = len(plan.decode_order)
     var num_rg = len(meta.row_groups)
@@ -123,7 +123,7 @@ def read_table(
             var reader = ColumnReader(
                 data,
                 rg.columns[orig].meta_data.copy(),
-                parsed.leaves[orig].copy(),
+                mapping.leaves[orig].copy(),
                 rg.num_rows,
             )
             grid[t] = reader.decode(codecs)

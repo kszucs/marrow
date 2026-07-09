@@ -1,7 +1,7 @@
 """Native Arrow → Parquet writer.
 
 `FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the
-table (bounded by `row_group_size`), then the footer. `ColumnChunkWriter` owns
+table (bounded by `row_group_size`), then the footer. `ColumnWriter` owns
 one leaf column chunk — encoding a data page (RLE definition levels + PLAIN
 values), compressing it, and producing the `ColumnMetaData` (with a null-count
 statistic). `version` selects the page format: v1 (levels + values compressed
@@ -15,18 +15,16 @@ pages. Dictionary encoding, page splitting, temporal/list writing, and min/max
 statistics are follow-ups.
 """
 
-from std.sys import size_of
 from std.pathlib import Path
 
-from ..arrays import AnyArray, PrimitiveArray, StringArray, BoolArray
+from ..arrays import AnyArray
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
-from .codecs import Encoding, Rle
-from .codecs import Compression
+from .codecs import Rle, Plain, LittleEndian, Compression
 from .utils import CompressionLibs
-from .schema import ParquetSchema, LeafColumn, SchemaNode
+from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
     ColumnMetaData,
@@ -39,11 +37,11 @@ comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
 
 
 # ---------------------------------------------------------------------------
-# ColumnChunkWriter — encode one leaf column chunk into the output buffer
+# ColumnWriter — encode one leaf column chunk into the output buffer
 # ---------------------------------------------------------------------------
 
 
-struct ColumnChunkWriter(Movable):
+struct ColumnWriter(Movable):
     var leaf: LeafColumn
     var compression: Compression
     var version: Int  # data-page version: 1 or 2
@@ -58,73 +56,34 @@ struct ColumnChunkWriter(Movable):
         self.compression = compression
         self.version = version
 
-    @staticmethod
-    def _u32le(mut out: List[UInt8], v: Int):
-        out.append(UInt8(v & 0xFF))
-        out.append(UInt8((v >> 8) & 0xFF))
-        out.append(UInt8((v >> 16) & 0xFF))
-        out.append(UInt8((v >> 24) & 0xFF))
-
-    def _plain[
-        store: dt.NumericType, phys: DType
-    ](self, arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
-        comptime W = size_of[Scalar[phys]]()
-        for i in range(arr.length):
-            if arr.is_valid(i):
-                var bytes = (
-                    arr[i].value().cast[phys]().as_bytes[big_endian=False]()
-                )
-                for b in range(W):
-                    out.append(bytes[b])
-
-    def _plain_bool(self, arr: BoolArray, mut out: List[UInt8]) raises:
-        var acc: UInt8 = 0
-        var nbits = 0
-        for i in range(arr.length):
-            if arr.is_valid(i):
-                if arr[i].value():
-                    acc |= UInt8(1) << UInt8(nbits)
-                nbits += 1
-                if nbits == 8:
-                    out.append(acc)
-                    acc = 0
-                    nbits = 0
-        if nbits > 0:
-            out.append(acc)
-
-    def _plain_bytes(self, arr: StringArray, mut out: List[UInt8]) raises:
-        for i in range(arr.length):
-            if arr.is_valid(i):
-                var b = String(arr[i]).as_bytes()
-                Self._u32le(out, len(b))
-                out.extend(b)
-
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
+        """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
+        writer's mirror of the reader's decode dispatch)."""
         ref vt = self.leaf.dtype
         if vt == dt.int32:
-            self._plain[phys=DType.int32](col.as_int32(), body)
+            Plain.encode_primitive[phys=DType.int32](col.as_int32(), body)
         elif vt == dt.int64:
-            self._plain[phys=DType.int64](col.as_int64(), body)
+            Plain.encode_primitive[phys=DType.int64](col.as_int64(), body)
         elif vt == dt.uint32:
-            self._plain[phys=DType.uint32](col.as_uint32(), body)
+            Plain.encode_primitive[phys=DType.uint32](col.as_uint32(), body)
         elif vt == dt.uint64:
-            self._plain[phys=DType.uint64](col.as_uint64(), body)
+            Plain.encode_primitive[phys=DType.uint64](col.as_uint64(), body)
         elif vt == dt.float32:
-            self._plain[phys=DType.float32](col.as_float32(), body)
+            Plain.encode_primitive[phys=DType.float32](col.as_float32(), body)
         elif vt == dt.float64:
-            self._plain[phys=DType.float64](col.as_float64(), body)
+            Plain.encode_primitive[phys=DType.float64](col.as_float64(), body)
         elif vt == dt.int8:
-            self._plain[phys=DType.int32](col.as_int8(), body)
+            Plain.encode_primitive[phys=DType.int32](col.as_int8(), body)
         elif vt == dt.int16:
-            self._plain[phys=DType.int32](col.as_int16(), body)
+            Plain.encode_primitive[phys=DType.int32](col.as_int16(), body)
         elif vt == dt.uint8:
-            self._plain[phys=DType.int32](col.as_uint8(), body)
+            Plain.encode_primitive[phys=DType.int32](col.as_uint8(), body)
         elif vt == dt.uint16:
-            self._plain[phys=DType.int32](col.as_uint16(), body)
+            Plain.encode_primitive[phys=DType.int32](col.as_uint16(), body)
         elif vt == dt.bool_:
-            self._plain_bool(col.as_bool(), body)
+            Plain.encode_bool(col.as_bool(), body)
         elif vt.is_string():
-            self._plain_bytes(col.as_string(), body)
+            Plain.encode_bytes(col.as_string(), body)
         else:
             raise Error("parquet: cannot write column type " + String(vt))
 
@@ -182,7 +141,7 @@ struct ColumnChunkWriter(Movable):
             var body = List[UInt8]()
             if self.leaf.max_def >= 1:
                 var def_bytes = self._def_levels(col, null_count)
-                Self._u32le(body, len(def_bytes))
+                LittleEndian.put_u32(body, len(def_bytes))
                 body.extend(Span(def_bytes))
             self._encode_values(col, body)
             uncompressed_size = len(body)
@@ -240,7 +199,7 @@ struct FileWriter(Movable):
         var columns = List[ColumnChunk]()
         var total = 0
         for ci in range(len(self.leaves)):
-            var ccw = ColumnChunkWriter(
+            var ccw = ColumnWriter(
                 self.leaves[ci].copy(), self.compression, self.version
             )
             var cc = ccw.write(leaf_arrays[ci], self.out, self.codecs)
@@ -262,7 +221,7 @@ struct FileWriter(Movable):
         var batch = table.combine_chunks()
         var n = batch.num_rows()
 
-        var ps = ParquetSchema.from_arrow(table.schema)
+        var ps = SchemaMapping.from_arrow(table.schema)
         self.leaves = ps.leaves.copy()
 
         var fmeta = FileMetaData()
@@ -280,15 +239,7 @@ struct FileWriter(Movable):
             if length == 0:
                 break
 
-        # PLAIN encoding for every column in every row group
-        var encodings = List[Int]()
-        for _ in range(len(self.leaves)):
-            encodings.append(Encoding.PLAIN.code)
-        var rg_encodings = List[List[Int]]()
-        for _ in range(len(fmeta.row_groups)):
-            rg_encodings.append(encodings.copy())
-
-        fmeta.write_footer(self.out, rg_encodings)
+        fmeta.write_footer(self.out)
         Path(path).write_bytes(Span(self.out))
 
 

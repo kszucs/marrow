@@ -178,8 +178,19 @@
   `Page.kind` (with its `PAGEKIND_*` ints) became a `Page.dictionary` flag; and
   the loose `_project` / `_erase` / `_count_equal` / `_read_logical_type`
   helpers were folded into methods — leaving `read_table` / `write_table` as the
-  only module-level functions. Behaviour and performance unchanged (same test
-  matrix and pyarrow interop).
+  only module-level functions. A concluding elegance pass then: renamed
+  `encoding.mojo` → `codecs.mojo` and moved the `dlopen` handle pool into a new
+  `parquet/utils.mojo`; split value coding into one small codec type per scheme
+  (`Plain` · `Dictionary` · `ByteStreamSplit` · `DeltaByteArray` ·
+  `DeltaLengthByteArray`, each with `encode`/`decode`) that `Encoding`
+  dispatches to, moving PLAIN *encode* off the writer so all value coding lives
+  in `codecs.mojo`; collapsed the four schema types (`ParsedSchema` +
+  `ParquetSchema` + `_SchemaReader` + `_SchemaWriter`) into one `SchemaMapping`
+  with `from_parquet` / `from_arrow` constructors; renamed `ColumnChunkWriter` →
+  `ColumnWriter` (symmetry with `ColumnReader`); and dropped the ad-hoc
+  `List[List[Int]]` per-column-encoding plumbing from the footer write (the
+  metadata declares its own `[RLE, PLAIN]`). Behaviour and performance unchanged
+  (same test matrix and pyarrow interop).
 - **Aggregate field cleanup + single `ExecutionContext`** (`marrow.expr`):
   `agg_exprs` renamed to `aggs`; the redundant `key_fields` field dropped (the
   key fields are the first `len(keys)` output-schema fields, so the processor

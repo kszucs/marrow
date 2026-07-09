@@ -866,15 +866,16 @@ struct ColumnMetaData(Copyable, Movable):
                 r.skip(ftype)
         return out^
 
-    def write(self, mut w: CompactWriter, encoding: Int):
+    def write(self, mut w: CompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.type))
-        # encodings: list<Encoding> = [RLE, encoding]
+        # encodings: list<Encoding> = [RLE levels, PLAIN values] — the writer
+        # only emits PLAIN data pages with RLE definition levels.
         last = w.write_field_begin(TC_LIST, 2, last)
         w.write_list_begin(TC_I32, 2)
         w.write_i32(Int32(Encoding.RLE.code))
-        w.write_i32(Int32(encoding))
+        w.write_i32(Int32(Encoding.PLAIN.code))
         last = w.write_field_begin(TC_LIST, 3, last)
         w.write_list_begin(TC_BINARY, len(self.path_in_schema))
         for p in self.path_in_schema:
@@ -923,12 +924,12 @@ struct ColumnChunk(Copyable, Movable):
                 r.skip(ftype)
         return out^
 
-    def write(self, mut w: CompactWriter, encoding: Int):
+    def write(self, mut w: CompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I64, 2, last)
         w.write_i64(Int64(self.file_offset))
         last = w.write_field_begin(TC_STRUCT, 3, last)
-        self.meta_data.write(w, encoding)
+        self.meta_data.write(w)
         w.write_field_stop()
 
 
@@ -963,12 +964,12 @@ struct RowGroup(Copyable, Movable):
                 r.skip(ftype)
         return out^
 
-    def write(self, mut w: CompactWriter, encodings: List[Int]):
+    def write(self, mut w: CompactWriter):
         var last = 0
         last = w.write_field_begin(TC_LIST, 1, last)
         w.write_list_begin(TC_STRUCT, len(self.columns))
         for i in range(len(self.columns)):
-            self.columns[i].write(w, encodings[i])
+            self.columns[i].write(w)
         last = w.write_field_begin(TC_I64, 2, last)
         w.write_i64(Int64(self.total_byte_size))
         last = w.write_field_begin(TC_I64, 3, last)
@@ -1017,7 +1018,7 @@ struct FileMetaData(Copyable, Movable):
                 r.skip(ftype)
         return out^
 
-    def write(self, mut w: CompactWriter, row_group_encodings: List[List[Int]]):
+    def write(self, mut w: CompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.version))
@@ -1030,7 +1031,7 @@ struct FileMetaData(Copyable, Movable):
         last = w.write_field_begin(TC_LIST, 4, last)
         w.write_list_begin(TC_STRUCT, len(self.row_groups))
         for i in range(len(self.row_groups)):
-            self.row_groups[i].write(w, row_group_encodings[i])
+            self.row_groups[i].write(w)
         _ = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
         w.write_field_stop()
@@ -1069,13 +1070,11 @@ struct FileMetaData(Copyable, Movable):
         var r = CompactReader(data, start)
         return Self.read(r)
 
-    def write_footer(
-        self, mut out: List[UInt8], row_group_encodings: List[List[Int]]
-    ) raises:
+    def write_footer(self, mut out: List[UInt8]) raises:
         """Serialize the thrift blob, then the 4-byte LE length and `PAR1` magic
         that close the file."""
         var w = CompactWriter()
-        self.write(w, row_group_encodings)
+        self.write(w)
         var meta_len = len(w.buf)
         out.extend(Span(w.buf))
         for i in range(4):
