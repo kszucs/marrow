@@ -19,6 +19,7 @@ from .tabular import RecordBatch, Table
 
 comptime ARROW_FLAG_NULLABLE = 2
 comptime ARROW_FLAG_DICT_ORDERED: Int64 = 1
+comptime ARROW_FLAG_MAP_KEYS_SORTED: Int64 = 4
 
 
 @always_inline
@@ -391,6 +392,19 @@ struct CArrowSchema(Copyable, Movable):
                 var child_ptr = alloc[CArrowSchema](1)
                 child_ptr.init_pointee_move(child^)
                 children[i] = child_ptr
+        elif dtype.is_map():
+            # "+m" with a single child = the non-nullable "entries" struct of
+            # (key, value). keys_sorted rides in the schema flags.
+            ref mt = dtype.as_map()
+            fmt = "+m"
+            n_children = 1
+            children = alloc[UnsafePointer[CArrowSchema, MutUntrackedOrigin]](1)
+            var entries = CArrowSchema.from_field(mt.entries_field())
+            var entries_ptr = alloc[CArrowSchema](1)
+            entries_ptr.init_pointee_move(entries^)
+            children[0] = entries_ptr
+            if mt.keys_sorted:
+                flags = ARROW_FLAG_MAP_KEYS_SORTED
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
             ref idx = dt.index_type()
@@ -666,6 +680,13 @@ struct CArrowSchema(Copyable, Movable):
             for i in range(self.n_children):
                 fields.append(self.children[i][].to_field())
             return struct_(fields^)
+        elif fmt == "+m":
+            # "+m" has one child = the entries struct field of (key, value); store
+            # it directly, preserving its field names and nullability. keys_sorted
+            # rides the schema flags.
+            var entries = self.children[0][].to_field()
+            var sorted = Bool(self.flags & ARROW_FLAG_MAP_KEYS_SORTED)
+            return MapType(entries^, sorted).to_any()
         elif fmt.startswith("d:"):
             var rest = String(fmt).removeprefix("d:")
             var parts = rest.split(",")
@@ -928,6 +949,18 @@ struct CArrowArray(Copyable, Movable):
                 children.append(
                     self.children[i][].to_data(st.fields[i].dtype, owner)
                 )
+        elif dtype.is_map():
+            # Same physical layout as a list: an int32 offsets buffer plus one
+            # child = the entries struct (synthesized from the map's key/value).
+            buffers.append(
+                Buffer.from_foreign(
+                    self.buffers[1],
+                    (Int(length) + 1) * size_of[DType.int32](),
+                    owner,
+                )
+            )
+            var entries_dt = dtype.as_map().entries_field().dtype.copy()
+            children.append(self.children[0][].to_data(entries_dt, owner))
         elif dtype.is_dictionary():
             ref dt = dtype.as_dictionary()
             buffers.append(

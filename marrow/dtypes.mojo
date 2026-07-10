@@ -602,6 +602,82 @@ struct StructType(DataType):
         writer.write(">")
 
 
+struct MapType(DataType, ListLikeType):
+    """Arrow map type — an ordered sequence of (key, value) entries per element.
+
+    Physically a list of a non-nullable 2-field ``entries`` struct (a required
+    ``key`` and a ``value``); the int32 offsets let `MapArray` reuse
+    `ListLikeArray[MapType]`. Following arrow-rs (`DataType::Map(field, sorted)`)
+    and Arrow C++ (`MapType::value_field()`), the entries struct is stored as a
+    single `Field` — preserving the key/value field names, nullability, and
+    metadata — with `key_field()`/`item_field()` derived from it. `keys_sorted`
+    is advisory. Equivalent to PyArrow's ``pa.map_(key_type, item_type,
+    keys_sorted)``. Accessors return by value so a map-dtype temporary can be
+    read safely.
+    """
+
+    comptime offset: DType = DType.int32
+
+    var entries: OwnedPointer[Field]
+    var keys_sorted: Bool
+
+    def __init__(out self, var entries: Field, keys_sorted: Bool = False):
+        """From the entries struct field directly (preserves its field names)."""
+        self.entries = OwnedPointer(entries^)
+        self.keys_sorted = keys_sorted
+
+    def __init__(
+        out self,
+        var key_type: AnyDataType,
+        var value_type: AnyDataType,
+        value_nullable: Bool = True,
+        keys_sorted: Bool = False,
+    ):
+        """From key/value types, with the canonical ``entries``/``key``/``value``
+        field names and a non-nullable key."""
+        var entries = field(
+            "entries",
+            struct_(
+                field("key", key_type^, nullable=False),
+                field("value", value_type^, nullable=value_nullable),
+            ),
+            nullable=False,
+        )
+        self.entries = OwnedPointer(entries^)
+        self.keys_sorted = keys_sorted
+
+    def __init__(out self, *, copy: Self):
+        self.entries = OwnedPointer(copy.entries[].copy())
+        self.keys_sorted = copy.keys_sorted
+
+    def __eq__(self, other: Self) -> Bool:
+        return (
+            self.entries[] == other.entries[]
+            and self.keys_sorted == other.keys_sorted
+        )
+
+    def entries_field(self) -> Field:
+        """The list-element field — the non-nullable ``entries`` struct of
+        (key, value). This is the single ``+m`` child in the C Data Interface and
+        the parquet ``key_value`` group."""
+        return self.entries[].copy()
+
+    def key_field(self) -> Field:
+        return self.entries[].dtype.as_struct().fields[0].copy()
+
+    def item_field(self) -> Field:
+        return self.entries[].dtype.as_struct().fields[1].copy()
+
+    def key_type(self) -> AnyDataType:
+        return self.entries[].dtype.as_struct().fields[0].dtype.copy()
+
+    def item_type(self) -> AnyDataType:
+        return self.entries[].dtype.as_struct().fields[1].dtype.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("map<", self.key_type(), ", ", self.item_type(), ">")
+
+
 struct DictionaryType(DataType):
     """Dictionary-encoded type — indices into a separate dictionary array.
 
@@ -696,6 +772,7 @@ struct AnyDataType(
         FixedSizeListType,
         FixedSizeBinaryType,
         StructType,
+        MapType,
         DictionaryType,
         Date32Type,
         Date64Type,
@@ -881,6 +958,9 @@ struct AnyDataType(
     def is_struct(self) -> Bool:
         return self._v.isa[StructType]()
 
+    def is_map(self) -> Bool:
+        return self._v.isa[MapType]()
+
     def is_dictionary(self) -> Bool:
         return self._v.isa[DictionaryType]()
 
@@ -988,6 +1068,10 @@ struct AnyDataType(
     def as_struct(ref self) -> ref[self._v] StructType:
         """For struct types, returns the inner StructType."""
         return self._as[StructType]()
+
+    def as_map(ref self) -> ref[self._v] MapType:
+        """For map types, returns the inner MapType."""
+        return self._as[MapType]()
 
     def as_dictionary(ref self) -> ref[self._v] DictionaryType:
         """For dictionary types, returns the inner DictionaryType."""
@@ -1142,6 +1226,19 @@ def struct_(var *fields: Field) -> StructType:
     for field in fields:
         list.append(field.copy())
     return StructType(list^)
+
+
+def map_(
+    var key_type: AnyDataType,
+    var item_type: AnyDataType,
+    keys_sorted: Bool = False,
+) -> MapType:
+    """Construct a map type. Equivalent to PyArrow's ``pa.map_(key_type,
+    item_type, keys_sorted)``. The key is non-nullable; the value is nullable.
+    """
+    return MapType(
+        key_type^, item_type^, value_nullable=True, keys_sorted=keys_sorted
+    )
 
 
 def decimal32(precision: Int, scale: Int = 0) -> Decimal32Type:

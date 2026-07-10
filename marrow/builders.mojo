@@ -53,6 +53,7 @@ from .arrays import (
     LargeStringArray,
     ListLikeArray,
     ListArray,
+    MapArray,
     FixedSizeListArray,
     FixedSizeBinaryArray,
     StructArray,
@@ -146,6 +147,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         LargeStringBuilder,
         ListBuilder,
         LargeListBuilder,
+        MapBuilder,
         FixedSizeListBuilder,
         FixedSizeBinaryBuilder,
         StructBuilder,
@@ -246,6 +248,8 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
             self = Decimal128Builder(dtype.as_decimal128(), capacity)
         elif dtype.is_decimal256():
             self = Decimal256Builder(dtype.as_decimal256(), capacity)
+        elif dtype.is_map():
+            self = MapBuilder(dtype.as_map(), capacity)
         elif dtype.is_struct():
             self = StructBuilder(dtype.as_struct().fields.copy(), capacity)
         elif dtype.is_dictionary():
@@ -974,6 +978,67 @@ struct ListLikeBuilder[T: ListLikeType](Builder):
 
 comptime ListBuilder = ListLikeBuilder[ListType]
 comptime LargeListBuilder = ListLikeBuilder[LargeListType]
+
+
+# ---------------------------------------------------------------------------
+# MapBuilder
+# ---------------------------------------------------------------------------
+
+
+struct MapBuilder(Builder):
+    """Builder for map arrays. A map is physically a list of a non-nullable
+    ``entries`` struct of (key, value), so this is a thin composition over a
+    `ListBuilder` whose child is that struct — the map dtype is applied only at
+    the `dtype()`/`finish()` boundary, and incoming `MapArray`s are retagged as
+    lists for `extend`. Append entries through `entries()` (the struct builder)
+    and mark map boundaries with `append_valid`/`append_null`."""
+
+    comptime ArrayType = MapArray
+
+    var _inner: ListBuilder
+    var _dtype: AnyDataType
+
+    def __init__(out self, dtype: MapType, capacity: Int = 0) raises:
+        var entries = StructBuilder(
+            [dtype.key_field(), dtype.item_field()], capacity
+        )
+        self._inner = ListBuilder(entries^, capacity)
+        self._dtype = MapType(copy=dtype)
+
+    def length(self) -> Int:
+        return self._inner.length()
+
+    def null_count(self) -> Int:
+        return self._inner.null_count()
+
+    def dtype(self) -> AnyDataType:
+        return self._dtype.copy()
+
+    def entries(self) -> AnyBuilder:
+        """The (key, value) entries struct builder — append map entries here,
+        then call `append_valid`/`append_null` to close each map."""
+        return self._inner.values()
+
+    def reserve(mut self, additional: Int) raises:
+        self._inner.reserve(additional)
+
+    def append_null(mut self) raises:
+        self._inner.append_null()
+
+    def append_valid(mut self) raises:
+        self._inner.append_valid()
+
+    def extend(mut self, arr: AnyArray) raises:
+        # Feed the map to the inner ListBuilder as a plain list of its entries.
+        self._inner.extend(arr.as_map().to_list())
+
+    def finish(mut self, *, shrink_to_fit: Bool = True) raises -> MapArray:
+        return self._inner.finish(shrink_to_fit=shrink_to_fit).to_map(
+            self._dtype.as_map().keys_sorted
+        )
+
+    def reset(mut self):
+        self._inner.reset()
 
 
 # ---------------------------------------------------------------------------

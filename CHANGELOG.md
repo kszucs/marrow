@@ -4,6 +4,17 @@
 
 ### Features
 
+- **Map type** (core): a first-class Arrow `map<k, v>` — `MapType`/`map_()` in
+  `dtypes`, `MapArray`/`MapArray.from_arrays(offsets, keys, items)` in `arrays`
+  (physically a list of a non-nullable `entries` struct, so it reuses
+  `ListLikeArray[MapType]`), `MapBuilder` (composed over an entries-struct
+  `ListBuilder`, so maps flow through `concat`/`combine_chunks`), and the Arrow C
+  Data Interface `+m` format in both directions (with the `keys_sorted` flag).
+  Following arrow-rs (`DataType::Map(field, sorted)`) and Arrow C++
+  (`MapType::value_field()`), `MapType` stores the entries struct as a single
+  `Field`, preserving key/value field names and nullability. The retag between a
+  list and a map lives in one place: `ListArray.to_map()` / `MapArray.to_list()`.
+
 - **Min/max statistics** (`marrow.parquet`): the writer now computes and emits
   per-column-chunk `min_value`/`max_value` bounds (with `is_min/max_value_exact`)
   alongside the existing `null_count`, and declares `column_orders`
