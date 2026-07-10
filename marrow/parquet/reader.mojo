@@ -132,6 +132,12 @@ struct Page(Movable):
     def all_present(self) -> Bool:
         return self.num_present == self.num_values
 
+    def present_at(self, row: Int, max_def: Int) -> Bool:
+        """Whether output `row` holds a present value: the whole page is present,
+        or its definition level reaches the leaf's max (a value slot, not a
+        null). The def-level scatter every `LeafBuilder` shares pivots on this."""
+        return self.all_present() or Int(self.def_levels[row]) == max_def
+
     def is_plain(self) -> Bool:
         return self.encoding.is_plain()
 
@@ -431,9 +437,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         self._ensure_bitmap()
         var vi = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if not mask or mask.value()[row]:
                 if present_here:
                     vptr[self.wpos] = present[vi]
@@ -548,9 +552,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
         DELTA_*). With `mask`, only the selected rows are appended."""
         var vi = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if not mask or mask.value()[row]:
                 if present_here:
                     self._append(Span(values[vi]))
@@ -570,9 +572,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
         """
         var vi = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if present_here:
                 var n = LittleEndian.u32(vspan, vi)
                 vi += 4
@@ -693,25 +693,24 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
         var vspan = page.values()
-        var present = List[Scalar[Self.native]](capacity=page.num_present)
-        if page.is_plain():
-            for i in range(page.num_present):
-                present.append(self._decode_be(vspan, i * self.width))
-        elif page.is_dictionary():
-            var idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
-            for i in range(page.num_present):
-                present.append(self.dict[Int(idx[i])])
-        else:
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        if is_dict:
+            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+        elif not page.is_plain():
             raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
 
         var vi = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if not mask or mask.value()[row]:
                 if present_here:
-                    self._append_present(present[vi])
+                    if is_dict:
+                        self._append_present(self.dict[Int(idx[vi])])
+                    else:
+                        self._append_present(
+                            self._decode_be(vspan, vi * self.width)
+                        )
                 else:
                     self._append_null()
             if present_here:
@@ -773,9 +772,7 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
 
         var vi = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if not mask or mask.value()[row]:
                 if present_here:
                     if is_dict:
@@ -827,9 +824,7 @@ struct BoolLeafBuilder(LeafBuilder):
         `mask`, only selected rows are appended."""
         var bitpos = 0
         for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
+            var present_here = page.present_at(row, self.max_def)
             if present_here:
                 var byte = vspan[bitpos >> 3]
                 var b = (byte >> UInt8(bitpos & 7)) & 1
