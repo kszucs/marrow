@@ -21,7 +21,12 @@ from std.memory import memcpy
 
 from ..arrays import AnyArray, ArrayData
 from ..buffers import Buffer, Bitmap
-from ..builders import BinaryLikeBuilder, BoolBuilder, PrimitiveBuilder
+from ..builders import (
+    BinaryLikeBuilder,
+    BoolBuilder,
+    FixedSizeBinaryBuilder,
+    PrimitiveBuilder,
+)
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
 from ..scalars import (
@@ -625,6 +630,183 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
         return out^
 
 
+struct DecimalLeafBuilder[native: DType](LeafBuilder):
+    """FIXED_LEN_BYTE_ARRAY decimals (decimal128 -> int128, decimal256 -> int256).
+
+    Each value is big-endian two's-complement of the schema's `type_length`
+    bytes — which PyArrow minimises per precision, so it may be narrower than the
+    16/32-byte storage — sign-extended into the native width. PLAIN and
+    RLE_DICTIONARY only, the encodings PyArrow emits for decimals."""
+
+    comptime FULL = size_of[Scalar[Self.native]]()
+
+    var dtype: dt.AnyDataType
+    var max_def: Int
+    var num_rows: Int
+    var width: Int
+    var values: Buffer[mut=True]
+    var bitmap: Bitmap[mut=True]
+    var has_bitmap: Bool
+    var wpos: Int
+    var null_count: Int
+    var dict: List[Scalar[Self.native]]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.dtype = leaf.dtype.copy()
+        self.max_def = leaf.max_def
+        self.num_rows = num_rows
+        self.width = leaf.type_length
+        self.values = Buffer.alloc_uninit[Self.native](num_rows)
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
+        self.wpos = 0
+        self.null_count = 0
+        self.dict = List[Scalar[Self.native]]()
+
+    def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
+        """Big-endian, sign-extended from `width` bytes to the native width."""
+        var arr = InlineArray[UInt8, Self.FULL](fill=0)
+        if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
+            for i in range(Self.FULL):
+                arr[i] = 0xFF
+        for i in range(self.width):
+            arr[Self.FULL - self.width + i] = span[off + i]
+        return SIMD[Self.native, 1].from_bytes[big_endian=True](arr)
+
+    def _ensure_bitmap(mut self):
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
+
+    def _append_present(mut self, v: Scalar[Self.native]):
+        self.values.unsafe_set[Self.native](self.wpos, v)
+        if self.has_bitmap:
+            self.bitmap.set(self.wpos)
+        self.wpos += 1
+
+    def _append_null(mut self):
+        self._ensure_bitmap()
+        self.values.unsafe_set[Self.native](self.wpos, Scalar[Self.native](0))
+        self.null_count += 1
+        self.wpos += 1
+
+    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+        var vspan = page.values()
+        var present = List[Scalar[Self.native]](capacity=page.num_present)
+        if page.is_plain():
+            for i in range(page.num_present):
+                present.append(self._decode_be(vspan, i * self.width))
+        elif page.is_dictionary():
+            var idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+            for i in range(page.num_present):
+                present.append(self.dict[Int(idx[i])])
+        else:
+            raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
+
+        var vi = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if not mask or mask.value()[row]:
+                if present_here:
+                    self._append_present(present[vi])
+                else:
+                    self._append_null()
+            if present_here:
+                vi += 1
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            var span = page.body
+            for i in range(page.num_values):
+                self.dict.append(self._decode_be(span, i * self.width))
+        else:
+            self._place(page, None)
+
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        self._place(page, mask.copy())
+
+    def finish(deinit self) raises -> AnyArray:
+        var buffers = List[Buffer[mut=False]]()
+        buffers.append(self.values^.to_immutable())
+        var bm: Optional[Bitmap[mut=False]] = None
+        if self.null_count > 0:
+            bm = self.bitmap^.to_immutable(length=self.wpos)
+        return AnyArray.from_data(
+            ArrayData(
+                dtype=self.dtype^,
+                length=self.wpos,
+                nulls=self.null_count,
+                offset=0,
+                bitmap=bm^,
+                buffers=buffers^,
+                children=List[ArrayData](),
+            )
+        )
+
+
+struct FixedSizeBinaryLeafBuilder(LeafBuilder):
+    """FIXED_LEN_BYTE_ARRAY raw bytes -> FixedSizeBinaryArray. PLAIN and
+    RLE_DICTIONARY, the encodings PyArrow emits."""
+
+    var builder: FixedSizeBinaryBuilder
+    var max_def: Int
+    var width: Int
+    var dict_body: List[UInt8]  # concatenated dict values, `width` bytes each
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.width = leaf.type_length
+        self.builder = FixedSizeBinaryBuilder(self.width, num_rows)
+        self.max_def = leaf.max_def
+        self.dict_body = List[UInt8]()
+
+    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+        var vspan = page.values()
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        if is_dict:
+            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+        elif not page.is_plain():
+            raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
+
+        var vi = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if not mask or mask.value()[row]:
+                if present_here:
+                    if is_dict:
+                        var o = Int(idx[vi]) * self.width
+                        self.builder.append(
+                            Span(self.dict_body)[o : o + self.width]
+                        )
+                    else:
+                        var o = vi * self.width
+                        self.builder.append(vspan[o : o + self.width])
+                else:
+                    self.builder.append_null()
+            if present_here:
+                vi += 1
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            self.dict_body = List[UInt8]()
+            self.dict_body.extend(page.body)
+        else:
+            self._place(page, None)
+
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        self._place(page, mask.copy())
+
+    def finish(deinit self) raises -> AnyArray:
+        var b = self.builder^
+        var out: AnyArray = b.finish()
+        return out^
+
+
 struct BoolLeafBuilder(LeafBuilder):
     """Bit-packed PLAIN booleans."""
 
@@ -986,6 +1168,22 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             )
             return self._flat_leaf(arr^)
 
+    def _emit_decimal[
+        native: DType
+    ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
+        var arr = self._build(
+            DecimalLeafBuilder[native](self.num_rows, self.pages.leaf), codecs
+        )
+        return self._flat_leaf(arr^)
+
+    def _emit_fsb(
+        mut self, mut codecs: CompressionLibs
+    ) raises -> DecodedLeaf:
+        var arr = self._build(
+            FixedSizeBinaryLeafBuilder(self.num_rows, self.pages.leaf), codecs
+        )
+        return self._flat_leaf(arr^)
+
     def _dispatch[
         leveled: Bool
     ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
@@ -1063,6 +1261,12 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                 return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
                     codecs, f, md
                 )
+            elif vt.is_decimal128():
+                return self._emit_decimal[DType.int128](codecs)
+            elif vt.is_decimal256():
+                return self._emit_decimal[DType.int256](codecs)
+            elif vt.is_fixed_size_binary():
+                return self._emit_fsb(codecs)
             else:
                 raise Error("parquet: unsupported column type " + String(vt))
         else:

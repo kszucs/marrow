@@ -229,7 +229,8 @@ def test_interop_dictionary_read() raises:
     _marrow_reads_pyarrow(t, "lz4")
 
 
-def test_interop_temporal_read() raises:
+def test_interop_temporal() raises:
+    # Temporal types now round-trip both directions (INT32/INT64 + LogicalType).
     var pa = Python.import_module("pyarrow")
     var dt = Python.import_module("datetime")
     var n = Python.none()
@@ -241,10 +242,50 @@ def test_interop_temporal_read() raises:
             ),
             ts_us=pa.array(Python.list(1, 2, n), type=pa.timestamp("us")),
             ts_ns=pa.array(Python.list(10, n, 20), type=pa.timestamp("ns")),
+            ts_tz=pa.array(
+                Python.list(1, n, 3), type=pa.timestamp("us", tz="UTC")
+            ),
             tm=pa.array(Python.list(5, 6, n), type=pa.time64("us")),
         )
     )
-    _read_only(t)
+    _all_shapes(t)
+
+
+def test_interop_decimal() raises:
+    # FIXED_LEN_BYTE_ARRAY decimals, both directions (big-endian FLBA).
+    var pa = Python.import_module("pyarrow")
+    var dec = Python.import_module("decimal")
+    var n = Python.none()
+    var t = pa.table(
+        Python.dict(
+            d128=pa.array(
+                Python.list(
+                    dec.Decimal("1.23"), n, dec.Decimal("-4.56")
+                ),
+                type=pa.decimal128(9, 2),
+            ),
+            d256=pa.array(
+                Python.list(
+                    dec.Decimal("123.456"), dec.Decimal("-7.890"), n
+                ),
+                type=pa.decimal256(40, 3),
+            ),
+        )
+    )
+    _all_shapes(t)
+
+
+def test_interop_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            fsb=pa.array(
+                Python.evaluate("[b'abc', None, b'xyz']"),
+                type=pa.binary(3),
+            ),
+        )
+    )
+    _all_shapes(t)
 
 
 def test_interop_binary_read() raises:

@@ -713,6 +713,7 @@ struct SchemaMapping(Movable):
                     nullable=nullable,
                     slot_def=slot_def,
                     carry_def=under_optional,
+                    type_length=el.type_length,
                 )
             )
             return SchemaNode(
@@ -1098,6 +1099,7 @@ struct LeafColumn(Copyable, Movable):
     var nullable: Bool
     var slot_def: Int  # def level at/above which this leaf's value slot exists
     var carry_def: Bool  # keep def levels (leaf is under a nullable struct)
+    var type_length: Int  # FIXED_LEN_BYTE_ARRAY width (decimal/fixed_size_binary)
 
     def __init__(
         out self,
@@ -1109,6 +1111,7 @@ struct LeafColumn(Copyable, Movable):
         nullable: Bool,
         slot_def: Int = 0,
         carry_def: Bool = False,
+        type_length: Int = 0,
     ):
         self.name = name^
         self.dtype = dtype^
@@ -1118,6 +1121,7 @@ struct LeafColumn(Copyable, Movable):
         self.nullable = nullable
         self.slot_def = slot_def
         self.carry_def = carry_def
+        self.type_length = type_length
 
 
 # ---------------------------------------------------------------------------

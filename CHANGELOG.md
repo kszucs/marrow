@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Decimal & fixed-size-binary read** (`marrow.parquet`): the reader now decodes
+  `FIXED_LEN_BYTE_ARRAY` columns — `decimal128`/`decimal256` (big-endian two's-
+  complement, sign-extended from PyArrow's minimal per-precision byte width to
+  the 16/32-byte int128/int256 storage) and `fixed_size_binary` (raw bytes) —
+  across PLAIN and `RLE_DICTIONARY` pages. With the temporal read already in
+  place, all temporal, decimal, and fixed-size-binary types now round-trip both
+  directions with PyArrow.
+
 - **Temporal, decimal & fixed-size-binary write** (`marrow.parquet`): the writer
   now emits `date32` (INT32/`DATE`), `time32`/`time64` (INT32/INT64 with
   `TIME_MILLIS`/`TIME_MICROS` and the nanosecond `TIME` `LogicalType`),
