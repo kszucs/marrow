@@ -338,32 +338,37 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         mut self,
         page: Page,
         present: UnsafePointer[Scalar[Self.store_dt], _],
+        mask: Optional[List[Bool]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
         buffer, honoring definition levels — one memcpy when the page is
-        all-present, else a per-row scatter that materializes the validity
-        bitmap. Every encoding funnels its decoded present values through here.
-        """
+        all-present and fully selected, else a per-row scatter that materializes
+        the validity bitmap. With `mask`, only the rows it selects are placed
+        (the page-boundary partial-page path). Every encoding funnels its decoded
+        present values through here."""
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
-        if page.all_present():
+        if not mask and page.all_present():
             memcpy(dest=vptr + self.wpos, src=present, count=page.num_present)
-            self.wpos += page.num_present
             if self.has_bitmap:
-                self.bitmap.set_range(
-                    self.wpos - page.num_present, page.num_present, True
-                )
-        else:
-            self._ensure_bitmap()
-            var vi = 0
-            for row in range(page.num_values):
-                if Int(page.def_levels[row]) == self.max_def:
+                self.bitmap.set_range(self.wpos, page.num_present, True)
+            self.wpos += page.num_present
+            return
+        self._ensure_bitmap()
+        var vi = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if not mask or mask.value()[row]:
+                if present_here:
                     vptr[self.wpos] = present[vi]
-                    vi += 1
                     self.bitmap.set(self.wpos)
                 else:
                     vptr[self.wpos] = 0
                     self.null_count += 1
                 self.wpos += 1
+            if present_here:
+                vi += 1
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -411,28 +416,12 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         # Decode every present value through the general per-encoding decoder
         # (PLAIN / dictionary / DELTA / BYTE_STREAM_SPLIT), then place only the
         # rows `mask` selects. Partial pages are the page-boundary minority, so
-        # skipping the fast paths here costs little.
+        # skipping `consume`'s fast paths here costs little.
         var present = List[Scalar[Self.store_dt]](capacity=page.num_present)
         page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
             page.values(), page.num_present, self.dict, present
         )
-        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
-        self._ensure_bitmap()  # selected present rows are set valid explicitly
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.all_present() or (
-                Int(page.def_levels[row]) == self.max_def
-            )
-            if mask[row]:
-                if present_here:
-                    vptr[self.wpos] = present[vi]
-                    self.bitmap.set(self.wpos)
-                else:
-                    vptr[self.wpos] = 0
-                    self.null_count += 1
-                self.wpos += 1
-            if present_here:
-                vi += 1
+        self._scatter(page, present.unsafe_ptr(), mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
         var buffers = List[Buffer[mut=False]]()
@@ -473,16 +462,49 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
     def _append(mut self, span: Span[UInt8, _]) raises:
         self.builder.append(StringSlice(unsafe_from_utf8=span))
 
-    def _scatter_values(mut self, page: Page, values: List[List[UInt8]]) raises:
-        """Append the `page.num_present` decoded present values into the builder,
-        honoring definition levels — the shared placement path for the encodings
-        that materialize their values (dictionary, DELTA_*)."""
+    def _scatter_values(
+        mut self,
+        page: Page,
+        values: List[List[UInt8]],
+        mask: Optional[List[Bool]] = None,
+    ) raises:
+        """Append the decoded present values honoring definition levels — the
+        shared placement path for the materializing encodings (dictionary,
+        DELTA_*). With `mask`, only the selected rows are appended."""
         var vi = 0
         for row in range(page.num_values):
-            if page.all_present() or Int(page.def_levels[row]) == self.max_def:
-                self._append(Span(values[vi]))
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if not mask or mask.value()[row]:
+                if present_here:
+                    self._append(Span(values[vi]))
+                else:
+                    self.builder.append_null()
+            if present_here:
                 vi += 1
-            else:
+
+    def _place_plain(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        mask: Optional[List[Bool]] = None,
+    ) raises:
+        """PLAIN in place: walk the length-prefixed present values, appending or
+        emitting nulls by def level. With `mask`, only selected rows are kept.
+        """
+        var vi = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if present_here:
+                var n = LittleEndian.u32(vspan, vi)
+                vi += 4
+                if not mask or mask.value()[row]:
+                    self._append(vspan[vi : vi + n])
+                vi += n
+            elif not mask or mask.value()[row]:
                 self.builder.append_null()
 
     def consume(mut self, var page: Page) raises:
@@ -501,19 +523,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
 
         var vspan = page.values()
         if page.is_plain():
-            # PLAIN is decoded in place (no per-value copy): walk the length-
-            # prefixed present values, appending or emitting nulls by def level.
-            var vi = 0
-            for row in range(page.num_values):
-                if page.all_present() or Int(page.def_levels[row]) == (
-                    self.max_def
-                ):
-                    var n = LittleEndian.u32(vspan, vi)
-                    vi += 4
-                    self._append(vspan[vi : vi + n])
-                    vi += n
-                else:
-                    self.builder.append_null()
+            self._place_plain(page, vspan)
         else:
             # dictionary and DELTA_* share one decoder with the nested path.
             var values = page.encoding.decode_bytes(
@@ -528,19 +538,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         var vspan = page.values()
         if page.is_plain():
-            var vi = 0
-            for row in range(page.num_values):
-                if page.all_present() or Int(page.def_levels[row]) == (
-                    self.max_def
-                ):
-                    var n = LittleEndian.u32(vspan, vi)
-                    vi += 4
-                    if mask[row]:
-                        self._append(vspan[vi : vi + n])
-                    vi += n
-                else:
-                    if mask[row]:
-                        self.builder.append_null()
+            self._place_plain(page, vspan, mask.copy())
         else:
             var values = page.encoding.decode_bytes(
                 page.values(),
@@ -549,17 +547,7 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
                 self.dict_off,
                 self.dict_len,
             )
-            var vi = 0
-            for row in range(page.num_values):
-                if page.all_present() or Int(page.def_levels[row]) == (
-                    self.max_def
-                ):
-                    if mask[row]:
-                        self._append(Span(values[vi]))
-                    vi += 1
-                else:
-                    if mask[row]:
-                        self.builder.append_null()
+            self._scatter_values(page, values, mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^
@@ -577,39 +565,39 @@ struct BoolLeafBuilder(LeafBuilder):
         self.builder = BoolBuilder(num_rows)
         self.max_def = leaf.max_def
 
+    def _place(
+        mut self,
+        page: Page,
+        vspan: Span[UInt8, _],
+        mask: Optional[List[Bool]] = None,
+    ) raises:
+        """Unpack the bit-packed present booleans honoring def levels; with
+        `mask`, only selected rows are appended."""
+        var bitpos = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if present_here:
+                var byte = vspan[bitpos >> 3]
+                var b = (byte >> UInt8(bitpos & 7)) & 1
+                bitpos += 1
+                if not mask or mask.value()[row]:
+                    self.builder.append(b == 1)
+            elif not mask or mask.value()[row]:
+                self.builder.append_null()
+
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
             raise Error("parquet: dictionary-encoded bool not supported")
         if not page.is_plain():
             raise Error("parquet: non-plain bool encoding not supported")
-        var vspan = page.values()
-        var all_present = page.all_present()
-        var bitpos = 0
-        for row in range(page.num_values):
-            if all_present or Int(page.def_levels[row]) == self.max_def:
-                var byte = vspan[bitpos >> 3]
-                var b = (byte >> UInt8(bitpos & 7)) & 1
-                bitpos += 1
-                self.builder.append(b == 1)
-            else:
-                self.builder.append_null()
+        self._place(page, page.values())
 
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
         if not page.is_plain():
             raise Error("parquet: non-plain bool encoding not supported")
-        var vspan = page.values()
-        var all_present = page.all_present()
-        var bitpos = 0
-        for row in range(page.num_values):
-            if all_present or Int(page.def_levels[row]) == self.max_def:
-                var byte = vspan[bitpos >> 3]
-                var b = (byte >> UInt8(bitpos & 7)) & 1
-                bitpos += 1
-                if mask[row]:
-                    self.builder.append(b == 1)
-            else:
-                if mask[row]:
-                    self.builder.append_null()
+        self._place(page, page.values(), mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^
