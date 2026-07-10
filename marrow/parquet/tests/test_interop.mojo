@@ -45,12 +45,14 @@ def _norm_type(t: PythonObject) raises -> String:
     """Normalize Arrow-only type distinctions that Parquet does not preserve, so
     marrow's read and pyarrow's read compare equal: the `large_*` variants
     collapse to their base type (pyarrow only restores `large_string` from its
-    private `ARROW:schema` metadata, which marrow ignores), and the LIST element
-    field name is arbitrary (marrow calls it `item`, pyarrow `element`)."""
-    var s = t.__str__()
-    return String(
-        s.replace("large_", "").replace("item: ", "").replace("element: ", "")
-    )
+    private `ARROW:schema` metadata, which marrow ignores), the LIST element
+    field name is arbitrary (marrow calls it `item`, pyarrow `element`), and
+    nested field-name annotations pyarrow renders as ` ('name')` (map key/value,
+    struct fields) are stripped since those names come from the same metadata."""
+    var re = Python.import_module("re")
+    var stripped = re.sub(PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__())
+    var s = String(stripped)
+    return s.replace("large_", "").replace("item: ", "").replace("element: ", "")
 
 
 def _values(col: PythonObject) raises -> PythonObject:
@@ -256,23 +258,35 @@ def test_interop_binary_read() raises:
     _read_only(t)
 
 
-def test_interop_list_read() raises:
+def test_interop_list() raises:
+    # Lists now round-trip both directions (Dremel shred on write).
     var pa = Python.import_module("pyarrow")
-    var n = Python.none()
     var t = pa.table(
         Python.dict(
             li=pa.array(
-                Python.list(
-                    Python.list(1, 2, 3),
-                    Python.list(),
-                    n,
-                    Python.list(4, 5),
-                ),
+                Python.evaluate("[[1, 2, 3], [], None, [4, 5]]"),
                 type=pa.list_(pa.int64()),
+            ),
+            ls=pa.array(
+                Python.evaluate("[['a', 'bb'], None, ['ccc'], []]"),
+                type=pa.list_(pa.string()),
             ),
         )
     )
-    _read_only(t)
+    _all_shapes(t)
+
+
+def test_interop_map() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            m=pa.array(
+                Python.evaluate("[{'a': 1, 'b': 2}, {}, None, {'c': 3}]"),
+                type=pa.map_(pa.string(), pa.int64()),
+            ),
+        )
+    )
+    _all_shapes(t)
 
 
 def main() raises:

@@ -368,5 +368,66 @@ def test_list_across_many_pages() raises:
     remove(path)
 
 
+# ---------------------------------------------------------------------------
+# Maps  (physically list<struct<key,value>> — read reconstructs a MapArray)
+# ---------------------------------------------------------------------------
+
+
+def test_map_string_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{'a': 1, 'b': 2}, {}, None, {'c': 3}]",
+        pa.map_(pa.string(), pa.int64()),
+        "none",
+    )
+
+
+def test_map_int_key_string_value() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{1: 'x', 2: 'y'}, None, {3: 'z'}]",
+        pa.map_(pa.int32(), pa.string()),
+        "none",
+    )
+
+
+def test_map_nullable_values() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{'a': 1, 'b': None}, {'c': 3}, None]",
+        pa.map_(pa.string(), pa.int64()),
+        "none",
+    )
+
+
+def test_map_snappy_many_rows() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{str(j): j * 2 for j in range(i % 4)} for i in range(50)]",
+        pa.map_(pa.string(), pa.int64()),
+        "snappy",
+    )
+
+
+def test_map_of_list_values() raises:
+    # map<string, list<int64>> — a nested value type under the map.
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[{'a': [1, 2], 'b': []}, None, {'c': [3]}]",
+        pa.map_(pa.string(), pa.list_(pa.int64())),
+        "none",
+    )
+
+
+def test_list_of_map() raises:
+    # list<map<string,int64>> — a map nested inside a list.
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[{'a': 1}, {'b': 2}], [], None, [{'c': 3}]]",
+        pa.list_(pa.map_(pa.string(), pa.int64())),
+        "none",
+    )
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

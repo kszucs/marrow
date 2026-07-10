@@ -15,6 +15,24 @@
   `Field`, preserving key/value field names and nullability. The retag between a
   list and a map lives in one place: `ListArray.to_map()` / `MapArray.to_list()`.
 
+- **Parquet map columns, read + write** (`marrow.parquet`): a Parquet `MAP`
+  (`optional group(MAP) { repeated group key_value { required key; value } }`,
+  incl. the legacy `MAP_KEY_VALUE` annotation) now reads back as a `MapArray` and
+  writes from one. A map reconstructs with the exact same Dremel machinery as
+  `list<struct<key, value>>` — only the final array tag differs — so it composes
+  to any depth (`map<k, list<v>>`, `list<map>`, …). PyArrow reads the maps marrow
+  writes and vice versa.
+
+- **Nested write (lists + maps)** (`marrow.parquet`): the writer gained a general
+  Dremel *shredding* path — it emits `LIST`/`MAP` schema groups with correct
+  repetition/definition levels, strips a nested column into per-leaf rep/def
+  level streams (`SchemaNode.shred_levels`), and encodes multi-bit RLE levels
+  (v1 and v2 data pages). Flat/struct columns keep their fast path untouched;
+  columns containing a repeated group are shredded. This closes the previously
+  open list-write gap. A single `ColumnWriter._emit_page` now serializes every
+  data page, and the map's schema geometry lives in one shared `_map_node`
+  builder used by both read and write.
+
 - **Min/max statistics** (`marrow.parquet`): the writer now computes and emits
   per-column-chunk `min_value`/`max_value` bounds (with `is_min/max_value_exact`)
   alongside the existing `null_count`, and declares `column_orders`

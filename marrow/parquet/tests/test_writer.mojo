@@ -274,5 +274,153 @@ def test_write_float_special_roundtrip() raises:
     remove(path)
 
 
+# ---------------------------------------------------------------------------
+# Nested write — lists and maps (Dremel shredding). Oracle: PyArrow reads back
+# marrow's written file and must match the original.
+# ---------------------------------------------------------------------------
+
+
+def _check_write(want: PythonObject, compression: Compression) raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    var caps = want.__arrow_c_stream__(Python.none())
+    var t = CArrowArrayStream.from_pycapsule(caps).to_table()
+    var path = String("/tmp/marrow_nested_write.parquet")
+    write_table(t, path, compression)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+        "PyArrow read of marrow's write mismatched the original",
+    )
+    remove(path)
+
+
+def _list_table(data: String, dtype: PythonObject) raises -> PythonObject:
+    var pa = Python.import_module("pyarrow")
+    return pa.table(
+        Python.dict(v=pa.array(Python.evaluate(data), type=dtype))
+    )
+
+
+def test_write_list_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table("[[1, 2, 3], [], None, [4, 5]]", pa.list_(pa.int64())),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_list_int_snappy() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[list(range(i % 6)) if i % 7 else None for i in range(80)]",
+            pa.list_(pa.int32()),
+        ),
+        Compression.SNAPPY,
+    )
+
+
+def test_write_list_string() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[['a', 'bb'], [], None, ['ccc', None, 'd']]",
+            pa.list_(pa.string()),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_list_of_list() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[[[1, 2], [3]], [], None, [[4], []]]",
+            pa.list_(pa.list_(pa.int64())),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_string_int() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[{'a': 1, 'b': 2}, {}, None, {'c': 3}]",
+            pa.map_(pa.string(), pa.int64()),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_nullable_values() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[{'a': 1, 'b': None}, {'c': 3}, None]",
+            pa.map_(pa.string(), pa.int64()),
+        ),
+        Compression.SNAPPY,
+    )
+
+
+def test_write_map_int_key() raises:
+    var pa = Python.import_module("pyarrow")
+    _check_write(
+        _list_table(
+            "[{1: 'x', 2: 'y'}, None, {3: 'z'}]",
+            pa.map_(pa.int32(), pa.string()),
+        ),
+        Compression.UNCOMPRESSED,
+    )
+
+
+def test_write_map_multichunk() raises:
+    # A map Table with several chunks exercises combine_chunks -> concat ->
+    # MapBuilder before the write.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var mt = pa.map_(pa.string(), pa.int64())
+    var b1 = pa.RecordBatch.from_arrays(
+        Python.list(pa.array(Python.evaluate("[{'a': 1}, {}]"), type=mt)),
+        names=Python.list("v"),
+    )
+    var b2 = pa.RecordBatch.from_arrays(
+        Python.list(pa.array(Python.evaluate("[None, {'b': 2, 'c': 3}]"), type=mt)),
+        names=Python.list("v"),
+    )
+    var want = pa.Table.from_batches(Python.list(b1, b2))
+    assert_true(Bool(want.column(0).num_chunks > 1))
+    var t = CArrowArrayStream.from_pycapsule(
+        want.__arrow_c_stream__(Python.none())
+    ).to_table()
+    var path = String("/tmp/marrow_map_multichunk.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+        "multi-chunk map write mismatch",
+    )
+    remove(path)
+
+
+def test_write_list_v2() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = _list_table("[[1, 2], [], None, [3]]", pa.list_(pa.int64()))
+    var t = CArrowArrayStream.from_pycapsule(
+        want.__arrow_c_stream__(Python.none())
+    ).to_table()
+    var path = String("/tmp/marrow_nested_write_v2.parquet")
+    var w = FileWriter(Compression.UNCOMPRESSED, version=2)
+    w.write(t, path)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.column(0).to_pylist() == want.column(0).to_pylist()),
+        "v2 nested write mismatch",
+    )
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

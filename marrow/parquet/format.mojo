@@ -351,6 +351,7 @@ struct ConvertedType(Equatable, ImplicitlyCopyable, Movable):
     comptime NONE = Self(-1)
     comptime UTF8 = Self(0)
     comptime MAP = Self(1)
+    comptime MAP_KEY_VALUE = Self(2)  # legacy map annotation (read tolerance)
     comptime LIST = Self(3)
     comptime DECIMAL = Self(5)
     comptime DATE = Self(6)
@@ -746,6 +747,7 @@ struct PageHeader(Copyable, Movable):
         num_rows: Int,
         def_levels_byte_length: Int,
         is_compressed: Bool,
+        rep_levels_byte_length: Int = 0,
     ) -> Self:
         """Build a v2 data-page header (PLAIN values; RLE levels stored
         uncompressed ahead of the — optionally compressed — values)."""
@@ -759,7 +761,7 @@ struct PageHeader(Copyable, Movable):
         dph.num_rows = num_rows
         dph.encoding = Encoding.PLAIN
         dph.definition_levels_byte_length = def_levels_byte_length
-        dph.repetition_levels_byte_length = 0
+        dph.repetition_levels_byte_length = rep_levels_byte_length
         dph.is_compressed = is_compressed
         ph.data_page_header_v2 = dph^
         return ph^

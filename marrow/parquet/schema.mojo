@@ -26,6 +26,7 @@ from .format import (
 comptime NODE_LEAF: Int = 0
 comptime NODE_STRUCT: Int = 1
 comptime NODE_LIST: Int = 2
+comptime NODE_MAP: Int = 3
 
 
 struct NodeGeom(Copyable, Movable):
@@ -98,11 +99,12 @@ struct SchemaNode(Copyable, Movable):
         """Reconstruct this node's Arrow array from the decoded leaf columns."""
         if self.kind == NODE_LEAF:
             return decoded[self.leaf_index].array.copy()
-        elif self.kind == NODE_LIST:
+        elif self.kind == NODE_LIST or self.kind == NODE_MAP:
             # Assemble the element (leaf, struct, or another list) — one entry
             # per present element — then fold this list's own offsets over those
-            # entries. The recursion composes to any depth because each list's
-            # geom carries every threshold its scan needs.
+            # entries. A map is the same fold over its (key, value) entries
+            # struct, producing a MapArray. The recursion composes to any depth
+            # because each node's geom carries every threshold its scan needs.
             var element = self.children[0].assemble(decoded)
             var li = self.first_leaf_index()
             return self._fold_list_offsets(
@@ -194,12 +196,19 @@ struct SchemaNode(Copyable, Movable):
         offsets.append(Int32(child_idx))
 
         var offsets_arr = offsets.finish()
-        var out: AnyArray
+        var mask_opt: Optional[BoolArray] = None
         if any_null:
-            var m = mask.finish()
-            out = ListArray.from_arrays(offsets_arr, element^, m^)
+            mask_opt = mask.finish()
+
+        # Fold the offsets over the element via ListArray.from_arrays (which turns
+        # the mask into a validity bitmap). A map is physically a list of its
+        # (key, value) entries struct, so retag the result as a MapArray.
+        var la = ListArray.from_arrays(offsets_arr, element^, mask_opt^)
+        var out: AnyArray
+        if self.field.dtype.is_map():
+            out = la.to_map(self.field.dtype.as_map().keys_sorted)
         else:
-            out = ListArray.from_arrays(offsets_arr, element^, None)
+            out = la^
         return out^
 
     def collect_leaf_arrays(
@@ -215,8 +224,118 @@ struct SchemaNode(Copyable, Movable):
                 self.children[i].collect_leaf_arrays(
                     sa.children[i], leaf_arrays
                 )
+        elif self.kind == NODE_LIST:
+            # Descend into the list's flat child values — the innermost element
+            # arrays hold the leaf values to write; the offsets/levels come from
+            # the Dremel shred.
+            self.children[0].collect_leaf_arrays(col.as_list().values(), leaf_arrays)
+        elif self.kind == NODE_MAP:
+            self.children[0].collect_leaf_arrays(col.as_map().values(), leaf_arrays)
         else:
             raise Error("parquet: unsupported schema node kind")
+
+    def contains_repeated(self) -> Bool:
+        """True if this subtree contains a list or map (a repeated group), so its
+        column must be Dremel-shredded (rep/def levels) rather than written flat.
+        """
+        if self.kind == NODE_LIST or self.kind == NODE_MAP:
+            return True
+        for ref c in self.children:
+            if c.contains_repeated():
+                return True
+        return False
+
+    # -----------------------------------------------------------------------
+    # Write-side Dremel striping (inverse of `assemble`): produce per-leaf
+    # definition and repetition levels for a leveled column. `defs`/`reps` are
+    # indexed by leaf index (in this node's subtree); only leaves with
+    # max_rep>=1 accumulate rep levels.
+    # -----------------------------------------------------------------------
+
+    def shred_levels(
+        self,
+        col: AnyArray,
+        meta: List[LeafColumn],
+        mut defs: List[List[Int32]],
+        mut reps: List[List[Int32]],
+    ) raises:
+        for i in range(col.length()):
+            self._shred_elem(col, i, 0, meta, defs, reps)
+
+    def _shred_elem(
+        self,
+        arr: AnyArray,
+        i: Int,
+        rep: Int,
+        meta: List[LeafColumn],
+        mut defs: List[List[Int32]],
+        mut reps: List[List[Int32]],
+    ) raises:
+        if self.kind == NODE_LEAF:
+            var li = self.leaf_index
+            var present = arr.is_valid(i)
+            defs[li].append(
+                Int32(meta[li].max_def if present else meta[li].max_def - 1)
+            )
+            if meta[li].max_rep >= 1:
+                reps[li].append(Int32(rep))
+        elif self.kind == NODE_STRUCT:
+            # Emitted REQUIRED on write, so the struct itself is always present;
+            # each field is shredded at the same element with the same rep.
+            ref sa = arr.as_struct()
+            for c in range(len(self.children)):
+                self.children[c]._shred_elem(
+                    sa.children[c], i, rep, meta, defs, reps
+                )
+        else:  # NODE_LIST / NODE_MAP
+            var valid: Bool
+            var start: Int
+            var end: Int
+            var child_arr: AnyArray
+            if self.kind == NODE_MAP:
+                ref la = arr.as_map()
+                valid = la.is_valid(i)
+                start, end = la.child_range(i)
+                child_arr = la.values().copy()
+            else:
+                ref la = arr.as_list()
+                valid = la.is_valid(i)
+                start, end = la.child_range(i)
+                child_arr = la.values().copy()
+
+            if self.geom.optional and not valid:
+                # Null list/map: one absent marker for every leaf underneath.
+                self._emit_absent(
+                    self.geom.non_null_def - 1, rep, meta, defs, reps
+                )
+            elif start == end:
+                # Present but empty: below the child element floor, no values.
+                self._emit_absent(
+                    self.geom.child_def - 1, rep, meta, defs, reps
+                )
+            else:
+                for j in range(start, end):
+                    var child_rep = rep if j == start else self.geom.rep_level
+                    self.children[0]._shred_elem(
+                        child_arr, j, child_rep, meta, defs, reps
+                    )
+
+    def _emit_absent(
+        self,
+        def_val: Int,
+        rep: Int,
+        meta: List[LeafColumn],
+        mut defs: List[List[Int32]],
+        mut reps: List[List[Int32]],
+    ):
+        """Emit a single absent/empty marker (one level entry) for every leaf in
+        this subtree — a null or empty list/map contributes no child values."""
+        var idxs = List[Int]()
+        self.collect_leaf_indices(idxs)
+        for li in idxs:
+            defs[li].append(Int32(def_val))
+            if meta[li].max_rep >= 1:
+                reps[li].append(Int32(rep))
 
     def collect_leaf_indices(self, mut out: List[Int]):
         """Append the flat leaf-column indices this node's subtree reads, in the
@@ -442,6 +561,64 @@ struct SchemaMapping(Movable):
                 return row.arrow.copy()
         raise Error("parquet: unsupported physical type " + String(pt.code))
 
+    @staticmethod
+    def _map_node(
+        name: String,
+        var key_node: SchemaNode,
+        var val_node: SchemaNode,
+        d: Int,
+        rep_base: Int,
+        slot_def: Int,
+        nullable: Bool,
+    ) -> SchemaNode:
+        """Assemble the `NODE_MAP` node from its key and value child nodes —
+        shared by read (`_parse_node`) and write (`_emit_field`) so the map's
+        Dremel geometry lives in one place. `d` is the map's own definition
+        level; its repeated `key_value` group sits at `rep_base + 1` / `d + 1`.
+        The entries struct is non-nullable with a non-null "key"; the value keeps
+        its nullability."""
+        var key_type = key_node.field.dtype.copy()
+        var value_type = val_node.field.dtype.copy()
+        var value_nullable = val_node.field.nullable
+        key_node.field = dt.Field("key", key_type.copy(), nullable=False)
+        val_node.field = dt.Field(
+            "value", value_type.copy(), nullable=value_nullable
+        )
+        var entries_fields = [key_node.field.copy(), val_node.field.copy()]
+        var entries_children = List[SchemaNode]()
+        entries_children.append(key_node^)
+        entries_children.append(val_node^)
+        var entries_node = SchemaNode(
+            NODE_STRUCT,
+            dt.Field("entries", dt.struct_(entries_fields^), nullable=False),
+            entries_children^,
+            -1,
+            NodeGeom(
+                non_null_def=d + 1,
+                optional=False,
+                rep_level=rep_base + 1,
+                slot_def=d + 1,
+            ),
+        )
+        var map_dtype: dt.AnyDataType = dt.MapType(
+            key_type^, value_type^, value_nullable=value_nullable
+        )
+        var map_children = List[SchemaNode]()
+        map_children.append(entries_node^)
+        return SchemaNode(
+            NODE_MAP,
+            dt.Field(name, map_dtype^, nullable),
+            map_children^,
+            -1,
+            NodeGeom(
+                non_null_def=d,
+                optional=nullable,
+                rep_level=rep_base + 1,
+                child_def=d + 1,
+                slot_def=slot_def,
+            ),
+        )
+
     def _parse_node(
         mut self,
         mut idx: Int,
@@ -488,12 +665,29 @@ struct SchemaMapping(Movable):
 
         if (
             el.converted_type == ConvertedType.MAP
+            or el.converted_type == ConvertedType.MAP_KEY_VALUE
             or el.logical_type == LogicalType.MAP
         ):
-            raise Error(
-                "parquet: map columns not supported yet (column '"
-                + el.name
-                + "')"
+            # MAP = optional group(MAP) { repeated group key_value { required key;
+            # <value> } }. Physically a list of a 2-field entries struct, so it
+            # reconstructs exactly like list<struct<key,value>> — the same Dremel
+            # geometry — and only the final array type (MapArray) differs. Skip
+            # the repeated key_value group and parse key + value at d+1 / r+1.
+            var kv = self.elements[idx].copy()
+            if kv.num_children != 2:
+                raise Error(
+                    "parquet: map 'key_value' group must have exactly a key and"
+                    " a value (column '" + el.name + "')"
+                )
+            idx += 1
+            var key_node = self._parse_node(
+                idx, d + 1, r + 1, slot_def=d + 1, under_optional=under_optional
+            )
+            var val_node = self._parse_node(
+                idx, d + 1, r + 1, slot_def=d + 1, under_optional=under_optional
+            )
+            return Self._map_node(
+                el.name, key_node^, val_node^, d, r, slot_def, nullable
             )
 
         if (
@@ -581,7 +775,7 @@ struct SchemaMapping(Movable):
         root.num_children = len(schema.fields)
         m.elements.append(root^)
         for ref f in schema.fields:
-            m.nodes.append(m._emit_field(f, 0))
+            m.nodes.append(m._emit_field(f, 0, 0, slot_def=0, under_optional=False))
         return m^
 
     @staticmethod
@@ -595,9 +789,105 @@ struct SchemaMapping(Movable):
         raise Error("parquet: cannot write Arrow type " + String(dtype))
 
     def _emit_field(
-        mut self, field: dt.Field, def_base: Int
+        mut self,
+        field: dt.Field,
+        def_base: Int,
+        rep_base: Int,
+        slot_def: Int = 0,
+        under_optional: Bool = False,
     ) raises -> SchemaNode:
+        """Emit the parquet `SchemaElement`s for an Arrow field and return its
+        assembly node, threading the Dremel levels exactly as `_parse_node` does
+        on read so a written file round-trips. Structs are emitted as REQUIRED
+        (struct-level nulls on write are a follow-up); lists and maps add a
+        repeated middle group (one def + one rep level)."""
+        var nullable = field.nullable
+        var d = def_base + (1 if nullable else 0)
+
+        if field.dtype.is_list() or field.dtype.is_large_list():
+            # LIST = <opt|req> group(LIST) { repeated group list { <element> } }.
+            var grp = SchemaElement()
+            grp.name = field.name
+            grp.repetition_type = (
+                Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+            )
+            grp.num_children = 1
+            grp.converted_type = ConvertedType.LIST
+            grp.logical_type = LogicalType.LIST
+            self.elements.append(grp^)
+            var mid = SchemaElement()
+            mid.name = "list"
+            mid.repetition_type = Repetition.REPEATED
+            mid.num_children = 1
+            self.elements.append(mid^)
+
+            var elem_field = (
+                field.dtype.as_list().value_field().copy() if field.dtype.is_list() else field.dtype.as_large_list().value_field().copy()
+            )
+            var elem = self._emit_field(
+                elem_field,
+                d + 1,
+                rep_base + 1,
+                slot_def=d + 1,
+                under_optional=under_optional,
+            )
+            var item: dt.AnyDataType = dt.list_(elem.field.dtype.copy())
+            var children = List[SchemaNode]()
+            children.append(elem^)
+            return SchemaNode(
+                NODE_LIST,
+                dt.Field(field.name, item^, nullable),
+                children^,
+                -1,
+                NodeGeom(
+                    non_null_def=d,
+                    optional=nullable,
+                    rep_level=rep_base + 1,
+                    child_def=d + 1,
+                    slot_def=slot_def,
+                ),
+            )
+
+        if field.dtype.is_map():
+            # MAP = <opt|req> group(MAP) { repeated group key_value {
+            #   required key; <value> } }.
+            ref mt = field.dtype.as_map()
+            var grp = SchemaElement()
+            grp.name = field.name
+            grp.repetition_type = (
+                Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+            )
+            grp.num_children = 1
+            grp.converted_type = ConvertedType.MAP
+            grp.logical_type = LogicalType.MAP
+            self.elements.append(grp^)
+            var kv = SchemaElement()
+            kv.name = "key_value"
+            kv.repetition_type = Repetition.REPEATED
+            kv.num_children = 2
+            self.elements.append(kv^)
+
+            var key_node = self._emit_field(
+                mt.key_field(),
+                d + 1,
+                rep_base + 1,
+                slot_def=d + 1,
+                under_optional=under_optional,
+            )
+            var val_node = self._emit_field(
+                mt.item_field(),
+                d + 1,
+                rep_base + 1,
+                slot_def=d + 1,
+                under_optional=under_optional,
+            )
+            return Self._map_node(
+                field.name, key_node^, val_node^, d, rep_base, slot_def, nullable
+            )
+
         if field.dtype.is_struct():
+            # Emitted as a REQUIRED group (struct-level nulls on write TODO), so
+            # the children inherit `def_base` unchanged.
             ref st = field.dtype.as_struct()
             var el = SchemaElement()
             el.name = field.name
@@ -606,31 +896,52 @@ struct SchemaMapping(Movable):
             self.elements.append(el^)
             var child_nodes = List[SchemaNode]()
             for ref cf in st.fields:
-                child_nodes.append(self._emit_field(cf, def_base))
-            return SchemaNode(NODE_STRUCT, field.copy(), child_nodes^, -1)
-        else:
-            var phys, conv, logi = Self._physical(field.dtype)
-            var el = SchemaElement()
-            el.type = phys
-            el.name = field.name
-            el.repetition_type = (
-                Repetition.OPTIONAL if field.nullable else Repetition.REQUIRED
-            )
-            el.converted_type = conv
-            el.logical_type = logi
-            self.elements.append(el^)
-            var li = len(self.leaves)
-            self.leaves.append(
-                LeafColumn(
-                    field.name,
-                    field.dtype.copy(),
-                    physical=phys,
-                    max_def=def_base + (1 if field.nullable else 0),
-                    max_rep=0,
-                    nullable=field.nullable,
+                child_nodes.append(
+                    self._emit_field(
+                        cf,
+                        def_base,
+                        rep_base,
+                        slot_def=slot_def,
+                        under_optional=under_optional,
+                    )
                 )
+            return SchemaNode(
+                NODE_STRUCT,
+                field.copy(),
+                child_nodes^,
+                -1,
+                NodeGeom(
+                    non_null_def=def_base,
+                    optional=False,
+                    rep_level=rep_base,
+                    slot_def=slot_def,
+                ),
             )
-            return SchemaNode(NODE_LEAF, field.copy(), List[SchemaNode](), li)
+
+        var phys, conv, logi = Self._physical(field.dtype)
+        var el = SchemaElement()
+        el.type = phys
+        el.name = field.name
+        el.repetition_type = (
+            Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+        )
+        el.converted_type = conv
+        el.logical_type = logi
+        self.elements.append(el^)
+        var li = len(self.leaves)
+        self.leaves.append(
+            LeafColumn(
+                field.name,
+                field.dtype.copy(),
+                physical=phys,
+                max_def=d,
+                max_rep=rep_base,
+                nullable=nullable,
+                slot_def=slot_def,
+                carry_def=under_optional,
+            )
+        )
+        return SchemaNode(NODE_LEAF, field.copy(), List[SchemaNode](), li)
 
     # -----------------------------------------------------------------------
     # Read plan
