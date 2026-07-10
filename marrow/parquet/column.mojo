@@ -643,9 +643,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         if self.leveled:
             # nested columns decode in full (page skipping is a flat-path
             # optimisation); a Filter above the scan still applies the predicate.
-            return self._decode_leveled(codecs)
+            return self._dispatch[True](codecs)
         else:
-            return self._decode_flat(codecs)
+            return self._dispatch[False](codecs)
 
     # -----------------------------------------------------------------------
     # Flat path — fixed-size LeafBuilder, one memcpy/gather per all-present page
@@ -700,104 +700,12 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         self._run(builder, codecs)
         return builder^.finish()
 
-    def _decode_flat(
-        mut self, mut codecs: CompressionLibs
-    ) raises -> DecodedLeaf:
-        var arr = self._flat_array(codecs)
+    def _flat_leaf(mut self, var arr: AnyArray) raises -> DecodedLeaf:
+        """Wrap a flat-path array with the carry-def levels accumulated during
+        the build (empty unless the leaf is under a nullable struct)."""
         var defs = self.def_out^
         self.def_out = List[Int32]()
         return DecodedLeaf(False, arr^, List[Int32](), defs^)
-
-    def _flat_array(mut self, mut codecs: CompressionLibs) raises -> AnyArray:
-        ref leaf = self.pages.leaf
-        ref vt = leaf.dtype
-        if vt == dt.int32:
-            return self._build(
-                PrimitiveLeafBuilder[DType.int32](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.int64:
-            return self._build(
-                PrimitiveLeafBuilder[DType.int64](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.uint32:
-            return self._build(
-                PrimitiveLeafBuilder[DType.uint32](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.uint64:
-            return self._build(
-                PrimitiveLeafBuilder[DType.uint64](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.float32:
-            return self._build(
-                PrimitiveLeafBuilder[DType.float32](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.float64:
-            return self._build(
-                PrimitiveLeafBuilder[DType.float64](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.int8:
-            return self._build(
-                PrimitiveLeafBuilder[DType.int8, DType.int32](
-                    self.num_rows, leaf
-                ),
-                codecs,
-            )
-        elif vt == dt.int16:
-            return self._build(
-                PrimitiveLeafBuilder[DType.int16, DType.int32](
-                    self.num_rows, leaf
-                ),
-                codecs,
-            )
-        elif vt == dt.uint8:
-            return self._build(
-                PrimitiveLeafBuilder[DType.uint8, DType.int32](
-                    self.num_rows, leaf
-                ),
-                codecs,
-            )
-        elif vt == dt.uint16:
-            return self._build(
-                PrimitiveLeafBuilder[DType.uint16, DType.int32](
-                    self.num_rows, leaf
-                ),
-                codecs,
-            )
-        elif vt.is_date32() or vt.is_time32():
-            return self._build(
-                PrimitiveLeafBuilder[DType.int32](self.num_rows, leaf), codecs
-            )
-        elif (
-            vt.is_timestamp()
-            or vt.is_time64()
-            or vt.is_date64()
-            or vt.is_duration()
-        ):
-            return self._build(
-                PrimitiveLeafBuilder[DType.int64](self.num_rows, leaf), codecs
-            )
-        elif vt == dt.bool_:
-            return self._build(BoolLeafBuilder(self.num_rows, leaf), codecs)
-        elif vt.is_string():
-            return self._build(
-                ByteArrayLeafBuilder[dt.StringType](self.num_rows, leaf), codecs
-            )
-        elif vt.is_large_string():
-            return self._build(
-                ByteArrayLeafBuilder[dt.LargeStringType](self.num_rows, leaf),
-                codecs,
-            )
-        elif vt.is_binary():
-            return self._build(
-                ByteArrayLeafBuilder[dt.BinaryType](self.num_rows, leaf), codecs
-            )
-        elif vt.is_large_binary():
-            return self._build(
-                ByteArrayLeafBuilder[dt.LargeBinaryType](self.num_rows, leaf),
-                codecs,
-            )
-        else:
-            raise Error("parquet: unsupported column type " + String(vt))
 
     # -----------------------------------------------------------------------
     # Leveled path — grow the element array while accumulating rep/def levels.
@@ -905,64 +813,135 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var arr = builder.finish()
         return DecodedLeaf(True, arr^, rep_out^, def_out^)
 
-    def _decode_leveled(
-        mut self, mut codecs: CompressionLibs
+    # -----------------------------------------------------------------------
+    # Unified dispatch — one arrow-dtype -> (store, phys) decision table shared by
+    # the flat and leveled paths. `leveled` is a compile-time flag: the emit
+    # helpers pick the flat build (fixed-size `LeafBuilder`) or the leveled drive
+    # (`_drive_*`), and each specialization DCEs the other branch, so the closed
+    # per-dtype dispatch is preserved. Temporal types are flat-only (they map to
+    # the same int32/int64 storage), guarded behind `comptime if not leveled`.
+    # -----------------------------------------------------------------------
+
+    def _emit_numeric[
+        T: dt.NumericType, phys: DType, leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_primitive[T, phys](codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                PrimitiveLeafBuilder[T.native, phys](
+                    self.num_rows, self.pages.leaf
+                ),
+                codecs,
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_bytes[
+        BT: dt.BinaryLikeType, leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_bytes[BT](codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                ByteArrayLeafBuilder[BT](self.num_rows, self.pages.leaf), codecs
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_bool[
+        leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_bool(codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                BoolLeafBuilder(self.num_rows, self.pages.leaf), codecs
+            )
+            return self._flat_leaf(arr^)
+
+    def _dispatch[
+        leveled: Bool
+    ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
         ref leaf = self.pages.leaf
         ref vt = leaf.dtype
-        # a value slot exists at/above the leaf's repetition floor (the innermost
-        # enclosing list's element level); the value is present at max_def.
+        # leveled: a value slot exists at/above the leaf's repetition floor (the
+        # innermost enclosing list's element level), present at max_def. flat
+        # ignores these (the emit helper's flat branch drops them).
         var f = leaf.slot_def
         var md = leaf.max_def
         if vt == dt.int32:
-            return self._drive_primitive[dt.Int32Type, DType.int32](
+            return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
                 codecs, f, md
             )
         elif vt == dt.int64:
-            return self._drive_primitive[dt.Int64Type, DType.int64](
+            return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
                 codecs, f, md
             )
         elif vt == dt.uint32:
-            return self._drive_primitive[dt.UInt32Type, DType.uint32](
+            return self._emit_numeric[dt.UInt32Type, DType.uint32, leveled](
                 codecs, f, md
             )
         elif vt == dt.uint64:
-            return self._drive_primitive[dt.UInt64Type, DType.uint64](
+            return self._emit_numeric[dt.UInt64Type, DType.uint64, leveled](
                 codecs, f, md
             )
         elif vt == dt.float32:
-            return self._drive_primitive[dt.Float32Type, DType.float32](
+            return self._emit_numeric[dt.Float32Type, DType.float32, leveled](
                 codecs, f, md
             )
         elif vt == dt.float64:
-            return self._drive_primitive[dt.Float64Type, DType.float64](
+            return self._emit_numeric[dt.Float64Type, DType.float64, leveled](
                 codecs, f, md
             )
         elif vt == dt.int8:
-            return self._drive_primitive[dt.Int8Type, DType.int32](
+            return self._emit_numeric[dt.Int8Type, DType.int32, leveled](
                 codecs, f, md
             )
         elif vt == dt.int16:
-            return self._drive_primitive[dt.Int16Type, DType.int32](
+            return self._emit_numeric[dt.Int16Type, DType.int32, leveled](
                 codecs, f, md
             )
         elif vt == dt.uint8:
-            return self._drive_primitive[dt.UInt8Type, DType.int32](
+            return self._emit_numeric[dt.UInt8Type, DType.int32, leveled](
                 codecs, f, md
             )
         elif vt == dt.uint16:
-            return self._drive_primitive[dt.UInt16Type, DType.int32](
+            return self._emit_numeric[dt.UInt16Type, DType.int32, leveled](
                 codecs, f, md
             )
         elif vt == dt.bool_:
-            return self._drive_bool(codecs, f, md)
+            return self._emit_bool[leveled](codecs, f, md)
         elif vt.is_string():
-            return self._drive_bytes[dt.StringType](codecs, f, md)
+            return self._emit_bytes[dt.StringType, leveled](codecs, f, md)
         elif vt.is_large_string():
-            return self._drive_bytes[dt.LargeStringType](codecs, f, md)
+            return self._emit_bytes[dt.LargeStringType, leveled](codecs, f, md)
         elif vt.is_binary():
-            return self._drive_bytes[dt.BinaryType](codecs, f, md)
+            return self._emit_bytes[dt.BinaryType, leveled](codecs, f, md)
         elif vt.is_large_binary():
-            return self._drive_bytes[dt.LargeBinaryType](codecs, f, md)
+            return self._emit_bytes[dt.LargeBinaryType, leveled](codecs, f, md)
+
+        comptime if not leveled:
+            # temporal types are physically int32/int64 and appear only on the
+            # flat path (page skipping is a flat-path optimisation).
+            if vt.is_date32() or vt.is_time32():
+                return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
+                    codecs, f, md
+                )
+            elif (
+                vt.is_timestamp()
+                or vt.is_time64()
+                or vt.is_date64()
+                or vt.is_duration()
+            ):
+                return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
+                    codecs, f, md
+                )
+            else:
+                raise Error("parquet: unsupported column type " + String(vt))
         else:
             raise Error("parquet: unsupported list element type " + String(vt))
