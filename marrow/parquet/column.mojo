@@ -714,6 +714,46 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     # `Encoding` decoders, so every encoding works here just as on the flat path.
     # -----------------------------------------------------------------------
 
+    def _drive_leveled[
+        handle_dict: def(Page) raises capturing[_] -> None,
+        decode_present: def(Page) raises capturing[_] -> None,
+        place_present: def(Int) raises capturing[_] -> None,
+        place_null: def() raises capturing[_] -> None,
+    ](
+        mut self,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+        mut rep_out: List[Int32],
+        mut def_out: List[Int32],
+    ) raises:
+        """The shared page-loop for every leveled (list-element) leaf. For each
+        page it folds a dictionary page into the builder's dict (`handle_dict`)
+        and skips it, else accumulates the page's rep/def levels, decodes its
+        present values (`decode_present`), and walks `num_values` slots placing a
+        present value (`place_present(vi)`) or a null (`place_null`) per
+        definition level — a slot below `floor` holds no element, a slot at
+        `max_def` is present, else null. Only the value type and how it is
+        appended differ across leaves; those live entirely in the closures."""
+        while self.pages.has_next():
+            var pg = self.pages.next(codecs)
+            if pg.dictionary:
+                handle_dict(pg)
+                continue
+            rep_out.extend(Span(pg.rep_levels))
+            def_out.extend(Span(pg.def_levels))
+            decode_present(pg)
+            var vi = 0
+            for k in range(pg.num_values):
+                var d = Int(pg.def_levels[k])
+                if d < floor:
+                    continue
+                if d == max_def:
+                    place_present(vi)
+                    vi += 1
+                else:
+                    place_null()
+
     def _drive_primitive[
         T: dt.NumericType, phys: DType
     ](
@@ -721,31 +761,34 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     ) raises -> DecodedLeaf:
         var builder = PrimitiveBuilder[T](self.num_rows)
         var dict = List[Scalar[T.native]]()
+        var present = List[Scalar[T.native]]()
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
-        while self.pages.has_next():
-            var pg = self.pages.next(codecs)
-            if pg.dictionary:
-                Dictionary.decode_page_primitive[T.native, phys](
-                    pg.body, pg.num_values, dict
-                )
-                continue
-            rep_out.extend(Span(pg.rep_levels))
-            def_out.extend(Span(pg.def_levels))
-            var present = List[Scalar[T.native]]()
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            Dictionary.decode_page_primitive[T.native, phys](
+                pg.body, pg.num_values, dict
+            )
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            present.clear()
             pg.encoding.decode_primitive[T.native, phys](
                 pg.values(), pg.num_present, dict, present
             )
-            var vi = 0
-            for k in range(pg.num_values):
-                var d = Int(pg.def_levels[k])
-                if d < floor:
-                    continue
-                if d == max_def:
-                    builder.append(present[vi])
-                    vi += 1
-                else:
-                    builder.append_null()
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(present[vi])
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
         return DecodedLeaf(True, arr^, rep_out^, def_out^)
 
@@ -758,32 +801,36 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var dict_body = List[UInt8]()
         var dict_off = List[Int]()
         var dict_len = List[Int]()
+        var values = List[List[UInt8]]()
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
-        while self.pages.has_next():
-            var pg = self.pages.next(codecs)
-            if pg.dictionary:
-                Dictionary.decode_page_bytes(
-                    pg.body, pg.num_values, dict_body, dict_off, dict_len
-                )
-                continue
-            rep_out.extend(Span(pg.rep_levels))
-            def_out.extend(Span(pg.def_levels))
-            var values = pg.encoding.decode_bytes(
-                pg.values(), pg.num_present, dict_body, dict_off, dict_len
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            Dictionary.decode_page_bytes(
+                pg.body, pg.num_values, dict_body, dict_off, dict_len
             )
-            var vi = 0
-            for k in range(pg.num_values):
-                var d = Int(pg.def_levels[k])
-                if d < floor:
-                    continue
-                if d == max_def:
-                    builder.append(
-                        StringSlice(unsafe_from_utf8=Span(values[vi]))
-                    )
-                    vi += 1
-                else:
-                    builder.append_null()
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            values.clear()
+            values.extend(
+                pg.encoding.decode_bytes(
+                    pg.values(), pg.num_present, dict_body, dict_off, dict_len
+                )
+            )
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(StringSlice(unsafe_from_utf8=Span(values[vi])))
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
         return DecodedLeaf(True, arr^, rep_out^, def_out^)
 
@@ -791,25 +838,30 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
         var builder = BoolBuilder(self.num_rows)
+        var present = List[Bool]()
         var rep_out = List[Int32]()
         var def_out = List[Int32]()
-        while self.pages.has_next():
-            var pg = self.pages.next(codecs)
-            if pg.dictionary:
-                raise Error("parquet: dictionary-encoded bool not supported")
-            rep_out.extend(Span(pg.rep_levels))
-            def_out.extend(Span(pg.def_levels))
-            var present = pg.encoding.decode_bool(pg.values(), pg.num_present)
-            var vi = 0
-            for k in range(pg.num_values):
-                var d = Int(pg.def_levels[k])
-                if d < floor:
-                    continue
-                if d == max_def:
-                    builder.append(present[vi])
-                    vi += 1
-                else:
-                    builder.append_null()
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            raise Error("parquet: dictionary-encoded bool not supported")
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            present.clear()
+            present.extend(pg.encoding.decode_bool(pg.values(), pg.num_present))
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(present[vi])
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
         return DecodedLeaf(True, arr^, rep_out^, def_out^)
 
