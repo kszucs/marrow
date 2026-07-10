@@ -723,16 +723,20 @@ struct PageHeader(Copyable, Movable):
 
     @staticmethod
     def data_page(
-        uncompressed_size: Int, compressed_size: Int, num_values: Int
+        uncompressed_size: Int,
+        compressed_size: Int,
+        num_values: Int,
+        encoding: Encoding = Encoding.PLAIN,
     ) -> Self:
-        """Build a v1 data-page header (PLAIN values, RLE levels)."""
+        """Build a v1 data-page header. `encoding` is the value encoding (PLAIN,
+        RLE_DICTIONARY, or a DELTA_* variant); levels are always RLE."""
         var ph = Self()
         ph.type = PageType.DATA
         ph.uncompressed_page_size = uncompressed_size
         ph.compressed_page_size = compressed_size
         var dph = DataPageHeader()
         dph.num_values = num_values
-        dph.encoding = Encoding.PLAIN
+        dph.encoding = encoding
         dph.definition_level_encoding = Encoding.RLE
         dph.repetition_level_encoding = Encoding.RLE
         ph.data_page_header = dph^
@@ -748,9 +752,10 @@ struct PageHeader(Copyable, Movable):
         def_levels_byte_length: Int,
         is_compressed: Bool,
         rep_levels_byte_length: Int = 0,
+        encoding: Encoding = Encoding.PLAIN,
     ) -> Self:
-        """Build a v2 data-page header (PLAIN values; RLE levels stored
-        uncompressed ahead of the — optionally compressed — values)."""
+        """Build a v2 data-page header (levels stored uncompressed ahead of the —
+        optionally compressed — values). `encoding` is the value encoding."""
         var ph = Self()
         ph.type = PageType.DATA_V2
         ph.uncompressed_page_size = uncompressed_size
@@ -759,11 +764,26 @@ struct PageHeader(Copyable, Movable):
         dph.num_values = num_values
         dph.num_nulls = num_nulls
         dph.num_rows = num_rows
-        dph.encoding = Encoding.PLAIN
+        dph.encoding = encoding
         dph.definition_levels_byte_length = def_levels_byte_length
         dph.repetition_levels_byte_length = rep_levels_byte_length
         dph.is_compressed = is_compressed
         ph.data_page_header_v2 = dph^
+        return ph^
+
+    @staticmethod
+    def dictionary_page(
+        uncompressed_size: Int, compressed_size: Int, num_values: Int
+    ) -> Self:
+        """Build a dictionary-page header (PLAIN-encoded distinct values)."""
+        var ph = Self()
+        ph.type = PageType.DICTIONARY
+        ph.uncompressed_page_size = uncompressed_size
+        ph.compressed_page_size = compressed_size
+        var dph = DictionaryPageHeader()
+        dph.num_values = num_values
+        dph.encoding = Encoding.PLAIN
+        ph.dictionary_page_header = dph^
         return ph^
 
 
@@ -781,6 +801,7 @@ struct ColumnMetaData(Copyable, Movable):
     var total_compressed_size: Int
     var data_page_offset: Int
     var dictionary_page_offset: Int  # -1 if absent
+    var encodings: List[Int]  # Encoding codes actually used in the chunk
     var null_count: Int  # -1 if unknown; written as Statistics.null_count
     var has_min_max: Bool  # Statistics.min_value/max_value present
     var min_value: List[
@@ -797,6 +818,7 @@ struct ColumnMetaData(Copyable, Movable):
         self.total_compressed_size = 0
         self.data_page_offset = 0
         self.dictionary_page_offset = -1
+        self.encodings = [Encoding.RLE.code, Encoding.PLAIN.code]
         self.null_count = -1
         self.has_min_max = False
         self.min_value = List[UInt8]()
@@ -860,12 +882,12 @@ struct ColumnMetaData(Copyable, Movable):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.type))
-        # encodings: list<Encoding> = [RLE levels, PLAIN values] — the writer
-        # only emits PLAIN data pages with RLE definition levels.
+        # encodings: list<Encoding> actually used — RLE levels plus the value
+        # encoding(s) (PLAIN, or RLE_DICTIONARY + PLAIN for a dictionary chunk).
         last = w.write_field_begin(TC_LIST, 2, last)
-        w.write_list_begin(TC_I32, 2)
-        w.write_i32(Int32(Encoding.RLE.code))
-        w.write_i32(Int32(Encoding.PLAIN.code))
+        w.write_list_begin(TC_I32, len(self.encodings))
+        for e in self.encodings:
+            w.write_i32(Int32(e))
         last = w.write_field_begin(TC_LIST, 3, last)
         w.write_list_begin(TC_BINARY, len(self.path_in_schema))
         for p in self.path_in_schema:
@@ -880,6 +902,9 @@ struct ColumnMetaData(Copyable, Movable):
         w.write_i64(Int64(self.total_compressed_size))
         last = w.write_field_begin(TC_I64, 9, last)
         w.write_i64(Int64(self.data_page_offset))
+        if self.dictionary_page_offset >= 0:
+            last = w.write_field_begin(TC_I64, 11, last)
+            w.write_i64(Int64(self.dictionary_page_offset))
         if self.null_count >= 0 or self.has_min_max:
             # Statistics (field 12): null_count (3), and the modern
             # max_value (5) / min_value (6) with their exactness flags (7/8).

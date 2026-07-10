@@ -5,7 +5,7 @@ from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, write_table
 from marrow.parquet.writer import FileWriter
-from marrow.parquet.codecs import Compression
+from marrow.parquet.codecs import Compression, Encoding
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
@@ -420,6 +420,164 @@ def test_write_list_v2() raises:
         "v2 nested write mismatch",
     )
     remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Dictionary encoding on write
+# ---------------------------------------------------------------------------
+
+
+def _col_encodings(path: String, col: Int) raises -> PythonObject:
+    var pq = Python.import_module("pyarrow.parquet")
+    return pq.ParquetFile(path).metadata.row_group(0).column(col).encodings
+
+
+def test_write_dictionary_encoding() raises:
+    # A low-cardinality column dictionary-encodes by default; pyarrow sees the
+    # RLE_DICTIONARY encoding and reads back the exact values.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = _pa_table(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['a', 'b', 'a', 'a', 'c', 'b'] * 20),"
+        " 'i': __import__('pyarrow').array([1, 2, 1, 1, 3, 2] * 20,"
+        " type=__import__('pyarrow').int64())})"
+    )
+    var path = String("/tmp/marrow_dict.parquet")
+    write_table(want, path, Compression.UNCOMPRESSED)  # use_dictionary defaults True
+
+    var enc0 = String(_col_encodings(path, 0))
+    var enc1 = String(_col_encodings(path, 1))
+    assert_true("DICTIONARY" in enc0, "string column not dictionary-encoded")
+    assert_true("DICTIONARY" in enc1, "int column not dictionary-encoded")
+
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(
+            back.column(0).to_pylist()
+            == Python.evaluate("['a', 'b', 'a', 'a', 'c', 'b'] * 20")
+        ),
+        "dict string values mismatch",
+    )
+    assert_true(
+        Bool(
+            back.column(1).to_pylist()
+            == Python.evaluate("[1, 2, 1, 1, 3, 2] * 20")
+        ),
+        "dict int values mismatch",
+    )
+    remove(path)
+
+
+def test_write_dictionary_disabled_is_plain() raises:
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = _pa_table(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['a', 'b', 'a', 'c'])})"
+    )
+    var path = String("/tmp/marrow_plain.parquet")
+    write_table(want, path, Compression.UNCOMPRESSED, use_dictionary=False)
+    var enc = String(_col_encodings(path, 0))
+    assert_false("DICTIONARY" in enc, "expected PLAIN, got a dictionary")
+    remove(path)
+
+
+def test_write_dictionary_nullable() raises:
+    # nulls are placed by the definition levels; only present values are indexed.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = _pa_table(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['x', None, 'y', 'x', None, 'y'])})"
+    )
+    var path = String("/tmp/marrow_dict_null.parquet")
+    write_table(want, path, Compression.SNAPPY)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(
+            back.column(0).to_pylist()
+            == Python.evaluate("['x', None, 'y', 'x', None, 'y']")
+        ),
+        "nullable dict values mismatch",
+    )
+    remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Delta encoding on write
+# ---------------------------------------------------------------------------
+
+
+def _delta_check(
+    code: String, encoding: Encoding, want_enc: String
+) raises:
+    """Write a column with a forced DELTA_* encoding, assert PyArrow sees that
+    encoding and reads back the original values."""
+    var pq = Python.import_module("pyarrow.parquet")
+    var py_want = Python.evaluate(code)  # a pyarrow table
+    var t = CArrowArrayStream.from_pycapsule(
+        py_want.__arrow_c_stream__(Python.none())
+    ).to_table()
+    var path = String("/tmp/marrow_delta.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED, encoding=encoding)
+    var enc = String(_col_encodings(path, 0))
+    assert_true(want_enc in enc, "expected " + want_enc + ", got " + enc)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.column(0).to_pylist() == py_want.column(0).to_pylist()),
+        "delta value mismatch (pyarrow read of marrow's write)",
+    )
+    # marrow also reads its own delta output
+    var mback = read_table(path)
+    var caps = CArrowArrayStream.from_batches(
+        mback.schema.copy(), mback.to_batches()
+    ).to_pycapsule()
+    var pa = Python.import_module("pyarrow")
+    var mpa = pa.RecordBatchReader._import_from_c_capsule(caps).read_all()
+    assert_true(
+        Bool(mpa.column(0).to_pylist() == py_want.column(0).to_pylist()),
+        "delta value mismatch (marrow round-trip)",
+    )
+    remove(path)
+
+
+def test_write_delta_binary_packed_int() raises:
+    _delta_check(
+        "__import__('pyarrow').table({'i':"
+        " __import__('pyarrow').array([1, 3, 6, 10, 15, 21, -4, 100, None, 7],"
+        " type=__import__('pyarrow').int64())})",
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_write_delta_int32_narrow() raises:
+    _delta_check(
+        "__import__('pyarrow').table({'i':"
+        " __import__('pyarrow').array(list(range(200)),"
+        " type=__import__('pyarrow').int32())})",
+        Encoding.DELTA_BINARY_PACKED,
+        "DELTA_BINARY_PACKED",
+    )
+
+
+def test_write_delta_byte_array_string() raises:
+    _delta_check(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['apple', 'apply', 'apricot', None,"
+        " 'banana', 'band', 'bandana'])})",
+        Encoding.DELTA_BYTE_ARRAY,
+        "DELTA_BYTE_ARRAY",
+    )
+
+
+def test_write_delta_length_byte_array_string() raises:
+    _delta_check(
+        "__import__('pyarrow').table({'s':"
+        " __import__('pyarrow').array(['a', 'bb', 'ccc', 'dddd', None, 'ef'])})",
+        Encoding.DELTA_LENGTH_BYTE_ARRAY,
+        "DELTA_LENGTH_BYTE_ARRAY",
+    )
 
 
 def main() raises:

@@ -318,6 +318,34 @@ struct Rle:
         return matches
 
     @staticmethod
+    def encode_bitpacked(values: List[Int32], width: Int) -> List[UInt8]:
+        """Encode all of `values` as a single bit-packed hybrid run (groups of 8,
+        LSB-first) at `width` bits each — compact for dictionary indices, which
+        rarely form the equal-value runs `encode` exploits. A `width` of 0 (a
+        single-entry dictionary) emits nothing; the reader treats every index as
+        0. Mirrors the reader's `_unpack8` bit order."""
+        var out = List[UInt8]()
+        var n = len(values)
+        if width == 0 or n == 0:
+            return out^
+        var num_groups = (n + 7) // 8
+        LittleEndian.put_varint(out, (UInt64(num_groups) << 1) | 1)
+        var mask = (UInt64(1) << UInt64(width)) - 1
+        var acc: UInt64 = 0
+        var acc_bits = 0
+        for i in range(num_groups * 8):
+            var v = (UInt64(Int(values[i])) & mask) if i < n else UInt64(0)
+            acc |= v << UInt64(acc_bits)
+            acc_bits += width
+            while acc_bits >= 8:
+                out.append(UInt8(acc & 0xFF))
+                acc >>= 8
+                acc_bits -= 8
+        if acc_bits > 0:
+            out.append(UInt8(acc & 0xFF))
+        return out^
+
+    @staticmethod
     def encode(values: List[Int32], width: Int) -> List[UInt8]:
         """Encode `values` as an all-RLE-run hybrid stream (runs of equal
         values). Levels are highly repetitive (often all-1s), so run-length runs
@@ -411,6 +439,91 @@ struct DeltaBinaryPacked:
         var out = List[Int64]()
         out.reserve(count)
         _ = Self.decode_into(data, 0, count, out)
+        return out^
+
+    @staticmethod
+    @always_inline
+    def _zigzag_encode(v: Int64) -> UInt64:
+        """Signed -> ULEB128 zigzag (inverse of `_zigzag`)."""
+        return UInt64((v << 1) ^ (v >> 63))
+
+    @staticmethod
+    def _put_bits(
+        mut out: List[UInt8], mut acc: UInt64, mut acc_bits: Int, v: UInt64, w: Int
+    ):
+        """Append `w` low bits of `v` LSB-first, flushing whole bytes and keeping
+        `acc_bits < 8`, so any width up to 64 packs without overflow."""
+        var rem = w
+        var val = v
+        while rem > 0:
+            var take = min(8 - acc_bits, rem)
+            acc |= (val & ((UInt64(1) << UInt64(take)) - 1)) << UInt64(acc_bits)
+            acc_bits += take
+            val >>= UInt64(take)
+            rem -= take
+            if acc_bits == 8:
+                out.append(UInt8(acc & 0xFF))
+                acc = 0
+                acc_bits = 0
+
+    @staticmethod
+    def encode(values: List[Int64]) -> List[UInt8]:
+        """Encode integers as DELTA_BINARY_PACKED (block 128, 4 miniblocks of 32).
+        Each block stores its `min_delta` and a per-miniblock bit width, then the
+        bit-packed `delta - min_delta`; a short final block is zero-padded (the
+        reader stops at the value count). Also encodes the length/prefix streams
+        of the byte-array delta codecs."""
+        comptime BLOCK = 128
+        comptime NMB = 4
+        comptime VPM = BLOCK // NMB  # 32
+        var out = List[UInt8]()
+        var n = len(values)
+        LittleEndian.put_varint(out, UInt64(BLOCK))
+        LittleEndian.put_varint(out, UInt64(NMB))
+        LittleEndian.put_varint(out, UInt64(n))
+        var first = values[0] if n > 0 else Int64(0)
+        LittleEndian.put_varint(out, Self._zigzag_encode(first))
+        if n <= 1:
+            return out^
+
+        var i = 1
+        while i < n:
+            var end = min(i + BLOCK, n)
+            var min_d = values[i] - values[i - 1]
+            for k in range(i + 1, end):
+                var d = values[k] - values[k - 1]
+                if d < min_d:
+                    min_d = d
+            LittleEndian.put_varint(out, Self._zigzag_encode(min_d))
+
+            # (delta - min_delta) for this block, zero-padded to a full BLOCK.
+            var rel = List[UInt64](capacity=BLOCK)
+            for k in range(i, end):
+                rel.append(UInt64((values[k] - values[k - 1]) - min_d))
+            while len(rel) < BLOCK:
+                rel.append(0)
+
+            var widths = List[Int](capacity=NMB)
+            for mb in range(NMB):
+                var maxv: UInt64 = 0
+                for j in range(VPM):
+                    if rel[mb * VPM + j] > maxv:
+                        maxv = rel[mb * VPM + j]
+                var w = 0
+                while (maxv >> UInt64(w)) > 0:
+                    w += 1
+                widths.append(w)
+                out.append(UInt8(w))
+            for mb in range(NMB):
+                var w = widths[mb]
+                if w == 0:
+                    continue
+                var acc: UInt64 = 0
+                var acc_bits = 0
+                for j in range(VPM):
+                    Self._put_bits(out, acc, acc_bits, rel[mb * VPM + j], w)
+                # VPM*w is a multiple of 8, so the miniblock is byte-aligned.
+            i = end
         return out^
 
 
@@ -601,6 +714,20 @@ struct DeltaLengthByteArray:
             pos += n
         return out^
 
+    @staticmethod
+    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+        """DELTA_LENGTH_BYTE_ARRAY: a delta-packed length stream then the
+        concatenated present-value bytes."""
+        var lengths = List[Int64]()
+        var data = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = String(arr[i]).as_bytes()
+                lengths.append(Int64(len(b)))
+                data.extend(b)
+        out.extend(Span(DeltaBinaryPacked.encode(lengths)))
+        out.extend(Span(data))
+
 
 struct DeltaByteArray:
     """The DELTA_BYTE_ARRAY codec — incremental prefix reconstruction: a
@@ -626,6 +753,31 @@ struct DeltaByteArray:
             out.append(v.copy())
             prev = v^
         return out^
+
+    @staticmethod
+    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+        """DELTA_BYTE_ARRAY: a delta-packed shared-prefix-length stream, then a
+        delta-packed suffix-length stream, then the suffix bytes; each value is
+        `prev[:prefix] + suffix`."""
+        var prefixes = List[Int64]()
+        var suffix_lens = List[Int64]()
+        var suffix_data = List[UInt8]()
+        var prev = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = List[UInt8](String(arr[i]).as_bytes())
+                var m = min(len(prev), len(v))
+                var p = 0
+                while p < m and prev[p] == v[p]:
+                    p += 1
+                prefixes.append(Int64(p))
+                suffix_lens.append(Int64(len(v) - p))
+                for k in range(p, len(v)):
+                    suffix_data.append(v[k])
+                prev = v^
+        out.extend(Span(DeltaBinaryPacked.encode(prefixes)))
+        out.extend(Span(DeltaBinaryPacked.encode(suffix_lens)))
+        out.extend(Span(suffix_data))
 
 
 @fieldwise_init

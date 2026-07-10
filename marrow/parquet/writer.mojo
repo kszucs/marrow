@@ -17,14 +17,24 @@ Dictionary encoding, page splitting, and temporal/list writing are follow-ups.
 
 from std.pathlib import Path
 from std.math import isnan
+from std.sys import size_of
 
-from ..arrays import AnyArray, PrimitiveArray
-from ..dtypes import PrimitiveType
+from ..arrays import AnyArray, PrimitiveArray, StringArray
+from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
 from ..schema import Schema
 
-from .codecs import Rle, Plain, LittleEndian, Compression
+from .codecs import (
+    Rle,
+    Plain,
+    LittleEndian,
+    Compression,
+    Encoding,
+    DeltaBinaryPacked,
+    DeltaByteArray,
+    DeltaLengthByteArray,
+)
 from .utils import CompressionLibs
 from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .format import (
@@ -47,16 +57,19 @@ struct ColumnWriter(Movable):
     var leaf: LeafColumn
     var compression: Compression
     var version: Int  # data-page version: 1 or 2
+    var encoding: Encoding  # value encoding: PLAIN, RLE_DICTIONARY, DELTA_*
 
     def __init__(
         out self,
         var leaf: LeafColumn,
         compression: Compression,
         version: Int = 1,
+        encoding: Encoding = Encoding.PLAIN,
     ):
         self.leaf = leaf^
         self.compression = compression
         self.version = version
+        self.encoding = encoding
 
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
         """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
@@ -88,6 +101,177 @@ struct ColumnWriter(Movable):
             Plain.encode_bytes(col.as_string(), body)
         else:
             raise Error("parquet: cannot write column type " + String(vt))
+
+    # -----------------------------------------------------------------------
+    # Dictionary encoding — build the distinct-value dictionary (PLAIN page) and
+    # the per-present-value indices (RLE_DICTIONARY data page). Indices cover the
+    # non-null values only, exactly like the PLAIN encoders; the definition
+    # levels place the nulls, so this composes with the flat and leveled paths.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _dict_prim[
+        store: NumericType, phys: DType
+    ](
+        arr: PrimitiveArray[store],
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Dictionary-encode a primitive column: PLAIN-encode each distinct value
+        (widened to `phys`) into `dict_body`, collect the per-value index."""
+        comptime W = size_of[Scalar[phys]]()
+        var seen = Dict[Scalar[store.native], Int]()
+        var num_dict = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = arr[i].value()
+                if v in seen:
+                    indices.append(Int32(seen[v]))
+                else:
+                    seen[v] = num_dict
+                    indices.append(Int32(num_dict))
+                    num_dict += 1
+                    var bytes = v.cast[phys]().as_bytes[big_endian=False]()
+                    for b in range(W):
+                        dict_body.append(bytes[b])
+        return num_dict
+
+    @staticmethod
+    def _dict_string(
+        arr: StringArray,
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Dictionary-encode a string column: length-prefixed distinct values in
+        the dictionary page, one index per present value."""
+        var seen = Dict[String, Int]()
+        var num_dict = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = String(arr[i])
+                if v in seen:
+                    indices.append(Int32(seen[v]))
+                else:
+                    seen[v] = num_dict
+                    indices.append(Int32(num_dict))
+                    num_dict += 1
+                    var b = v.as_bytes()
+                    LittleEndian.put_u32(dict_body, len(b))
+                    dict_body.extend(b)
+        return num_dict
+
+    def _encode_dictionary(
+        self,
+        col: AnyArray,
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Build the dictionary page bytes + per-value indices for `col`; returns
+        the dictionary size. Mirrors `_encode_values`' type dispatch (bool is
+        never dictionary-encoded)."""
+        ref vt = self.leaf.dtype
+        if vt == dt.int32:
+            return Self._dict_prim[dt.Int32Type, DType.int32](
+                col.as_int32(), dict_body, indices
+            )
+        elif vt == dt.int64:
+            return Self._dict_prim[dt.Int64Type, DType.int64](
+                col.as_int64(), dict_body, indices
+            )
+        elif vt == dt.uint32:
+            return Self._dict_prim[dt.UInt32Type, DType.uint32](
+                col.as_uint32(), dict_body, indices
+            )
+        elif vt == dt.uint64:
+            return Self._dict_prim[dt.UInt64Type, DType.uint64](
+                col.as_uint64(), dict_body, indices
+            )
+        elif vt == dt.float32:
+            return Self._dict_prim[dt.Float32Type, DType.float32](
+                col.as_float32(), dict_body, indices
+            )
+        elif vt == dt.float64:
+            return Self._dict_prim[dt.Float64Type, DType.float64](
+                col.as_float64(), dict_body, indices
+            )
+        elif vt == dt.int8:
+            return Self._dict_prim[dt.Int8Type, DType.int32](
+                col.as_int8(), dict_body, indices
+            )
+        elif vt == dt.int16:
+            return Self._dict_prim[dt.Int16Type, DType.int32](
+                col.as_int16(), dict_body, indices
+            )
+        elif vt == dt.uint8:
+            return Self._dict_prim[dt.UInt8Type, DType.int32](
+                col.as_uint8(), dict_body, indices
+            )
+        elif vt == dt.uint16:
+            return Self._dict_prim[dt.UInt16Type, DType.int32](
+                col.as_uint16(), dict_body, indices
+            )
+        elif vt.is_string():
+            return Self._dict_string(col.as_string(), dict_body, indices)
+        else:
+            raise Error(
+                "parquet: cannot dictionary-encode column type " + String(vt)
+            )
+
+    @staticmethod
+    def can_dictionary(dtype: dt.AnyDataType) -> Bool:
+        """Whether a column of `dtype` is dictionary-encoded when requested —
+        numeric and string columns (bool and unsupported types stay PLAIN)."""
+        return (
+            dtype.is_integer() or dtype.is_floating_point() or dtype.is_string()
+        )
+
+    # -----------------------------------------------------------------------
+    # Delta encoding — DELTA_BINARY_PACKED (signed ints) and DELTA_BYTE_ARRAY /
+    # DELTA_LENGTH_BYTE_ARRAY (strings), over the present values only.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _ints[
+        store: NumericType
+    ](arr: PrimitiveArray[store], mut out: List[Int64]) raises:
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                out.append(Int64(arr[i].value()))
+
+    @staticmethod
+    def can_delta(dtype: dt.AnyDataType, encoding: Encoding) -> Bool:
+        """Whether `encoding` (a DELTA_* variant) applies to `dtype`."""
+        if encoding == Encoding.DELTA_BINARY_PACKED:
+            return dtype.is_signed_integer()
+        elif (
+            encoding == Encoding.DELTA_BYTE_ARRAY
+            or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+        ):
+            return dtype.is_string()
+        return False
+
+    def _encode_delta(self, col: AnyArray, mut out: List[UInt8]) raises:
+        """Delta-encode the present values per `self.encoding`."""
+        var ints = List[Int64]()
+        ref vt = self.leaf.dtype
+        if self.encoding == Encoding.DELTA_BINARY_PACKED:
+            if vt == dt.int32:
+                Self._ints(col.as_int32(), ints)
+            elif vt == dt.int64:
+                Self._ints(col.as_int64(), ints)
+            elif vt == dt.int8:
+                Self._ints(col.as_int8(), ints)
+            elif vt == dt.int16:
+                Self._ints(col.as_int16(), ints)
+            else:
+                raise Error(
+                    "parquet: cannot DELTA_BINARY_PACKED type " + String(vt)
+                )
+            out.extend(Span(DeltaBinaryPacked.encode(ints)))
+        elif self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
+            DeltaLengthByteArray.encode(col.as_string(), out)
+        else:  # DELTA_BYTE_ARRAY
+            DeltaByteArray.encode(col.as_string(), out)
 
     def _def_levels(
         self, col: AnyArray, mut null_count: Int
@@ -259,28 +443,59 @@ struct ColumnWriter(Movable):
         else:
             return False
 
+    def _write_dict_page(
+        self,
+        values: AnyArray,
+        mut index_bytes: List[UInt8],
+        mut out: List[UInt8],
+        mut codecs: CompressionLibs,
+    ) raises -> Tuple[Int, Int, Int]:
+        """Write the dictionary page (PLAIN distinct values, compressed) ahead of
+        the data page and fill `index_bytes` with the data page's value bytes:
+        a `bit_width` byte then the bit-packed per-value indices. Returns
+        `(offset, uncompressed_size, compressed_size)` — the page's byte offset
+        (the chunk start) and its total sizes (header included), which the chunk
+        metadata must add to the data page's."""
+        var offset = len(out)
+        var dict_body = List[UInt8]()
+        var indices = List[Int32]()
+        var num_dict = self._encode_dictionary(values, dict_body, indices)
+        var comp = self.compression.compress(codecs, Span(dict_body))
+        var header_len = PageHeader.dictionary_page(
+            len(dict_body), len(comp), num_dict
+        ).append_to(out)
+        out.extend(Span(comp))
+
+        var width = Rle.bit_width(num_dict - 1) if num_dict > 0 else 0
+        index_bytes.append(UInt8(width))
+        index_bytes.extend(Span(Rle.encode_bitpacked(indices, width)))
+        return (offset, header_len + len(dict_body), header_len + len(comp))
+
     def _emit_page(
         self,
         values: AnyArray,
+        var value_bytes: List[UInt8],
         var rep_bytes: List[UInt8],
         var def_bytes: List[UInt8],
         num_values: Int,
         num_rows: Int,
         null_count: Int,
+        dict_page_offset: Int,
+        dict_uncompressed_size: Int,
+        dict_compressed_size: Int,
         path: List[String],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
     ) raises -> ColumnChunk:
-        """Serialize one data page (v1 or v2) from already-RLE-encoded rep/def
-        level bytes plus the PLAIN-encoded values, and build its `ColumnChunk`
-        metadata (null count + min/max stats). The single page-emit routine —
-        `write` and `write_leveled` only differ in how they produce the levels.
-        v1 length-prefixes each level stream ahead of the values (all compressed
-        together); v2 keeps rep+def uncompressed ahead of the compressed values.
-        """
+        """Serialize one data page (v1 or v2) from the already-encoded value bytes
+        (PLAIN, dictionary indices, or DELTA) plus the RLE rep/def level bytes,
+        and build its `ColumnChunk` metadata (null count, min/max stats, the
+        encodings actually used, and — for a dictionary chunk — the dictionary
+        page offset). v1 length-prefixes each level stream ahead of the values
+        (all compressed together); v2 keeps rep+def uncompressed ahead of the
+        compressed values. A dictionary page, if any, was already written to
+        `out` at `dict_page_offset`, so the chunk starts there."""
         var page_offset = len(out)
-        var value_bytes = List[UInt8]()
-        self._encode_values(values, value_bytes)
 
         var uncompressed_size: Int
         var compressed_size: Int
@@ -302,6 +517,7 @@ struct ColumnWriter(Movable):
                 len(def_bytes),
                 is_comp,
                 rep_levels_byte_length=len(rep_bytes),
+                encoding=self.encoding,
             ).append_to(out)
             out.extend(Span(rep_bytes))
             out.extend(Span(def_bytes))
@@ -319,7 +535,7 @@ struct ColumnWriter(Movable):
             var compressed = self.compression.compress(codecs, Span(body))
             compressed_size = len(compressed)
             header_len = PageHeader.data_page(
-                uncompressed_size, compressed_size, num_values
+                uncompressed_size, compressed_size, num_values, self.encoding
             ).append_to(out)
             out.extend(Span(compressed))
 
@@ -329,9 +545,21 @@ struct ColumnWriter(Movable):
             meta.path_in_schema.append(p)
         meta.codec = self.compression.code
         meta.num_values = num_values
-        meta.total_uncompressed_size = uncompressed_size + header_len
-        meta.total_compressed_size = compressed_size + header_len
+        meta.total_uncompressed_size = (
+            uncompressed_size + header_len + dict_uncompressed_size
+        )
+        meta.total_compressed_size = (
+            compressed_size + header_len + dict_compressed_size
+        )
         meta.data_page_offset = page_offset
+        # encodings: RLE levels, then the value encoding (a dictionary chunk also
+        # advertises the PLAIN dictionary page).
+        var encs = [Encoding.RLE.code]
+        if dict_page_offset >= 0:
+            meta.dictionary_page_offset = dict_page_offset
+            encs.append(Encoding.PLAIN.code)
+        encs.append(self.encoding.code)
+        meta.encodings = encs^
         if self.leaf.max_def >= 1:
             meta.null_count = null_count
         var min_v = List[UInt8]()
@@ -342,7 +570,7 @@ struct ColumnWriter(Movable):
             meta.max_value = max_v^
 
         var cc = ColumnChunk()
-        cc.file_offset = page_offset
+        cc.file_offset = dict_page_offset if dict_page_offset >= 0 else page_offset
         cc.meta_data = meta^
         return cc^
 
@@ -358,47 +586,72 @@ struct ColumnWriter(Movable):
         """Write one leaf column chunk. A flat column passes empty `def_levels`/
         `rep_levels` and its 0/1 definition levels are derived here (the fast path
         that never materialises rep levels); a leveled (list/map/nested) column
-        passes the rep/def levels pre-shredded by `SchemaNode.shred_levels`.
-        Values are PLAIN-encoded with nulls skipped; the page + `ColumnMetaData`
-        go through `_emit_page`."""
+        passes the rep/def levels pre-shredded by `SchemaNode.shred_levels`. The
+        value encoding is `self.encoding` (PLAIN, dictionary, or DELTA); nulls are
+        skipped and placed by the definition levels."""
         var max_def = self.leaf.max_def
         var max_rep = self.leaf.max_rep
 
+        # ---- levels ----
+        var num_values: Int
+        var null_count: Int
+        var num_rows: Int
+        var rep_bytes = List[UInt8]()
+        var def_bytes = List[UInt8]()
         if max_rep == 0 and len(def_levels) == 0:
             # Flat: derive 0/1 definition levels from the array's own validity.
-            var n = values.length()
-            var null_count = 0
-            var def_bytes = self._def_levels(values, null_count)
-            return self._emit_page(
-                values, List[UInt8](), def_bytes^, n, n, null_count, path, out, codecs
-            )
+            num_values = values.length()
+            null_count = 0
+            def_bytes = self._def_levels(values, null_count)
+            num_rows = num_values
+        else:
+            # Leveled: present values = definition level == max_def.
+            num_values = len(def_levels)
+            var num_present = 0
+            for d in def_levels:
+                if Int(d) == max_def:
+                    num_present += 1
+            null_count = num_values - num_present
+            num_rows = num_values
+            if max_rep >= 1:
+                num_rows = 0
+                for rl in rep_levels:
+                    if Int(rl) == 0:
+                        num_rows += 1
+                rep_bytes = Rle.encode(rep_levels, Rle.bit_width(max_rep))
+            if max_def >= 1:
+                def_bytes = Rle.encode(def_levels, Rle.bit_width(max_def))
 
-        # Leveled: pre-shredded rep/def levels (present values = def == max_def).
-        var num_values = len(def_levels)
-        var num_present = 0
-        for d in def_levels:
-            if Int(d) == max_def:
-                num_present += 1
-        var num_rows = num_values
-        if max_rep >= 1:
-            num_rows = 0
-            for rl in rep_levels:
-                if Int(rl) == 0:
-                    num_rows += 1
+        # ---- values ----
+        var value_bytes = List[UInt8]()
+        var dict_page_offset = -1
+        var dict_uncompressed = 0
+        var dict_compressed = 0
+        if self.encoding == Encoding.RLE_DICTIONARY:
+            var d = self._write_dict_page(values, value_bytes, out, codecs)
+            dict_page_offset = d[0]
+            dict_uncompressed = d[1]
+            dict_compressed = d[2]
+        elif (
+            self.encoding == Encoding.DELTA_BINARY_PACKED
+            or self.encoding == Encoding.DELTA_BYTE_ARRAY
+            or self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+        ):
+            self._encode_delta(values, value_bytes)
+        else:
+            self._encode_values(values, value_bytes)
 
-        var rep_bytes = List[UInt8]()
-        if max_rep >= 1:
-            rep_bytes = Rle.encode(rep_levels, Rle.bit_width(max_rep))
-        var def_bytes = List[UInt8]()
-        if max_def >= 1:
-            def_bytes = Rle.encode(def_levels, Rle.bit_width(max_def))
         return self._emit_page(
             values,
+            value_bytes^,
             rep_bytes^,
             def_bytes^,
             num_values,
             num_rows,
-            num_values - num_present,
+            null_count,
+            dict_page_offset,
+            dict_uncompressed,
+            dict_compressed,
             path,
             out,
             codecs,
@@ -415,15 +668,37 @@ struct FileWriter(Movable):
     var codecs: CompressionLibs
     var compression: Compression
     var version: Int  # data-page version: 1 (default) or 2
+    var use_dictionary: Bool  # dictionary-encode eligible columns (else PLAIN)
+    var encoding: Optional[Encoding]  # forced DELTA_* for compatible columns
     var leaves: List[LeafColumn]
 
-    def __init__(out self, compression: Compression, version: Int = 1):
+    def __init__(
+        out self,
+        compression: Compression,
+        version: Int = 1,
+        use_dictionary: Bool = True,
+        encoding: Optional[Encoding] = None,
+    ):
         self.out = List[UInt8]()
         FileMetaData.write_magic(self.out)  # file header magic
         self.codecs = CompressionLibs()
         self.compression = compression
         self.version = version
+        self.use_dictionary = use_dictionary
+        self.encoding = encoding
         self.leaves = List[LeafColumn]()
+
+    def _encoding_for(self, leaf: LeafColumn) -> Encoding:
+        """The value encoding for a leaf: a forced DELTA_* encoding where it
+        applies, else RLE_DICTIONARY when dictionaries are enabled and the type
+        is eligible, else PLAIN."""
+        if self.encoding and ColumnWriter.can_delta(
+            leaf.dtype, self.encoding.value()
+        ):
+            return self.encoding.value()
+        if self.use_dictionary and ColumnWriter.can_dictionary(leaf.dtype):
+            return Encoding.RLE_DICTIONARY
+        return Encoding.PLAIN
 
     def _write_row_group(
         mut self, batch: RecordBatch, nodes: List[SchemaNode]
@@ -452,7 +727,10 @@ struct FileWriter(Movable):
             for k in range(len(col_leaves)):
                 var gi = col_leaves[k]
                 var ccw = ColumnWriter(
-                    self.leaves[gi].copy(), self.compression, self.version
+                    self.leaves[gi].copy(),
+                    self.compression,
+                    self.version,
+                    self._encoding_for(self.leaves[gi]),
                 )
                 var cc = ccw.write(
                     leaf_values[k],
@@ -507,9 +785,16 @@ def write_table(
     path: String,
     compression: Compression = Compression.SNAPPY,
     version: Int = 1,
+    use_dictionary: Bool = True,
+    encoding: Optional[Encoding] = None,
 ) raises:
     """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
     format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
+    `use_dictionary` (default True, like PyArrow) dictionary-encodes numeric and
+    string columns; set False to force PLAIN. `encoding` forces a `DELTA_*`
+    variant on compatible columns (DELTA_BINARY_PACKED for signed ints,
+    DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY for strings), overriding the
+    dictionary for those columns.
     """
-    var writer = FileWriter(compression, version)
+    var writer = FileWriter(compression, version, use_dictionary, encoding)
     writer.write(table, path)
