@@ -6,7 +6,7 @@ Arrow type tree.
 with `assemble` / `flatten`; `LeafColumn` is a flat leaf descriptor; `Projection`
 is a read plan; `DecodedLeaf` is the reader's per-column output. Covers flat
 columns, (nullable) structs, and nested lists. Each node carries its Dremel
-geometry (`present_def`, `element_floor`) computed once during the parse walk so
+geometry (`non_null_def`, `child_def`) computed once during the parse walk so
 `assemble` stays a clean recursive walk.
 """
 
@@ -31,29 +31,29 @@ comptime NODE_LIST: Int = 2
 struct NodeGeom(Copyable, Movable):
     """Dremel geometry for a schema node, in absolute definition/repetition
     levels — computed once during schema parsing so the assembler never
-    re-derives thresholds. A struct uses `present_def` + `optional`; a list uses
+    re-derives thresholds. A struct uses `non_null_def` + `optional`; a list uses
     all fields, which lets its offset scan reconstruct any nesting depth on its
     own (no dependence on parent levels)."""
 
-    var present_def: Int  # def at/above which this node is non-null
+    var non_null_def: Int  # def at/above which this node is non-null
     var optional: Bool  # whether this node can be null
     var rep_level: Int  # NODE_LIST: repetition level of its repeated group
-    var element_floor: Int  # NODE_LIST: def at/above which it holds a child element
-    var entry_floor: Int  # NODE_LIST: def at/above which this list exists as an entry
+    var child_def: Int  # NODE_LIST: def at/above which it holds a child element
+    var slot_def: Int  # NODE_LIST: def at/above which this list exists as an entry
 
     def __init__(
         out self,
-        present_def: Int = 0,
+        non_null_def: Int = 0,
         optional: Bool = False,
         rep_level: Int = 0,
-        element_floor: Int = 0,
-        entry_floor: Int = 0,
+        child_def: Int = 0,
+        slot_def: Int = 0,
     ):
-        self.present_def = present_def
+        self.non_null_def = non_null_def
         self.optional = optional
         self.rep_level = rep_level
-        self.element_floor = element_floor
-        self.entry_floor = entry_floor
+        self.child_def = child_def
+        self.slot_def = slot_def
 
 
 struct SchemaNode(Copyable, Movable):
@@ -105,7 +105,7 @@ struct SchemaNode(Copyable, Movable):
             # geom carries every threshold its scan needs.
             var element = self.children[0].assemble(decoded)
             var li = self.first_leaf_index()
-            return self._assemble_list(
+            return self._fold_list_offsets(
                 element^, decoded[li].rep_levels, decoded[li].def_levels
             )
         elif self.kind == NODE_STRUCT:
@@ -117,7 +117,7 @@ struct SchemaNode(Copyable, Movable):
             # A nullable struct is null wherever a representative leaf's def is
             # below the struct's present level. One validity bit per struct entry
             # — the records where this struct has a slot (`rep <= rep_level` and
-            # `def >= entry_floor`) — so it aligns with the child arrays at any
+            # `def >= slot_def`) — so it aligns with the child arrays at any
             # position (top level, holding a list, or as a list element).
             var mask: Optional[BoolArray] = None
             if self.geom.optional:
@@ -131,9 +131,9 @@ struct SchemaNode(Copyable, Movable):
                         var r = Int(reps[i]) if len(reps) > 0 else 0
                         var d = Int(defs[i])
                         if r <= self.geom.rep_level and (
-                            d >= self.geom.entry_floor
+                            d >= self.geom.slot_def
                         ):
-                            var is_null = d < self.geom.present_def
+                            var is_null = d < self.geom.non_null_def
                             mb.append(is_null)
                             any_null = any_null or is_null
                     if any_null:
@@ -145,7 +145,7 @@ struct SchemaNode(Copyable, Movable):
         else:
             raise Error("parquet: unsupported schema node kind")
 
-    def _assemble_list(
+    def _fold_list_offsets(
         self,
         var element: AnyArray,
         rep_levels: List[Int32],
@@ -159,13 +159,13 @@ struct SchemaNode(Copyable, Movable):
 
         - a **new instance** of this list begins where `rep < rep_level` (the
           repetition is shallower than this list, so its parent moved on) *and*
-          `def >= entry_floor` (this list is actually reached — otherwise an
+          `def >= slot_def` (this list is actually reached — otherwise an
           ancestor is empty/null and this list has no entry here);
         - a **new child element** (one entry of `element`) is added where
           `rep <= rep_level` (a repetition at this level or shallower starts a
-          fresh element) *and* `def >= element_floor` (the element is present,
+          fresh element) *and* `def >= child_def` (the element is present,
           not an empty/null structural slot);
-        - the instance is **null** where `def < present_def`.
+        - the instance is **null** where `def < non_null_def`.
 
         Because every threshold lives in `geom`, the scan needs nothing from the
         parent, so nested lists compose by recursion: the child array is itself
@@ -182,14 +182,14 @@ struct SchemaNode(Copyable, Movable):
         for i in range(n):
             var r = Int(rep_levels[i])
             var d = Int(def_levels[i])
-            if r < geom.rep_level and d >= geom.entry_floor:
+            if r < geom.rep_level and d >= geom.slot_def:
                 if started:
                     offsets.append(Int32(child_idx))  # close previous instance
                 started = True
-                var is_null = geom.optional and d < geom.present_def
+                var is_null = geom.optional and d < geom.non_null_def
                 mask.append(is_null)
                 any_null = any_null or is_null
-            if r <= geom.rep_level and d >= geom.element_floor:
+            if r <= geom.rep_level and d >= geom.child_def:
                 child_idx += 1
         offsets.append(Int32(child_idx))
 
@@ -202,7 +202,9 @@ struct SchemaNode(Copyable, Movable):
             out = ListArray.from_arrays(offsets_arr, element^, None)
         return out^
 
-    def flatten(self, col: AnyArray, mut leaf_arrays: List[AnyArray]) raises:
+    def collect_leaf_arrays(
+        self, col: AnyArray, mut leaf_arrays: List[AnyArray]
+    ) raises:
         """Inverse of `assemble`: collect this node's leaf arrays in column order.
         """
         if self.kind == NODE_LEAF:
@@ -210,7 +212,9 @@ struct SchemaNode(Copyable, Movable):
         elif self.kind == NODE_STRUCT:
             ref sa = col.as_struct()
             for i in range(len(self.children)):
-                self.children[i].flatten(sa.children[i], leaf_arrays)
+                self.children[i].collect_leaf_arrays(
+                    sa.children[i], leaf_arrays
+                )
         else:
             raise Error("parquet: unsupported schema node kind")
 
@@ -224,13 +228,13 @@ struct SchemaNode(Copyable, Movable):
             for ref c in self.children:
                 c.collect_leaf_indices(out)
 
-    def remapped(self, mapping: List[Int]) -> SchemaNode:
+    def with_remapped_leaves(self, mapping: List[Int]) -> SchemaNode:
         """A copy of this node with every leaf index rewritten through `mapping`
         (original flat index -> compact index), so a projected node assembles
         from a decoded list that holds only the selected columns."""
         var new_children = List[SchemaNode]()
         for ref c in self.children:
-            new_children.append(c.remapped(mapping))
+            new_children.append(c.with_remapped_leaves(mapping))
         var new_leaf = self.leaf_index
         if self.kind == NODE_LEAF:
             new_leaf = mapping[self.leaf_index]
@@ -367,12 +371,12 @@ struct SchemaMapping(Movable):
         mut idx: Int,
         def_base: Int,
         rep_base: Int,
-        rep_floor: Int = 0,
+        slot_def: Int = 0,
         under_optional: Bool = False,
     ) raises -> SchemaNode:
         """Consume the element at `idx` (advancing it) and return its Arrow node.
 
-        `rep_floor` is the definition level at/above which this element's value
+        `slot_def` is the definition level at/above which this element's value
         slot exists — bumped past each enclosing list's repeated group so leaves
         under nested lists read the right present/absent slots. `under_optional`
         marks that a nullable struct ancestor exists, so flat leaves must keep
@@ -395,7 +399,7 @@ struct SchemaMapping(Movable):
                     max_def=d,
                     max_rep=r,
                     nullable=nullable,
-                    rep_floor=rep_floor,
+                    slot_def=slot_def,
                     carry_def=under_optional,
                 )
             )
@@ -430,14 +434,14 @@ struct SchemaMapping(Movable):
                 idx,
                 d + 1,
                 r + 1,
-                rep_floor=d + 1,
+                slot_def=d + 1,
                 under_optional=under_optional,
             )
             var item: dt.AnyDataType = dt.list_(elem.field.dtype.copy())
             var children = List[SchemaNode]()
             children.append(elem^)
-            # rep_level = the repeated group's level (r + 1); entry_floor =
-            # `rep_floor`, the innermost *enclosing list's* element floor (0 at
+            # rep_level = the repeated group's level (r + 1); slot_def =
+            # `slot_def`, the innermost *enclosing list's* element floor (0 at
             # top / under a struct) — an optional struct being null still leaves a
             # row-slot, so the list gets a (null) entry there. With every
             # threshold on the node, the scan needs nothing from its parent, so
@@ -448,11 +452,11 @@ struct SchemaMapping(Movable):
                 children^,
                 -1,
                 NodeGeom(
-                    present_def=d,
+                    non_null_def=d,
                     optional=rep == Repetition.OPTIONAL,
                     rep_level=r + 1,
-                    element_floor=d + 1,
-                    entry_floor=rep_floor,
+                    child_def=d + 1,
+                    slot_def=slot_def,
                 ),
             )
 
@@ -464,7 +468,7 @@ struct SchemaMapping(Movable):
         var child_optional = under_optional or nullable
         for _ in range(el.num_children):
             var cn = self._parse_node(
-                idx, d, r, rep_floor=rep_floor, under_optional=child_optional
+                idx, d, r, slot_def=slot_def, under_optional=child_optional
             )
             child_fields.append(cn.field.copy())
             child_nodes.append(cn^)
@@ -475,10 +479,10 @@ struct SchemaMapping(Movable):
             child_nodes^,
             -1,
             NodeGeom(
-                present_def=d,
+                non_null_def=d,
                 optional=nullable,
                 rep_level=r,
-                entry_floor=rep_floor,
+                slot_def=slot_def,
             ),
         )
 
@@ -597,7 +601,7 @@ struct SchemaMapping(Movable):
 
     def project(self, columns: List[String]) raises -> Projection:
         """Read plan for the named top-level columns, in the given order. The
-        assembly nodes are remapped onto a compact decoded list holding only the
+        assembly nodes are with_remapped_leaves onto a compact decoded list holding only the
         selected columns' leaves; unselected column chunks are never decoded."""
         var fields = List[dt.Field]()
         var nodes = List[SchemaNode]()
@@ -617,14 +621,14 @@ struct SchemaMapping(Movable):
             for orig in node_leaves:
                 mapping[orig] = len(decode_order)
                 decode_order.append(orig)
-            nodes.append(node.remapped(mapping))
+            nodes.append(node.with_remapped_leaves(mapping))
             fields.append(node.field.copy())
         return Projection(Schema(fields=fields^), nodes^, decode_order^)
 
 
 struct Projection(Movable):
     """A read plan: the output Arrow schema, the assembly nodes (leaf indices
-    remapped to a compact decoded list), and `decode_order` — the original flat
+    with_remapped_leaves to a compact decoded list), and `decode_order` — the original flat
     leaf/column-chunk indices to decode, in that compact order."""
 
     var schema: Schema
@@ -651,7 +655,7 @@ struct LeafColumn(Copyable, Movable):
     var max_def: Int
     var max_rep: Int
     var nullable: Bool
-    var rep_floor: Int  # def level at/above which this leaf's value slot exists
+    var slot_def: Int  # def level at/above which this leaf's value slot exists
     var carry_def: Bool  # keep def levels (leaf is under a nullable struct)
 
     def __init__(
@@ -662,7 +666,7 @@ struct LeafColumn(Copyable, Movable):
         max_def: Int,
         max_rep: Int,
         nullable: Bool,
-        rep_floor: Int = 0,
+        slot_def: Int = 0,
         carry_def: Bool = False,
     ):
         self.name = name^
@@ -671,7 +675,7 @@ struct LeafColumn(Copyable, Movable):
         self.max_def = max_def
         self.max_rep = max_rep
         self.nullable = nullable
-        self.rep_floor = rep_floor
+        self.slot_def = slot_def
         self.carry_def = carry_def
 
 

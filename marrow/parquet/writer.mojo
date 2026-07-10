@@ -114,24 +114,25 @@ struct ColumnWriter(Movable):
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def _le_bytes(bits: UInt64, width: Int, mut out: List[UInt8]):
-        for i in range(width):
-            out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
-
-    @staticmethod
     def _mm[
-        T: PrimitiveType
+        T: PrimitiveType, skip_nan: Bool = False
     ](arr: PrimitiveArray[T]) raises -> Tuple[
         Scalar[T.native], Scalar[T.native], Bool
     ]:
-        """min/max over valid values using T's native (signed/unsigned) order.
-        """
+        """min/max over the valid values in T's native (signed/unsigned) order.
+        `skip_nan` excludes NaN — floats only, per the spec (NaN bounds nothing);
+        the check is comptime-elided for integer columns."""
         var seen = False
         var mn = Scalar[T.native](0)
         var mx = Scalar[T.native](0)
         for i in range(len(arr)):
             if arr.is_valid(i):
                 var v = arr[i].value()
+
+                @parameter
+                if skip_nan:
+                    if isnan(v):
+                        continue
                 if not seen:
                     mn = v
                     mx = v
@@ -144,124 +145,74 @@ struct ColumnWriter(Movable):
         return (mn, mx, seen)
 
     @staticmethod
-    def _mm_float[
-        T: PrimitiveType
-    ](arr: PrimitiveArray[T]) raises -> Tuple[
-        Scalar[T.native], Scalar[T.native], Bool
-    ]:
-        """min/max skipping NaN (NaN participates in no bound, per the spec)."""
-        var seen = False
-        var mn = Scalar[T.native](0)
-        var mx = Scalar[T.native](0)
-        for i in range(len(arr)):
-            if arr.is_valid(i):
-                var v = arr[i].value()
-                if isnan(v):
-                    continue
-                if not seen:
-                    mn = v
-                    mx = v
-                    seen = True
-                else:
-                    if v < mn:
-                        mn = v
-                    if v > mx:
-                        mx = v
-        return (mn, mx, seen)
+    def _int_stats[
+        T: PrimitiveType, width: Int
+    ](
+        arr: PrimitiveArray[T],
+        mut min_out: List[UInt8],
+        mut max_out: List[UInt8],
+    ) raises -> Bool:
+        """Signed/unsigned integer bounds, widened to `width` little-endian bytes
+        (the physical INT32 / INT64 width). False when there are no values."""
+        var r = Self._mm(arr)
+        if not r[2]:
+            return False
+        LittleEndian.put_le(min_out, r[0].cast[DType.uint64](), width)
+        LittleEndian.put_le(max_out, r[1].cast[DType.uint64](), width)
+        return True
 
     @staticmethod
-    def _bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
-        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
-        var n = min(len(a), len(b))
-        for i in range(n):
-            if a[i] != b[i]:
-                return a[i] < b[i]
-        return len(a) < len(b)
+    def _float_stats[
+        T: PrimitiveType, width: Int
+    ](
+        arr: PrimitiveArray[T],
+        mut min_out: List[UInt8],
+        mut max_out: List[UInt8],
+    ) raises -> Bool:
+        """IEEE float bounds (NaN skipped), stored as their bit pattern with the
+        signed zero normalised so the bound brackets both +0.0 and -0.0."""
+        var r = Self._mm[skip_nan=True](arr)
+        if not r[2]:
+            return False
+        var zero = Scalar[T.native](0)
+        var mn = -zero if r[0] == zero else r[0]
+        var mx = zero if r[1] == zero else r[1]
+        LittleEndian.put_le(min_out, UInt64(mn.to_bits()), width)
+        LittleEndian.put_le(max_out, UInt64(mx.to_bits()), width)
+        return True
 
     def _stats(
         self, col: AnyArray, mut min_out: List[UInt8], mut max_out: List[UInt8]
     ) raises -> Bool:
         """Fill `min_out`/`max_out` with the PLAIN-encoded bounds; return False
         when there is nothing to summarise (all-null / empty) or the type carries
-        no statistics. Integers are widened to their physical width (INT32/INT64)
-        and stored little-endian; floats store their IEEE bits (min/max with
-        signed-zero normalised so the bound brackets both ±0.0); byte arrays
-        store raw bytes with no length prefix."""
+        no statistics. Byte arrays store raw bytes with no length prefix; the
+        numeric widen/normalise rules live in `_int_stats` / `_float_stats`."""
         ref vt = self.leaf.dtype
         if vt == dt.int8:
-            var r = Self._mm(col.as_int8())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_int8(), min_out, max_out)
         elif vt == dt.int16:
-            var r = Self._mm(col.as_int16())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_int16(), min_out, max_out)
         elif vt == dt.int32:
-            var r = Self._mm(col.as_int32())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_int32(), min_out, max_out)
         elif vt == dt.uint8:
-            var r = Self._mm(col.as_uint8())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_uint8(), min_out, max_out)
         elif vt == dt.uint16:
-            var r = Self._mm(col.as_uint16())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_uint16(), min_out, max_out)
         elif vt == dt.uint32:
-            var r = Self._mm(col.as_uint32())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 4, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 4, max_out)
-            return True
+            return Self._int_stats[width=4](col.as_uint32(), min_out, max_out)
         elif vt == dt.int64:
-            var r = Self._mm(col.as_int64())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 8, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 8, max_out)
-            return True
+            return Self._int_stats[width=8](col.as_int64(), min_out, max_out)
         elif vt == dt.uint64:
-            var r = Self._mm(col.as_uint64())
-            if not r[2]:
-                return False
-            Self._le_bytes(r[0].cast[DType.uint64](), 8, min_out)
-            Self._le_bytes(r[1].cast[DType.uint64](), 8, max_out)
-            return True
+            return Self._int_stats[width=8](col.as_uint64(), min_out, max_out)
         elif vt == dt.float32:
-            var r = Self._mm_float(col.as_float32())
-            if not r[2]:
-                return False
-            var mn = -Float32(0) if r[0] == Float32(0) else r[0]
-            var mx = Float32(0) if r[1] == Float32(0) else r[1]
-            Self._le_bytes(UInt64(mn.to_bits()), 4, min_out)
-            Self._le_bytes(UInt64(mx.to_bits()), 4, max_out)
-            return True
+            return Self._float_stats[width=4](
+                col.as_float32(), min_out, max_out
+            )
         elif vt == dt.float64:
-            var r = Self._mm_float(col.as_float64())
-            if not r[2]:
-                return False
-            var mn = -Float64(0) if r[0] == Float64(0) else r[0]
-            var mx = Float64(0) if r[1] == Float64(0) else r[1]
-            Self._le_bytes(UInt64(mn.to_bits()), 8, min_out)
-            Self._le_bytes(UInt64(mx.to_bits()), 8, max_out)
-            return True
+            return Self._float_stats[width=8](
+                col.as_float64(), min_out, max_out
+            )
         elif vt == dt.bool_:
             ref b = col.as_bool()
             var seen = False
@@ -292,9 +243,9 @@ struct ColumnWriter(Movable):
                         hi = v.copy()
                         seen = True
                     else:
-                        if Self._bytes_less(v.as_bytes(), lo.as_bytes()):
+                        if LittleEndian.bytes_less(v.as_bytes(), lo.as_bytes()):
                             lo = v.copy()
-                        if Self._bytes_less(hi.as_bytes(), v.as_bytes()):
+                        if LittleEndian.bytes_less(hi.as_bytes(), v.as_bytes()):
                             hi = v.copy()
             if not seen:
                 return False
@@ -402,7 +353,7 @@ struct FileWriter(Movable):
     ) raises -> RowGroup:
         var leaf_arrays = List[AnyArray]()
         for ci in range(len(nodes)):
-            nodes[ci].flatten(batch.columns[ci], leaf_arrays)
+            nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_arrays)
 
         var columns = List[ColumnChunk]()
         var total = 0

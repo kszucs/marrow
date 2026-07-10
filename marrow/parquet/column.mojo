@@ -924,7 +924,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         ref vt = leaf.dtype
         # a value slot exists at/above the leaf's repetition floor (the innermost
         # enclosing list's element level); the value is present at max_def.
-        var f = leaf.rep_floor
+        var f = leaf.slot_def
         var md = leaf.max_def
         if vt == dt.int32:
             return self._drive_primitive[dt.Int32Type, DType.int32](

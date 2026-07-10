@@ -78,6 +78,21 @@ struct LittleEndian:
         out.append(UInt8((v >> 24) & 0xFF))
 
     @staticmethod
+    def put_le(mut out: List[UInt8], bits: UInt64, width: Int):
+        """Append the low `width` bytes of `bits`, least-significant first."""
+        for i in range(width):
+            out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
+
+    @staticmethod
+    def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
+        var n = min(len(a), len(b))
+        for i in range(n):
+            if a[i] != b[i]:
+                return a[i] < b[i]
+        return len(a) < len(b)
+
+    @staticmethod
     def put_varint(mut out: List[UInt8], var v: UInt64):
         """Append `v` as an unsigned LEB128 varint."""
         while True:
