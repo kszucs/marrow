@@ -562,6 +562,55 @@ struct SchemaMapping(Movable):
         raise Error("parquet: unsupported physical type " + String(pt.code))
 
     @staticmethod
+    def _group_element(
+        name: String,
+        repetition: Repetition,
+        num_children: Int,
+        converted: ConvertedType = ConvertedType.NONE,
+        logical: LogicalType = LogicalType.NONE,
+    ) -> SchemaElement:
+        """A group `SchemaElement` (a non-leaf node) for the write path: sets the
+        repetition, child count, and optional LIST/MAP annotation."""
+        var el = SchemaElement()
+        el.name = name
+        el.repetition_type = repetition
+        el.num_children = num_children
+        el.converted_type = converted
+        el.logical_type = logical
+        return el^
+
+    @staticmethod
+    def _list_node(
+        name: String,
+        var elem: SchemaNode,
+        d: Int,
+        rep_base: Int,
+        slot_def: Int,
+        nullable: Bool,
+    ) -> SchemaNode:
+        """Assemble the `NODE_LIST` node from its (parsed/emitted) element node —
+        shared by read (`_parse_node`) and write (`_emit_field`) so the list's
+        Dremel geometry lives in one place. `d` is the list's own definition
+        level; its repeated middle group sits at `rep_base + 1` / `d + 1`, so a
+        slot holds an element at `d + 1` and the list itself is non-null at `d`."""
+        var children = List[SchemaNode]()
+        children.append(elem^)
+        var item: dt.AnyDataType = dt.list_(children[0].field.dtype.copy())
+        return SchemaNode(
+            NODE_LIST,
+            dt.Field(name, item^, nullable),
+            children^,
+            -1,
+            NodeGeom(
+                non_null_def=d,
+                optional=nullable,
+                rep_level=rep_base + 1,
+                child_def=d + 1,
+                slot_def=slot_def,
+            ),
+        )
+
+    @staticmethod
     def _map_node(
         name: String,
         var key_node: SchemaNode,
@@ -696,9 +745,7 @@ struct SchemaMapping(Movable):
         ):
             # LIST = optional group(LIST) { repeated group { <element> } }. Skip
             # the repeated middle group (adds one def + one rep level) and parse
-            # the element as this list's single child. The list holds an element
-            # when the leaf def reaches `d + 1` (repeated group present); the list
-            # itself is non-null at `d` (its own optional level).
+            # the element as this list's single child.
             idx += 1
             var elem = self._parse_node(
                 idx,
@@ -707,28 +754,7 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
                 under_optional=under_optional,
             )
-            var item: dt.AnyDataType = dt.list_(elem.field.dtype.copy())
-            var children = List[SchemaNode]()
-            children.append(elem^)
-            # rep_level = the repeated group's level (r + 1); slot_def =
-            # `slot_def`, the innermost *enclosing list's* element floor (0 at
-            # top / under a struct) — an optional struct being null still leaves a
-            # row-slot, so the list gets a (null) entry there. With every
-            # threshold on the node, the scan needs nothing from its parent, so
-            # any nesting depth composes by recursion.
-            return SchemaNode(
-                NODE_LIST,
-                dt.Field(el.name, item^, nullable),
-                children^,
-                -1,
-                NodeGeom(
-                    non_null_def=d,
-                    optional=rep == Repetition.OPTIONAL,
-                    rep_level=r + 1,
-                    child_def=d + 1,
-                    slot_def=slot_def,
-                ),
-            )
+            return Self._list_node(el.name, elem^, d, r, slot_def, nullable)
 
         # plain group -> Arrow struct. A nullable struct is reconstructed from its
         # leaves' def levels (below `d` -> struct null), so its descendants must
@@ -804,22 +830,22 @@ struct SchemaMapping(Movable):
         var nullable = field.nullable
         var d = def_base + (1 if nullable else 0)
 
+        var group_rep = Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+
         if field.dtype.is_list() or field.dtype.is_large_list():
             # LIST = <opt|req> group(LIST) { repeated group list { <element> } }.
-            var grp = SchemaElement()
-            grp.name = field.name
-            grp.repetition_type = (
-                Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+            self.elements.append(
+                Self._group_element(
+                    field.name,
+                    group_rep,
+                    1,
+                    ConvertedType.LIST,
+                    LogicalType.LIST,
+                )
             )
-            grp.num_children = 1
-            grp.converted_type = ConvertedType.LIST
-            grp.logical_type = LogicalType.LIST
-            self.elements.append(grp^)
-            var mid = SchemaElement()
-            mid.name = "list"
-            mid.repetition_type = Repetition.REPEATED
-            mid.num_children = 1
-            self.elements.append(mid^)
+            self.elements.append(
+                Self._group_element("list", Repetition.REPEATED, 1)
+            )
 
             var elem_field = (
                 field.dtype.as_list().value_field().copy() if field.dtype.is_list() else field.dtype.as_large_list().value_field().copy()
@@ -831,41 +857,20 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
                 under_optional=under_optional,
             )
-            var item: dt.AnyDataType = dt.list_(elem.field.dtype.copy())
-            var children = List[SchemaNode]()
-            children.append(elem^)
-            return SchemaNode(
-                NODE_LIST,
-                dt.Field(field.name, item^, nullable),
-                children^,
-                -1,
-                NodeGeom(
-                    non_null_def=d,
-                    optional=nullable,
-                    rep_level=rep_base + 1,
-                    child_def=d + 1,
-                    slot_def=slot_def,
-                ),
-            )
+            return Self._list_node(field.name, elem^, d, rep_base, slot_def, nullable)
 
         if field.dtype.is_map():
             # MAP = <opt|req> group(MAP) { repeated group key_value {
             #   required key; <value> } }.
             ref mt = field.dtype.as_map()
-            var grp = SchemaElement()
-            grp.name = field.name
-            grp.repetition_type = (
-                Repetition.OPTIONAL if nullable else Repetition.REQUIRED
+            self.elements.append(
+                Self._group_element(
+                    field.name, group_rep, 1, ConvertedType.MAP, LogicalType.MAP
+                )
             )
-            grp.num_children = 1
-            grp.converted_type = ConvertedType.MAP
-            grp.logical_type = LogicalType.MAP
-            self.elements.append(grp^)
-            var kv = SchemaElement()
-            kv.name = "key_value"
-            kv.repetition_type = Repetition.REPEATED
-            kv.num_children = 2
-            self.elements.append(kv^)
+            self.elements.append(
+                Self._group_element("key_value", Repetition.REPEATED, 2)
+            )
 
             var key_node = self._emit_field(
                 mt.key_field(),
@@ -889,11 +894,11 @@ struct SchemaMapping(Movable):
             # Emitted as a REQUIRED group (struct-level nulls on write TODO), so
             # the children inherit `def_base` unchanged.
             ref st = field.dtype.as_struct()
-            var el = SchemaElement()
-            el.name = field.name
-            el.repetition_type = Repetition.REQUIRED
-            el.num_children = len(st.fields)
-            self.elements.append(el^)
+            self.elements.append(
+                Self._group_element(
+                    field.name, Repetition.REQUIRED, len(st.fields)
+                )
+            )
             var child_nodes = List[SchemaNode]()
             for ref cf in st.fields:
                 child_nodes.append(

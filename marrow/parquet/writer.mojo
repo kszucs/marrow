@@ -347,26 +347,6 @@ struct ColumnWriter(Movable):
         return cc^
 
     def write(
-        self, col: AnyArray, mut out: List[UInt8], mut codecs: CompressionLibs
-    ) raises -> ColumnChunk:
-        """Write one flat leaf column chunk: 0/1 definition levels (no
-        repetition), values, stats — the fast path for non-nested columns."""
-        var n = col.length()
-        var null_count = 0
-        var def_bytes = self._def_levels(col, null_count)
-        return self._emit_page(
-            col,
-            List[UInt8](),
-            def_bytes^,
-            n,
-            n,
-            null_count,
-            [self.leaf.name],
-            out,
-            codecs,
-        )
-
-    def write_leveled(
         self,
         values: AnyArray,
         def_levels: List[Int32],
@@ -375,19 +355,30 @@ struct ColumnWriter(Movable):
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
     ) raises -> ColumnChunk:
-        """Write one leveled (list/map, or nested) leaf column chunk from
-        pre-shredded rep/def levels + the flat leaf values (PLAIN encoders skip
-        value nulls). `def_levels`/`rep_levels` come from `SchemaNode.shred_levels`;
-        `path` is the dotted schema path this leaf occupies."""
+        """Write one leaf column chunk. A flat column passes empty `def_levels`/
+        `rep_levels` and its 0/1 definition levels are derived here (the fast path
+        that never materialises rep levels); a leveled (list/map/nested) column
+        passes the rep/def levels pre-shredded by `SchemaNode.shred_levels`.
+        Values are PLAIN-encoded with nulls skipped; the page + `ColumnMetaData`
+        go through `_emit_page`."""
         var max_def = self.leaf.max_def
         var max_rep = self.leaf.max_rep
-        var num_values = len(def_levels) if max_def >= 1 else values.length()
-        var num_present = num_values
-        if max_def >= 1:
-            num_present = 0
-            for d in def_levels:
-                if Int(d) == max_def:
-                    num_present += 1
+
+        if max_rep == 0 and len(def_levels) == 0:
+            # Flat: derive 0/1 definition levels from the array's own validity.
+            var n = values.length()
+            var null_count = 0
+            var def_bytes = self._def_levels(values, null_count)
+            return self._emit_page(
+                values, List[UInt8](), def_bytes^, n, n, null_count, path, out, codecs
+            )
+
+        # Leveled: pre-shredded rep/def levels (present values = def == max_def).
+        var num_values = len(def_levels)
+        var num_present = 0
+        for d in def_levels:
+            if Int(d) == max_def:
+                num_present += 1
         var num_rows = num_values
         if max_rep >= 1:
             num_rows = 0
@@ -445,42 +436,34 @@ struct FileWriter(Movable):
             var leaf_values = List[AnyArray]()
             nodes[ci].collect_leaf_arrays(batch.columns[ci], leaf_values)
 
+            # Per-leaf rep/def levels: empty for a flat column (each leaf derives
+            # its own 0/1 def levels), Dremel-shredded when the column contains a
+            # repeated (list/map) group.
+            var defs = List[List[Int32]]()
+            var reps = List[List[Int32]]()
+            for _ in range(len(self.leaves)):
+                defs.append(List[Int32]())
+                reps.append(List[Int32]())
             if nodes[ci].contains_repeated():
-                # Dremel-shred the whole column into per-leaf rep/def levels.
-                var defs = List[List[Int32]]()
-                var reps = List[List[Int32]]()
-                for _ in range(len(self.leaves)):
-                    defs.append(List[Int32]())
-                    reps.append(List[Int32]())
                 nodes[ci].shred_levels(
                     batch.columns[ci], self.leaves, defs, reps
                 )
-                for k in range(len(col_leaves)):
-                    var gi = col_leaves[k]
-                    var ccw = ColumnWriter(
-                        self.leaves[gi].copy(), self.compression, self.version
-                    )
-                    var cc = ccw.write_leveled(
-                        leaf_values[k],
-                        defs[gi],
-                        reps[gi],
-                        [self.leaves[gi].name],
-                        self.out,
-                        self.codecs,
-                    )
-                    total += cc.meta_data.total_uncompressed_size
-                    columns.append(cc^)
-            else:
-                for k in range(len(col_leaves)):
-                    var gi = col_leaves[k]
-                    var ccw = ColumnWriter(
-                        self.leaves[gi].copy(), self.compression, self.version
-                    )
-                    var cc = ccw.write(
-                        leaf_values[k], self.out, self.codecs
-                    )
-                    total += cc.meta_data.total_uncompressed_size
-                    columns.append(cc^)
+
+            for k in range(len(col_leaves)):
+                var gi = col_leaves[k]
+                var ccw = ColumnWriter(
+                    self.leaves[gi].copy(), self.compression, self.version
+                )
+                var cc = ccw.write(
+                    leaf_values[k],
+                    defs[gi],
+                    reps[gi],
+                    [self.leaves[gi].name],
+                    self.out,
+                    self.codecs,
+                )
+                total += cc.meta_data.total_uncompressed_size
+                columns.append(cc^)
 
         var rg = RowGroup()
         rg.total_byte_size = total
