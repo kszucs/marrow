@@ -304,6 +304,10 @@ struct FixedSizeBinaryScalar(Scalar):
     def type(self) -> AnyDataType:
         return FixedSizeBinaryType(self._byte_width).to_any()
 
+    def value(ref self) -> ref[self._value] List[UInt8]:
+        """The `byte_width` value bytes (empty for a null scalar)."""
+        return self._value
+
     def is_valid(self) -> Bool:
         return self._is_valid
 

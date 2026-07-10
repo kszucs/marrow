@@ -40,6 +40,22 @@ comptime TC_MAP: UInt8 = 11
 comptime TC_STRUCT: UInt8 = 12
 
 
+struct FieldHeader(Copyable, Movable):
+    """Iteration state for one Thrift struct's fields: the current field's `id`
+    and wire `type`, plus the running `last` id the compact header-delta decoding
+    needs. One instance per struct frame — nested structs each keep their own.
+    """
+
+    var id: Int
+    var type: UInt8
+    var last: Int
+
+    def __init__(out self):
+        self.id = 0
+        self.type = TC_STOP
+        self.last = 0
+
+
 struct Zigzag:
     """Signed <-> unsigned mapping so small-magnitude signed integers stay small
     as varints. Stateless; a namespace of static methods."""
@@ -150,6 +166,23 @@ struct CompactReader[o: Origin[mut=False]](Movable):
             field_id = last_field_id + delta
         return (field_type, field_id)
 
+    def next_field(mut self, mut field: FieldHeader) raises -> Bool:
+        """Advance to the next field of the current struct, driving the
+        `while r.next_field(f):` loop that every `read` body shares.
+
+        Returns `False` at the STOP marker (ending the loop). On `True`,
+        `field.id` / `field.type` describe the field the body must consume;
+        the running `field.last` is tracked internally. Fields the body does
+        not recognise still need an explicit `r.skip(field.type)`.
+        """
+        var ftype, fid = self.read_field_header(field.last)
+        if ftype == TC_STOP:
+            return False
+        field.last = fid
+        field.id = fid
+        field.type = ftype
+        return True
+
     def read_list_header(mut self) raises -> Tuple[UInt8, Int]:
         """Read a list/set header, returning `(element_type, size)`."""
         var b = self._u8()
@@ -189,13 +222,9 @@ struct CompactReader[o: Origin[mut=False]](Movable):
                     self.skip(ktype)
                     self.skip(vtype)
         elif field_type == TC_STRUCT:
-            var last = 0
-            while True:
-                var ftype, fid = self.read_field_header(last)
-                if ftype == TC_STOP:
-                    break
-                last = fid
-                self.skip(ftype)
+            var f = FieldHeader()
+            while self.next_field(f):
+                self.skip(f.type)
         else:
             raise Error("thrift: unknown field type " + String(field_type))
 
@@ -284,6 +313,7 @@ comptime PARQUET_MAGIC: List[UInt8] = [0x50, 0x41, 0x52, 0x31]  # "PAR1"
 # ---------------------------------------------------------------------------
 
 
+@fieldwise_init
 struct PhysicalType(Equatable, ImplicitlyCopyable, Movable):
     """Parquet `Type` — `SchemaElement.type` / `ColumnMetaData.type`."""
 
@@ -299,16 +329,8 @@ struct PhysicalType(Equatable, ImplicitlyCopyable, Movable):
     comptime BYTE_ARRAY = Self(6)
     comptime FIXED_LEN_BYTE_ARRAY = Self(7)
 
-    def __init__(out self, code: Int):
-        self.code = code
 
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
-
-
+@fieldwise_init
 struct Repetition(Equatable, ImplicitlyCopyable, Movable):
     """Parquet `FieldRepetitionType` — `NONE` (-1) marks the root group."""
 
@@ -319,16 +341,8 @@ struct Repetition(Equatable, ImplicitlyCopyable, Movable):
     comptime OPTIONAL = Self(1)
     comptime REPEATED = Self(2)
 
-    def __init__(out self, code: Int):
-        self.code = code
 
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
-
-
+@fieldwise_init
 struct ConvertedType(Equatable, ImplicitlyCopyable, Movable):
     """Parquet `ConvertedType` (legacy logical annotation); `NONE` = absent."""
 
@@ -337,6 +351,7 @@ struct ConvertedType(Equatable, ImplicitlyCopyable, Movable):
     comptime NONE = Self(-1)
     comptime UTF8 = Self(0)
     comptime MAP = Self(1)
+    comptime MAP_KEY_VALUE = Self(2)  # legacy map annotation (read tolerance)
     comptime LIST = Self(3)
     comptime DECIMAL = Self(5)
     comptime DATE = Self(6)
@@ -353,16 +368,8 @@ struct ConvertedType(Equatable, ImplicitlyCopyable, Movable):
     comptime INT_32 = Self(17)
     comptime INT_64 = Self(18)
 
-    def __init__(out self, code: Int):
-        self.code = code
 
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
-
-
+@fieldwise_init
 struct LogicalType(Equatable, ImplicitlyCopyable, Movable):
     """Parquet `LogicalType` union member id; `NONE` = absent."""
 
@@ -378,16 +385,8 @@ struct LogicalType(Equatable, ImplicitlyCopyable, Movable):
     comptime TIMESTAMP = Self(8)
     comptime INTEGER = Self(10)
 
-    def __init__(out self, code: Int):
-        self.code = code
 
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
-
-
+@fieldwise_init
 struct PageType(Equatable, ImplicitlyCopyable, Movable):
     """Parquet `PageType`."""
 
@@ -398,15 +397,6 @@ struct PageType(Equatable, ImplicitlyCopyable, Movable):
     comptime INDEX = Self(1)
     comptime DICTIONARY = Self(2)
     comptime DATA_V2 = Self(3)
-
-    def __init__(out self, code: Int):
-        self.code = code
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
 
 
 # ---------------------------------------------------------------------------
@@ -445,34 +435,30 @@ struct SchemaElement(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.type = PhysicalType(Int(r.read_i32()))
-            elif fid == 2:
+            elif f.id == 2:
                 out.type_length = Int(r.read_i32())
-            elif fid == 3:
+            elif f.id == 3:
                 out.repetition_type = Repetition(Int(r.read_i32()))
-            elif fid == 4:
+            elif f.id == 4:
                 out.name = r.read_string()
-            elif fid == 5:
+            elif f.id == 5:
                 out.num_children = Int(r.read_i32())
-            elif fid == 6:
+            elif f.id == 6:
                 out.converted_type = ConvertedType(Int(r.read_i32()))
-            elif fid == 7:
+            elif f.id == 7:
                 out.scale = Int(r.read_i32())
-            elif fid == 8:
+            elif f.id == 8:
                 out.precision = Int(r.read_i32())
-            elif fid == 9:
+            elif f.id == 9:
                 out.field_id = Int(r.read_i32())
-            elif fid == 10:
+            elif f.id == 10:
                 out._read_logical_type(r)
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def _read_logical_type[
@@ -481,40 +467,28 @@ struct SchemaElement(Copyable, Movable):
         """Parse the `LogicalType` union into `logical_type`, and for TIMESTAMP /
         TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`.
         """
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            self.logical_type = LogicalType(fid)
+        var f = FieldHeader()
+        while r.next_field(f):
+            self.logical_type = LogicalType(f.id)
             if (
                 self.logical_type == LogicalType.TIMESTAMP
                 or self.logical_type == LogicalType.TIME
             ):
                 # TimestampType/TimeType = {1: isAdjustedToUTC, 2: TimeUnit unit}
-                var l2 = 0
-                while True:
-                    var ft2, fid2 = r.read_field_header(l2)
-                    if ft2 == TC_STOP:
-                        break
-                    l2 = fid2
-                    if fid2 == 1:
-                        self.logical_utc = r.read_bool(ft2)
-                    elif fid2 == 2:
+                var f2 = FieldHeader()
+                while r.next_field(f2):
+                    if f2.id == 1:
+                        self.logical_utc = r.read_bool(f2.type)
+                    elif f2.id == 2:
                         # TimeUnit union: the single set field id is the unit
-                        var l3 = 0
-                        while True:
-                            var ft3, fid3 = r.read_field_header(l3)
-                            if ft3 == TC_STOP:
-                                break
-                            l3 = fid3
-                            self.logical_unit = fid3
-                            r.skip(ft3)
+                        var f3 = FieldHeader()
+                        while r.next_field(f3):
+                            self.logical_unit = f3.id
+                            r.skip(f3.type)
                     else:
-                        r.skip(ft2)
+                        r.skip(f2.type)
             else:
-                r.skip(ftype)
+                r.skip(f.type)
 
     def write(self, mut w: CompactWriter):
         var last = 0
@@ -535,7 +509,41 @@ struct SchemaElement(Copyable, Movable):
         if self.converted_type != ConvertedType.NONE:
             last = w.write_field_begin(TC_I32, 6, last)
             w.write_i32(Int32(self.converted_type.code))
+        if self.logical_type == LogicalType.DECIMAL:
+            last = w.write_field_begin(TC_I32, 7, last)
+            w.write_i32(Int32(self.scale))
+            last = w.write_field_begin(TC_I32, 8, last)
+            w.write_i32(Int32(self.precision))
+        if self.logical_type != LogicalType.NONE:
+            last = w.write_field_begin(TC_STRUCT, 10, last)
+            self._write_logical_type(w)
         w.write_field_stop()
+
+    def _write_logical_type(self, mut w: CompactWriter):
+        """Serialize the `LogicalType` union (field 10): one member field whose
+        id is the logical type, holding that member's struct. TIME/TIMESTAMP carry
+        `{isAdjustedToUTC, unit}` (unit a `TimeUnit` union), DECIMAL carries
+        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs."""
+        _ = w.write_field_begin(TC_STRUCT, self.logical_type.code, 0)
+        if (
+            self.logical_type == LogicalType.TIME
+            or self.logical_type == LogicalType.TIMESTAMP
+        ):
+            var last = w.write_bool_field(self.logical_utc, 1, 0)
+            _ = w.write_field_begin(TC_STRUCT, 2, last)  # unit: TimeUnit union
+            _ = w.write_field_begin(TC_STRUCT, self.logical_unit, 0)
+            w.write_field_stop()  # close the TimeUnit member (empty struct)
+            w.write_field_stop()  # close the TimeUnit union
+            w.write_field_stop()  # close the TimeType / TimestampType struct
+        elif self.logical_type == LogicalType.DECIMAL:
+            var last = w.write_field_begin(TC_I32, 1, 0)
+            w.write_i32(Int32(self.scale))
+            last = w.write_field_begin(TC_I32, 2, last)
+            w.write_i32(Int32(self.precision))
+            w.write_field_stop()  # close the DecimalType struct
+        else:
+            w.write_field_stop()  # close the (empty) member struct
+        w.write_field_stop()  # close the LogicalType union struct
 
 
 # ---------------------------------------------------------------------------
@@ -558,22 +566,18 @@ struct DataPageHeader(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.num_values = Int(r.read_i32())
-            elif fid == 2:
+            elif f.id == 2:
                 out.encoding = Encoding(Int(r.read_i32()))
-            elif fid == 3:
+            elif f.id == 3:
                 out.definition_level_encoding = Encoding(Int(r.read_i32()))
-            elif fid == 4:
+            elif f.id == 4:
                 out.repetition_level_encoding = Encoding(Int(r.read_i32()))
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -610,28 +614,24 @@ struct DataPageHeaderV2(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.num_values = Int(r.read_i32())
-            elif fid == 2:
+            elif f.id == 2:
                 out.num_nulls = Int(r.read_i32())
-            elif fid == 3:
+            elif f.id == 3:
                 out.num_rows = Int(r.read_i32())
-            elif fid == 4:
+            elif f.id == 4:
                 out.encoding = Encoding(Int(r.read_i32()))
-            elif fid == 5:
+            elif f.id == 5:
                 out.definition_levels_byte_length = Int(r.read_i32())
-            elif fid == 6:
+            elif f.id == 6:
                 out.repetition_levels_byte_length = Int(r.read_i32())
-            elif fid == 7:
-                out.is_compressed = r.read_bool(ftype)
+            elif f.id == 7:
+                out.is_compressed = r.read_bool(f.type)
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -663,18 +663,14 @@ struct DictionaryPageHeader(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.num_values = Int(r.read_i32())
-            elif fid == 2:
+            elif f.id == 2:
                 out.encoding = Encoding(Int(r.read_i32()))
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -705,26 +701,22 @@ struct PageHeader(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.type = PageType(Int(r.read_i32()))
-            elif fid == 2:
+            elif f.id == 2:
                 out.uncompressed_page_size = Int(r.read_i32())
-            elif fid == 3:
+            elif f.id == 3:
                 out.compressed_page_size = Int(r.read_i32())
-            elif fid == 5:
+            elif f.id == 5:
                 out.data_page_header = DataPageHeader.read(r)
-            elif fid == 7:
+            elif f.id == 7:
                 out.dictionary_page_header = DictionaryPageHeader.read(r)
-            elif fid == 8:
+            elif f.id == 8:
                 out.data_page_header_v2 = DataPageHeaderV2.read(r)
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -765,16 +757,20 @@ struct PageHeader(Copyable, Movable):
 
     @staticmethod
     def data_page(
-        uncompressed_size: Int, compressed_size: Int, num_values: Int
+        uncompressed_size: Int,
+        compressed_size: Int,
+        num_values: Int,
+        encoding: Encoding = Encoding.PLAIN,
     ) -> Self:
-        """Build a v1 data-page header (PLAIN values, RLE levels)."""
+        """Build a v1 data-page header. `encoding` is the value encoding (PLAIN,
+        RLE_DICTIONARY, or a DELTA_* variant); levels are always RLE."""
         var ph = Self()
         ph.type = PageType.DATA
         ph.uncompressed_page_size = uncompressed_size
         ph.compressed_page_size = compressed_size
         var dph = DataPageHeader()
         dph.num_values = num_values
-        dph.encoding = Encoding.PLAIN
+        dph.encoding = encoding
         dph.definition_level_encoding = Encoding.RLE
         dph.repetition_level_encoding = Encoding.RLE
         ph.data_page_header = dph^
@@ -789,9 +785,11 @@ struct PageHeader(Copyable, Movable):
         num_rows: Int,
         def_levels_byte_length: Int,
         is_compressed: Bool,
+        rep_levels_byte_length: Int = 0,
+        encoding: Encoding = Encoding.PLAIN,
     ) -> Self:
-        """Build a v2 data-page header (PLAIN values; RLE levels stored
-        uncompressed ahead of the — optionally compressed — values)."""
+        """Build a v2 data-page header (levels stored uncompressed ahead of the —
+        optionally compressed — values). `encoding` is the value encoding."""
         var ph = Self()
         ph.type = PageType.DATA_V2
         ph.uncompressed_page_size = uncompressed_size
@@ -800,11 +798,26 @@ struct PageHeader(Copyable, Movable):
         dph.num_values = num_values
         dph.num_nulls = num_nulls
         dph.num_rows = num_rows
-        dph.encoding = Encoding.PLAIN
+        dph.encoding = encoding
         dph.definition_levels_byte_length = def_levels_byte_length
-        dph.repetition_levels_byte_length = 0
+        dph.repetition_levels_byte_length = rep_levels_byte_length
         dph.is_compressed = is_compressed
         ph.data_page_header_v2 = dph^
+        return ph^
+
+    @staticmethod
+    def dictionary_page(
+        uncompressed_size: Int, compressed_size: Int, num_values: Int
+    ) -> Self:
+        """Build a dictionary-page header (PLAIN-encoded distinct values)."""
+        var ph = Self()
+        ph.type = PageType.DICTIONARY
+        ph.uncompressed_page_size = uncompressed_size
+        ph.compressed_page_size = compressed_size
+        var dph = DictionaryPageHeader()
+        dph.num_values = num_values
+        dph.encoding = Encoding.PLAIN
+        ph.dictionary_page_header = dph^
         return ph^
 
 
@@ -822,7 +835,13 @@ struct ColumnMetaData(Copyable, Movable):
     var total_compressed_size: Int
     var data_page_offset: Int
     var dictionary_page_offset: Int  # -1 if absent
+    var encodings: List[Int]  # Encoding codes actually used in the chunk
     var null_count: Int  # -1 if unknown; written as Statistics.null_count
+    var has_min_max: Bool  # Statistics.min_value/max_value present
+    var min_value: List[
+        UInt8
+    ]  # PLAIN-encoded min (no length prefix for BYTE_ARRAY)
+    var max_value: List[UInt8]  # PLAIN-encoded max
 
     def __init__(out self):
         self.type = -1
@@ -833,49 +852,76 @@ struct ColumnMetaData(Copyable, Movable):
         self.total_compressed_size = 0
         self.data_page_offset = 0
         self.dictionary_page_offset = -1
+        self.encodings = [Encoding.RLE.code, Encoding.PLAIN.code]
         self.null_count = -1
+        self.has_min_max = False
+        self.min_value = List[UInt8]()
+        self.max_value = List[UInt8]()
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 3:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 3:
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.path_in_schema.append(r.read_string())
-            elif fid == 1:
+            elif f.id == 1:
                 out.type = Int(r.read_i32())
-            elif fid == 4:
+            elif f.id == 4:
                 out.codec = Int(r.read_i32())
-            elif fid == 5:
+            elif f.id == 5:
                 out.num_values = Int(r.read_i64())
-            elif fid == 6:
+            elif f.id == 6:
                 out.total_uncompressed_size = Int(r.read_i64())
-            elif fid == 7:
+            elif f.id == 7:
                 out.total_compressed_size = Int(r.read_i64())
-            elif fid == 9:
+            elif f.id == 9:
                 out.data_page_offset = Int(r.read_i64())
-            elif fid == 11:
+            elif f.id == 11:
                 out.dictionary_page_offset = Int(r.read_i64())
+            elif f.id == 12:
+                out._read_statistics(r)
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
+
+    def _read_statistics[
+        o: Origin[mut=False]
+    ](mut self, mut r: CompactReader[o]) raises:
+        """Parse the nested Statistics struct, keeping null_count and the modern
+        min_value/max_value (fields 6/5). The deprecated min/max (fields 2/1) are
+        skipped — modern writers populate min_value/max_value."""
+        var f = FieldHeader()
+        var seen_min = False
+        var seen_max = False
+        while r.next_field(f):
+            if f.id == 3:
+                self.null_count = Int(r.read_i64())
+            elif f.id == 5:
+                var bytes = r.read_bytes()
+                self.max_value = List[UInt8](Span(bytes))
+                seen_max = True
+            elif f.id == 6:
+                var bytes = r.read_bytes()
+                self.min_value = List[UInt8](Span(bytes))
+                seen_min = True
+            else:
+                r.skip(f.type)
+        # min/max are only usable when both bounds are present.
+        self.has_min_max = seen_min and seen_max
 
     def write(self, mut w: CompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.type))
-        # encodings: list<Encoding> = [RLE levels, PLAIN values] — the writer
-        # only emits PLAIN data pages with RLE definition levels.
+        # encodings: list<Encoding> actually used — RLE levels plus the value
+        # encoding(s) (PLAIN, or RLE_DICTIONARY + PLAIN for a dictionary chunk).
         last = w.write_field_begin(TC_LIST, 2, last)
-        w.write_list_begin(TC_I32, 2)
-        w.write_i32(Int32(Encoding.RLE.code))
-        w.write_i32(Int32(Encoding.PLAIN.code))
+        w.write_list_begin(TC_I32, len(self.encodings))
+        for e in self.encodings:
+            w.write_i32(Int32(e))
         last = w.write_field_begin(TC_LIST, 3, last)
         w.write_list_begin(TC_BINARY, len(self.path_in_schema))
         for p in self.path_in_schema:
@@ -890,38 +936,172 @@ struct ColumnMetaData(Copyable, Movable):
         w.write_i64(Int64(self.total_compressed_size))
         last = w.write_field_begin(TC_I64, 9, last)
         w.write_i64(Int64(self.data_page_offset))
-        if self.null_count >= 0:
-            # Statistics (field 12) with only null_count (field 3) populated
+        if self.dictionary_page_offset >= 0:
+            last = w.write_field_begin(TC_I64, 11, last)
+            w.write_i64(Int64(self.dictionary_page_offset))
+        if self.null_count >= 0 or self.has_min_max:
+            # Statistics (field 12): null_count (3), and the modern
+            # max_value (5) / min_value (6) with their exactness flags (7/8).
+            # Fields are written in ascending id order per the compact protocol.
             last = w.write_field_begin(TC_STRUCT, 12, last)
-            _ = w.write_field_begin(TC_I64, 3, 0)
-            w.write_i64(Int64(self.null_count))
+            var slast = 0
+            if self.null_count >= 0:
+                slast = w.write_field_begin(TC_I64, 3, slast)
+                w.write_i64(Int64(self.null_count))
+            if self.has_min_max:
+                slast = w.write_field_begin(TC_BINARY, 5, slast)
+                w.write_bytes(Span(self.max_value))
+                slast = w.write_field_begin(TC_BINARY, 6, slast)
+                w.write_bytes(Span(self.min_value))
+                slast = w.write_bool_field(True, 7, slast)  # is_max_value_exact
+                slast = w.write_bool_field(True, 8, slast)  # is_min_value_exact
             w.write_field_stop()
         w.write_field_stop()
+
+
+# ---------------------------------------------------------------------------
+# Page index — OffsetIndex / ColumnIndex, stored near the footer and pointed to
+# by ColumnChunk.{offset,column}_index_offset. Read on demand (selective scans
+# only); a full-row-group scan never touches them.
+# ---------------------------------------------------------------------------
+
+
+struct PageLocation(Copyable, Movable):
+    """Locates one data page: byte `offset` in the file, `compressed_page_size`
+    (header included), and `first_row_index` (row-group-relative, on a row
+    boundary)."""
+
+    var offset: Int
+    var compressed_page_size: Int
+    var first_row_index: Int
+
+    def __init__(out self):
+        self.offset = 0
+        self.compressed_page_size = 0
+        self.first_row_index = 0
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                out.offset = Int(r.read_i64())
+            elif f.id == 2:
+                out.compressed_page_size = Int(r.read_i32())
+            elif f.id == 3:
+                out.first_row_index = Int(r.read_i64())
+            else:
+                r.skip(f.type)
+        return out^
+
+
+struct OffsetIndex(Copyable, Movable):
+    """Per-page locations for one column chunk (field 1 = list<PageLocation>).
+    """
+
+    var page_locations: List[PageLocation]
+
+    def __init__(out self):
+        self.page_locations = List[PageLocation]()
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.page_locations.append(PageLocation.read(r))
+            else:
+                r.skip(f.type)
+        return out^
+
+
+struct ColumnIndex(Copyable, Movable):
+    """Per-page statistics for one column chunk: `null_pages[i]` (page holds only
+    nulls → its min/max are empty), the PLAIN-encoded `min_values`/`max_values`
+    bounds, `boundary_order` (0 UNORDERED, 1 ASCENDING, 2 DESCENDING), and the
+    optional per-page `null_counts`. Bounds follow the column's ColumnOrder."""
+
+    var null_pages: List[Bool]
+    var min_values: List[List[UInt8]]
+    var max_values: List[List[UInt8]]
+    var boundary_order: Int
+    var null_counts: List[Int]
+
+    def __init__(out self):
+        self.null_pages = List[Bool]()
+        self.min_values = List[List[UInt8]]()
+        self.max_values = List[List[UInt8]]()
+        self.boundary_order = 0
+        self.null_counts = List[Int]()
+
+    @staticmethod
+    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+        var out = Self()
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    # list bool elements: 1 = true, 2 = false (compact protocol)
+                    out.null_pages.append(Int(r.read_byte()) == 1)
+            elif f.id == 2:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.min_values.append(List[UInt8](Span(r.read_bytes())))
+            elif f.id == 3:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.max_values.append(List[UInt8](Span(r.read_bytes())))
+            elif f.id == 4:
+                out.boundary_order = Int(r.read_i32())
+            elif f.id == 5:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.null_counts.append(Int(r.read_i64()))
+            else:
+                r.skip(f.type)
+        return out^
 
 
 struct ColumnChunk(Copyable, Movable):
     var file_offset: Int
     var meta_data: ColumnMetaData
+    var offset_index_offset: Int  # -1 if absent
+    var offset_index_length: Int
+    var column_index_offset: Int  # -1 if absent
+    var column_index_length: Int
 
     def __init__(out self):
         self.file_offset = 0
         self.meta_data = ColumnMetaData()
+        self.offset_index_offset = -1
+        self.offset_index_length = 0
+        self.column_index_offset = -1
+        self.column_index_length = 0
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 2:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 2:
                 out.file_offset = Int(r.read_i64())
-            elif fid == 3:
+            elif f.id == 3:
                 out.meta_data = ColumnMetaData.read(r)
+            elif f.id == 4:
+                out.offset_index_offset = Int(r.read_i64())
+            elif f.id == 5:
+                out.offset_index_length = Int(r.read_i32())
+            elif f.id == 6:
+                out.column_index_offset = Int(r.read_i64())
+            elif f.id == 7:
+                out.column_index_length = Int(r.read_i32())
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -946,22 +1126,18 @@ struct RowGroup(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.columns.append(ColumnChunk.read(r))
-            elif fid == 2:
+            elif f.id == 2:
                 out.total_byte_size = Int(r.read_i64())
-            elif fid == 3:
+            elif f.id == 3:
                 out.num_rows = Int(r.read_i64())
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -994,28 +1170,24 @@ struct FileMetaData(Copyable, Movable):
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
         var out = Self()
-        var last = 0
-        while True:
-            var ftype, fid = r.read_field_header(last)
-            if ftype == TC_STOP:
-                break
-            last = fid
-            if fid == 1:
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
                 out.version = Int(r.read_i32())
-            elif fid == 2:
+            elif f.id == 2:
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.schema.append(SchemaElement.read(r))
-            elif fid == 3:
+            elif f.id == 3:
                 out.num_rows = Int(r.read_i64())
-            elif fid == 4:
+            elif f.id == 4:
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.row_groups.append(RowGroup.read(r))
-            elif fid == 6:
+            elif f.id == 6:
                 out.created_by = r.read_string()
             else:
-                r.skip(ftype)
+                r.skip(f.type)
         return out^
 
     def write(self, mut w: CompactWriter):
@@ -1032,8 +1204,23 @@ struct FileMetaData(Copyable, Movable):
         w.write_list_begin(TC_STRUCT, len(self.row_groups))
         for i in range(len(self.row_groups)):
             self.row_groups[i].write(w)
-        _ = w.write_field_begin(TC_BINARY, 6, last)
+        last = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
+        # column_orders (7): one ColumnOrder per leaf column, each the
+        # TYPE_ORDER (TypeDefinedOrder) union member — declares that min_value/
+        # max_value follow the column's logical (type-defined) ordering, so
+        # readers trust unsigned-int and byte-array bounds.
+        var num_leaves = 0
+        for s in self.schema:
+            if s.num_children == 0:
+                num_leaves += 1
+        _ = w.write_field_begin(TC_LIST, 7, last)
+        w.write_list_begin(TC_STRUCT, num_leaves)
+        for _ in range(num_leaves):
+            # ColumnOrder union: field 1 = TypeDefinedOrder (empty struct)
+            _ = w.write_field_begin(TC_STRUCT, 1, 0)
+            w.write_field_stop()  # empty TypeDefinedOrder
+            w.write_field_stop()  # end ColumnOrder union
         w.write_field_stop()
 
     @staticmethod

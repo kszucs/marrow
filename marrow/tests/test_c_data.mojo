@@ -1011,5 +1011,119 @@ def test_dictionary_to_pyarrow() raises:
     assert_equal(da[2].value().as_string().to_string(), "red")
 
 
+def test_map_dtype_from_pyarrow() raises:
+    """Import a PyArrow map type ('+m') via CArrowSchema."""
+    var pa = Python.import_module("pyarrow")
+    var map_type = pa.map_(pa.string(), pa.int32())
+    var c_schema = c_schema_from_pyobj(map_type)
+    var dtype = c_schema.to_dtype()
+    assert_true(dtype.is_map())
+    ref mt = dtype.as_map()
+    assert_equal(mt.key_type(), string)
+    assert_equal(mt.item_type(), int32)
+    assert_false(mt.keys_sorted)
+
+
+def test_map_dtype_schema_roundtrip() raises:
+    """CArrowSchema round-trip for map(string, int64) incl. keys_sorted flag."""
+    var dt = map_(
+        AnyDataType(string), AnyDataType(int64), keys_sorted=True
+    ).to_any()
+    var c_schema = CArrowSchema.from_dtype(dt)
+    var fmt = String(StringSlice(unsafe_from_utf8_ptr=c_schema.format))
+    assert_equal(fmt, "+m")
+    var rt = c_schema.to_dtype()
+    assert_true(rt.is_map())
+    ref mt = rt.as_map()
+    assert_equal(mt.key_type(), string)
+    assert_equal(mt.item_type(), int64)
+    assert_true(mt.keys_sorted)
+
+
+def test_map_array_from_pyarrow() raises:
+    """Import a PyArrow map array: {"a":1,"b":2}, None, {"c":3}."""
+    var pa = Python.import_module("pyarrow")
+    var e0 = Python.list(Python.tuple("a", 1), Python.tuple("b", 2))
+    var e2 = Python.list(Python.tuple("c", 3))
+    var pyarr = pa.array(
+        Python.list(e0, Python.none(), e2),
+        type=pa.map_(pa.string(), pa.int64()),
+    )
+
+    var c_schema = c_schema_from_pyobj(pyarr.type)
+    var dtype = c_schema.to_dtype()
+    assert_true(dtype.is_map())
+
+    var c_array = c_array_from_pyobj(pyarr)
+    assert_equal(c_array.length, 3)
+    assert_equal(c_array.null_count, 1)
+    assert_equal(c_array.n_buffers, 2)  # validity + offsets
+    assert_equal(c_array.n_children, 1)  # entries struct
+
+    var data = c_array^.to_array(dtype)
+    ref m = data.as_map()
+    assert_equal(len(m), 3)
+    assert_true(m.is_valid(0))
+    assert_false(m.is_valid(1))
+    assert_true(m.is_valid(2))
+
+    var lens = m.value_lengths()
+    assert_equal(lens[0].value(), 2)
+    assert_equal(lens[1].value(), 0)
+    assert_equal(lens[2].value(), 1)
+
+    ref entries = m.values().as_struct()
+    assert_equal(len(entries), 3)
+    ref keys = entries.children[0].as_string()
+    ref vals = entries.children[1].as_int64()
+    assert_equal(keys[0].to_string(), "a")
+    assert_equal(keys[1].to_string(), "b")
+    assert_equal(keys[2].to_string(), "c")
+    assert_equal(vals[0].value(), 1)
+    assert_equal(vals[1].value(), 2)
+    assert_equal(vals[2].value(), 3)
+
+
+def test_map_array_roundtrip() raises:
+    """Build a Mojo MapArray, export it, and re-import through CArrowArray."""
+    from marrow.arrays import MapArray, Int32Array
+    from marrow.builders import Int32Builder, StringBuilder
+
+    # map: [ {"x":10}, {"y":20,"z":30} ]  ->  offsets [0,1,3]
+    var ob = Int32Builder()
+    ob.append(0)
+    ob.append(1)
+    ob.append(3)
+    var kb = StringBuilder()
+    kb.append("x")
+    kb.append("y")
+    kb.append("z")
+    var vb = Int32Builder()
+    vb.append(10)
+    vb.append(20)
+    vb.append(30)
+
+    var arr: AnyArray = MapArray.from_arrays(
+        ob.finish(), kb.finish(), vb.finish()
+    )
+    assert_true(arr.dtype().is_map())
+
+    var c_array = CArrowArray.from_array(arr)
+    var data = c_array^.to_array(arr.dtype())
+    ref m = data.as_map()
+    assert_equal(len(m), 2)
+    var lens = m.value_lengths()
+    assert_equal(lens[0].value(), 1)
+    assert_equal(lens[1].value(), 2)
+
+    ref entries = m.values().as_struct()
+    ref keys = entries.children[0].as_string()
+    ref vals = entries.children[1].as_int32()
+    assert_equal(keys[0].to_string(), "x")
+    assert_equal(keys[2].to_string(), "z")
+    assert_equal(vals[0].value(), 10)
+    assert_equal(vals[2].value(), 30)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

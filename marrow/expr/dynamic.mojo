@@ -36,6 +36,7 @@ from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .values import Value
+from .pruning import PruneStats, PruneBound
 from ..kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
 from ..kernels.boolean import and_, or_, not_, is_null, select
 from ..kernels.compare import (
@@ -249,6 +250,68 @@ struct DynValue(
             )
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
+
+    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+        """Pruning evaluation by tag (the runtime counterpart of the fused
+        nodes' `prune_bound`): column -> its stats interval, literal -> a point
+        interval, comparisons -> the min/max rule, AND/OR -> combine. Anything
+        not modelled (arithmetic, NOT, IS_NULL, ...) is conservatively unknown /
+        maybe-true, so a caller only ever skips data it has proven cannot match.
+        """
+        if self._tag == LOAD:
+            var iv = stats.by_name(
+                self._name
+            ) if self._name.byte_length() > 0 else stats.by_index(
+                Int(self._kind_data)
+            )
+            return PruneBound.interval(iv[0].copy(), iv[1].copy())
+        elif self._tag == LITERAL:
+            return PruneBound.interval(
+                Optional(self._value.value().copy()),
+                Optional(self._value.value().copy()),
+            )
+        elif self._tag == EQ:
+            return PruneBound.boolean(
+                self._args[0]
+                .prune_bound(stats)
+                .maybe_eq(self._args[1].prune_bound(stats))
+            )
+        elif self._tag == LT:
+            return PruneBound.boolean(
+                self._args[0]
+                .prune_bound(stats)
+                .maybe_lt(self._args[1].prune_bound(stats))
+            )
+        elif self._tag == LE:
+            return PruneBound.boolean(
+                self._args[0]
+                .prune_bound(stats)
+                .maybe_le(self._args[1].prune_bound(stats))
+            )
+        elif self._tag == GT:
+            return PruneBound.boolean(
+                self._args[0]
+                .prune_bound(stats)
+                .maybe_gt(self._args[1].prune_bound(stats))
+            )
+        elif self._tag == GE:
+            return PruneBound.boolean(
+                self._args[0]
+                .prune_bound(stats)
+                .maybe_ge(self._args[1].prune_bound(stats))
+            )
+        elif self._tag == AND:
+            return PruneBound.boolean(
+                self._args[0].prune_bound(stats).maybe_true
+                and self._args[1].prune_bound(stats).maybe_true
+            )
+        elif self._tag == OR:
+            return PruneBound.boolean(
+                self._args[0].prune_bound(stats).maybe_true
+                or self._args[1].prune_bound(stats).maybe_true
+            )
+        else:
+            return PruneBound.unknown()
 
     def _op_name(self) -> String:
         """Display name for an operator tag (empty if not an operator)."""

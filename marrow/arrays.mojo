@@ -855,7 +855,9 @@ struct ListLikeArray[T: ListLikeType](Array):
         return self.dtype.copy()
 
     def write_to[W: Writer](self, mut writer: W):
-        if self.dtype.is_large_list():
+        if self.dtype.is_map():
+            writer.write("MapArray([")
+        elif self.dtype.is_large_list():
             writer.write("LargeListArray([")
         else:
             writer.write("ListArray([")
@@ -882,14 +884,20 @@ struct ListLikeArray[T: ListLikeType](Array):
             return True
         return self.bitmap.value().test(self.offset + index)
 
-    def unsafe_get(self, index: Int) raises -> AnyArray:
-        """Return a view of the child array for the list at the given index."""
+    def child_range(self, index: Int) -> Tuple[Int, Int]:
+        """The `[start, end)` range in the child values array for element
+        `index` — the offsets pair, adjusted for this array's own offset."""
         var start = Int(
             self.offsets.unsafe_get[Self.T.offset](self.offset + index)
         )
         var end = Int(
             self.offsets.unsafe_get[Self.T.offset](self.offset + index + 1)
         )
+        return (start, end)
+
+    def unsafe_get(self, index: Int) raises -> AnyArray:
+        """Return a view of the child array for the list at the given index."""
+        var start, end = self.child_range(index)
         return self.values().slice(start, end - start)
 
     def __getitem__(self, index: Int) raises -> ListScalar:
@@ -915,6 +923,40 @@ struct ListLikeArray[T: ListLikeType](Array):
     def flatten(self) -> AnyArray:
         """Unnest this ListArray, returning the flat child values."""
         return self.child[].copy()
+
+    def to_map(self, keys_sorted: Bool = False) raises -> MapArray:
+        """Retag this list of (key, value) entries structs as a `MapArray` — same
+        physical layout (offsets, validity, and the entries child are shared),
+        only the dtype tag changes: the child struct dtype becomes the map's
+        entries field (its key/value field names are preserved). `keys_sorted` is
+        caller-supplied (Parquet carries no such flag). The single point where a
+        list becomes a map — inverse of `MapArray.to_list`."""
+        var map_dtype: AnyDataType = MapType(
+            field("entries", self.values().dtype(), nullable=False), keys_sorted
+        )
+        return MapArray(
+            dtype=map_dtype,
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            offsets=self.offsets,
+            values=self.values().copy(),
+        )
+
+    def to_list(self) -> ListArray:
+        """Retag this map as a plain list of its entries struct — the inverse of
+        `ListArray.to_map`, same shared layout. Lets list-oriented machinery
+        (builders, concat) operate on a map without knowing it is one."""
+        return ListArray(
+            dtype=list_(self.values().dtype()),
+            length=self.length,
+            nulls=self.nulls,
+            offset=self.offset,
+            bitmap=self.bitmap,
+            offsets=self.offsets,
+            values=self.values().copy(),
+        )
 
     def value_lengths(self) -> Int32Array:
         """Return an array of list lengths for each element."""
@@ -996,6 +1038,29 @@ struct ListLikeArray[T: ListLikeType](Array):
             values=values^,
         )
 
+    @staticmethod
+    def from_arrays(
+        offsets: Int32Array,
+        var keys: AnyArray,
+        var items: AnyArray,
+        keys_sorted: Bool = False,
+        var mask: Optional[BoolArray] = None,
+    ) raises -> MapArray:
+        """Construct a MapArray from int32 offsets (length n+1), key/item child
+        arrays, and an optional null mask (PyArrow convention: True = null).
+
+        Matches PyArrow's ``MapArray.from_arrays(offsets, keys, items)``. The
+        entries struct is built non-nullable with a required key, then the
+        offsets fold it into a map (`ListArray.from_arrays(...).to_map()`)."""
+        var entry_fields = [
+            field("key", keys.dtype(), nullable=False),
+            field("value", items.dtype(), nullable=True),
+        ]
+        var entries: AnyArray = StructArray.from_arrays(
+            [keys^, items^], entry_fields, None
+        )
+        return ListArray.from_arrays(offsets, entries^, mask^).to_map(keys_sorted)
+
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""
         return ArrayData(
@@ -1011,6 +1076,7 @@ struct ListLikeArray[T: ListLikeType](Array):
 
 comptime ListArray = ListLikeArray[ListType]
 comptime LargeListArray = ListLikeArray[LargeListType]
+comptime MapArray = ListLikeArray[MapType]
 
 
 # ---------------------------------------------------------------------------
@@ -1866,6 +1932,8 @@ struct ChunkedArray(Copyable, Movable, Writable):
             # etc.), so build a properly-structured empty array of the dtype.
             var builder = AnyBuilder(self.dtype)
             return builder.finish()
+        if len(self.chunks) == 1:
+            return self.chunks[0].copy()
         return concat(self.chunks)
 
 
@@ -1934,6 +2002,7 @@ struct AnyArray(
         FixedSizeListArray,
         FixedSizeBinaryArray,
         StructArray,
+        MapArray,
         DictionaryArray,
     ]
 
@@ -2206,6 +2275,9 @@ struct AnyArray(
     def as_struct(ref self) -> ref[self._v] StructArray:
         return self._as[StructArray]()
 
+    def as_map(ref self) -> ref[self._v] MapArray:
+        return self._as[MapArray]()
+
     def as_dictionary(ref self) -> ref[self._v] DictionaryArray:
         return self._as[DictionaryArray]()
 
@@ -2289,6 +2361,8 @@ struct AnyArray(
             return Decimal256Array(data)
         elif dt.is_struct():
             return StructArray(data)
+        elif dt.is_map():
+            return MapArray(data)
         elif dt.is_dictionary():
             return DictionaryArray(data)
         else:

@@ -8,6 +8,16 @@ oracle.
     from marrow.parquet import read_table, write_table
 """
 
-from .reader import read_table
+from .reader import (
+    read_table,
+    read_metadata,
+    read_statistics,
+    ColumnStatistics,
+    read_page_index,
+    PageIndex,
+    read_page_bounds,
+    PageBounds,
+    RowSelection,
+)
 from .writer import write_table
 from .codecs import Compression

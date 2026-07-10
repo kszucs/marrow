@@ -29,8 +29,18 @@ from ..kernels.filter import filter
 from ..kernels.groupby import HashGrouper
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
-from ..parquet import read_table
+from ..parquet import (
+    read_table,
+    read_metadata,
+    read_statistics,
+    read_page_bounds,
+    RowSelection,
+    ColumnStatistics,
+    PageBounds,
+)
+from ..scalars import AnyScalar
 from .values import AnyValue
+from .pruning import PruneStats
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536
@@ -169,29 +179,137 @@ struct InMemoryTableProcessor(Processor):
 
 
 struct ParquetScanProcessor(Processor):
-    """Reads the Parquet file on first pull, then yields morsels."""
+    """Reads the Parquet file on first pull, then yields morsels.
+
+    When a `predicate` is pushed down, row groups whose column statistics prove
+    the predicate can never match are skipped (never decoded). The predicate is
+    only a pruning hint — a `Filter` above the scan still applies it exactly — so
+    pushdown only ever reduces I/O, never changes results."""
 
     var path: String
     var _schema: Schema
     var morsel_size: Int
+    var _predicate: Optional[AnyValue]
     var _batch: Optional[RecordBatch]
     var _offset: Int
 
     def __init__(
-        out self, *, var path: String, var schema: Schema, morsel_size: Int
+        out self,
+        *,
+        var path: String,
+        var schema: Schema,
+        morsel_size: Int,
+        var predicate: Optional[AnyValue] = None,
     ):
         self.path = path^
         self._schema = schema^
         self.morsel_size = morsel_size
+        self._predicate = predicate^
         self._batch = None
         self._offset = 0
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
+    def _bounds_of(
+        self, mins: List[Optional[AnyScalar]], maxs: List[Optional[AnyScalar]]
+    ) raises -> PruneStats:
+        """A `PruneStats` over this scan's schema from parallel min/max lists.
+        """
+        return PruneStats(Schema(copy=self._schema), mins.copy(), maxs.copy())
+
+    def _row_group_survives(
+        self, rg_stats: List[ColumnStatistics]
+    ) raises -> Bool:
+        """Whether the predicate might match some row of a group, from its
+        per-column chunk statistics."""
+        var mins = List[Optional[AnyScalar]]()
+        var maxs = List[Optional[AnyScalar]]()
+        for c in range(len(rg_stats)):
+            mins.append(rg_stats[c].min.copy())
+            maxs.append(rg_stats[c].max.copy())
+        return (
+            self._predicate.value()
+            .prune_bound(self._bounds_of(mins, maxs))
+            .maybe_true
+        )
+
+    def _page_selection(
+        self, rg_pages: List[List[PageBounds]], num_rows: Int
+    ) raises -> RowSelection:
+        """Rows of one group that survive page-level pruning: for each column
+        with a page index, keep a page iff the predicate might match given that
+        page's bounds (other columns unknown), then intersect the per-column
+        selections. Pages of an unindexed column impose no restriction."""
+        var ncols = len(self._schema.fields)
+        var sel = RowSelection.all(num_rows)
+        for c in range(ncols):
+            ref pages = rg_pages[c]
+            if len(pages) == 0:
+                continue  # no page index for this column
+            var keep = List[Bool]()
+            var page_rows = List[Int]()
+            for p in range(len(pages)):
+                var mins = List[Optional[AnyScalar]]()
+                var maxs = List[Optional[AnyScalar]]()
+                for cc in range(ncols):
+                    if cc == c:
+                        mins.append(pages[p].min.copy())
+                        maxs.append(pages[p].max.copy())
+                    else:
+                        mins.append(None)
+                        maxs.append(None)
+                keep.append(
+                    self._predicate.value()
+                    .prune_bound(self._bounds_of(mins, maxs))
+                    .maybe_true
+                )
+                page_rows.append(pages[p].num_rows)
+            sel = sel.intersect(RowSelection.from_pages(keep, page_rows))
+        return sel^
+
+    def _read_plan(
+        self,
+    ) raises -> Tuple[Optional[List[Int]], Optional[List[RowSelection]]]:
+        """The pushdown plan: which row groups to read and, when the page index
+        lets the reader skip pages, a per-group row selection. Returns
+        `(None, None)` with no predicate, and `(groups, None)` when only
+        row-group skipping applies. Pruning is skipped for a nested file (leaf
+        count != top-level column count) — those groups are kept whole."""
+        if not self._predicate:
+            return (None, None)
+        var meta = read_metadata(self.path)
+        var stats = read_statistics(self.path)
+        var pages = read_page_bounds(self.path)
+        var ncols = len(self._schema.fields)
+        var groups = List[Int]()
+        var selections = List[RowSelection]()
+        var any_page_skip = False
+        for rg in range(len(meta.row_groups)):
+            var num_rows = meta.row_groups[rg].num_rows
+            if len(stats[rg]) != ncols:
+                groups.append(rg)
+                selections.append(RowSelection.all(num_rows))
+                continue
+            if not self._row_group_survives(stats[rg]):
+                continue
+            groups.append(rg)
+            var sel = self._page_selection(pages[rg], num_rows)
+            if not sel.selects_all():
+                any_page_skip = True
+            selections.append(sel^)
+        if any_page_skip:
+            return (Optional(groups^), Optional(selections^))
+        return (Optional(groups^), None)
+
     def pull(mut self) raises -> RecordBatch:
         if not self._batch:
-            var table = read_table(self.path)
+            var plan = self._read_plan()
+            var table = read_table(
+                self.path,
+                row_groups=plan[0].copy(),
+                row_selections=plan[1].copy(),
+            )
             var batches = table.to_batches()
             if len(batches) == 0:
                 self._batch = RecordBatch(

@@ -18,6 +18,8 @@
   allocation kinds -- owned CPU, foreign (with a release callback),
   pinned host and device -- with borrowed, offset-applied `BufferView`
   and `BitmapView` spans for kernels to compute over.
+- `map` is a first-class Arrow type: arrays, builders, scalars, casts,
+  hashing, selection, Parquet and IPC all carry it.
 
 ### Compute kernels
 
@@ -41,6 +43,11 @@
   through `.filter()`, `.select()`, `.project()`, `.aggregate()`,
   `.sort_by()`, `.limit()`, `.join()`, and run by `.execute()`.
 
+### Query optimizer
+
+- Statistics-based pruning: predicates push into `ParquetScan` and skip
+  row groups; the page index skips pages within a group.
+
 ### Parquet
 
 - A from-scratch reader and writer with no Arrow C++ dependency:
@@ -50,6 +57,8 @@
   read and on write, with per-column selection and dictionary fallback.
 - Arbitrarily nested reconstruction -- any depth of list and struct,
   struct-level nulls included -- and general nested writes.
+- Column statistics (min/max/null/distinct), and the ColumnIndex and
+  OffsetIndex page index, on read and write.
 - Reads parallelize across row groups and columns; page bodies are
   zero-copy out of the mapped file.
 

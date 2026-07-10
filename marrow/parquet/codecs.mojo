@@ -24,7 +24,12 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
 from std.sys import size_of
 from std.memory import memcpy
 
-from ..arrays import PrimitiveArray, StringArray, BoolArray
+from ..arrays import (
+    PrimitiveArray,
+    StringArray,
+    BoolArray,
+    FixedSizeBinaryArray,
+)
 from .. import dtypes as dt
 from ..views import load_word_le
 from .utils import CompressionLibs
@@ -76,6 +81,21 @@ struct LittleEndian:
         out.append(UInt8((v >> 8) & 0xFF))
         out.append(UInt8((v >> 16) & 0xFF))
         out.append(UInt8((v >> 24) & 0xFF))
+
+    @staticmethod
+    def put_le(mut out: List[UInt8], bits: UInt64, width: Int):
+        """Append the low `width` bytes of `bits`, least-significant first."""
+        for i in range(width):
+            out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
+
+    @staticmethod
+    def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
+        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
+        var n = min(len(a), len(b))
+        for i in range(n):
+            if a[i] != b[i]:
+                return a[i] < b[i]
+        return len(a) < len(b)
 
     @staticmethod
     def put_varint(mut out: List[UInt8], var v: UInt64):
@@ -303,6 +323,34 @@ struct Rle:
         return matches
 
     @staticmethod
+    def encode_bitpacked(values: List[Int32], width: Int) -> List[UInt8]:
+        """Encode all of `values` as a single bit-packed hybrid run (groups of 8,
+        LSB-first) at `width` bits each — compact for dictionary indices, which
+        rarely form the equal-value runs `encode` exploits. A `width` of 0 (a
+        single-entry dictionary) emits nothing; the reader treats every index as
+        0. Mirrors the reader's `_unpack8` bit order."""
+        var out = List[UInt8]()
+        var n = len(values)
+        if width == 0 or n == 0:
+            return out^
+        var num_groups = (n + 7) // 8
+        LittleEndian.put_varint(out, (UInt64(num_groups) << 1) | 1)
+        var mask = (UInt64(1) << UInt64(width)) - 1
+        var acc: UInt64 = 0
+        var acc_bits = 0
+        for i in range(num_groups * 8):
+            var v = (UInt64(Int(values[i])) & mask) if i < n else UInt64(0)
+            acc |= v << UInt64(acc_bits)
+            acc_bits += width
+            while acc_bits >= 8:
+                out.append(UInt8(acc & 0xFF))
+                acc >>= 8
+                acc_bits -= 8
+        if acc_bits > 0:
+            out.append(UInt8(acc & 0xFF))
+        return out^
+
+    @staticmethod
     def encode(values: List[Int32], width: Int) -> List[UInt8]:
         """Encode `values` as an all-RLE-run hybrid stream (runs of equal
         values). Levels are highly repetitive (often all-1s), so run-length runs
@@ -398,6 +446,91 @@ struct DeltaBinaryPacked:
         _ = Self.decode_into(data, 0, count, out)
         return out^
 
+    @staticmethod
+    @always_inline
+    def _zigzag_encode(v: Int64) -> UInt64:
+        """Signed -> ULEB128 zigzag (inverse of `_zigzag`)."""
+        return UInt64((v << 1) ^ (v >> 63))
+
+    @staticmethod
+    def _put_bits(
+        mut out: List[UInt8], mut acc: UInt64, mut acc_bits: Int, v: UInt64, w: Int
+    ):
+        """Append `w` low bits of `v` LSB-first, flushing whole bytes and keeping
+        `acc_bits < 8`, so any width up to 64 packs without overflow."""
+        var rem = w
+        var val = v
+        while rem > 0:
+            var take = min(8 - acc_bits, rem)
+            acc |= (val & ((UInt64(1) << UInt64(take)) - 1)) << UInt64(acc_bits)
+            acc_bits += take
+            val >>= UInt64(take)
+            rem -= take
+            if acc_bits == 8:
+                out.append(UInt8(acc & 0xFF))
+                acc = 0
+                acc_bits = 0
+
+    @staticmethod
+    def encode(values: List[Int64]) -> List[UInt8]:
+        """Encode integers as DELTA_BINARY_PACKED (block 128, 4 miniblocks of 32).
+        Each block stores its `min_delta` and a per-miniblock bit width, then the
+        bit-packed `delta - min_delta`; a short final block is zero-padded (the
+        reader stops at the value count). Also encodes the length/prefix streams
+        of the byte-array delta codecs."""
+        comptime BLOCK = 128
+        comptime NMB = 4
+        comptime VPM = BLOCK // NMB  # 32
+        var out = List[UInt8]()
+        var n = len(values)
+        LittleEndian.put_varint(out, UInt64(BLOCK))
+        LittleEndian.put_varint(out, UInt64(NMB))
+        LittleEndian.put_varint(out, UInt64(n))
+        var first = values[0] if n > 0 else Int64(0)
+        LittleEndian.put_varint(out, Self._zigzag_encode(first))
+        if n <= 1:
+            return out^
+
+        var i = 1
+        while i < n:
+            var end = min(i + BLOCK, n)
+            var min_d = values[i] - values[i - 1]
+            for k in range(i + 1, end):
+                var d = values[k] - values[k - 1]
+                if d < min_d:
+                    min_d = d
+            LittleEndian.put_varint(out, Self._zigzag_encode(min_d))
+
+            # (delta - min_delta) for this block, zero-padded to a full BLOCK.
+            var rel = List[UInt64](capacity=BLOCK)
+            for k in range(i, end):
+                rel.append(UInt64((values[k] - values[k - 1]) - min_d))
+            while len(rel) < BLOCK:
+                rel.append(0)
+
+            var widths = List[Int](capacity=NMB)
+            for mb in range(NMB):
+                var maxv: UInt64 = 0
+                for j in range(VPM):
+                    if rel[mb * VPM + j] > maxv:
+                        maxv = rel[mb * VPM + j]
+                var w = 0
+                while (maxv >> UInt64(w)) > 0:
+                    w += 1
+                widths.append(w)
+                out.append(UInt8(w))
+            for mb in range(NMB):
+                var w = widths[mb]
+                if w == 0:
+                    continue
+                var acc: UInt64 = 0
+                var acc_bits = 0
+                for j in range(VPM):
+                    Self._put_bits(out, acc, acc_bits, rel[mb * VPM + j], w)
+                # VPM*w is a multiple of 8, so the miniblock is byte-aligned.
+            i = end
+        return out^
+
 
 struct Plain:
     """The PLAIN codec — values laid out in order: fixed-width little-endian for
@@ -407,14 +540,18 @@ struct Plain:
 
     @staticmethod
     def encode_primitive[
-        store: dt.NumericType, phys: DType
+        store: dt.PrimitiveType, phys: DType, big_endian: Bool = False
     ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
+        """PLAIN fixed-width encode of the present values, `phys`-wide. `store`
+        may be numeric, temporal, decimal, or interval; `big_endian` (for DECIMAL
+        FIXED_LEN_BYTE_ARRAY) writes the two's-complement value most-significant
+        byte first."""
         comptime W = size_of[Scalar[phys]]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var bytes = (
-                    arr[i].value().cast[phys]().as_bytes[big_endian=False]()
-                )
+                var bytes = arr[i].value().cast[phys]().as_bytes[
+                    big_endian=big_endian
+                ]()
                 for b in range(W):
                     out.append(bytes[b])
 
@@ -441,6 +578,16 @@ struct Plain:
                 var b = String(arr[i]).as_bytes()
                 LittleEndian.put_u32(out, len(b))
                 out.extend(b)
+
+    @staticmethod
+    def encode_fixed_size_binary(
+        arr: FixedSizeBinaryArray, mut out: List[UInt8]
+    ) raises:
+        """FIXED_LEN_BYTE_ARRAY: the present values' `byte_width` bytes, no
+        length prefix (the width is in the schema)."""
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                out.extend(Span(arr[i].value()))
 
     @staticmethod
     def decode_primitive[
@@ -566,6 +713,25 @@ struct ByteStreamSplit:
                 SIMD[phys, 1].from_bytes[big_endian=False](raw).cast[store]()
             )
 
+    @staticmethod
+    def encode[
+        store: dt.NumericType, phys: DType
+    ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
+        """Transpose the present values into per-byte planes: byte `k` of value
+        `i` at `out[base + k*np + i]` (inverse of `decode_primitive`)."""
+        comptime PW = size_of[Scalar[phys]]()
+        # value-major little-endian bytes of the present values
+        var raw = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
+                for k in range(PW):
+                    raw.append(b[k])
+        var np = len(raw) // PW
+        for k in range(PW):
+            for i in range(np):
+                out.append(raw[i * PW + k])
+
 
 struct DeltaLengthByteArray:
     """The DELTA_LENGTH_BYTE_ARRAY codec — a delta-packed length stream followed
@@ -585,6 +751,20 @@ struct DeltaLengthByteArray:
             out.append(v^)
             pos += n
         return out^
+
+    @staticmethod
+    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+        """DELTA_LENGTH_BYTE_ARRAY: a delta-packed length stream then the
+        concatenated present-value bytes."""
+        var lengths = List[Int64]()
+        var data = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = String(arr[i]).as_bytes()
+                lengths.append(Int64(len(b)))
+                data.extend(b)
+        out.extend(Span(DeltaBinaryPacked.encode(lengths)))
+        out.extend(Span(data))
 
 
 struct DeltaByteArray:
@@ -612,7 +792,33 @@ struct DeltaByteArray:
             prev = v^
         return out^
 
+    @staticmethod
+    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+        """DELTA_BYTE_ARRAY: a delta-packed shared-prefix-length stream, then a
+        delta-packed suffix-length stream, then the suffix bytes; each value is
+        `prev[:prefix] + suffix`."""
+        var prefixes = List[Int64]()
+        var suffix_lens = List[Int64]()
+        var suffix_data = List[UInt8]()
+        var prev = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = List[UInt8](String(arr[i]).as_bytes())
+                var m = min(len(prev), len(v))
+                var p = 0
+                while p < m and prev[p] == v[p]:
+                    p += 1
+                prefixes.append(Int64(p))
+                suffix_lens.append(Int64(len(v) - p))
+                for k in range(p, len(v)):
+                    suffix_data.append(v[k])
+                prev = v^
+        out.extend(Span(DeltaBinaryPacked.encode(prefixes)))
+        out.extend(Span(DeltaBinaryPacked.encode(suffix_lens)))
+        out.extend(Span(suffix_data))
 
+
+@fieldwise_init
 struct Encoding(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `Encoding` enum value. The decode methods dispatch a data page's
     *present* values to the per-encoding codec above; each appends `num_present`
@@ -631,15 +837,6 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
     comptime DELTA_BYTE_ARRAY = Self(7)
     comptime RLE_DICTIONARY = Self(8)
     comptime BYTE_STREAM_SPLIT = Self(9)
-
-    def __init__(out self, code: Int):
-        self.code = code
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
 
     def is_plain(self) -> Bool:
         return self == Self.PLAIN
@@ -707,6 +904,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         return Plain.decode_bool(values, num_present)
 
 
+@fieldwise_init
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value: the codec identity plus the
     `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
@@ -723,15 +921,6 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     comptime LZ4 = Self(5)
     comptime ZSTD = Self(6)
     comptime LZ4_RAW = Self(7)
-
-    def __init__(out self, code: Int):
-        self.code = code
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
 
     def decompress_into(
         self,
