@@ -694,6 +694,25 @@ struct ByteStreamSplit:
                 SIMD[phys, 1].from_bytes[big_endian=False](raw).cast[store]()
             )
 
+    @staticmethod
+    def encode[
+        store: dt.NumericType, phys: DType
+    ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
+        """Transpose the present values into per-byte planes: byte `k` of value
+        `i` at `out[base + k*np + i]` (inverse of `decode_primitive`)."""
+        comptime PW = size_of[Scalar[phys]]()
+        # value-major little-endian bytes of the present values
+        var raw = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
+                for k in range(PW):
+                    raw.append(b[k])
+        var np = len(raw) // PW
+        for k in range(PW):
+            for i in range(np):
+                out.append(raw[i * PW + k])
+
 
 struct DeltaLengthByteArray:
     """The DELTA_LENGTH_BYTE_ARRAY codec — a delta-packed length stream followed

@@ -4,19 +4,23 @@
 
 ### Features
 
-- **Dictionary + delta encoding on write** (`marrow.parquet`): the writer no
-  longer emits only PLAIN. `write_table(..., use_dictionary=True)` (the default,
-  like PyArrow) dictionary-encodes numeric and string columns — a PLAIN
-  dictionary page of distinct values plus an `RLE_DICTIONARY` data page of
-  bit-packed indices (`Rle.encode_bitpacked`), shrinking low-cardinality
-  columns; set `use_dictionary=False` for PLAIN. `write_table(..., encoding=...)`
-  forces a delta variant on compatible columns: `DELTA_BINARY_PACKED` (signed
-  ints; block/miniblock zig-zag deltas via `DeltaBinaryPacked.encode`) and
-  `DELTA_BYTE_ARRAY` / `DELTA_LENGTH_BYTE_ARRAY` (strings). Nulls are placed by
-  the definition levels, so all three compose with the flat and nested (Dremel)
-  write paths; the encoders mirror the reader's decoders and PyArrow reads every
-  variant back. `ColumnMetaData` now advertises the real encodings and the
-  dictionary page offset.
+- **Write-side encodings** (`marrow.parquet`): the writer no longer emits only
+  PLAIN. `write_table(..., use_dictionary=True)` (the default, like PyArrow)
+  dictionary-encodes numeric and string columns — a PLAIN dictionary page of
+  distinct values plus an `RLE_DICTIONARY` data page of bit-packed indices
+  (`Rle.encode_bitpacked`), shrinking low-cardinality columns; set
+  `use_dictionary=False` for PLAIN, and columns whose dictionary page would
+  exceed 1 MB fall back to PLAIN automatically. The other encodings are
+  selectable: `DELTA_BINARY_PACKED` (signed ints; block/miniblock zig-zag deltas
+  via `DeltaBinaryPacked.encode`), `DELTA_BYTE_ARRAY` / `DELTA_LENGTH_BYTE_ARRAY`
+  (strings), and `BYTE_STREAM_SPLIT` (floats). Encoding is chosen per leaf, most
+  specific first — a `column_encodings` name→encoding map, then a single global
+  `encoding`, then the dictionary/PLAIN default; an override that does not fit a
+  column's type is ignored. Nulls are placed by the definition levels, so every
+  encoding composes with the flat and nested (Dremel) write paths; the encoders
+  mirror the reader's decoders and PyArrow reads every variant back.
+  `ColumnMetaData` now advertises the real encodings and the dictionary page
+  offset.
 
 - **Map type** (core): a first-class Arrow `map<k, v>` — `MapType`/`map_()` in
   `dtypes`, `MapArray`/`MapArray.from_arrays(offsets, keys, items)` in `arrays`

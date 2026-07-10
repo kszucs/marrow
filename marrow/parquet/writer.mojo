@@ -34,6 +34,7 @@ from .codecs import (
     DeltaBinaryPacked,
     DeltaByteArray,
     DeltaLengthByteArray,
+    ByteStreamSplit,
 )
 from .utils import CompressionLibs
 from .schema import SchemaMapping, LeafColumn, SchemaNode
@@ -46,6 +47,9 @@ from .format import (
 )
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
+# Above this dictionary-page byte size a column falls back to PLAIN — the
+# dictionary would be as large as the raw values (PyArrow's default limit).
+comptime _DICT_PAGE_LIMIT: Int = 1 << 20
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +254,38 @@ struct ColumnWriter(Movable):
             return dtype.is_string()
         return False
 
+    @staticmethod
+    def can_bss(dtype: dt.AnyDataType) -> Bool:
+        """BYTE_STREAM_SPLIT applies to floating-point columns."""
+        return dtype.is_floating_point()
+
+    @staticmethod
+    def supports(encoding: Encoding, dtype: dt.AnyDataType) -> Bool:
+        """Whether `encoding` is a valid value encoding for a column of `dtype`.
+        PLAIN is always valid; the others require a compatible type."""
+        if encoding == Encoding.PLAIN:
+            return True
+        elif encoding == Encoding.RLE_DICTIONARY:
+            return Self.can_dictionary(dtype)
+        elif encoding == Encoding.BYTE_STREAM_SPLIT:
+            return Self.can_bss(dtype)
+        else:
+            return Self.can_delta(dtype, encoding)
+
+    def _encode_bss(self, col: AnyArray, mut out: List[UInt8]) raises:
+        """BYTE_STREAM_SPLIT-encode the present float values."""
+        ref vt = self.leaf.dtype
+        if vt == dt.float32:
+            ByteStreamSplit.encode[dt.Float32Type, DType.float32](
+                col.as_float32(), out
+            )
+        elif vt == dt.float64:
+            ByteStreamSplit.encode[dt.Float64Type, DType.float64](
+                col.as_float64(), out
+            )
+        else:
+            raise Error("parquet: cannot BYTE_STREAM_SPLIT type " + String(vt))
+
     def _encode_delta(self, col: AnyArray, mut out: List[UInt8]) raises:
         """Delta-encode the present values per `self.encoding`."""
         var ints = List[Int64]()
@@ -443,9 +479,11 @@ struct ColumnWriter(Movable):
         else:
             return False
 
-    def _write_dict_page(
+    def _flush_dict_page(
         self,
-        values: AnyArray,
+        var dict_body: List[UInt8],
+        num_dict: Int,
+        indices: List[Int32],
         mut index_bytes: List[UInt8],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
@@ -457,9 +495,6 @@ struct ColumnWriter(Movable):
         (the chunk start) and its total sizes (header included), which the chunk
         metadata must add to the data page's."""
         var offset = len(out)
-        var dict_body = List[UInt8]()
-        var indices = List[Int32]()
-        var num_dict = self._encode_dictionary(values, dict_body, indices)
         var comp = self.compression.compress(codecs, Span(dict_body))
         var header_len = PageHeader.dictionary_page(
             len(dict_body), len(comp), num_dict
@@ -483,6 +518,7 @@ struct ColumnWriter(Movable):
         dict_page_offset: Int,
         dict_uncompressed_size: Int,
         dict_compressed_size: Int,
+        encoding: Encoding,
         path: List[String],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
@@ -517,7 +553,7 @@ struct ColumnWriter(Movable):
                 len(def_bytes),
                 is_comp,
                 rep_levels_byte_length=len(rep_bytes),
-                encoding=self.encoding,
+                encoding=encoding,
             ).append_to(out)
             out.extend(Span(rep_bytes))
             out.extend(Span(def_bytes))
@@ -535,7 +571,7 @@ struct ColumnWriter(Movable):
             var compressed = self.compression.compress(codecs, Span(body))
             compressed_size = len(compressed)
             header_len = PageHeader.data_page(
-                uncompressed_size, compressed_size, num_values, self.encoding
+                uncompressed_size, compressed_size, num_values, encoding
             ).append_to(out)
             out.extend(Span(compressed))
 
@@ -558,7 +594,7 @@ struct ColumnWriter(Movable):
         if dict_page_offset >= 0:
             meta.dictionary_page_offset = dict_page_offset
             encs.append(Encoding.PLAIN.code)
-        encs.append(self.encoding.code)
+        encs.append(encoding.code)
         meta.encodings = encs^
         if self.leaf.max_def >= 1:
             meta.null_count = null_count
@@ -627,17 +663,31 @@ struct ColumnWriter(Movable):
         var dict_page_offset = -1
         var dict_uncompressed = 0
         var dict_compressed = 0
-        if self.encoding == Encoding.RLE_DICTIONARY:
-            var d = self._write_dict_page(values, value_bytes, out, codecs)
-            dict_page_offset = d[0]
-            dict_uncompressed = d[1]
-            dict_compressed = d[2]
+        var encoding = self.encoding
+        if encoding == Encoding.RLE_DICTIONARY:
+            var dict_body = List[UInt8]()
+            var indices = List[Int32]()
+            var num_dict = self._encode_dictionary(values, dict_body, indices)
+            if len(dict_body) <= _DICT_PAGE_LIMIT:
+                var d = self._flush_dict_page(
+                    dict_body^, num_dict, indices, value_bytes, out, codecs
+                )
+                dict_page_offset = d[0]
+                dict_uncompressed = d[1]
+                dict_compressed = d[2]
+            else:
+                # High-cardinality: the dictionary would be larger than PLAIN,
+                # so fall back to PLAIN for this column.
+                encoding = Encoding.PLAIN
+                self._encode_values(values, value_bytes)
         elif (
-            self.encoding == Encoding.DELTA_BINARY_PACKED
-            or self.encoding == Encoding.DELTA_BYTE_ARRAY
-            or self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+            encoding == Encoding.DELTA_BINARY_PACKED
+            or encoding == Encoding.DELTA_BYTE_ARRAY
+            or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
         ):
             self._encode_delta(values, value_bytes)
+        elif encoding == Encoding.BYTE_STREAM_SPLIT:
+            self._encode_bss(values, value_bytes)
         else:
             self._encode_values(values, value_bytes)
 
@@ -652,6 +702,7 @@ struct ColumnWriter(Movable):
             dict_page_offset,
             dict_uncompressed,
             dict_compressed,
+            encoding,
             path,
             out,
             codecs,
@@ -669,7 +720,8 @@ struct FileWriter(Movable):
     var compression: Compression
     var version: Int  # data-page version: 1 (default) or 2
     var use_dictionary: Bool  # dictionary-encode eligible columns (else PLAIN)
-    var encoding: Optional[Encoding]  # forced DELTA_* for compatible columns
+    var encoding: Optional[Encoding]  # global forced encoding for eligible cols
+    var column_encodings: Dict[String, Encoding]  # per-column overrides by name
     var leaves: List[LeafColumn]
 
     def __init__(
@@ -677,7 +729,8 @@ struct FileWriter(Movable):
         compression: Compression,
         version: Int = 1,
         use_dictionary: Bool = True,
-        encoding: Optional[Encoding] = None,
+        var encoding: Optional[Encoding] = None,
+        var column_encodings: Dict[String, Encoding] = {},
     ):
         self.out = List[UInt8]()
         FileMetaData.write_magic(self.out)  # file header magic
@@ -685,15 +738,21 @@ struct FileWriter(Movable):
         self.compression = compression
         self.version = version
         self.use_dictionary = use_dictionary
-        self.encoding = encoding
+        self.encoding = encoding^
+        self.column_encodings = column_encodings^
         self.leaves = List[LeafColumn]()
 
-    def _encoding_for(self, leaf: LeafColumn) -> Encoding:
-        """The value encoding for a leaf: a forced DELTA_* encoding where it
-        applies, else RLE_DICTIONARY when dictionaries are enabled and the type
-        is eligible, else PLAIN."""
-        if self.encoding and ColumnWriter.can_delta(
-            leaf.dtype, self.encoding.value()
+    def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
+        """The value encoding for a leaf, most specific first: a per-column
+        override, then the global `encoding`, then RLE_DICTIONARY when
+        dictionaries are enabled, else PLAIN. An override that does not apply to
+        the column type falls through rather than erroring."""
+        if leaf.name in self.column_encodings:
+            var e = self.column_encodings[leaf.name]
+            if ColumnWriter.supports(e, leaf.dtype):
+                return e
+        if self.encoding and ColumnWriter.supports(
+            self.encoding.value(), leaf.dtype
         ):
             return self.encoding.value()
         if self.use_dictionary and ColumnWriter.can_dictionary(leaf.dtype):
@@ -786,15 +845,22 @@ def write_table(
     compression: Compression = Compression.SNAPPY,
     version: Int = 1,
     use_dictionary: Bool = True,
-    encoding: Optional[Encoding] = None,
+    var encoding: Optional[Encoding] = None,
+    var column_encodings: Dict[String, Encoding] = {},
 ) raises:
     """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
     format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
     `use_dictionary` (default True, like PyArrow) dictionary-encodes numeric and
-    string columns; set False to force PLAIN. `encoding` forces a `DELTA_*`
-    variant on compatible columns (DELTA_BINARY_PACKED for signed ints,
-    DELTA_BYTE_ARRAY / DELTA_LENGTH_BYTE_ARRAY for strings), overriding the
-    dictionary for those columns.
+    string columns; set False to force PLAIN.
+
+    Encoding is chosen per leaf, most specific first: `column_encodings` (a name
+    -> `Encoding` map) overrides `encoding` (a single global default), which
+    overrides the dictionary/PLAIN default. Supported value encodings:
+    RLE_DICTIONARY, DELTA_BINARY_PACKED (signed ints), DELTA_BYTE_ARRAY /
+    DELTA_LENGTH_BYTE_ARRAY (strings), BYTE_STREAM_SPLIT (floats), and PLAIN. An
+    override that does not fit a column's type is ignored for that column.
     """
-    var writer = FileWriter(compression, version, use_dictionary, encoding)
+    var writer = FileWriter(
+        compression, version, use_dictionary, encoding^, column_encodings^
+    )
     writer.write(table, path)
