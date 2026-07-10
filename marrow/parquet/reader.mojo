@@ -91,6 +91,7 @@ def read_table(
     path: String,
     columns: Optional[List[String]] = None,
     row_groups: Optional[List[Int]] = None,
+    row_selections: Optional[List[RowSelection]] = None,
 ) raises -> Table:
     """Read a Parquet file into a Marrow `Table`.
 
@@ -126,6 +127,11 @@ def read_table(
         for rg in range(len(meta.row_groups)):
             rg_list.append(rg)
 
+    if row_selections and len(row_selections.value()) != len(rg_list):
+        raise Error(
+            "parquet: row_selections must match the selected row groups"
+        )
+
     var num_leaves = len(plan.decode_order)
     var num_rg = len(rg_list)
     var total = num_rg * num_leaves
@@ -153,10 +159,16 @@ def read_table(
         )  # per-worker: lazy dlopen handles are not shared
         var t = w
         while t < total:
-            var rg_idx = rg_list[t // num_leaves]
+            var slot = t // num_leaves
+            var rg_idx = rg_list[slot]
             # original column-chunk index for this compact slot
             var orig = plan.decode_order[t % num_leaves]
             ref rg = meta.row_groups[rg_idx]
+            # the row selection for this group (shared by all its leaf columns),
+            # None when nothing is pushed down or the group is fully selected.
+            var sel: Optional[RowSelection] = None
+            if row_selections:
+                sel = row_selections.value()[slot].copy()
             # ColumnReader.decode picks the flat vs leveled path from the leaf's
             # max repetition, so the same call serves every column shape.
             var reader = ColumnReader(
@@ -164,6 +176,7 @@ def read_table(
                 rg.columns[orig].meta_data.copy(),
                 mapping.leaves[orig].copy(),
                 rg.num_rows,
+                sel^,
             )
             grid[t] = reader.decode(codecs)
             t += nt
@@ -196,6 +209,90 @@ def read_table(
 # Metadata / statistics — read the footer without decoding any column data.
 # Mirrors PyArrow's `read_metadata` / `ColumnChunkMetaData.statistics`.
 # ---------------------------------------------------------------------------
+
+
+struct RowSelection(Copyable, Movable):
+    """Which rows of a row group to decode when a pushed-down predicate lets the
+    reader skip pages. Row-group-relative, one flag per row: a data page whose
+    rows are all deselected is skipped without decoding; a partially selected
+    page keeps only its chosen rows, so every column yields the same rows and
+    stays aligned. Built from per-page keep flags, combined with `intersect`, and
+    queried by the decoder over each page's row range. (A run-length form is a
+    possible future optimisation; it would not change this interface.)"""
+
+    var _selected: List[Bool]
+
+    def __init__(out self, var selected: List[Bool]):
+        self._selected = selected^
+
+    @staticmethod
+    def all(n: Int) -> Self:
+        """Select every one of `n` rows."""
+        var s = List[Bool](capacity=n)
+        for _ in range(n):
+            s.append(True)
+        return Self(s^)
+
+    @staticmethod
+    def from_pages(keep: List[Bool], page_rows: List[Int]) -> Self:
+        """Expand per-page keep flags into per-row flags. `keep[i]` decides all
+        `page_rows[i]` rows of page `i` (pages begin on row boundaries)."""
+        var s = List[Bool]()
+        for p in range(len(keep)):
+            for _ in range(page_rows[p]):
+                s.append(keep[p])
+        return Self(s^)
+
+    def total_rows(self) -> Int:
+        return len(self._selected)
+
+    def selected(self, row: Int) -> Bool:
+        return self._selected[row]
+
+    def num_selected(self) -> Int:
+        var n = 0
+        for i in range(len(self._selected)):
+            if self._selected[i]:
+                n += 1
+        return n
+
+    def selects_any(self) -> Bool:
+        for i in range(len(self._selected)):
+            if self._selected[i]:
+                return True
+        return False
+
+    def selects_all(self) -> Bool:
+        for i in range(len(self._selected)):
+            if not self._selected[i]:
+                return False
+        return True
+
+    def intersect(self, other: Self) raises -> Self:
+        """AND two selections over the same row group (a row survives only if
+        both keep it)."""
+        if self.total_rows() != other.total_rows():
+            raise Error("parquet: RowSelection size mismatch")
+        var s = List[Bool](capacity=self.total_rows())
+        for i in range(self.total_rows()):
+            s.append(self._selected[i] and other._selected[i])
+        return Self(s^)
+
+    def selected_in(self, start: Int, length: Int) -> Int:
+        """How many rows in the half-open range `[start, start+length)` are
+        selected — lets the decoder decide skip / keep-all / mask for a page."""
+        var n = 0
+        for i in range(start, start + length):
+            if self._selected[i]:
+                n += 1
+        return n
+
+    def mask(self, start: Int, length: Int) -> List[Bool]:
+        """The per-row keep flags for the page rows `[start, start+length)`."""
+        var m = List[Bool](capacity=length)
+        for i in range(start, start + length):
+            m.append(self._selected[i])
+        return m^
 
 
 def read_metadata(path: String) raises -> FileMetaData:
@@ -245,6 +342,68 @@ def read_page_index(path: String) raises -> List[List[PageIndex]]:
             row.append(pi^)
         out.append(row^)
     _ = mapped^  # OffsetIndex/ColumnIndex copy their bytes into owned storage
+    return out^
+
+
+struct PageBounds(Copyable, Movable):
+    """One data page's decoded bounds: its row count and the typed `min`/`max`
+    (each `None` when the page is all-null or carried no bound)."""
+
+    var num_rows: Int
+    var min: Optional[AnyScalar]
+    var max: Optional[AnyScalar]
+
+    def __init__(
+        out self,
+        num_rows: Int,
+        var min: Optional[AnyScalar],
+        var max: Optional[AnyScalar],
+    ):
+        self.num_rows = num_rows
+        self.min = min^
+        self.max = max^
+
+
+def read_page_bounds(path: String) raises -> List[List[List[PageBounds]]]:
+    """Per (row group, leaf column, data page) decoded bounds, from the page
+    index — indexed `result[rg][leaf][page]`. A column with no page index yields
+    an empty page list. Predicate pushdown prunes individual pages with these.
+    """
+    var mapped = MappedFile(path)
+    var data = mapped.span()
+    var meta = FileMetaData.read_footer(data)
+    var mapping = SchemaMapping.from_parquet(meta)
+    var out = List[List[List[PageBounds]]]()
+    for ref rg in meta.row_groups:
+        var per_col = List[List[PageBounds]]()
+        for ci in range(len(rg.columns)):
+            ref cc = rg.columns[ci]
+            var pages = List[PageBounds]()
+            if cc.offset_index_offset >= 0 and cc.column_index_offset >= 0:
+                var ro = CompactReader(data, cc.offset_index_offset)
+                var oi = OffsetIndex.read(ro)
+                var rc = CompactReader(data, cc.column_index_offset)
+                var cix = ColumnIndex.read(rc)
+                ref dtype = mapping.leaves[ci].dtype
+                var np = len(oi.page_locations)
+                for p in range(np):
+                    var first = oi.page_locations[p].first_row_index
+                    var nxt = (
+                        oi.page_locations[p + 1].first_row_index if p + 1
+                        < np else rg.num_rows
+                    )
+                    var mn: Optional[AnyScalar] = None
+                    var mx: Optional[AnyScalar] = None
+                    # an all-null page (or a missing bound) prunes nothing
+                    if not (p < len(cix.null_pages) and cix.null_pages[p]):
+                        if p < len(cix.min_values):
+                            mn = _decode_stat(dtype, cix.min_values[p])
+                        if p < len(cix.max_values):
+                            mx = _decode_stat(dtype, cix.max_values[p])
+                    pages.append(PageBounds(nxt - first, mn^, mx^))
+            per_col.append(pages^)
+        out.append(per_col^)
+    _ = mapped^
     return out^
 
 

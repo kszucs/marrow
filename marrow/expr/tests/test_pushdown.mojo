@@ -99,6 +99,36 @@ def test_pushdown_end_to_end() raises:
     remove(path)
 
 
+def test_pushdown_page_skip() raises:
+    # one row group, many small pages with a page index; a range predicate must
+    # skip whole pages yet return exactly the matching rows (Filter re-applies)
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            x=pa.array(Python.evaluate("list(range(10000))"), type=pa.int64())
+        )
+    )
+    var path = String("/tmp/marrow_pd_pageskip.parquet")
+    pq.write_table(
+        tbl,
+        path,
+        data_page_size=256,
+        row_group_size=1000000,
+        write_page_index=True,
+        compression="none",
+    )
+    var sch = schema([field("x", int64)])
+    var plan = parquet_scan(path, sch).filter(
+        col("x") > lit[Int64Type](Int64(7500))
+    )
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2499)  # 7501..9999
+    assert_equal(result.columns[0].copy().as_int64()[0].value(), 7501)
+    assert_equal(result.columns[0].copy().as_int64()[2498].value(), 9999)
+    remove(path)
+
+
 def test_pushdown_prunes_all_groups() raises:
     # a predicate no row can satisfy -> every group pruned -> empty result
     var path = String("/tmp/marrow_pd_none.parquet")

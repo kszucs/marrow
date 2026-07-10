@@ -15,6 +15,9 @@ from .reader import (
     ColumnStatistics,
     read_page_index,
     PageIndex,
+    read_page_bounds,
+    PageBounds,
+    RowSelection,
 )
 from .writer import write_table
 from .codecs import Compression

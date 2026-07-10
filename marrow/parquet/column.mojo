@@ -21,6 +21,7 @@ from .codecs import Encoding, Rle, LittleEndian, Dictionary, Compression
 from .utils import CompressionLibs
 from .schema import LeafColumn, DecodedLeaf
 from .format import ColumnMetaData, PageHeader, PageType
+from .reader import RowSelection
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +236,37 @@ struct PageReader[o: Origin[mut=False]](Movable):
         else:
             raise Error("parquet: unexpected page type")
 
+    def peek(self) raises -> Tuple[Bool, Int]:
+        """Inspect the next page without consuming it: `(is_dictionary,
+        num_values)`. Lets the caller decide, from the page's row count, whether
+        to decode, skip, or partially select it before paying the decode."""
+        var p = self.pos
+        var ph = PageHeader.read_at(self.data, p)
+        if ph.type == PageType.DICTIONARY:
+            return (True, ph.dictionary_page_header.value().num_values)
+        elif ph.type == PageType.DATA:
+            return (False, ph.data_page_header.value().num_values)
+        elif ph.type == PageType.DATA_V2:
+            return (False, ph.data_page_header_v2.value().num_values)
+        else:
+            raise Error("parquet: unexpected page type")
+
+    def skip_next(mut self) raises -> Int:
+        """Advance past the next data page without decompressing or decoding it
+        (the row-skip fast path); return the number of rows skipped."""
+        var body_start = self.pos
+        var ph = PageHeader.read_at(self.data, body_start)
+        self.pos = body_start + ph.compressed_page_size
+        var nv: Int
+        if ph.type == PageType.DATA:
+            nv = ph.data_page_header.value().num_values
+        elif ph.type == PageType.DATA_V2:
+            nv = ph.data_page_header_v2.value().num_values
+        else:
+            raise Error("parquet: skip_next on a non-data page")
+        self.produced += nv
+        return nv
+
 
 # ---------------------------------------------------------------------------
 # LeafBuilder — accumulates decoded pages into one Arrow array
@@ -245,6 +277,12 @@ trait LeafBuilder(ImplicitlyDeletable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
     def consume(mut self, var page: Page) raises:
+        ...
+
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        """Append only the rows of `page` where `mask[row]` is set (page-relative
+        row index) — used for a data page partially covered by a row selection.
+        """
         ...
 
     def finish(deinit self) raises -> AnyArray:
@@ -369,6 +407,33 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             )
             self._scatter(page, present.unsafe_ptr())
 
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        # Decode every present value through the general per-encoding decoder
+        # (PLAIN / dictionary / DELTA / BYTE_STREAM_SPLIT), then place only the
+        # rows `mask` selects. Partial pages are the page-boundary minority, so
+        # skipping the fast paths here costs little.
+        var present = List[Scalar[Self.store_dt]](capacity=page.num_present)
+        page.encoding.decode_primitive[Self.store_dt, Self.phys_dt](
+            page.values(), page.num_present, self.dict, present
+        )
+        var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
+        self._ensure_bitmap()  # selected present rows are set valid explicitly
+        var vi = 0
+        for row in range(page.num_values):
+            var present_here = page.all_present() or (
+                Int(page.def_levels[row]) == self.max_def
+            )
+            if mask[row]:
+                if present_here:
+                    vptr[self.wpos] = present[vi]
+                    self.bitmap.set(self.wpos)
+                else:
+                    vptr[self.wpos] = 0
+                    self.null_count += 1
+                self.wpos += 1
+            if present_here:
+                vi += 1
+
     def finish(deinit self) raises -> AnyArray:
         var buffers = List[Buffer[mut=False]]()
         buffers.append(self.values^.to_immutable())
@@ -460,6 +525,42 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
             )
             self._scatter_values(page, values)
 
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        var vspan = page.values()
+        if page.is_plain():
+            var vi = 0
+            for row in range(page.num_values):
+                if page.all_present() or Int(page.def_levels[row]) == (
+                    self.max_def
+                ):
+                    var n = LittleEndian.u32(vspan, vi)
+                    vi += 4
+                    if mask[row]:
+                        self._append(vspan[vi : vi + n])
+                    vi += n
+                else:
+                    if mask[row]:
+                        self.builder.append_null()
+        else:
+            var values = page.encoding.decode_bytes(
+                page.values(),
+                page.num_present,
+                self.dict_body,
+                self.dict_off,
+                self.dict_len,
+            )
+            var vi = 0
+            for row in range(page.num_values):
+                if page.all_present() or Int(page.def_levels[row]) == (
+                    self.max_def
+                ):
+                    if mask[row]:
+                        self._append(Span(values[vi]))
+                    vi += 1
+                else:
+                    if mask[row]:
+                        self.builder.append_null()
+
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^
         var out: AnyArray = b.finish()
@@ -493,6 +594,23 @@ struct BoolLeafBuilder(LeafBuilder):
             else:
                 self.builder.append_null()
 
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        if not page.is_plain():
+            raise Error("parquet: non-plain bool encoding not supported")
+        var vspan = page.values()
+        var all_present = page.all_present()
+        var bitpos = 0
+        for row in range(page.num_values):
+            if all_present or Int(page.def_levels[row]) == self.max_def:
+                var byte = vspan[bitpos >> 3]
+                var b = (byte >> UInt8(bitpos & 7)) & 1
+                bitpos += 1
+                if mask[row]:
+                    self.builder.append(b == 1)
+            else:
+                if mask[row]:
+                    self.builder.append_null()
+
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^
         var out: AnyArray = b.finish()
@@ -516,6 +634,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     var num_rows: Int
     var leveled: Bool
     var def_out: List[Int32]  # per-row def levels, kept only when carry_def
+    var selection: Optional[RowSelection]  # None = decode every row
 
     def __init__(
         out self,
@@ -523,15 +642,19 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var meta: ColumnMetaData,
         var leaf: LeafColumn,
         num_rows: Int,
+        var selection: Optional[RowSelection] = None,
     ):
         var leveled = leaf.max_rep >= 1
         self.pages = PageReader(data, meta^, leaf^)
         self.num_rows = num_rows
         self.leveled = leveled
         self.def_out = List[Int32]()
+        self.selection = selection^
 
     def decode(mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
         if self.leveled:
+            # nested columns decode in full (page skipping is a flat-path
+            # optimisation); a Filter above the scan still applies the predicate.
             return self._decode_leveled(codecs)
         else:
             return self._decode_flat(codecs)
@@ -543,6 +666,8 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     def _run[
         B: LeafBuilder
     ](mut self, mut builder: B, mut codecs: CompressionLibs) raises:
+        if self.selection:
+            return self._run_selected(builder, codecs)
         var carry = self.pages.leaf.carry_def
         var md = self.pages.leaf.max_def
         while self.pages.has_next():
@@ -556,6 +681,30 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                     for _ in range(pg.num_values):
                         self.def_out.append(Int32(md))
             builder.consume(pg^)
+
+    def _run_selected[
+        B: LeafBuilder
+    ](mut self, mut builder: B, mut codecs: CompressionLibs) raises:
+        """Flat decode honoring a row selection: a data page whose rows are all
+        deselected is skipped without decoding; a fully selected page decodes
+        normally; a partially selected page keeps only its chosen rows. For flat
+        columns `pages.produced` is the row-group-relative index of the next data
+        page's first row, so the page's rows are `[produced, produced + nv)`."""
+        ref sel = self.selection.value()
+        while self.pages.has_next():
+            var is_dict, nv = self.pages.peek()
+            if is_dict:
+                builder.consume(self.pages.next(codecs))  # build the dictionary
+            else:
+                var start = self.pages.produced
+                var kept = sel.selected_in(start, nv)
+                if kept == 0:
+                    _ = self.pages.skip_next()
+                elif kept == nv:
+                    builder.consume(self.pages.next(codecs))
+                else:
+                    var m = sel.mask(start, nv)
+                    builder.consume_selected(self.pages.next(codecs), m)
 
     def _build[
         B: LeafBuilder
