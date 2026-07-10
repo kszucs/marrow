@@ -628,6 +628,7 @@ struct DeltaByteArray:
         return out^
 
 
+@fieldwise_init
 struct Encoding(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `Encoding` enum value. The decode methods dispatch a data page's
     *present* values to the per-encoding codec above; each appends `num_present`
@@ -646,15 +647,6 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
     comptime DELTA_BYTE_ARRAY = Self(7)
     comptime RLE_DICTIONARY = Self(8)
     comptime BYTE_STREAM_SPLIT = Self(9)
-
-    def __init__(out self, code: Int):
-        self.code = code
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
 
     def is_plain(self) -> Bool:
         return self == Self.PLAIN
@@ -722,6 +714,7 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         return Plain.decode_bool(values, num_present)
 
 
+@fieldwise_init
 struct Compression(Equatable, ImplicitlyCopyable, Movable):
     """A Parquet `CompressionCodec` value: the codec identity plus the
     `compress` / `decompress` operations, dispatched onto a `CompressionLibs`
@@ -738,15 +731,6 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     comptime LZ4 = Self(5)
     comptime ZSTD = Self(6)
     comptime LZ4_RAW = Self(7)
-
-    def __init__(out self, code: Int):
-        self.code = code
-
-    def __eq__(self, other: Self) -> Bool:
-        return self.code == other.code
-
-    def __ne__(self, other: Self) -> Bool:
-        return self.code != other.code
 
     def decompress_into(
         self,
