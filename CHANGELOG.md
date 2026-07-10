@@ -4,6 +4,19 @@
 
 ### Features
 
+- **Temporal, decimal & fixed-size-binary write** (`marrow.parquet`): the writer
+  now emits `date32` (INT32/`DATE`), `time32`/`time64` (INT32/INT64 with
+  `TIME_MILLIS`/`TIME_MICROS` and the nanosecond `TIME` `LogicalType`),
+  `timestamp` (INT64/`TIMESTAMP` carrying the time unit and the
+  `isAdjustedToUTC` flag derived from the Arrow timezone), `decimal128`/
+  `decimal256` (big-endian two's-complement `FIXED_LEN_BYTE_ARRAY` of 16/32
+  bytes with `precision`/`scale`), `decimal32`/`decimal64` (INT32/INT64), and
+  `fixed_size_binary` (`FIXED_LEN_BYTE_ARRAY`). `SchemaElement` now serializes
+  the full `LogicalType` Thrift union — including the nested `TimeUnit`
+  (MILLIS/MICROS/NANOS) and `DECIMAL {scale, precision}` members — plus the
+  `scale`/`precision` fields. PyArrow reads every type back with the correct
+  annotation, including nanosecond resolution and timezones.
+
 - **Write-side encodings** (`marrow.parquet`): the writer no longer emits only
   PLAIN. `write_table(..., use_dictionary=True)` (the default, like PyArrow)
   dictionary-encodes numeric and string columns — a PLAIN dictionary page of

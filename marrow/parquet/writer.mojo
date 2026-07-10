@@ -103,6 +103,33 @@ struct ColumnWriter(Movable):
             Plain.encode_bool(col.as_bool(), body)
         elif vt.is_string():
             Plain.encode_bytes(col.as_string(), body)
+        elif vt.is_date32():
+            Plain.encode_primitive[phys=DType.int32](col.as_date32(), body)
+        elif vt.is_time32():
+            Plain.encode_primitive[phys=DType.int32](col.as_time32(), body)
+        elif vt.is_time64():
+            Plain.encode_primitive[phys=DType.int64](col.as_time64(), body)
+        elif vt.is_timestamp():
+            Plain.encode_primitive[phys=DType.int64](col.as_timestamp(), body)
+        elif vt.is_date64():
+            Plain.encode_primitive[phys=DType.int64](col.as_date64(), body)
+        elif vt.is_duration():
+            Plain.encode_primitive[phys=DType.int64](col.as_duration(), body)
+        elif vt.is_decimal32():
+            Plain.encode_primitive[phys=DType.int32](col.as_decimal32(), body)
+        elif vt.is_decimal64():
+            Plain.encode_primitive[phys=DType.int64](col.as_decimal64(), body)
+        elif vt.is_decimal128():
+            # DECIMAL as FIXED_LEN_BYTE_ARRAY(16): big-endian two's complement.
+            Plain.encode_primitive[phys=DType.int128, big_endian=True](
+                col.as_decimal128(), body
+            )
+        elif vt.is_decimal256():
+            Plain.encode_primitive[phys=DType.int256, big_endian=True](
+                col.as_decimal256(), body
+            )
+        elif vt.is_fixed_size_binary():
+            Plain.encode_fixed_size_binary(col.as_fixed_size_binary(), body)
         else:
             raise Error("parquet: cannot write column type " + String(vt))
 

@@ -509,7 +509,41 @@ struct SchemaElement(Copyable, Movable):
         if self.converted_type != ConvertedType.NONE:
             last = w.write_field_begin(TC_I32, 6, last)
             w.write_i32(Int32(self.converted_type.code))
+        if self.logical_type == LogicalType.DECIMAL:
+            last = w.write_field_begin(TC_I32, 7, last)
+            w.write_i32(Int32(self.scale))
+            last = w.write_field_begin(TC_I32, 8, last)
+            w.write_i32(Int32(self.precision))
+        if self.logical_type != LogicalType.NONE:
+            last = w.write_field_begin(TC_STRUCT, 10, last)
+            self._write_logical_type(w)
         w.write_field_stop()
+
+    def _write_logical_type(self, mut w: CompactWriter):
+        """Serialize the `LogicalType` union (field 10): one member field whose
+        id is the logical type, holding that member's struct. TIME/TIMESTAMP carry
+        `{isAdjustedToUTC, unit}` (unit a `TimeUnit` union), DECIMAL carries
+        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs."""
+        _ = w.write_field_begin(TC_STRUCT, self.logical_type.code, 0)
+        if (
+            self.logical_type == LogicalType.TIME
+            or self.logical_type == LogicalType.TIMESTAMP
+        ):
+            var last = w.write_bool_field(self.logical_utc, 1, 0)
+            _ = w.write_field_begin(TC_STRUCT, 2, last)  # unit: TimeUnit union
+            _ = w.write_field_begin(TC_STRUCT, self.logical_unit, 0)
+            w.write_field_stop()  # close the TimeUnit member (empty struct)
+            w.write_field_stop()  # close the TimeUnit union
+            w.write_field_stop()  # close the TimeType / TimestampType struct
+        elif self.logical_type == LogicalType.DECIMAL:
+            var last = w.write_field_begin(TC_I32, 1, 0)
+            w.write_i32(Int32(self.scale))
+            last = w.write_field_begin(TC_I32, 2, last)
+            w.write_i32(Int32(self.precision))
+            w.write_field_stop()  # close the DecimalType struct
+        else:
+            w.write_field_stop()  # close the (empty) member struct
+        w.write_field_stop()  # close the LogicalType union struct
 
 
 # ---------------------------------------------------------------------------

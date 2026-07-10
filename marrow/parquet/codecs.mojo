@@ -24,7 +24,12 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
 from std.sys import size_of
 from std.memory import memcpy
 
-from ..arrays import PrimitiveArray, StringArray, BoolArray
+from ..arrays import (
+    PrimitiveArray,
+    StringArray,
+    BoolArray,
+    FixedSizeBinaryArray,
+)
 from .. import dtypes as dt
 from ..views import load_word_le
 from .utils import CompressionLibs
@@ -535,14 +540,18 @@ struct Plain:
 
     @staticmethod
     def encode_primitive[
-        store: dt.NumericType, phys: DType
+        store: dt.PrimitiveType, phys: DType, big_endian: Bool = False
     ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
+        """PLAIN fixed-width encode of the present values, `phys`-wide. `store`
+        may be numeric, temporal, decimal, or interval; `big_endian` (for DECIMAL
+        FIXED_LEN_BYTE_ARRAY) writes the two's-complement value most-significant
+        byte first."""
         comptime W = size_of[Scalar[phys]]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var bytes = (
-                    arr[i].value().cast[phys]().as_bytes[big_endian=False]()
-                )
+                var bytes = arr[i].value().cast[phys]().as_bytes[
+                    big_endian=big_endian
+                ]()
                 for b in range(W):
                     out.append(bytes[b])
 
@@ -569,6 +578,16 @@ struct Plain:
                 var b = String(arr[i]).as_bytes()
                 LittleEndian.put_u32(out, len(b))
                 out.extend(b)
+
+    @staticmethod
+    def encode_fixed_size_binary(
+        arr: FixedSizeBinaryArray, mut out: List[UInt8]
+    ) raises:
+        """FIXED_LEN_BYTE_ARRAY: the present values' `byte_width` bytes, no
+        length prefix (the width is in the schema)."""
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                out.extend(Span(arr[i].value()))
 
     @staticmethod
     def decode_primitive[

@@ -542,6 +542,16 @@ struct SchemaMapping(Movable):
                 )
             elif ct == ConvertedType.TIME_MICROS or lt == LogicalType.TIME:
                 return dt.time64(Self._time_unit(el))
+        # DECIMAL (any physical backing) -> the narrowest Arrow decimal that
+        # holds the precision, mirroring PyArrow (decimal128 up to 38 digits).
+        if ct == ConvertedType.DECIMAL or lt == LogicalType.DECIMAL:
+            if el.precision <= 38:
+                return dt.decimal128(el.precision, el.scale)
+            else:
+                return dt.decimal256(el.precision, el.scale)
+        # Un-annotated FIXED_LEN_BYTE_ARRAY -> fixed-size binary of that width.
+        if pt == PhysicalType.FIXED_LEN_BYTE_ARRAY:
+            return dt.fixed_size_binary_(el.type_length)
         # Non-temporal bulk: match the physical type, then the specific
         # converted/logical annotation; falling back to that physical's default
         # row (both annotations NONE) when none applies.
@@ -814,6 +824,77 @@ struct SchemaMapping(Movable):
                 return (row.physical, row.converted, row.logical)
         raise Error("parquet: cannot write Arrow type " + String(dtype))
 
+    @staticmethod
+    def _set_leaf_physical(
+        dtype: dt.AnyDataType, mut el: SchemaElement
+    ) raises:
+        """Populate a leaf `SchemaElement`'s physical fields (type, converted /
+        logical annotation, time unit + UTC, decimal scale + precision, and FLBA
+        length) from an Arrow value type — the inverse of `_leaf_dtype`. Temporal,
+        decimal, and fixed-size-binary are handled here; everything else falls
+        back to the `_leaf_type_rows` table."""
+        if dtype.is_date32():
+            el.type = PhysicalType.INT32
+            el.converted_type = ConvertedType.DATE
+            el.logical_type = LogicalType.DATE
+        elif dtype.is_time32():
+            el.type = PhysicalType.INT32
+            el.converted_type = ConvertedType.TIME_MILLIS
+            el.logical_type = LogicalType.TIME
+            el.logical_unit = 1
+        elif dtype.is_time64():
+            el.type = PhysicalType.INT64
+            el.logical_type = LogicalType.TIME
+            if dtype.as_time64().unit == dt.microsecond:
+                el.converted_type = ConvertedType.TIME_MICROS
+                el.logical_unit = 2
+            else:
+                el.logical_unit = 3  # nanoseconds: logical annotation only
+        elif dtype.is_timestamp():
+            ref ts = dtype.as_timestamp()
+            el.type = PhysicalType.INT64
+            el.logical_type = LogicalType.TIMESTAMP
+            el.logical_utc = ts.timezone.byte_length() > 0
+            if ts.unit == dt.millisecond:
+                el.logical_unit = 1
+                if not el.logical_utc:
+                    el.converted_type = ConvertedType.TIMESTAMP_MILLIS
+            elif ts.unit == dt.microsecond:
+                el.logical_unit = 2
+                if not el.logical_utc:
+                    el.converted_type = ConvertedType.TIMESTAMP_MICROS
+            else:
+                el.logical_unit = 3  # nanoseconds: logical annotation only
+        elif dtype.is_decimal():
+            el.converted_type = ConvertedType.DECIMAL
+            el.logical_type = LogicalType.DECIMAL
+            if dtype.is_decimal32():
+                el.type = PhysicalType.INT32
+                el.precision = dtype.as_decimal32().precision
+                el.scale = dtype.as_decimal32().scale
+            elif dtype.is_decimal64():
+                el.type = PhysicalType.INT64
+                el.precision = dtype.as_decimal64().precision
+                el.scale = dtype.as_decimal64().scale
+            elif dtype.is_decimal128():
+                el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
+                el.type_length = 16
+                el.precision = dtype.as_decimal128().precision
+                el.scale = dtype.as_decimal128().scale
+            else:
+                el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
+                el.type_length = 32
+                el.precision = dtype.as_decimal256().precision
+                el.scale = dtype.as_decimal256().scale
+        elif dtype.is_fixed_size_binary():
+            el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
+            el.type_length = dtype.as_fixed_size_binary().byte_width
+        else:
+            var phys, conv, logi = Self._physical(dtype)
+            el.type = phys
+            el.converted_type = conv
+            el.logical_type = logi
+
     def _emit_field(
         mut self,
         field: dt.Field,
@@ -923,15 +1004,13 @@ struct SchemaMapping(Movable):
                 ),
             )
 
-        var phys, conv, logi = Self._physical(field.dtype)
         var el = SchemaElement()
-        el.type = phys
         el.name = field.name
         el.repetition_type = (
             Repetition.OPTIONAL if nullable else Repetition.REQUIRED
         )
-        el.converted_type = conv
-        el.logical_type = logi
+        Self._set_leaf_physical(field.dtype, el)
+        var phys = el.type
         self.elements.append(el^)
         var li = len(self.leaves)
         self.leaves.append(

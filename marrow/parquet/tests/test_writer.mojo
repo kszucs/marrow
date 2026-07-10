@@ -608,5 +608,123 @@ def test_write_dictionary_high_cardinality_falls_back() raises:
     remove(path)
 
 
+# ---------------------------------------------------------------------------
+# Temporal write — date/time/timestamp (incl. nanoseconds and timezone, which
+# need the LogicalType union, not just the legacy ConvertedType).
+# ---------------------------------------------------------------------------
+
+
+def test_write_temporal() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var d = Python.import_module("datetime")
+    var want = pa.table(
+        {
+            "date": pa.array(
+                [d.date(2020, 1, 1), None, d.date(2021, 6, 15)],
+                type=pa.date32(),
+            ),
+            "ts_ms": pa.array([10, 20, 30], type=pa.timestamp("ms")),
+            "ts_us": pa.array([1000, None, 2000], type=pa.timestamp("us")),
+            "ts_ns": pa.array([1, 2, 3], type=pa.timestamp("ns")),
+            "ts_tz": pa.array(
+                [100, 200, 300], type=pa.timestamp("us", tz="UTC")
+            ),
+            "time_ms": pa.array([1, 2, 3], type=pa.time32("ms")),
+            "time_us": pa.array([5, 6, 7], type=pa.time64("us")),
+            "time_ns": pa.array([8, 9, 10], type=pa.time64("ns")),
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_temporal.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+
+    # PyArrow reads back every type (unit + tz preserved) and every value.
+    var back = pq.read_table(path)
+    for i in range(Int(py=want.num_columns)):
+        assert_true(
+            Bool(back.schema.field(i).type == want.schema.field(i).type),
+            "temporal type mismatch at column " + String(i),
+        )
+        assert_true(
+            Bool(back.column(i).equals(want.column(i))),
+            "temporal value mismatch at column " + String(i),
+        )
+    remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Decimal + fixed-size-binary write (FIXED_LEN_BYTE_ARRAY).
+# ---------------------------------------------------------------------------
+
+
+def test_write_decimal128() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var dec = Python.import_module("decimal")
+    var want = pa.table(
+        {
+            "d": pa.array(
+                [dec.Decimal("1.23"), None, dec.Decimal("-45.67")],
+                type=pa.decimal128(10, 2),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_decimal.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.schema.field(0).type == want.schema.field(0).type),
+        "decimal type mismatch",
+    )
+    assert_true(
+        Bool(back.column(0).equals(want.column(0))), "decimal value mismatch"
+    )
+    remove(path)
+
+
+def test_write_decimal256() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var dec = Python.import_module("decimal")
+    var want = pa.table(
+        {
+            "d": pa.array(
+                [dec.Decimal("123456789.123456789"), dec.Decimal("-1")],
+                type=pa.decimal256(50, 9),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_decimal256.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(Bool(back.column(0).equals(want.column(0))), "dec256 mismatch")
+    remove(path)
+
+
+def test_write_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "b": pa.array(
+                Python.evaluate("[b'abc', None, b'xyz']"), type=pa.binary(3)
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_fsb.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.schema.field(0).type == want.schema.field(0).type),
+        "fixed_size_binary type mismatch",
+    )
+    assert_true(Bool(back.column(0).equals(want.column(0))), "fsb mismatch")
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
