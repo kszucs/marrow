@@ -247,6 +247,31 @@ struct SchemaNode(Copyable, Movable):
         )
 
 
+struct _LeafTypeRow(Copyable, Movable):
+    """One row of the canonical Arrow<->Parquet leaf-type table: an Arrow value
+    type and the `(physical, converted, logical)` triple it maps to. Both
+    directions of `SchemaMapping` derive from the same rows so they cannot drift.
+    The temporal types (date/time/timestamp) need unit + UTC disambiguation that
+    does not invert cleanly and are special-cased outside this table."""
+
+    var arrow: dt.AnyDataType
+    var physical: PhysicalType
+    var converted: ConvertedType
+    var logical: LogicalType
+
+    def __init__(
+        out self,
+        var arrow: dt.AnyDataType,
+        physical: PhysicalType,
+        converted: ConvertedType,
+        logical: LogicalType,
+    ):
+        self.arrow = arrow^
+        self.physical = physical
+        self.converted = converted
+        self.logical = logical
+
+
 struct SchemaMapping(Movable):
     """The bridge between an Arrow schema and its Parquet representation, built in
     either direction. It holds the Arrow `schema`, the flat Parquet
@@ -314,30 +339,78 @@ struct SchemaMapping(Movable):
             return dt.microsecond
 
     @staticmethod
+    def _leaf_type_rows() -> List[_LeafTypeRow]:
+        """The single source of truth for the primitive / string / binary leaf
+        types, as `(arrow, physical, converted, logical)` rows. `_physical`
+        (Arrow -> Parquet) is a forward lookup by Arrow type; `_leaf_dtype`
+        (Parquet -> Arrow) is the reverse lookup by physical + converted/logical.
+        Each physical type has exactly one "default" row (converted and logical
+        both NONE) that the reverse lookup falls back to. Temporal types are
+        special-cased in `_leaf_dtype` / `_physical` and deliberately absent."""
+        comptime NO_CT = ConvertedType.NONE
+        comptime NO_LT = LogicalType.NONE
+        var rows = List[_LeafTypeRow]()
+        rows.append(_LeafTypeRow(dt.bool_, PhysicalType.BOOLEAN, NO_CT, NO_LT))
+        rows.append(
+            _LeafTypeRow(
+                dt.int8, PhysicalType.INT32, ConvertedType.INT_8, NO_LT
+            )
+        )
+        rows.append(
+            _LeafTypeRow(
+                dt.int16, PhysicalType.INT32, ConvertedType.INT_16, NO_LT
+            )
+        )
+        rows.append(_LeafTypeRow(dt.int32, PhysicalType.INT32, NO_CT, NO_LT))
+        rows.append(
+            _LeafTypeRow(
+                dt.uint8, PhysicalType.INT32, ConvertedType.UINT_8, NO_LT
+            )
+        )
+        rows.append(
+            _LeafTypeRow(
+                dt.uint16, PhysicalType.INT32, ConvertedType.UINT_16, NO_LT
+            )
+        )
+        rows.append(
+            _LeafTypeRow(
+                dt.uint32, PhysicalType.INT32, ConvertedType.UINT_32, NO_LT
+            )
+        )
+        rows.append(_LeafTypeRow(dt.int64, PhysicalType.INT64, NO_CT, NO_LT))
+        rows.append(
+            _LeafTypeRow(
+                dt.uint64, PhysicalType.INT64, ConvertedType.UINT_64, NO_LT
+            )
+        )
+        rows.append(_LeafTypeRow(dt.float32, PhysicalType.FLOAT, NO_CT, NO_LT))
+        rows.append(_LeafTypeRow(dt.float64, PhysicalType.DOUBLE, NO_CT, NO_LT))
+        rows.append(
+            _LeafTypeRow(
+                dt.string,
+                PhysicalType.BYTE_ARRAY,
+                ConvertedType.UTF8,
+                LogicalType.STRING,
+            )
+        )
+        rows.append(
+            _LeafTypeRow(dt.binary, PhysicalType.BYTE_ARRAY, NO_CT, NO_LT)
+        )
+        return rows^
+
+    @staticmethod
     def _leaf_dtype(el: SchemaElement) raises -> dt.AnyDataType:
         """Arrow value type for a Parquet leaf `SchemaElement`."""
         var pt = el.type
         var ct = el.converted_type
         var lt = el.logical_type
-        if pt == PhysicalType.BOOLEAN:
-            return dt.bool_
-        elif pt == PhysicalType.INT32:
+        # Temporal leaves need unit + UTC disambiguation and array construction
+        # that does not invert cleanly, so they are matched before the table.
+        if pt == PhysicalType.INT32:
             if ct == ConvertedType.DATE or lt == LogicalType.DATE:
                 return dt.date32()
             elif ct == ConvertedType.TIME_MILLIS or lt == LogicalType.TIME:
                 return dt.time32(dt.millisecond)
-            elif ct == ConvertedType.INT_8:
-                return dt.int8
-            elif ct == ConvertedType.INT_16:
-                return dt.int16
-            elif ct == ConvertedType.UINT_8:
-                return dt.uint8
-            elif ct == ConvertedType.UINT_16:
-                return dt.uint16
-            elif ct == ConvertedType.UINT_32:
-                return dt.uint32
-            else:
-                return dt.int32
         elif pt == PhysicalType.INT64:
             if (
                 ct == ConvertedType.TIMESTAMP_MILLIS
@@ -350,21 +423,24 @@ struct SchemaMapping(Movable):
                 )
             elif ct == ConvertedType.TIME_MICROS or lt == LogicalType.TIME:
                 return dt.time64(Self._time_unit(el))
-            elif ct == ConvertedType.UINT_64:
-                return dt.uint64
-            else:
-                return dt.int64
-        elif pt == PhysicalType.FLOAT:
-            return dt.float32
-        elif pt == PhysicalType.DOUBLE:
-            return dt.float64
-        elif pt == PhysicalType.BYTE_ARRAY:
-            if ct == ConvertedType.UTF8 or lt == LogicalType.STRING:
-                return dt.string
-            else:
-                return dt.binary
-        else:
-            raise Error("parquet: unsupported physical type " + String(pt.code))
+        # Non-temporal bulk: match the physical type, then the specific
+        # converted/logical annotation; falling back to that physical's default
+        # row (both annotations NONE) when none applies.
+        var rows = Self._leaf_type_rows()
+        for ref row in rows:
+            if row.physical == pt and (
+                (row.converted != ConvertedType.NONE and row.converted == ct)
+                or (row.logical != LogicalType.NONE and row.logical == lt)
+            ):
+                return row.arrow.copy()
+        for ref row in rows:
+            if (
+                row.physical == pt
+                and row.converted == ConvertedType.NONE
+                and row.logical == LogicalType.NONE
+            ):
+                return row.arrow.copy()
+        raise Error("parquet: unsupported physical type " + String(pt.code))
 
     def _parse_node(
         mut self,
@@ -513,40 +589,10 @@ struct SchemaMapping(Movable):
         dtype: dt.AnyDataType,
     ) raises -> Tuple[PhysicalType, ConvertedType, LogicalType]:
         """`(physical, converted, logical)` for an Arrow leaf; NONE = absent."""
-        comptime NO_CT = ConvertedType.NONE
-        comptime NO_LT = LogicalType.NONE
-        if dtype == dt.bool_:
-            return (PhysicalType.BOOLEAN, NO_CT, NO_LT)
-        elif dtype == dt.int8:
-            return (PhysicalType.INT32, ConvertedType.INT_8, NO_LT)
-        elif dtype == dt.int16:
-            return (PhysicalType.INT32, ConvertedType.INT_16, NO_LT)
-        elif dtype == dt.int32:
-            return (PhysicalType.INT32, NO_CT, NO_LT)
-        elif dtype == dt.uint8:
-            return (PhysicalType.INT32, ConvertedType.UINT_8, NO_LT)
-        elif dtype == dt.uint16:
-            return (PhysicalType.INT32, ConvertedType.UINT_16, NO_LT)
-        elif dtype == dt.uint32:
-            return (PhysicalType.INT32, ConvertedType.UINT_32, NO_LT)
-        elif dtype == dt.int64:
-            return (PhysicalType.INT64, NO_CT, NO_LT)
-        elif dtype == dt.uint64:
-            return (PhysicalType.INT64, ConvertedType.UINT_64, NO_LT)
-        elif dtype == dt.float32:
-            return (PhysicalType.FLOAT, NO_CT, NO_LT)
-        elif dtype == dt.float64:
-            return (PhysicalType.DOUBLE, NO_CT, NO_LT)
-        elif dtype.is_string():
-            return (
-                PhysicalType.BYTE_ARRAY,
-                ConvertedType.UTF8,
-                LogicalType.STRING,
-            )
-        elif dtype.is_binary():
-            return (PhysicalType.BYTE_ARRAY, NO_CT, NO_LT)
-        else:
-            raise Error("parquet: cannot write Arrow type " + String(dtype))
+        for ref row in Self._leaf_type_rows():
+            if row.arrow == dtype:
+                return (row.physical, row.converted, row.logical)
+        raise Error("parquet: cannot write Arrow type " + String(dtype))
 
     def _emit_field(
         mut self, field: dt.Field, def_base: Int
