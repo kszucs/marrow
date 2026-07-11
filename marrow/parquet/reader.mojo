@@ -147,7 +147,9 @@ struct Page(Movable):
         """The column chunk's dictionary page — carries only its distinct values;
         no levels, no present/null distinction."""
         return Page(
-            body=body, num_values=num_values, num_present=num_values,
+            body=body,
+            num_values=num_values,
+            num_present=num_values,
             dictionary=True,
         )
 
@@ -157,7 +159,8 @@ struct Page(Movable):
     def present_at(self, row: Int, max_def: Int) -> Bool:
         """Whether output `row` holds a present value: the whole page is present,
         or its definition level reaches the leaf's max (a value slot, not a
-        null). The def-level scatter every `LeafBuilder` shares pivots on this."""
+        null). The def-level scatter every `LeafBuilder` shares pivots on this.
+        """
         return self.all_present() or Int(self.def_levels[row]) == max_def
 
     def is_plain(self) -> Bool:
@@ -398,14 +401,15 @@ struct PageReader[o: Origin[mut=False]](Movable):
 
 
 def _walk_slots[
-    body: def (Bool, Bool, Int) raises capturing [_] -> None,
+    body: def(Bool, Bool, Int) raises capturing[_] -> None,
 ](page: Page, max_def: Int, mask: Optional[List[Bool]]) raises:
     """Walk a data page's `num_values` output slots — the flat scatter skeleton
     every `LeafBuilder` shares. For each row `body(present, selected, vi)` fires
     with whether the slot holds a present value (`page.present_at`), whether the
     selection mask keeps it, and the running index into the page's decoded
     present values (advanced on every present slot, regardless of the mask). Only
-    the per-slot placement differs across leaves; it lives entirely in `body`."""
+    the per-slot placement differs across leaves; it lives entirely in `body`.
+    """
     var vi = 0
     for row in range(page.num_values):
         var present_here = page.present_at(row, max_def)
@@ -1247,9 +1251,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         )
         return self._flat_leaf(arr^)
 
-    def _emit_fsb(
-        mut self, mut codecs: CompressionLibs
-    ) raises -> DecodedLeaf:
+    def _emit_fsb(mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
         var arr = self._build(
             FixedSizeBinaryLeafBuilder(self.num_rows, self.pages.leaf), codecs
         )
@@ -1354,122 +1356,164 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
 comptime _PARALLEL_MIN_ROWS = 4096
 
 
+struct ParquetFile(Movable):
+    """A Parquet file opened for reading — mirrors PyArrow's `ParquetFile`.
+
+    Owns the read-only mmap, the footer metadata, and the Parquet->Arrow schema
+    mapping, all read once at construction. `read()` decodes columns into a
+    `Table`; the mmap is unmapped when the `ParquetFile` drops. Decoded values
+    are copied into owned Arrow buffers, so a returned `Table` outlives the
+    file."""
+
+    var _mapped: MappedFile
+    var _meta: FileMetaData
+    var _mapping: SchemaMapping
+
+    def __init__(out self, path: String) raises:
+        self._mapped = MappedFile(path)
+        self._meta = FileMetaData.read_footer(self._mapped.span())
+        self._mapping = SchemaMapping.from_parquet(self._meta)
+
+    def metadata(self) -> FileMetaData:
+        """The file's footer metadata (row groups, column chunks, statistics).
+        """
+        return self._meta.copy()
+
+    def schema(self) -> Schema:
+        """The file's Arrow schema."""
+        return self._mapping.schema.copy()
+
+    def num_row_groups(self) -> Int:
+        return len(self._meta.row_groups)
+
+    def num_rows(self) -> Int:
+        return self._meta.num_rows
+
+    def read(
+        self,
+        columns: Optional[List[String]] = None,
+        row_groups: Optional[List[Int]] = None,
+        row_selections: Optional[List[RowSelection]] = None,
+    ) raises -> Table:
+        """Decode columns into a Marrow `Table`.
+
+        `columns` projects the read to the named top-level columns (in the given
+        order); `None` reads all. Only the selected columns' chunks are touched.
+
+        `row_groups` restricts the read to the given row-group indices (in that
+        order); `None` reads all. Unselected row groups are never decoded — this
+        is what predicate pushdown uses to skip groups that cannot match a
+        filter.
+
+        Every (row group, selected leaf) pair decodes independently — each reads
+        a disjoint byte range of the shared read-only mmap and writes its own
+        result slot — so the whole grid is decoded across `num_physical_cores()`
+        workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
+        and reused size cell are not shareable across threads); the mmap and
+        metadata are read-only."""
+        var data = self._mapped.span()
+
+        # the read plan: which column chunks to decode and how to reassemble them
+        var plan = self._mapping.project(
+            columns.value()
+        ) if columns else self._mapping.full()
+
+        # which row groups to decode (all, or the given subset in order)
+        var rg_list = List[Int]()
+        if row_groups:
+            for rg in row_groups.value():
+                if rg < 0 or rg >= len(self._meta.row_groups):
+                    raise Error("parquet: row group index out of range")
+                rg_list.append(rg)
+        else:
+            for rg in range(len(self._meta.row_groups)):
+                rg_list.append(rg)
+
+        if row_selections and len(row_selections.value()) != len(rg_list):
+            raise Error(
+                "parquet: row_selections must match the selected row groups"
+            )
+
+        var num_leaves = len(plan.decode_order)
+        var num_rg = len(rg_list)
+        var total = num_rg * num_leaves
+
+        # rows across selected groups — governs the parallel-dispatch threshold
+        var selected_rows = 0
+        for rg in rg_list:
+            selected_rows += self._meta.row_groups[rg].num_rows
+
+        var nt = 1
+        if total >= 2 and selected_rows >= _PARALLEL_MIN_ROWS:
+            nt = min(num_physical_cores(), total)
+
+        # One result slot per (row group, selected leaf), pre-sized so workers
+        # assign by index without racing on list growth. (DecodedLeaf is
+        # move-only, so slots are filled by appending, not the copy-based
+        # `fill=`.)
+        var grid = List[Optional[DecodedLeaf]](capacity=total)
+        for _ in range(total):
+            grid.append(None)
+
+        @parameter
+        def worker(w: Int) raises:
+            var codecs = (
+                CompressionLibs()
+            )  # per-worker: lazy dlopen handles are not shared
+            var t = w
+            while t < total:
+                var slot = t // num_leaves
+                var rg_idx = rg_list[slot]
+                # original column-chunk index for this compact slot
+                var orig = plan.decode_order[t % num_leaves]
+                ref rg = self._meta.row_groups[rg_idx]
+                # the row selection for this group (shared by all its leaf
+                # columns), None when nothing is pushed down or the group is
+                # fully selected.
+                var sel: Optional[RowSelection] = None
+                if row_selections:
+                    sel = row_selections.value()[slot].copy()
+                # ColumnReader.decode picks the flat vs leveled path from the
+                # leaf's max repetition, so one call serves every column shape.
+                var reader = ColumnReader(
+                    data,
+                    rg.columns[orig].meta_data.copy(),
+                    self._mapping.leaves[orig].copy(),
+                    rg.num_rows,
+                    sel^,
+                )
+                grid[t] = reader.decode(codecs)
+                t += nt
+
+        sync_parallelize[worker](nt)
+
+        # Fold each selected row group's decoded leaves back into the Arrow tree.
+        var batches = List[RecordBatch]()
+        for i in range(num_rg):
+            var decoded = List[DecodedLeaf]()
+            for ci in range(num_leaves):
+                decoded.append(grid[i * num_leaves + ci].take())
+            var cols = List[AnyArray]()
+            for ref node in plan.nodes:
+                cols.append(node.assemble(decoded))
+            batches.append(
+                RecordBatch(schema=Schema(copy=plan.schema), columns=cols^)
+            )
+
+        if len(batches) == 0:
+            batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
+        return Table.from_batches(Schema(copy=plan.schema), batches)
+
+
 def read_table(
     path: String,
     columns: Optional[List[String]] = None,
     row_groups: Optional[List[Int]] = None,
     row_selections: Optional[List[RowSelection]] = None,
 ) raises -> Table:
-    """Read a Parquet file into a Marrow `Table`.
-
-    `columns` projects the read to the named top-level columns (in the given
-    order); `None` reads all. Only the selected columns' chunks are touched.
-
-    `row_groups` restricts the read to the given row-group indices (in that
-    order); `None` reads all. Unselected row groups are never decoded — this is
-    what predicate pushdown uses to skip groups that cannot match a filter.
-
-    Every (row group, selected leaf) pair decodes independently — each reads a
-    disjoint byte range of the shared read-only mmap and writes its own result
-    slot — so the whole grid is decoded across `num_physical_cores()` workers.
-    Each worker owns a `CompressionLibs` (the lazy `dlopen` handles and reused size cell
-    are not shareable across threads); the mmap and metadata are read-only.
-    """
-    var mapped = MappedFile(path)
-    var data = mapped.span()
-    var meta = FileMetaData.read_footer(data)
-    var mapping = SchemaMapping.from_parquet(meta)
-
-    # the read plan: which column chunks to decode and how to reassemble them
-    var plan = mapping.project(columns.value()) if columns else mapping.full()
-
-    # which row groups to decode (all, or the given subset in order)
-    var rg_list = List[Int]()
-    if row_groups:
-        for rg in row_groups.value():
-            if rg < 0 or rg >= len(meta.row_groups):
-                raise Error("parquet: row group index out of range")
-            rg_list.append(rg)
-    else:
-        for rg in range(len(meta.row_groups)):
-            rg_list.append(rg)
-
-    if row_selections and len(row_selections.value()) != len(rg_list):
-        raise Error(
-            "parquet: row_selections must match the selected row groups"
-        )
-
-    var num_leaves = len(plan.decode_order)
-    var num_rg = len(rg_list)
-    var total = num_rg * num_leaves
-
-    # rows across the selected groups — governs the parallel-dispatch threshold
-    var selected_rows = 0
-    for rg in rg_list:
-        selected_rows += meta.row_groups[rg].num_rows
-
-    var nt = 1
-    if total >= 2 and selected_rows >= _PARALLEL_MIN_ROWS:
-        nt = min(num_physical_cores(), total)
-
-    # One result slot per (row group, selected leaf), pre-sized so workers assign
-    # by index without racing on list growth. (DecodedLeaf is move-only, so the
-    # slots are filled by appending rather than the copy-based `fill=`.)
-    var grid = List[Optional[DecodedLeaf]](capacity=total)
-    for _ in range(total):
-        grid.append(None)
-
-    @parameter
-    def worker(w: Int) raises:
-        var codecs = (
-            CompressionLibs()
-        )  # per-worker: lazy dlopen handles are not shared
-        var t = w
-        while t < total:
-            var slot = t // num_leaves
-            var rg_idx = rg_list[slot]
-            # original column-chunk index for this compact slot
-            var orig = plan.decode_order[t % num_leaves]
-            ref rg = meta.row_groups[rg_idx]
-            # the row selection for this group (shared by all its leaf columns),
-            # None when nothing is pushed down or the group is fully selected.
-            var sel: Optional[RowSelection] = None
-            if row_selections:
-                sel = row_selections.value()[slot].copy()
-            # ColumnReader.decode picks the flat vs leveled path from the leaf's
-            # max repetition, so the same call serves every column shape.
-            var reader = ColumnReader(
-                data,
-                rg.columns[orig].meta_data.copy(),
-                mapping.leaves[orig].copy(),
-                rg.num_rows,
-                sel^,
-            )
-            grid[t] = reader.decode(codecs)
-            t += nt
-
-    sync_parallelize[worker](nt)
-
-    # Fold each selected row group's decoded leaves back into the Arrow tree.
-    var batches = List[RecordBatch]()
-    for i in range(num_rg):
-        var decoded = List[DecodedLeaf]()
-        for ci in range(num_leaves):
-            decoded.append(grid[i * num_leaves + ci].take())
-        var cols = List[AnyArray]()
-        for ref node in plan.nodes:
-            cols.append(node.assemble(decoded))
-        batches.append(
-            RecordBatch(schema=Schema(copy=plan.schema), columns=cols^)
-        )
-
-    if len(batches) == 0:
-        batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
-    var result = Table.from_batches(Schema(copy=plan.schema), batches)
-    # `data` is an untracked view into `mapped`; keep the map alive until every
-    # value has been copied into owned Arrow buffers above, then unmap.
-    _ = mapped^
-    return result^
+    """Read a Parquet file into a Marrow `Table` — a convenience wrapper over
+    `ParquetFile(path).read(...)` (mirrors `pyarrow.parquet.read_table`)."""
+    return ParquetFile(path).read(columns, row_groups, row_selections)
 
 
 # ---------------------------------------------------------------------------

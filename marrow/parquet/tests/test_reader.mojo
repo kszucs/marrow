@@ -10,7 +10,7 @@ from std.math import isnan, isinf
 from std.python import Python
 from std.os import remove
 from marrow.testing import TestSuite
-from marrow.parquet import read_table
+from marrow.parquet import read_table, ParquetFile
 from marrow.tabular import Table
 
 
@@ -740,6 +740,43 @@ def test_date32_negative() raises:
     assert_true(days[0].value() < 0)  # pre-epoch
     assert_equal(days[1].value(), Int32(0))  # epoch
     assert_true(days[2].value() > 0)
+    remove(path)
+
+
+def test_parquet_file() raises:
+    # ParquetFile exposes the metadata/schema without decoding, and read()
+    # (which read_table wraps) decodes; both share one opened file.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            a=pa.array(Python.list(1, 2, 3, 4), type=pa.int64()),
+            b=pa.array(Python.list("w", "x", "y", "z")),
+        )
+    )
+    var path = String("/tmp/marrow_rd_pqfile.parquet")
+    pq.write_table(tbl, path, row_group_size=2)  # -> 2 row groups
+
+    var f = ParquetFile(path)
+    assert_equal(f.num_rows(), 4)
+    assert_equal(f.num_row_groups(), 2)
+    assert_equal(f.schema().num_fields(), 2)
+
+    # full read
+    var t = f.read()
+    assert_equal(t.num_rows(), 4)
+    assert_equal(t.num_columns(), 2)
+
+    # column projection through the same object
+    var cols: List[String] = [String("b")]
+    var proj = f.read(columns=cols^)
+    assert_equal(proj.num_columns(), 1)
+    assert_equal(proj.num_rows(), 4)
+
+    # single row group
+    var rgs: List[Int] = [0]
+    var rg0 = f.read(row_groups=rgs^)
+    assert_equal(rg0.num_rows(), 2)
     remove(path)
 
 

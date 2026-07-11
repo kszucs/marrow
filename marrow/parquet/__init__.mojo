@@ -9,6 +9,7 @@ oracle.
 """
 
 from .reader import (
+    ParquetFile,
     read_table,
     read_metadata,
     read_statistics,
