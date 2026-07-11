@@ -256,9 +256,6 @@ struct CompactWriter(Movable):
     def write_i64(mut self, v: Int64):
         self.write_varint(Zigzag.encode(v))
 
-    def write_byte(mut self, v: Int8):
-        self.buf.append(UInt8(v))
-
     def write_double(mut self, v: Float64):
         var bits = UInt64(v.to_bits())
         for i in range(8):
@@ -413,7 +410,6 @@ struct SchemaElement(Copyable, Movable):
     var converted_type: ConvertedType  # NONE if absent
     var scale: Int
     var precision: Int
-    var field_id: Int
     var logical_type: LogicalType  # union member id, NONE if absent
     var logical_unit: Int  # TimeUnit for TIMESTAMP/TIME: 1=ms 2=us 3=ns, else -1
     var logical_utc: Bool  # isAdjustedToUTC for TIMESTAMP/TIME
@@ -427,7 +423,6 @@ struct SchemaElement(Copyable, Movable):
         self.converted_type = ConvertedType.NONE
         self.scale = 0
         self.precision = 0
-        self.field_id = -1
         self.logical_type = LogicalType.NONE
         self.logical_unit = -1
         self.logical_utc = False
@@ -453,8 +448,6 @@ struct SchemaElement(Copyable, Movable):
                 out.scale = Int(r.read_i32())
             elif f.id == 8:
                 out.precision = Int(r.read_i32())
-            elif f.id == 9:
-                out.field_id = Int(r.read_i32())
             elif f.id == 10:
                 out._read_logical_type(r)
             else:

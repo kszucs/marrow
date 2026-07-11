@@ -710,7 +710,6 @@ struct SchemaMapping(Movable):
                     physical=el.type,
                     max_def=d,
                     max_rep=r,
-                    nullable=nullable,
                     slot_def=slot_def,
                     carry_def=under_optional,
                     type_length=el.type_length,
@@ -1021,7 +1020,6 @@ struct SchemaMapping(Movable):
                 physical=phys,
                 max_def=d,
                 max_rep=rep_base,
-                nullable=nullable,
                 slot_def=slot_def,
                 carry_def=under_optional,
             )
@@ -1096,7 +1094,6 @@ struct LeafColumn(Copyable, Movable):
     var physical: PhysicalType
     var max_def: Int
     var max_rep: Int
-    var nullable: Bool
     var slot_def: Int  # def level at/above which this leaf's value slot exists
     var carry_def: Bool  # keep def levels (leaf is under a nullable struct)
     var type_length: Int  # FIXED_LEN_BYTE_ARRAY width (decimal/fixed_size_binary)
@@ -1108,7 +1105,6 @@ struct LeafColumn(Copyable, Movable):
         physical: PhysicalType,
         max_def: Int,
         max_rep: Int,
-        nullable: Bool,
         slot_def: Int = 0,
         carry_def: Bool = False,
         type_length: Int = 0,
@@ -1118,7 +1114,6 @@ struct LeafColumn(Copyable, Movable):
         self.physical = physical
         self.max_def = max_def
         self.max_rep = max_rep
-        self.nullable = nullable
         self.slot_def = slot_def
         self.carry_def = carry_def
         self.type_length = type_length
@@ -1136,23 +1131,16 @@ struct DecodedLeaf(Movable):
     levels mean present/empty/null) lives on the schema node, so this stays a
     plain data record."""
 
-    var leveled: Bool
     var array: AnyArray  # flat column, or the list's element/child array
     var rep_levels: List[Int32]
     var def_levels: List[Int32]
 
     def __init__(
         out self,
-        leveled: Bool,
         var array: AnyArray,
         var rep_levels: List[Int32],
         var def_levels: List[Int32],
     ):
-        self.leveled = leveled
         self.array = array^
         self.rep_levels = rep_levels^
         self.def_levels = def_levels^
-
-    @staticmethod
-    def flat(var array: AnyArray) -> DecodedLeaf:
-        return DecodedLeaf(False, array^, List[Int32](), List[Int32]())

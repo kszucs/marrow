@@ -952,7 +952,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         the build (empty unless the leaf is under a nullable struct)."""
         var defs = self.def_out^
         self.def_out = List[Int32]()
-        return DecodedLeaf(False, arr^, List[Int32](), defs^)
+        return DecodedLeaf(arr^, List[Int32](), defs^)
 
     # -----------------------------------------------------------------------
     # Leveled path — grow the element array while accumulating rep/def levels.
@@ -1037,7 +1037,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
-        return DecodedLeaf(True, arr^, rep_out^, def_out^)
+        return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
         BT: dt.BinaryLikeType
@@ -1079,7 +1079,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
-        return DecodedLeaf(True, arr^, rep_out^, def_out^)
+        return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bool(
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
@@ -1110,7 +1110,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
         var arr = builder.finish()
-        return DecodedLeaf(True, arr^, rep_out^, def_out^)
+        return DecodedLeaf(arr^, rep_out^, def_out^)
 
     # -----------------------------------------------------------------------
     # Unified dispatch — one arrow-dtype -> (store, phys) decision table shared by
