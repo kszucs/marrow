@@ -35,6 +35,22 @@ from ..views import load_word_le
 from .utils import CompressionLibs
 
 
+struct Zigzag:
+    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
+    as varints — shared by the delta codecs and the Thrift Compact Protocol.
+    Stateless; a namespace of static methods."""
+
+    @staticmethod
+    @always_inline
+    def encode(v: Int64) -> UInt64:
+        return UInt64((v << 1) ^ (v >> 63))
+
+    @staticmethod
+    @always_inline
+    def decode(u: UInt64) -> Int64:
+        return Int64(u >> 1) ^ -Int64(u & 1)
+
+
 struct LittleEndian:
     """Little-endian byte, bit, and LEB128-varint reads over a byte span — the
     low-level primitives the codecs below share. Stateless; a namespace of
@@ -73,6 +89,8 @@ struct LittleEndian:
             if b & 0x80 == 0:
                 break
             shift += 7
+            if shift >= 64:
+                raise Error("parquet: varint too long")
         return (result, p)
 
     @staticmethod
@@ -383,12 +401,6 @@ struct DeltaBinaryPacked:
     deltas. Each value is `prev + min_delta + unpacked_delta`."""
 
     @staticmethod
-    @always_inline
-    def _zigzag(u: UInt64) -> Int64:
-        """ULEB128 zigzag -> signed."""
-        return Int64(u >> 1) ^ -Int64(u & 1)
-
-    @staticmethod
     def decode_into(
         data: Span[UInt8, _], start: Int, count: Int, mut out: List[Int64]
     ) raises -> Int:
@@ -411,14 +423,14 @@ struct DeltaBinaryPacked:
         var num_miniblocks = Int(miniblocks)
         var vals_per_mb = Int(block_size) // num_miniblocks
 
-        var value = Self._zigzag(first_z)
+        var value = Zigzag.decode(first_z)
         out.append(value)
         var produced = 1
 
         while produced < count:
             var min_delta_z: UInt64
             min_delta_z, pos = LittleEndian.varint(data, pos)
-            var min_delta = Self._zigzag(min_delta_z)
+            var min_delta = Zigzag.decode(min_delta_z)
             var widths_at = pos
             pos += num_miniblocks  # one bit-width byte per miniblock
             for mb in range(num_miniblocks):
@@ -445,12 +457,6 @@ struct DeltaBinaryPacked:
         out.reserve(count)
         _ = Self.decode_into(data, 0, count, out)
         return out^
-
-    @staticmethod
-    @always_inline
-    def _zigzag_encode(v: Int64) -> UInt64:
-        """Signed -> ULEB128 zigzag (inverse of `_zigzag`)."""
-        return UInt64((v << 1) ^ (v >> 63))
 
     @staticmethod
     def _put_bits(
@@ -487,7 +493,7 @@ struct DeltaBinaryPacked:
         LittleEndian.put_varint(out, UInt64(NMB))
         LittleEndian.put_varint(out, UInt64(n))
         var first = values[0] if n > 0 else Int64(0)
-        LittleEndian.put_varint(out, Self._zigzag_encode(first))
+        LittleEndian.put_varint(out, Zigzag.encode(first))
         if n <= 1:
             return out^
 
@@ -499,7 +505,7 @@ struct DeltaBinaryPacked:
                 var d = values[k] - values[k - 1]
                 if d < min_d:
                     min_d = d
-            LittleEndian.put_varint(out, Self._zigzag_encode(min_d))
+            LittleEndian.put_varint(out, Zigzag.encode(min_d))
 
             # (delta - min_delta) for this block, zero-padded to a full BLOCK.
             var rel = List[UInt64](capacity=BLOCK)

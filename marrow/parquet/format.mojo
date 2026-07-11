@@ -14,7 +14,7 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 
 from std.memory import bitcast
 
-from .codecs import Encoding
+from .codecs import Encoding, Zigzag, LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -56,19 +56,6 @@ struct FieldHeader(Copyable, Movable):
         self.last = 0
 
 
-struct Zigzag:
-    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
-    as varints. Stateless; a namespace of static methods."""
-
-    @staticmethod
-    def encode(v: Int64) -> UInt64:
-        return UInt64((v << 1) ^ (v >> 63))
-
-    @staticmethod
-    def decode(v: UInt64) -> Int64:
-        return Int64(v >> 1) ^ (-(Int64(v & 1)))
-
-
 struct CompactReader[o: Origin[mut=False]](Movable):
     """Reads Thrift Compact Protocol values from an immutable byte span.
 
@@ -97,18 +84,10 @@ struct CompactReader[o: Origin[mut=False]](Movable):
         return b
 
     def read_varint(mut self) raises -> UInt64:
-        """Read an unsigned LEB128 varint."""
-        var result: UInt64 = 0
-        var shift: Int = 0
-        while True:
-            var b = self._u8()
-            result |= UInt64(b & 0x7F) << UInt64(shift)
-            if b & 0x80 == 0:
-                break
-            shift += 7
-            if shift >= 64:
-                raise Error("thrift: varint too long")
-        return result
+        """Read an unsigned LEB128 varint, advancing `pos`."""
+        var value: UInt64
+        value, self.pos = LittleEndian.varint(self.data, self.pos)
+        return value
 
     def read_i16(mut self) raises -> Int16:
         return Int16(Zigzag.decode(self.read_varint()))
@@ -238,14 +217,7 @@ struct CompactWriter(Movable):
         self.buf = List[UInt8]()
 
     def write_varint(mut self, var v: UInt64):
-        while True:
-            var b = UInt8(v & 0x7F)
-            v >>= 7
-            if v != 0:
-                self.buf.append(b | 0x80)
-            else:
-                self.buf.append(b)
-                break
+        LittleEndian.put_varint(self.buf, v)
 
     def write_i16(mut self, v: Int16):
         self.write_varint(Zigzag.encode(Int64(v)))
