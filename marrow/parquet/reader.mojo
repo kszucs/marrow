@@ -354,6 +354,24 @@ struct PageReader[o: Origin[mut=False]](Movable):
 # ---------------------------------------------------------------------------
 
 
+def _walk_slots[
+    body: def (Bool, Bool, Int) raises capturing [_] -> None,
+](page: Page, max_def: Int, mask: Optional[List[Bool]]) raises:
+    """Walk a data page's `num_values` output slots — the flat scatter skeleton
+    every `LeafBuilder` shares. For each row `body(present, selected, vi)` fires
+    with whether the slot holds a present value (`page.present_at`), whether the
+    selection mask keeps it, and the running index into the page's decoded
+    present values (advanced on every present slot, regardless of the mask). Only
+    the per-slot placement differs across leaves; it lives entirely in `body`."""
+    var vi = 0
+    for row in range(page.num_values):
+        var present_here = page.present_at(row, max_def)
+        var selected = not mask or mask.value()[row]
+        body(present_here, selected, vi)
+        if present_here:
+            vi += 1
+
+
 trait LeafBuilder(ImplicitlyDeletable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
@@ -435,10 +453,10 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
             self.wpos += page.num_present
             return
         self._ensure_bitmap()
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
-            if not mask or mask.value()[row]:
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
                 if present_here:
                     vptr[self.wpos] = present[vi]
                     self.bitmap.set(self.wpos)
@@ -446,8 +464,8 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                     vptr[self.wpos] = 0
                     self.null_count += 1
                 self.wpos += 1
-            if present_here:
-                vi += 1
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         comptime PW = size_of[Scalar[Self.phys_dt]]()
@@ -550,16 +568,16 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
         """Append the decoded present values honoring definition levels — the
         shared placement path for the materializing encodings (dictionary,
         DELTA_*). With `mask`, only the selected rows are appended."""
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
-            if not mask or mask.value()[row]:
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
                 if present_here:
                     self._append(Span(values[vi]))
                 else:
                     self.builder.append_null()
-            if present_here:
-                vi += 1
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def _place_plain(
         mut self,
@@ -569,18 +587,22 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
     ) raises:
         """PLAIN in place: walk the length-prefixed present values, appending or
         emitting nulls by def level. With `mask`, only selected rows are kept.
-        """
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
+        The byte cursor advances past every present value (even masked-out ones)
+        since PLAIN stores no offsets."""
+        var bpos = 0
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if present_here:
-                var n = LittleEndian.u32(vspan, vi)
-                vi += 4
-                if not mask or mask.value()[row]:
-                    self._append(vspan[vi : vi + n])
-                vi += n
-            elif not mask or mask.value()[row]:
+                var n = LittleEndian.u32(vspan, bpos)
+                bpos += 4
+                if selected:
+                    self._append(vspan[bpos : bpos + n])
+                bpos += n
+            elif selected:
                 self.builder.append_null()
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -700,10 +722,9 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         elif not page.is_plain():
             raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
 
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
-            if not mask or mask.value()[row]:
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
                 if present_here:
                     if is_dict:
                         self._append_present(self.dict[Int(idx[vi])])
@@ -713,8 +734,8 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
                         )
                 else:
                     self._append_null()
-            if present_here:
-                vi += 1
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -770,10 +791,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         elif not page.is_plain():
             raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
 
-        var vi = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
-            if not mask or mask.value()[row]:
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
                 if present_here:
                     if is_dict:
                         var o = Int(idx[vi]) * self.width
@@ -785,8 +805,8 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
                         self.builder.append(vspan[o : o + self.width])
                 else:
                     self.builder.append_null()
-            if present_here:
-                vi += 1
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
@@ -821,18 +841,20 @@ struct BoolLeafBuilder(LeafBuilder):
         mask: Optional[List[Bool]] = None,
     ) raises:
         """Unpack the bit-packed present booleans honoring def levels; with
-        `mask`, only selected rows are appended."""
-        var bitpos = 0
-        for row in range(page.num_values):
-            var present_here = page.present_at(row, self.max_def)
+        `mask`, only selected rows are appended. `vi` is the present-value index,
+        which for a bit-packed PLAIN page is exactly the bit offset."""
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
             if present_here:
-                var byte = vspan[bitpos >> 3]
-                var b = (byte >> UInt8(bitpos & 7)) & 1
-                bitpos += 1
-                if not mask or mask.value()[row]:
+                var byte = vspan[vi >> 3]
+                var b = (byte >> UInt8(vi & 7)) & 1
+                if selected:
                     self.builder.append(b == 1)
-            elif not mask or mask.value()[row]:
+            elif selected:
                 self.builder.append_null()
+
+        _walk_slots[place](page, self.max_def, mask)
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
