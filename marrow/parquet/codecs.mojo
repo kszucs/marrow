@@ -158,6 +158,16 @@ struct Rle:
 
     @staticmethod
     @always_inline
+    def _run_value(data: Span[UInt8, _], pos: Int, byte_width: Int) -> Int32:
+        """The little-endian value introducing an RLE run: `byte_width` bytes at
+        `pos`. The caller advances its cursor by `byte_width`."""
+        var val: Int32 = 0
+        for b in range(byte_width):
+            val |= Int32(Int(data[pos + b]) << (8 * b))
+        return val
+
+    @staticmethod
+    @always_inline
     def _unpack8(
         data: Span[UInt8, _],
         byte_base: Int,
@@ -228,9 +238,7 @@ struct Rle:
             else:
                 # RLE run
                 var run_len = Int(header >> 1)
-                var val: Int32 = 0
-                for b in range(byte_width):
-                    val |= Int32(Int(data[pos + b]) << (8 * b))
+                var val = Self._run_value(data, pos, byte_width)
                 pos += byte_width
                 for _ in range(run_len):
                     if len(out) < count:
@@ -296,9 +304,7 @@ struct Rle:
                 pos += num_groups * width
             else:
                 var run_len = Int(header >> 1)
-                var val: Int32 = 0
-                for b in range(byte_width):
-                    val |= Int32(Int(data[pos + b]) << (8 * b))
+                var val = Self._run_value(data, pos, byte_width)
                 pos += byte_width
                 var idx = Int(val)
                 var take = min(run_len, count - produced)
@@ -337,9 +343,7 @@ struct Rle:
                 pos += num_groups * width
             else:
                 var run_len = Int(header >> 1)
-                var val: Int32 = 0
-                for b in range(byte_width):
-                    val |= Int32(Int(data[pos + b]) << (8 * b))
+                var val = Self._run_value(data, pos, byte_width)
                 pos += byte_width
                 var take = min(run_len, count - produced)
                 if val == target:
