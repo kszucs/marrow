@@ -415,6 +415,34 @@ def _walk_slots[
             vi += 1
 
 
+def _finish_primitive(
+    var values: Buffer[mut=True],
+    var bitmap: Bitmap[mut=True],
+    wpos: Int,
+    null_count: Int,
+    var dtype: dt.AnyDataType,
+) raises -> AnyArray:
+    """Freeze a fixed-width builder's storage into an `AnyArray` — the shared
+    tail of every primitive-backed leaf (numeric, temporal, decimal): one values
+    buffer, a validity bitmap only when a null occurred, length `wpos`."""
+    var buffers = List[Buffer[mut=False]]()
+    buffers.append(values^.to_immutable())
+    var bm: Optional[Bitmap[mut=False]] = None
+    if null_count > 0:
+        bm = bitmap^.to_immutable(length=wpos)
+    return AnyArray.from_data(
+        ArrayData(
+            dtype=dtype^,
+            length=wpos,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm^,
+            buffers=buffers^,
+            children=List[ArrayData](),
+        )
+    )
+
+
 trait LeafBuilder(ImplicitlyDeletable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
@@ -565,21 +593,12 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         self._scatter(page, present.unsafe_ptr(), mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
-        var buffers = List[Buffer[mut=False]]()
-        buffers.append(self.values^.to_immutable())
-        var bm: Optional[Bitmap[mut=False]] = None
-        if self.null_count > 0:
-            bm = self.bitmap^.to_immutable(length=self.wpos)
-        return AnyArray.from_data(
-            ArrayData(
-                dtype=self.dtype^,
-                length=self.wpos,
-                nulls=self.null_count,
-                offset=0,
-                bitmap=bm^,
-                buffers=buffers^,
-                children=List[ArrayData](),
-            )
+        return _finish_primitive(
+            self.values^,
+            self.bitmap^,
+            self.wpos,
+            self.null_count,
+            self.dtype^,
         )
 
 
@@ -793,21 +812,12 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         self._place(page, mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
-        var buffers = List[Buffer[mut=False]]()
-        buffers.append(self.values^.to_immutable())
-        var bm: Optional[Bitmap[mut=False]] = None
-        if self.null_count > 0:
-            bm = self.bitmap^.to_immutable(length=self.wpos)
-        return AnyArray.from_data(
-            ArrayData(
-                dtype=self.dtype^,
-                length=self.wpos,
-                nulls=self.null_count,
-                offset=0,
-                bitmap=bm^,
-                buffers=buffers^,
-                children=List[ArrayData](),
-            )
+        return _finish_primitive(
+            self.values^,
+            self.bitmap^,
+            self.wpos,
+            self.null_count,
+            self.dtype^,
         )
 
 
