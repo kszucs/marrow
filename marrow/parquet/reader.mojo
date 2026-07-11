@@ -119,15 +119,37 @@ struct Page(Movable):
     var encoding: Encoding
     var num_values: Int
 
-    def __init__(out self, body: Span[UInt8, ImmutUntrackedOrigin]):
-        self.dictionary = False
+    def __init__(
+        out self,
+        *,
+        body: Span[UInt8, ImmutUntrackedOrigin],
+        num_values: Int,
+        num_present: Int,
+        value_offset: Int = 0,
+        encoding: Encoding = Encoding.PLAIN,
+        var rep_levels: List[Int32] = [],
+        var def_levels: List[Int32] = [],
+        dictionary: Bool = False,
+    ):
+        self.dictionary = dictionary
         self.body = body
-        self.def_levels = List[Int32]()
-        self.rep_levels = List[Int32]()
-        self.value_offset = 0
-        self.num_present = 0
-        self.encoding = Encoding.PLAIN
-        self.num_values = 0
+        self.def_levels = def_levels^
+        self.rep_levels = rep_levels^
+        self.value_offset = value_offset
+        self.num_present = num_present
+        self.encoding = encoding
+        self.num_values = num_values
+
+    @staticmethod
+    def dictionary_page(
+        body: Span[UInt8, ImmutUntrackedOrigin], num_values: Int
+    ) -> Page:
+        """The column chunk's dictionary page — carries only its distinct values;
+        no levels, no present/null distinction."""
+        return Page(
+            body=body, num_values=num_values, num_present=num_values,
+            dictionary=True,
+        )
 
     def all_present(self) -> Bool:
         return self.num_present == self.num_values
@@ -204,20 +226,29 @@ struct PageReader[o: Origin[mut=False]](Movable):
     def has_next(self) -> Bool:
         return self.produced < self.meta.num_values
 
-    def _decode_levels_v1(mut self, mut page: Page) raises:
-        var body = page.body
+    def _data_page_v1(
+        self,
+        var body: Span[UInt8, ImmutUntrackedOrigin],
+        num_values: Int,
+        encoding: Encoding,
+    ) raises -> Page:
+        """Decode a v1 data page's leading rep/def level streams and build the
+        `Page` — the single construction site for v1 pages (no field-by-field
+        mutation)."""
+        var reps = List[Int32]()
+        var defs = List[Int32]()
+        var num_present = num_values
         var cursor = 0
         var leveled = self.leaf.max_rep >= 1
         if leveled:
             var l = LittleEndian.u32(body, cursor)
             cursor += 4
-            page.rep_levels = Rle.decode(
+            reps = Rle.decode(
                 body[cursor : cursor + l],
                 Rle.bit_width(self.leaf.max_rep),
-                page.num_values,
+                num_values,
             )
             cursor += l
-        page.num_present = page.num_values
         if self.leaf.max_def >= 1:
             var bw = Rle.bit_width(self.leaf.max_def)
             var l = LittleEndian.u32(body, cursor)
@@ -225,22 +256,30 @@ struct PageReader[o: Origin[mut=False]](Movable):
             var levels = body[cursor : cursor + l]
             if leveled:
                 # nested columns need the full def levels to rebuild offsets
-                page.def_levels = Rle.decode(levels, bw, page.num_values)
+                defs = Rle.decode(levels, bw, num_values)
                 var present = 0
-                for d in page.def_levels:
+                for d in defs:
                     if Int(d) == self.leaf.max_def:
                         present += 1
-                page.num_present = present
+                num_present = present
             else:
                 # flat: count present in O(1) for the all-present run; only
                 # materialize the level list when there are actually nulls.
-                page.num_present = Rle.count_matches(
-                    levels, bw, page.num_values, Int32(self.leaf.max_def)
+                num_present = Rle.count_matches(
+                    levels, bw, num_values, Int32(self.leaf.max_def)
                 )
-                if page.num_present != page.num_values:
-                    page.def_levels = Rle.decode(levels, bw, page.num_values)
+                if num_present != num_values:
+                    defs = Rle.decode(levels, bw, num_values)
             cursor += l
-        page.value_offset = cursor
+        return Page(
+            body=body,
+            num_values=num_values,
+            num_present=num_present,
+            value_offset=cursor,
+            encoding=encoding,
+            rep_levels=reps^,
+            def_levels=defs^,
+        )
 
     def next(mut self, mut codecs: CompressionLibs) raises -> Page:
         var body_start = self.pos
@@ -250,19 +289,19 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.pos = body_start + ph.compressed_page_size
 
         if ph.type == PageType.DICTIONARY:
-            var page = Page(self._body(comp, ph.uncompressed_page_size, codecs))
-            page.dictionary = True
-            page.num_values = ph.dictionary_page_header.value().num_values
-            return page^
+            return Page.dictionary_page(
+                self._body(comp, ph.uncompressed_page_size, codecs),
+                ph.dictionary_page_header.value().num_values,
+            )
 
         if ph.type == PageType.DATA:
-            var page = Page(self._body(comp, ph.uncompressed_page_size, codecs))
             ref dph = ph.data_page_header.value()
-            page.num_values = dph.num_values
-            page.encoding = dph.encoding
-            self._decode_levels_v1(page)
-            self.produced += page.num_values
-            return page^
+            self.produced += dph.num_values
+            return self._data_page_v1(
+                self._body(comp, ph.uncompressed_page_size, codecs),
+                dph.num_values,
+                dph.encoding,
+            )
         elif ph.type == PageType.DATA_V2:
             # v2 keeps the (uncompressed) levels ahead of the (maybe compressed)
             # values; assemble both into scratch, then view it.
@@ -286,34 +325,38 @@ struct PageReader[o: Origin[mut=False]](Movable):
             else:
                 self.scratch.extend(comp[lvl_len:])
 
-            var page = Page(Self._untracked(Span(self.scratch)))
-            page.num_values = dph2.num_values
-            page.encoding = dph2.encoding
+            var body = Self._untracked(Span(self.scratch))
+            var reps = List[Int32]()
+            var defs = List[Int32]()
             if (
                 self.leaf.max_rep >= 1
                 and dph2.repetition_levels_byte_length > 0
             ):
-                page.rep_levels = Rle.decode(
-                    page.body[0 : dph2.repetition_levels_byte_length],
+                reps = Rle.decode(
+                    body[0 : dph2.repetition_levels_byte_length],
                     Rle.bit_width(self.leaf.max_rep),
-                    page.num_values,
+                    dph2.num_values,
                 )
             var cursor = dph2.repetition_levels_byte_length
             if (
                 self.leaf.max_def >= 1
                 and dph2.definition_levels_byte_length > 0
             ):
-                page.def_levels = Rle.decode(
-                    page.body[
-                        cursor : cursor + dph2.definition_levels_byte_length
-                    ],
+                defs = Rle.decode(
+                    body[cursor : cursor + dph2.definition_levels_byte_length],
                     Rle.bit_width(self.leaf.max_def),
-                    page.num_values,
+                    dph2.num_values,
                 )
-            page.value_offset = lvl_len
-            page.num_present = page.num_values - dph2.num_nulls
-            self.produced += page.num_values
-            return page^
+            self.produced += dph2.num_values
+            return Page(
+                body=body,
+                num_values=dph2.num_values,
+                num_present=dph2.num_values - dph2.num_nulls,
+                value_offset=lvl_len,
+                encoding=dph2.encoding,
+                rep_levels=reps^,
+                def_levels=defs^,
+            )
         else:
             raise Error("parquet: unexpected page type")
 
