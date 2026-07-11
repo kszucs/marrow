@@ -244,16 +244,23 @@ struct Rle:
         data: Span[UInt8, _],
         width: Int,
         count: Int,
-        dict: UnsafePointer[Scalar[dt], _],
-        dest: UnsafePointer[Scalar[dt], do],
+        dict: Span[Scalar[dt], _],
+        dest: Span[Scalar[dt], do],
+        dest_offset: Int = 0,
     ) raises:
         """Decode `count` RLE/bit-packed dictionary indices and write `dict[idx]`
-        straight to `dest` — fuses index decode and gather (no index buffer)."""
+        straight into `dest` at `dest_offset` — fuses index decode and gather (no
+        index buffer). Callers pass `Span`s (a `List` or a `BufferView.as_span()`)
+        so no pointer crosses the boundary; the fused gather loop then works
+        through raw pointers, since `Span` subscripting does not lower to a plain
+        store on this path (a ~3x slowdown measured)."""
         if count == 0:
             return
+        var dp = dest.unsafe_ptr() + dest_offset
+        var kp = dict.unsafe_ptr()
         if width == 0:
             for i in range(count):
-                dest[i] = dict[0]
+                dp[i] = kp[0]
             return
         var byte_width = (width + 7) // 8
         var pos = 0
@@ -278,12 +285,12 @@ struct Rle:
                         # compile-time constant or the SIMD lane-select is
                         # runtime.
                         comptime for j in range(8):
-                            dest[produced + j] = dict[Int(idxv[j])]
+                            dp[produced + j] = kp[Int(idxv[j])]
                         produced += 8
                     else:
                         var take = count - produced
                         for j in range(take):
-                            dest[produced] = dict[Int(idxv[j])]
+                            dp[produced] = kp[Int(idxv[j])]
                             produced += 1
                     g += 8
                 pos += num_groups * width
@@ -296,7 +303,7 @@ struct Rle:
                 var idx = Int(val)
                 var take = min(run_len, count - produced)
                 for _ in range(take):
-                    dest[produced] = dict[idx]
+                    dp[produced] = kp[idx]
                     produced += 1
 
     @staticmethod
@@ -678,8 +685,9 @@ struct Dictionary:
             values[1:],
             Int(values[0]),
             np,
-            dict.unsafe_ptr(),
-            out.unsafe_ptr() + base,
+            Span(dict),
+            Span(out),
+            base,
         )
 
     @staticmethod

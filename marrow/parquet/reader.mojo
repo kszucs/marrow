@@ -496,8 +496,9 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
                 vspan[1:],
                 Int(vspan[0]),
                 page.num_values,
-                self.dict.unsafe_ptr(),
-                self.values.view[Self.store_dt]().unsafe_ptr() + self.wpos,
+                Span(self.dict),
+                self.values.view[Self.store_dt]().as_span(),
+                self.wpos,
             )
             self.wpos += page.num_values
         else:
