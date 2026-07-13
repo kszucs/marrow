@@ -488,7 +488,12 @@ struct SchemaMapping(Movable):
             var node = m._parse_node(idx, 0, 0)
             fields.append(node.field.copy())
             m.nodes.append(node^)
-        m.schema = Schema(fields=fields^)
+        # File-level key/value metadata (incl. PyArrow's ARROW:schema) rides on
+        # the schema, mirroring pyarrow's `read_table(...).schema.metadata`.
+        var md = Dict[String, String]()
+        for ref kv in meta.key_value_metadata:
+            md[kv.key] = kv.value
+        m.schema = Schema(fields=fields^, metadata=md^)
         return m^
 
     @staticmethod

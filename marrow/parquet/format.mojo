@@ -1231,11 +1231,46 @@ struct RowGroup(Copyable, Movable, ThriftWritable):
         w.write_field_stop()
 
 
+struct KeyValue(Copyable, Movable, ThriftWritable):
+    """A file-level metadata entry: a `key` and its optional string `value`."""
+
+    var key: String
+    var value: String
+
+    def __init__(out self, key: String = String(), value: String = String()):
+        self.key = key
+        self.value = value
+
+    @staticmethod
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
+        var out = Self()
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                out.key = r.read_string()
+            elif f.id == 2:
+                out.value = r.read_string()
+            else:
+                r.skip(f.type)
+        return out^
+
+    def write(self, mut w: ThriftCompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_BINARY, 1, last)
+        w.write_string(self.key)
+        last = w.write_field_begin(TC_BINARY, 2, last)
+        w.write_string(self.value)
+        w.write_field_stop()
+
+
 struct FileMetaData(Copyable, Movable):
     var version: Int
     var schema: List[SchemaElement]
     var num_rows: Int
     var row_groups: List[RowGroup]
+    var key_value_metadata: List[KeyValue]
     var created_by: String
 
     def __init__(out self):
@@ -1243,6 +1278,7 @@ struct FileMetaData(Copyable, Movable):
         self.schema = List[SchemaElement]()
         self.num_rows = 0
         self.row_groups = List[RowGroup]()
+        self.key_value_metadata = List[KeyValue]()
         self.created_by = String()
 
     @staticmethod
@@ -1264,6 +1300,10 @@ struct FileMetaData(Copyable, Movable):
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.row_groups.append(RowGroup.read(r))
+            elif f.id == 5:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.key_value_metadata.append(KeyValue.read(r))
             elif f.id == 6:
                 out.created_by = r.read_string()
             else:
@@ -1278,6 +1318,8 @@ struct FileMetaData(Copyable, Movable):
         last = w.write_field_begin(TC_I64, 3, last)
         w.write_i64(Int64(self.num_rows))
         last = w.write_struct_list(4, last, self.row_groups)
+        if len(self.key_value_metadata) > 0:
+            last = w.write_struct_list(5, last, self.key_value_metadata)
         last = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
         # column_orders (7): one ColumnOrder per leaf column, each the

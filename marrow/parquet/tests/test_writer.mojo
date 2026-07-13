@@ -1006,5 +1006,42 @@ def test_float16_roundtrip() raises:
         remove(path)
 
 
+def test_key_value_metadata() raises:
+    # user schema metadata round-trips; PyArrow's ARROW:schema is dropped on
+    # write (marrow writes its own Parquet schema).
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var md = Python.evaluate("{b'hello': b'world', b'team': b'marrow'}")
+    var sch = pa.schema(Python.list(pa.field("x", pa.int64()))).with_metadata(
+        md
+    )
+    var want = pa.table(
+        Python.dict(x=pa.array(Python.list(1, 2, 3))), schema=sch
+    )
+    var path = String("/tmp/marrow_kv.parquet")
+    pq.write_table(want, path)
+
+    # marrow surfaces the file's key/value metadata on the schema
+    var t = read_table(path)
+    assert_equal(t.schema.metadata["hello"], String("world"))
+    assert_equal(t.schema.metadata["team"], String("marrow"))
+
+    # marrow writes it back; PyArrow reads the user keys, ARROW:schema is gone
+    var dst = String("/tmp/marrow_kv_out.parquet")
+    write_table(t, dst)
+    var back = pq.read_table(dst)
+    assert_true(
+        Bool(
+            back.schema.metadata[Python.evaluate("b'hello'")]
+            == Python.evaluate("b'world'")
+        )
+    )
+    assert_false(
+        Bool(Python.evaluate("b'ARROW:schema'") in back.schema.metadata)
+    )
+    remove(path)
+    remove(dst)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

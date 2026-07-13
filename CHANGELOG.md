@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Key/value metadata round-trip** (`marrow.parquet`): the file footer's
+  `key_value_metadata` is now read and written. On read it populates
+  `schema.metadata` (matching `pyarrow.read_table(...).schema.metadata`,
+  including PyArrow's `ARROW:schema` blob); on write the schema's metadata is
+  emitted, except `ARROW:schema` (which pins exact Arrow types — marrow writes
+  and infers types from the Parquet schema, so re-emitting a foreign copy would
+  make the file self-inconsistent).
+
 - **float16 read + write** (`marrow.parquet`): the Arrow `float16` (half-float)
   type now round-trips. Parquet stores it as `FIXED_LEN_BYTE_ARRAY(2)` with the
   `FLOAT16` logical annotation, and the 2 bytes are exactly the little-endian

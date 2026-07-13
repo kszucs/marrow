@@ -39,6 +39,7 @@ from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
     PhysicalType,
+    KeyValue,
     ColumnMetaData,
     ColumnChunk,
     RowGroup,
@@ -1232,6 +1233,15 @@ struct FileWriter(Movable):
         fmeta.schema = ps.elements.copy()
         fmeta.num_rows = n
         fmeta.created_by = "marrow"
+        # Preserve the schema's key/value metadata. PyArrow's `ARROW:schema` is
+        # dropped: it pins the exact Arrow types, but marrow writes (and readers
+        # infer) types from the Parquet schema, so re-emitting a foreign
+        # ARROW:schema would make the file self-inconsistent.
+        for entry in table.schema.metadata.items():
+            if entry.key != "ARROW:schema":
+                fmeta.key_value_metadata.append(
+                    KeyValue(entry.key, entry.value)
+                )
 
         var start = 0
         while start < n or (n == 0 and start == 0):
