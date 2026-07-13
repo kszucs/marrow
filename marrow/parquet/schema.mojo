@@ -14,6 +14,7 @@ from .. import dtypes as dt
 from ..schema import Schema
 from ..arrays import AnyArray, StructArray, BoolArray, ListArray
 from ..builders import BoolBuilder, PrimitiveBuilder
+from ..buffers import Bitmap
 from .format import (
     SchemaElement,
     FileMetaData,
@@ -220,10 +221,20 @@ struct SchemaNode(Copyable, Movable):
             leaf_arrays.append(col.copy())
         elif self.kind == NODE_STRUCT:
             ref sa = col.as_struct()
+            # A nullable struct's null bit is not reflected in its children
+            # (Arrow leaves them defined), so AND it into each child before
+            # descending — the encoders skip nulls, and the count then matches
+            # the definition levels (`def == max_def` only where the struct is
+            # present *and* the child is non-null).
             for i in range(len(self.children)):
-                self.children[i].collect_leaf_arrays(
-                    sa.children[i], leaf_arrays
-                )
+                if self.geom.optional and sa.bitmap:
+                    self.children[i].collect_leaf_arrays(
+                        Self._apply_null_mask(sa.children[i], sa), leaf_arrays
+                    )
+                else:
+                    self.children[i].collect_leaf_arrays(
+                        sa.children[i], leaf_arrays
+                    )
         elif self.kind == NODE_LIST:
             # Descend into the list's flat child values — the innermost element
             # arrays hold the leaf values to write; the offsets/levels come from
@@ -248,6 +259,36 @@ struct SchemaNode(Copyable, Movable):
             if c.contains_repeated():
                 return True
         return False
+
+    def needs_levels(self) -> Bool:
+        """Whether this column must be Dremel-shredded on write: it contains a
+        repeated group (list/map) or a nullable (OPTIONAL) struct — either needs
+        definition levels the flat 0/1-derivation cannot produce."""
+        if self.kind == NODE_LIST or self.kind == NODE_MAP:
+            return True
+        if self.kind == NODE_STRUCT and self.geom.optional:
+            return True
+        for ref c in self.children:
+            if c.needs_levels():
+                return True
+        return False
+
+    @staticmethod
+    def _apply_null_mask(arr: AnyArray, sa: StructArray) raises -> AnyArray:
+        """A copy of `arr` whose validity is `arr` AND `sa` — used to push a
+        nullable struct's null bit into a child before shredding/encoding."""
+        var n = arr.length()
+        var bm = Bitmap[mut=True].alloc_zeroed(n)
+        var nulls = 0
+        for i in range(n):
+            if arr.is_valid(i) and sa.is_valid(i):
+                bm.set(i)
+            else:
+                nulls += 1
+        var d = arr.to_data()
+        d.bitmap = bm^.to_immutable(length=n)
+        d.nulls = nulls
+        return AnyArray.from_data(d^)
 
     # -----------------------------------------------------------------------
     # Write-side Dremel striping (inverse of `assemble`): produce per-leaf
@@ -284,13 +325,19 @@ struct SchemaNode(Copyable, Movable):
             if meta[li].max_rep >= 1:
                 reps[li].append(Int32(rep))
         elif self.kind == NODE_STRUCT:
-            # Emitted REQUIRED on write, so the struct itself is always present;
-            # each field is shredded at the same element with the same rep.
             ref sa = arr.as_struct()
-            for c in range(len(self.children)):
-                self.children[c]._shred_elem(
-                    sa.children[c], i, rep, meta, defs, reps
+            if self.geom.optional and not sa.is_valid(i):
+                # Null struct: one absent marker (def below the struct's non-null
+                # level) for every leaf underneath.
+                self._emit_absent(
+                    self.geom.non_null_def - 1, rep, meta, defs, reps
                 )
+            else:
+                # Present (or REQUIRED) struct: shred each field at this element.
+                for c in range(len(self.children)):
+                    self.children[c]._shred_elem(
+                        sa.children[c], i, rep, meta, defs, reps
+                    )
         else:  # NODE_LIST / NODE_MAP
             var valid: Bool
             var start: Int
@@ -527,6 +574,10 @@ struct SchemaMapping(Movable):
         var pt = el.type
         var ct = el.converted_type
         var lt = el.logical_type
+        # INT96 is the deprecated 12-byte timestamp of legacy writers (Impala/
+        # Spark/Hive) -> nanosecond timestamp, no timezone (matching PyArrow).
+        if pt == PhysicalType.INT96:
+            return dt.timestamp(dt.nanosecond, String(""))
         # Temporal leaves need unit + UTC disambiguation and array construction
         # that does not invert cleanly, so they are matched before the table.
         if pt == PhysicalType.INT32:
@@ -801,8 +852,9 @@ struct SchemaMapping(Movable):
 
     # -----------------------------------------------------------------------
     # Arrow -> Parquet metadata (write). A depth-first walk over Arrow fields
-    # appends `SchemaElement`s and leaf descriptors. Structs are emitted as
-    # required groups (struct-level nulls are a follow-up).
+    # appends `SchemaElement`s and leaf descriptors. A nullable struct is emitted
+    # as an OPTIONAL group (struct nulls in the def levels); a struct whose
+    # subtree contains a repeated group stays REQUIRED.
     # -----------------------------------------------------------------------
 
     @staticmethod
@@ -911,6 +963,24 @@ struct SchemaMapping(Movable):
             el.converted_type = conv
             el.logical_type = logi
 
+    @staticmethod
+    def _has_repeated(dtype: dt.AnyDataType) -> Bool:
+        """Whether an Arrow type contains a repeated group (list/map/fixed-size
+        list) anywhere — a nullable struct wrapping one stays REQUIRED on write.
+        """
+        if (
+            dtype.is_list()
+            or dtype.is_large_list()
+            or dtype.is_fixed_size_list()
+            or dtype.is_map()
+        ):
+            return True
+        if dtype.is_struct():
+            for ref f in dtype.as_struct().fields:
+                if Self._has_repeated(f.dtype):
+                    return True
+        return False
+
     def _emit_field(
         mut self,
         field: dt.Field,
@@ -1000,23 +1070,27 @@ struct SchemaMapping(Movable):
             )
 
         if field.dtype.is_struct():
-            # Emitted as a REQUIRED group (struct-level nulls on write TODO), so
-            # the children inherit `def_base` unchanged.
+            # A nullable struct is emitted as an OPTIONAL group so struct-level
+            # nulls ride in the definition levels (children inherit `d`). A struct
+            # whose subtree contains a repeated group (list/map) stays REQUIRED —
+            # combining struct nulls with record boundaries is a follow-up — so
+            # its field nullability is not preserved in that case.
             ref st = field.dtype.as_struct()
+            var opt = nullable and not Self._has_repeated(field.dtype)
+            var sd = def_base + (1 if opt else 0)
+            var group_rep = Repetition.OPTIONAL if opt else Repetition.REQUIRED
             self.elements.append(
-                Self._group_element(
-                    field.name, Repetition.REQUIRED, len(st.fields)
-                )
+                Self._group_element(field.name, group_rep, len(st.fields))
             )
             var child_nodes = List[SchemaNode]()
             for ref cf in st.fields:
                 child_nodes.append(
                     self._emit_field(
                         cf,
-                        def_base,
+                        sd,
                         rep_base,
                         slot_def=slot_def,
-                        under_optional=under_optional,
+                        under_optional=under_optional or opt,
                     )
                 )
             return SchemaNode(
@@ -1025,8 +1099,8 @@ struct SchemaMapping(Movable):
                 child_nodes^,
                 -1,
                 NodeGeom(
-                    non_null_def=def_base,
-                    optional=False,
+                    non_null_def=sd,
+                    optional=opt,
                     rep_level=rep_base,
                     slot_def=slot_def,
                 ),

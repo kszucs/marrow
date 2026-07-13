@@ -1170,7 +1170,7 @@ struct FileWriter(Movable):
             for _ in range(len(self.leaves)):
                 defs.append(List[Int32]())
                 reps.append(List[Int32]())
-            if nodes[ci].contains_repeated():
+            if nodes[ci].needs_levels():
                 nodes[ci].shred_levels(
                     batch.columns[ci], self.leaves, defs, reps
                 )

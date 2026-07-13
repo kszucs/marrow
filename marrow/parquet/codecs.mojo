@@ -843,10 +843,21 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
     def decode_bool(
         self, values: Span[UInt8, _], num_present: Int
     ) raises -> List[Bool]:
-        """Return the present PLAIN bit-packed booleans."""
-        if not self.is_plain():
+        """Return the present booleans — PLAIN bit-packed, or RLE (the encoding
+        arrow/PyArrow use for boolean values in DataPage v2). An RLE boolean
+        stream is a 4-byte little-endian length then a width-1 RLE/bit-packed
+        hybrid run, exactly like a level stream."""
+        if self.is_plain():
+            return Plain.decode_bool(values, num_present)
+        elif self == Self.RLE:
+            var length = LittleEndian.u32(values, 0)
+            var decoded = Rle.decode(values[4 : 4 + length], 1, num_present)
+            var out = List[Bool](capacity=num_present)
+            for i in range(num_present):
+                out.append(Int(decoded[i]) == 1)
+            return out^
+        else:
             raise Error("parquet: non-plain bool encoding not supported")
-        return Plain.decode_bool(values, num_present)
 
 
 @fieldwise_init

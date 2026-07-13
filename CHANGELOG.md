@@ -4,6 +4,22 @@
 
 ### Features
 
+- **Nullable-struct write** (`marrow.parquet`): a nullable Arrow struct is now
+  emitted as an `OPTIONAL` group so struct-level nulls ride in the definition
+  levels (previously structs were always `REQUIRED` and their null-ness was
+  silently dropped on write). The struct's null bit is pushed into its children
+  before shredding/encoding so the value count matches the levels. A struct whose
+  subtree contains a repeated group (list/map) still stays `REQUIRED` for now.
+
+- **INT96 timestamp read** (`marrow.parquet`): the reader decodes the deprecated
+  12-byte INT96 physical type (nanoseconds-of-day + Julian day) into a
+  nanosecond `timestamp`, so legacy Impala/Spark/Hive files read back — PLAIN and
+  RLE_DICTIONARY, flat and nested.
+
+- **RLE boolean read** (`marrow.parquet`): boolean values encoded as RLE — what
+  arrow/PyArrow emit in DataPage v2 — now decode (a 4-byte length prefix then a
+  width-1 RLE/bit-packed hybrid), alongside the existing PLAIN bit-packed path.
+
 - **Data page splitting** (`marrow.parquet`): the writer no longer emits a single
   data page per column chunk. Each chunk is split into data pages of at most
   ~1 MiB of encoded values or 20 000 rows (matching arrow-cpp `data_pagesize` /

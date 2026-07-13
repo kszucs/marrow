@@ -512,5 +512,40 @@ def test_page_split_nested() raises:
     remove(path)
 
 
+def test_write_nullable_struct() raises:
+    # a nullable struct with struct-level nulls (and a child null) -> emitted as
+    # an OPTIONAL group; PyArrow must read the struct nulls back exactly
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var s = pa.array(
+        Python.evaluate(
+            "[{'a':1,'b':'x'}, None, {'a':3,'b':None}, None, {'a':5,'b':'z'}]"
+        ),
+        type=pa.struct(
+            Python.list(pa.field("a", pa.int32()), pa.field("b", pa.string()))
+        ),
+    )
+    var want = pa.table(Python.dict(s=s))
+    var t = CArrowArrayStream.from_pycapsule(
+        want.__arrow_c_stream__(Python.none())
+    ).to_table()
+    var path = String("/tmp/marrow_nullable_struct.parquet")
+    write_table(t, path, use_dictionary=False)
+
+    var back = pq.read_table(path)
+    # struct-level nulls preserved
+    assert_true(
+        Bool(
+            back.column(0).combine_chunks().is_valid().to_pylist()
+            == Python.evaluate("[True, False, True, False, True]")
+        )
+    )
+    # full value equality (incl. the child-null at row 2)
+    assert_true(Bool(back.column(0).equals(want.column(0))))
+    # marrow round-trips it too
+    assert_equal(read_table(path).num_rows(), 5)
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

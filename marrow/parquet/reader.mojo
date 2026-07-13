@@ -59,6 +59,7 @@ from .format import (
     ColumnMetaData,
     PageHeader,
     PageType,
+    PhysicalType,
 )
 
 
@@ -465,6 +466,23 @@ def _decode_be_flba[
     return SIMD[native, 1].from_bytes[big_endian=True](arr)
 
 
+comptime _JULIAN_DAY_OF_EPOCH = 2440588  # Julian day number of 1970-01-01
+comptime _NANOS_PER_DAY = 86_400_000_000_000
+
+
+def _int96_nanos(span: Span[UInt8, _], off: Int) -> Int64:
+    """Decode a 12-byte INT96 timestamp to nanoseconds since the Unix epoch: the
+    first 8 bytes are the little-endian nanoseconds within the day, the last 4
+    the little-endian Julian day number. The shared flat/leveled INT96 decode.
+    """
+    var nanos_of_day = LittleEndian.fixed[DType.int64](span, off)
+    var julian_day = LittleEndian.fixed[DType.int32](span, off + 8)
+    return (
+        nanos_of_day
+        + Int64(Int(julian_day) - _JULIAN_DAY_OF_EPOCH) * _NANOS_PER_DAY
+    )
+
+
 def _retag(var arr: AnyArray, var dtype: dt.AnyDataType) raises -> AnyArray:
     """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
     Used to give a leveled temporal column its Arrow type (the growing builder
@@ -846,6 +864,94 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         )
 
 
+struct Int96LeafBuilder(LeafBuilder):
+    """Legacy INT96 timestamps (12 bytes each) -> `int64` nanoseconds. PLAIN and
+    RLE_DICTIONARY, the encodings INT96 ever uses. Mirrors `DecimalLeafBuilder`,
+    decoding each fixed-width value with `_int96_nanos` instead of big-endian.
+    """
+
+    var dtype: dt.AnyDataType  # timestamp(ns)
+    var max_def: Int
+    var num_rows: Int
+    var values: Buffer[mut=True]  # int64
+    var bitmap: Bitmap[mut=True]
+    var has_bitmap: Bool
+    var wpos: Int
+    var null_count: Int
+    var dict: List[Int64]
+
+    def __init__(out self, num_rows: Int, leaf: LeafColumn):
+        self.dtype = leaf.dtype.copy()
+        self.max_def = leaf.max_def
+        self.num_rows = num_rows
+        self.values = Buffer.alloc_uninit[DType.int64](num_rows)
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
+        self.wpos = 0
+        self.null_count = 0
+        self.dict = List[Int64]()
+
+    def _ensure_bitmap(mut self):
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
+
+    def _append_present(mut self, v: Int64):
+        self.values.unsafe_set[DType.int64](self.wpos, v)
+        if self.has_bitmap:
+            self.bitmap.set(self.wpos)
+        self.wpos += 1
+
+    def _append_null(mut self):
+        self._ensure_bitmap()
+        self.values.unsafe_set[DType.int64](self.wpos, Int64(0))
+        self.null_count += 1
+        self.wpos += 1
+
+    def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
+        var vspan = page.values()
+        var idx = List[Int32]()
+        var is_dict = page.is_dictionary()
+        if is_dict:
+            idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
+        elif not page.is_plain():
+            raise Error("parquet: unsupported INT96 encoding")
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
+                if present_here:
+                    if is_dict:
+                        self._append_present(self.dict[Int(idx[vi])])
+                    else:
+                        self._append_present(_int96_nanos(vspan, vi * 12))
+                else:
+                    self._append_null()
+
+        _walk_slots[place](page, self.max_def, mask)
+
+    def consume(mut self, var page: Page) raises:
+        if page.dictionary:
+            var span = page.body
+            for i in range(page.num_values):
+                self.dict.append(_int96_nanos(span, i * 12))
+        else:
+            self._place(page, None)
+
+    def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
+        self._place(page, mask.copy())
+
+    def finish(deinit self) raises -> AnyArray:
+        return _finish_primitive(
+            self.values^,
+            self.bitmap^,
+            self.wpos,
+            self.null_count,
+            self.dtype^,
+        )
+
+
 struct FixedSizeBinaryLeafBuilder(LeafBuilder):
     """FIXED_LEN_BYTE_ARRAY raw bytes -> FixedSizeBinaryArray. PLAIN and
     RLE_DICTIONARY, the encodings PyArrow emits."""
@@ -935,17 +1041,45 @@ struct BoolLeafBuilder(LeafBuilder):
 
         _walk_slots[place](page, self.max_def, mask)
 
+    def _place_values(
+        mut self,
+        page: Page,
+        values: List[Bool],
+        mask: Optional[List[Bool]] = None,
+    ) raises:
+        """Scatter already-decoded present booleans (the RLE path) honoring def
+        levels; with `mask`, only selected rows are appended."""
+
+        @parameter
+        def place(present_here: Bool, selected: Bool, vi: Int) raises:
+            if selected:
+                if present_here:
+                    self.builder.append(values[vi])
+                else:
+                    self.builder.append_null()
+
+        _walk_slots[place](page, self.max_def, mask)
+
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
             raise Error("parquet: dictionary-encoded bool not supported")
-        if not page.is_plain():
-            raise Error("parquet: non-plain bool encoding not supported")
-        self._place(page, page.values())
+        if page.is_plain():
+            self._place(page, page.values())
+        else:
+            # RLE booleans (arrow's DataPage v2) share the nested decoder.
+            self._place_values(
+                page, page.encoding.decode_bool(page.values(), page.num_present)
+            )
 
     def consume_selected(mut self, var page: Page, mask: List[Bool]) raises:
-        if not page.is_plain():
-            raise Error("parquet: non-plain bool encoding not supported")
-        self._place(page, page.values(), mask.copy())
+        if page.is_plain():
+            self._place(page, page.values(), mask.copy())
+        else:
+            self._place_values(
+                page,
+                page.encoding.decode_bool(page.values(), page.num_present),
+                mask.copy(),
+            )
 
     def finish(deinit self) raises -> AnyArray:
         var b = self.builder^
@@ -1435,6 +1569,65 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             )
             return self._flat_leaf(arr^)
 
+    def _drive_int96(
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        """Leveled INT96 timestamps (list/map elements): 12-byte values decoded to
+        int64 nanoseconds, retagged to the leaf's `timestamp(ns)` type."""
+        var builder = PrimitiveBuilder[dt.Int64Type](self.num_rows)
+        var dict = List[Int64]()
+        var present = List[Int64]()
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            for i in range(pg.num_values):
+                dict.append(_int96_nanos(pg.body, i * 12))
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            present.clear()
+            var vspan = pg.values()
+            if pg.is_dictionary():
+                var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+                for i in range(pg.num_present):
+                    present.append(dict[Int(idx[i])])
+            elif pg.is_plain():
+                for i in range(pg.num_present):
+                    present.append(_int96_nanos(vspan, i * 12))
+            else:
+                raise Error("parquet: unsupported INT96 encoding")
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(present[vi])
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
+        var arr: AnyArray = builder.finish()
+        return DecodedLeaf(
+            _retag(arr^, self.pages.leaf.dtype.copy()), rep_out^, def_out^
+        )
+
+    def _emit_int96[
+        leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_int96(codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                Int96LeafBuilder(self.num_rows, self.pages.leaf), codecs
+            )
+            return self._flat_leaf(arr^)
+
     def _dispatch[
         leveled: Bool
     ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
@@ -1445,7 +1638,11 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         # ignores these (the emit helper's flat branch drops them).
         var f = leaf.slot_def
         var md = leaf.max_def
-        if vt == dt.int32:
+        # INT96 is a 12-byte timestamp; its Arrow dtype is timestamp(ns), so it is
+        # distinguished from an INT64 timestamp by the physical type.
+        if leaf.physical == PhysicalType.INT96:
+            return self._emit_int96[leveled](codecs, f, md)
+        elif vt == dt.int32:
             return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
                 codecs, f, md
             )

@@ -786,5 +786,64 @@ def test_parquet_file() raises:
     remove(path)
 
 
+def test_read_rle_bool_v2() raises:
+    # PyArrow's DataPage v2 encodes boolean *values* as RLE (not PLAIN)
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var vals = Python.list()
+    for i in range(500):
+        if i % 9 == 0:
+            vals.append(Python.evaluate("None"))
+        else:
+            vals.append(Python.evaluate("True" if i % 2 == 0 else "False"))
+    var tbl = pa.table(Python.dict(b=pa.array(vals, type=pa.bool_())))
+    var path = String("/tmp/marrow_rle_bool.parquet")
+    pq.write_table(tbl, path, data_page_version="2.0", use_dictionary=False)
+
+    var t = read_table(path)
+    var b = t.to_batches()[0].copy()
+    var cb = b.columns[0].copy()
+    ref col = cb.as_bool()
+    assert_equal(col.null_count(), 500 // 9 + 1)
+    assert_true(col[2].value())  # i=2 -> True
+    assert_false(col[1].value())  # i=1 -> False
+    assert_false(col.is_valid(0))  # i=0 -> null
+    remove(path)
+
+
+def test_read_int96_timestamp() raises:
+    # legacy INT96 timestamps (Impala/Spark/Hive) -> timestamp(ns)
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var ts = Python.list()
+    for i in range(200):
+        if i % 13 == 0:
+            ts.append(Python.evaluate("None"))
+        else:
+            ts.append(i * 1000000000 + 500)
+    var tbl = pa.table(Python.dict(t=pa.array(ts, type=pa.timestamp("ns"))))
+    var path = String("/tmp/marrow_int96.parquet")
+    pq.write_table(tbl, path, use_deprecated_int96_timestamps=True)
+    # confirm it is really INT96 on disk
+    assert_equal(
+        String(
+            py=pq.ParquetFile(path)
+            .metadata.row_group(0)
+            .column(0)
+            .physical_type
+        ),
+        "INT96",
+    )
+
+    var t = read_table(path)
+    var b = t.to_batches()[0].copy()
+    var cts = b.columns[0].copy()
+    ref col = cts.as_timestamp()
+    assert_false(col.is_valid(0))  # i=0 -> null (0 % 13 == 0)
+    assert_equal(col[1].value(), 1000000000 + 500)
+    assert_equal(col[2].value(), 2000000000 + 500)
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
