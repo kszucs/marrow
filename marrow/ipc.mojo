@@ -28,7 +28,7 @@ from .arrays import AnyArray, ArrayData, DictionaryArray, NullArray
 from .buffers import Buffer, Bitmap
 from .schema import Schema
 from .tabular import RecordBatch
-from .utils import read_le, write_le, append_le
+from .utils import LittleEndian
 from . import dtypes as dt
 
 
@@ -240,7 +240,7 @@ def _read_le[T: DType](buf: List[UInt8], pos: Int) raises -> Scalar[T]:
     """
     if pos < 0 or pos + size_of[T]() - 1 >= len(buf):
         raise Error("ipc: _read_le out of bounds at " + String(pos))
-    return read_le[T](Span(buf), pos)
+    return LittleEndian.fixed[T](Span(buf), pos)
 
 
 def _padding_to(pos: Int, alignment: Int) -> Int:
@@ -322,32 +322,32 @@ struct _FlatbufWriter(Movable):
     def prepend_u16(mut self, val: UInt16) raises -> UInt32:
         self._prep(2, 2)
         self._head -= 2
-        write_le[DType.uint16](self._buf, self._head, val)
+        LittleEndian.write[DType.uint16](self._buf, self._head, val)
         return self.offset()
 
     def prepend_i16(mut self, val: Int16) raises -> UInt32:
         self._prep(2, 2)
         self._head -= 2
-        write_le[DType.int16](self._buf, self._head, val)
+        LittleEndian.write[DType.int16](self._buf, self._head, val)
         return self.offset()
 
     def prepend_i32(mut self, val: Int32) raises -> UInt32:
         self._prep(4, 4)
         self._head -= 4
-        write_le[DType.int32](self._buf, self._head, val)
+        LittleEndian.write[DType.int32](self._buf, self._head, val)
         return self.offset()
 
     def prepend_i64(mut self, val: Int64) raises -> UInt32:
         self._prep(8, 8)
         self._head -= 8
-        write_le[DType.int64](self._buf, self._head, val)
+        LittleEndian.write[DType.int64](self._buf, self._head, val)
         return self.offset()
 
     def prepend_uoffset(mut self, val: UInt32) raises -> UInt32:
         self._prep(4, 4)
         self._head -= 4
         var stored_abs = len(self._buf) - self._head
-        write_le[DType.uint32](
+        LittleEndian.write[DType.uint32](
             self._buf, self._head, UInt32(stored_abs - Int(val))
         )
         return self.offset()
@@ -362,7 +362,7 @@ struct _FlatbufWriter(Movable):
             self._head -= 1
             self._buf[self._head] = bytes[i]
         self._head -= 4
-        write_le[DType.uint32](self._buf, self._head, UInt32(n))
+        LittleEndian.write[DType.uint32](self._buf, self._head, UInt32(n))
         return self.offset()
 
     def create_vector_u8(mut self, data: List[UInt8]) raises -> UInt32:
@@ -372,7 +372,7 @@ struct _FlatbufWriter(Movable):
             self._head -= 1
             self._buf[self._head] = data[i]
         self._head -= 4
-        write_le[DType.uint32](self._buf, self._head, UInt32(n))
+        LittleEndian.write[DType.uint32](self._buf, self._head, UInt32(n))
         return self.offset()
 
     def create_vector_offsets(mut self, offsets: List[UInt32]) raises -> UInt32:
@@ -382,9 +382,9 @@ struct _FlatbufWriter(Movable):
             self._head -= 4
             var stored_abs = len(self._buf) - self._head
             var rel = stored_abs - Int(offsets[i])
-            write_le[DType.uint32](self._buf, self._head, UInt32(rel))
+            LittleEndian.write[DType.uint32](self._buf, self._head, UInt32(rel))
         self._head -= 4
-        write_le[DType.uint32](self._buf, self._head, UInt32(n))
+        LittleEndian.write[DType.uint32](self._buf, self._head, UInt32(n))
         return self.offset()
 
     def create_vector_structs(
@@ -412,14 +412,14 @@ struct _FlatbufWriter(Movable):
             self._head -= 1
             self._buf[self._head] = data[i]
         self._head -= 4
-        write_le[DType.uint32](self._buf, self._head, UInt32(count))
+        LittleEndian.write[DType.uint32](self._buf, self._head, UInt32(count))
         return self.offset()
 
     def finish(mut self, root: UInt32) raises -> List[UInt8]:
         self._prep(self._min_align, 4)
         self._head -= 4
         var table_pos_in_result = (len(self._buf) - Int(root)) - self._head
-        write_le[DType.uint32](
+        LittleEndian.write[DType.uint32](
             self._buf, self._head, UInt32(table_pos_in_result)
         )
         var result = List[UInt8](capacity=len(self._buf) - self._head)
@@ -440,7 +440,7 @@ struct _FlatbufWriter(Movable):
 
         self._prep(4, 4)
         self._head -= 4
-        write_le[DType.int32](self._buf, self._head, Int32(0))
+        LittleEndian.write[DType.int32](self._buf, self._head, Int32(0))
         var table_pos = self.offset()
 
         var object_size = UInt16(Int(table_pos) - Int(table_start))
@@ -458,15 +458,17 @@ struct _FlatbufWriter(Movable):
         self._prep(1, 4 + num_slots * 2)
         for s in range(num_slots - 1, -1, -1):
             self._head -= 2
-            write_le[DType.uint16](self._buf, self._head, vtable_slots[s])
+            LittleEndian.write[DType.uint16](
+                self._buf, self._head, vtable_slots[s]
+            )
         self._head -= 2
-        write_le[DType.uint16](self._buf, self._head, object_size)
+        LittleEndian.write[DType.uint16](self._buf, self._head, object_size)
         self._head -= 2
-        write_le[DType.uint16](self._buf, self._head, vtable_size)
+        LittleEndian.write[DType.uint16](self._buf, self._head, vtable_size)
         var new_vt_offset = self.offset()
 
         var soffset = Int32(Int(new_vt_offset) - Int(table_pos))
-        write_le[DType.int32](
+        LittleEndian.write[DType.int32](
             self._buf, len(self._buf) - Int(table_pos), soffset
         )
 
@@ -690,10 +692,10 @@ struct _IpcEncoder(Movable):
     @staticmethod
     def frame_message(metadata: List[UInt8], body: List[UInt8]) -> List[UInt8]:
         var out = List[UInt8]()
-        append_le[DType.uint32](out, UInt32(0xFFFFFFFF))
+        LittleEndian.append[DType.uint32](out, UInt32(0xFFFFFFFF))
         var meta_len = len(metadata)
         var padded_len = meta_len + (8 - meta_len % 8) % 8
-        append_le[DType.int32](out, Int32(padded_len))
+        LittleEndian.append[DType.int32](out, Int32(padded_len))
         out.extend(Span(metadata))
         _pad_to(out, 8)
         out.extend(Span(body))
@@ -744,8 +746,10 @@ struct _IpcEncoder(Movable):
         for _ in range(n * 16):
             data.append(UInt8(0))
         for i in range(n):
-            write_le[DType.int64](data, i * 16, nodes[i].length)
-            write_le[DType.int64](data, i * 16 + 8, nodes[i].null_count)
+            LittleEndian.write[DType.int64](data, i * 16, nodes[i].length)
+            LittleEndian.write[DType.int64](
+                data, i * 16 + 8, nodes[i].null_count
+            )
         return self._fb.create_vector_structs(data, n, 16, 8)
 
     def _write_body_buffers_vec(
@@ -756,8 +760,8 @@ struct _IpcEncoder(Movable):
         for _ in range(n * 16):
             data.append(UInt8(0))
         for i in range(n):
-            write_le[DType.int64](data, i * 16, bufs[i].offset)
-            write_le[DType.int64](data, i * 16 + 8, bufs[i].length)
+            LittleEndian.write[DType.int64](data, i * 16, bufs[i].offset)
+            LittleEndian.write[DType.int64](data, i * 16 + 8, bufs[i].length)
         return self._fb.create_vector_structs(data, n, 16, 8)
 
     def _write_blocks_vec(mut self, blocks: List[_Block]) raises -> UInt32:
@@ -766,10 +770,14 @@ struct _IpcEncoder(Movable):
         for _ in range(n * 24):
             data.append(UInt8(0))
         for i in range(n):
-            write_le[DType.int64](data, i * 24, blocks[i].offset)
-            write_le[DType.int32](data, i * 24 + 8, blocks[i].metadata_length)
+            LittleEndian.write[DType.int64](data, i * 24, blocks[i].offset)
+            LittleEndian.write[DType.int32](
+                data, i * 24 + 8, blocks[i].metadata_length
+            )
             # 4 bytes padding at offset 12 (Arrow Block struct alignment)
-            write_le[DType.int64](data, i * 24 + 16, blocks[i].body_length)
+            LittleEndian.write[DType.int64](
+                data, i * 24 + 16, blocks[i].body_length
+            )
         return self._fb.create_vector_structs(data, n, 24, 8)
 
     def _type_code(self, dtype: dt.AnyDataType) raises -> UInt8:
@@ -2038,7 +2046,7 @@ struct RecordBatchFileWriter(Movable):
             self._schema, self._dict_blocks, self._blocks
         )
         self._out.extend(Span(footer_bytes))
-        append_le[DType.int32](self._out, Int32(len(footer_bytes)))
+        LittleEndian.append[DType.int32](self._out, Int32(len(footer_bytes)))
         var magic = _magic()
         for i in range(6):
             self._out.append(magic[i])
@@ -2088,8 +2096,8 @@ struct RecordBatchStreamWriter(Movable):
     def close(mut self) raises:
         if self._closed:
             return
-        append_le[DType.uint32](self._out, UInt32(0xFFFFFFFF))
-        append_le[DType.int32](self._out, Int32(0))
+        LittleEndian.append[DType.uint32](self._out, UInt32(0xFFFFFFFF))
+        LittleEndian.append[DType.int32](self._out, Int32(0))
         Path(self._path).write_bytes(self._out^)
         self._closed = True
 

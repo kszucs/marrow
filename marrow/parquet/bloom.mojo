@@ -16,7 +16,7 @@ reference implementations in arrow-rs (`bloom_filter.rs`) and Arrow C++:
 
 from std.math import log
 
-from .codecs import LittleEndian
+from ..utils import LittleEndian
 from .format import (
     CompactWriter,
     CompactReader,

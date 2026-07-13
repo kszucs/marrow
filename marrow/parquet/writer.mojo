@@ -29,7 +29,6 @@ from ..schema import Schema
 from .codecs import (
     Rle,
     Plain,
-    LittleEndian,
     Compression,
     Encoding,
     DeltaBinaryPacked,
@@ -37,6 +36,7 @@ from .codecs import (
     DeltaLengthByteArray,
     ByteStreamSplit,
 )
+from ..utils import LittleEndian
 from .utils import CompressionLibs
 from .bloom import xxh64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, LeafColumn, SchemaNode

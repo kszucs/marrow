@@ -14,7 +14,8 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 
 from std.memory import bitcast
 
-from .codecs import Encoding, Zigzag, LittleEndian
+from .codecs import Encoding, Zigzag
+from ..utils import LittleEndian
 
 
 # ---------------------------------------------------------------------------

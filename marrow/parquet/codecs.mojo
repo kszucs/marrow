@@ -32,7 +32,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
-from ..utils import read_le, append_le
+from ..utils import LittleEndian
 from ..views import load_word_le
 from .utils import CompressionLibs
 
@@ -51,85 +51,6 @@ struct Zigzag:
     @always_inline
     def decode(u: UInt64) -> Int64:
         return Int64(u >> 1) ^ -Int64(u & 1)
-
-
-struct LittleEndian:
-    """Little-endian byte, bit, and LEB128-varint reads over a byte span — the
-    low-level primitives the codecs below share. Stateless; a namespace of
-    static methods rather than free functions. The fixed-width scalar read/write
-    delegate to the shared `read_le`/`append_le` in `marrow.utils`."""
-
-    @staticmethod
-    def u32(body: Span[UInt8, _], off: Int) -> Int:
-        return Int(read_le[DType.uint32](body, off))
-
-    @staticmethod
-    def fixed[dt: DType](body: Span[UInt8, _], off: Int) -> Scalar[dt]:
-        return read_le[dt](body, off)
-
-    @staticmethod
-    def varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
-        """Read an unsigned LEB128 varint at `pos`; return `(value, next_pos)`.
-        """
-        var result: UInt64 = 0
-        var shift: Int = 0
-        var p = pos
-        while True:
-            if p >= len(data):
-                raise Error("parquet: varint out of bounds")
-            var b = data[p]
-            p += 1
-            result |= UInt64(b & 0x7F) << UInt64(shift)
-            if b & 0x80 == 0:
-                break
-            shift += 7
-            if shift >= 64:
-                raise Error("parquet: varint too long")
-        return (result, p)
-
-    @staticmethod
-    def put_u32(mut out: List[UInt8], v: Int):
-        append_le[DType.uint32](out, UInt32(v))
-
-    @staticmethod
-    def put_le(mut out: List[UInt8], bits: UInt64, width: Int):
-        """Append the low `width` bytes of `bits`, least-significant first."""
-        for i in range(width):
-            out.append(UInt8((bits >> UInt64(i * 8)) & 0xFF))
-
-    @staticmethod
-    def bytes_less(a: Span[UInt8, _], b: Span[UInt8, _]) -> Bool:
-        """Unsigned byte-wise lexicographic `a < b` (BYTE_ARRAY ordering)."""
-        var n = min(len(a), len(b))
-        for i in range(n):
-            if a[i] != b[i]:
-                return a[i] < b[i]
-        return len(a) < len(b)
-
-    @staticmethod
-    def put_varint(mut out: List[UInt8], var v: UInt64):
-        """Append `v` as an unsigned LEB128 varint."""
-        while True:
-            var b = UInt8(v & 0x7F)
-            v >>= 7
-            if v != 0:
-                out.append(b | 0x80)
-            else:
-                out.append(b)
-                break
-
-    @staticmethod
-    def bits(data: Span[UInt8, _], bit_offset: Int, nbits: Int) -> UInt64:
-        """Read `nbits` starting at absolute `bit_offset`, least-significant
-        first."""
-        var result: UInt64 = 0
-        for i in range(nbits):
-            var abs_bit = bit_offset + i
-            var byte_idx = abs_bit >> 3
-            var bit_idx = abs_bit & 7
-            var bit = (UInt64(data[byte_idx]) >> UInt64(bit_idx)) & 1
-            result |= bit << UInt64(i)
-        return result
 
 
 struct Rle:

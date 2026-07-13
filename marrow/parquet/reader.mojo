@@ -47,7 +47,8 @@ from ..scalars import (
 from .. import dtypes as dt
 
 from .utils import CompressionLibs
-from .codecs import Encoding, Rle, LittleEndian, Dictionary, Compression
+from .codecs import Encoding, Rle, Dictionary, Compression
+from ..utils import LittleEndian
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
 from .format import (
