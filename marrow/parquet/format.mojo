@@ -488,7 +488,8 @@ struct SchemaElement(Copyable, Movable):
         """Serialize the `LogicalType` union (field 10): one member field whose
         id is the logical type, holding that member's struct. TIME/TIMESTAMP carry
         `{isAdjustedToUTC, unit}` (unit a `TimeUnit` union), DECIMAL carries
-        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs."""
+        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs.
+        """
         _ = w.write_field_begin(TC_STRUCT, self.logical_type.code, 0)
         if (
             self.logical_type == LogicalType.TIME
@@ -807,6 +808,8 @@ struct ColumnMetaData(Copyable, Movable):
         UInt8
     ]  # PLAIN-encoded min (no length prefix for BYTE_ARRAY)
     var max_value: List[UInt8]  # PLAIN-encoded max
+    var bloom_filter_offset: Int  # -1 if absent
+    var bloom_filter_length: Int
 
     def __init__(out self):
         self.type = -1
@@ -822,6 +825,8 @@ struct ColumnMetaData(Copyable, Movable):
         self.has_min_max = False
         self.min_value = List[UInt8]()
         self.max_value = List[UInt8]()
+        self.bloom_filter_offset = -1
+        self.bloom_filter_length = 0
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -848,6 +853,10 @@ struct ColumnMetaData(Copyable, Movable):
                 out.dictionary_page_offset = Int(r.read_i64())
             elif f.id == 12:
                 out._read_statistics(r)
+            elif f.id == 14:
+                out.bloom_filter_offset = Int(r.read_i64())
+            elif f.id == 15:
+                out.bloom_filter_length = Int(r.read_i32())
             else:
                 r.skip(f.type)
         return out^
@@ -921,6 +930,11 @@ struct ColumnMetaData(Copyable, Movable):
                 slast = w.write_bool_field(True, 7, slast)  # is_max_value_exact
                 slast = w.write_bool_field(True, 8, slast)  # is_min_value_exact
             w.write_field_stop()
+        if self.bloom_filter_offset >= 0:
+            last = w.write_field_begin(TC_I64, 14, last)
+            w.write_i64(Int64(self.bloom_filter_offset))
+            last = w.write_field_begin(TC_I32, 15, last)
+            w.write_i32(Int32(self.bloom_filter_length))
         w.write_field_stop()
 
 
@@ -1097,6 +1111,7 @@ struct ColumnChunk(Copyable, Movable):
     var column_index_offset: Int  # -1 if absent
     var column_index_length: Int
     var data_page_size: Int  # writer-only: the single data page's total bytes
+    var bloom_bytes: List[UInt8]  # writer-only: the built bloom filter bitset
 
     def __init__(out self):
         self.file_offset = 0
@@ -1106,6 +1121,7 @@ struct ColumnChunk(Copyable, Movable):
         self.column_index_offset = -1
         self.column_index_length = 0
         self.data_page_size = 0
+        self.bloom_bytes = List[UInt8]()
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:

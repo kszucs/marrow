@@ -48,6 +48,7 @@ from .. import dtypes as dt
 
 from .utils import CompressionLibs
 from .codecs import Encoding, Rle, LittleEndian, Dictionary, Compression
+from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
 from .format import (
     FileMetaData,
@@ -1256,7 +1257,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                     present.append(dict[Int(idx[i])])
             elif pg.is_plain():
                 for i in range(pg.num_present):
-                    present.append(_decode_be_flba[native](vspan, i * width, width))
+                    present.append(
+                        _decode_be_flba[native](vspan, i * width, width)
+                    )
             else:
                 raise Error(
                     "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding"
@@ -1725,10 +1728,28 @@ struct ParquetFile(Movable):
             out.append(row^)
         return out^
 
+    def bloom_filter(
+        self, row_group: Int, column: Int
+    ) raises -> Optional[SplitBlockBloomFilter]:
+        """The split-block bloom filter for one `(row_group, leaf column)`, or
+        `None` when the chunk has none. Use `.might_contain(bytes)` to test a
+        value's XXH64-hashed bytes — a `False` proves absence (no false negatives).
+        """
+        ref cc = self._meta.row_groups[row_group].columns[column]
+        if cc.meta_data.bloom_filter_offset < 0:
+            return None
+        var data = self._mapped.span()
+        var r = CompactReader(data, cc.meta_data.bloom_filter_offset)
+        var hdr = BloomFilterHeader.read(r)
+        return SplitBlockBloomFilter.from_bytes(
+            data[r.pos : r.pos + hdr.num_bytes]
+        )
+
     def page_bounds(self) raises -> List[List[List[PageBounds]]]:
         """Per (row group, leaf column, data page) decoded bounds, from the page
         index — indexed `result[rg][leaf][page]`. A column with no page index
-        yields an empty page list. Predicate pushdown prunes pages with these."""
+        yields an empty page list. Predicate pushdown prunes pages with these.
+        """
         var data = self._mapped.span()
         var out = List[List[List[PageBounds]]]()
         for ref rg in self._meta.row_groups:

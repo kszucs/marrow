@@ -472,7 +472,11 @@ struct DeltaBinaryPacked:
 
     @staticmethod
     def _put_bits(
-        mut out: List[UInt8], mut acc: UInt64, mut acc_bits: Int, v: UInt64, w: Int
+        mut out: List[UInt8],
+        mut acc: UInt64,
+        mut acc_bits: Int,
+        v: UInt64,
+        w: Int,
     ):
         """Append `w` low bits of `v` LSB-first, flushing whole bytes and keeping
         `acc_bits < 8`, so any width up to 64 packs without overflow."""
@@ -567,9 +571,12 @@ struct Plain:
         comptime W = size_of[Scalar[phys]]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var bytes = arr[i].value().cast[phys]().as_bytes[
-                    big_endian=big_endian
-                ]()
+                var bytes = (
+                    arr[i]
+                    .value()
+                    .cast[phys]()
+                    .as_bytes[big_endian=big_endian]()
+                )
                 for b in range(W):
                     out.append(bytes[b])
 
@@ -974,7 +981,9 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
             # Deprecated LZ4 (code 5): modern writers (PyArrow) emit a plain LZ4
             # block, but tolerate the legacy Hadoop frame ([be u32 decompressed
             # size][be u32 compressed size] prefix) by stripping it when present.
-            libs.lz4_raw_decompress(Self._strip_lz4_frame(src, out_size), ptr, out_size)
+            libs.lz4_raw_decompress(
+                Self._strip_lz4_frame(src, out_size), ptr, out_size
+            )
         elif self == Self.GZIP:
             libs.gzip_decompress(src, ptr, out_size)
         elif self == Self.BROTLI:

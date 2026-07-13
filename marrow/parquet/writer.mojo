@@ -38,6 +38,7 @@ from .codecs import (
     ByteStreamSplit,
 )
 from .utils import CompressionLibs
+from .bloom import xxh64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
@@ -66,6 +67,7 @@ struct ColumnWriter(Movable):
     var compression: Compression
     var version: Int  # data-page version: 1 or 2
     var encoding: Encoding  # value encoding: PLAIN, RLE_DICTIONARY, DELTA_*
+    var write_bloom: Bool  # build a bloom filter for this column chunk
 
     def __init__(
         out self,
@@ -73,11 +75,13 @@ struct ColumnWriter(Movable):
         compression: Compression,
         version: Int = 1,
         encoding: Encoding = Encoding.PLAIN,
+        write_bloom: Bool = False,
     ):
         self.leaf = leaf^
         self.compression = compression
         self.version = version
         self.encoding = encoding
+        self.write_bloom = write_bloom
 
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
         """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
@@ -266,6 +270,100 @@ struct ColumnWriter(Movable):
             raise Error(
                 "parquet: cannot dictionary-encode column type " + String(vt)
             )
+
+    # -----------------------------------------------------------------------
+    # Bloom filter — XXH64-hash every present value's physical bytes (INT32/
+    # INT64/FLOAT/DOUBLE little-endian, or raw byte-array bytes) into a split-
+    # block filter sized for the column's distinct count.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_prim[
+        store: NumericType, phys: DType
+    ](arr: PrimitiveArray[store], mut hashes: List[UInt64]) raises:
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
+                hashes.append(xxh64(Span(b)))
+
+    @staticmethod
+    def _hash_bytes[
+        BT: dt.BinaryLikeType
+    ](arr: BinaryLikeArray[BT], mut hashes: List[UInt64]) raises:
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                hashes.append(xxh64(arr.unsafe_get(UInt(i)).as_bytes()))
+
+    def _bloom_hashes(
+        self, col: AnyArray, mut hashes: List[UInt64]
+    ) raises -> Bool:
+        """XXH64 of each present value's physical bytes; False for a type marrow
+        does not bloom-filter (temporal/decimal/fsb/bool are skipped)."""
+        ref vt = self.leaf.dtype
+        if vt == dt.int32:
+            Self._hash_prim[dt.Int32Type, DType.int32](col.as_int32(), hashes)
+        elif vt == dt.int64:
+            Self._hash_prim[dt.Int64Type, DType.int64](col.as_int64(), hashes)
+        elif vt == dt.uint32:
+            Self._hash_prim[dt.UInt32Type, DType.uint32](
+                col.as_uint32(), hashes
+            )
+        elif vt == dt.uint64:
+            Self._hash_prim[dt.UInt64Type, DType.uint64](
+                col.as_uint64(), hashes
+            )
+        elif vt == dt.float32:
+            Self._hash_prim[dt.Float32Type, DType.float32](
+                col.as_float32(), hashes
+            )
+        elif vt == dt.float64:
+            Self._hash_prim[dt.Float64Type, DType.float64](
+                col.as_float64(), hashes
+            )
+        elif vt == dt.int8:
+            Self._hash_prim[dt.Int8Type, DType.int32](col.as_int8(), hashes)
+        elif vt == dt.int16:
+            Self._hash_prim[dt.Int16Type, DType.int32](col.as_int16(), hashes)
+        elif vt == dt.uint8:
+            Self._hash_prim[dt.UInt8Type, DType.int32](col.as_uint8(), hashes)
+        elif vt == dt.uint16:
+            Self._hash_prim[dt.UInt16Type, DType.int32](col.as_uint16(), hashes)
+        elif vt.is_string():
+            Self._hash_bytes(col.as_string(), hashes)
+        elif vt.is_large_string():
+            Self._hash_bytes(col.as_large_string(), hashes)
+        elif vt.is_binary():
+            Self._hash_bytes(col.as_binary(), hashes)
+        elif vt.is_large_binary():
+            Self._hash_bytes(col.as_large_binary(), hashes)
+        else:
+            return False
+        return True
+
+    def _bloom_bytes(self, col: AnyArray) raises -> List[UInt8]:
+        """The serialized split-block bloom filter for `col`, or an empty list
+        when the column has no bloom-filterable values. Sized to the distinct
+        hash count (deduped) so low-cardinality columns stay small."""
+        var hashes = List[UInt64]()
+        if not self._bloom_hashes(col, hashes) or len(hashes) == 0:
+            return List[UInt8]()
+        var seen = Dict[UInt64, Bool]()
+        for h in hashes:
+            seen[h] = True
+        var bf = SplitBlockBloomFilter.with_ndv(len(seen))
+        for h in hashes:
+            bf.insert_hash(h)
+        return bf.to_bytes()
+
+    @staticmethod
+    def can_bloom(dtype: dt.AnyDataType) -> Bool:
+        """Whether a column of `dtype` is bloom-filtered when enabled —
+        integer, floating-point, and byte-array columns."""
+        return (
+            dtype.is_integer()
+            or dtype.is_floating_point()
+            or dtype.is_binary_like()
+        )
 
     @staticmethod
     def can_dictionary(dtype: dt.AnyDataType) -> Bool:
@@ -758,7 +856,9 @@ struct ColumnWriter(Movable):
             meta.max_value = max_v^
 
         var cc = ColumnChunk()
-        cc.file_offset = dict_page_offset if dict_page_offset >= 0 else page_offset
+        cc.file_offset = (
+            dict_page_offset if dict_page_offset >= 0 else page_offset
+        )
         cc.meta_data = meta^
         # the single data page's total bytes (header + body), for the OffsetIndex
         cc.data_page_size = len(out) - page_offset
@@ -845,7 +945,7 @@ struct ColumnWriter(Movable):
         else:
             self._encode_values(values, value_bytes)
 
-        return self._emit_page(
+        var cc = self._emit_page(
             values,
             value_bytes^,
             rep_bytes^,
@@ -861,6 +961,9 @@ struct ColumnWriter(Movable):
             out,
             codecs,
         )
+        if self.write_bloom:
+            cc.bloom_bytes = self._bloom_bytes(values)
+        return cc^
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +979,7 @@ struct FileWriter(Movable):
     var use_dictionary: Bool  # dictionary-encode eligible columns (else PLAIN)
     var encoding: Optional[Encoding]  # global forced encoding for eligible cols
     var column_encodings: Dict[String, Encoding]  # per-column overrides by name
+    var write_bloom_filter: Bool  # build bloom filters for eligible columns
     var leaves: List[LeafColumn]
 
     def __init__(
@@ -885,6 +989,7 @@ struct FileWriter(Movable):
         use_dictionary: Bool = True,
         var encoding: Optional[Encoding] = None,
         var column_encodings: Dict[String, Encoding] = {},
+        write_bloom_filter: Bool = False,
     ):
         self.out = List[UInt8]()
         FileMetaData.write_magic(self.out)  # file header magic
@@ -894,6 +999,7 @@ struct FileWriter(Movable):
         self.use_dictionary = use_dictionary
         self.encoding = encoding^
         self.column_encodings = column_encodings^
+        self.write_bloom_filter = write_bloom_filter
         self.leaves = List[LeafColumn]()
 
     def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
@@ -944,6 +1050,8 @@ struct FileWriter(Movable):
                     self.compression,
                     self.version,
                     self._encoding_for(self.leaves[gi]),
+                    self.write_bloom_filter
+                    and ColumnWriter.can_bloom(self.leaves[gi].dtype),
                 )
                 var cc = ccw.write(
                     leaf_values[k],
@@ -989,12 +1097,36 @@ struct FileWriter(Movable):
             if length == 0:
                 break
 
-        # page index (OffsetIndex + ColumnIndex) — written after the page data,
-        # before the footer; the footer's ColumnChunks point back at it.
+        # bloom filters, then the page index — both written after the page data,
+        # before the footer; the footer's ColumnChunks point back at them.
+        self._write_bloom_filters(fmeta)
         self._write_page_index(fmeta)
 
         fmeta.write_footer(self.out)
         Path(path).write_bytes(Span(self.out))
+
+    def _write_bloom_filters(mut self, mut fmeta: FileMetaData) raises:
+        """Emit each chunk's bloom filter (BloomFilterHeader + bitset) and record
+        its offset/length on the ColumnMetaData. Chunks with no bloom bytes (a
+        non-eligible type, or bloom filters disabled) are skipped."""
+        for rg in range(len(fmeta.row_groups)):
+            for ci in range(len(fmeta.row_groups[rg].columns)):
+                var nbytes = len(fmeta.row_groups[rg].columns[ci].bloom_bytes)
+                if nbytes == 0:
+                    continue
+                var offset = len(self.out)
+                var hdr = BloomFilterHeader()
+                hdr.num_bytes = nbytes
+                var hlen = hdr.append_to(self.out)
+                self.out.extend(
+                    Span(fmeta.row_groups[rg].columns[ci].bloom_bytes)
+                )
+                fmeta.row_groups[rg].columns[
+                    ci
+                ].meta_data.bloom_filter_offset = offset
+                fmeta.row_groups[rg].columns[
+                    ci
+                ].meta_data.bloom_filter_length = (hlen + nbytes)
 
     def _write_page_index(mut self, mut fmeta: FileMetaData) raises:
         """Emit the OffsetIndex (always) and ColumnIndex (when the chunk carries
@@ -1004,19 +1136,33 @@ struct FileWriter(Movable):
         for rg in range(len(fmeta.row_groups)):
             for ci in range(len(fmeta.row_groups[rg].columns)):
                 # snapshot the fields the index needs before mutating the chunk
-                var has_mm = fmeta.row_groups[rg].columns[ci].meta_data.has_min_max
-                var null_count = fmeta.row_groups[rg].columns[ci].meta_data.null_count
-                var num_values = fmeta.row_groups[rg].columns[ci].meta_data.num_values
-                var min_v = fmeta.row_groups[rg].columns[ci].meta_data.min_value.copy()
-                var max_v = fmeta.row_groups[rg].columns[ci].meta_data.max_value.copy()
-                var dp_offset = fmeta.row_groups[rg].columns[ci].meta_data.data_page_offset
+                var has_mm = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.has_min_max
+                )
+                var null_count = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.null_count
+                )
+                var num_values = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.num_values
+                )
+                var min_v = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.min_value.copy()
+                )
+                var max_v = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.max_value.copy()
+                )
+                var dp_offset = (
+                    fmeta.row_groups[rg].columns[ci].meta_data.data_page_offset
+                )
                 var dp_size = fmeta.row_groups[rg].columns[ci].data_page_size
 
                 # ColumnIndex: one page. A chunk with bounds is a normal page;
                 # an all-null chunk is a null page (empty bounds). Otherwise
                 # (no usable bounds) the ColumnIndex is omitted.
                 var all_null = (
-                    null_count >= 0 and num_values > 0 and null_count == num_values
+                    null_count >= 0
+                    and num_values > 0
+                    and null_count == num_values
                 )
                 if has_mm or all_null:
                     var cix = ColumnIndex()
@@ -1057,6 +1203,7 @@ def write_table(
     use_dictionary: Bool = True,
     var encoding: Optional[Encoding] = None,
     var column_encodings: Dict[String, Encoding] = {},
+    write_bloom_filter: Bool = False,
 ) raises:
     """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
     format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
@@ -1069,8 +1216,17 @@ def write_table(
     RLE_DICTIONARY, DELTA_BINARY_PACKED (signed ints), DELTA_BYTE_ARRAY /
     DELTA_LENGTH_BYTE_ARRAY (strings), BYTE_STREAM_SPLIT (floats), and PLAIN. An
     override that does not fit a column's type is ignored for that column.
+
+    `write_bloom_filter` (default False) builds a split-block bloom filter for
+    every integer, floating-point, and byte-array column, letting readers prove a
+    value's absence without scanning.
     """
     var writer = FileWriter(
-        compression, version, use_dictionary, encoding^, column_encodings^
+        compression,
+        version,
+        use_dictionary,
+        encoding^,
+        column_encodings^,
+        write_bloom_filter,
     )
     writer.write(table, path)

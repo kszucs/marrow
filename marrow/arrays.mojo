@@ -1059,7 +1059,9 @@ struct ListLikeArray[T: ListLikeType](Array):
         var entries: AnyArray = StructArray.from_arrays(
             [keys^, items^], entry_fields, None
         )
-        return ListArray.from_arrays(offsets, entries^, mask^).to_map(keys_sorted)
+        return ListArray.from_arrays(offsets, entries^, mask^).to_map(
+            keys_sorted
+        )
 
     def to_data(self) raises -> ArrayData:
         """Extract generic array layout for interop."""

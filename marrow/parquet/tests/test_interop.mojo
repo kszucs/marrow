@@ -48,11 +48,16 @@ def _norm_type(t: PythonObject) raises -> String:
     private `ARROW:schema` metadata, which marrow ignores), the LIST element
     field name is arbitrary (marrow calls it `item`, pyarrow `element`), and
     nested field-name annotations pyarrow renders as ` ('name')` (map key/value,
-    struct fields) are stripped since those names come from the same metadata."""
+    struct fields) are stripped since those names come from the same metadata.
+    """
     var re = Python.import_module("re")
-    var stripped = re.sub(PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__())
+    var stripped = re.sub(
+        PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__()
+    )
     var s = String(stripped)
-    return s.replace("large_", "").replace("item: ", "").replace("element: ", "")
+    return (
+        s.replace("large_", "").replace("item: ", "").replace("element: ", "")
+    )
 
 
 def _values(col: PythonObject) raises -> PythonObject:
@@ -259,15 +264,11 @@ def test_interop_decimal() raises:
     var t = pa.table(
         Python.dict(
             d128=pa.array(
-                Python.list(
-                    dec.Decimal("1.23"), n, dec.Decimal("-4.56")
-                ),
+                Python.list(dec.Decimal("1.23"), n, dec.Decimal("-4.56")),
                 type=pa.decimal128(9, 2),
             ),
             d256=pa.array(
-                Python.list(
-                    dec.Decimal("123.456"), dec.Decimal("-7.890"), n
-                ),
+                Python.list(dec.Decimal("123.456"), dec.Decimal("-7.890"), n),
                 type=pa.decimal256(40, 3),
             ),
         )

@@ -274,7 +274,13 @@ struct CompressionLibs(Movable):
         # level 6, method Z_DEFLATED(8), windowBits 31 = gzip, memLevel 8,
         # strategy Z_DEFAULT_STRATEGY(0), stream_size = sizeof(z_stream) = 112.
         var rc = z.call["deflateInit2_", Int32](
-            sp, Int32(6), Int32(8), Int32(31), Int32(8), Int32(0), version,
+            sp,
+            Int32(6),
+            Int32(8),
+            Int32(31),
+            Int32(8),
+            Int32(0),
+            version,
             Int32(112),
         )
         if Int(rc) != 0:
@@ -310,8 +316,13 @@ struct CompressionLibs(Movable):
         #   size_t* encoded_size, uint8_t* encoded); quality 11, lgwin 22,
         #   mode 0 (GENERIC); returns BROTLI_TRUE == 1.
         var rc = e.call["BrotliEncoderCompress", Int32](
-            Int32(11), Int32(22), Int32(0), UInt(len(src)), src.unsafe_ptr(),
-            sz, dst,
+            Int32(11),
+            Int32(22),
+            Int32(0),
+            UInt(len(src)),
+            src.unsafe_ptr(),
+            sz,
+            dst,
         )
         var produced = Int(sz[0])
         sz.free()

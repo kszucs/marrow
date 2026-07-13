@@ -284,9 +284,7 @@ def test_write_empty_table() raises:
 
 def test_write_all_null_roundtrip() raises:
     var pa = Python.import_module("pyarrow")
-    var t = _one_col(
-        pa.array([None, None, None, None, None], type=pa.int64())
-    )
+    var t = _one_col(pa.array([None, None, None, None, None], type=pa.int64()))
     var path = String("/tmp/marrow_allnull.parquet")
     write_table(t, path)
     var back = read_table(path)
@@ -483,7 +481,9 @@ def test_write_dictionary_encoding() raises:
         pa.table({"s": pa.array(strs), "i": pa.array(ints, type=pa.int64())})
     )
     var path = String("/tmp/marrow_dict.parquet")
-    write_table(t, path, Compression.UNCOMPRESSED)  # use_dictionary defaults True
+    write_table(
+        t, path, Compression.UNCOMPRESSED
+    )  # use_dictionary defaults True
 
     assert_true(
         "DICTIONARY" in String(_col_encodings(path, 0)),
@@ -875,7 +875,9 @@ def _compression_roundtrip(
 
     # marrow reads a PyArrow file written with the same codec
     var pypath = String("/tmp/pyarrow_comp.parquet")
-    pq.write_table(want, pypath, compression=py_name.lower(), use_dictionary=False)
+    pq.write_table(
+        want, pypath, compression=py_name.lower(), use_dictionary=False
+    )
     var mpy = read_table(pypath)
     var b = mpy.to_batches()[0].copy()
     assert_equal(b.columns[0].copy().as_int32()[3].value(), 3)

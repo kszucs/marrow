@@ -228,9 +228,13 @@ struct SchemaNode(Copyable, Movable):
             # Descend into the list's flat child values — the innermost element
             # arrays hold the leaf values to write; the offsets/levels come from
             # the Dremel shred.
-            self.children[0].collect_leaf_arrays(col.as_list().values(), leaf_arrays)
+            self.children[0].collect_leaf_arrays(
+                col.as_list().values(), leaf_arrays
+            )
         elif self.kind == NODE_MAP:
-            self.children[0].collect_leaf_arrays(col.as_map().values(), leaf_arrays)
+            self.children[0].collect_leaf_arrays(
+                col.as_map().values(), leaf_arrays
+            )
         else:
             raise Error("parquet: unsupported schema node kind")
 
@@ -602,7 +606,8 @@ struct SchemaMapping(Movable):
         shared by read (`_parse_node`) and write (`_emit_field`) so the list's
         Dremel geometry lives in one place. `d` is the list's own definition
         level; its repeated middle group sits at `rep_base + 1` / `d + 1`, so a
-        slot holds an element at `d + 1` and the list itself is non-null at `d`."""
+        slot holds an element at `d + 1` and the list itself is non-null at `d`.
+        """
         var children = List[SchemaNode]()
         children.append(elem^)
         var item: dt.AnyDataType = dt.list_(children[0].field.dtype.copy())
@@ -736,7 +741,9 @@ struct SchemaMapping(Movable):
             if kv.num_children != 2:
                 raise Error(
                     "parquet: map 'key_value' group must have exactly a key and"
-                    " a value (column '" + el.name + "')"
+                    " a value (column '"
+                    + el.name
+                    + "')"
                 )
             idx += 1
             var key_node = self._parse_node(
@@ -811,7 +818,9 @@ struct SchemaMapping(Movable):
         root.num_children = len(schema.fields)
         m.elements.append(root^)
         for ref f in schema.fields:
-            m.nodes.append(m._emit_field(f, 0, 0, slot_def=0, under_optional=False))
+            m.nodes.append(
+                m._emit_field(f, 0, 0, slot_def=0, under_optional=False)
+            )
         return m^
 
     @staticmethod
@@ -825,9 +834,7 @@ struct SchemaMapping(Movable):
         raise Error("parquet: cannot write Arrow type " + String(dtype))
 
     @staticmethod
-    def _set_leaf_physical(
-        dtype: dt.AnyDataType, mut el: SchemaElement
-    ) raises:
+    def _set_leaf_physical(dtype: dt.AnyDataType, mut el: SchemaElement) raises:
         """Populate a leaf `SchemaElement`'s physical fields (type, converted /
         logical annotation, time unit + UTC, decimal scale + precision, and FLBA
         length) from an Arrow value type — the inverse of `_leaf_dtype`. Temporal,
@@ -938,7 +945,11 @@ struct SchemaMapping(Movable):
             )
 
             var elem_field = (
-                field.dtype.as_list().value_field().copy() if field.dtype.is_list() else field.dtype.as_large_list().value_field().copy()
+                field.dtype.as_list()
+                .value_field()
+                .copy() if field.dtype.is_list() else field.dtype.as_large_list()
+                .value_field()
+                .copy()
             )
             var elem = self._emit_field(
                 elem_field,
@@ -947,7 +958,9 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
                 under_optional=under_optional,
             )
-            return Self._list_node(field.name, elem^, d, rep_base, slot_def, nullable)
+            return Self._list_node(
+                field.name, elem^, d, rep_base, slot_def, nullable
+            )
 
         if field.dtype.is_map():
             # MAP = <opt|req> group(MAP) { repeated group key_value {
@@ -977,7 +990,13 @@ struct SchemaMapping(Movable):
                 under_optional=under_optional,
             )
             return Self._map_node(
-                field.name, key_node^, val_node^, d, rep_base, slot_def, nullable
+                field.name,
+                key_node^,
+                val_node^,
+                d,
+                rep_base,
+                slot_def,
+                nullable,
             )
 
         if field.dtype.is_struct():

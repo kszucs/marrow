@@ -4,6 +4,18 @@
 
 ### Features
 
+- **Bloom filters, read + write** (`marrow.parquet`): a new `bloom` module
+  implements the XXH64 value hash and the split-block bloom filter (SBBF) per the
+  Parquet spec / arrow-rs. `write_table(..., write_bloom_filter=True)` builds a
+  filter for every integer, floating-point, and byte-array column (sized to its
+  distinct-value count) and writes it with a `BloomFilterHeader`;
+  `ColumnMetaData` now carries `bloom_filter_offset`/`length`.
+  `ParquetFile.bloom_filter(row_group, column)` returns a `SplitBlockBloomFilter`
+  whose `might_contain(bytes)` proves a value's absence with no false negatives.
+  Validated both ways against the Apache `parquet-testing` reference file
+  (`check("Hello")` / `check("Hello_Not_Exists")`) and by an independent
+  reference reader over marrow's own output.
+
 - **Page index write** (`marrow.parquet`): the writer now emits an `OffsetIndex`
   and (when the chunk carries bounds or is all-null) a `ColumnIndex` for every
   column chunk, written after the page data and pointed to by the footer's
