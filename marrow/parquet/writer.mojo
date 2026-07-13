@@ -32,7 +32,7 @@ from .codecs import (
     DeltaLengthByteArray,
     ByteStreamSplit,
 )
-from ..utils import LittleEndian
+from ..utils import LittleEndian, Crc32
 from .utils import CompressionLibs
 from .bloom import xxh64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, LeafColumn, SchemaNode
@@ -71,6 +71,7 @@ struct ColumnWriter(Movable):
     var version: Int  # data-page version: 1 or 2
     var encoding: Encoding  # value encoding: PLAIN, RLE_DICTIONARY, DELTA_*
     var write_bloom: Bool  # build a bloom filter for this column chunk
+    var write_crc: Bool  # attach a CRC-32 checksum to every page
 
     def __init__(
         out self,
@@ -79,12 +80,14 @@ struct ColumnWriter(Movable):
         version: Int = 1,
         encoding: Encoding = Encoding.PLAIN,
         write_bloom: Bool = False,
+        write_crc: Bool = False,
     ):
         self.leaf = leaf^
         self.compression = compression
         self.version = version
         self.encoding = encoding
         self.write_bloom = write_bloom
+        self.write_crc = write_crc
 
     def _encode_values(self, col: AnyArray, mut body: List[UInt8]) raises:
         """Dispatch on the leaf's Arrow type to the right `Plain` encoder (the
@@ -810,9 +813,10 @@ struct ColumnWriter(Movable):
         return `(offset, uncompressed_incl_header, compressed_incl_header)`."""
         var offset = len(out)
         var comp = self.compression.compress(codecs, Span(dict_body))
-        var header_len = PageHeader.dictionary_page(
-            len(dict_body), len(comp), num_dict
-        ).append_to(out)
+        var ph = PageHeader.dictionary_page(len(dict_body), len(comp), num_dict)
+        if self.write_crc:
+            ph.crc = Int(Crc32.compute(Span(comp)))
+        var header_len = ph.append_to(out)
         out.extend(Span(comp))
         return (offset, header_len + len(dict_body), header_len + len(comp))
 
@@ -845,7 +849,7 @@ struct ColumnWriter(Movable):
             var level_len = len(rep_bytes) + len(def_bytes)
             uncompressed_size = level_len + len(value_bytes)
             compressed_size = level_len + len(comp_values)
-            header_len = PageHeader.data_page_v2(
+            var ph = PageHeader.data_page_v2(
                 uncompressed_size,
                 compressed_size,
                 num_values,
@@ -855,7 +859,15 @@ struct ColumnWriter(Movable):
                 is_comp,
                 rep_levels_byte_length=len(rep_bytes),
                 encoding=encoding,
-            ).append_to(out)
+            )
+            if self.write_crc:
+                # v2 checksums the (uncompressed) levels then compressed values
+                var c = Crc32()
+                c.update(Span(rep_bytes))
+                c.update(Span(def_bytes))
+                c.update(Span(comp_values))
+                ph.crc = Int(c.value())
+            header_len = ph.append_to(out)
             out.extend(Span(rep_bytes))
             out.extend(Span(def_bytes))
             out.extend(Span(comp_values))
@@ -871,9 +883,12 @@ struct ColumnWriter(Movable):
             uncompressed_size = len(body)
             var compressed = self.compression.compress(codecs, Span(body))
             compressed_size = len(compressed)
-            header_len = PageHeader.data_page(
+            var ph = PageHeader.data_page(
                 uncompressed_size, compressed_size, num_values, encoding
-            ).append_to(out)
+            )
+            if self.write_crc:
+                ph.crc = Int(Crc32.compute(Span(compressed)))
+            header_len = ph.append_to(out)
             out.extend(Span(compressed))
         return (
             page_offset,
@@ -1126,6 +1141,7 @@ struct FileWriter(Movable):
     var encoding: Optional[Encoding]  # global forced encoding for eligible cols
     var column_encodings: Dict[String, Encoding]  # per-column overrides by name
     var write_bloom_filter: Bool  # build bloom filters for eligible columns
+    var write_page_checksum: Bool  # attach a CRC-32 to every page
     var leaves: List[LeafColumn]
 
     def __init__(
@@ -1136,6 +1152,7 @@ struct FileWriter(Movable):
         var encoding: Optional[Encoding] = None,
         var column_encodings: Dict[String, Encoding] = {},
         write_bloom_filter: Bool = False,
+        write_page_checksum: Bool = False,
     ):
         self.out = List[UInt8]()
         FileMetaData.write_magic(self.out)  # file header magic
@@ -1146,6 +1163,7 @@ struct FileWriter(Movable):
         self.encoding = encoding^
         self.column_encodings = column_encodings^
         self.write_bloom_filter = write_bloom_filter
+        self.write_page_checksum = write_page_checksum
         self.leaves = List[LeafColumn]()
 
     def _encoding_for(self, leaf: LeafColumn) raises -> Encoding:
@@ -1198,6 +1216,7 @@ struct FileWriter(Movable):
                     self._encoding_for(self.leaves[gi]),
                     self.write_bloom_filter
                     and ColumnWriter.can_bloom(self.leaves[gi].dtype),
+                    self.write_page_checksum,
                 )
                 var cc = ccw.write(
                     leaf_values[k],
@@ -1317,6 +1336,7 @@ def write_table(
     var encoding: Optional[Encoding] = None,
     var column_encodings: Dict[String, Encoding] = {},
     write_bloom_filter: Bool = False,
+    write_page_checksum: Bool = False,
 ) raises:
     """Write a Marrow `Table` to a Parquet file. `version` selects the data-page
     format: 1 (default) or 2 (levels stored uncompressed ahead of the values).
@@ -1333,6 +1353,9 @@ def write_table(
     `write_bloom_filter` (default False) builds a split-block bloom filter for
     every integer, floating-point, and byte-array column, letting readers prove a
     value's absence without scanning.
+
+    `write_page_checksum` (default False, like PyArrow) attaches a CRC-32 to
+    every page header, which the reader verifies to detect corruption.
     """
     var writer = FileWriter(
         compression,
@@ -1341,5 +1364,6 @@ def write_table(
         encoding^,
         column_encodings^,
         write_bloom_filter,
+        write_page_checksum,
     )
     writer.write(table, path)

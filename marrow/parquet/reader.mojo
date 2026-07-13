@@ -48,7 +48,7 @@ from .. import dtypes as dt
 
 from .utils import CompressionLibs
 from .codecs import Encoding, Rle, Dictionary, Compression
-from ..utils import LittleEndian
+from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
 from .format import (
@@ -293,6 +293,12 @@ struct PageReader[o: Origin[mut=False]](Movable):
         var ph = PageHeader.read_at(self.data, body_start)
         var comp = self.data[body_start : body_start + ph.compressed_page_size]
         self.pos = body_start + ph.compressed_page_size
+
+        # Verify the optional page checksum: for both v1 and v2 the CRC covers
+        # exactly the on-disk body (v1's compressed blob; v2's uncompressed
+        # levels + compressed values), which is `comp`.
+        if ph.crc >= 0 and Int(Crc32.compute(comp)) != ph.crc:
+            raise Error("parquet: page CRC-32 mismatch (corrupt data)")
 
         if ph.type == PageType.DICTIONARY:
             return Page.dictionary_page(

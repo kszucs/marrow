@@ -4,6 +4,13 @@
 
 ### Features
 
+- **Page CRC-32 checksums** (`marrow.parquet`): `write_table(...,
+  write_page_checksum=True)` (default False, like PyArrow) attaches a standard
+  CRC-32 to every data/dictionary page header — over the compressed body for v1
+  and the uncompressed levels + compressed values for v2, matching the spec —
+  and the reader verifies it on read, raising on a mismatch. A new
+  `marrow.utils.Crc32` (incremental, ISO-3309 / zlib polynomial) backs it.
+
 - **Key/value metadata round-trip** (`marrow.parquet`): the file footer's
   `key_value_metadata` is now read and written. On read it populates
   `schema.metadata` (matching `pyarrow.read_table(...).schema.metadata`,

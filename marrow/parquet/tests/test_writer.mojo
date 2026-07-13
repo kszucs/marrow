@@ -11,6 +11,7 @@ from marrow.parquet import (
 )
 from marrow.parquet.writer import FileWriter
 from marrow.parquet.codecs import Compression, Encoding
+from marrow.utils import Crc32
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
@@ -1041,6 +1042,31 @@ def test_key_value_metadata() raises:
     )
     remove(path)
     remove(dst)
+
+
+def test_page_checksum() raises:
+    # write_page_checksum attaches a CRC-32 to every page. The check vector
+    # locks the algorithm; PyArrow's verified read proves the written CRC is
+    # correct; marrow reading its own file exercises the verify path.
+    assert_equal(Int(Crc32.compute(String("123456789").as_bytes())), 0xCBF43926)
+
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var t = _one_col(
+        pa.array(Python.evaluate("list(range(200))"), type=pa.int64())
+    )
+    for ver in [1, 2]:
+        var path = String("/tmp/marrow_crc.parquet")
+        var w = FileWriter(
+            Compression.SNAPPY, version=ver, write_page_checksum=True
+        )
+        w.write(t, path)
+        # PyArrow verifies the checksum -> marrow's CRC matches the spec
+        var back = pq.read_table(path, page_checksum_verification=True)
+        assert_equal(Int(py=back.num_rows), 200)
+        # marrow reads its own checksummed file (runs the verify branch)
+        assert_equal(read_table(path).num_rows(), 200)
+        remove(path)
 
 
 def main() raises:

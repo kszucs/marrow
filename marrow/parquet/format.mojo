@@ -690,6 +690,7 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
     var type: PageType
     var uncompressed_page_size: Int
     var compressed_page_size: Int
+    var crc: Int  # CRC-32 of the page body, or -1 when absent
     var data_page_header: Optional[DataPageHeader]
     var data_page_header_v2: Optional[DataPageHeaderV2]
     var dictionary_page_header: Optional[DictionaryPageHeader]
@@ -698,6 +699,7 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
         self.type = PageType.NONE
         self.uncompressed_page_size = 0
         self.compressed_page_size = 0
+        self.crc = -1
         self.data_page_header = None
         self.data_page_header_v2 = None
         self.dictionary_page_header = None
@@ -715,6 +717,9 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
                 out.uncompressed_page_size = Int(r.read_i32())
             elif f.id == 3:
                 out.compressed_page_size = Int(r.read_i32())
+            elif f.id == 4:
+                # stored signed; keep the unsigned 32-bit value so -1 = absent
+                out.crc = Int(r.read_i32()) & 0xFFFFFFFF
             elif f.id == 5:
                 out.data_page_header = DataPageHeader.read(r)
             elif f.id == 7:
@@ -733,6 +738,9 @@ struct PageHeader(Copyable, Movable, ThriftWritable):
         w.write_i32(Int32(self.uncompressed_page_size))
         last = w.write_field_begin(TC_I32, 3, last)
         w.write_i32(Int32(self.compressed_page_size))
+        if self.crc >= 0:
+            last = w.write_field_begin(TC_I32, 4, last)
+            w.write_i32(Int32(self.crc))
         if self.data_page_header:
             _ = w.write_field_begin(TC_STRUCT, 5, last)
             self.data_page_header.value().write(w)
