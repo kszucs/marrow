@@ -329,6 +329,52 @@ def test_list_of_delta_int() raises:
     )
 
 
+def test_fsb_delta_byte_array() raises:
+    # FIXED_LEN_BYTE_ARRAY under DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT — flat and
+    # nested (list element). PyArrow emits these for fixed_size_binary/decimal.
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[b'abcd', b'efgh', None, b'ijkl']",
+        pa.binary(4),
+        "none",
+        "DELTA_BYTE_ARRAY",
+    )
+
+
+def test_fsb_byte_stream_split() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[b'abcd', b'efgh', None, b'ijkl']",
+        pa.binary(4),
+        "none",
+        "BYTE_STREAM_SPLIT",
+    )
+
+
+def test_list_fsb_byte_stream_split() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[b'abcd', b'efgh'], [b'ijkl'], None]",
+        pa.list_(pa.binary(4)),
+        "none",
+        "BYTE_STREAM_SPLIT",
+    )
+
+
+def test_decimal_byte_stream_split() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        (
+            "[__import__('decimal').Decimal('1.25'),"
+            " __import__('decimal').Decimal('-2.50'), None,"
+            " __import__('decimal').Decimal('3.75')]"
+        ),
+        pa.decimal128(9, 2),
+        "none",
+        "BYTE_STREAM_SPLIT",
+    )
+
+
 def test_list_of_byte_stream_split_float() raises:
     var pa = Python.import_module("pyarrow")
     _check(

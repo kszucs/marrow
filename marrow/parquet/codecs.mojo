@@ -655,6 +655,20 @@ struct ByteStreamSplit:
             )
 
     @staticmethod
+    def decode_flba(
+        values: Span[UInt8, _], np: Int, width: Int
+    ) raises -> List[UInt8]:
+        """Runtime-width transpose for FIXED_LEN_BYTE_ARRAY: value `i`'s byte `k`
+        is at `values[k*np + i]`. Returns the `np * width` value-major bytes (the
+        `decode_primitive` counterpart when the width is only known at runtime).
+        """
+        var out = List[UInt8](length=np * width, fill=0)
+        for i in range(np):
+            for k in range(width):
+                out[i * width + k] = values[k * np + i]
+        return out^
+
+    @staticmethod
     def encode[
         store: dt.NumericType, phys: DType
     ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
@@ -838,6 +852,28 @@ struct Encoding(Equatable, ImplicitlyCopyable, Movable):
         else:
             raise Error(
                 "parquet: unsupported byte-array encoding " + String(self.code)
+            )
+
+    def decode_flba(
+        self, values: Span[UInt8, _], num_present: Int, width: Int
+    ) raises -> List[UInt8]:
+        """Decode the present FIXED_LEN_BYTE_ARRAY values (each `width` bytes) of
+        a non-PLAIN/dict page into a contiguous `num_present * width` buffer — the
+        DELTA_BYTE_ARRAY and BYTE_STREAM_SPLIT encodings PyArrow emits for decimal
+        / fixed_size_binary. PLAIN and dictionary pages are read in place by the
+        leaf builders, so they never reach here."""
+        if self == Self.DELTA_BYTE_ARRAY:
+            var vals = DeltaByteArray.decode_bytes(values, num_present)
+            var out = List[UInt8](capacity=num_present * width)
+            for i in range(num_present):
+                out.extend(Span(vals[i]))
+            return out^
+        elif self == Self.BYTE_STREAM_SPLIT:
+            return ByteStreamSplit.decode_flba(values, num_present, width)
+        else:
+            raise Error(
+                "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding "
+                + String(self.code)
             )
 
     def decode_bool(

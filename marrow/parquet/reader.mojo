@@ -823,10 +823,17 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         var vspan = page.values()
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
+        # DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT are decoded up-front into a
+        # contiguous width-byte buffer; PLAIN reads `vspan` in place (no copy).
+        var decoded = List[UInt8]()
+        var use_decoded = False
         if is_dict:
             idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
         elif not page.is_plain():
-            raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
+            decoded = page.encoding.decode_flba(
+                vspan, page.num_present, self.width
+            )
+            use_decoded = True
 
         @parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
@@ -834,6 +841,10 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
                 if present_here:
                     if is_dict:
                         self._append_present(self.dict[Int(idx[vi])])
+                    elif use_decoded:
+                        self._append_present(
+                            self._decode_be(Span(decoded), vi * self.width)
+                        )
                     else:
                         self._append_present(
                             self._decode_be(vspan, vi * self.width)
@@ -971,10 +982,17 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
         var vspan = page.values()
         var idx = List[Int32]()
         var is_dict = page.is_dictionary()
+        # DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT are decoded up-front into a
+        # contiguous width-byte buffer; PLAIN reads `vspan` in place (no copy).
+        var decoded = List[UInt8]()
+        var use_decoded = False
         if is_dict:
             idx = Rle.decode(vspan[1:], Int(vspan[0]), page.num_present)
         elif not page.is_plain():
-            raise Error("parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding")
+            decoded = page.encoding.decode_flba(
+                vspan, page.num_present, self.width
+            )
+            use_decoded = True
 
         @parameter
         def place(present_here: Bool, selected: Bool, vi: Int) raises:
@@ -985,6 +1003,9 @@ struct FixedSizeBinaryLeafBuilder(LeafBuilder):
                         self.builder.append(
                             Span(self.dict_body)[o : o + self.width]
                         )
+                    elif use_decoded:
+                        var o = vi * self.width
+                        self.builder.append(Span(decoded)[o : o + self.width])
                     else:
                         var o = vi * self.width
                         self.builder.append(vspan[o : o + self.width])
@@ -1396,9 +1417,13 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                         _decode_be_flba[native](vspan, i * width, width)
                     )
             else:
-                raise Error(
-                    "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding"
+                var bytes = pg.encoding.decode_flba(
+                    vspan, pg.num_present, width
                 )
+                for i in range(pg.num_present):
+                    present.append(
+                        _decode_be_flba[native](Span(bytes), i * width, width)
+                    )
 
         @parameter
         def place_present(vi: Int) raises:
@@ -1445,9 +1470,12 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                     var o = i * width
                     present.append(List[UInt8](vspan[o : o + width]))
             else:
-                raise Error(
-                    "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding"
+                var bytes = pg.encoding.decode_flba(
+                    vspan, pg.num_present, width
                 )
+                for i in range(pg.num_present):
+                    var o = i * width
+                    present.append(List[UInt8](Span(bytes)[o : o + width]))
 
         @parameter
         def place_present(vi: Int) raises:
