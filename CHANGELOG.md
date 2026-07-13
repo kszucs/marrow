@@ -4,6 +4,11 @@
 
 ### Features
 
+- **`distinct_count` statistic** (`marrow.parquet`): a dictionary-encoded column
+  chunk now writes `Statistics.distinct_count` (its dictionary size = the number
+  of distinct non-null values); PLAIN/DELTA chunks leave it absent. `distinct_count`
+  is also read back into `ColumnMetaData`.
+
 - **Bloom filters for temporal / decimal / fixed-size-binary** (`marrow.parquet`):
   `write_bloom_filter=True` now also builds filters for temporal (date/time/
   timestamp/duration — hashed over their INT32/INT64 little-endian bytes),

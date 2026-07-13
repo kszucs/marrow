@@ -844,6 +844,7 @@ struct ColumnMetaData(Copyable, Movable):
     var dictionary_page_offset: Int  # -1 if absent
     var encodings: List[Int]  # Encoding codes actually used in the chunk
     var null_count: Int  # -1 if unknown; written as Statistics.null_count
+    var distinct_count: Int  # -1 if unknown; Statistics.distinct_count
     var has_min_max: Bool  # Statistics.min_value/max_value present
     var min_value: List[
         UInt8
@@ -863,6 +864,7 @@ struct ColumnMetaData(Copyable, Movable):
         self.dictionary_page_offset = -1
         self.encodings = [Encoding.RLE.code, Encoding.PLAIN.code]
         self.null_count = -1
+        self.distinct_count = -1
         self.has_min_max = False
         self.min_value = List[UInt8]()
         self.max_value = List[UInt8]()
@@ -916,6 +918,8 @@ struct ColumnMetaData(Copyable, Movable):
         while r.next_field(f):
             if f.id == 3:
                 self.null_count = Int(r.read_i64())
+            elif f.id == 4:
+                self.distinct_count = Int(r.read_i64())
             elif f.id == 5:
                 var bytes = r.read_bytes()
                 self.max_value = List[UInt8](Span(bytes))
@@ -956,15 +960,19 @@ struct ColumnMetaData(Copyable, Movable):
         if self.dictionary_page_offset >= 0:
             last = w.write_field_begin(TC_I64, 11, last)
             w.write_i64(Int64(self.dictionary_page_offset))
-        if self.null_count >= 0 or self.has_min_max:
-            # Statistics (field 12): null_count (3), and the modern
-            # max_value (5) / min_value (6) with their exactness flags (7/8).
-            # Fields are written in ascending id order per the compact protocol.
+        if self.null_count >= 0 or self.distinct_count >= 0 or self.has_min_max:
+            # Statistics (field 12): null_count (3), distinct_count (4), and the
+            # modern max_value (5) / min_value (6) with their exactness flags
+            # (7/8). Fields are written in ascending id order per the compact
+            # protocol.
             last = w.write_field_begin(TC_STRUCT, 12, last)
             var slast = 0
             if self.null_count >= 0:
                 slast = w.write_field_begin(TC_I64, 3, slast)
                 w.write_i64(Int64(self.null_count))
+            if self.distinct_count >= 0:
+                slast = w.write_field_begin(TC_I64, 4, slast)
+                w.write_i64(Int64(self.distinct_count))
             if self.has_min_max:
                 slast = w.write_field_begin(TC_BINARY, 5, slast)
                 w.write_bytes(Span(self.max_value))

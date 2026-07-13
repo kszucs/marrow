@@ -1004,6 +1004,9 @@ struct ColumnWriter(Movable):
         var dict_page_offset = -1
         var total_uncompressed = 0
         var total_compressed = 0
+        # Distinct non-null value count, known only for a dictionary-encoded
+        # chunk (the dictionary size); -1 leaves Statistics.distinct_count absent.
+        var chunk_distinct = -1
         if encoding == Encoding.RLE_DICTIONARY:
             var dict_body = List[UInt8]()
             var num_dict = self._encode_dictionary(values, dict_body, indices)
@@ -1012,6 +1015,7 @@ struct ColumnWriter(Movable):
                 encoding = Encoding.PLAIN
                 indices = List[Int32]()
             else:
+                chunk_distinct = num_dict
                 dict_width = Rle.bit_width(num_dict - 1) if num_dict > 0 else 0
                 var d = self._write_dict_page(dict_body^, num_dict, out, codecs)
                 dict_page_offset = d[0]
@@ -1156,6 +1160,7 @@ struct ColumnWriter(Movable):
         meta.encodings = encs^
         if max_def >= 1:
             meta.null_count = null_count_total
+        meta.distinct_count = chunk_distinct
         var cmin = List[UInt8]()
         var cmax = List[UInt8]()
         if self._stats(values, cmin, cmax):

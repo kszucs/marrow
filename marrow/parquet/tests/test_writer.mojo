@@ -1051,6 +1051,27 @@ def test_key_value_metadata() raises:
     remove(dst)
 
 
+def test_distinct_count_statistic() raises:
+    # a dictionary-encoded chunk knows its distinct (non-null) value count — the
+    # dictionary size — and writes it as Statistics.distinct_count; a PLAIN chunk
+    # leaves it absent.
+    var pa = Python.import_module("pyarrow")
+    var ints = Python.list()
+    for i in range(300):
+        ints.append(i % 40)
+    var t = _one_col(pa.array(ints, type=pa.int64()))
+
+    var dpath = String("/tmp/marrow_distinct.parquet")
+    write_table(t, dpath, use_dictionary=True)
+    assert_equal(Int(py=_col_stats(dpath, 0).distinct_count), 40)
+    remove(dpath)
+
+    var ppath = String("/tmp/marrow_distinct_plain.parquet")
+    write_table(t, ppath, use_dictionary=False)
+    assert_false(Bool(_col_stats(ppath, 0).distinct_count))  # None
+    remove(ppath)
+
+
 def test_page_checksum() raises:
     # write_page_checksum attaches a CRC-32 to every page. The check vector
     # locks the algorithm; PyArrow's verified read proves the written CRC is
