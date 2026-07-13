@@ -10,16 +10,17 @@ values). Value encoding is dispatched by Arrow type to typed methods, so the
 writer mirrors the reader's structure.
 
 Milestone: flat columns + struct; primitives (incl. int8/16 widened to INT32),
-string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD/LZ4_RAW; v1 and v2 data
-pages; per-column null-count and min/max statistics (with column_orders).
-Dictionary encoding, page splitting, and temporal/list writing are follow-ups.
+string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD/GZIP/BROTLI/LZ4/LZ4_RAW;
+v1 and v2 data pages; per-column null-count and min/max statistics (with
+column_orders). Dictionary encoding, page splitting, and temporal/list writing
+are follow-ups.
 """
 
 from std.pathlib import Path
 from std.math import isnan
 from std.sys import size_of
 
-from ..arrays import AnyArray, PrimitiveArray, StringArray
+from ..arrays import AnyArray, PrimitiveArray, StringArray, BinaryLikeArray
 from ..dtypes import PrimitiveType, NumericType
 from .. import dtypes as dt
 from ..tabular import Table, RecordBatch
@@ -103,6 +104,12 @@ struct ColumnWriter(Movable):
             Plain.encode_bool(col.as_bool(), body)
         elif vt.is_string():
             Plain.encode_bytes(col.as_string(), body)
+        elif vt.is_large_string():
+            Plain.encode_bytes(col.as_large_string(), body)
+        elif vt.is_binary():
+            Plain.encode_bytes(col.as_binary(), body)
+        elif vt.is_large_binary():
+            Plain.encode_bytes(col.as_large_binary(), body)
         elif vt.is_date32():
             Plain.encode_primitive[phys=DType.int32](col.as_date32(), body)
         elif vt.is_time32():
@@ -168,18 +175,21 @@ struct ColumnWriter(Movable):
         return num_dict
 
     @staticmethod
-    def _dict_string(
-        arr: StringArray,
+    def _dict_bytes[
+        BT: dt.BinaryLikeType
+    ](
+        arr: BinaryLikeArray[BT],
         mut dict_body: List[UInt8],
         mut indices: List[Int32],
     ) raises -> Int:
-        """Dictionary-encode a string column: length-prefixed distinct values in
-        the dictionary page, one index per present value."""
+        """Dictionary-encode a byte-array column (string/binary and their large_
+        variants): length-prefixed distinct values in the dictionary page, one
+        index per present value."""
         var seen = Dict[String, Int]()
         var num_dict = 0
         for i in range(arr.length):
             if arr.is_valid(i):
-                var v = String(arr[i])
+                var v = String(arr.unsafe_get(UInt(i)))
                 if v in seen:
                     indices.append(Int32(seen[v]))
                 else:
@@ -242,7 +252,13 @@ struct ColumnWriter(Movable):
                 col.as_uint16(), dict_body, indices
             )
         elif vt.is_string():
-            return Self._dict_string(col.as_string(), dict_body, indices)
+            return Self._dict_bytes(col.as_string(), dict_body, indices)
+        elif vt.is_large_string():
+            return Self._dict_bytes(col.as_large_string(), dict_body, indices)
+        elif vt.is_binary():
+            return Self._dict_bytes(col.as_binary(), dict_body, indices)
+        elif vt.is_large_binary():
+            return Self._dict_bytes(col.as_large_binary(), dict_body, indices)
         else:
             raise Error(
                 "parquet: cannot dictionary-encode column type " + String(vt)
@@ -251,9 +267,12 @@ struct ColumnWriter(Movable):
     @staticmethod
     def can_dictionary(dtype: dt.AnyDataType) -> Bool:
         """Whether a column of `dtype` is dictionary-encoded when requested —
-        numeric and string columns (bool and unsupported types stay PLAIN)."""
+        numeric and byte-array columns (bool and unsupported types stay PLAIN).
+        """
         return (
-            dtype.is_integer() or dtype.is_floating_point() or dtype.is_string()
+            dtype.is_integer()
+            or dtype.is_floating_point()
+            or dtype.is_binary_like()
         )
 
     # -----------------------------------------------------------------------
@@ -278,7 +297,7 @@ struct ColumnWriter(Movable):
             encoding == Encoding.DELTA_BYTE_ARRAY
             or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
         ):
-            return dtype.is_string()
+            return dtype.is_binary_like()
         return False
 
     @staticmethod
@@ -313,6 +332,16 @@ struct ColumnWriter(Movable):
         else:
             raise Error("parquet: cannot BYTE_STREAM_SPLIT type " + String(vt))
 
+    def _encode_bytes_delta[
+        BT: dt.BinaryLikeType
+    ](self, arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+        """Delta-encode a byte-array column per `self.encoding` (DELTA_BYTE_ARRAY
+        or DELTA_LENGTH_BYTE_ARRAY)."""
+        if self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
+            DeltaLengthByteArray.encode(arr, out)
+        else:  # DELTA_BYTE_ARRAY
+            DeltaByteArray.encode(arr, out)
+
     def _encode_delta(self, col: AnyArray, mut out: List[UInt8]) raises:
         """Delta-encode the present values per `self.encoding`."""
         var ints = List[Int64]()
@@ -331,10 +360,14 @@ struct ColumnWriter(Movable):
                     "parquet: cannot DELTA_BINARY_PACKED type " + String(vt)
                 )
             out.extend(Span(DeltaBinaryPacked.encode(ints)))
-        elif self.encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY:
-            DeltaLengthByteArray.encode(col.as_string(), out)
-        else:  # DELTA_BYTE_ARRAY
-            DeltaByteArray.encode(col.as_string(), out)
+        elif vt.is_string():
+            self._encode_bytes_delta(col.as_string(), out)
+        elif vt.is_large_string():
+            self._encode_bytes_delta(col.as_large_string(), out)
+        elif vt.is_binary():
+            self._encode_bytes_delta(col.as_binary(), out)
+        else:  # large_binary
+            self._encode_bytes_delta(col.as_large_binary(), out)
 
     def _def_levels(
         self, col: AnyArray, mut null_count: Int
@@ -428,6 +461,60 @@ struct ColumnWriter(Movable):
         LittleEndian.put_le(max_out, UInt64(mx.to_bits()), width)
         return True
 
+    @staticmethod
+    def _decimal_flba_stats[
+        T: PrimitiveType, width: Int
+    ](
+        arr: PrimitiveArray[T],
+        mut min_out: List[UInt8],
+        mut max_out: List[UInt8],
+    ) raises -> Bool:
+        """DECIMAL FIXED_LEN_BYTE_ARRAY bounds: signed numeric min/max over the
+        int128/int256 values, big-endian two's complement of `width` bytes (the
+        full storage width, matching the value encoding)."""
+        var r = Self._mm(arr)
+        if not r[2]:
+            return False
+        var lo = r[0].as_bytes[big_endian=True]()
+        var hi = r[1].as_bytes[big_endian=True]()
+        for b in range(width):
+            min_out.append(lo[b])
+            max_out.append(hi[b])
+        return True
+
+    @staticmethod
+    def _bytes_stats[
+        BT: dt.BinaryLikeType
+    ](
+        arr: BinaryLikeArray[BT],
+        mut min_out: List[UInt8],
+        mut max_out: List[UInt8],
+    ) raises -> Bool:
+        """Unsigned byte-wise lexicographic min/max over the present values —
+        the BYTE_ARRAY ordering shared by string/binary and their large_
+        variants. Skips very long bounds rather than truncate (a missing bound is
+        always valid)."""
+        var seen = False
+        var lo = List[UInt8]()
+        var hi = List[UInt8]()
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = arr.unsafe_get(UInt(i)).as_bytes()
+                if not seen:
+                    lo = List[UInt8](v)
+                    hi = List[UInt8](v)
+                    seen = True
+                else:
+                    if LittleEndian.bytes_less(v, Span(lo)):
+                        lo = List[UInt8](v)
+                    if LittleEndian.bytes_less(Span(hi), v):
+                        hi = List[UInt8](v)
+        if not seen or len(lo) > 4096 or len(hi) > 4096:
+            return False
+        min_out = lo^
+        max_out = hi^
+        return True
+
     def _stats(
         self, col: AnyArray, mut min_out: List[UInt8], mut max_out: List[UInt8]
     ) raises -> Bool:
@@ -478,31 +565,66 @@ struct ColumnWriter(Movable):
             max_out.append(UInt8(1) if any_true else UInt8(0))
             return True
         elif vt.is_string():
-            ref s = col.as_string()
+            return Self._bytes_stats(col.as_string(), min_out, max_out)
+        elif vt.is_large_string():
+            return Self._bytes_stats(col.as_large_string(), min_out, max_out)
+        elif vt.is_binary():
+            return Self._bytes_stats(col.as_binary(), min_out, max_out)
+        elif vt.is_large_binary():
+            return Self._bytes_stats(col.as_large_binary(), min_out, max_out)
+        elif vt.is_date32():
+            # temporal stored as INT32/INT64 — signed integer ordering
+            return Self._int_stats[width=4](col.as_date32(), min_out, max_out)
+        elif vt.is_time32():
+            return Self._int_stats[width=4](col.as_time32(), min_out, max_out)
+        elif vt.is_timestamp():
+            return Self._int_stats[width=8](
+                col.as_timestamp(), min_out, max_out
+            )
+        elif vt.is_time64():
+            return Self._int_stats[width=8](col.as_time64(), min_out, max_out)
+        elif vt.is_date64():
+            return Self._int_stats[width=8](col.as_date64(), min_out, max_out)
+        elif vt.is_duration():
+            return Self._int_stats[width=8](col.as_duration(), min_out, max_out)
+        elif vt.is_fixed_size_binary():
+            ref fsb = col.as_fixed_size_binary()
             var seen = False
-            var lo = String()
-            var hi = String()
-            for i in range(len(s)):
-                if s.is_valid(i):
-                    var v = String(s[i])
+            var lo = List[UInt8]()
+            var hi = List[UInt8]()
+            for i in range(len(fsb)):
+                if fsb.is_valid(i):
+                    var v = fsb[i].value().copy()
                     if not seen:
                         lo = v.copy()
                         hi = v.copy()
                         seen = True
                     else:
-                        if LittleEndian.bytes_less(v.as_bytes(), lo.as_bytes()):
+                        if LittleEndian.bytes_less(Span(v), Span(lo)):
                             lo = v.copy()
-                        if LittleEndian.bytes_less(hi.as_bytes(), v.as_bytes()):
+                        if LittleEndian.bytes_less(Span(hi), Span(v)):
                             hi = v.copy()
             if not seen:
                 return False
-            # keep the footer small: skip stats for very long byte-array bounds
-            # rather than truncate (a missing bound is always valid).
-            if lo.byte_length() > 4096 or hi.byte_length() > 4096:
-                return False
-            min_out = List[UInt8](lo.as_bytes())
-            max_out = List[UInt8](hi.as_bytes())
+            min_out = lo^
+            max_out = hi^
             return True
+        elif vt.is_decimal32():
+            return Self._int_stats[width=4](
+                col.as_decimal32(), min_out, max_out
+            )
+        elif vt.is_decimal64():
+            return Self._int_stats[width=8](
+                col.as_decimal64(), min_out, max_out
+            )
+        elif vt.is_decimal128():
+            return Self._decimal_flba_stats[width=16](
+                col.as_decimal128(), min_out, max_out
+            )
+        elif vt.is_decimal256():
+            return Self._decimal_flba_stats[width=32](
+                col.as_decimal256(), min_out, max_out
+            )
         else:
             return False
 

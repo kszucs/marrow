@@ -4,6 +4,32 @@
 
 ### Features
 
+- **Full compression codec coverage** (`marrow.parquet`): the writer now emits
+  `GZIP` (zlib deflate, windowBits 31) and `BROTLI` (via `libbrotlienc`), and
+  the reader decodes `BROTLI` (via `libbrotlidec`) — closing the read/write
+  asymmetry where GZIP could only be read. The deprecated `LZ4` (code 5) now
+  round-trips in both directions: writers emit a plain LZ4 block (as modern
+  PyArrow does) and the reader tolerates the legacy Hadoop 8-byte frame by
+  stripping it when present. `brotli` is now a runtime dependency (opened via
+  `dlopen`, like the other codecs).
+
+- **Binary & large byte-array write** (`marrow.parquet`): the writer now emits
+  `binary`, `large_binary`, and `large_string` columns (previously only the
+  reader handled them). Parquet has a single `BYTE_ARRAY` physical type, so
+  `large_*` columns are written as `BYTE_ARRAY` (large_string carrying the
+  `UTF8`/`STRING` annotation) and read back as `binary`/`string` — matching
+  arrow-rs / parquet-cpp. All value encodings (PLAIN, RLE_DICTIONARY,
+  DELTA_BYTE_ARRAY, DELTA_LENGTH_BYTE_ARRAY) now work over any byte-array type.
+
+- **Temporal, decimal & byte-array statistics** (`marrow.parquet`): the writer
+  now emits `min`/`max` bounds for temporal (`date32`/`time32` as INT32,
+  `timestamp`/`time64`/`date64`/`duration` as INT64, signed order), decimal
+  (`decimal32`/`decimal64` as INT32/INT64, `decimal128`/`decimal256` as
+  big-endian two's-complement `FIXED_LEN_BYTE_ARRAY` in signed numeric order),
+  `binary`/`large_binary`/`large_string` (byte-wise lexicographic), and
+  `fixed_size_binary`. Previously only numeric, bool, and string columns carried
+  bounds; PyArrow now reads correct statistics for every written type.
+
 - **Decimal & fixed-size-binary read** (`marrow.parquet`): the reader now decodes
   `FIXED_LEN_BYTE_ARRAY` columns — `decimal128`/`decimal256` (big-endian two's-
   complement, sign-extended from PyArrow's minimal per-precision byte width to

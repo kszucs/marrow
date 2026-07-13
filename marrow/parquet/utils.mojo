@@ -34,6 +34,16 @@ comptime _ZLIB_PATHS: List[Path] = [
     "libz.so",
     "libz.so.1",
 ]
+comptime _BROTLI_ENC_PATHS: List[Path] = [
+    "libbrotlienc.dylib",
+    "libbrotlienc.so",
+    "libbrotlienc.so.1",
+]
+comptime _BROTLI_DEC_PATHS: List[Path] = [
+    "libbrotlidec.dylib",
+    "libbrotlidec.so",
+    "libbrotlidec.so.1",
+]
 
 
 struct CompressionLibs(Movable):
@@ -48,6 +58,8 @@ struct CompressionLibs(Movable):
     var _snappy: Optional[OwnedDLHandle]
     var _lz4: Optional[OwnedDLHandle]
     var _zlib: Optional[OwnedDLHandle]
+    var _brotli_enc: Optional[OwnedDLHandle]
+    var _brotli_dec: Optional[OwnedDLHandle]
     var _sz: List[UInt]  # reusable size out-param for snappy
 
     def __init__(out self):
@@ -55,6 +67,8 @@ struct CompressionLibs(Movable):
         self._snappy = None
         self._lz4 = None
         self._zlib = None
+        self._brotli_enc = None
+        self._brotli_dec = None
         self._sz = [UInt(0)]
 
     def _ensure_zstd(mut self) raises:
@@ -74,6 +88,18 @@ struct CompressionLibs(Movable):
     def _ensure_zlib(mut self) raises:
         if not self._zlib:
             self._zlib = _try_find_dylib["z"](materialize[_ZLIB_PATHS]())
+
+    def _ensure_brotli_enc(mut self) raises:
+        if not self._brotli_enc:
+            self._brotli_enc = _try_find_dylib["brotlienc"](
+                materialize[_BROTLI_ENC_PATHS]()
+            )
+
+    def _ensure_brotli_dec(mut self) raises:
+        if not self._brotli_dec:
+            self._brotli_dec = _try_find_dylib["brotlidec"](
+                materialize[_BROTLI_DEC_PATHS]()
+            )
 
     # --- decompress: write exactly `out_size` bytes to `dst` ---
 
@@ -154,6 +180,26 @@ struct CompressionLibs(Movable):
         if produced != out_size:
             raise Error("gzip: decompressed size mismatch")
 
+    def brotli_decompress(
+        mut self,
+        src: Span[UInt8, _],
+        dst: UnsafePointer[UInt8, _],
+        out_size: Int,
+    ) raises:
+        self._ensure_brotli_dec()
+        var sz = alloc[UInt](1)
+        sz[0] = UInt(out_size)
+        # BrotliDecoderResult BrotliDecoderDecompress(size_t encoded_size,
+        #   const uint8_t* encoded, size_t* decoded_size, uint8_t* decoded);
+        # returns BROTLI_DECODER_RESULT_SUCCESS == 1.
+        var rc = self._brotli_dec.value().call[
+            "BrotliDecoderDecompress", Int32
+        ](len(src), src.unsafe_ptr(), sz, dst)
+        var produced = Int(sz[0])
+        sz.free()
+        if Int(rc) != 1 or produced != out_size:
+            raise Error("brotli: decompress failed")
+
     # --- compress: return the codec's output bytes ---
 
     def zstd_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
@@ -202,6 +248,78 @@ struct CompressionLibs(Movable):
             raise Error("lz4: compression failed")
         var out = List[UInt8]()
         for i in range(Int(n)):
+            out.append(dst[i])
+        dst.free()
+        return out^
+
+    def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
+        self._ensure_zlib()
+        ref z = self._zlib.value()
+        # gzip worst-case: deflate expansion (~len/1000 + 12) plus the 18-byte
+        # gzip header/trailer; pad generously.
+        var bound = len(src) + len(src) // 1000 + 128
+        var dst = alloc[UInt8](bound)
+        # z_stream is 112 bytes on LP64; same field layout as gzip_decompress.
+        var strm = alloc[UInt64](16)
+        var sp = strm.bitcast[UInt8]()
+        memset_zero(sp, 128)
+        strm[0] = UInt64(Int(src.unsafe_ptr()))  # next_in @0
+        (sp + 8).bitcast[UInt32]()[0] = UInt32(len(src))  # avail_in @8
+        strm[3] = UInt64(Int(dst))  # next_out @24
+        (sp + 32).bitcast[UInt32]()[0] = UInt32(bound)  # avail_out @32
+
+        var version = z.call[
+            "zlibVersion", UnsafePointer[UInt8, MutUntrackedOrigin]
+        ]()
+        # level 6, method Z_DEFLATED(8), windowBits 31 = gzip, memLevel 8,
+        # strategy Z_DEFAULT_STRATEGY(0), stream_size = sizeof(z_stream) = 112.
+        var rc = z.call["deflateInit2_", Int32](
+            sp, Int32(6), Int32(8), Int32(31), Int32(8), Int32(0), version,
+            Int32(112),
+        )
+        if Int(rc) != 0:
+            strm.free()
+            dst.free()
+            raise Error("gzip: deflateInit2 failed")
+        var st = z.call["deflate", Int32](sp, Int32(4))  # Z_FINISH
+        var produced = Int(strm[5])  # total_out @40
+        _ = z.call["deflateEnd", Int32](sp)
+        strm.free()
+        if Int(st) != 1:  # Z_STREAM_END
+            dst.free()
+            raise Error("gzip: deflate failed")
+        var out = List[UInt8]()
+        for i in range(produced):
+            out.append(dst[i])
+        dst.free()
+        return out^
+
+    def brotli_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
+        self._ensure_brotli_enc()
+        ref e = self._brotli_enc.value()
+        var bound = Int(
+            e.call["BrotliEncoderMaxCompressedSize", UInt](UInt(len(src)))
+        )
+        if bound == 0:
+            bound = len(src) + len(src) // 2 + 512
+        var dst = alloc[UInt8](bound)
+        var sz = alloc[UInt](1)
+        sz[0] = UInt(bound)
+        # BROTLI_BOOL BrotliEncoderCompress(int quality, int lgwin,
+        #   BrotliEncoderMode mode, size_t input_size, const uint8_t* input,
+        #   size_t* encoded_size, uint8_t* encoded); quality 11, lgwin 22,
+        #   mode 0 (GENERIC); returns BROTLI_TRUE == 1.
+        var rc = e.call["BrotliEncoderCompress", Int32](
+            Int32(11), Int32(22), Int32(0), UInt(len(src)), src.unsafe_ptr(),
+            sz, dst,
+        )
+        var produced = Int(sz[0])
+        sz.free()
+        if Int(rc) != 1:
+            dst.free()
+            raise Error("brotli: compression failed")
+        var out = List[UInt8]()
+        for i in range(produced):
             out.append(dst[i])
         dst.free()
         return out^

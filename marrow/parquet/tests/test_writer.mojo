@@ -140,6 +140,66 @@ def test_minmax_unsigned_int() raises:
     remove(path)
 
 
+def test_minmax_temporal() raises:
+    var pa = Python.import_module("pyarrow")
+    var dt = Python.import_module("datetime")
+    var t = _one_col(pa.array([10, 3, 7, None, 1], type=pa.timestamp("us")))
+    var path = String("/tmp/marrow_mm_ts.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    # min value 1us / max value 10us after the epoch
+    assert_true(Bool(s.min == dt.datetime(1970, 1, 1, 0, 0, 0, 1)))
+    assert_true(Bool(s.max == dt.datetime(1970, 1, 1, 0, 0, 0, 10)))
+    assert_equal(Int(py=s.null_count), 1)
+    remove(path)
+
+
+def test_minmax_decimal128() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(["1.50", "-3.25", "2.00", None, "0.75"]).cast(
+            pa.decimal128(5, 2)
+        )
+    )
+    var path = String("/tmp/marrow_mm_dec.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_equal(String(py=s.min), "-3.25")
+    assert_equal(String(py=s.max), "2.00")
+    remove(path)
+
+
+def test_minmax_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.evaluate("[b'zoo', b'abc', None, b'mno']"),
+            type=pa.binary(),
+        )
+    )
+    var path = String("/tmp/marrow_mm_bin.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_true(Bool(s.min == Python.evaluate("b'abc'")))
+    assert_true(Bool(s.max == Python.evaluate("b'zoo'")))
+    remove(path)
+
+
+def test_minmax_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var t = _one_col(
+        pa.array(
+            Python.evaluate("[b'yy', b'aa', b'mm', None]"), type=pa.binary(2)
+        )
+    )
+    var path = String("/tmp/marrow_mm_fsb.parquet")
+    write_table(t, path)
+    var s = _col_stats(path, 0)
+    assert_true(Bool(s.min == Python.evaluate("b'aa'")))
+    assert_true(Bool(s.max == Python.evaluate("b'yy'")))
+    remove(path)
+
+
 def test_minmax_float_with_negatives() raises:
     var pa = Python.import_module("pyarrow")
     var t = _one_col(pa.array([1.5, -2.5, 3.25, None], type=pa.float64()))
@@ -724,6 +784,121 @@ def test_write_fixed_size_binary() raises:
     )
     assert_true(Bool(back.column(0).equals(want.column(0))), "fsb mismatch")
     remove(path)
+
+
+def test_write_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "b": pa.array(
+                Python.evaluate("[b'abc', None, b'xyz', b'']"),
+                type=pa.binary(),
+            )
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_binary.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(Bool(back.column(0).equals(want.column(0))), "binary mismatch")
+    remove(path)
+
+
+def test_write_large_binary_and_string() raises:
+    # large_binary / large_string carry no distinct Parquet physical type, so
+    # they land as BYTE_ARRAY and read back as binary / string — the values must
+    # match after a cast.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var want = pa.table(
+        {
+            "lb": pa.array(
+                Python.evaluate("[b'hello', b'world', None]"),
+                type=pa.large_binary(),
+            ),
+            "ls": pa.array(
+                Python.evaluate("['aa', 'bb', None]"), type=pa.large_string()
+            ),
+        }
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_large.parquet")
+    write_table(t, path, Compression.UNCOMPRESSED)
+    var back = pq.read_table(path)
+    assert_true(
+        Bool(back.column(0).cast(pa.large_binary()).equals(want.column(0))),
+        "large_binary mismatch",
+    )
+    assert_true(
+        Bool(back.column(1).cast(pa.large_string()).equals(want.column(1))),
+        "large_string mismatch",
+    )
+    remove(path)
+
+
+def _compression_roundtrip(
+    codec: Compression, py_name: String, check_name: Bool = True
+) raises:
+    """marrow writes with `codec`; PyArrow reads it back, marrow reads it back,
+    and marrow reads a PyArrow file written with the same codec."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    # compressible payload so the codec actually kicks in
+    var ints = Python.list()
+    var strs = Python.list()
+    for i in range(500):
+        ints.append(i % 17)
+        strs.append(Python.str("val_") + Python.str(i % 23))
+    var want = pa.table(
+        {"i": pa.array(ints, type=pa.int32()), "s": pa.array(strs)}
+    )
+    var t = _to_marrow(want)
+    var path = String("/tmp/marrow_comp.parquet")
+    write_table(t, path, codec, use_dictionary=False)
+
+    # PyArrow reads marrow's compressed pages, with the right codec advertised
+    # (the deprecated LZ4 code-5 is displayed as "UNKNOWN" by PyArrow, which
+    # only names the codecs it still writes — the decompress path still works).
+    var pf = pq.ParquetFile(path)
+    if check_name:
+        assert_equal(
+            String(py=pf.metadata.row_group(0).column(0).compression), py_name
+        )
+    var back = pq.read_table(path)
+    assert_true(Bool(back.column(0).equals(want.column(0))), "int mismatch")
+    assert_true(Bool(back.column(1).equals(want.column(1))), "str mismatch")
+
+    # marrow round-trips its own file
+    var mback = read_table(path)
+    assert_equal(mback.num_rows(), 500)
+
+    # marrow reads a PyArrow file written with the same codec
+    var pypath = String("/tmp/pyarrow_comp.parquet")
+    pq.write_table(want, pypath, compression=py_name.lower(), use_dictionary=False)
+    var mpy = read_table(pypath)
+    var b = mpy.to_batches()[0].copy()
+    assert_equal(b.columns[0].copy().as_int32()[3].value(), 3)
+    remove(path)
+    remove(pypath)
+
+
+def test_compression_gzip() raises:
+    _compression_roundtrip(Compression.GZIP, "GZIP")
+
+
+def test_compression_brotli() raises:
+    _compression_roundtrip(Compression.BROTLI, "BROTLI")
+
+
+def test_compression_lz4() raises:
+    # PyArrow displays the deprecated code-5 LZ4 as "UNKNOWN"; skip the name
+    # check and rely on the round-trip (its `compression='lz4'` is LZ4_RAW).
+    _compression_roundtrip(Compression.LZ4, "LZ4", check_name=False)
+
+
+def test_compression_zstd() raises:
+    _compression_roundtrip(Compression.ZSTD, "ZSTD")
 
 
 def main() raises:

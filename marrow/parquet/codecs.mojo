@@ -27,6 +27,7 @@ from std.memory import memcpy
 from ..arrays import (
     PrimitiveArray,
     StringArray,
+    BinaryLikeArray,
     BoolArray,
     FixedSizeBinaryArray,
 )
@@ -589,10 +590,14 @@ struct Plain:
             out.append(acc)
 
     @staticmethod
-    def encode_bytes(arr: StringArray, mut out: List[UInt8]) raises:
+    def encode_bytes[
+        BT: dt.BinaryLikeType
+    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
+        """PLAIN byte arrays: each present value's 4-byte LE length then its raw
+        bytes. Serves string/binary and their large_ variants alike."""
         for i in range(arr.length):
             if arr.is_valid(i):
-                var b = String(arr[i]).as_bytes()
+                var b = arr.unsafe_get(UInt(i)).as_bytes()
                 LittleEndian.put_u32(out, len(b))
                 out.extend(b)
 
@@ -771,14 +776,16 @@ struct DeltaLengthByteArray:
         return out^
 
     @staticmethod
-    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+    def encode[
+        BT: dt.BinaryLikeType
+    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
         """DELTA_LENGTH_BYTE_ARRAY: a delta-packed length stream then the
         concatenated present-value bytes."""
         var lengths = List[Int64]()
         var data = List[UInt8]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var b = String(arr[i]).as_bytes()
+                var b = arr.unsafe_get(UInt(i)).as_bytes()
                 lengths.append(Int64(len(b)))
                 data.extend(b)
         out.extend(Span(DeltaBinaryPacked.encode(lengths)))
@@ -811,7 +818,9 @@ struct DeltaByteArray:
         return out^
 
     @staticmethod
-    def encode(arr: StringArray, mut out: List[UInt8]) raises:
+    def encode[
+        BT: dt.BinaryLikeType
+    ](arr: BinaryLikeArray[BT], mut out: List[UInt8]) raises:
         """DELTA_BYTE_ARRAY: a delta-packed shared-prefix-length stream, then a
         delta-packed suffix-length stream, then the suffix bytes; each value is
         `prev[:prefix] + suffix`."""
@@ -821,7 +830,7 @@ struct DeltaByteArray:
         var prev = List[UInt8]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var v = List[UInt8](String(arr[i]).as_bytes())
+                var v = List[UInt8](arr.unsafe_get(UInt(i)).as_bytes())
                 var m = min(len(prev), len(v))
                 var p = 0
                 while p < m and prev[p] == v[p]:
@@ -961,12 +970,44 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
             libs.snappy_decompress(src, ptr, out_size)
         elif self == Self.LZ4_RAW:
             libs.lz4_raw_decompress(src, ptr, out_size)
+        elif self == Self.LZ4:
+            # Deprecated LZ4 (code 5): modern writers (PyArrow) emit a plain LZ4
+            # block, but tolerate the legacy Hadoop frame ([be u32 decompressed
+            # size][be u32 compressed size] prefix) by stripping it when present.
+            libs.lz4_raw_decompress(Self._strip_lz4_frame(src, out_size), ptr, out_size)
         elif self == Self.GZIP:
             libs.gzip_decompress(src, ptr, out_size)
+        elif self == Self.BROTLI:
+            libs.brotli_decompress(src, ptr, out_size)
         else:
             raise Error(
                 "parquet: unsupported compression codec " + String(self.code)
             )
+
+    @staticmethod
+    def _strip_lz4_frame[
+        o: Origin[mut=False]
+    ](src: Span[UInt8, o], out_size: Int) -> Span[UInt8, o]:
+        """Strip the legacy Hadoop LZ4 8-byte frame header when present: a
+        big-endian u32 decompressed size (== `out_size`) then a big-endian u32
+        compressed size (== the remaining bytes). A plain LZ4 block is returned
+        unchanged."""
+        if len(src) >= 8:
+            var dlen = (
+                (Int(src[0]) << 24)
+                | (Int(src[1]) << 16)
+                | (Int(src[2]) << 8)
+                | Int(src[3])
+            )
+            var clen = (
+                (Int(src[4]) << 24)
+                | (Int(src[5]) << 16)
+                | (Int(src[6]) << 8)
+                | Int(src[7])
+            )
+            if dlen == out_size and clen == len(src) - 8:
+                return src[8:]
+        return src
 
     def decompress(
         self, mut libs: CompressionLibs, src: Span[UInt8, _], out_size: Int
@@ -980,8 +1021,8 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
     def compress(
         self, mut libs: CompressionLibs, src: Span[UInt8, _]
     ) raises -> List[UInt8]:
-        """Compress `src`, returning the codec's output bytes. Writers currently
-        emit UNCOMPRESSED, SNAPPY, ZSTD, or LZ4_RAW."""
+        """Compress `src`, returning the codec's output bytes. Writers emit
+        UNCOMPRESSED, SNAPPY, ZSTD, GZIP, BROTLI, LZ4, or LZ4_RAW."""
         if self == Self.UNCOMPRESSED:
             var out = List[UInt8]()
             out.extend(src)
@@ -990,8 +1031,14 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
             return libs.zstd_compress(src)
         elif self == Self.SNAPPY:
             return libs.snappy_compress(src)
-        elif self == Self.LZ4_RAW:
+        elif self == Self.LZ4_RAW or self == Self.LZ4:
+            # Both emit a plain LZ4 block; code 5 readers accept it (see the
+            # Hadoop-frame tolerance in `_strip_lz4_frame`).
             return libs.lz4_compress(src)
+        elif self == Self.GZIP:
+            return libs.gzip_compress(src)
+        elif self == Self.BROTLI:
+            return libs.brotli_compress(src)
         else:
             raise Error(
                 "parquet: unsupported compression codec " + String(self.code)

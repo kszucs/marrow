@@ -889,6 +889,15 @@ struct SchemaMapping(Movable):
         elif dtype.is_fixed_size_binary():
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
             el.type_length = dtype.as_fixed_size_binary().byte_width
+        elif dtype.is_large_string():
+            # Parquet has a single BYTE_ARRAY; large_ offsets are an Arrow-only
+            # distinction, so a large_string is emitted as a UTF8 BYTE_ARRAY
+            # (it reads back as string, exactly like arrow-rs / parquet-cpp).
+            el.type = PhysicalType.BYTE_ARRAY
+            el.converted_type = ConvertedType.UTF8
+            el.logical_type = LogicalType.STRING
+        elif dtype.is_large_binary():
+            el.type = PhysicalType.BYTE_ARRAY
         else:
             var phys, conv, logi = Self._physical(dtype)
             el.type = phys
