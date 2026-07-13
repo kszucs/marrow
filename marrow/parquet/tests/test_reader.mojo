@@ -762,6 +762,12 @@ def test_parquet_file() raises:
     assert_equal(f.num_row_groups(), 2)
     assert_equal(f.schema().num_fields(), 2)
 
+    # metadata + statistics come off the same opened file (no re-mmap)
+    assert_equal(f.metadata().num_rows, 4)
+    var stats = f.statistics()
+    assert_equal(len(stats), 2)  # 2 row groups
+    assert_equal(len(stats[0]), 2)  # 2 leaf columns
+
     # full read
     var t = f.read()
     assert_equal(t.num_rows(), 4)

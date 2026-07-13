@@ -1504,6 +1504,87 @@ struct ParquetFile(Movable):
             batches.append(RecordBatch.empty(Schema(copy=plan.schema)))
         return Table.from_batches(Schema(copy=plan.schema), batches)
 
+    def statistics(self) raises -> List[List[ColumnStatistics]]:
+        """Per-(row group, leaf column) decoded column-chunk statistics, indexed
+        `result[row_group][leaf]`. `min`/`max` are typed scalars matching each
+        column's Arrow type (each `None` when the file stored no bound or the
+        type's bounds are not yet decoded); `null_count` is -1 if absent."""
+        var out = List[List[ColumnStatistics]]()
+        for ref rg in self._meta.row_groups:
+            var row = List[ColumnStatistics]()
+            for ci in range(len(rg.columns)):
+                ref cm = rg.columns[ci].meta_data
+                var cs = ColumnStatistics()
+                cs.null_count = cm.null_count
+                if cm.has_min_max:
+                    ref dtype = self._mapping.leaves[ci].dtype
+                    var mn = _decode_stat(dtype, cm.min_value)
+                    var mx = _decode_stat(dtype, cm.max_value)
+                    if Bool(mn) and Bool(mx):
+                        cs.min = mn^
+                        cs.max = mx^
+                row.append(cs^)
+            out.append(row^)
+        return out^
+
+    def page_index(self) raises -> List[List[PageIndex]]:
+        """The raw page index (OffsetIndex + ColumnIndex) for every (row group,
+        leaf column), indexed `result[row_group][leaf]`. A chunk without a page
+        index yields empty optionals."""
+        var data = self._mapped.span()
+        var out = List[List[PageIndex]]()
+        for ref rg in self._meta.row_groups:
+            var row = List[PageIndex]()
+            for ci in range(len(rg.columns)):
+                ref cc = rg.columns[ci]
+                var pi = PageIndex()
+                if cc.offset_index_offset >= 0:
+                    var r = CompactReader(data, cc.offset_index_offset)
+                    pi.offset_index = OffsetIndex.read(r)
+                if cc.column_index_offset >= 0:
+                    var r = CompactReader(data, cc.column_index_offset)
+                    pi.column_index = ColumnIndex.read(r)
+                row.append(pi^)
+            out.append(row^)
+        return out^
+
+    def page_bounds(self) raises -> List[List[List[PageBounds]]]:
+        """Per (row group, leaf column, data page) decoded bounds, from the page
+        index — indexed `result[rg][leaf][page]`. A column with no page index
+        yields an empty page list. Predicate pushdown prunes pages with these."""
+        var data = self._mapped.span()
+        var out = List[List[List[PageBounds]]]()
+        for ref rg in self._meta.row_groups:
+            var per_col = List[List[PageBounds]]()
+            for ci in range(len(rg.columns)):
+                ref cc = rg.columns[ci]
+                var pages = List[PageBounds]()
+                if cc.offset_index_offset >= 0 and cc.column_index_offset >= 0:
+                    var ro = CompactReader(data, cc.offset_index_offset)
+                    var oi = OffsetIndex.read(ro)
+                    var rc = CompactReader(data, cc.column_index_offset)
+                    var cix = ColumnIndex.read(rc)
+                    ref dtype = self._mapping.leaves[ci].dtype
+                    var np = len(oi.page_locations)
+                    for p in range(np):
+                        var first = oi.page_locations[p].first_row_index
+                        var nxt = (
+                            oi.page_locations[p + 1].first_row_index if p + 1
+                            < np else rg.num_rows
+                        )
+                        var mn: Optional[AnyScalar] = None
+                        var mx: Optional[AnyScalar] = None
+                        # an all-null page (or a missing bound) prunes nothing
+                        if not (p < len(cix.null_pages) and cix.null_pages[p]):
+                            if p < len(cix.min_values):
+                                mn = _decode_stat(dtype, cix.min_values[p])
+                            if p < len(cix.max_values):
+                                mx = _decode_stat(dtype, cix.max_values[p])
+                        pages.append(PageBounds(nxt - first, mn^, mx^))
+                per_col.append(pages^)
+            out.append(per_col^)
+        return out^
+
 
 def read_table(
     path: String,
@@ -1609,12 +1690,9 @@ struct RowSelection(Copyable, Movable):
 def read_metadata(path: String) raises -> FileMetaData:
     """Read only the file footer: schema, row groups, and per-column-chunk
     metadata (offsets, sizes, codec, null_count, and the raw min/max statistic
-    bytes). No column data is decoded. Mirrors `pyarrow.parquet.read_metadata`.
-    """
-    var mapped = MappedFile(path)
-    var meta = FileMetaData.read_footer(mapped.span())
-    _ = mapped^  # read_footer copies every field into owned storage
-    return meta^
+    bytes). No column data is decoded. Mirrors `pyarrow.parquet.read_metadata` —
+    a convenience wrapper over `ParquetFile(path).metadata()`."""
+    return ParquetFile(path).metadata()
 
 
 struct PageIndex(Copyable, Movable):
@@ -1632,28 +1710,9 @@ struct PageIndex(Copyable, Movable):
 
 def read_page_index(path: String) raises -> List[List[PageIndex]]:
     """Read the page index (OffsetIndex + ColumnIndex) for every (row group,
-    leaf column), indexed `result[row_group][leaf]`. Follows the offsets stored
-    in each `ColumnChunk`; a chunk without a page index yields empty optionals.
-    """
-    var mapped = MappedFile(path)
-    var data = mapped.span()
-    var meta = FileMetaData.read_footer(data)
-    var out = List[List[PageIndex]]()
-    for ref rg in meta.row_groups:
-        var row = List[PageIndex]()
-        for ci in range(len(rg.columns)):
-            ref cc = rg.columns[ci]
-            var pi = PageIndex()
-            if cc.offset_index_offset >= 0:
-                var r = CompactReader(data, cc.offset_index_offset)
-                pi.offset_index = OffsetIndex.read(r)
-            if cc.column_index_offset >= 0:
-                var r = CompactReader(data, cc.column_index_offset)
-                pi.column_index = ColumnIndex.read(r)
-            row.append(pi^)
-        out.append(row^)
-    _ = mapped^  # OffsetIndex/ColumnIndex copy their bytes into owned storage
-    return out^
+    leaf column), indexed `result[row_group][leaf]` — a convenience wrapper over
+    `ParquetFile(path).page_index()`."""
+    return ParquetFile(path).page_index()
 
 
 struct PageBounds(Copyable, Movable):
@@ -1677,45 +1736,9 @@ struct PageBounds(Copyable, Movable):
 
 def read_page_bounds(path: String) raises -> List[List[List[PageBounds]]]:
     """Per (row group, leaf column, data page) decoded bounds, from the page
-    index — indexed `result[rg][leaf][page]`. A column with no page index yields
-    an empty page list. Predicate pushdown prunes individual pages with these.
-    """
-    var mapped = MappedFile(path)
-    var data = mapped.span()
-    var meta = FileMetaData.read_footer(data)
-    var mapping = SchemaMapping.from_parquet(meta)
-    var out = List[List[List[PageBounds]]]()
-    for ref rg in meta.row_groups:
-        var per_col = List[List[PageBounds]]()
-        for ci in range(len(rg.columns)):
-            ref cc = rg.columns[ci]
-            var pages = List[PageBounds]()
-            if cc.offset_index_offset >= 0 and cc.column_index_offset >= 0:
-                var ro = CompactReader(data, cc.offset_index_offset)
-                var oi = OffsetIndex.read(ro)
-                var rc = CompactReader(data, cc.column_index_offset)
-                var cix = ColumnIndex.read(rc)
-                ref dtype = mapping.leaves[ci].dtype
-                var np = len(oi.page_locations)
-                for p in range(np):
-                    var first = oi.page_locations[p].first_row_index
-                    var nxt = (
-                        oi.page_locations[p + 1].first_row_index if p + 1
-                        < np else rg.num_rows
-                    )
-                    var mn: Optional[AnyScalar] = None
-                    var mx: Optional[AnyScalar] = None
-                    # an all-null page (or a missing bound) prunes nothing
-                    if not (p < len(cix.null_pages) and cix.null_pages[p]):
-                        if p < len(cix.min_values):
-                            mn = _decode_stat(dtype, cix.min_values[p])
-                        if p < len(cix.max_values):
-                            mx = _decode_stat(dtype, cix.max_values[p])
-                    pages.append(PageBounds(nxt - first, mn^, mx^))
-            per_col.append(pages^)
-        out.append(per_col^)
-    _ = mapped^
-    return out^
+    index — indexed `result[rg][leaf][page]` — a convenience wrapper over
+    `ParquetFile(path).page_bounds()`."""
+    return ParquetFile(path).page_bounds()
 
 
 struct ColumnStatistics(Copyable, Movable):
@@ -1788,24 +1811,6 @@ def _decode_stat(
 
 def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:
     """Per-(row group, leaf column) decoded statistics, indexed
-    `result[row_group][leaf]`. `min`/`max` are typed scalars matching each
-    column's Arrow type; `has_min_max` is false when the file stored no bounds
-    or the type's bounds are not yet decoded."""
-    var meta = read_metadata(path)
-    var mapping = SchemaMapping.from_parquet(meta)
-    var out = List[List[ColumnStatistics]]()
-    for ref rg in meta.row_groups:
-        var row = List[ColumnStatistics]()
-        for ci in range(len(rg.columns)):
-            ref cm = rg.columns[ci].meta_data
-            var cs = ColumnStatistics()
-            cs.null_count = cm.null_count
-            if cm.has_min_max:
-                var mn = _decode_stat(mapping.leaves[ci].dtype, cm.min_value)
-                var mx = _decode_stat(mapping.leaves[ci].dtype, cm.max_value)
-                if Bool(mn) and Bool(mx):
-                    cs.min = mn^
-                    cs.max = mx^
-            row.append(cs^)
-        out.append(row^)
-    return out^
+    `result[row_group][leaf]` — a convenience wrapper over
+    `ParquetFile(path).statistics()`."""
+    return ParquetFile(path).statistics()
