@@ -194,6 +194,29 @@ def test_select_none() raises:
     remove(path)
 
 
+def test_read_row_group_out_of_range() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
+    var groups: List[Int] = [5]  # the file has a single row group
+    with assert_raises():
+        _ = read_table(path, row_groups=groups^)
+    remove(path)
+
+
+def test_row_selections_count_mismatch() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
+    # two selections but only one (selected) row group
+    var rs = List[RowSelection]()
+    rs.append(RowSelection.all(100))
+    rs.append(RowSelection.all(100))
+    with assert_raises():
+        _ = read_table(path, row_selections=rs^)
+    remove(path)
+
+
 # ---------------------------------------------------------------------------
 # RowSelection unit tests: per-row keep/skip built from per-page keep flags and
 # combined with intersect.
