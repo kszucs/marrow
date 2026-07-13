@@ -48,11 +48,16 @@ def _norm_type(t: PythonObject) raises -> String:
     private `ARROW:schema` metadata, which marrow ignores), the LIST element
     field name is arbitrary (marrow calls it `item`, pyarrow `element`), and
     nested field-name annotations pyarrow renders as ` ('name')` (map key/value,
-    struct fields) are stripped since those names come from the same metadata."""
+    struct fields) are stripped since those names come from the same metadata.
+    """
     var re = Python.import_module("re")
-    var stripped = re.sub(PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__())
+    var stripped = re.sub(
+        PythonObject(" \\('[^']*'\\)"), PythonObject(""), t.__str__()
+    )
     var s = String(stripped)
-    return s.replace("large_", "").replace("item: ", "").replace("element: ", "")
+    return (
+        s.replace("large_", "").replace("item: ", "").replace("element: ", "")
+    )
 
 
 def _values(col: PythonObject) raises -> PythonObject:
@@ -259,15 +264,11 @@ def test_interop_decimal() raises:
     var t = pa.table(
         Python.dict(
             d128=pa.array(
-                Python.list(
-                    dec.Decimal("1.23"), n, dec.Decimal("-4.56")
-                ),
+                Python.list(dec.Decimal("1.23"), n, dec.Decimal("-4.56")),
                 type=pa.decimal128(9, 2),
             ),
             d256=pa.array(
-                Python.list(
-                    dec.Decimal("123.456"), dec.Decimal("-7.890"), n
-                ),
+                Python.list(dec.Decimal("123.456"), dec.Decimal("-7.890"), n),
                 type=pa.decimal256(40, 3),
             ),
         )
@@ -280,7 +281,11 @@ def test_interop_fixed_size_binary() raises:
     var t = pa.table(
         Python.dict(
             fsb=pa.array(
-                Python.evaluate("[b'abc', None, b'xyz']"),
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                ),
                 type=pa.binary(3),
             ),
         )
@@ -289,12 +294,22 @@ def test_interop_fixed_size_binary() raises:
 
 
 def test_interop_binary_read() raises:
-    var t = Python.evaluate(
-        "__import__('pyarrow').table({"
-        "'b': __import__('pyarrow').array([b'ab', None, b'cd'],"
-        " type=__import__('pyarrow').binary()),"
-        "'ls': __import__('pyarrow').array(['big', None, 'string'],"
-        " type=__import__('pyarrow').large_string())})"
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.list(
+                    Python.str("ab").encode(),
+                    Python.none(),
+                    Python.str("cd").encode(),
+                ),
+                type=pa.binary(),
+            ),
+            ls=pa.array(
+                Python.list("big", Python.none(), "string"),
+                type=pa.large_string(),
+            ),
+        )
     )
     _read_only(t)
 
@@ -305,11 +320,21 @@ def test_interop_list() raises:
     var t = pa.table(
         Python.dict(
             li=pa.array(
-                Python.evaluate("[[1, 2, 3], [], None, [4, 5]]"),
+                Python.list(
+                    Python.list(1, 2, 3),
+                    Python.list(),
+                    Python.none(),
+                    Python.list(4, 5),
+                ),
                 type=pa.list_(pa.int64()),
             ),
             ls=pa.array(
-                Python.evaluate("[['a', 'bb'], None, ['ccc'], []]"),
+                Python.list(
+                    Python.list("a", "bb"),
+                    Python.none(),
+                    Python.list("ccc"),
+                    Python.list(),
+                ),
                 type=pa.list_(pa.string()),
             ),
         )
@@ -322,7 +347,12 @@ def test_interop_map() raises:
     var t = pa.table(
         Python.dict(
             m=pa.array(
-                Python.evaluate("[{'a': 1, 'b': 2}, {}, None, {'c': 3}]"),
+                Python.list(
+                    Python.dict(a=1, b=2),
+                    Python.dict(),
+                    Python.none(),
+                    Python.dict(c=3),
+                ),
                 type=pa.map_(pa.string(), pa.int64()),
             ),
         )

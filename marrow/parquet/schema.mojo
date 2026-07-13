@@ -14,6 +14,7 @@ from .. import dtypes as dt
 from ..schema import Schema
 from ..arrays import AnyArray, StructArray, BoolArray, ListArray
 from ..builders import BoolBuilder, PrimitiveBuilder
+from ..buffers import Bitmap
 from .format import (
     SchemaElement,
     FileMetaData,
@@ -220,17 +221,31 @@ struct SchemaNode(Copyable, Movable):
             leaf_arrays.append(col.copy())
         elif self.kind == NODE_STRUCT:
             ref sa = col.as_struct()
+            # A nullable struct's null bit is not reflected in its children
+            # (Arrow leaves them defined), so AND it into each child before
+            # descending — the encoders skip nulls, and the count then matches
+            # the definition levels (`def == max_def` only where the struct is
+            # present *and* the child is non-null).
             for i in range(len(self.children)):
-                self.children[i].collect_leaf_arrays(
-                    sa.children[i], leaf_arrays
-                )
+                if self.geom.optional and sa.bitmap:
+                    self.children[i].collect_leaf_arrays(
+                        Self._apply_null_mask(sa.children[i], sa), leaf_arrays
+                    )
+                else:
+                    self.children[i].collect_leaf_arrays(
+                        sa.children[i], leaf_arrays
+                    )
         elif self.kind == NODE_LIST:
             # Descend into the list's flat child values — the innermost element
             # arrays hold the leaf values to write; the offsets/levels come from
             # the Dremel shred.
-            self.children[0].collect_leaf_arrays(col.as_list().values(), leaf_arrays)
+            self.children[0].collect_leaf_arrays(
+                col.as_list().values(), leaf_arrays
+            )
         elif self.kind == NODE_MAP:
-            self.children[0].collect_leaf_arrays(col.as_map().values(), leaf_arrays)
+            self.children[0].collect_leaf_arrays(
+                col.as_map().values(), leaf_arrays
+            )
         else:
             raise Error("parquet: unsupported schema node kind")
 
@@ -244,6 +259,36 @@ struct SchemaNode(Copyable, Movable):
             if c.contains_repeated():
                 return True
         return False
+
+    def needs_levels(self) -> Bool:
+        """Whether this column must be Dremel-shredded on write: it contains a
+        repeated group (list/map) or a nullable (OPTIONAL) struct — either needs
+        definition levels the flat 0/1-derivation cannot produce."""
+        if self.kind == NODE_LIST or self.kind == NODE_MAP:
+            return True
+        if self.kind == NODE_STRUCT and self.geom.optional:
+            return True
+        for ref c in self.children:
+            if c.needs_levels():
+                return True
+        return False
+
+    @staticmethod
+    def _apply_null_mask(arr: AnyArray, sa: StructArray) raises -> AnyArray:
+        """A copy of `arr` whose validity is `arr` AND `sa` — used to push a
+        nullable struct's null bit into a child before shredding/encoding."""
+        var n = arr.length()
+        var bm = Bitmap[mut=True].alloc_zeroed(n)
+        var nulls = 0
+        for i in range(n):
+            if arr.is_valid(i) and sa.is_valid(i):
+                bm.set(i)
+            else:
+                nulls += 1
+        var d = arr.to_data()
+        d.bitmap = bm^.to_immutable(length=n)
+        d.nulls = nulls
+        return AnyArray.from_data(d^)
 
     # -----------------------------------------------------------------------
     # Write-side Dremel striping (inverse of `assemble`): produce per-leaf
@@ -280,13 +325,19 @@ struct SchemaNode(Copyable, Movable):
             if meta[li].max_rep >= 1:
                 reps[li].append(Int32(rep))
         elif self.kind == NODE_STRUCT:
-            # Emitted REQUIRED on write, so the struct itself is always present;
-            # each field is shredded at the same element with the same rep.
             ref sa = arr.as_struct()
-            for c in range(len(self.children)):
-                self.children[c]._shred_elem(
-                    sa.children[c], i, rep, meta, defs, reps
+            if self.geom.optional and not sa.is_valid(i):
+                # Null struct: one absent marker (def below the struct's non-null
+                # level) for every leaf underneath.
+                self._emit_absent(
+                    self.geom.non_null_def - 1, rep, meta, defs, reps
                 )
+            else:
+                # Present (or REQUIRED) struct: shred each field at this element.
+                for c in range(len(self.children)):
+                    self.children[c]._shred_elem(
+                        sa.children[c], i, rep, meta, defs, reps
+                    )
         else:  # NODE_LIST / NODE_MAP
             var valid: Bool
             var start: Int
@@ -437,7 +488,12 @@ struct SchemaMapping(Movable):
             var node = m._parse_node(idx, 0, 0)
             fields.append(node.field.copy())
             m.nodes.append(node^)
-        m.schema = Schema(fields=fields^)
+        # File-level key/value metadata (incl. PyArrow's ARROW:schema) rides on
+        # the schema, mirroring pyarrow's `read_table(...).schema.metadata`.
+        var md = Dict[String, String]()
+        for ref kv in meta.key_value_metadata:
+            md[kv.key] = kv.value
+        m.schema = Schema(fields=fields^, metadata=md^)
         return m^
 
     @staticmethod
@@ -523,6 +579,10 @@ struct SchemaMapping(Movable):
         var pt = el.type
         var ct = el.converted_type
         var lt = el.logical_type
+        # INT96 is the deprecated 12-byte timestamp of legacy writers (Impala/
+        # Spark/Hive) -> nanosecond timestamp, no timezone (matching PyArrow).
+        if pt == PhysicalType.INT96:
+            return dt.timestamp(dt.nanosecond, String(""))
         # Temporal leaves need unit + UTC disambiguation and array construction
         # that does not invert cleanly, so they are matched before the table.
         if pt == PhysicalType.INT32:
@@ -542,13 +602,25 @@ struct SchemaMapping(Movable):
                 )
             elif ct == ConvertedType.TIME_MICROS or lt == LogicalType.TIME:
                 return dt.time64(Self._time_unit(el))
-        # DECIMAL (any physical backing) -> the narrowest Arrow decimal that
-        # holds the precision, mirroring PyArrow (decimal128 up to 38 digits).
+        # DECIMAL -> an Arrow decimal whose storage matches the physical backing:
+        # INT32 -> decimal32, INT64 -> decimal64, and FIXED_LEN_BYTE_ARRAY (or
+        # BYTE_ARRAY) -> decimal128/decimal256 by precision. Decoding is driven by
+        # the physical type, so the storage width must line up.
         if ct == ConvertedType.DECIMAL or lt == LogicalType.DECIMAL:
-            if el.precision <= 38:
+            if pt == PhysicalType.INT32:
+                return dt.decimal32(el.precision, el.scale)
+            elif pt == PhysicalType.INT64:
+                return dt.decimal64(el.precision, el.scale)
+            elif el.precision <= 38:
                 return dt.decimal128(el.precision, el.scale)
             else:
                 return dt.decimal256(el.precision, el.scale)
+        # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bit pattern.
+        if (
+            pt == PhysicalType.FIXED_LEN_BYTE_ARRAY
+            and lt == LogicalType.FLOAT16
+        ):
+            return dt.float16
         # Un-annotated FIXED_LEN_BYTE_ARRAY -> fixed-size binary of that width.
         if pt == PhysicalType.FIXED_LEN_BYTE_ARRAY:
             return dt.fixed_size_binary_(el.type_length)
@@ -602,7 +674,8 @@ struct SchemaMapping(Movable):
         shared by read (`_parse_node`) and write (`_emit_field`) so the list's
         Dremel geometry lives in one place. `d` is the list's own definition
         level; its repeated middle group sits at `rep_base + 1` / `d + 1`, so a
-        slot holds an element at `d + 1` and the list itself is non-null at `d`."""
+        slot holds an element at `d + 1` and the list itself is non-null at `d`.
+        """
         var children = List[SchemaNode]()
         children.append(elem^)
         var item: dt.AnyDataType = dt.list_(children[0].field.dtype.copy())
@@ -710,7 +783,6 @@ struct SchemaMapping(Movable):
                     physical=el.type,
                     max_def=d,
                     max_rep=r,
-                    nullable=nullable,
                     slot_def=slot_def,
                     carry_def=under_optional,
                     type_length=el.type_length,
@@ -737,7 +809,9 @@ struct SchemaMapping(Movable):
             if kv.num_children != 2:
                 raise Error(
                     "parquet: map 'key_value' group must have exactly a key and"
-                    " a value (column '" + el.name + "')"
+                    " a value (column '"
+                    + el.name
+                    + "')"
                 )
             idx += 1
             var key_node = self._parse_node(
@@ -795,8 +869,9 @@ struct SchemaMapping(Movable):
 
     # -----------------------------------------------------------------------
     # Arrow -> Parquet metadata (write). A depth-first walk over Arrow fields
-    # appends `SchemaElement`s and leaf descriptors. Structs are emitted as
-    # required groups (struct-level nulls are a follow-up).
+    # appends `SchemaElement`s and leaf descriptors. A nullable struct is emitted
+    # as an OPTIONAL group (struct nulls in the def levels); a struct whose
+    # subtree contains a repeated group stays REQUIRED.
     # -----------------------------------------------------------------------
 
     @staticmethod
@@ -812,7 +887,9 @@ struct SchemaMapping(Movable):
         root.num_children = len(schema.fields)
         m.elements.append(root^)
         for ref f in schema.fields:
-            m.nodes.append(m._emit_field(f, 0, 0, slot_def=0, under_optional=False))
+            m.nodes.append(
+                m._emit_field(f, 0, 0, slot_def=0, under_optional=False)
+            )
         return m^
 
     @staticmethod
@@ -826,9 +903,7 @@ struct SchemaMapping(Movable):
         raise Error("parquet: cannot write Arrow type " + String(dtype))
 
     @staticmethod
-    def _set_leaf_physical(
-        dtype: dt.AnyDataType, mut el: SchemaElement
-    ) raises:
+    def _set_leaf_physical(dtype: dt.AnyDataType, mut el: SchemaElement) raises:
         """Populate a leaf `SchemaElement`'s physical fields (type, converted /
         logical annotation, time unit + UTC, decimal scale + precision, and FLBA
         length) from an Arrow value type — the inverse of `_leaf_dtype`. Temporal,
@@ -887,14 +962,46 @@ struct SchemaMapping(Movable):
                 el.type_length = 32
                 el.precision = dtype.as_decimal256().precision
                 el.scale = dtype.as_decimal256().scale
+        elif dtype.is_float16():
+            # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bits.
+            el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
+            el.type_length = 2
+            el.logical_type = LogicalType.FLOAT16
         elif dtype.is_fixed_size_binary():
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
             el.type_length = dtype.as_fixed_size_binary().byte_width
+        elif dtype.is_large_string():
+            # Parquet has a single BYTE_ARRAY; large_ offsets are an Arrow-only
+            # distinction, so a large_string is emitted as a UTF8 BYTE_ARRAY
+            # (it reads back as string, exactly like arrow-rs / parquet-cpp).
+            el.type = PhysicalType.BYTE_ARRAY
+            el.converted_type = ConvertedType.UTF8
+            el.logical_type = LogicalType.STRING
+        elif dtype.is_large_binary():
+            el.type = PhysicalType.BYTE_ARRAY
         else:
             var phys, conv, logi = Self._physical(dtype)
             el.type = phys
             el.converted_type = conv
             el.logical_type = logi
+
+    @staticmethod
+    def _has_repeated(dtype: dt.AnyDataType) -> Bool:
+        """Whether an Arrow type contains a repeated group (list/map/fixed-size
+        list) anywhere — a nullable struct wrapping one stays REQUIRED on write.
+        """
+        if (
+            dtype.is_list()
+            or dtype.is_large_list()
+            or dtype.is_fixed_size_list()
+            or dtype.is_map()
+        ):
+            return True
+        if dtype.is_struct():
+            for ref f in dtype.as_struct().fields:
+                if Self._has_repeated(f.dtype):
+                    return True
+        return False
 
     def _emit_field(
         mut self,
@@ -930,7 +1037,11 @@ struct SchemaMapping(Movable):
             )
 
             var elem_field = (
-                field.dtype.as_list().value_field().copy() if field.dtype.is_list() else field.dtype.as_large_list().value_field().copy()
+                field.dtype.as_list()
+                .value_field()
+                .copy() if field.dtype.is_list() else field.dtype.as_large_list()
+                .value_field()
+                .copy()
             )
             var elem = self._emit_field(
                 elem_field,
@@ -939,7 +1050,9 @@ struct SchemaMapping(Movable):
                 slot_def=d + 1,
                 under_optional=under_optional,
             )
-            return Self._list_node(field.name, elem^, d, rep_base, slot_def, nullable)
+            return Self._list_node(
+                field.name, elem^, d, rep_base, slot_def, nullable
+            )
 
         if field.dtype.is_map():
             # MAP = <opt|req> group(MAP) { repeated group key_value {
@@ -969,27 +1082,37 @@ struct SchemaMapping(Movable):
                 under_optional=under_optional,
             )
             return Self._map_node(
-                field.name, key_node^, val_node^, d, rep_base, slot_def, nullable
+                field.name,
+                key_node^,
+                val_node^,
+                d,
+                rep_base,
+                slot_def,
+                nullable,
             )
 
         if field.dtype.is_struct():
-            # Emitted as a REQUIRED group (struct-level nulls on write TODO), so
-            # the children inherit `def_base` unchanged.
+            # A nullable struct is emitted as an OPTIONAL group so struct-level
+            # nulls ride in the definition levels (children inherit `d`). A struct
+            # whose subtree contains a repeated group (list/map) stays REQUIRED —
+            # combining struct nulls with record boundaries is a follow-up — so
+            # its field nullability is not preserved in that case.
             ref st = field.dtype.as_struct()
+            var opt = nullable and not Self._has_repeated(field.dtype)
+            var sd = def_base + (1 if opt else 0)
+            var group_rep = Repetition.OPTIONAL if opt else Repetition.REQUIRED
             self.elements.append(
-                Self._group_element(
-                    field.name, Repetition.REQUIRED, len(st.fields)
-                )
+                Self._group_element(field.name, group_rep, len(st.fields))
             )
             var child_nodes = List[SchemaNode]()
             for ref cf in st.fields:
                 child_nodes.append(
                     self._emit_field(
                         cf,
-                        def_base,
+                        sd,
                         rep_base,
                         slot_def=slot_def,
-                        under_optional=under_optional,
+                        under_optional=under_optional or opt,
                     )
                 )
             return SchemaNode(
@@ -998,8 +1121,8 @@ struct SchemaMapping(Movable):
                 child_nodes^,
                 -1,
                 NodeGeom(
-                    non_null_def=def_base,
-                    optional=False,
+                    non_null_def=sd,
+                    optional=opt,
                     rep_level=rep_base,
                     slot_def=slot_def,
                 ),
@@ -1021,7 +1144,6 @@ struct SchemaMapping(Movable):
                 physical=phys,
                 max_def=d,
                 max_rep=rep_base,
-                nullable=nullable,
                 slot_def=slot_def,
                 carry_def=under_optional,
             )
@@ -1043,7 +1165,7 @@ struct SchemaMapping(Movable):
 
     def project(self, columns: List[String]) raises -> Projection:
         """Read plan for the named top-level columns, in the given order. The
-        assembly nodes are with_remapped_leaves onto a compact decoded list holding only the
+        assembly nodes are remapped onto a compact decoded list holding only the
         selected columns' leaves; unselected column chunks are never decoded."""
         var fields = List[dt.Field]()
         var nodes = List[SchemaNode]()
@@ -1070,7 +1192,7 @@ struct SchemaMapping(Movable):
 
 struct Projection(Movable):
     """A read plan: the output Arrow schema, the assembly nodes (leaf indices
-    with_remapped_leaves to a compact decoded list), and `decode_order` — the original flat
+    remapped to a compact decoded list), and `decode_order` — the original flat
     leaf/column-chunk indices to decode, in that compact order."""
 
     var schema: Schema
@@ -1096,7 +1218,6 @@ struct LeafColumn(Copyable, Movable):
     var physical: PhysicalType
     var max_def: Int
     var max_rep: Int
-    var nullable: Bool
     var slot_def: Int  # def level at/above which this leaf's value slot exists
     var carry_def: Bool  # keep def levels (leaf is under a nullable struct)
     var type_length: Int  # FIXED_LEN_BYTE_ARRAY width (decimal/fixed_size_binary)
@@ -1108,7 +1229,6 @@ struct LeafColumn(Copyable, Movable):
         physical: PhysicalType,
         max_def: Int,
         max_rep: Int,
-        nullable: Bool,
         slot_def: Int = 0,
         carry_def: Bool = False,
         type_length: Int = 0,
@@ -1118,7 +1238,6 @@ struct LeafColumn(Copyable, Movable):
         self.physical = physical
         self.max_def = max_def
         self.max_rep = max_rep
-        self.nullable = nullable
         self.slot_def = slot_def
         self.carry_def = carry_def
         self.type_length = type_length
@@ -1136,23 +1255,16 @@ struct DecodedLeaf(Movable):
     levels mean present/empty/null) lives on the schema node, so this stays a
     plain data record."""
 
-    var leveled: Bool
     var array: AnyArray  # flat column, or the list's element/child array
     var rep_levels: List[Int32]
     var def_levels: List[Int32]
 
     def __init__(
         out self,
-        leveled: Bool,
         var array: AnyArray,
         var rep_levels: List[Int32],
         var def_levels: List[Int32],
     ):
-        self.leveled = leveled
         self.array = array^
         self.rep_levels = rep_levels^
         self.def_levels = def_levels^
-
-    @staticmethod
-    def flat(var array: AnyArray) -> DecodedLeaf:
-        return DecodedLeaf(False, array^, List[Int32](), List[Int32]())

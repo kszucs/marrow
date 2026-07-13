@@ -169,6 +169,15 @@ struct BufferView[
     # --- Element access ---
 
     @always_inline
+    def as_span(self) -> Span[Scalar[Self.T], Self.origin]:
+        """This view as a `std` `Span` — same responsibility (a non-owning,
+        length-carrying window over contiguous elements), for APIs typed on
+        `Span`. Preserves mutability via the origin."""
+        return Span[Scalar[Self.T], Self.origin](
+            ptr=self._data, length=self._length
+        )
+
+    @always_inline
     def __getitem__(self, index: Int) -> Scalar[Self.T]:
         self._check_bounds(index)
         return self._data[index]

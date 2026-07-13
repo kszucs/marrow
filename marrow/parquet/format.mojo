@@ -1,7 +1,7 @@
 """The Parquet file-format layer: the Thrift Compact Protocol codec plus the
 metadata structures it serializes.
 
-`CompactReader` / `CompactWriter` are a hand-written subset of the Thrift Compact
+`ThriftCompactReader` / `ThriftCompactWriter` are a hand-written subset of the Thrift Compact
 Protocol (varint / zigzag / nibble-packed field & list headers + a recursive
 `skip` for forward compatibility), modelled on arrow-rs `parquet_thrift.rs` — no
 Thrift runtime or codegen. On top of them sit the metadata structs for exactly
@@ -14,7 +14,8 @@ types (`PhysicalType`, `Encoding`, …) rather than bare integer constants.
 
 from std.memory import bitcast
 
-from .codecs import Encoding
+from .codecs import Encoding, Zigzag
+from ..utils import LittleEndian
 
 
 # ---------------------------------------------------------------------------
@@ -56,20 +57,7 @@ struct FieldHeader(Copyable, Movable):
         self.last = 0
 
 
-struct Zigzag:
-    """Signed <-> unsigned mapping so small-magnitude signed integers stay small
-    as varints. Stateless; a namespace of static methods."""
-
-    @staticmethod
-    def encode(v: Int64) -> UInt64:
-        return UInt64((v << 1) ^ (v >> 63))
-
-    @staticmethod
-    def decode(v: UInt64) -> Int64:
-        return Int64(v >> 1) ^ (-(Int64(v & 1)))
-
-
-struct CompactReader[o: Origin[mut=False]](Movable):
+struct ThriftCompactReader[o: Origin[mut=False]](Movable):
     """Reads Thrift Compact Protocol values from an immutable byte span.
 
     `pos` advances as values are consumed. Byte strings are returned as
@@ -97,18 +85,10 @@ struct CompactReader[o: Origin[mut=False]](Movable):
         return b
 
     def read_varint(mut self) raises -> UInt64:
-        """Read an unsigned LEB128 varint."""
-        var result: UInt64 = 0
-        var shift: Int = 0
-        while True:
-            var b = self._u8()
-            result |= UInt64(b & 0x7F) << UInt64(shift)
-            if b & 0x80 == 0:
-                break
-            shift += 7
-            if shift >= 64:
-                raise Error("thrift: varint too long")
-        return result
+        """Read an unsigned LEB128 varint, advancing `pos`."""
+        var value: UInt64
+        value, self.pos = LittleEndian.varint(self.data, self.pos)
+        return value
 
     def read_i16(mut self) raises -> Int16:
         return Int16(Zigzag.decode(self.read_varint()))
@@ -229,7 +209,7 @@ struct CompactReader[o: Origin[mut=False]](Movable):
             raise Error("thrift: unknown field type " + String(field_type))
 
 
-struct CompactWriter(Movable):
+struct ThriftCompactWriter(Movable):
     """Builds a Thrift Compact Protocol byte stream."""
 
     var buf: List[UInt8]
@@ -238,14 +218,7 @@ struct CompactWriter(Movable):
         self.buf = List[UInt8]()
 
     def write_varint(mut self, var v: UInt64):
-        while True:
-            var b = UInt8(v & 0x7F)
-            v >>= 7
-            if v != 0:
-                self.buf.append(b | 0x80)
-            else:
-                self.buf.append(b)
-                break
+        LittleEndian.put_varint(self.buf, v)
 
     def write_i16(mut self, v: Int16):
         self.write_varint(Zigzag.encode(Int64(v)))
@@ -255,9 +228,6 @@ struct CompactWriter(Movable):
 
     def write_i64(mut self, v: Int64):
         self.write_varint(Zigzag.encode(v))
-
-    def write_byte(mut self, v: Int8):
-        self.buf.append(UInt8(v))
 
     def write_double(mut self, v: Float64):
         var bits = UInt64(v.to_bits())
@@ -300,6 +270,34 @@ struct CompactWriter(Movable):
         else:
             self.buf.append(UInt8(0xF0) | elem_type)
             self.write_varint(UInt64(size))
+
+    def write_struct_list[
+        T: ThriftWritable
+    ](mut self, field_id: Int, last: Int, items: List[T]) -> Int:
+        """Write a `list<struct>` field (each element via its own `write`);
+        return `field_id` as the new `last_field_id`."""
+        var this = self.write_field_begin(TC_LIST, field_id, last)
+        self.write_list_begin(TC_STRUCT, len(items))
+        for i in range(len(items)):
+            items[i].write(self)
+        return this
+
+
+trait ThriftWritable(Copyable, Movable):
+    """A metadata struct that serializes itself into a `ThriftCompactWriter`. `write`
+    is the only requirement; `append_to` and `ThriftCompactWriter.write_struct_list`
+    build on it so every footer / header struct shares one serialization path.
+    """
+
+    def write(self, mut w: ThriftCompactWriter):
+        ...
+
+    def append_to(self, mut out: List[UInt8]) -> Int:
+        """Serialize `self` into `out`; return its byte length."""
+        var w = ThriftCompactWriter()
+        self.write(w)
+        out.extend(Span(w.buf))
+        return len(w.buf)
 
 
 comptime PARQUET_MAGIC: List[UInt8] = [0x50, 0x41, 0x52, 0x31]  # "PAR1"
@@ -384,6 +382,7 @@ struct LogicalType(Equatable, ImplicitlyCopyable, Movable):
     comptime TIME = Self(7)
     comptime TIMESTAMP = Self(8)
     comptime INTEGER = Self(10)
+    comptime FLOAT16 = Self(15)
 
 
 @fieldwise_init
@@ -404,7 +403,7 @@ struct PageType(Equatable, ImplicitlyCopyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct SchemaElement(Copyable, Movable):
+struct SchemaElement(Copyable, Movable, ThriftWritable):
     var type: PhysicalType  # NONE if a group node
     var type_length: Int  # for FIXED_LEN_BYTE_ARRAY
     var repetition_type: Repetition  # NONE at root
@@ -413,7 +412,6 @@ struct SchemaElement(Copyable, Movable):
     var converted_type: ConvertedType  # NONE if absent
     var scale: Int
     var precision: Int
-    var field_id: Int
     var logical_type: LogicalType  # union member id, NONE if absent
     var logical_unit: Int  # TimeUnit for TIMESTAMP/TIME: 1=ms 2=us 3=ns, else -1
     var logical_utc: Bool  # isAdjustedToUTC for TIMESTAMP/TIME
@@ -427,13 +425,14 @@ struct SchemaElement(Copyable, Movable):
         self.converted_type = ConvertedType.NONE
         self.scale = 0
         self.precision = 0
-        self.field_id = -1
         self.logical_type = LogicalType.NONE
         self.logical_unit = -1
         self.logical_utc = False
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -453,8 +452,6 @@ struct SchemaElement(Copyable, Movable):
                 out.scale = Int(r.read_i32())
             elif f.id == 8:
                 out.precision = Int(r.read_i32())
-            elif f.id == 9:
-                out.field_id = Int(r.read_i32())
             elif f.id == 10:
                 out._read_logical_type(r)
             else:
@@ -463,7 +460,7 @@ struct SchemaElement(Copyable, Movable):
 
     def _read_logical_type[
         o: Origin[mut=False]
-    ](mut self, mut r: CompactReader[o]) raises:
+    ](mut self, mut r: ThriftCompactReader[o]) raises:
         """Parse the `LogicalType` union into `logical_type`, and for TIMESTAMP /
         TIME also the nested `TimeUnit` (`logical_unit`) and `isAdjustedToUTC`.
         """
@@ -490,7 +487,7 @@ struct SchemaElement(Copyable, Movable):
             else:
                 r.skip(f.type)
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         if self.type != PhysicalType.NONE:
             last = w.write_field_begin(TC_I32, 1, last)
@@ -519,11 +516,12 @@ struct SchemaElement(Copyable, Movable):
             self._write_logical_type(w)
         w.write_field_stop()
 
-    def _write_logical_type(self, mut w: CompactWriter):
+    def _write_logical_type(self, mut w: ThriftCompactWriter):
         """Serialize the `LogicalType` union (field 10): one member field whose
         id is the logical type, holding that member's struct. TIME/TIMESTAMP carry
         `{isAdjustedToUTC, unit}` (unit a `TimeUnit` union), DECIMAL carries
-        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs."""
+        `{scale, precision}`, and the rest (DATE, STRING, …) are empty structs.
+        """
         _ = w.write_field_begin(TC_STRUCT, self.logical_type.code, 0)
         if (
             self.logical_type == LogicalType.TIME
@@ -564,7 +562,9 @@ struct DataPageHeader(Copyable, Movable):
         self.repetition_level_encoding = Encoding.RLE
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -580,7 +580,7 @@ struct DataPageHeader(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.num_values))
@@ -612,7 +612,9 @@ struct DataPageHeaderV2(Copyable, Movable):
         self.is_compressed = True
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -634,7 +636,7 @@ struct DataPageHeaderV2(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.num_values))
@@ -661,7 +663,9 @@ struct DictionaryPageHeader(Copyable, Movable):
         self.encoding = Encoding.PLAIN
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -673,7 +677,7 @@ struct DictionaryPageHeader(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.num_values))
@@ -682,10 +686,11 @@ struct DictionaryPageHeader(Copyable, Movable):
         w.write_field_stop()
 
 
-struct PageHeader(Copyable, Movable):
+struct PageHeader(Copyable, Movable, ThriftWritable):
     var type: PageType
     var uncompressed_page_size: Int
     var compressed_page_size: Int
+    var crc: Int  # CRC-32 of the page body, or -1 when absent
     var data_page_header: Optional[DataPageHeader]
     var data_page_header_v2: Optional[DataPageHeaderV2]
     var dictionary_page_header: Optional[DictionaryPageHeader]
@@ -694,12 +699,15 @@ struct PageHeader(Copyable, Movable):
         self.type = PageType.NONE
         self.uncompressed_page_size = 0
         self.compressed_page_size = 0
+        self.crc = -1
         self.data_page_header = None
         self.data_page_header_v2 = None
         self.dictionary_page_header = None
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -709,6 +717,9 @@ struct PageHeader(Copyable, Movable):
                 out.uncompressed_page_size = Int(r.read_i32())
             elif f.id == 3:
                 out.compressed_page_size = Int(r.read_i32())
+            elif f.id == 4:
+                # stored signed; keep the unsigned 32-bit value so -1 = absent
+                out.crc = Int(r.read_i32()) & 0xFFFFFFFF
             elif f.id == 5:
                 out.data_page_header = DataPageHeader.read(r)
             elif f.id == 7:
@@ -719,7 +730,7 @@ struct PageHeader(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.type.code))
@@ -727,6 +738,9 @@ struct PageHeader(Copyable, Movable):
         w.write_i32(Int32(self.uncompressed_page_size))
         last = w.write_field_begin(TC_I32, 3, last)
         w.write_i32(Int32(self.compressed_page_size))
+        if self.crc >= 0:
+            last = w.write_field_begin(TC_I32, 4, last)
+            w.write_i32(Int32(self.crc))
         if self.data_page_header:
             _ = w.write_field_begin(TC_STRUCT, 5, last)
             self.data_page_header.value().write(w)
@@ -743,17 +757,10 @@ struct PageHeader(Copyable, Movable):
         o: Origin[mut=False]
     ](data: Span[UInt8, o], mut pos: Int) raises -> Self:
         """Read the page header at `pos`, advancing `pos` to the page body."""
-        var r = CompactReader(data, pos)
+        var r = ThriftCompactReader(data, pos)
         var ph = Self.read(r)
         pos = r.pos
         return ph^
-
-    def append_to(self, mut out: List[UInt8]) raises -> Int:
-        """Serialize this header into `out`; return its byte length."""
-        var w = CompactWriter()
-        self.write(w)
-        out.extend(Span(w.buf))
-        return len(w.buf)
 
     @staticmethod
     def data_page(
@@ -837,11 +844,14 @@ struct ColumnMetaData(Copyable, Movable):
     var dictionary_page_offset: Int  # -1 if absent
     var encodings: List[Int]  # Encoding codes actually used in the chunk
     var null_count: Int  # -1 if unknown; written as Statistics.null_count
+    var distinct_count: Int  # -1 if unknown; Statistics.distinct_count
     var has_min_max: Bool  # Statistics.min_value/max_value present
     var min_value: List[
         UInt8
     ]  # PLAIN-encoded min (no length prefix for BYTE_ARRAY)
     var max_value: List[UInt8]  # PLAIN-encoded max
+    var bloom_filter_offset: Int  # -1 if absent
+    var bloom_filter_length: Int
 
     def __init__(out self):
         self.type = -1
@@ -854,12 +864,17 @@ struct ColumnMetaData(Copyable, Movable):
         self.dictionary_page_offset = -1
         self.encodings = [Encoding.RLE.code, Encoding.PLAIN.code]
         self.null_count = -1
+        self.distinct_count = -1
         self.has_min_max = False
         self.min_value = List[UInt8]()
         self.max_value = List[UInt8]()
+        self.bloom_filter_offset = -1
+        self.bloom_filter_length = 0
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -883,13 +898,17 @@ struct ColumnMetaData(Copyable, Movable):
                 out.dictionary_page_offset = Int(r.read_i64())
             elif f.id == 12:
                 out._read_statistics(r)
+            elif f.id == 14:
+                out.bloom_filter_offset = Int(r.read_i64())
+            elif f.id == 15:
+                out.bloom_filter_length = Int(r.read_i32())
             else:
                 r.skip(f.type)
         return out^
 
     def _read_statistics[
         o: Origin[mut=False]
-    ](mut self, mut r: CompactReader[o]) raises:
+    ](mut self, mut r: ThriftCompactReader[o]) raises:
         """Parse the nested Statistics struct, keeping null_count and the modern
         min_value/max_value (fields 6/5). The deprecated min/max (fields 2/1) are
         skipped — modern writers populate min_value/max_value."""
@@ -899,6 +918,8 @@ struct ColumnMetaData(Copyable, Movable):
         while r.next_field(f):
             if f.id == 3:
                 self.null_count = Int(r.read_i64())
+            elif f.id == 4:
+                self.distinct_count = Int(r.read_i64())
             elif f.id == 5:
                 var bytes = r.read_bytes()
                 self.max_value = List[UInt8](Span(bytes))
@@ -912,7 +933,7 @@ struct ColumnMetaData(Copyable, Movable):
         # min/max are only usable when both bounds are present.
         self.has_min_max = seen_min and seen_max
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.type))
@@ -939,15 +960,19 @@ struct ColumnMetaData(Copyable, Movable):
         if self.dictionary_page_offset >= 0:
             last = w.write_field_begin(TC_I64, 11, last)
             w.write_i64(Int64(self.dictionary_page_offset))
-        if self.null_count >= 0 or self.has_min_max:
-            # Statistics (field 12): null_count (3), and the modern
-            # max_value (5) / min_value (6) with their exactness flags (7/8).
-            # Fields are written in ascending id order per the compact protocol.
+        if self.null_count >= 0 or self.distinct_count >= 0 or self.has_min_max:
+            # Statistics (field 12): null_count (3), distinct_count (4), and the
+            # modern max_value (5) / min_value (6) with their exactness flags
+            # (7/8). Fields are written in ascending id order per the compact
+            # protocol.
             last = w.write_field_begin(TC_STRUCT, 12, last)
             var slast = 0
             if self.null_count >= 0:
                 slast = w.write_field_begin(TC_I64, 3, slast)
                 w.write_i64(Int64(self.null_count))
+            if self.distinct_count >= 0:
+                slast = w.write_field_begin(TC_I64, 4, slast)
+                w.write_i64(Int64(self.distinct_count))
             if self.has_min_max:
                 slast = w.write_field_begin(TC_BINARY, 5, slast)
                 w.write_bytes(Span(self.max_value))
@@ -956,6 +981,11 @@ struct ColumnMetaData(Copyable, Movable):
                 slast = w.write_bool_field(True, 7, slast)  # is_max_value_exact
                 slast = w.write_bool_field(True, 8, slast)  # is_min_value_exact
             w.write_field_stop()
+        if self.bloom_filter_offset >= 0:
+            last = w.write_field_begin(TC_I64, 14, last)
+            w.write_i64(Int64(self.bloom_filter_offset))
+            last = w.write_field_begin(TC_I32, 15, last)
+            w.write_i32(Int32(self.bloom_filter_length))
         w.write_field_stop()
 
 
@@ -966,7 +996,7 @@ struct ColumnMetaData(Copyable, Movable):
 # ---------------------------------------------------------------------------
 
 
-struct PageLocation(Copyable, Movable):
+struct PageLocation(Copyable, Movable, ThriftWritable):
     """Locates one data page: byte `offset` in the file, `compressed_page_size`
     (header included), and `first_row_index` (row-group-relative, on a row
     boundary)."""
@@ -981,7 +1011,9 @@ struct PageLocation(Copyable, Movable):
         self.first_row_index = 0
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -995,8 +1027,18 @@ struct PageLocation(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
+    def write(self, mut w: ThriftCompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_I64, 1, last)
+        w.write_i64(Int64(self.offset))
+        last = w.write_field_begin(TC_I32, 2, last)
+        w.write_i32(Int32(self.compressed_page_size))
+        last = w.write_field_begin(TC_I64, 3, last)
+        w.write_i64(Int64(self.first_row_index))
+        w.write_field_stop()
 
-struct OffsetIndex(Copyable, Movable):
+
+struct OffsetIndex(Copyable, Movable, ThriftWritable):
     """Per-page locations for one column chunk (field 1 = list<PageLocation>).
     """
 
@@ -1006,7 +1048,9 @@ struct OffsetIndex(Copyable, Movable):
         self.page_locations = List[PageLocation]()
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1018,8 +1062,12 @@ struct OffsetIndex(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
+    def write(self, mut w: ThriftCompactWriter):
+        _ = w.write_struct_list(1, 0, self.page_locations)
+        w.write_field_stop()
 
-struct ColumnIndex(Copyable, Movable):
+
+struct ColumnIndex(Copyable, Movable, ThriftWritable):
     """Per-page statistics for one column chunk: `null_pages[i]` (page holds only
     nulls → its min/max are empty), the PLAIN-encoded `min_values`/`max_values`
     bounds, `boundary_order` (0 UNORDERED, 1 ASCENDING, 2 DESCENDING), and the
@@ -1039,7 +1087,9 @@ struct ColumnIndex(Copyable, Movable):
         self.null_counts = List[Int]()
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1066,14 +1116,43 @@ struct ColumnIndex(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
+    def write(self, mut w: ThriftCompactWriter):
+        var last = 0
+        # null_pages: list<bool> — compact lists encode each bool as one byte
+        # (1 = true, 2 = false) under a BOOL_TRUE element-type nibble.
+        last = w.write_field_begin(TC_LIST, 1, last)
+        w.write_list_begin(TC_BOOL_TRUE, len(self.null_pages))
+        for p in self.null_pages:
+            w.buf.append(UInt8(1) if p else UInt8(2))
+        last = w.write_field_begin(TC_LIST, 2, last)
+        w.write_list_begin(TC_BINARY, len(self.min_values))
+        for i in range(len(self.min_values)):
+            w.write_bytes(Span(self.min_values[i]))
+        last = w.write_field_begin(TC_LIST, 3, last)
+        w.write_list_begin(TC_BINARY, len(self.max_values))
+        for i in range(len(self.max_values)):
+            w.write_bytes(Span(self.max_values[i]))
+        last = w.write_field_begin(TC_I32, 4, last)
+        w.write_i32(Int32(self.boundary_order))
+        if len(self.null_counts) > 0:
+            last = w.write_field_begin(TC_LIST, 5, last)
+            w.write_list_begin(TC_I64, len(self.null_counts))
+            for i in range(len(self.null_counts)):
+                w.write_i64(Int64(self.null_counts[i]))
+        w.write_field_stop()
 
-struct ColumnChunk(Copyable, Movable):
+
+struct ColumnChunk(Copyable, Movable, ThriftWritable):
     var file_offset: Int
     var meta_data: ColumnMetaData
     var offset_index_offset: Int  # -1 if absent
     var offset_index_length: Int
     var column_index_offset: Int  # -1 if absent
     var column_index_length: Int
+    var offset_index_out: OffsetIndex  # writer-only: per-data-page locations
+    var column_index_out: ColumnIndex  # writer-only: per-data-page stats
+    var write_column_index: Bool  # writer-only: emit the ColumnIndex
+    var bloom_bytes: List[UInt8]  # writer-only: the built bloom filter bitset
 
     def __init__(out self):
         self.file_offset = 0
@@ -1082,9 +1161,15 @@ struct ColumnChunk(Copyable, Movable):
         self.offset_index_length = 0
         self.column_index_offset = -1
         self.column_index_length = 0
+        self.offset_index_out = OffsetIndex()
+        self.column_index_out = ColumnIndex()
+        self.write_column_index = False
+        self.bloom_bytes = List[UInt8]()
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1104,16 +1189,27 @@ struct ColumnChunk(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I64, 2, last)
         w.write_i64(Int64(self.file_offset))
         last = w.write_field_begin(TC_STRUCT, 3, last)
         self.meta_data.write(w)
+        # page-index pointers (written after the pages, before the footer)
+        if self.offset_index_offset >= 0:
+            last = w.write_field_begin(TC_I64, 4, last)
+            w.write_i64(Int64(self.offset_index_offset))
+            last = w.write_field_begin(TC_I32, 5, last)
+            w.write_i32(Int32(self.offset_index_length))
+        if self.column_index_offset >= 0:
+            last = w.write_field_begin(TC_I64, 6, last)
+            w.write_i64(Int64(self.column_index_offset))
+            last = w.write_field_begin(TC_I32, 7, last)
+            w.write_i32(Int32(self.column_index_length))
         w.write_field_stop()
 
 
-struct RowGroup(Copyable, Movable):
+struct RowGroup(Copyable, Movable, ThriftWritable):
     var columns: List[ColumnChunk]
     var total_byte_size: Int
     var num_rows: Int
@@ -1124,7 +1220,9 @@ struct RowGroup(Copyable, Movable):
         self.num_rows = 0
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1140,16 +1238,46 @@ struct RowGroup(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
-        var last = 0
-        last = w.write_field_begin(TC_LIST, 1, last)
-        w.write_list_begin(TC_STRUCT, len(self.columns))
-        for i in range(len(self.columns)):
-            self.columns[i].write(w)
+    def write(self, mut w: ThriftCompactWriter):
+        var last = w.write_struct_list(1, 0, self.columns)
         last = w.write_field_begin(TC_I64, 2, last)
         w.write_i64(Int64(self.total_byte_size))
         last = w.write_field_begin(TC_I64, 3, last)
         w.write_i64(Int64(self.num_rows))
+        w.write_field_stop()
+
+
+struct KeyValue(Copyable, Movable, ThriftWritable):
+    """A file-level metadata entry: a `key` and its optional string `value`."""
+
+    var key: String
+    var value: String
+
+    def __init__(out self, key: String = String(), value: String = String()):
+        self.key = key
+        self.value = value
+
+    @staticmethod
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
+        var out = Self()
+        var f = FieldHeader()
+        while r.next_field(f):
+            if f.id == 1:
+                out.key = r.read_string()
+            elif f.id == 2:
+                out.value = r.read_string()
+            else:
+                r.skip(f.type)
+        return out^
+
+    def write(self, mut w: ThriftCompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_BINARY, 1, last)
+        w.write_string(self.key)
+        last = w.write_field_begin(TC_BINARY, 2, last)
+        w.write_string(self.value)
         w.write_field_stop()
 
 
@@ -1158,6 +1286,7 @@ struct FileMetaData(Copyable, Movable):
     var schema: List[SchemaElement]
     var num_rows: Int
     var row_groups: List[RowGroup]
+    var key_value_metadata: List[KeyValue]
     var created_by: String
 
     def __init__(out self):
@@ -1165,10 +1294,13 @@ struct FileMetaData(Copyable, Movable):
         self.schema = List[SchemaElement]()
         self.num_rows = 0
         self.row_groups = List[RowGroup]()
+        self.key_value_metadata = List[KeyValue]()
         self.created_by = String()
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -1184,26 +1316,26 @@ struct FileMetaData(Copyable, Movable):
                 var et, n = r.read_list_header()
                 for _ in range(n):
                     out.row_groups.append(RowGroup.read(r))
+            elif f.id == 5:
+                var et, n = r.read_list_header()
+                for _ in range(n):
+                    out.key_value_metadata.append(KeyValue.read(r))
             elif f.id == 6:
                 out.created_by = r.read_string()
             else:
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.version))
-        last = w.write_field_begin(TC_LIST, 2, last)
-        w.write_list_begin(TC_STRUCT, len(self.schema))
-        for s in self.schema:
-            s.write(w)
+        last = w.write_struct_list(2, last, self.schema)
         last = w.write_field_begin(TC_I64, 3, last)
         w.write_i64(Int64(self.num_rows))
-        last = w.write_field_begin(TC_LIST, 4, last)
-        w.write_list_begin(TC_STRUCT, len(self.row_groups))
-        for i in range(len(self.row_groups)):
-            self.row_groups[i].write(w)
+        last = w.write_struct_list(4, last, self.row_groups)
+        if len(self.key_value_metadata) > 0:
+            last = w.write_struct_list(5, last, self.key_value_metadata)
         last = w.write_field_begin(TC_BINARY, 6, last)
         w.write_string(self.created_by)
         # column_orders (7): one ColumnOrder per leaf column, each the
@@ -1254,13 +1386,13 @@ struct FileMetaData(Copyable, Movable):
         var start = n - 8 - meta_len
         if start < 4:
             raise Error("parquet: corrupt footer length")
-        var r = CompactReader(data, start)
+        var r = ThriftCompactReader(data, start)
         return Self.read(r)
 
     def write_footer(self, mut out: List[UInt8]) raises:
         """Serialize the thrift blob, then the 4-byte LE length and `PAR1` magic
         that close the file."""
-        var w = CompactWriter()
+        var w = ThriftCompactWriter()
         self.write(w)
         var meta_len = len(w.buf)
         out.extend(Span(w.buf))

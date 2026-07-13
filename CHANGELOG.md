@@ -20,6 +20,7 @@
   and `BitmapView` spans for kernels to compute over.
 - `map` is a first-class Arrow type: arrays, builders, scalars, casts,
   hashing, selection, Parquet and IPC all carry it.
+- Decimal 32/64/128/256 and fixed-size binary, end to end.
 
 ### Compute kernels
 
@@ -57,8 +58,14 @@
   read and on write, with per-column selection and dictionary fallback.
 - Arbitrarily nested reconstruction -- any depth of list and struct,
   struct-level nulls included -- and general nested writes.
+- Codecs opened at run time by `dlopen`, so there is no link-time
+  dependency: snappy, zstd, gzip, brotli, lz4 and lz4-raw.
 - Column statistics (min/max/null/distinct), and the ColumnIndex and
   OffsetIndex page index, on read and write.
+- Split-block bloom filters on read and write, including for temporal,
+  decimal and fixed-size-binary columns.
+- Data page v1 and v2, optional page CRC-32 checksums, file key/value
+  metadata, and INT96 and float16 columns.
 - Reads parallelize across row groups and columns; page bodies are
   zero-copy out of the mapped file.
 

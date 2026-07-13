@@ -9,6 +9,7 @@ oracle.
 """
 
 from .reader import (
+    ParquetFile,
     read_table,
     read_metadata,
     read_statistics,
@@ -21,3 +22,4 @@ from .reader import (
 )
 from .writer import write_table
 from .codecs import Compression
+from .bloom import SplitBlockBloomFilter, xxh64

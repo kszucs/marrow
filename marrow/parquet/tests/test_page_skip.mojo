@@ -6,7 +6,7 @@ genuinely spans skip / keep / partial pages across every builder (primitive,
 nullable, string/dict)."""
 
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
-from std.python import Python
+from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table
@@ -14,13 +14,12 @@ from marrow.parquet.reader import RowSelection
 from marrow.tabular import Table
 
 
-def _write(code: String) raises -> String:
-    var pa = Python.import_module("pyarrow")
+def _write(tbl: PythonObject) raises -> String:
     var pq = Python.import_module("pyarrow.parquet")
     var path = String("/tmp/marrow_pageskip.parquet")
     # tiny pages -> many pages per chunk; single row group
     pq.write_table(
-        Python.evaluate(code),
+        tbl,
         path,
         data_page_size=128,
         row_group_size=1000000,
@@ -65,8 +64,8 @@ def _assert_matches_full(
                 k += 1
 
 
-def _check(code: String, sel: RowSelection) raises:
-    var path = _write(code)
+def _check(tbl: PythonObject, sel: RowSelection) raises:
+    var path = _write(tbl)
     var full = read_table(path)
     var rs = List[RowSelection]()
     rs.append(sel.copy())
@@ -75,69 +74,116 @@ def _check(code: String, sel: RowSelection) raises:
     remove(path)
 
 
+def _col(arr: PythonObject) raises -> PythonObject:
+    """A single-column ("c") PyArrow table around `arr`."""
+    return Python.import_module("pyarrow").table(Python.dict(c=arr))
+
+
 def test_contiguous_int() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
     _check(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array(list(range(10000)),"
-            " type=__import__('pyarrow').int64())})"
-        ),
+        _col(pa.array(np.arange(10000), type=pa.int64())),
         _selection(10000, 2500, 7500),
     )
 
 
 def test_scattered_int() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
     _check(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array(list(range(10000)),"
-            " type=__import__('pyarrow').int64())})"
-        ),
+        _col(pa.array(np.arange(10000), type=pa.int64())),
         _strided(10000, 7, 3),
     )
 
 
 def test_nullable_int() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(5000)
     _check(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array([None if i % 4 == 0 else i for i in"
-            " range(5000)], type=__import__('pyarrow').int64())})"
-        ),
+        _col(pa.array(idx, mask=(idx % 4 == 0), type=pa.int64())),
         _strided(5000, 5, 2),
     )
 
 
 def test_string_dict() raises:
     # low cardinality -> dictionary-encoded data pages
-    _check(
-        (
-            "__import__('pyarrow').table({'s':"
-            " __import__('pyarrow').array([['red','green','blue'][i % 3] for i"
-            " in range(6000)])})"
-        ),
-        _selection(6000, 1000, 4000),
-    )
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var vals = np.array(Python.list("red", "green", "blue"))[
+        np.arange(6000) % 3
+    ]
+    _check(_col(pa.array(vals)), _selection(6000, 1000, 4000))
 
 
 def test_string_plain_nullable() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(4000)
+    var vals = np.char.add("v", idx.astype("U"))
     _check(
-        (
-            "__import__('pyarrow').table({'s':"
-            " __import__('pyarrow').array([None if i % 6 == 0 else 'v%d' % i"
-            " for i in range(4000)], type=__import__('pyarrow').string())})"
-        ),
+        _col(pa.array(vals, mask=(idx % 6 == 0), type=pa.string())),
         _strided(4000, 3, 1),
+    )
+
+
+def test_scattered_bool() raises:
+    # exercises BoolLeafBuilder's partial-page selected scatter
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var idx = np.arange(6000)
+    _check(
+        _col(pa.array(idx % 2 == 0, mask=(idx % 9 == 0), type=pa.bool_())),
+        _strided(6000, 5, 2),
+    )
+
+
+def test_scattered_float() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    _check(
+        _col(pa.array(np.arange(8000) * 0.25, type=pa.float64())),
+        _strided(8000, 7, 3),
+    )
+
+
+def test_scattered_temporal() raises:
+    # timestamp column (INT64 storage retagged) under a partial-page selection
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    _check(
+        _col(pa.array(np.arange(8000) * 1000, type=pa.timestamp("us"))),
+        _selection(8000, 2000, 6000),
+    )
+
+
+def test_scattered_decimal() raises:
+    # decimal128 (FIXED_LEN_BYTE_ARRAY) drives DecimalLeafBuilder.place() per row
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var vals = np.char.add(np.arange(4000).astype("U"), ".25")
+    _check(
+        _col(pa.array(vals).cast(pa.decimal128(12, 2))),
+        _strided(4000, 5, 2),
+    )
+
+
+def test_scattered_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var vals = np.char.zfill((np.arange(5000) % 9999).astype("U"), 4)
+    _check(
+        _col(pa.array(vals.astype("S4"), type=pa.binary(4))),
+        _strided(5000, 6, 3),
     )
 
 
 def test_select_none() raises:
     # an empty selection reads zero rows
-    var path = _write(
-        "__import__('pyarrow').table({'x':"
-        " __import__('pyarrow').array(list(range(2000)),"
-        " type=__import__('pyarrow').int64())})"
-    )
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write(_col(pa.array(np.arange(2000), type=pa.int64())))
     var s = List[Bool](capacity=2000)
     for _ in range(2000):
         s.append(False)
@@ -145,6 +191,29 @@ def test_select_none() raises:
     rs.append(RowSelection(s^))
     var got = read_table(path, row_selections=rs^)
     assert_equal(got.num_rows(), 0)
+    remove(path)
+
+
+def test_read_row_group_out_of_range() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
+    var groups: List[Int] = [5]  # the file has a single row group
+    with assert_raises():
+        _ = read_table(path, row_groups=groups^)
+    remove(path)
+
+
+def test_row_selections_count_mismatch() raises:
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write(_col(pa.array(np.arange(100), type=pa.int64())))
+    # two selections but only one (selected) row group
+    var rs = List[RowSelection]()
+    rs.append(RowSelection.all(100))
+    rs.append(RowSelection.all(100))
+    with assert_raises():
+        _ = read_table(path, row_selections=rs^)
     remove(path)
 
 

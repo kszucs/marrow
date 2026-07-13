@@ -10,8 +10,8 @@ from marrow.parquet.format import (
     FileMetaData,
     PhysicalType,
     Repetition,
-    CompactReader,
-    CompactWriter,
+    ThriftCompactReader,
+    ThriftCompactWriter,
     Zigzag,
     TC_I32,
     TC_I64,
@@ -32,38 +32,38 @@ def test_zigzag_roundtrip() raises:
 
 
 def test_varint_roundtrip() raises:
-    var w = CompactWriter()
+    var w = ThriftCompactWriter()
     for v in [UInt64(0), 1, 127, 128, 300, 16384, 1_000_000_000]:
         w.write_varint(v)
-    var r = CompactReader(Span(w.buf))
+    var r = ThriftCompactReader(Span(w.buf))
     for v in [UInt64(0), 1, 127, 128, 300, 16384, 1_000_000_000]:
         assert_equal(r.read_varint(), v)
 
 
 def test_int_roundtrip() raises:
-    var w = CompactWriter()
+    var w = ThriftCompactWriter()
     w.write_i32(-12345)
     w.write_i64(9_876_543_210)
     w.write_double(3.14159)
-    var r = CompactReader(Span(w.buf))
+    var r = ThriftCompactReader(Span(w.buf))
     assert_equal(r.read_i32(), Int32(-12345))
     assert_equal(r.read_i64(), Int64(9_876_543_210))
     assert_true(r.read_double() == 3.14159)
 
 
 def test_string_roundtrip() raises:
-    var w = CompactWriter()
+    var w = ThriftCompactWriter()
     w.write_string("hello")
     w.write_string("")
     w.write_string("parquet")
-    var r = CompactReader(Span(w.buf))
+    var r = ThriftCompactReader(Span(w.buf))
     assert_equal(r.read_string(), "hello")
     assert_equal(r.read_string(), "")
     assert_equal(r.read_string(), "parquet")
 
 
 def test_field_header_delta() raises:
-    var w = CompactWriter()
+    var w = ThriftCompactWriter()
     var last = 0
     last = w.write_field_begin(TC_I32, 1, last)
     w.write_i32(10)
@@ -74,7 +74,7 @@ def test_field_header_delta() raises:
     w.write_i64(30)
     w.write_field_stop()
 
-    var r = CompactReader(Span(w.buf))
+    var r = ThriftCompactReader(Span(w.buf))
     var rlast = 0
     var ftype: UInt8
     var fid: Int
@@ -101,7 +101,7 @@ def test_field_header_delta() raises:
 def test_list_and_skip() raises:
     # Build a struct-like stream: field 1 = list<i32>[3], field 2 = binary,
     # then STOP. Then reparse skipping field 1.
-    var w = CompactWriter()
+    var w = ThriftCompactWriter()
     var last = 0
     last = w.write_field_begin(TC_LIST, 1, last)
     w.write_list_begin(TC_I32, 3)
@@ -112,7 +112,7 @@ def test_list_and_skip() raises:
     w.write_string("tail")
     w.write_field_stop()
 
-    var r = CompactReader(Span(w.buf))
+    var r = ThriftCompactReader(Span(w.buf))
     var rlast = 0
     var ftype: UInt8
     var fid: Int

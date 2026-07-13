@@ -622,7 +622,8 @@ struct MapType(DataType, ListLikeType):
     var keys_sorted: Bool
 
     def __init__(out self, var entries: Field, keys_sorted: Bool = False):
-        """From the entries struct field directly (preserves its field names)."""
+        """From the entries struct field directly (preserves its field names).
+        """
         self.entries = OwnedPointer(entries^)
         self.keys_sorted = keys_sorted
 
