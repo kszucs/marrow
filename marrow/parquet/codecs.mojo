@@ -32,6 +32,7 @@ from ..arrays import (
     FixedSizeBinaryArray,
 )
 from .. import dtypes as dt
+from ..utils import read_le, append_le
 from ..views import load_word_le
 from .utils import CompressionLibs
 
@@ -55,24 +56,16 @@ struct Zigzag:
 struct LittleEndian:
     """Little-endian byte, bit, and LEB128-varint reads over a byte span — the
     low-level primitives the codecs below share. Stateless; a namespace of
-    static methods rather than free functions."""
+    static methods rather than free functions. The fixed-width scalar read/write
+    delegate to the shared `read_le`/`append_le` in `marrow.utils`."""
 
     @staticmethod
     def u32(body: Span[UInt8, _], off: Int) -> Int:
-        return (
-            Int(body[off])
-            | (Int(body[off + 1]) << 8)
-            | (Int(body[off + 2]) << 16)
-            | (Int(body[off + 3]) << 24)
-        )
+        return Int(read_le[DType.uint32](body, off))
 
     @staticmethod
     def fixed[dt: DType](body: Span[UInt8, _], off: Int) -> Scalar[dt]:
-        comptime W = size_of[Scalar[dt]]()
-        var arr = InlineArray[UInt8, W](fill=0)
-        for i in range(W):
-            arr[i] = body[off + i]
-        return SIMD[dt, 1].from_bytes[big_endian=False](arr)
+        return read_le[dt](body, off)
 
     @staticmethod
     def varint(data: Span[UInt8, _], pos: Int) raises -> Tuple[UInt64, Int]:
@@ -96,10 +89,7 @@ struct LittleEndian:
 
     @staticmethod
     def put_u32(mut out: List[UInt8], v: Int):
-        out.append(UInt8(v & 0xFF))
-        out.append(UInt8((v >> 8) & 0xFF))
-        out.append(UInt8((v >> 16) & 0xFF))
-        out.append(UInt8((v >> 24) & 0xFF))
+        append_le[DType.uint32](out, UInt32(v))
 
     @staticmethod
     def put_le(mut out: List[UInt8], bits: UInt64, width: Int):

@@ -20,8 +20,42 @@ compiler currently crashes when `ref[_]` is used here (tracked as a TODO).
 from std.utils import Variant
 from std.builtin.rebind import downcast
 from std.os import abort
-from std.sys import has_accelerator, CompilationTarget
+from std.sys import has_accelerator, CompilationTarget, size_of
 from std.sys.info import _accelerator_arch
+
+
+# ---------------------------------------------------------------------------
+# Little-endian scalar byte helpers
+#
+# Read and write fixed-width integers as little-endian bytes, independent of the
+# host byte order: the `from_bytes[big_endian=False]` read and the shift/mask
+# write both assemble LE bytes numerically, so no host byteswap is needed. Shared
+# by the Arrow IPC (FlatBuffers) and Parquet (Thrift / page) serializers.
+# ---------------------------------------------------------------------------
+
+
+def read_le[T: DType](data: Span[UInt8, _], pos: Int) -> Scalar[T]:
+    """Read a `T`-width little-endian scalar at byte `pos`. Not bounds-checked —
+    callers validate `pos` (matches the raw span reads in the hot decode paths).
+    """
+    comptime W = size_of[Scalar[T]]()
+    var arr = InlineArray[UInt8, W](fill=0)
+    for i in range(W):
+        arr[i] = data[pos + i]
+    return SIMD[T, 1].from_bytes[big_endian=False](arr)
+
+
+def write_le[T: DType](mut buf: List[UInt8], pos: Int, val: Scalar[T]):
+    """Write `val` as `T`-width little-endian bytes into `buf` at `pos` (the
+    destination slots must already exist)."""
+    comptime for i in range(size_of[Scalar[T]]()):
+        buf[pos + i] = (val >> Scalar[T](i * 8)).cast[DType.uint8]()
+
+
+def append_le[T: DType](mut buf: List[UInt8], val: Scalar[T]):
+    """Append `val` as `T`-width little-endian bytes to `buf`."""
+    comptime for i in range(size_of[Scalar[T]]()):
+        buf.append((val >> Scalar[T](i * 8)).cast[DType.uint8]())
 
 
 # `_TypePredicateGenerator` was moved from a top-level alias in
