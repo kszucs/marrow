@@ -845,5 +845,40 @@ def test_read_int96_timestamp() raises:
     remove(path)
 
 
+def test_read_float16() raises:
+    # FLOAT16 = FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical -> Arrow halffloat.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var vals = np.array(
+        Python.list(1.5, -2.0, 3.25, 0.0, 100.0), dtype=np.float16
+    )
+    var mask = np.array(Python.list(False, False, True, False, False))
+    var tbl = pa.table(
+        Python.dict(h=pa.array(vals, mask=mask, type=pa.float16()))
+    )
+    var path = String("/tmp/marrow_read_f16.parquet")
+    pq.write_table(tbl, path, use_dictionary=False)
+    assert_equal(
+        String(
+            py=pq.ParquetFile(path)
+            .metadata.row_group(0)
+            .column(0)
+            .physical_type
+        ),
+        "FIXED_LEN_BYTE_ARRAY",
+    )
+
+    var t = read_table(path)
+    var b = t.to_batches()[0].copy()
+    var ch = b.columns[0].copy()
+    ref col = ch.as_float16()
+    assert_true(col[0].value() == Float16(1.5))
+    assert_true(col[1].value() == Float16(-2.0))
+    assert_false(col.is_valid(2))  # masked
+    assert_true(col[4].value() == Float16(100.0))
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

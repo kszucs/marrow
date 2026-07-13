@@ -4,6 +4,20 @@
 
 ### Features
 
+- **float16 read + write** (`marrow.parquet`): the Arrow `float16` (half-float)
+  type now round-trips. Parquet stores it as `FIXED_LEN_BYTE_ARRAY(2)` with the
+  `FLOAT16` logical annotation, and the 2 bytes are exactly the little-endian
+  half bit pattern, so it routes through the existing primitive path (PLAIN,
+  dictionary, flat and nested) with IEEE-ordered, signed-zero-normalised
+  min/max statistics.
+
+- **FIXED_LEN_BYTE_ARRAY DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT read**
+  (`marrow.parquet`): decimal and fixed-size-binary columns encoded with
+  `DELTA_BYTE_ARRAY` or `BYTE_STREAM_SPLIT` (both emitted by PyArrow via
+  `column_encoding`) now read. A single shared `Encoding.decode_flba` decodes the
+  present values into a contiguous width-byte buffer, keeping the PLAIN path a
+  zero-copy read.
+
 - **Nullable-struct write** (`marrow.parquet`): a nullable Arrow struct is now
   emitted as an `OPTIONAL` group so struct-level nulls ride in the definition
   levels (previously structs were always `REQUIRED` and their null-ness was

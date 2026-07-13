@@ -101,6 +101,9 @@ struct ColumnWriter(Movable):
             Plain.encode_primitive[phys=DType.float32](col.as_float32(), body)
         elif vt == dt.float64:
             Plain.encode_primitive[phys=DType.float64](col.as_float64(), body)
+        elif vt == dt.float16:
+            # FLOAT16 -> FIXED_LEN_BYTE_ARRAY(2): the 2 little-endian half bits.
+            Plain.encode_primitive[phys=DType.float16](col.as_float16(), body)
         elif vt == dt.int8:
             Plain.encode_primitive[phys=DType.int32](col.as_int8(), body)
         elif vt == dt.int16:
@@ -243,6 +246,10 @@ struct ColumnWriter(Movable):
         elif vt == dt.float64:
             return Self._dict_prim[dt.Float64Type, DType.float64](
                 col.as_float64(), dict_body, indices
+            )
+        elif vt == dt.float16:
+            return Self._dict_prim[dt.Float16Type, DType.float16](
+                col.as_float16(), dict_body, indices
             )
         elif vt == dt.int8:
             return Self._dict_prim[dt.Int8Type, DType.int32](
@@ -630,6 +637,12 @@ struct ColumnWriter(Movable):
         elif vt == dt.float64:
             return Self._float_stats[width=8](
                 col.as_float64(), min_out, max_out
+            )
+        elif vt == dt.float16:
+            # FLOAT16 bounds follow IEEE float ordering, stored as the 2-byte
+            # little-endian half bit pattern (the FLBA(2) value encoding).
+            return Self._float_stats[width=2](
+                col.as_float16(), min_out, max_out
             )
         elif vt == dt.bool_:
             ref b = col.as_bool()

@@ -593,5 +593,15 @@ def test_write_nullable_struct() raises:
     remove(path)
 
 
+def test_list_float16() raises:
+    # float16 inside a list exercises the leveled (rep/def) primitive path.
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[1.5, 2.5], None, [], [3.0, -4.0, 0.5]]",
+        pa.list_(pa.float16()),
+        "none",
+    )
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

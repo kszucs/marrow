@@ -604,6 +604,12 @@ struct SchemaMapping(Movable):
                 return dt.decimal128(el.precision, el.scale)
             else:
                 return dt.decimal256(el.precision, el.scale)
+        # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bit pattern.
+        if (
+            pt == PhysicalType.FIXED_LEN_BYTE_ARRAY
+            and lt == LogicalType.FLOAT16
+        ):
+            return dt.float16
         # Un-annotated FIXED_LEN_BYTE_ARRAY -> fixed-size binary of that width.
         if pt == PhysicalType.FIXED_LEN_BYTE_ARRAY:
             return dt.fixed_size_binary_(el.type_length)
@@ -945,6 +951,11 @@ struct SchemaMapping(Movable):
                 el.type_length = 32
                 el.precision = dtype.as_decimal256().precision
                 el.scale = dtype.as_decimal256().scale
+        elif dtype.is_float16():
+            # FLOAT16 is a FIXED_LEN_BYTE_ARRAY(2) holding the IEEE half bits.
+            el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
+            el.type_length = 2
+            el.logical_type = LogicalType.FLOAT16
         elif dtype.is_fixed_size_binary():
             el.type = PhysicalType.FIXED_LEN_BYTE_ARRAY
             el.type_length = dtype.as_fixed_size_binary().byte_width

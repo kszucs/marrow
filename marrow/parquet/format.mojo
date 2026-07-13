@@ -382,6 +382,7 @@ struct LogicalType(Equatable, ImplicitlyCopyable, Movable):
     comptime TIME = Self(7)
     comptime TIMESTAMP = Self(8)
     comptime INTEGER = Self(10)
+    comptime FLOAT16 = Self(15)
 
 
 @fieldwise_init

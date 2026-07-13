@@ -1694,6 +1694,12 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._emit_numeric[dt.Float64Type, DType.float64, leveled](
                 codecs, f, md
             )
+        elif vt == dt.float16:
+            # FLOAT16 is physically FIXED_LEN_BYTE_ARRAY(2), but the 2 bytes are
+            # exactly the little-endian half-float — the primitive path reads it.
+            return self._emit_numeric[dt.Float16Type, DType.float16, leveled](
+                codecs, f, md
+            )
         elif vt == dt.int8:
             return self._emit_numeric[dt.Int8Type, DType.int32, leveled](
                 codecs, f, md

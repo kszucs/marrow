@@ -973,5 +973,38 @@ def test_page_split_dictionary() raises:
     remove(path)
 
 
+def test_float16_roundtrip() raises:
+    # float16 is physically FIXED_LEN_BYTE_ARRAY(2) + FLOAT16 logical; verify
+    # both encodings round-trip through marrow write and read, incl. nulls and
+    # the signed-zero-normalised min/max statistic.
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
+    var vals = np.array(
+        Python.list(1.5, 2.5, 3.0, 0.0, 4.5, -0.0), dtype=np.float16
+    )
+    var mask = np.array(Python.list(False, False, False, True, False, False))
+    var want = pa.table(
+        Python.dict(h=pa.array(vals, mask=mask, type=pa.float16()))
+    )
+    for use_dict in [False, True]:
+        var path = String("/tmp/marrow_f16.parquet")
+        write_table(_to_marrow(want), path, use_dictionary=use_dict)
+        # pyarrow reads marrow's file back to a halffloat column
+        var back = pq.read_table(path)
+        assert_true(Bool(back.schema.field(0).type == pa.float16()))
+        assert_true(
+            Bool(back.column(0).to_pylist() == want.column(0).to_pylist())
+        )
+        # marrow reads its own file
+        assert_equal(read_table(path).num_rows(), 6)
+        # statistics: min normalises to -0.0 (0x8000), max is 4.5 (0x4480)
+        var s = pq.ParquetFile(path).metadata.row_group(0).column(0).statistics
+        assert_true(Bool(s.min == Python.evaluate(r"b'\x00\x80'")))
+        assert_true(Bool(s.max == Python.evaluate(r"b'\x80\x44'")))
+        assert_equal(Int(py=s.null_count), 1)
+        remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
