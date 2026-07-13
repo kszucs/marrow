@@ -7,7 +7,7 @@ match the (sorted) data; marrow's own writer emits no page index yet, so those
 chunks read back absent."""
 
 from std.testing import assert_equal, assert_true, assert_false
-from std.python import Python
+from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import (
@@ -21,24 +21,22 @@ from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
 
-def _write_pa(code: String, use_dictionary: Bool = True) raises -> String:
+def _col(arr: PythonObject) raises -> PythonObject:
+    """A single-column ("c") PyArrow table around `arr`."""
+    return Python.import_module("pyarrow").table(Python.dict(c=arr))
+
+
+def _write_pa(tbl: PythonObject, use_dictionary: Bool = True) raises -> String:
     var pq = Python.import_module("pyarrow.parquet")
     var path = String("/tmp/marrow_readstats.parquet")
-    pq.write_table(
-        Python.evaluate(code),
-        path,
-        compression="none",
-        use_dictionary=use_dictionary,
-    )
+    pq.write_table(tbl, path, compression="none", use_dictionary=use_dictionary)
     return path
 
 
 def test_read_metadata_shape() raises:
-    var path = _write_pa(
-        "__import__('pyarrow').table({'a':"
-        " __import__('pyarrow').array(list(range(2500)),"
-        " type=__import__('pyarrow').int64())})"
-    )
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var path = _write_pa(_col(pa.array(np.arange(2500), type=pa.int64())))
     var pq = Python.import_module("pyarrow.parquet")
     var meta = read_metadata(path)
     # matches pyarrow's own view of num_rows and column count
@@ -52,11 +50,10 @@ def test_read_metadata_shape() raises:
 
 
 def test_read_int_minmax() raises:
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array([5, -1, None, 9, -3],"
-            " type=__import__('pyarrow').int64())}, )"
+        _col(
+            pa.array(Python.list(5, -1, Python.none(), 9, -3), type=pa.int64())
         ),
         use_dictionary=False,
     )
@@ -71,12 +68,9 @@ def test_read_int_minmax() raises:
 
 
 def test_read_uint_minmax() raises:
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array([1, 3000000000, 2],"
-            " type=__import__('pyarrow').uint32())})"
-        ),
+        _col(pa.array(Python.list(1, 3000000000, 2), type=pa.uint32())),
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
@@ -88,11 +82,13 @@ def test_read_uint_minmax() raises:
 
 
 def test_read_float_minmax() raises:
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'x':"
-            " __import__('pyarrow').array([1.5, -2.5, 3.25, None],"
-            " type=__import__('pyarrow').float64())})"
+        _col(
+            pa.array(
+                Python.list(1.5, -2.5, 3.25, Python.none()),
+                type=pa.float64(),
+            )
         ),
         use_dictionary=False,
     )
@@ -103,12 +99,9 @@ def test_read_float_minmax() raises:
 
 
 def test_read_string_minmax() raises:
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'s':"
-            " __import__('pyarrow').array(['banana', 'apple', 'cherry',"
-            " None])})"
-        ),
+        _col(pa.array(Python.list("banana", "apple", "cherry", Python.none()))),
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
@@ -121,10 +114,9 @@ def test_read_string_minmax() raises:
 def test_read_stats_multiple_row_groups() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     var tbl = pa.table(
-        Python.dict(
-            x=pa.array(Python.evaluate("list(range(2500))"), type=pa.int64())
-        )
+        Python.dict(x=pa.array(np.arange(2500), type=pa.int64()))
     )
     var path = String("/tmp/marrow_readstats_rg.parquet")
     pq.write_table(
@@ -144,13 +136,16 @@ def test_read_stats_multiple_row_groups() raises:
 def test_roundtrip_own_stats() raises:
     # marrow writes -> marrow reads its own min/max back (closes the loop with
     # the PyArrow-oracle write tests in test_writer.mojo)
-    var caps = Python.evaluate(
-        "__import__('pyarrow').table({'x':"
-        " __import__('pyarrow').array([7, 2, None, 11],"
-        " type=__import__('pyarrow').int64()), 's':"
-        " __import__('pyarrow').array(['m', 'a', 'z', None])})"
-    ).__arrow_c_stream__(Python.none())
-    var t = CArrowArrayStream.from_pycapsule(caps).to_table()
+    var pa = Python.import_module("pyarrow")
+    var tbl = pa.table(
+        Python.dict(
+            x=pa.array(Python.list(7, 2, Python.none(), 11), type=pa.int64()),
+            s=pa.array(Python.list("m", "a", "z", Python.none())),
+        )
+    )
+    var t = CArrowArrayStream.from_pycapsule(
+        tbl.__arrow_c_stream__(Python.none())
+    ).to_table()
     var path = String("/tmp/marrow_stats_rt.parquet")
     write_table(t, path)
 
@@ -178,10 +173,9 @@ def _le_i64(b: List[UInt8]) -> Int:
 def test_page_index_sorted_int() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     var tbl = pa.table(
-        Python.dict(
-            x=pa.array(Python.evaluate("list(range(10000))"), type=pa.int64())
-        )
+        Python.dict(x=pa.array(np.arange(10000), type=pa.int64()))
     )
     var path = String("/tmp/marrow_pageidx.parquet")
     # tiny pages -> many pages in one chunk; page index on
@@ -232,12 +226,13 @@ def test_page_index_sorted_int() raises:
 
 def test_marrow_file_has_page_index() raises:
     # marrow's writer now emits an OffsetIndex + ColumnIndex per column chunk
-    var caps = Python.evaluate(
-        "__import__('pyarrow').table({'x':"
-        " __import__('pyarrow').array([5, 1, None, 9, 3],"
-        " type=__import__('pyarrow').int64())})"
-    ).__arrow_c_stream__(Python.none())
-    var t = CArrowArrayStream.from_pycapsule(caps).to_table()
+    var pa = Python.import_module("pyarrow")
+    var tbl = _col(
+        pa.array(Python.list(5, 1, Python.none(), 9, 3), type=pa.int64())
+    )
+    var t = CArrowArrayStream.from_pycapsule(
+        tbl.__arrow_c_stream__(Python.none())
+    ).to_table()
     var path = String("/tmp/marrow_pageidx.parquet")
     write_table(t, path)
     var pi = read_page_index(path)
@@ -277,11 +272,13 @@ def test_marrow_page_index_pyarrow_reads() raises:
 
 def test_read_temporal_minmax() raises:
     # timestamp (INT64) + date32 (INT32) bounds decode to typed scalars
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'t':"
-            " __import__('pyarrow').array([10, 3, 7, None, 1],"
-            " type=__import__('pyarrow').timestamp('us'))})"
+        _col(
+            pa.array(
+                Python.list(10, 3, 7, Python.none(), 1),
+                type=pa.timestamp("us"),
+            )
         ),
         use_dictionary=False,
     )
@@ -292,11 +289,7 @@ def test_read_temporal_minmax() raises:
     remove(path)
 
     var dpath = _write_pa(
-        (
-            "__import__('pyarrow').table({'d':"
-            " __import__('pyarrow').array([10, 3, 7],"
-            " type=__import__('pyarrow').date32())})"
-        ),
+        _col(pa.array(Python.list(10, 3, 7), type=pa.date32())),
         use_dictionary=False,
     )
     ref ds = read_statistics(dpath)[0][0]
@@ -308,11 +301,12 @@ def test_read_temporal_minmax() raises:
 def test_read_decimal_minmax() raises:
     # decimal128 (big-endian FIXED_LEN_BYTE_ARRAY) bounds decode to the unscaled
     # integer (-3.25 -> -325, 2.00 -> 200 at scale 2)
+    var pa = Python.import_module("pyarrow")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'d':"
-            " __import__('pyarrow').array(['1.50','-3.25','2.00']).cast("
-            "__import__('pyarrow').decimal128(5, 2))})"
+        _col(
+            pa.array(Python.list("1.50", "-3.25", "2.00")).cast(
+                pa.decimal128(5, 2)
+            )
         ),
         use_dictionary=False,
     )
@@ -325,12 +319,11 @@ def test_read_decimal_minmax() raises:
 
 def test_read_fixed_size_binary_minmax() raises:
     # fixed_size_binary bounds decode to a FixedSizeBinaryScalar of raw bytes
+    var pa = Python.import_module("pyarrow")
+    var np = Python.import_module("numpy")
+    var vals = np.array(Python.list("yy", "aa", "mm")).astype("S2")
     var path = _write_pa(
-        (
-            "__import__('pyarrow').table({'f':"
-            " __import__('pyarrow').array([b'yy', b'aa', b'mm'],"
-            " type=__import__('pyarrow').binary(2))})"
-        ),
+        _col(pa.array(vals, type=pa.binary(2))),
         use_dictionary=False,
     )
     ref cs = read_statistics(path)[0][0]
