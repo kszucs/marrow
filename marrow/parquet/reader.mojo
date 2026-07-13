@@ -27,38 +27,15 @@ from ..builders import (
 )
 from ..schema import Schema
 from ..tabular import Table, RecordBatch
-from ..scalars import (
-    AnyScalar,
-    BoolScalar,
-    StringScalar,
-    Int8Scalar,
-    Int16Scalar,
-    Int32Scalar,
-    Int64Scalar,
-    UInt8Scalar,
-    UInt16Scalar,
-    UInt32Scalar,
-    UInt64Scalar,
-    Float16Scalar,
-    Float32Scalar,
-    Float64Scalar,
-    Date32Scalar,
-    Time32Scalar,
-    Time64Scalar,
-    TimestampScalar,
-    Decimal32Scalar,
-    Decimal64Scalar,
-    Decimal128Scalar,
-    Decimal256Scalar,
-    FixedSizeBinaryScalar,
-)
+from ..scalars import AnyScalar
 from .. import dtypes as dt
 
 from .utils import CompressionLibs
-from .codecs import Encoding, Rle, Dictionary, Compression
+from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
+from .statistics import Statistics
 from .format import (
     FileMetaData,
     ThriftCompactReader,
@@ -464,22 +441,6 @@ def _finish_primitive(
     )
 
 
-def _decode_be_flba[
-    native: DType
-](span: Span[UInt8, _], off: Int, width: Int) -> Scalar[native]:
-    """Decode a big-endian two's-complement FIXED_LEN_BYTE_ARRAY value at `off`.
-    Sign-extended from `width` bytes to the native width — the shared decimal
-    decode for the flat and leveled paths."""
-    comptime FULL = size_of[Scalar[native]]()
-    var arr = InlineArray[UInt8, FULL](fill=0)
-    if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
-        for i in range(FULL):
-            arr[i] = 0xFF
-    for i in range(width):
-        arr[FULL - width + i] = span[off + i]
-    return SIMD[native, 1].from_bytes[big_endian=True](arr)
-
-
 comptime _JULIAN_DAY_OF_EPOCH = 2440588  # Julian day number of 1970-01-01
 comptime _NANOS_PER_DAY = 86_400_000_000_000
 
@@ -846,7 +807,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
         """Big-endian, sign-extended from `width` bytes to the native width."""
-        return _decode_be_flba[Self.native](span, off, self.width)
+        return Plain.decode_be_flba[Self.native](span, off, self.width)
 
     def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
         var vspan = page.values()
@@ -1390,7 +1351,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         @parameter
         def handle_dict(pg: Page) raises:
             for i in range(pg.num_values):
-                dict.append(_decode_be_flba[native](pg.body, i * width, width))
+                dict.append(
+                    Plain.decode_be_flba[native](pg.body, i * width, width)
+                )
 
         @parameter
         def decode_present(pg: Page) raises:
@@ -1403,7 +1366,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             elif pg.is_plain():
                 for i in range(pg.num_present):
                     present.append(
-                        _decode_be_flba[native](vspan, i * width, width)
+                        Plain.decode_be_flba[native](vspan, i * width, width)
                     )
             else:
                 var bytes = pg.encoding.decode_flba(
@@ -1411,7 +1374,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                 )
                 for i in range(pg.num_present):
                     present.append(
-                        _decode_be_flba[native](Span(bytes), i * width, width)
+                        Plain.decode_be_flba[native](
+                            Span(bytes), i * width, width
+                        )
                     )
 
         @parameter
@@ -1920,17 +1885,12 @@ struct ParquetFile(Movable):
         for ref rg in self._meta.row_groups:
             var row = List[ColumnStatistics]()
             for ci in range(len(rg.columns)):
-                ref cm = rg.columns[ci].meta_data
-                var cs = ColumnStatistics()
-                cs.null_count = cm.null_count
-                if cm.has_min_max:
-                    ref dtype = self._mapping.leaves[ci].dtype
-                    var mn = _decode_stat(dtype, cm.min_value)
-                    var mx = _decode_stat(dtype, cm.max_value)
-                    if Bool(mn) and Bool(mx):
-                        cs.min = mn^
-                        cs.max = mx^
-                row.append(cs^)
+                row.append(
+                    ColumnStatistics.from_metadata(
+                        self._mapping.leaves[ci].dtype,
+                        rg.columns[ci].meta_data,
+                    )
+                )
             out.append(row^)
         return out^
 
@@ -2002,9 +1962,9 @@ struct ParquetFile(Movable):
                         # an all-null page (or a missing bound) prunes nothing
                         if not (p < len(cix.null_pages) and cix.null_pages[p]):
                             if p < len(cix.min_values):
-                                mn = _decode_stat(dtype, cix.min_values[p])
+                                mn = Statistics.decode(dtype, cix.min_values[p])
                             if p < len(cix.max_values):
-                                mx = _decode_stat(dtype, cix.max_values[p])
+                                mx = Statistics.decode(dtype, cix.max_values[p])
                         pages.append(PageBounds(nxt - first, mn^, mx^))
                 per_col.append(pages^)
             out.append(per_col^)
@@ -2180,95 +2140,19 @@ struct ColumnStatistics(Copyable, Movable):
         self.min = None
         self.max = None
 
-
-def _decode_stat(
-    dtype: dt.AnyDataType, b: List[UInt8]
-) raises -> Optional[AnyScalar]:
-    """Decode one PLAIN-encoded min/max value to a typed scalar, mirroring the
-    writer's encoding (`LittleEndian.fixed` reads `size_of[dt]` LE bytes and
-    reinterprets — the inverse of the writer's byte emission). Returns None for
-    types this reader does not yet decode (raw bytes stay in `read_metadata`).
-    """
-    var s = Span(b)
-    if dtype == dt.int8:
-        return Int8Scalar(
-            LittleEndian.fixed[DType.int32](s, 0).cast[DType.int8]()
-        ).to_any()
-    elif dtype == dt.int16:
-        return Int16Scalar(
-            LittleEndian.fixed[DType.int32](s, 0).cast[DType.int16]()
-        ).to_any()
-    elif dtype == dt.int32:
-        return Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)).to_any()
-    elif dtype == dt.uint8:
-        return UInt8Scalar(
-            LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint8]()
-        ).to_any()
-    elif dtype == dt.uint16:
-        return UInt16Scalar(
-            LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint16]()
-        ).to_any()
-    elif dtype == dt.uint32:
-        return UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)).to_any()
-    elif dtype == dt.int64:
-        return Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)).to_any()
-    elif dtype == dt.uint64:
-        return UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)).to_any()
-    elif dtype == dt.float32:
-        return Float32Scalar(LittleEndian.fixed[DType.float32](s, 0)).to_any()
-    elif dtype == dt.float64:
-        return Float64Scalar(LittleEndian.fixed[DType.float64](s, 0)).to_any()
-    elif dtype == dt.float16:
-        return Float16Scalar(LittleEndian.fixed[DType.float16](s, 0)).to_any()
-    elif dtype == dt.bool_:
-        return BoolScalar(len(b) > 0 and b[0] != 0).to_any()
-    elif dtype.is_string():
-        return StringScalar(
-            String(StringSlice(unsafe_from_utf8=Span(b)))
-        ).to_any()
-    # Temporal / small-decimal: physical INT32 / INT64, carrying the leaf's
-    # unit / precision-scale so the scalar retags to the Arrow type.
-    elif dtype.is_date32():
-        return Date32Scalar(
-            LittleEndian.fixed[DType.int32](s, 0), dt.date32()
-        ).to_any()
-    elif dtype.is_time32():
-        return Time32Scalar(
-            LittleEndian.fixed[DType.int32](s, 0), dtype.as_time32()
-        ).to_any()
-    elif dtype.is_time64():
-        return Time64Scalar(
-            LittleEndian.fixed[DType.int64](s, 0), dtype.as_time64()
-        ).to_any()
-    elif dtype.is_timestamp():
-        return TimestampScalar(
-            LittleEndian.fixed[DType.int64](s, 0), dtype.as_timestamp()
-        ).to_any()
-    elif dtype.is_decimal32():
-        return Decimal32Scalar(
-            LittleEndian.fixed[DType.int32](s, 0), dtype.as_decimal32()
-        ).to_any()
-    elif dtype.is_decimal64():
-        return Decimal64Scalar(
-            LittleEndian.fixed[DType.int64](s, 0), dtype.as_decimal64()
-        ).to_any()
-    # decimal128/256: big-endian two's-complement FIXED_LEN_BYTE_ARRAY.
-    elif dtype.is_decimal128():
-        return Decimal128Scalar(
-            _decode_be_flba[DType.int128](s, 0, len(b)), dtype.as_decimal128()
-        ).to_any()
-    elif dtype.is_decimal256():
-        return Decimal256Scalar(
-            _decode_be_flba[DType.int256](s, 0, len(b)), dtype.as_decimal256()
-        ).to_any()
-    elif dtype.is_fixed_size_binary():
-        return FixedSizeBinaryScalar(
-            List[UInt8](s), dtype.as_fixed_size_binary().byte_width
-        ).to_any()
-    else:
-        # binary / large_binary have no scalar type; the raw min/max bytes are
-        # still available via `read_metadata`.
-        return None
+    @staticmethod
+    def from_metadata(dtype: dt.AnyDataType, cm: ColumnMetaData) raises -> Self:
+        """Decode a column chunk's `ColumnMetaData` statistics: `null_count` plus
+        the min/max bounds as typed scalars (kept only when both decode)."""
+        var cs = Self()
+        cs.null_count = cm.null_count
+        if cm.has_min_max:
+            var mn = Statistics.decode(dtype, cm.min_value)
+            var mx = Statistics.decode(dtype, cm.max_value)
+            if Bool(mn) and Bool(mx):
+                cs.min = mn^
+                cs.max = mx^
+        return cs^
 
 
 def read_statistics(path: String) raises -> List[List[ColumnStatistics]]:

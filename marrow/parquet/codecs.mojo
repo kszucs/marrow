@@ -473,6 +473,22 @@ struct Plain:
     """
 
     @staticmethod
+    def decode_be_flba[
+        native: DType
+    ](span: Span[UInt8, _], off: Int, width: Int) -> Scalar[native]:
+        """Decode a big-endian two's-complement FIXED_LEN_BYTE_ARRAY value at
+        `off`, sign-extended from `width` bytes to the native width — the DECIMAL
+        FLBA decode shared by the flat, leveled, and statistics read paths."""
+        comptime FULL = size_of[Scalar[native]]()
+        var arr = InlineArray[UInt8, FULL](fill=0)
+        if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
+            for i in range(FULL):
+                arr[i] = 0xFF
+        for i in range(width):
+            arr[FULL - width + i] = span[off + i]
+        return SIMD[native, 1].from_bytes[big_endian=True](arr)
+
+    @staticmethod
     def encode_primitive[
         store: dt.PrimitiveType, phys: DType, big_endian: Bool = False
     ](arr: PrimitiveArray[store], mut out: List[UInt8]) raises:
