@@ -335,6 +335,44 @@ def test_list_of_byte_stream_split_float() raises:
     )
 
 
+def test_list_of_timestamp() raises:
+    # temporal list element — decodes as int64 storage then retags to timestamp
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[1, 2], [3], None, [4, 5, 6]]",
+        pa.list_(pa.timestamp("us")),
+        "snappy",
+    )
+
+
+def test_list_of_date32() raises:
+    var pa = Python.import_module("pyarrow")
+    _check("[[10, 3], [7], None, []]", pa.list_(pa.date32()), "none")
+
+
+def test_list_of_decimal128() raises:
+    # FIXED_LEN_BYTE_ARRAY decimal list element (big-endian two's complement)
+    var pa = Python.import_module("pyarrow")
+    _check(
+        (
+            "[[__import__('decimal').Decimal('1.50'),"
+            " __import__('decimal').Decimal('-2.50')], None,"
+            " [__import__('decimal').Decimal('3.50')]]"
+        ),
+        pa.list_(pa.decimal128(5, 2)),
+        "snappy",
+    )
+
+
+def test_list_of_fixed_size_binary() raises:
+    var pa = Python.import_module("pyarrow")
+    _check(
+        "[[b'ab', b'cd'], [b'ef'], None, []]",
+        pa.list_(pa.binary(2)),
+        "none",
+    )
+
+
 def test_list_across_many_pages() raises:
     # a list column whose leaf/levels span many data pages within one chunk;
     # the reader must stitch rep/def levels across page boundaries.

@@ -4,6 +4,15 @@
 
 ### Features
 
+- **Nested temporal / decimal / fixed-size-binary read** (`marrow.parquet`): a
+  list or map element of a temporal type (`date32`/`time32`/`timestamp`/
+  `time64`/`date64`/`duration`), `decimal128`/`decimal256`, or
+  `fixed_size_binary` now decodes — previously only primitive/string/binary
+  leaves worked under a repeated group and anything else raised `unsupported
+  list element type`. The leveled drives grow a builder and retag the int32/
+  int64 storage to the temporal Arrow type (decimals carry their precision/scale
+  directly), so nested and flat paths now cover the same type set.
+
 - **Full compression codec coverage** (`marrow.parquet`): the writer now emits
   `GZIP` (zlib deflate, windowBits 31) and `BROTLI` (via `libbrotlienc`), and
   the reader decodes `BROTLI` (via `libbrotlidec`) — closing the read/write

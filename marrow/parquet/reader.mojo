@@ -447,6 +447,31 @@ def _finish_primitive(
     )
 
 
+def _decode_be_flba[
+    native: DType
+](span: Span[UInt8, _], off: Int, width: Int) -> Scalar[native]:
+    """Decode a big-endian two's-complement FIXED_LEN_BYTE_ARRAY value at `off`.
+    Sign-extended from `width` bytes to the native width — the shared decimal
+    decode for the flat and leveled paths."""
+    comptime FULL = size_of[Scalar[native]]()
+    var arr = InlineArray[UInt8, FULL](fill=0)
+    if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
+        for i in range(FULL):
+            arr[i] = 0xFF
+    for i in range(width):
+        arr[FULL - width + i] = span[off + i]
+    return SIMD[native, 1].from_bytes[big_endian=True](arr)
+
+
+def _retag(var arr: AnyArray, var dtype: dt.AnyDataType) raises -> AnyArray:
+    """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
+    Used to give a leveled temporal column its Arrow type (the growing builder
+    produces the int32/int64 storage type)."""
+    var d = arr.to_data()
+    d.dtype = dtype^
+    return AnyArray.from_data(d^)
+
+
 trait LeafBuilder(ImplicitlyDeletable, Movable):
     """Accumulates the values of a column chunk, page by page, into an array."""
 
@@ -754,13 +779,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
         """Big-endian, sign-extended from `width` bytes to the native width."""
-        var arr = InlineArray[UInt8, Self.FULL](fill=0)
-        if (span[off] & 0x80) != 0:  # negative -> sign-extend with 0xFF
-            for i in range(Self.FULL):
-                arr[i] = 0xFF
-        for i in range(self.width):
-            arr[Self.FULL - self.width + i] = span[off + i]
-        return SIMD[Self.native, 1].from_bytes[big_endian=True](arr)
+        return _decode_be_flba[Self.native](span, off, self.width)
 
     def _ensure_bitmap(mut self):
         if not self.has_bitmap:
@@ -1084,8 +1103,15 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     def _drive_primitive[
         T: dt.NumericType, phys: DType
     ](
-        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+        mut self,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+        var retag_to: Optional[dt.AnyDataType] = None,
     ) raises -> DecodedLeaf:
+        """Leveled primitive decode. `retag_to`, when set, reinterprets the
+        int32/int64 storage array under a temporal Arrow type (the leaf's dtype).
+        """
         var builder = PrimitiveBuilder[T](self.num_rows)
         var dict = List[Scalar[T.native]]()
         var present = List[Scalar[T.native]]()
@@ -1116,7 +1142,9 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         self._drive_leveled[
             handle_dict, decode_present, place_present, place_null
         ](codecs, floor, max_def, rep_out, def_out)
-        var arr = builder.finish()
+        var arr: AnyArray = builder.finish()
+        if retag_to:
+            arr = _retag(arr^, retag_to.take())
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
     def _drive_bytes[
@@ -1192,13 +1220,120 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         var arr = builder.finish()
         return DecodedLeaf(arr^, rep_out^, def_out^)
 
+    def _drive_decimal[
+        T: dt.PrimitiveType
+    ](
+        mut self,
+        dtype_inst: T,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+    ) raises -> DecodedLeaf:
+        """Decode leveled FIXED_LEN_BYTE_ARRAY decimals (list/map elements).
+        Big-endian two's-complement values, PLAIN or RLE_DICTIONARY;
+        `dtype_inst` carries the leaf's precision/scale so the builder yields the
+        right decimal type."""
+        comptime native = T.native
+        var width = self.pages.leaf.type_length
+        var builder = PrimitiveBuilder[T](dtype_inst.copy(), self.num_rows)
+        var dict = List[Scalar[native]]()
+        var present = List[Scalar[native]]()
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            for i in range(pg.num_values):
+                dict.append(_decode_be_flba[native](pg.body, i * width, width))
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            present.clear()
+            var vspan = pg.values()
+            if pg.is_dictionary():
+                var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+                for i in range(pg.num_present):
+                    present.append(dict[Int(idx[i])])
+            elif pg.is_plain():
+                for i in range(pg.num_present):
+                    present.append(_decode_be_flba[native](vspan, i * width, width))
+            else:
+                raise Error(
+                    "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding"
+                )
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(present[vi])
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
+        var arr = builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
+    def _drive_fsb(
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        """Leveled FIXED_LEN_BYTE_ARRAY raw bytes (list/map elements) ->
+        FixedSizeBinaryArray, PLAIN or RLE_DICTIONARY."""
+        var width = self.pages.leaf.type_length
+        var builder = FixedSizeBinaryBuilder(width, self.num_rows)
+        var dict_body = List[UInt8]()
+        var present = List[List[UInt8]]()
+        var rep_out = List[Int32]()
+        var def_out = List[Int32]()
+
+        @parameter
+        def handle_dict(pg: Page) raises:
+            dict_body.clear()
+            dict_body.extend(pg.body)
+
+        @parameter
+        def decode_present(pg: Page) raises:
+            present.clear()
+            var vspan = pg.values()
+            if pg.is_dictionary():
+                var idx = Rle.decode(vspan[1:], Int(vspan[0]), pg.num_present)
+                for i in range(pg.num_present):
+                    var o = Int(idx[i]) * width
+                    present.append(List[UInt8](Span(dict_body)[o : o + width]))
+            elif pg.is_plain():
+                for i in range(pg.num_present):
+                    var o = i * width
+                    present.append(List[UInt8](vspan[o : o + width]))
+            else:
+                raise Error(
+                    "parquet: unsupported FIXED_LEN_BYTE_ARRAY encoding"
+                )
+
+        @parameter
+        def place_present(vi: Int) raises:
+            builder.append(Span(present[vi]))
+
+        @parameter
+        def place_null() raises:
+            builder.append_null()
+
+        self._drive_leveled[
+            handle_dict, decode_present, place_present, place_null
+        ](codecs, floor, max_def, rep_out, def_out)
+        var arr = builder.finish()
+        return DecodedLeaf(arr^, rep_out^, def_out^)
+
     # -----------------------------------------------------------------------
     # Unified dispatch — one arrow-dtype -> (store, phys) decision table shared by
     # the flat and leveled paths. `leveled` is a compile-time flag: the emit
     # helpers pick the flat build (fixed-size `LeafBuilder`) or the leveled drive
     # (`_drive_*`), and each specialization DCEs the other branch, so the closed
-    # per-dtype dispatch is preserved. Temporal types are flat-only (they map to
-    # the same int32/int64 storage), guarded behind `comptime if not leveled`.
+    # per-dtype dispatch is preserved. Temporal, decimal, and fixed-size-binary
+    # work on both paths — the leveled drive grows a builder and, for temporal
+    # (int32/int64 storage retagged) and decimal (precision/scale-carrying
+    # builder), yields the leaf's Arrow type.
     # -----------------------------------------------------------------------
 
     def _emit_numeric[
@@ -1243,19 +1378,58 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             )
             return self._flat_leaf(arr^)
 
-    def _emit_decimal[
-        native: DType
-    ](mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
-        var arr = self._build(
-            DecimalLeafBuilder[native](self.num_rows, self.pages.leaf), codecs
-        )
-        return self._flat_leaf(arr^)
+    def _emit_temporal[
+        T: dt.NumericType, phys: DType, leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        """Temporal columns are physically int32/int64; the flat builder already
+        carries the leaf's Arrow dtype, while the leveled drive produces the
+        int32/int64 storage and is retagged to the temporal type."""
+        comptime if leveled:
+            return self._drive_primitive[T, phys](
+                codecs, floor, max_def, self.pages.leaf.dtype.copy()
+            )
+        else:
+            var arr = self._build(
+                PrimitiveLeafBuilder[T.native, phys](
+                    self.num_rows, self.pages.leaf
+                ),
+                codecs,
+            )
+            return self._flat_leaf(arr^)
 
-    def _emit_fsb(mut self, mut codecs: CompressionLibs) raises -> DecodedLeaf:
-        var arr = self._build(
-            FixedSizeBinaryLeafBuilder(self.num_rows, self.pages.leaf), codecs
-        )
-        return self._flat_leaf(arr^)
+    def _emit_decimal[
+        T: dt.PrimitiveType, leveled: Bool
+    ](
+        mut self,
+        dtype_inst: T,
+        mut codecs: CompressionLibs,
+        floor: Int,
+        max_def: Int,
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_decimal[T](dtype_inst, codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                DecimalLeafBuilder[T.native](self.num_rows, self.pages.leaf),
+                codecs,
+            )
+            return self._flat_leaf(arr^)
+
+    def _emit_fsb[
+        leveled: Bool
+    ](
+        mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
+    ) raises -> DecodedLeaf:
+        comptime if leveled:
+            return self._drive_fsb(codecs, floor, max_def)
+        else:
+            var arr = self._build(
+                FixedSizeBinaryLeafBuilder(self.num_rows, self.pages.leaf),
+                codecs,
+            )
+            return self._flat_leaf(arr^)
 
     def _dispatch[
         leveled: Bool
@@ -1318,32 +1492,35 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
         elif vt.is_large_binary():
             return self._emit_bytes[dt.LargeBinaryType, leveled](codecs, f, md)
 
-        comptime if not leveled:
-            # temporal types are physically int32/int64 and appear only on the
-            # flat path (page skipping is a flat-path optimisation).
-            if vt.is_date32() or vt.is_time32():
-                return self._emit_numeric[dt.Int32Type, DType.int32, leveled](
-                    codecs, f, md
-                )
-            elif (
-                vt.is_timestamp()
-                or vt.is_time64()
-                or vt.is_date64()
-                or vt.is_duration()
-            ):
-                return self._emit_numeric[dt.Int64Type, DType.int64, leveled](
-                    codecs, f, md
-                )
-            elif vt.is_decimal128():
-                return self._emit_decimal[DType.int128](codecs)
-            elif vt.is_decimal256():
-                return self._emit_decimal[DType.int256](codecs)
-            elif vt.is_fixed_size_binary():
-                return self._emit_fsb(codecs)
-            else:
-                raise Error("parquet: unsupported column type " + String(vt))
+        # temporal / decimal / fixed-size-binary — physically int32/int64 or
+        # FIXED_LEN_BYTE_ARRAY. These work on both the flat and leveled (list/map
+        # element) paths; the leveled drives grow a builder and, for temporal and
+        # decimal, retag the storage array to the leaf's Arrow type.
+        elif vt.is_date32() or vt.is_time32():
+            return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                codecs, f, md
+            )
+        elif (
+            vt.is_timestamp()
+            or vt.is_time64()
+            or vt.is_date64()
+            or vt.is_duration()
+        ):
+            return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                codecs, f, md
+            )
+        elif vt.is_decimal128():
+            return self._emit_decimal[dt.Decimal128Type, leveled](
+                vt.as_decimal128().copy(), codecs, f, md
+            )
+        elif vt.is_decimal256():
+            return self._emit_decimal[dt.Decimal256Type, leveled](
+                vt.as_decimal256().copy(), codecs, f, md
+            )
+        elif vt.is_fixed_size_binary():
+            return self._emit_fsb[leveled](codecs, f, md)
         else:
-            raise Error("parquet: unsupported list element type " + String(vt))
+            raise Error("parquet: unsupported column type " + String(vt))
 
 
 # ---------------------------------------------------------------------------
