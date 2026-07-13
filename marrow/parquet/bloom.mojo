@@ -191,9 +191,6 @@ struct SplitBlockBloomFilter(Movable):
             LittleEndian.put_le(out, UInt64(w), 4)
         return out^
 
-    def num_bytes(self) -> Int:
-        return self.num_blocks * _BYTES_PER_BLOCK
-
     @always_inline
     def _block_of(self, hash: UInt64) -> Int:
         # the block index from the hash's high 32 bits (multiply-shift)

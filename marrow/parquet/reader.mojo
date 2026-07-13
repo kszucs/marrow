@@ -8,8 +8,6 @@ Predicate pushdown skips whole row groups (`row_groups`) and individual pages
 `LeafBuilder` and its concrete builders, and `ColumnReader` — lives here too, so
 this module is the entire deserialization layer; the metadata / statistics /
 page-index readers reuse the same footer decode without touching column data.
-Milestone: flat columns + struct nesting; primitives, string/binary; PLAIN and
-dictionary encodings; v1/v2 pages.
 """
 
 from std.ffi import external_call
@@ -1741,12 +1739,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
                 codecs, f, md
             )
-        elif (
-            vt.is_timestamp()
-            or vt.is_time64()
-            or vt.is_date64()
-            or vt.is_duration()
-        ):
+        elif vt.is_timestamp() or vt.is_time64():
             return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
                 codecs, f, md
             )

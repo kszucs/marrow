@@ -134,10 +134,6 @@ struct ColumnWriter(Movable):
             Plain.encode_primitive[phys=DType.int64](col.as_time64(), body)
         elif vt.is_timestamp():
             Plain.encode_primitive[phys=DType.int64](col.as_timestamp(), body)
-        elif vt.is_date64():
-            Plain.encode_primitive[phys=DType.int64](col.as_date64(), body)
-        elif vt.is_duration():
-            Plain.encode_primitive[phys=DType.int64](col.as_duration(), body)
         elif vt.is_decimal32():
             Plain.encode_primitive[phys=DType.int32](col.as_decimal32(), body)
         elif vt.is_decimal64():
@@ -382,10 +378,6 @@ struct ColumnWriter(Movable):
             Self._hash_prim[phys=DType.int64](col.as_time64(), hashes)
         elif vt.is_timestamp():
             Self._hash_prim[phys=DType.int64](col.as_timestamp(), hashes)
-        elif vt.is_date64():
-            Self._hash_prim[phys=DType.int64](col.as_date64(), hashes)
-        elif vt.is_duration():
-            Self._hash_prim[phys=DType.int64](col.as_duration(), hashes)
         elif vt.is_decimal32():
             Self._hash_prim[phys=DType.int32](col.as_decimal32(), hashes)
         elif vt.is_decimal64():
@@ -630,6 +622,26 @@ struct ColumnWriter(Movable):
         return True
 
     @staticmethod
+    @staticmethod
+    def _update_minmax(
+        v: Span[UInt8, _],
+        mut lo: List[UInt8],
+        mut hi: List[UInt8],
+        mut seen: Bool,
+    ):
+        """Fold one present value `v` into the running byte-wise `lo`/`hi`
+        bounds (unsigned lexicographic, the BYTE_ARRAY / FIXED_LEN ordering)."""
+        if not seen:
+            lo = List[UInt8](v)
+            hi = List[UInt8](v)
+            seen = True
+        else:
+            if LittleEndian.bytes_less(v, Span(lo)):
+                lo = List[UInt8](v)
+            if LittleEndian.bytes_less(Span(hi), v):
+                hi = List[UInt8](v)
+
+    @staticmethod
     def _bytes_stats[
         BT: dt.BinaryLikeType
     ](
@@ -646,16 +658,9 @@ struct ColumnWriter(Movable):
         var hi = List[UInt8]()
         for i in range(arr.length):
             if arr.is_valid(i):
-                var v = arr.unsafe_get(UInt(i)).as_bytes()
-                if not seen:
-                    lo = List[UInt8](v)
-                    hi = List[UInt8](v)
-                    seen = True
-                else:
-                    if LittleEndian.bytes_less(v, Span(lo)):
-                        lo = List[UInt8](v)
-                    if LittleEndian.bytes_less(Span(hi), v):
-                        hi = List[UInt8](v)
+                Self._update_minmax(
+                    arr.unsafe_get(UInt(i)).as_bytes(), lo, hi, seen
+                )
         if not seen or len(lo) > 4096 or len(hi) > 4096:
             return False
         min_out = lo^
@@ -736,10 +741,6 @@ struct ColumnWriter(Movable):
             )
         elif vt.is_time64():
             return Self._int_stats[width=8](col.as_time64(), min_out, max_out)
-        elif vt.is_date64():
-            return Self._int_stats[width=8](col.as_date64(), min_out, max_out)
-        elif vt.is_duration():
-            return Self._int_stats[width=8](col.as_duration(), min_out, max_out)
         elif vt.is_fixed_size_binary():
             ref fsb = col.as_fixed_size_binary()
             var seen = False
@@ -747,16 +748,7 @@ struct ColumnWriter(Movable):
             var hi = List[UInt8]()
             for i in range(len(fsb)):
                 if fsb.is_valid(i):
-                    var v = fsb[i].value().copy()
-                    if not seen:
-                        lo = v.copy()
-                        hi = v.copy()
-                        seen = True
-                    else:
-                        if LittleEndian.bytes_less(Span(v), Span(lo)):
-                            lo = v.copy()
-                        if LittleEndian.bytes_less(Span(hi), Span(v)):
-                            hi = v.copy()
+                    Self._update_minmax(Span(fsb[i].value()), lo, hi, seen)
             if not seen:
                 return False
             min_out = lo^

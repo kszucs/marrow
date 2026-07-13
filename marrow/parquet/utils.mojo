@@ -202,6 +202,17 @@ struct CompressionLibs(Movable):
 
     # --- compress: return the codec's output bytes ---
 
+    @staticmethod
+    def _take(
+        dst: UnsafePointer[UInt8, MutUntrackedOrigin], n: Int
+    ) -> List[UInt8]:
+        """Copy `n` bytes out of a freshly-`alloc`'d compression scratch buffer,
+        free the buffer, and return an owned List — the shared tail of every
+        `*_compress` method."""
+        var out = List[UInt8](Span(ptr=dst, length=n))
+        dst.free()
+        return out^
+
     def zstd_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         self._ensure_zstd()
         var bound = self._zstd.value().call["ZSTD_compressBound", Int](len(src))
@@ -209,11 +220,7 @@ struct CompressionLibs(Movable):
         var n = self._zstd.value().call["ZSTD_compress", Int](
             dst, bound, src.unsafe_ptr(), len(src), Int32(1)
         )
-        var out = List[UInt8]()
-        for i in range(n):
-            out.append(dst[i])
-        dst.free()
-        return out^
+        return Self._take(dst, n)
 
     def snappy_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         self._ensure_snappy()
@@ -227,12 +234,8 @@ struct CompressionLibs(Movable):
             src.unsafe_ptr(), len(src), dst, sz
         )
         var produced = Int(sz[0])
-        var out = List[UInt8]()
-        for i in range(produced):
-            out.append(dst[i])
-        dst.free()
         sz.free()
-        return out^
+        return Self._take(dst, produced)
 
     def lz4_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         self._ensure_lz4()
@@ -246,11 +249,7 @@ struct CompressionLibs(Movable):
         if n == 0:
             dst.free()
             raise Error("lz4: compression failed")
-        var out = List[UInt8]()
-        for i in range(Int(n)):
-            out.append(dst[i])
-        dst.free()
-        return out^
+        return Self._take(dst, Int(n))
 
     def gzip_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         self._ensure_zlib()
@@ -294,11 +293,7 @@ struct CompressionLibs(Movable):
         if Int(st) != 1:  # Z_STREAM_END
             dst.free()
             raise Error("gzip: deflate failed")
-        var out = List[UInt8]()
-        for i in range(produced):
-            out.append(dst[i])
-        dst.free()
-        return out^
+        return Self._take(dst, produced)
 
     def brotli_compress(mut self, src: Span[UInt8, _]) raises -> List[UInt8]:
         self._ensure_brotli_enc()
@@ -329,8 +324,4 @@ struct CompressionLibs(Movable):
         if Int(rc) != 1:
             dst.free()
             raise Error("brotli: compression failed")
-        var out = List[UInt8]()
-        for i in range(produced):
-            out.append(dst[i])
-        dst.free()
-        return out^
+        return Self._take(dst, produced)
