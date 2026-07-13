@@ -602,10 +602,16 @@ struct SchemaMapping(Movable):
                 )
             elif ct == ConvertedType.TIME_MICROS or lt == LogicalType.TIME:
                 return dt.time64(Self._time_unit(el))
-        # DECIMAL (any physical backing) -> the narrowest Arrow decimal that
-        # holds the precision, mirroring PyArrow (decimal128 up to 38 digits).
+        # DECIMAL -> an Arrow decimal whose storage matches the physical backing:
+        # INT32 -> decimal32, INT64 -> decimal64, and FIXED_LEN_BYTE_ARRAY (or
+        # BYTE_ARRAY) -> decimal128/decimal256 by precision. Decoding is driven by
+        # the physical type, so the storage width must line up.
         if ct == ConvertedType.DECIMAL or lt == LogicalType.DECIMAL:
-            if el.precision <= 38:
+            if pt == PhysicalType.INT32:
+                return dt.decimal32(el.precision, el.scale)
+            elif pt == PhysicalType.INT64:
+                return dt.decimal64(el.precision, el.scale)
+            elif el.precision <= 38:
                 return dt.decimal128(el.precision, el.scale)
             else:
                 return dt.decimal256(el.precision, el.scale)

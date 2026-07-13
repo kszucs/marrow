@@ -1051,6 +1051,39 @@ def test_key_value_metadata() raises:
     remove(dst)
 
 
+def _decimal_int_backed(patype: PythonObject, phys: String) raises:
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var vals = pa.array(
+        Python.list("1.50", "-3.25", "2.00", Python.none(), "0.75")
+    ).cast(patype)
+    var t = _one_col(vals)
+    var a = String("/tmp/marrow_dec_a.parquet")
+    write_table(t, a, use_dictionary=False)
+    # marrow encodes decimal32/decimal64 with the integer physical type
+    assert_equal(
+        String(
+            py=pq.ParquetFile(a).metadata.row_group(0).column(0).physical_type
+        ),
+        phys,
+    )
+    # marrow must read its own int-backed decimal correctly (not as a big-endian
+    # FLBA): read -> write -> PyArrow-read must recover the original values.
+    var b = String("/tmp/marrow_dec_b.parquet")
+    write_table(read_table(a), b, use_dictionary=False)
+    assert_true(
+        Bool(pq.read_table(b).column(0).to_pylist() == vals.to_pylist())
+    )
+    remove(a)
+    remove(b)
+
+
+def test_decimal_int_backed_roundtrip() raises:
+    var pa = Python.import_module("pyarrow")
+    _decimal_int_backed(pa.decimal32(9, 2), "INT32")
+    _decimal_int_backed(pa.decimal64(15, 2), "INT64")
+
+
 def test_distinct_count_statistic() raises:
     # a dictionary-encoded chunk knows its distinct (non-null) value count — the
     # dictionary size — and writes it as Statistics.distinct_count; a PLAIN chunk

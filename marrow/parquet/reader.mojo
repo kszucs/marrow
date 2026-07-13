@@ -1553,9 +1553,10 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
     ](
         mut self, mut codecs: CompressionLibs, floor: Int, max_def: Int
     ) raises -> DecodedLeaf:
-        """Temporal columns are physically int32/int64; the flat builder already
-        carries the leaf's Arrow dtype, while the leveled drive produces the
-        int32/int64 storage and is retagged to the temporal type."""
+        """Temporal and small-decimal (decimal32/decimal64) columns are
+        physically int32/int64; the flat builder already carries the leaf's Arrow
+        dtype, while the leveled drive produces the int32/int64 storage and is
+        retagged to the leaf's type."""
         comptime if leveled:
             return self._drive_primitive[T, phys](
                 codecs, floor, max_def, self.pages.leaf.dtype.copy()
@@ -1740,6 +1741,16 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
                 codecs, f, md
             )
         elif vt.is_timestamp() or vt.is_time64():
+            return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
+                codecs, f, md
+            )
+        elif vt.is_decimal32():
+            # DECIMAL backed by INT32 — read as int32 storage, tagged decimal32.
+            return self._emit_temporal[dt.Int32Type, DType.int32, leveled](
+                codecs, f, md
+            )
+        elif vt.is_decimal64():
+            # DECIMAL backed by INT64 — read as int64 storage, tagged decimal64.
             return self._emit_temporal[dt.Int64Type, DType.int64, leveled](
                 codecs, f, md
             )

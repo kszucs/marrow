@@ -305,6 +305,14 @@
 
 ### Fixes
 
+- **INT32/INT64-backed decimal read** (`marrow.parquet`): a DECIMAL column stored
+  as physical `INT32`/`INT64` (which the writer emits for `decimal32`/`decimal64`)
+  was decoded as a big-endian `FIXED_LEN_BYTE_ARRAY`, misreading the little-endian
+  integer payload. `_leaf_dtype` now maps DECIMAL by physical type
+  (`INT32`→`decimal32`, `INT64`→`decimal64`, FLBA→`decimal128`/`decimal256`) and
+  the reader decodes the integer physical directly, so `decimal32`/`decimal64`
+  round-trip.
+
 - **Encodings and booleans inside lists** (`marrow.parquet`): a list element
   encoded as DELTA_BINARY_PACKED / DELTA_BYTE_ARRAY / BYTE_STREAM_SPLIT, or a
   `list<bool>`, previously crashed — the nested reader had its own value decoders
