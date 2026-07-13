@@ -18,9 +18,10 @@ from std.math import log
 
 from ..utils import LittleEndian
 from .format import (
-    CompactWriter,
-    CompactReader,
+    ThriftCompactWriter,
+    ThriftCompactReader,
     FieldHeader,
+    ThriftWritable,
     TC_I32,
     TC_STRUCT,
 )
@@ -230,7 +231,7 @@ struct SplitBlockBloomFilter(Movable):
 # ---------------------------------------------------------------------------
 
 
-struct BloomFilterHeader(Copyable, Movable):
+struct BloomFilterHeader(Copyable, Movable, ThriftWritable):
     """The `BloomFilterHeader`: `num_bytes` plus the algorithm/hash/compression
     union members. Marrow only writes and expects SPLIT_BLOCK + XXHASH +
     UNCOMPRESSED, so the unions are fixed on write and skipped on read."""
@@ -241,7 +242,9 @@ struct BloomFilterHeader(Copyable, Movable):
         self.num_bytes = 0
 
     @staticmethod
-    def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
+    def read[
+        o: Origin[mut=False]
+    ](mut r: ThriftCompactReader[o]) raises -> Self:
         var out = Self()
         var f = FieldHeader()
         while r.next_field(f):
@@ -251,7 +254,7 @@ struct BloomFilterHeader(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
-    def write(self, mut w: CompactWriter):
+    def write(self, mut w: ThriftCompactWriter):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.num_bytes))
@@ -271,10 +274,3 @@ struct BloomFilterHeader(Copyable, Movable):
         w.write_field_stop()  # empty Uncompressed
         w.write_field_stop()  # close the compression union
         w.write_field_stop()  # close the header
-
-    def append_to(self, mut out: List[UInt8]) -> Int:
-        """Serialize into `out`; return its byte length."""
-        var w = CompactWriter()
-        self.write(w)
-        out.extend(Span(w.buf))
-        return len(w.buf)

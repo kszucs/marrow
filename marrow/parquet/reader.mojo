@@ -53,7 +53,7 @@ from .bloom import SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
 from .format import (
     FileMetaData,
-    CompactReader,
+    ThriftCompactReader,
     ColumnIndex,
     OffsetIndex,
     ColumnMetaData,
@@ -1720,10 +1720,10 @@ struct ParquetFile(Movable):
                 ref cc = rg.columns[ci]
                 var pi = PageIndex()
                 if cc.offset_index_offset >= 0:
-                    var r = CompactReader(data, cc.offset_index_offset)
+                    var r = ThriftCompactReader(data, cc.offset_index_offset)
                     pi.offset_index = OffsetIndex.read(r)
                 if cc.column_index_offset >= 0:
-                    var r = CompactReader(data, cc.column_index_offset)
+                    var r = ThriftCompactReader(data, cc.column_index_offset)
                     pi.column_index = ColumnIndex.read(r)
                 row.append(pi^)
             out.append(row^)
@@ -1740,7 +1740,7 @@ struct ParquetFile(Movable):
         if cc.meta_data.bloom_filter_offset < 0:
             return None
         var data = self._mapped.span()
-        var r = CompactReader(data, cc.meta_data.bloom_filter_offset)
+        var r = ThriftCompactReader(data, cc.meta_data.bloom_filter_offset)
         var hdr = BloomFilterHeader.read(r)
         return SplitBlockBloomFilter.from_bytes(
             data[r.pos : r.pos + hdr.num_bytes]
@@ -1759,9 +1759,9 @@ struct ParquetFile(Movable):
                 ref cc = rg.columns[ci]
                 var pages = List[PageBounds]()
                 if cc.offset_index_offset >= 0 and cc.column_index_offset >= 0:
-                    var ro = CompactReader(data, cc.offset_index_offset)
+                    var ro = ThriftCompactReader(data, cc.offset_index_offset)
                     var oi = OffsetIndex.read(ro)
-                    var rc = CompactReader(data, cc.column_index_offset)
+                    var rc = ThriftCompactReader(data, cc.column_index_offset)
                     var cix = ColumnIndex.read(rc)
                     ref dtype = self._mapping.leaves[ci].dtype
                     var np = len(oi.page_locations)
