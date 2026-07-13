@@ -4,6 +4,15 @@
 
 ### Features
 
+- **Page index write** (`marrow.parquet`): the writer now emits an `OffsetIndex`
+  and (when the chunk carries bounds or is all-null) a `ColumnIndex` for every
+  column chunk, written after the page data and pointed to by the footer's
+  `ColumnChunk.{offset,column}_index_offset` — closing the read/write asymmetry
+  where the reader consumed a page index that the writer never produced. Marrow
+  writes a single data page per chunk, so each index has one entry covering all
+  rows; PyArrow prunes with it (page-level predicate pushdown) and marrow reads
+  it back via `read_page_index` / `read_page_bounds`.
+
 - **Nested temporal / decimal / fixed-size-binary read** (`marrow.parquet`): a
   list or map element of a temporal type (`date32`/`time32`/`timestamp`/
   `time64`/`date64`/`duration`), `decimal128`/`decimal256`, or

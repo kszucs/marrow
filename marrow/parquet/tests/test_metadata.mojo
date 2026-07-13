@@ -14,6 +14,7 @@ from marrow.parquet import (
     read_metadata,
     read_statistics,
     read_page_index,
+    read_page_bounds,
     write_table,
 )
 from marrow.tabular import Table
@@ -229,20 +230,48 @@ def test_page_index_sorted_int() raises:
     remove(path)
 
 
-def test_marrow_file_has_no_page_index() raises:
-    # marrow's writer does not emit a page index yet -> both are absent
+def test_marrow_file_has_page_index() raises:
+    # marrow's writer now emits an OffsetIndex + ColumnIndex per column chunk
     var caps = Python.evaluate(
         "__import__('pyarrow').table({'x':"
-        " __import__('pyarrow').array([1, 2, 3],"
+        " __import__('pyarrow').array([5, 1, None, 9, 3],"
         " type=__import__('pyarrow').int64())})"
     ).__arrow_c_stream__(Python.none())
     var t = CArrowArrayStream.from_pycapsule(caps).to_table()
-    var path = String("/tmp/marrow_nopageidx.parquet")
+    var path = String("/tmp/marrow_pageidx.parquet")
     write_table(t, path)
     var pi = read_page_index(path)
     assert_equal(len(pi), 1)
-    assert_false(Bool(pi[0][0].offset_index))
-    assert_false(Bool(pi[0][0].column_index))
+    assert_true(Bool(pi[0][0].offset_index))
+    assert_true(Bool(pi[0][0].column_index))
+    # one data page covering all rows, with the correct bounds and null count
+    var pb = read_page_bounds(path)
+    assert_equal(len(pb[0][0]), 1)
+    var pg = pb[0][0][0].copy()
+    assert_equal(pg.num_rows, 5)
+    assert_equal(pg.min.value().as_int64().value(), 1)
+    assert_equal(pg.max.value().as_int64().value(), 9)
+    remove(path)
+
+
+def test_marrow_page_index_pyarrow_reads() raises:
+    # a marrow-written page index is spec-valid: PyArrow prunes with it and
+    # returns exactly the matching rows.
+    var pa = Python.import_module("pyarrow")
+    var ds = Python.import_module("pyarrow.dataset")
+    var ints = Python.list()
+    for i in range(300):
+        ints.append(i)
+    var caps = pa.table(
+        Python.dict(i=pa.array(ints, type=pa.int32()))
+    ).__arrow_c_stream__(Python.none())
+    var t = CArrowArrayStream.from_pycapsule(caps).to_table()
+    var path = String("/tmp/marrow_pageidx_pa.parquet")
+    write_table(t, path, use_dictionary=False)
+    var d = ds.dataset(path, format="parquet")
+    var got = d.to_table(filter=(ds.field("i") >= 295))
+    assert_equal(Int(py=got.num_rows), 5)
+    assert_equal(Int(py=got.column(0)[0]), 295)
     remove(path)
 
 

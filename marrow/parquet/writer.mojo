@@ -45,6 +45,9 @@ from .format import (
     ColumnChunk,
     RowGroup,
     FileMetaData,
+    OffsetIndex,
+    ColumnIndex,
+    PageLocation,
 )
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
@@ -757,6 +760,8 @@ struct ColumnWriter(Movable):
         var cc = ColumnChunk()
         cc.file_offset = dict_page_offset if dict_page_offset >= 0 else page_offset
         cc.meta_data = meta^
+        # the single data page's total bytes (header + body), for the OffsetIndex
+        cc.data_page_size = len(out) - page_offset
         return cc^
 
     def write(
@@ -984,8 +989,64 @@ struct FileWriter(Movable):
             if length == 0:
                 break
 
+        # page index (OffsetIndex + ColumnIndex) — written after the page data,
+        # before the footer; the footer's ColumnChunks point back at it.
+        self._write_page_index(fmeta)
+
         fmeta.write_footer(self.out)
         Path(path).write_bytes(Span(self.out))
+
+    def _write_page_index(mut self, mut fmeta: FileMetaData) raises:
+        """Emit the OffsetIndex (always) and ColumnIndex (when the chunk carries
+        bounds or is all-null) for every column chunk, then record their file
+        offsets on the chunk. Marrow writes a single data page per chunk, so each
+        index has exactly one entry covering all the chunk's rows."""
+        for rg in range(len(fmeta.row_groups)):
+            for ci in range(len(fmeta.row_groups[rg].columns)):
+                # snapshot the fields the index needs before mutating the chunk
+                var has_mm = fmeta.row_groups[rg].columns[ci].meta_data.has_min_max
+                var null_count = fmeta.row_groups[rg].columns[ci].meta_data.null_count
+                var num_values = fmeta.row_groups[rg].columns[ci].meta_data.num_values
+                var min_v = fmeta.row_groups[rg].columns[ci].meta_data.min_value.copy()
+                var max_v = fmeta.row_groups[rg].columns[ci].meta_data.max_value.copy()
+                var dp_offset = fmeta.row_groups[rg].columns[ci].meta_data.data_page_offset
+                var dp_size = fmeta.row_groups[rg].columns[ci].data_page_size
+
+                # ColumnIndex: one page. A chunk with bounds is a normal page;
+                # an all-null chunk is a null page (empty bounds). Otherwise
+                # (no usable bounds) the ColumnIndex is omitted.
+                var all_null = (
+                    null_count >= 0 and num_values > 0 and null_count == num_values
+                )
+                if has_mm or all_null:
+                    var cix = ColumnIndex()
+                    if has_mm:
+                        cix.null_pages.append(False)
+                        cix.min_values.append(min_v^)
+                        cix.max_values.append(max_v^)
+                    else:
+                        cix.null_pages.append(True)
+                        cix.min_values.append(List[UInt8]())
+                        cix.max_values.append(List[UInt8]())
+                    cix.boundary_order = 0  # UNORDERED (single page)
+                    if null_count >= 0:
+                        cix.null_counts.append(null_count)
+                    var coff = len(self.out)
+                    var clen = cix.append_to(self.out)
+                    fmeta.row_groups[rg].columns[ci].column_index_offset = coff
+                    fmeta.row_groups[rg].columns[ci].column_index_length = clen
+
+                # OffsetIndex: the single data page's location and row start.
+                var oix = OffsetIndex()
+                var loc = PageLocation()
+                loc.offset = dp_offset
+                loc.compressed_page_size = dp_size
+                loc.first_row_index = 0
+                oix.page_locations.append(loc^)
+                var ooff = len(self.out)
+                var olen = oix.append_to(self.out)
+                fmeta.row_groups[rg].columns[ci].offset_index_offset = ooff
+                fmeta.row_groups[rg].columns[ci].offset_index_length = olen
 
 
 def write_table(

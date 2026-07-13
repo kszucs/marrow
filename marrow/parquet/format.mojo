@@ -960,6 +960,16 @@ struct PageLocation(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
+    def write(self, mut w: CompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_I64, 1, last)
+        w.write_i64(Int64(self.offset))
+        last = w.write_field_begin(TC_I32, 2, last)
+        w.write_i32(Int32(self.compressed_page_size))
+        last = w.write_field_begin(TC_I64, 3, last)
+        w.write_i64(Int64(self.first_row_index))
+        w.write_field_stop()
+
 
 struct OffsetIndex(Copyable, Movable):
     """Per-page locations for one column chunk (field 1 = list<PageLocation>).
@@ -982,6 +992,21 @@ struct OffsetIndex(Copyable, Movable):
             else:
                 r.skip(f.type)
         return out^
+
+    def write(self, mut w: CompactWriter):
+        var last = 0
+        last = w.write_field_begin(TC_LIST, 1, last)
+        w.write_list_begin(TC_STRUCT, len(self.page_locations))
+        for i in range(len(self.page_locations)):
+            self.page_locations[i].write(w)
+        w.write_field_stop()
+
+    def append_to(self, mut out: List[UInt8]) -> Int:
+        """Serialize into `out`; return its byte length."""
+        var w = CompactWriter()
+        self.write(w)
+        out.extend(Span(w.buf))
+        return len(w.buf)
 
 
 struct ColumnIndex(Copyable, Movable):
@@ -1031,6 +1056,38 @@ struct ColumnIndex(Copyable, Movable):
                 r.skip(f.type)
         return out^
 
+    def write(self, mut w: CompactWriter):
+        var last = 0
+        # null_pages: list<bool> — compact lists encode each bool as one byte
+        # (1 = true, 2 = false) under a BOOL_TRUE element-type nibble.
+        last = w.write_field_begin(TC_LIST, 1, last)
+        w.write_list_begin(TC_BOOL_TRUE, len(self.null_pages))
+        for p in self.null_pages:
+            w.buf.append(UInt8(1) if p else UInt8(2))
+        last = w.write_field_begin(TC_LIST, 2, last)
+        w.write_list_begin(TC_BINARY, len(self.min_values))
+        for i in range(len(self.min_values)):
+            w.write_bytes(Span(self.min_values[i]))
+        last = w.write_field_begin(TC_LIST, 3, last)
+        w.write_list_begin(TC_BINARY, len(self.max_values))
+        for i in range(len(self.max_values)):
+            w.write_bytes(Span(self.max_values[i]))
+        last = w.write_field_begin(TC_I32, 4, last)
+        w.write_i32(Int32(self.boundary_order))
+        if len(self.null_counts) > 0:
+            last = w.write_field_begin(TC_LIST, 5, last)
+            w.write_list_begin(TC_I64, len(self.null_counts))
+            for i in range(len(self.null_counts)):
+                w.write_i64(Int64(self.null_counts[i]))
+        w.write_field_stop()
+
+    def append_to(self, mut out: List[UInt8]) -> Int:
+        """Serialize into `out`; return its byte length."""
+        var w = CompactWriter()
+        self.write(w)
+        out.extend(Span(w.buf))
+        return len(w.buf)
+
 
 struct ColumnChunk(Copyable, Movable):
     var file_offset: Int
@@ -1039,6 +1096,7 @@ struct ColumnChunk(Copyable, Movable):
     var offset_index_length: Int
     var column_index_offset: Int  # -1 if absent
     var column_index_length: Int
+    var data_page_size: Int  # writer-only: the single data page's total bytes
 
     def __init__(out self):
         self.file_offset = 0
@@ -1047,6 +1105,7 @@ struct ColumnChunk(Copyable, Movable):
         self.offset_index_length = 0
         self.column_index_offset = -1
         self.column_index_length = 0
+        self.data_page_size = 0
 
     @staticmethod
     def read[o: Origin[mut=False]](mut r: CompactReader[o]) raises -> Self:
@@ -1075,6 +1134,17 @@ struct ColumnChunk(Copyable, Movable):
         w.write_i64(Int64(self.file_offset))
         last = w.write_field_begin(TC_STRUCT, 3, last)
         self.meta_data.write(w)
+        # page-index pointers (written after the pages, before the footer)
+        if self.offset_index_offset >= 0:
+            last = w.write_field_begin(TC_I64, 4, last)
+            w.write_i64(Int64(self.offset_index_offset))
+            last = w.write_field_begin(TC_I32, 5, last)
+            w.write_i32(Int32(self.offset_index_length))
+        if self.column_index_offset >= 0:
+            last = w.write_field_begin(TC_I64, 6, last)
+            w.write_i64(Int64(self.column_index_offset))
+            last = w.write_field_begin(TC_I32, 7, last)
+            w.write_i32(Int32(self.column_index_length))
         w.write_field_stop()
 
 
