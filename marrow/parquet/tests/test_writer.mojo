@@ -980,17 +980,23 @@ def test_float16_roundtrip() raises:
     # the signed-zero-normalised min/max statistic.
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var np = Python.import_module("numpy")
-    var vals = np.array(
-        Python.list(1.5, 2.5, 3.0, 0.0, 4.5, -0.0), dtype=np.float16
-    )
-    var mask = np.array(Python.list(False, False, False, True, False, False))
     var want = pa.table(
-        Python.dict(h=pa.array(vals, mask=mask, type=pa.float16()))
+        Python.dict(
+            h=pa.array(
+                Python.list(1.5, 2.5, 3.0, Python.none(), 4.5, -0.0),
+                type=pa.float16(),
+            )
+        )
     )
+    # a marrow float16 Table via PyArrow write -> marrow read (a list-backed
+    # PyArrow array's buffer is 64-byte aligned, unlike a numpy-backed one that
+    # the C-import would reject).
+    var src = String("/tmp/marrow_f16_src.parquet")
+    pq.write_table(want, src, use_dictionary=False)
+    var mt = read_table(src)
     for use_dict in [False, True]:
         var path = String("/tmp/marrow_f16.parquet")
-        write_table(_to_marrow(want), path, use_dictionary=use_dict)
+        write_table(mt, path, use_dictionary=use_dict)
         # pyarrow reads marrow's file back to a halffloat column
         var back = pq.read_table(path)
         assert_true(Bool(back.schema.field(0).type == pa.float16()))
@@ -1005,6 +1011,7 @@ def test_float16_roundtrip() raises:
         assert_true(Bool(s.max == Python.evaluate(r"b'\x80\x44'")))
         assert_equal(Int(py=s.null_count), 1)
         remove(path)
+    remove(src)
 
 
 def test_key_value_metadata() raises:
