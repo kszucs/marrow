@@ -285,19 +285,35 @@ struct ColumnWriter(Movable):
             )
 
     # -----------------------------------------------------------------------
-    # Bloom filter — XXH64-hash every present value's physical bytes (INT32/
-    # INT64/FLOAT/DOUBLE little-endian, or raw byte-array bytes) into a split-
-    # block filter sized for the column's distinct count.
+    # Bloom filter — XXH64-hash every present value's physical bytes (numeric /
+    # temporal / small-decimal little-endian, decimal128/256 big-endian FLBA, or
+    # raw byte-array / fixed-size-binary bytes) into a split-block filter sized
+    # for the column's distinct count.
     # -----------------------------------------------------------------------
 
     @staticmethod
     def _hash_prim[
-        store: NumericType, phys: DType
+        store: PrimitiveType, phys: DType
     ](arr: PrimitiveArray[store], mut hashes: List[UInt64]) raises:
+        """Hash each present value's little-endian `phys`-width bytes — the
+        INT32/INT64/FLOAT/DOUBLE physical encoding shared by numeric, temporal,
+        and small-decimal columns."""
         for i in range(arr.length):
             if arr.is_valid(i):
                 var b = arr[i].value().cast[phys]().as_bytes[big_endian=False]()
                 hashes.append(xxh64(Span(b)))
+
+    @staticmethod
+    def _hash_flba[
+        store: PrimitiveType, width: Int
+    ](arr: PrimitiveArray[store], mut hashes: List[UInt64]) raises:
+        """Hash each present decimal value's big-endian two's-complement
+        `width`-byte FIXED_LEN_BYTE_ARRAY encoding (matching the value encoding).
+        """
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var b = arr[i].value().as_bytes[big_endian=True]()
+                hashes.append(xxh64(Span(b)[0:width]))
 
     @staticmethod
     def _hash_bytes[
@@ -307,11 +323,20 @@ struct ColumnWriter(Movable):
             if arr.is_valid(i):
                 hashes.append(xxh64(arr.unsafe_get(UInt(i)).as_bytes()))
 
+    def _hash_fixed_size_binary(
+        self, col: AnyArray, mut hashes: List[UInt64]
+    ) raises:
+        """Hash each present fixed-size-binary value's raw bytes."""
+        ref fsb = col.as_fixed_size_binary()
+        for i in range(len(fsb)):
+            if fsb.is_valid(i):
+                hashes.append(xxh64(Span(fsb[i].value())))
+
     def _bloom_hashes(
         self, col: AnyArray, mut hashes: List[UInt64]
     ) raises -> Bool:
         """XXH64 of each present value's physical bytes; False for a type marrow
-        does not bloom-filter (temporal/decimal/fsb/bool are skipped)."""
+        does not bloom-filter (bool)."""
         ref vt = self.leaf.dtype
         if vt == dt.int32:
             Self._hash_prim[dt.Int32Type, DType.int32](col.as_int32(), hashes)
@@ -349,6 +374,28 @@ struct ColumnWriter(Movable):
             Self._hash_bytes(col.as_binary(), hashes)
         elif vt.is_large_binary():
             Self._hash_bytes(col.as_large_binary(), hashes)
+        elif vt.is_date32():
+            Self._hash_prim[phys=DType.int32](col.as_date32(), hashes)
+        elif vt.is_time32():
+            Self._hash_prim[phys=DType.int32](col.as_time32(), hashes)
+        elif vt.is_time64():
+            Self._hash_prim[phys=DType.int64](col.as_time64(), hashes)
+        elif vt.is_timestamp():
+            Self._hash_prim[phys=DType.int64](col.as_timestamp(), hashes)
+        elif vt.is_date64():
+            Self._hash_prim[phys=DType.int64](col.as_date64(), hashes)
+        elif vt.is_duration():
+            Self._hash_prim[phys=DType.int64](col.as_duration(), hashes)
+        elif vt.is_decimal32():
+            Self._hash_prim[phys=DType.int32](col.as_decimal32(), hashes)
+        elif vt.is_decimal64():
+            Self._hash_prim[phys=DType.int64](col.as_decimal64(), hashes)
+        elif vt.is_decimal128():
+            Self._hash_flba[width=16](col.as_decimal128(), hashes)
+        elif vt.is_decimal256():
+            Self._hash_flba[width=32](col.as_decimal256(), hashes)
+        elif vt.is_fixed_size_binary():
+            self._hash_fixed_size_binary(col, hashes)
         else:
             return False
         return True
@@ -370,12 +417,17 @@ struct ColumnWriter(Movable):
 
     @staticmethod
     def can_bloom(dtype: dt.AnyDataType) -> Bool:
-        """Whether a column of `dtype` is bloom-filtered when enabled —
-        integer, floating-point, and byte-array columns."""
+        """Whether a column of `dtype` is bloom-filtered when enabled — integer,
+        floating-point, byte-array, temporal, decimal, and fixed-size-binary
+        columns (everything with a stable physical byte encoding except bool).
+        """
         return (
             dtype.is_integer()
             or dtype.is_floating_point()
             or dtype.is_binary_like()
+            or dtype.is_temporal()
+            or dtype.is_decimal()
+            or dtype.is_fixed_size_binary()
         )
 
     @staticmethod

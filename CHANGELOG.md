@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Bloom filters for temporal / decimal / fixed-size-binary** (`marrow.parquet`):
+  `write_bloom_filter=True` now also builds filters for temporal (date/time/
+  timestamp/duration — hashed over their INT32/INT64 little-endian bytes),
+  decimal (`decimal32`/`decimal64` as INT32/INT64, `decimal128`/`decimal256`
+  over their big-endian FIXED_LEN_BYTE_ARRAY bytes), and `fixed_size_binary`
+  (raw bytes) columns — matching each type's physical value encoding. Previously
+  only integer, floating-point, and byte-array columns were covered.
+
 - **Page CRC-32 checksums** (`marrow.parquet`): `write_table(...,
   write_page_checksum=True)` (default False, like PyArrow) attaches a standard
   CRC-32 to every data/dictionary page header — over the compressed body for v1

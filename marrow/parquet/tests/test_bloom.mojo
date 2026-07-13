@@ -191,6 +191,100 @@ def test_write_bloom_filter_int() raises:
     remove(path)
 
 
+def _le(v: Int, width: Int) -> List[UInt8]:
+    """Little-endian `width`-byte encoding of a non-negative integer."""
+    var b = List[UInt8]()
+    for k in range(width):
+        b.append(UInt8((v >> (k * 8)) & 0xFF))
+    return b^
+
+
+def _be16(v: Int) -> List[UInt8]:
+    """Big-endian 16-byte two's-complement encoding of a small non-negative int
+    (the decimal128 FIXED_LEN_BYTE_ARRAY value encoding)."""
+    var b = List[UInt8](length=16, fill=0)
+    var x = v
+    for k in range(16):
+        b[15 - k] = UInt8(x & 0xFF)
+        x = x >> 8
+    return b^
+
+
+def test_write_bloom_filter_temporal() raises:
+    # timestamp(us) is physically INT64 -> hashed over its 8 little-endian bytes,
+    # exactly like an int64 column.
+    var pa = Python.import_module("pyarrow")
+    var vals = Python.list()
+    for i in range(300):
+        vals.append((i % 50) * 1000)
+    var want = pa.table(Python.dict(t=pa.array(vals, type=pa.timestamp("us"))))
+    var path = String("/tmp/marrow_bloom_ts.parquet")
+    write_table(
+        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
+    )
+
+    var pf = ParquetFile(path)
+    var bf = pf.bloom_filter(0, 0)
+    assert_true(Bool(bf))
+    ref f = bf.value()
+    for i in range(50):
+        assert_true(f.might_contain(Span(_le((i % 50) * 1000, 8))))
+    assert_false(f.might_contain(Span(_le(987654321, 8))))
+    remove(path)
+
+
+def test_write_bloom_filter_decimal() raises:
+    # decimal128 is FIXED_LEN_BYTE_ARRAY(16) -> hashed over its big-endian
+    # two's-complement bytes.
+    var pa = Python.import_module("pyarrow")
+    var vals = Python.list()
+    for i in range(300):
+        vals.append(Python.str(i % 40) + Python.str(".00"))
+    var want = pa.table(Python.dict(d=pa.array(vals).cast(pa.decimal128(9, 2))))
+    var path = String("/tmp/marrow_bloom_dec.parquet")
+    write_table(
+        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
+    )
+
+    var pf = ParquetFile(path)
+    var bf = pf.bloom_filter(0, 0)
+    assert_true(Bool(bf))
+    ref f = bf.value()
+    # value "i.00" has unscaled integer i*100
+    for i in range(40):
+        assert_true(f.might_contain(Span(_be16(i * 100))))
+    assert_false(f.might_contain(Span(_be16(99999999))))
+    remove(path)
+
+
+def _k3(i: Int) -> String:
+    # a fixed 3-byte key "kNN" with a zero-padded two-digit index (0..29)
+    var d = String(i)
+    return String("k") + (String("0") + d if d.byte_length() == 1 else d)
+
+
+def test_write_bloom_filter_fixed_size_binary() raises:
+    # fixed_size_binary is hashed over its raw bytes.
+    var pa = Python.import_module("pyarrow")
+    var vals = Python.list()
+    for i in range(300):
+        vals.append(Python.str(_k3(i % 30)))
+    var want = pa.table(Python.dict(f=pa.array(vals).cast(pa.binary(3))))
+    var path = String("/tmp/marrow_bloom_fsb.parquet")
+    write_table(
+        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
+    )
+
+    var pf = ParquetFile(path)
+    var bf = pf.bloom_filter(0, 0)
+    assert_true(Bool(bf))
+    ref f = bf.value()
+    for i in range(30):
+        assert_true(_contains(f, _k3(i)))
+    assert_false(_contains(f, "zzz"))
+    remove(path)
+
+
 def test_no_bloom_filter_by_default() raises:
     var pa = Python.import_module("pyarrow")
     var want = pa.table(Python.dict(n=pa.array([1, 2, 3], type=pa.int64())))
