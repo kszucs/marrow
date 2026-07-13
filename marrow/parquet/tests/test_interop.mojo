@@ -281,7 +281,11 @@ def test_interop_fixed_size_binary() raises:
     var t = pa.table(
         Python.dict(
             fsb=pa.array(
-                Python.evaluate("[b'abc', None, b'xyz']"),
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                ),
                 type=pa.binary(3),
             ),
         )
@@ -290,12 +294,22 @@ def test_interop_fixed_size_binary() raises:
 
 
 def test_interop_binary_read() raises:
-    var t = Python.evaluate(
-        "__import__('pyarrow').table({"
-        "'b': __import__('pyarrow').array([b'ab', None, b'cd'],"
-        " type=__import__('pyarrow').binary()),"
-        "'ls': __import__('pyarrow').array(['big', None, 'string'],"
-        " type=__import__('pyarrow').large_string())})"
+    var pa = Python.import_module("pyarrow")
+    var t = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.list(
+                    Python.str("ab").encode(),
+                    Python.none(),
+                    Python.str("cd").encode(),
+                ),
+                type=pa.binary(),
+            ),
+            ls=pa.array(
+                Python.list("big", Python.none(), "string"),
+                type=pa.large_string(),
+            ),
+        )
     )
     _read_only(t)
 
@@ -306,11 +320,21 @@ def test_interop_list() raises:
     var t = pa.table(
         Python.dict(
             li=pa.array(
-                Python.evaluate("[[1, 2, 3], [], None, [4, 5]]"),
+                Python.list(
+                    Python.list(1, 2, 3),
+                    Python.list(),
+                    Python.none(),
+                    Python.list(4, 5),
+                ),
                 type=pa.list_(pa.int64()),
             ),
             ls=pa.array(
-                Python.evaluate("[['a', 'bb'], None, ['ccc'], []]"),
+                Python.list(
+                    Python.list("a", "bb"),
+                    Python.none(),
+                    Python.list("ccc"),
+                    Python.list(),
+                ),
                 type=pa.list_(pa.string()),
             ),
         )
@@ -323,7 +347,12 @@ def test_interop_map() raises:
     var t = pa.table(
         Python.dict(
             m=pa.array(
-                Python.evaluate("[{'a': 1, 'b': 2}, {}, None, {'c': 3}]"),
+                Python.list(
+                    Python.dict(a=1, b=2),
+                    Python.dict(),
+                    Python.none(),
+                    Python.dict(c=3),
+                ),
                 type=pa.map_(pa.string(), pa.int64()),
             ),
         )

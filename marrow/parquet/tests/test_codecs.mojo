@@ -85,15 +85,12 @@ def _delta_roundtrip(compression: String) raises:
     var np = Python.import_module("numpy")
     # 1000 rows > 128 (default block size) spans multiple delta blocks;
     # int64 monotone + int32 with negatives and every-7th null.
+    var idx = np.arange(1000)
     var t = pa.table(
         Python.dict(
-            a=pa.array(np.arange(1000) * 3 - 500, type=pa.int64()),
+            a=pa.array(idx * 3 - 500, type=pa.int64()),
             b=pa.array(
-                Python.evaluate(
-                    "[None if i % 7 == 0 else i * i - 100000 for i in"
-                    " range(1000)]"
-                ),
-                type=pa.int32(),
+                idx * idx - 100000, mask=(idx % 7 == 0), type=pa.int32()
             ),
         )
     )
@@ -107,7 +104,7 @@ def _delta_roundtrip(compression: String) raises:
     )
     # confirm PyArrow actually used DELTA_BINARY_PACKED
     var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.evaluate("'DELTA_BINARY_PACKED'") in enc))
+    assert_true(Bool(Python.str("DELTA_BINARY_PACKED") in enc))
 
     var back = read_table(path)
     assert_equal(back.num_rows(), 1000)
@@ -146,16 +143,11 @@ def _bss_roundtrip(compression: String) raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var np = Python.import_module("numpy")
+    var idx = np.arange(500)
     var t = pa.table(
         Python.dict(
-            f=pa.array(np.arange(500, dtype="float64") * 0.25 - 3.0),
-            g=pa.array(
-                Python.evaluate(
-                    "[None if i % 5 == 0 else float(i) * 1.5 for i in"
-                    " range(500)]"
-                ),
-                type=pa.float32(),
-            ),
+            f=pa.array(idx.astype("float64") * 0.25 - 3.0),
+            g=pa.array(idx * 1.5, mask=(idx % 5 == 0), type=pa.float32()),
         )
     )
     var path = String("/tmp/marrow_bss.parquet")
@@ -167,7 +159,7 @@ def _bss_roundtrip(compression: String) raises:
         compression=compression,
     )
     var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.evaluate("'BYTE_STREAM_SPLIT'") in enc))
+    assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
 
     var back = read_table(path)
     assert_equal(back.num_rows(), 500)
@@ -199,18 +191,13 @@ def _bss_int_roundtrip(dtype: String) raises:
     # physical type, so int32 and int64 split into 4 / 8 byte-planes.
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     var ty = pa.int32() if dtype == "int32" else pa.int64()
+    var idx = np.arange(300)
     var t = pa.table(
         Python.dict(
-            a=pa.array(
-                Python.evaluate("[i * 3 - 500 for i in range(300)]"), type=ty
-            ),
-            b=pa.array(
-                Python.evaluate(
-                    "[None if i % 6 == 0 else i * i for i in range(300)]"
-                ),
-                type=ty,
-            ),
+            a=pa.array(idx * 3 - 500, type=ty),
+            b=pa.array(idx * idx, mask=(idx % 6 == 0), type=ty),
         )
     )
     var path = String("/tmp/marrow_bss_int.parquet")
@@ -222,7 +209,7 @@ def _bss_int_roundtrip(dtype: String) raises:
         compression="none",
     )
     var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.evaluate("'BYTE_STREAM_SPLIT'") in enc))
+    assert_true(Bool(Python.str("BYTE_STREAM_SPLIT") in enc))
 
     var back = read_table(path)
     assert_equal(back.num_rows(), 300)
@@ -264,18 +251,20 @@ def _dba_roundtrip(encoding: String, compression: String) raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     # varying lengths + shared prefixes exercise the incremental reconstruction;
-    # every 9th null; 600 rows spans multiple delta blocks.
-    var t = pa.table(
-        Python.dict(
-            s=pa.array(
-                Python.evaluate(
-                    "[None if i % 9 == 0 else 'item-%04d-%s' % (i, 'x' * (i %"
-                    " 13)) for i in range(600)]"
-                ),
-                type=pa.string(),
-            ),
-        )
-    )
+    # every 9th null; 600 rows spans multiple delta blocks. Value i is
+    # "item-<i:04d>-<'x' repeated i%13>".
+    var vals = Python.list()
+    for i in range(600):
+        if i % 9 == 0:
+            vals.append(Python.none())
+        else:
+            vals.append(
+                Python.str("item-")
+                + Python.str(String(i)).zfill(4)
+                + Python.str("-")
+                + Python.str("x") * (i % 13)
+            )
+    var t = pa.table(Python.dict(s=pa.array(vals, type=pa.string())))
     var path = String("/tmp/marrow_dba.parquet")
     pq.write_table(
         t,
@@ -285,7 +274,7 @@ def _dba_roundtrip(encoding: String, compression: String) raises:
         compression=compression,
     )
     var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.evaluate("'" + encoding + "'") in enc))
+    assert_true(Bool(Python.str(encoding) in enc))
 
     var back = read_table(path)
     assert_equal(back.num_rows(), 600)

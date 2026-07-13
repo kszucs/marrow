@@ -74,7 +74,7 @@ def test_multiple_row_groups() raises:
     # 2500 rows, row_group_size 1000 -> 3 row groups
     var pa = Python.import_module("pyarrow")
     var t = _one_col(
-        pa.array(Python.evaluate("list(range(2500))"), type=pa.int64())
+        pa.array(Python.import_module("numpy").arange(2500), type=pa.int64())
     )
     var path = String("/tmp/marrow_rg.parquet")
     var w = FileWriter(Compression.SNAPPY)
@@ -179,15 +179,20 @@ def test_minmax_binary() raises:
     var pa = Python.import_module("pyarrow")
     var t = _one_col(
         pa.array(
-            Python.evaluate("[b'zoo', b'abc', None, b'mno']"),
+            Python.list(
+                Python.str("zoo").encode(),
+                Python.str("abc").encode(),
+                Python.none(),
+                Python.str("mno").encode(),
+            ),
             type=pa.binary(),
         )
     )
     var path = String("/tmp/marrow_mm_bin.parquet")
     write_table(t, path)
     var s = _col_stats(path, 0)
-    assert_true(Bool(s.min == Python.evaluate("b'abc'")))
-    assert_true(Bool(s.max == Python.evaluate("b'zoo'")))
+    assert_true(Bool(s.min == Python.str("abc").encode()))
+    assert_true(Bool(s.max == Python.str("zoo").encode()))
     remove(path)
 
 
@@ -195,14 +200,20 @@ def test_minmax_fixed_size_binary() raises:
     var pa = Python.import_module("pyarrow")
     var t = _one_col(
         pa.array(
-            Python.evaluate("[b'yy', b'aa', b'mm', None]"), type=pa.binary(2)
+            Python.list(
+                Python.str("yy").encode(),
+                Python.str("aa").encode(),
+                Python.str("mm").encode(),
+                Python.none(),
+            ),
+            type=pa.binary(2),
         )
     )
     var path = String("/tmp/marrow_mm_fsb.parquet")
     write_table(t, path)
     var s = _col_stats(path, 0)
-    assert_true(Bool(s.min == Python.evaluate("b'aa'")))
-    assert_true(Bool(s.max == Python.evaluate("b'yy'")))
+    assert_true(Bool(s.min == Python.str("aa").encode()))
+    assert_true(Bool(s.max == Python.str("yy").encode()))
     remove(path)
 
 
@@ -306,11 +317,10 @@ def test_write_all_null_roundtrip() raises:
 def test_write_float_special_roundtrip() raises:
     # NaN / +Inf / -Inf must survive marrow write -> read byte-exact
     var pa = Python.import_module("pyarrow")
+    var m = Python.import_module("math")
     var t = _one_col(
         pa.array(
-            Python.evaluate(
-                "[float('nan'), float('inf'), float('-inf'), -0.0, 3.25]"
-            ),
+            Python.list(m.nan, m.inf, -m.inf, -0.0, 3.25),
             type=pa.float64(),
         )
     )
@@ -360,15 +370,15 @@ def test_write_list_int() raises:
 
 def test_write_list_int_snappy() raises:
     var pa = Python.import_module("pyarrow")
-    _check_write(
-        _list_table(
-            Python.evaluate(
-                "[list(range(i % 6)) if i % 7 else None for i in range(80)]"
-            ),
-            pa.list_(pa.int32()),
-        ),
-        Compression.SNAPPY,
-    )
+    var np = Python.import_module("numpy")
+    # each row is list(range(i % 6)), or None every 7th row
+    var data = Python.list()
+    for i in range(80):
+        if i % 7 == 0:
+            data.append(Python.none())
+        else:
+            data.append(np.arange(i % 6).tolist())
+    _check_write(_list_table(data, pa.list_(pa.int32())), Compression.SNAPPY)
 
 
 def test_write_list_string() raises:
@@ -481,8 +491,8 @@ def test_write_dictionary_encoding() raises:
     # RLE_DICTIONARY encoding and reads back the exact values.
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var strs = Python.evaluate("['a', 'b', 'a', 'a', 'c', 'b'] * 20")
-    var ints = Python.evaluate("[1, 2, 1, 1, 3, 2] * 20")
+    var strs = Python.list("a", "b", "a", "a", "c", "b") * 20
+    var ints = Python.list(1, 2, 1, 1, 3, 2) * 20
     var t = _to_marrow(
         pa.table({"s": pa.array(strs), "i": pa.array(ints, type=pa.int64())})
     )
@@ -583,7 +593,7 @@ def test_write_delta_binary_packed_int() raises:
 def test_write_delta_int32_narrow() raises:
     var pa = Python.import_module("pyarrow")
     _encoding_check(
-        pa.array(Python.evaluate("list(range(200))"), type=pa.int32()),
+        pa.array(Python.import_module("numpy").arange(200), type=pa.int32()),
         Encoding.DELTA_BINARY_PACKED,
         "DELTA_BINARY_PACKED",
     )
@@ -661,7 +671,7 @@ def test_write_dictionary_high_cardinality_falls_back() raises:
     # column falls back to PLAIN instead of a dictionary larger than the data.
     var pa = Python.import_module("pyarrow")
     var t = _one_col(
-        pa.array(Python.evaluate("list(range(140000))"), type=pa.int64())
+        pa.array(Python.import_module("numpy").arange(140000), type=pa.int64())
     )
     var path = String("/tmp/marrow_hicard.parquet")
     write_table(t, path, Compression.UNCOMPRESSED)  # dictionary requested
@@ -776,7 +786,12 @@ def test_write_fixed_size_binary() raises:
     var want = pa.table(
         {
             "b": pa.array(
-                Python.evaluate("[b'abc', None, b'xyz']"), type=pa.binary(3)
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                ),
+                type=pa.binary(3),
             )
         }
     )
@@ -798,7 +813,12 @@ def test_write_binary() raises:
     var want = pa.table(
         {
             "b": pa.array(
-                Python.evaluate("[b'abc', None, b'xyz', b'']"),
+                Python.list(
+                    Python.str("abc").encode(),
+                    Python.none(),
+                    Python.str("xyz").encode(),
+                    Python.str("").encode(),
+                ),
                 type=pa.binary(),
             )
         }
@@ -820,11 +840,15 @@ def test_write_large_binary_and_string() raises:
     var want = pa.table(
         {
             "lb": pa.array(
-                Python.evaluate("[b'hello', b'world', None]"),
+                Python.list(
+                    Python.str("hello").encode(),
+                    Python.str("world").encode(),
+                    Python.none(),
+                ),
                 type=pa.large_binary(),
             ),
             "ls": pa.array(
-                Python.evaluate("['aa', 'bb', None]"), type=pa.large_string()
+                Python.list("aa", "bb", Python.none()), type=pa.large_string()
             ),
         }
     )
@@ -1007,8 +1031,20 @@ def test_float16_roundtrip() raises:
         assert_equal(read_table(path).num_rows(), 6)
         # statistics: min normalises to -0.0 (0x8000), max is 4.5 (0x4480)
         var s = pq.ParquetFile(path).metadata.row_group(0).column(0).statistics
-        assert_true(Bool(s.min == Python.evaluate(r"b'\x00\x80'")))
-        assert_true(Bool(s.max == Python.evaluate(r"b'\x80\x44'")))
+        assert_true(
+            Bool(
+                s.min
+                == Python.import_module("builtins").bytes(Python.list(0, 0x80))
+            )
+        )
+        assert_true(
+            Bool(
+                s.max
+                == Python.import_module("builtins").bytes(
+                    Python.list(0x80, 0x44)
+                )
+            )
+        )
         assert_equal(Int(py=s.null_count), 1)
         remove(path)
     remove(src)
@@ -1019,7 +1055,9 @@ def test_key_value_metadata() raises:
     # write (marrow writes its own Parquet schema).
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var md = Python.evaluate("{b'hello': b'world', b'team': b'marrow'}")
+    var md = Python.dict()
+    md[Python.str("hello").encode()] = Python.str("world").encode()
+    md[Python.str("team").encode()] = Python.str("marrow").encode()
     var sch = pa.schema(Python.list(pa.field("x", pa.int64()))).with_metadata(
         md
     )
@@ -1040,12 +1078,12 @@ def test_key_value_metadata() raises:
     var back = pq.read_table(dst)
     assert_true(
         Bool(
-            back.schema.metadata[Python.evaluate("b'hello'")]
-            == Python.evaluate("b'world'")
+            back.schema.metadata[Python.str("hello").encode()]
+            == Python.str("world").encode()
         )
     )
     assert_false(
-        Bool(Python.evaluate("b'ARROW:schema'") in back.schema.metadata)
+        Bool(Python.str("ARROW:schema").encode() in back.schema.metadata)
     )
     remove(path)
     remove(dst)
@@ -1114,7 +1152,7 @@ def test_page_checksum() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
     var t = _one_col(
-        pa.array(Python.evaluate("list(range(200))"), type=pa.int64())
+        pa.array(Python.import_module("numpy").arange(200), type=pa.int64())
     )
     for ver in [1, 2]:
         var path = String("/tmp/marrow_crc.parquet")

@@ -7,7 +7,7 @@ spanning many row groups, and pre-epoch dates."""
 
 from std.testing import assert_equal, assert_true, assert_false, assert_raises
 from std.math import isnan, isinf
-from std.python import Python
+from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, ParquetFile
@@ -233,11 +233,20 @@ def test_read_timestamp_with_timezone() raises:
 
 
 def test_read_binary() raises:
+    var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var tbl = Python.evaluate(
-        "__import__('pyarrow').table({'b':"
-        " __import__('pyarrow').array([b'\\x00\\x01', b'\\xff\\xfe', b'ab'],"
-        " type=__import__('pyarrow').binary())})"
+    var bi = Python.import_module("builtins")
+    var tbl = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.list(
+                    bi.bytes(Python.list(0, 1)),
+                    bi.bytes(Python.list(255, 254)),
+                    Python.str("ab").encode(),
+                ),
+                type=pa.binary(),
+            )
+        )
     )
     var path = String("/tmp/marrow_types_bin.parquet")
     pq.write_table(tbl, path, compression="snappy")
@@ -252,11 +261,19 @@ def test_read_binary() raises:
 
 def test_read_large_binary() raises:
     # large_binary has no distinct Parquet physical type -> reads back as binary.
+    var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var tbl = Python.evaluate(
-        "__import__('pyarrow').table({'b':"
-        " __import__('pyarrow').array([b'ab', None, b'cdef'],"
-        " type=__import__('pyarrow').large_binary())})"
+    var tbl = pa.table(
+        Python.dict(
+            b=pa.array(
+                Python.list(
+                    Python.str("ab").encode(),
+                    Python.none(),
+                    Python.str("cdef").encode(),
+                ),
+                type=pa.large_binary(),
+            )
+        )
     )
     var path = String("/tmp/marrow_types_lbin.parquet")
     pq.write_table(tbl, path, compression="snappy")
@@ -328,15 +345,20 @@ def test_project_single_column() raises:
 
 def test_project_struct_column() raises:
     # a struct column (multi-leaf node) projected alongside a flat one
-    var t_src = Python.evaluate(
-        "__import__('pyarrow').table({"
-        "'s': __import__('pyarrow').array("
-        "[{'x': 1, 'y': 'a'}, {'x': 2, 'y': 'b'}],"
-        " type=__import__('pyarrow').struct("
-        "[__import__('pyarrow').field('x', __import__('pyarrow').int64()),"
-        " __import__('pyarrow').field('y', __import__('pyarrow').string())])),"
-        "'n': __import__('pyarrow').array([7, 8],"
-        " type=__import__('pyarrow').int64())})"
+    var pa = Python.import_module("pyarrow")
+    var t_src = pa.table(
+        Python.dict(
+            s=pa.array(
+                Python.list(Python.dict(x=1, y="a"), Python.dict(x=2, y="b")),
+                type=pa.struct(
+                    Python.list(
+                        pa.field("x", pa.int64()),
+                        pa.field("y", pa.string()),
+                    )
+                ),
+            ),
+            n=pa.array(Python.list(7, 8), type=pa.int64()),
+        )
     )
     var path = String("/tmp/marrow_proj_struct.parquet")
     var pq = Python.import_module("pyarrow.parquet")
@@ -354,11 +376,10 @@ def test_project_struct_column() raises:
 
 
 def test_project_missing_column() raises:
+    var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
-    var tbl = Python.evaluate(
-        "__import__('pyarrow').table({'a':"
-        " __import__('pyarrow').array([1, 2],"
-        " type=__import__('pyarrow').int64())})"
+    var tbl = pa.table(
+        Python.dict(a=pa.array(Python.list(1, 2), type=pa.int64()))
     )
     var path = String("/tmp/marrow_proj_miss.parquet")
     pq.write_table(tbl, path)
@@ -378,10 +399,9 @@ def test_project_missing_column() raises:
 def test_many_pages_plain_int() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     var tbl = pa.table(
-        Python.dict(
-            x=pa.array(Python.evaluate("list(range(10000))"), type=pa.int64())
-        )
+        Python.dict(x=pa.array(np.arange(10000), type=pa.int64()))
     )
     var path = String("/tmp/marrow_pages_plain.parquet")
     # tiny page size forces many PLAIN pages inside one chunk
@@ -404,16 +424,10 @@ def test_many_pages_plain_int() raises:
 def test_many_pages_dict_string() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     # low cardinality -> dictionary-encoded data pages, split across many pages
-    var tbl = pa.table(
-        Python.dict(
-            s=pa.array(
-                Python.evaluate(
-                    "[['red', 'green', 'blue'][i % 3] for i in range(6000)]"
-                )
-            )
-        )
-    )
+    var colors = np.array(Python.list("red", "green", "blue"))
+    var tbl = pa.table(Python.dict(s=pa.array(colors[np.arange(6000) % 3])))
     var path = String("/tmp/marrow_pages_dict.parquet")
     pq.write_table(
         tbl, path, data_page_size=128, use_dictionary=True, compression="snappy"
@@ -431,16 +445,12 @@ def test_many_pages_dict_string() raises:
 def test_many_pages_string_with_nulls() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     # variable-length strings with every 4th null, spanning many pages
+    var idx = np.arange(4000)
+    var vals = np.char.add("v", idx.astype("U"))
     var tbl = pa.table(
-        Python.dict(
-            s=pa.array(
-                Python.evaluate(
-                    "[None if i % 4 == 0 else 'v%d' % i for i in range(4000)]"
-                ),
-                type=pa.string(),
-            )
-        )
+        Python.dict(s=pa.array(vals, mask=(idx % 4 == 0), type=pa.string()))
     )
     var path = String("/tmp/marrow_pages_strnull.parquet")
     pq.write_table(
@@ -466,21 +476,19 @@ def test_many_pages_string_with_nulls() raises:
 # ---------------------------------------------------------------------------
 
 
-def _read(code: String, compression: String = "snappy") raises -> Table:
-    """Write a one-line pyarrow table expression to a file and read it back."""
+def _read(want: PythonObject, compression: String = "snappy") raises -> Table:
+    """Write a PyArrow table to a file and read it back through marrow."""
     var pq = Python.import_module("pyarrow.parquet")
     var path = String("/tmp/marrow_values.parquet")
-    pq.write_table(Python.evaluate(code), path, compression=compression)
+    pq.write_table(want, path, compression=compression)
     var t = read_table(path)
     remove(path)
     return t^
 
 
 def test_all_null_int64() raises:
-    var t = _read(
-        "__import__('pyarrow').table({'x': __import__('pyarrow').array("
-        "[None, None, None, None], type=__import__('pyarrow').int64())})"
-    )
+    var pa = Python.import_module("pyarrow")
+    var t = _read(pa.table(Python.dict(x=pa.nulls(4, type=pa.int64()))))
     assert_equal(t.num_rows(), 4)
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
@@ -490,20 +498,22 @@ def test_all_null_int64() raises:
 
 
 def test_all_null_string() raises:
-    var t = _read(
-        "__import__('pyarrow').table({'s': __import__('pyarrow').array("
-        "[None, None, None], type=__import__('pyarrow').string())})"
-    )
+    var pa = Python.import_module("pyarrow")
+    var t = _read(pa.table(Python.dict(s=pa.nulls(3, type=pa.string()))))
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
     assert_equal(c.as_string().null_count(), 3)
 
 
 def test_single_row() raises:
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        "__import__('pyarrow').table({'i': __import__('pyarrow').array([42],"
-        " type=__import__('pyarrow').int64()), 's':"
-        " __import__('pyarrow').array(['solo'])})"
+        pa.table(
+            Python.dict(
+                i=pa.array(Python.list(42), type=pa.int64()),
+                s=pa.array(Python.list("solo")),
+            )
+        )
     )
     assert_equal(t.num_rows(), 1)
     var b = t.to_batches()[0].copy()
@@ -514,10 +524,20 @@ def test_single_row() raises:
 
 
 def test_int64_extremes() raises:
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        "__import__('pyarrow').table({'x': __import__('pyarrow').array("
-        "[-9223372036854775808, 9223372036854775807, 0],"
-        " type=__import__('pyarrow').int64())})"
+        pa.table(
+            Python.dict(
+                x=pa.array(
+                    Python.list(
+                        Int64(-9223372036854775808),
+                        Int64(9223372036854775807),
+                        Int64(0),
+                    ),
+                    type=pa.int64(),
+                )
+            )
+        )
     )
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
@@ -528,9 +548,16 @@ def test_int64_extremes() raises:
 
 
 def test_uint64_max() raises:
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        "__import__('pyarrow').table({'x': __import__('pyarrow').array("
-        "[0, 18446744073709551615], type=__import__('pyarrow').uint64())})"
+        pa.table(
+            Python.dict(
+                x=pa.array(
+                    Python.list(UInt64(0), UInt64(18446744073709551615)),
+                    type=pa.uint64(),
+                )
+            )
+        )
     )
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
@@ -540,9 +567,16 @@ def test_uint64_max() raises:
 
 
 def test_int32_extremes() raises:
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        "__import__('pyarrow').table({'x': __import__('pyarrow').array("
-        "[-2147483648, 2147483647], type=__import__('pyarrow').int32())})"
+        pa.table(
+            Python.dict(
+                x=pa.array(
+                    Python.list(Int32(-2147483648), Int32(2147483647)),
+                    type=pa.int32(),
+                )
+            )
+        )
     )
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
@@ -552,11 +586,16 @@ def test_int32_extremes() raises:
 
 
 def test_float64_special() raises:
+    var pa = Python.import_module("pyarrow")
+    var m = Python.import_module("math")
     var t = _read(
-        (
-            "__import__('pyarrow').table({'f': __import__('pyarrow').array("
-            "[float('nan'), float('inf'), float('-inf'), 0.0, 1.5],"
-            " type=__import__('pyarrow').float64())})"
+        pa.table(
+            Python.dict(
+                f=pa.array(
+                    Python.list(m.nan, m.inf, -m.inf, 0.0, 1.5),
+                    type=pa.float64(),
+                )
+            )
         ),
         "none",
     )
@@ -571,11 +610,16 @@ def test_float64_special() raises:
 
 
 def test_float32_special() raises:
+    var pa = Python.import_module("pyarrow")
+    var m = Python.import_module("math")
     var t = _read(
-        (
-            "__import__('pyarrow').table({'f': __import__('pyarrow').array("
-            "[float('nan'), float('inf'), float('-inf'), -2.5],"
-            " type=__import__('pyarrow').float32())})"
+        pa.table(
+            Python.dict(
+                f=pa.array(
+                    Python.list(m.nan, m.inf, -m.inf, -2.5),
+                    type=pa.float32(),
+                )
+            )
         ),
         "zstd",
     )
@@ -590,9 +634,21 @@ def test_float32_special() raises:
 
 def test_string_edge_cases() raises:
     # empty, ascii, multibyte utf-8, a long value (> a page-ish size), null
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        "__import__('pyarrow').table({'s': __import__('pyarrow').array("
-        "['', 'a', 'h\\u00e9llo \\u4e16\\u754c', 'x' * 5000, None])})"
+        pa.table(
+            Python.dict(
+                s=pa.array(
+                    Python.list(
+                        "",
+                        "a",
+                        "héllo 世界",
+                        Python.str("x") * 5000,
+                        Python.none(),
+                    )
+                )
+            )
+        )
     )
     var b = t.to_batches()[0].copy()
     var c = b.columns[0].copy()
@@ -606,11 +662,17 @@ def test_string_edge_cases() raises:
 
 
 def test_bool_with_nulls() raises:
+    var pa = Python.import_module("pyarrow")
     var t = _read(
-        (
-            "__import__('pyarrow').table({'b': __import__('pyarrow').array("
-            "[True, None, False, None, True, False],"
-            " type=__import__('pyarrow').bool_())})"
+        pa.table(
+            Python.dict(
+                b=pa.array(
+                    Python.list(
+                        True, Python.none(), False, Python.none(), True, False
+                    ),
+                    type=pa.bool_(),
+                )
+            )
         ),
         "none",
     )
@@ -628,20 +690,14 @@ def test_bool_with_nulls() raises:
 def test_dictionary_encoded_read() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     # 400 rows over 3 distinct strings -> pyarrow dictionary-encodes by default
-    var t_src = pa.table(
-        Python.dict(
-            s=pa.array(
-                Python.evaluate(
-                    "[['red', 'green', 'blue'][i % 3] for i in range(400)]"
-                )
-            )
-        )
-    )
+    var colors = np.array(Python.list("red", "green", "blue"))
+    var t_src = pa.table(Python.dict(s=pa.array(colors[np.arange(400) % 3])))
     var path = String("/tmp/marrow_dict.parquet")
     pq.write_table(t_src, path, use_dictionary=True, compression="snappy")
     var enc = pq.ParquetFile(path).metadata.row_group(0).column(0).encodings
-    assert_true(Bool(Python.evaluate("'RLE_DICTIONARY'") in enc))
+    assert_true(Bool(Python.str("RLE_DICTIONARY") in enc))
 
     var t = read_table(path)
     assert_equal(t.num_rows(), 400)
@@ -656,13 +712,15 @@ def test_dictionary_encoded_read() raises:
 
 
 def test_wide_table() raises:
+    var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     # 40 int64 columns c0..c39; value in column j at row i is i*100 + j
-    var t_src = Python.evaluate(
-        "__import__('pyarrow').table({'c%d' % j:"
-        " __import__('pyarrow').array([i * 100 + j for i in range(5)],"
-        " type=__import__('pyarrow').int64()) for j in range(40)})"
-    )
+    var cols = Python.dict()
+    var rows = np.arange(5) * 100
+    for j in range(40):
+        cols[Python.str("c") + String(j)] = pa.array(rows + j, type=pa.int64())
+    var t_src = pa.table(cols)
     var path = String("/tmp/marrow_wide.parquet")
     pq.write_table(t_src, path, compression="snappy")
     var t = read_table(path)
@@ -679,16 +737,11 @@ def test_wide_table() raises:
 def test_nulls_across_row_groups() raises:
     var pa = Python.import_module("pyarrow")
     var pq = Python.import_module("pyarrow.parquet")
+    var np = Python.import_module("numpy")
     # 5000 rows, every 3rd null, 500-row row groups -> 10 row groups
+    var idx = np.arange(5000)
     var t_src = pa.table(
-        Python.dict(
-            x=pa.array(
-                Python.evaluate(
-                    "[None if i % 3 == 0 else i for i in range(5000)]"
-                ),
-                type=pa.int64(),
-            )
-        )
+        Python.dict(x=pa.array(idx, mask=(idx % 3 == 0), type=pa.int64()))
     )
     var path = String("/tmp/marrow_manyrg.parquet")
     pq.write_table(t_src, path, row_group_size=500, compression="snappy")
@@ -793,9 +846,9 @@ def test_read_rle_bool_v2() raises:
     var vals = Python.list()
     for i in range(500):
         if i % 9 == 0:
-            vals.append(Python.evaluate("None"))
+            vals.append(Python.none())
         else:
-            vals.append(Python.evaluate("True" if i % 2 == 0 else "False"))
+            vals.append(i % 2 == 0)
     var tbl = pa.table(Python.dict(b=pa.array(vals, type=pa.bool_())))
     var path = String("/tmp/marrow_rle_bool.parquet")
     pq.write_table(tbl, path, data_page_version="2.0", use_dictionary=False)
@@ -818,7 +871,7 @@ def test_read_int96_timestamp() raises:
     var ts = Python.list()
     for i in range(200):
         if i % 13 == 0:
-            ts.append(Python.evaluate("None"))
+            ts.append(Python.none())
         else:
             ts.append(i * 1000000000 + 500)
     var tbl = pa.table(Python.dict(t=pa.array(ts, type=pa.timestamp("ns"))))
