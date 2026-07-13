@@ -39,6 +39,7 @@ from ..scalars import (
     UInt16Scalar,
     UInt32Scalar,
     UInt64Scalar,
+    Float16Scalar,
     Float32Scalar,
     Float64Scalar,
     Date32Scalar,
@@ -2242,6 +2243,8 @@ def _decode_stat(
         return Float32Scalar(LittleEndian.fixed[DType.float32](s, 0)).to_any()
     elif dtype == dt.float64:
         return Float64Scalar(LittleEndian.fixed[DType.float64](s, 0)).to_any()
+    elif dtype == dt.float16:
+        return Float16Scalar(LittleEndian.fixed[DType.float16](s, 0)).to_any()
     elif dtype == dt.bool_:
         return BoolScalar(len(b) > 0 and b[0] != 0).to_any()
     elif dtype.is_string():

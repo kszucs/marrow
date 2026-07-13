@@ -338,5 +338,19 @@ def test_read_fixed_size_binary_minmax() raises:
     remove(path)
 
 
+def test_read_float16_minmax() raises:
+    # float16 (FIXED_LEN_BYTE_ARRAY(2)) bounds decode to a Float16 scalar
+    var pa = Python.import_module("pyarrow")
+    var path = _write_pa(
+        _col(pa.array(Python.list(1.5, 2.5, 3.0, 4.5), type=pa.float16())),
+        use_dictionary=False,
+    )
+    ref cs = read_statistics(path)[0][0]
+    assert_true(Bool(cs.min))
+    assert_true(cs.min.value().as_float16().value() == Float16(1.5))
+    assert_true(cs.max.value().as_float16().value() == Float16(4.5))
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

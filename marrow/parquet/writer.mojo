@@ -354,6 +354,10 @@ struct ColumnWriter(Movable):
             Self._hash_prim[dt.Float64Type, DType.float64](
                 col.as_float64(), hashes
             )
+        elif vt == dt.float16:
+            Self._hash_prim[dt.Float16Type, DType.float16](
+                col.as_float16(), hashes
+            )
         elif vt == dt.int8:
             Self._hash_prim[dt.Int8Type, DType.int32](col.as_int8(), hashes)
         elif vt == dt.int16:

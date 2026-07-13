@@ -285,6 +285,29 @@ def test_write_bloom_filter_fixed_size_binary() raises:
     remove(path)
 
 
+def test_write_bloom_filter_float16() raises:
+    # float16 is hashed over its 2 little-endian half-float bytes
+    var pa = Python.import_module("pyarrow")
+    var vals = Python.list()
+    for i in range(300):
+        vals.append(Float64(i % 40) * 0.5)  # 0, 0.5 .. 19.5 — exact in float16
+    var want = pa.table(Python.dict(h=pa.array(vals, type=pa.float16())))
+    var path = String("/tmp/marrow_bloom_f16.parquet")
+    write_table(
+        _to_marrow(want), path, use_dictionary=False, write_bloom_filter=True
+    )
+
+    var pf = ParquetFile(path)
+    var bf = pf.bloom_filter(0, 0)
+    assert_true(Bool(bf))
+    ref f = bf.value()
+    for i in range(40):
+        var bits = Int(Float16(Float64(i) * 0.5).to_bits())
+        assert_true(f.might_contain(Span(_le(bits, 2))))
+    assert_false(f.might_contain(Span(_le(Int(Float16(999.0).to_bits()), 2))))
+    remove(path)
+
+
 def test_no_bloom_filter_by_default() raises:
     var pa = Python.import_module("pyarrow")
     var want = pa.table(Python.dict(n=pa.array([1, 2, 3], type=pa.int64())))
