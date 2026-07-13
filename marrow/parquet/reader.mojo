@@ -775,6 +775,52 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
         return out^
 
 
+struct _FixedWidthAcc[native: DType](Movable):
+    """Shared output bookkeeping for the per-value fixed-width leaf builders
+    (decimal, INT96): a `native`-typed values buffer, a validity bitmap
+    materialized lazily on the first null (backfilling prior values as valid), a
+    write cursor, and the null count. The builders own the per-page decode and
+    funnel each decoded value through `append_present` / `append_null`."""
+
+    var num_rows: Int
+    var values: Buffer[mut=True]
+    var bitmap: Bitmap[mut=True]
+    var has_bitmap: Bool
+    var wpos: Int
+    var null_count: Int
+
+    def __init__(out self, num_rows: Int):
+        self.num_rows = num_rows
+        self.values = Buffer.alloc_uninit[Self.native](num_rows)
+        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
+        self.has_bitmap = False
+        self.wpos = 0
+        self.null_count = 0
+
+    def ensure_bitmap(mut self):
+        if not self.has_bitmap:
+            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
+            self.bitmap.set_range(0, self.wpos, True)
+            self.has_bitmap = True
+
+    def append_present(mut self, v: Scalar[Self.native]):
+        self.values.unsafe_set[Self.native](self.wpos, v)
+        if self.has_bitmap:
+            self.bitmap.set(self.wpos)
+        self.wpos += 1
+
+    def append_null(mut self):
+        self.ensure_bitmap()
+        self.values.unsafe_set[Self.native](self.wpos, Scalar[Self.native](0))
+        self.null_count += 1
+        self.wpos += 1
+
+    def finish(deinit self, var dtype: dt.AnyDataType) raises -> AnyArray:
+        return _finish_primitive(
+            self.values^, self.bitmap^, self.wpos, self.null_count, dtype^
+        )
+
+
 struct DecimalLeafBuilder[native: DType](LeafBuilder):
     """FIXED_LEN_BYTE_ARRAY decimals (decimal128 -> int128, decimal256 -> int256).
 
@@ -787,48 +833,20 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
 
     var dtype: dt.AnyDataType
     var max_def: Int
-    var num_rows: Int
     var width: Int
-    var values: Buffer[mut=True]
-    var bitmap: Bitmap[mut=True]
-    var has_bitmap: Bool
-    var wpos: Int
-    var null_count: Int
+    var acc: _FixedWidthAcc[Self.native]
     var dict: List[Scalar[Self.native]]
 
     def __init__(out self, num_rows: Int, leaf: LeafColumn):
         self.dtype = leaf.dtype.copy()
         self.max_def = leaf.max_def
-        self.num_rows = num_rows
         self.width = leaf.type_length
-        self.values = Buffer.alloc_uninit[Self.native](num_rows)
-        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
-        self.has_bitmap = False
-        self.wpos = 0
-        self.null_count = 0
+        self.acc = _FixedWidthAcc[Self.native](num_rows)
         self.dict = List[Scalar[Self.native]]()
 
     def _decode_be(self, span: Span[UInt8, _], off: Int) -> Scalar[Self.native]:
         """Big-endian, sign-extended from `width` bytes to the native width."""
         return _decode_be_flba[Self.native](span, off, self.width)
-
-    def _ensure_bitmap(mut self):
-        if not self.has_bitmap:
-            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
-            self.bitmap.set_range(0, self.wpos, True)
-            self.has_bitmap = True
-
-    def _append_present(mut self, v: Scalar[Self.native]):
-        self.values.unsafe_set[Self.native](self.wpos, v)
-        if self.has_bitmap:
-            self.bitmap.set(self.wpos)
-        self.wpos += 1
-
-    def _append_null(mut self):
-        self._ensure_bitmap()
-        self.values.unsafe_set[Self.native](self.wpos, Scalar[Self.native](0))
-        self.null_count += 1
-        self.wpos += 1
 
     def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
         var vspan = page.values()
@@ -851,17 +869,17 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
             if selected:
                 if present_here:
                     if is_dict:
-                        self._append_present(self.dict[Int(idx[vi])])
+                        self.acc.append_present(self.dict[Int(idx[vi])])
                     elif use_decoded:
-                        self._append_present(
+                        self.acc.append_present(
                             self._decode_be(Span(decoded), vi * self.width)
                         )
                     else:
-                        self._append_present(
+                        self.acc.append_present(
                             self._decode_be(vspan, vi * self.width)
                         )
                 else:
-                    self._append_null()
+                    self.acc.append_null()
 
         _walk_slots[place](page, self.max_def, mask)
 
@@ -877,13 +895,7 @@ struct DecimalLeafBuilder[native: DType](LeafBuilder):
         self._place(page, mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
-        return _finish_primitive(
-            self.values^,
-            self.bitmap^,
-            self.wpos,
-            self.null_count,
-            self.dtype^,
-        )
+        return self.acc^.finish(self.dtype^)
 
 
 struct Int96LeafBuilder(LeafBuilder):
@@ -894,42 +906,14 @@ struct Int96LeafBuilder(LeafBuilder):
 
     var dtype: dt.AnyDataType  # timestamp(ns)
     var max_def: Int
-    var num_rows: Int
-    var values: Buffer[mut=True]  # int64
-    var bitmap: Bitmap[mut=True]
-    var has_bitmap: Bool
-    var wpos: Int
-    var null_count: Int
+    var acc: _FixedWidthAcc[DType.int64]
     var dict: List[Int64]
 
     def __init__(out self, num_rows: Int, leaf: LeafColumn):
         self.dtype = leaf.dtype.copy()
         self.max_def = leaf.max_def
-        self.num_rows = num_rows
-        self.values = Buffer.alloc_uninit[DType.int64](num_rows)
-        self.bitmap = Bitmap[mut=True].alloc_zeroed(0)
-        self.has_bitmap = False
-        self.wpos = 0
-        self.null_count = 0
+        self.acc = _FixedWidthAcc[DType.int64](num_rows)
         self.dict = List[Int64]()
-
-    def _ensure_bitmap(mut self):
-        if not self.has_bitmap:
-            self.bitmap = Bitmap[mut=True].alloc_zeroed(self.num_rows)
-            self.bitmap.set_range(0, self.wpos, True)
-            self.has_bitmap = True
-
-    def _append_present(mut self, v: Int64):
-        self.values.unsafe_set[DType.int64](self.wpos, v)
-        if self.has_bitmap:
-            self.bitmap.set(self.wpos)
-        self.wpos += 1
-
-    def _append_null(mut self):
-        self._ensure_bitmap()
-        self.values.unsafe_set[DType.int64](self.wpos, Int64(0))
-        self.null_count += 1
-        self.wpos += 1
 
     def _place(mut self, page: Page, mask: Optional[List[Bool]]) raises:
         var vspan = page.values()
@@ -945,11 +929,11 @@ struct Int96LeafBuilder(LeafBuilder):
             if selected:
                 if present_here:
                     if is_dict:
-                        self._append_present(self.dict[Int(idx[vi])])
+                        self.acc.append_present(self.dict[Int(idx[vi])])
                     else:
-                        self._append_present(_int96_nanos(vspan, vi * 12))
+                        self.acc.append_present(_int96_nanos(vspan, vi * 12))
                 else:
-                    self._append_null()
+                    self.acc.append_null()
 
         _walk_slots[place](page, self.max_def, mask)
 
@@ -965,13 +949,7 @@ struct Int96LeafBuilder(LeafBuilder):
         self._place(page, mask.copy())
 
     def finish(deinit self) raises -> AnyArray:
-        return _finish_primitive(
-            self.values^,
-            self.bitmap^,
-            self.wpos,
-            self.null_count,
-            self.dtype^,
-        )
+        return self.acc^.finish(self.dtype^)
 
 
 struct FixedSizeBinaryLeafBuilder(LeafBuilder):
