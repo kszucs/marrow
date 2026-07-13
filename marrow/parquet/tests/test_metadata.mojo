@@ -275,5 +275,75 @@ def test_marrow_page_index_pyarrow_reads() raises:
     remove(path)
 
 
+def test_read_temporal_minmax() raises:
+    # timestamp (INT64) + date32 (INT32) bounds decode to typed scalars
+    var path = _write_pa(
+        (
+            "__import__('pyarrow').table({'t':"
+            " __import__('pyarrow').array([10, 3, 7, None, 1],"
+            " type=__import__('pyarrow').timestamp('us'))})"
+        ),
+        use_dictionary=False,
+    )
+    ref cs = read_statistics(path)[0][0]
+    assert_true(Bool(cs.min))
+    assert_equal(cs.min.value().as_timestamp().value(), Int64(1))
+    assert_equal(cs.max.value().as_timestamp().value(), Int64(10))
+    remove(path)
+
+    var dpath = _write_pa(
+        (
+            "__import__('pyarrow').table({'d':"
+            " __import__('pyarrow').array([10, 3, 7],"
+            " type=__import__('pyarrow').date32())})"
+        ),
+        use_dictionary=False,
+    )
+    ref ds = read_statistics(dpath)[0][0]
+    assert_equal(ds.min.value().as_date32().value(), Int32(3))
+    assert_equal(ds.max.value().as_date32().value(), Int32(10))
+    remove(dpath)
+
+
+def test_read_decimal_minmax() raises:
+    # decimal128 (big-endian FIXED_LEN_BYTE_ARRAY) bounds decode to the unscaled
+    # integer (-3.25 -> -325, 2.00 -> 200 at scale 2)
+    var path = _write_pa(
+        (
+            "__import__('pyarrow').table({'d':"
+            " __import__('pyarrow').array(['1.50','-3.25','2.00']).cast("
+            "__import__('pyarrow').decimal128(5, 2))})"
+        ),
+        use_dictionary=False,
+    )
+    ref cs = read_statistics(path)[0][0]
+    assert_true(Bool(cs.min))
+    assert_equal(Int(cs.min.value().as_decimal128().value()), -325)
+    assert_equal(Int(cs.max.value().as_decimal128().value()), 200)
+    remove(path)
+
+
+def test_read_fixed_size_binary_minmax() raises:
+    # fixed_size_binary bounds decode to a FixedSizeBinaryScalar of raw bytes
+    var path = _write_pa(
+        (
+            "__import__('pyarrow').table({'f':"
+            " __import__('pyarrow').array([b'yy', b'aa', b'mm'],"
+            " type=__import__('pyarrow').binary(2))})"
+        ),
+        use_dictionary=False,
+    )
+    ref cs = read_statistics(path)[0][0]
+    assert_true(Bool(cs.min))
+    assert_true(
+        cs.min.value().as_fixed_size_binary().value() == [UInt8(97), UInt8(97)]
+    )
+    assert_true(
+        cs.max.value().as_fixed_size_binary().value()
+        == [UInt8(121), UInt8(121)]
+    )
+    remove(path)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

@@ -305,6 +305,15 @@
 
 ### Fixes
 
+- **Typed statistics for temporal / decimal / fixed-size-binary** (`marrow.parquet`):
+  `read_statistics` / `read_page_bounds` decoded `min`/`max` only for numeric,
+  bool, and string columns and returned `None` for everything else — even though
+  the writer emits those bounds. `_decode_stat` now also decodes temporal
+  (`date32`/`time32`/`time64`/`timestamp`), decimal (`decimal32`/`decimal64` from
+  INT32/INT64, `decimal128`/`decimal256` from big-endian FLBA), and
+  `fixed_size_binary` bounds to typed scalars. (`binary`/`large_binary` have no
+  scalar type yet, so their raw bounds remain available via `read_metadata`.)
+
 - **INT32/INT64-backed decimal read** (`marrow.parquet`): a DECIMAL column stored
   as physical `INT32`/`INT64` (which the writer emits for `decimal32`/`decimal64`)
   was decoded as a big-endian `FIXED_LEN_BYTE_ARRAY`, misreading the little-endian

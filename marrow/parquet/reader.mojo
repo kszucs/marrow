@@ -41,6 +41,15 @@ from ..scalars import (
     UInt64Scalar,
     Float32Scalar,
     Float64Scalar,
+    Date32Scalar,
+    Time32Scalar,
+    Time64Scalar,
+    TimestampScalar,
+    Decimal32Scalar,
+    Decimal64Scalar,
+    Decimal128Scalar,
+    Decimal256Scalar,
+    FixedSizeBinaryScalar,
 )
 from .. import dtypes as dt
 
@@ -2239,7 +2248,48 @@ def _decode_stat(
         return StringScalar(
             String(StringSlice(unsafe_from_utf8=Span(b)))
         ).to_any()
+    # Temporal / small-decimal: physical INT32 / INT64, carrying the leaf's
+    # unit / precision-scale so the scalar retags to the Arrow type.
+    elif dtype.is_date32():
+        return Date32Scalar(
+            LittleEndian.fixed[DType.int32](s, 0), dt.date32()
+        ).to_any()
+    elif dtype.is_time32():
+        return Time32Scalar(
+            LittleEndian.fixed[DType.int32](s, 0), dtype.as_time32()
+        ).to_any()
+    elif dtype.is_time64():
+        return Time64Scalar(
+            LittleEndian.fixed[DType.int64](s, 0), dtype.as_time64()
+        ).to_any()
+    elif dtype.is_timestamp():
+        return TimestampScalar(
+            LittleEndian.fixed[DType.int64](s, 0), dtype.as_timestamp()
+        ).to_any()
+    elif dtype.is_decimal32():
+        return Decimal32Scalar(
+            LittleEndian.fixed[DType.int32](s, 0), dtype.as_decimal32()
+        ).to_any()
+    elif dtype.is_decimal64():
+        return Decimal64Scalar(
+            LittleEndian.fixed[DType.int64](s, 0), dtype.as_decimal64()
+        ).to_any()
+    # decimal128/256: big-endian two's-complement FIXED_LEN_BYTE_ARRAY.
+    elif dtype.is_decimal128():
+        return Decimal128Scalar(
+            _decode_be_flba[DType.int128](s, 0, len(b)), dtype.as_decimal128()
+        ).to_any()
+    elif dtype.is_decimal256():
+        return Decimal256Scalar(
+            _decode_be_flba[DType.int256](s, 0, len(b)), dtype.as_decimal256()
+        ).to_any()
+    elif dtype.is_fixed_size_binary():
+        return FixedSizeBinaryScalar(
+            List[UInt8](s), dtype.as_fixed_size_binary().byte_width
+        ).to_any()
     else:
+        # binary / large_binary have no scalar type; the raw min/max bytes are
+        # still available via `read_metadata`.
         return None
 
 
