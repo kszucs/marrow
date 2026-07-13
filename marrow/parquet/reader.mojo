@@ -1766,45 +1766,39 @@ def _decode_stat(
     """
     var s = Span(b)
     if dtype == dt.int8:
-        return AnyScalar(
-            Int8Scalar(LittleEndian.fixed[DType.int32](s, 0).cast[DType.int8]())
-        )
+        return Int8Scalar(
+            LittleEndian.fixed[DType.int32](s, 0).cast[DType.int8]()
+        ).to_any()
     elif dtype == dt.int16:
-        return AnyScalar(
-            Int16Scalar(
-                LittleEndian.fixed[DType.int32](s, 0).cast[DType.int16]()
-            )
-        )
+        return Int16Scalar(
+            LittleEndian.fixed[DType.int32](s, 0).cast[DType.int16]()
+        ).to_any()
     elif dtype == dt.int32:
-        return AnyScalar(Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)))
+        return Int32Scalar(LittleEndian.fixed[DType.int32](s, 0)).to_any()
     elif dtype == dt.uint8:
-        return AnyScalar(
-            UInt8Scalar(
-                LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint8]()
-            )
-        )
+        return UInt8Scalar(
+            LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint8]()
+        ).to_any()
     elif dtype == dt.uint16:
-        return AnyScalar(
-            UInt16Scalar(
-                LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint16]()
-            )
-        )
+        return UInt16Scalar(
+            LittleEndian.fixed[DType.uint32](s, 0).cast[DType.uint16]()
+        ).to_any()
     elif dtype == dt.uint32:
-        return AnyScalar(UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)))
+        return UInt32Scalar(LittleEndian.fixed[DType.uint32](s, 0)).to_any()
     elif dtype == dt.int64:
-        return AnyScalar(Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)))
+        return Int64Scalar(LittleEndian.fixed[DType.int64](s, 0)).to_any()
     elif dtype == dt.uint64:
-        return AnyScalar(UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)))
+        return UInt64Scalar(LittleEndian.fixed[DType.uint64](s, 0)).to_any()
     elif dtype == dt.float32:
-        return AnyScalar(Float32Scalar(LittleEndian.fixed[DType.float32](s, 0)))
+        return Float32Scalar(LittleEndian.fixed[DType.float32](s, 0)).to_any()
     elif dtype == dt.float64:
-        return AnyScalar(Float64Scalar(LittleEndian.fixed[DType.float64](s, 0)))
+        return Float64Scalar(LittleEndian.fixed[DType.float64](s, 0)).to_any()
     elif dtype == dt.bool_:
-        return AnyScalar(BoolScalar(len(b) > 0 and b[0] != 0))
+        return BoolScalar(len(b) > 0 and b[0] != 0).to_any()
     elif dtype.is_string():
-        return AnyScalar(
-            StringScalar(String(StringSlice(unsafe_from_utf8=Span(b))))
-        )
+        return StringScalar(
+            String(StringSlice(unsafe_from_utf8=Span(b)))
+        ).to_any()
     else:
         return None
 
