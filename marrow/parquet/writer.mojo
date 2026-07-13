@@ -626,7 +626,6 @@ struct ColumnWriter(Movable):
         return True
 
     @staticmethod
-    @staticmethod
     def _update_minmax(
         v: Span[UInt8, _],
         mut lo: List[UInt8],

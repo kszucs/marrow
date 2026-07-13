@@ -1165,7 +1165,7 @@ struct SchemaMapping(Movable):
 
     def project(self, columns: List[String]) raises -> Projection:
         """Read plan for the named top-level columns, in the given order. The
-        assembly nodes are with_remapped_leaves onto a compact decoded list holding only the
+        assembly nodes are remapped onto a compact decoded list holding only the
         selected columns' leaves; unselected column chunks are never decoded."""
         var fields = List[dt.Field]()
         var nodes = List[SchemaNode]()
@@ -1192,7 +1192,7 @@ struct SchemaMapping(Movable):
 
 struct Projection(Movable):
     """A read plan: the output Arrow schema, the assembly nodes (leaf indices
-    with_remapped_leaves to a compact decoded list), and `decode_order` — the original flat
+    remapped to a compact decoded list), and `decode_order` — the original flat
     leaf/column-chunk indices to decode, in that compact order."""
 
     var schema: Schema

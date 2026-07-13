@@ -732,16 +732,13 @@ struct ByteArrayLeafBuilder[BT: dt.BinaryLikeType](LeafBuilder):
 
     def consume(mut self, var page: Page) raises:
         if page.dictionary:
-            self.dict_body = List[UInt8]()
-            self.dict_body.extend(page.body)
-            var span = Span(self.dict_body)
-            var off = 0
-            for _ in range(page.num_values):
-                var n = LittleEndian.u32(span, off)
-                off += 4
-                self.dict_off.append(off)
-                self.dict_len.append(n)
-                off += n
+            Dictionary.decode_page_bytes(
+                page.body,
+                page.num_values,
+                self.dict_body,
+                self.dict_off,
+                self.dict_len,
+            )
             return
 
         var vspan = page.values()
