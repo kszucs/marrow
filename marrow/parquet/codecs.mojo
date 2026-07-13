@@ -25,6 +25,7 @@ from std.sys import size_of
 from std.memory import memcpy
 
 from ..arrays import (
+    AnyArray,
     PrimitiveArray,
     StringArray,
     BinaryLikeArray,
@@ -563,8 +564,134 @@ struct Plain:
 
 struct Dictionary:
     """The dictionary codec — a dictionary page of distinct values, then data
-    pages of RLE/bit-packed indices into it. `decode_page_*` reads the dictionary
-    page; `decode_*` reads a data page's indices and gathers the values."""
+    pages of RLE/bit-packed indices into it. `encode` builds both from a column;
+    `decode_page_*` reads the dictionary page and `decode_*` reads a data page's
+    indices and gathers the values."""
+
+    # --- encode: column -> dictionary-page bytes + per-present-value indices ---
+
+    @staticmethod
+    def _encode_prim[
+        store: dt.NumericType, phys: DType
+    ](
+        arr: PrimitiveArray[store],
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Dictionary-encode a primitive column: PLAIN-encode each distinct value
+        (widened to `phys`) into `dict_body`, collect the per-value index."""
+        comptime W = size_of[Scalar[phys]]()
+        var seen = Dict[Scalar[store.native], Int]()
+        var num_dict = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = arr[i].value()
+                if v in seen:
+                    indices.append(Int32(seen[v]))
+                else:
+                    seen[v] = num_dict
+                    indices.append(Int32(num_dict))
+                    num_dict += 1
+                    var bytes = v.cast[phys]().as_bytes[big_endian=False]()
+                    for b in range(W):
+                        dict_body.append(bytes[b])
+        return num_dict
+
+    @staticmethod
+    def _encode_bytes[
+        BT: dt.BinaryLikeType
+    ](
+        arr: BinaryLikeArray[BT],
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Dictionary-encode a byte-array column (string/binary and their large_
+        variants): length-prefixed distinct values in the dictionary page, one
+        index per present value."""
+        var seen = Dict[String, Int]()
+        var num_dict = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                var v = String(arr.unsafe_get(UInt(i)))
+                if v in seen:
+                    indices.append(Int32(seen[v]))
+                else:
+                    seen[v] = num_dict
+                    indices.append(Int32(num_dict))
+                    num_dict += 1
+                    var b = v.as_bytes()
+                    LittleEndian.put_u32(dict_body, len(b))
+                    dict_body.extend(b)
+        return num_dict
+
+    @staticmethod
+    def encode(
+        dtype: dt.AnyDataType,
+        col: AnyArray,
+        mut dict_body: List[UInt8],
+        mut indices: List[Int32],
+    ) raises -> Int:
+        """Build the dictionary page bytes + per-value indices for `col`; returns
+        the dictionary size. Dispatches on the Arrow type like the PLAIN encoders
+        (bool is never dictionary-encoded)."""
+        if dtype == dt.int32:
+            return Self._encode_prim[dt.Int32Type, DType.int32](
+                col.as_int32(), dict_body, indices
+            )
+        elif dtype == dt.int64:
+            return Self._encode_prim[dt.Int64Type, DType.int64](
+                col.as_int64(), dict_body, indices
+            )
+        elif dtype == dt.uint32:
+            return Self._encode_prim[dt.UInt32Type, DType.uint32](
+                col.as_uint32(), dict_body, indices
+            )
+        elif dtype == dt.uint64:
+            return Self._encode_prim[dt.UInt64Type, DType.uint64](
+                col.as_uint64(), dict_body, indices
+            )
+        elif dtype == dt.float32:
+            return Self._encode_prim[dt.Float32Type, DType.float32](
+                col.as_float32(), dict_body, indices
+            )
+        elif dtype == dt.float64:
+            return Self._encode_prim[dt.Float64Type, DType.float64](
+                col.as_float64(), dict_body, indices
+            )
+        elif dtype == dt.float16:
+            return Self._encode_prim[dt.Float16Type, DType.float16](
+                col.as_float16(), dict_body, indices
+            )
+        elif dtype == dt.int8:
+            return Self._encode_prim[dt.Int8Type, DType.int32](
+                col.as_int8(), dict_body, indices
+            )
+        elif dtype == dt.int16:
+            return Self._encode_prim[dt.Int16Type, DType.int32](
+                col.as_int16(), dict_body, indices
+            )
+        elif dtype == dt.uint8:
+            return Self._encode_prim[dt.UInt8Type, DType.int32](
+                col.as_uint8(), dict_body, indices
+            )
+        elif dtype == dt.uint16:
+            return Self._encode_prim[dt.UInt16Type, DType.int32](
+                col.as_uint16(), dict_body, indices
+            )
+        elif dtype.is_string():
+            return Self._encode_bytes(col.as_string(), dict_body, indices)
+        elif dtype.is_large_string():
+            return Self._encode_bytes(col.as_large_string(), dict_body, indices)
+        elif dtype.is_binary():
+            return Self._encode_bytes(col.as_binary(), dict_body, indices)
+        elif dtype.is_large_binary():
+            return Self._encode_bytes(col.as_large_binary(), dict_body, indices)
+        else:
+            raise Error(
+                "parquet: cannot dictionary-encode column type " + String(dtype)
+            )
+
+    # --- decode ---
 
     @staticmethod
     def decode_page_primitive[
