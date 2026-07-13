@@ -4,6 +4,17 @@
 
 ### Features
 
+- **Data page splitting** (`marrow.parquet`): the writer no longer emits a single
+  data page per column chunk. Each chunk is split into data pages of at most
+  ~1 MiB of encoded values or 20 000 rows (matching arrow-cpp `data_pagesize` /
+  `max_rows_per_page` and arrow-rs `DEFAULT_PAGE_SIZE` /
+  `DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT`), always breaking on a record boundary so a
+  nested (list/map) row never straddles pages. A single dictionary page is shared
+  by all data pages of a chunk. The writer now produces a real multi-entry
+  OffsetIndex + ColumnIndex (per-page location, `first_row_index`, and
+  min/max/null-count), so page-level predicate pushdown works on marrow-written
+  files and large columns are no longer one giant page.
+
 - **Bloom filters, read + write** (`marrow.parquet`): a new `bloom` module
   implements the XXH64 value hash and the split-block bloom filter (SBBF) per the
   Parquet spec / arrow-rs. `write_table(..., write_bloom_filter=True)` builds a

@@ -1,19 +1,15 @@
 """Native Arrow → Parquet writer.
 
 `FileWriter` orchestrates the file: header magic, one `RowGroup` per slice of the
-table (bounded by `row_group_size`), then the footer. `ColumnWriter` owns
-one leaf column chunk — encoding a data page (RLE definition levels + PLAIN
-values), compressing it, and producing the `ColumnMetaData` (with null-count and
-min/max statistics). `version` selects the page format: v1 (levels + values
+table (bounded by `row_group_size`), then the footer. `ColumnWriter` owns one
+leaf column chunk — splitting it into data pages (RLE rep/def levels + encoded
+values) of at most ~1 MiB / `MAX_ROWS_PER_PAGE` rows on record boundaries,
+compressing each, and producing the `ColumnMetaData` plus the per-page
+OffsetIndex / ColumnIndex. A shared dictionary page (when dictionary-encoded)
+precedes the data pages. `version` selects the page format: v1 (levels + values
 compressed together) or v2 (levels stored uncompressed ahead of the compressed
 values). Value encoding is dispatched by Arrow type to typed methods, so the
 writer mirrors the reader's structure.
-
-Milestone: flat columns + struct; primitives (incl. int8/16 widened to INT32),
-string/binary; PLAIN values; UNCOMPRESSED/SNAPPY/ZSTD/GZIP/BROTLI/LZ4/LZ4_RAW;
-v1 and v2 data pages; per-column null-count and min/max statistics (with
-column_orders). Dictionary encoding, page splitting, and temporal/list writing
-are follow-ups.
 """
 
 from std.pathlib import Path
@@ -42,6 +38,7 @@ from .bloom import xxh64, SplitBlockBloomFilter, BloomFilterHeader
 from .schema import SchemaMapping, LeafColumn, SchemaNode
 from .format import (
     PageHeader,
+    PhysicalType,
     ColumnMetaData,
     ColumnChunk,
     RowGroup,
@@ -52,6 +49,11 @@ from .format import (
 )
 
 comptime DEFAULT_ROW_GROUP_SIZE: Int = 1 << 20
+# A data page is flushed at whichever comes first: ~1 MiB of encoded value bytes
+# or 20 000 rows (matching arrow-cpp `data_pagesize` / `max_rows_per_page` and
+# arrow-rs `DEFAULT_PAGE_SIZE` / `DEFAULT_DATA_PAGE_ROW_COUNT_LIMIT`).
+comptime DEFAULT_DATA_PAGE_SIZE: Int = 1 << 20
+comptime MAX_ROWS_PER_PAGE: Int = 20_000
 # Above this dictionary-page byte size a column falls back to PLAIN — the
 # dictionary would be as large as the raw values (PyArrow's default limit).
 comptime _DICT_PAGE_LIMIT: Int = 1 << 20
@@ -470,25 +472,6 @@ struct ColumnWriter(Movable):
         else:  # large_binary
             self._encode_bytes_delta(col.as_large_binary(), out)
 
-    def _def_levels(
-        self, col: AnyArray, mut null_count: Int
-    ) raises -> List[UInt8]:
-        """RLE definition levels (bit width 1), no length prefix — the shared
-        level encoding for both page versions. Reports the null count; returns
-        empty for a non-nullable column (`max_def == 0`)."""
-        var out = List[UInt8]()
-        null_count = 0
-        if self.leaf.max_def >= 1:
-            var defs = List[Int32]()
-            for i in range(col.length()):
-                if col.is_valid(i):
-                    defs.append(Int32(1))
-                else:
-                    defs.append(Int32(0))
-                    null_count += 1
-            out = Rle.encode(defs, 1)
-        return out^
-
     # -----------------------------------------------------------------------
     # min/max statistics — PLAIN-encoded bounds over the non-null values, in
     # the column's logical (type-defined) ordering (see ColumnOrder emission).
@@ -729,60 +712,114 @@ struct ColumnWriter(Movable):
         else:
             return False
 
-    def _flush_dict_page(
+    # -----------------------------------------------------------------------
+    # Page splitting — a column chunk is split into data pages of at most
+    # ~1 MiB of encoded values / MAX_ROWS_PER_PAGE rows, each on a record
+    # boundary. One dictionary page (if any) is shared by all data pages.
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _sub(src: List[Int32], a: Int, b: Int) -> List[Int32]:
+        """A copy of `src[a:b]` (the per-page level / index slice)."""
+        var out = List[Int32](capacity=b - a)
+        for i in range(a, b):
+            out.append(src[i])
+        return out^
+
+    def _phys_width(self) -> Int:
+        """Physical byte width of a fixed-width value (0 for BYTE_ARRAY / BOOL).
+        """
+        ref p = self.leaf.physical
+        if p == PhysicalType.INT32 or p == PhysicalType.FLOAT:
+            return 4
+        elif p == PhysicalType.INT64 or p == PhysicalType.DOUBLE:
+            return 8
+        elif p == PhysicalType.FIXED_LEN_BYTE_ARRAY:
+            return self.leaf.type_length
+        else:
+            return 0
+
+    @staticmethod
+    def _bytes_total[
+        BT: dt.BinaryLikeType
+    ](arr: BinaryLikeArray[BT]) raises -> Int:
+        var total = 0
+        for i in range(arr.length):
+            if arr.is_valid(i):
+                total += len(arr.unsafe_get(UInt(i)).as_bytes()) + 4
+        return total
+
+    def _rows_per_page(
+        self,
+        values: AnyArray,
+        encoding: Encoding,
+        dict_width: Int,
+        num_rows: Int,
+        num_present: Int,
+    ) raises -> Int:
+        """Rows per data page: the row count whose estimated encoded value bytes
+        fill `DEFAULT_DATA_PAGE_SIZE`, clamped to `[1, MAX_ROWS_PER_PAGE]`. The
+        estimate is values-only (dictionary indices are `bit_width` bits each,
+        byte arrays their measured length, everything else its physical width).
+        """
+        var est: Int
+        if encoding == Encoding.RLE_DICTIONARY:
+            est = num_present * max(1, (dict_width + 7) // 8)
+        elif self.leaf.physical == PhysicalType.BOOLEAN:
+            est = (num_present + 7) // 8
+        elif self.leaf.physical == PhysicalType.BYTE_ARRAY:
+            ref vt = self.leaf.dtype
+            if vt.is_string():
+                est = Self._bytes_total(values.as_string())
+            elif vt.is_large_string():
+                est = Self._bytes_total(values.as_large_string())
+            elif vt.is_binary():
+                est = Self._bytes_total(values.as_binary())
+            else:
+                est = Self._bytes_total(values.as_large_binary())
+        else:
+            est = num_present * self._phys_width()
+        if est <= 0 or num_rows == 0:
+            return MAX_ROWS_PER_PAGE
+        return max(
+            1, min(MAX_ROWS_PER_PAGE, num_rows * DEFAULT_DATA_PAGE_SIZE // est)
+        )
+
+    def _write_dict_page(
         self,
         var dict_body: List[UInt8],
         num_dict: Int,
-        indices: List[Int32],
-        mut index_bytes: List[UInt8],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
     ) raises -> Tuple[Int, Int, Int]:
-        """Write the dictionary page (PLAIN distinct values, compressed) ahead of
-        the data page and fill `index_bytes` with the data page's value bytes:
-        a `bit_width` byte then the bit-packed per-value indices. Returns
-        `(offset, uncompressed_size, compressed_size)` — the page's byte offset
-        (the chunk start) and its total sizes (header included), which the chunk
-        metadata must add to the data page's."""
+        """Write the shared dictionary page (PLAIN distinct values, compressed);
+        return `(offset, uncompressed_incl_header, compressed_incl_header)`."""
         var offset = len(out)
         var comp = self.compression.compress(codecs, Span(dict_body))
         var header_len = PageHeader.dictionary_page(
             len(dict_body), len(comp), num_dict
         ).append_to(out)
         out.extend(Span(comp))
-
-        var width = Rle.bit_width(num_dict - 1) if num_dict > 0 else 0
-        index_bytes.append(UInt8(width))
-        index_bytes.extend(Span(Rle.encode_bitpacked(indices, width)))
         return (offset, header_len + len(dict_body), header_len + len(comp))
 
-    def _emit_page(
+    def _serialize_data_page(
         self,
-        values: AnyArray,
         var value_bytes: List[UInt8],
         var rep_bytes: List[UInt8],
         var def_bytes: List[UInt8],
         num_values: Int,
         num_rows: Int,
         null_count: Int,
-        dict_page_offset: Int,
-        dict_uncompressed_size: Int,
-        dict_compressed_size: Int,
         encoding: Encoding,
-        path: List[String],
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
-    ) raises -> ColumnChunk:
-        """Serialize one data page (v1 or v2) from the already-encoded value bytes
-        (PLAIN, dictionary indices, or DELTA) plus the RLE rep/def level bytes,
-        and build its `ColumnChunk` metadata (null count, min/max stats, the
-        encodings actually used, and — for a dictionary chunk — the dictionary
-        page offset). v1 length-prefixes each level stream ahead of the values
-        (all compressed together); v2 keeps rep+def uncompressed ahead of the
-        compressed values. A dictionary page, if any, was already written to
-        `out` at `dict_page_offset`, so the chunk starts there."""
+    ) raises -> Tuple[Int, Int, Int]:
+        """Serialize one v1/v2 data page into `out` from the already-encoded value
+        + rep/def level bytes; return `(page_offset, uncompressed_incl_header,
+        compressed_incl_header)`. v1 length-prefixes each level stream ahead of
+        the values (all compressed together); v2 keeps the levels uncompressed
+        ahead of the (optionally compressed) values."""
         var page_offset = len(out)
-
         var uncompressed_size: Int
         var compressed_size: Int
         var header_len: Int
@@ -824,45 +861,11 @@ struct ColumnWriter(Movable):
                 uncompressed_size, compressed_size, num_values, encoding
             ).append_to(out)
             out.extend(Span(compressed))
-
-        var meta = ColumnMetaData()
-        meta.type = self.leaf.physical.code
-        for p in path:
-            meta.path_in_schema.append(p)
-        meta.codec = self.compression.code
-        meta.num_values = num_values
-        meta.total_uncompressed_size = (
-            uncompressed_size + header_len + dict_uncompressed_size
+        return (
+            page_offset,
+            header_len + uncompressed_size,
+            header_len + compressed_size,
         )
-        meta.total_compressed_size = (
-            compressed_size + header_len + dict_compressed_size
-        )
-        meta.data_page_offset = page_offset
-        # encodings: RLE levels, then the value encoding (a dictionary chunk also
-        # advertises the PLAIN dictionary page).
-        var encs = [Encoding.RLE.code]
-        if dict_page_offset >= 0:
-            meta.dictionary_page_offset = dict_page_offset
-            encs.append(Encoding.PLAIN.code)
-        encs.append(encoding.code)
-        meta.encodings = encs^
-        if self.leaf.max_def >= 1:
-            meta.null_count = null_count
-        var min_v = List[UInt8]()
-        var max_v = List[UInt8]()
-        if self._stats(values, min_v, max_v):
-            meta.has_min_max = True
-            meta.min_value = min_v^
-            meta.max_value = max_v^
-
-        var cc = ColumnChunk()
-        cc.file_offset = (
-            dict_page_offset if dict_page_offset >= 0 else page_offset
-        )
-        cc.meta_data = meta^
-        # the single data page's total bytes (header + body), for the OffsetIndex
-        cc.data_page_size = len(out) - page_offset
-        return cc^
 
     def write(
         self,
@@ -873,94 +876,223 @@ struct ColumnWriter(Movable):
         mut out: List[UInt8],
         mut codecs: CompressionLibs,
     ) raises -> ColumnChunk:
-        """Write one leaf column chunk. A flat column passes empty `def_levels`/
-        `rep_levels` and its 0/1 definition levels are derived here (the fast path
-        that never materialises rep levels); a leveled (list/map/nested) column
-        passes the rep/def levels pre-shredded by `SchemaNode.shred_levels`. The
-        value encoding is `self.encoding` (PLAIN, dictionary, or DELTA); nulls are
-        skipped and placed by the definition levels."""
+        """Write one leaf column chunk, split into data pages. A flat column
+        passes empty `def_levels`/`rep_levels` and its 0/1 definition levels are
+        derived here; a leveled (list/map) column passes the rep/def levels
+        pre-shredded by `SchemaNode.shred_levels`. Values are dictionary/PLAIN/
+        DELTA/BSS-encoded; a shared dictionary page (if any) precedes the data
+        pages. Produces the per-page OffsetIndex + ColumnIndex on the chunk."""
         var max_def = self.leaf.max_def
         var max_rep = self.leaf.max_rep
+        var slot_def = self.leaf.slot_def
 
-        # ---- levels ----
-        var num_values: Int
-        var null_count: Int
-        var num_rows: Int
-        var rep_bytes = List[UInt8]()
-        var def_bytes = List[UInt8]()
+        # ---- per-slot definition/repetition levels ----
+        # Flat: one 0/1 def per row from the array's validity (a non-nullable
+        # column has max_def == 0, so every slot is present). Leveled: the
+        # pre-shredded levels, with one slot per element or empty/null list.
+        var defs = List[Int32]()
+        var reps = List[Int32]()
         if max_rep == 0 and len(def_levels) == 0:
-            # Flat: derive 0/1 definition levels from the array's own validity.
-            num_values = values.length()
-            null_count = 0
-            def_bytes = self._def_levels(values, null_count)
-            num_rows = num_values
+            for i in range(values.length()):
+                defs.append(
+                    Int32(max_def) if values.is_valid(i) else Int32(max_def - 1)
+                )
         else:
-            # Leveled: present values = definition level == max_def.
-            num_values = len(def_levels)
-            var num_present = 0
             for d in def_levels:
-                if Int(d) == max_def:
-                    num_present += 1
-            null_count = num_values - num_present
-            num_rows = num_values
-            if max_rep >= 1:
-                num_rows = 0
-                for rl in rep_levels:
-                    if Int(rl) == 0:
-                        num_rows += 1
-                rep_bytes = Rle.encode(rep_levels, Rle.bit_width(max_rep))
-            if max_def >= 1:
-                def_bytes = Rle.encode(def_levels, Rle.bit_width(max_def))
+                defs.append(d)
+            for r in rep_levels:
+                reps.append(r)
 
-        # ---- values ----
-        var value_bytes = List[UInt8]()
-        var dict_page_offset = -1
-        var dict_uncompressed = 0
-        var dict_compressed = 0
+        var num_values = len(defs)
+        var num_present = 0
+        for d in defs:
+            if Int(d) == max_def:
+                num_present += 1
+        var null_count_total = num_values - num_present
+        var num_rows = num_values
+        if max_rep >= 1:
+            num_rows = 0
+            for r in reps:
+                if Int(r) == 0:
+                    num_rows += 1
+
+        # ---- dictionary: build once, write the shared dictionary page ----
         var encoding = self.encoding
+        var indices = List[Int32]()
+        var dict_width = 0
+        var dict_page_offset = -1
+        var total_uncompressed = 0
+        var total_compressed = 0
         if encoding == Encoding.RLE_DICTIONARY:
             var dict_body = List[UInt8]()
-            var indices = List[Int32]()
             var num_dict = self._encode_dictionary(values, dict_body, indices)
-            if len(dict_body) <= _DICT_PAGE_LIMIT:
-                var d = self._flush_dict_page(
-                    dict_body^, num_dict, indices, value_bytes, out, codecs
-                )
-                dict_page_offset = d[0]
-                dict_uncompressed = d[1]
-                dict_compressed = d[2]
-            else:
-                # High-cardinality: the dictionary would be larger than PLAIN,
-                # so fall back to PLAIN for this column.
+            if len(dict_body) > _DICT_PAGE_LIMIT:
+                # High-cardinality: the dictionary would exceed PLAIN, fall back.
                 encoding = Encoding.PLAIN
-                self._encode_values(values, value_bytes)
-        elif (
-            encoding == Encoding.DELTA_BINARY_PACKED
-            or encoding == Encoding.DELTA_BYTE_ARRAY
-            or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
-        ):
-            self._encode_delta(values, value_bytes)
-        elif encoding == Encoding.BYTE_STREAM_SPLIT:
-            self._encode_bss(values, value_bytes)
-        else:
-            self._encode_values(values, value_bytes)
+                indices = List[Int32]()
+            else:
+                dict_width = Rle.bit_width(num_dict - 1) if num_dict > 0 else 0
+                var d = self._write_dict_page(dict_body^, num_dict, out, codecs)
+                dict_page_offset = d[0]
+                total_uncompressed += d[1]
+                total_compressed += d[2]
 
-        var cc = self._emit_page(
-            values,
-            value_bytes^,
-            rep_bytes^,
-            def_bytes^,
-            num_values,
-            num_rows,
-            null_count,
-            dict_page_offset,
-            dict_uncompressed,
-            dict_compressed,
-            encoding,
-            path,
-            out,
-            codecs,
+        var rows_per_page = self._rows_per_page(
+            values, encoding, dict_width, num_rows, num_present
         )
+
+        # ---- emit data pages ----
+        var page_locs = List[PageLocation]()
+        var cix = ColumnIndex()
+        var can_column_index = True
+        var first_data_offset = -1
+        var i = 0  # slot cursor
+        var e = 0  # element cursor into `values`
+        var p = 0  # present cursor into `indices`
+        var rows_before = 0
+        while i < num_values or len(page_locs) == 0:
+            var i0 = i
+            var e0 = e
+            var p0 = p
+            var page_rows = 0
+            while i < num_values and page_rows < rows_per_page:
+                # consume one whole record (rep == 0 starts a new record)
+                if Int(defs[i]) >= slot_def:
+                    e += 1
+                if Int(defs[i]) == max_def:
+                    p += 1
+                i += 1
+                while i < num_values and not (
+                    max_rep == 0 or Int(reps[i]) == 0
+                ):
+                    if Int(defs[i]) >= slot_def:
+                        e += 1
+                    if Int(defs[i]) == max_def:
+                        p += 1
+                    i += 1
+                page_rows += 1
+            var page_num_values = i - i0
+            var page_present = p - p0
+            var page_null = page_num_values - page_present
+
+            # levels for this page
+            var rep_bytes = List[UInt8]()
+            var def_bytes = List[UInt8]()
+            if max_rep >= 1:
+                rep_bytes = Rle.encode(
+                    Self._sub(reps, i0, i), Rle.bit_width(max_rep)
+                )
+            if max_def >= 1:
+                def_bytes = Rle.encode(
+                    Self._sub(defs, i0, i), Rle.bit_width(max_def)
+                )
+
+            # value bytes for this page
+            var value_bytes = List[UInt8]()
+            if encoding == Encoding.RLE_DICTIONARY:
+                value_bytes.append(UInt8(dict_width))
+                value_bytes.extend(
+                    Span(
+                        Rle.encode_bitpacked(
+                            Self._sub(indices, p0, p), dict_width
+                        )
+                    )
+                )
+            else:
+                var page_vals = values.slice(e0, e - e0)
+                if (
+                    encoding == Encoding.DELTA_BINARY_PACKED
+                    or encoding == Encoding.DELTA_BYTE_ARRAY
+                    or encoding == Encoding.DELTA_LENGTH_BYTE_ARRAY
+                ):
+                    self._encode_delta(page_vals, value_bytes)
+                elif encoding == Encoding.BYTE_STREAM_SPLIT:
+                    self._encode_bss(page_vals, value_bytes)
+                else:
+                    self._encode_values(page_vals, value_bytes)
+
+            var sp = self._serialize_data_page(
+                value_bytes^,
+                rep_bytes^,
+                def_bytes^,
+                page_num_values,
+                page_rows,
+                page_null,
+                encoding,
+                out,
+                codecs,
+            )
+            total_uncompressed += sp[1]
+            total_compressed += sp[2]
+            if first_data_offset < 0:
+                first_data_offset = sp[0]
+
+            # OffsetIndex: this page's location and its first (row-group-relative)
+            # row.
+            var loc = PageLocation()
+            loc.offset = sp[0]
+            loc.compressed_page_size = len(out) - sp[0]
+            loc.first_row_index = rows_before
+            page_locs.append(loc^)
+
+            # ColumnIndex: per-page bounds. A page with no present value is a null
+            # page (empty bounds); a present page without stats disables the index.
+            var pmin = List[UInt8]()
+            var pmax = List[UInt8]()
+            var has_mm = self._stats(values.slice(e0, e - e0), pmin, pmax)
+            if page_present == 0:
+                cix.null_pages.append(True)
+                cix.min_values.append(List[UInt8]())
+                cix.max_values.append(List[UInt8]())
+            elif has_mm:
+                cix.null_pages.append(False)
+                cix.min_values.append(pmin^)
+                cix.max_values.append(pmax^)
+            else:
+                can_column_index = False
+                cix.null_pages.append(False)
+                cix.min_values.append(List[UInt8]())
+                cix.max_values.append(List[UInt8]())
+            cix.null_counts.append(page_null)
+
+            rows_before += page_rows
+
+        # ---- chunk metadata ----
+        var meta = ColumnMetaData()
+        meta.type = self.leaf.physical.code
+        for pth in path:
+            meta.path_in_schema.append(pth)
+        meta.codec = self.compression.code
+        meta.num_values = num_values
+        meta.total_uncompressed_size = total_uncompressed
+        meta.total_compressed_size = total_compressed
+        meta.data_page_offset = first_data_offset
+        var encs = [Encoding.RLE.code]
+        if dict_page_offset >= 0:
+            meta.dictionary_page_offset = dict_page_offset
+            encs.append(Encoding.PLAIN.code)
+        encs.append(encoding.code)
+        meta.encodings = encs^
+        if max_def >= 1:
+            meta.null_count = null_count_total
+        var cmin = List[UInt8]()
+        var cmax = List[UInt8]()
+        if self._stats(values, cmin, cmax):
+            meta.has_min_max = True
+            meta.min_value = cmin^
+            meta.max_value = cmax^
+
+        var cc = ColumnChunk()
+        cc.file_offset = (
+            dict_page_offset if dict_page_offset >= 0 else first_data_offset
+        )
+        cc.meta_data = meta^
+        var oi = OffsetIndex()
+        oi.page_locations = page_locs^
+        cc.offset_index_out = oi^
+        cix.boundary_order = 0  # UNORDERED (per-page ordering not computed)
+        cc.column_index_out = cix^
+        cc.write_column_index = can_column_index
         if self.write_bloom:
             cc.bloom_bytes = self._bloom_bytes(values)
         return cc^
@@ -1129,70 +1261,28 @@ struct FileWriter(Movable):
                 ].meta_data.bloom_filter_length = (hlen + nbytes)
 
     def _write_page_index(mut self, mut fmeta: FileMetaData) raises:
-        """Emit the OffsetIndex (always) and ColumnIndex (when the chunk carries
-        bounds or is all-null) for every column chunk, then record their file
-        offsets on the chunk. Marrow writes a single data page per chunk, so each
-        index has exactly one entry covering all the chunk's rows."""
+        """Serialize the per-page OffsetIndex (always) and ColumnIndex (when the
+        chunk's pages all carry bounds or are null pages) that `ColumnWriter.write`
+        produced, then record their file offsets on the chunk."""
         for rg in range(len(fmeta.row_groups)):
             for ci in range(len(fmeta.row_groups[rg].columns)):
-                # snapshot the fields the index needs before mutating the chunk
-                var has_mm = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.has_min_max
-                )
-                var null_count = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.null_count
-                )
-                var num_values = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.num_values
-                )
-                var min_v = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.min_value.copy()
-                )
-                var max_v = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.max_value.copy()
-                )
-                var dp_offset = (
-                    fmeta.row_groups[rg].columns[ci].meta_data.data_page_offset
-                )
-                var dp_size = fmeta.row_groups[rg].columns[ci].data_page_size
-
-                # ColumnIndex: one page. A chunk with bounds is a normal page;
-                # an all-null chunk is a null page (empty bounds). Otherwise
-                # (no usable bounds) the ColumnIndex is omitted.
-                var all_null = (
-                    null_count >= 0
-                    and num_values > 0
-                    and null_count == num_values
-                )
-                if has_mm or all_null:
-                    var cix = ColumnIndex()
-                    if has_mm:
-                        cix.null_pages.append(False)
-                        cix.min_values.append(min_v^)
-                        cix.max_values.append(max_v^)
-                    else:
-                        cix.null_pages.append(True)
-                        cix.min_values.append(List[UInt8]())
-                        cix.max_values.append(List[UInt8]())
-                    cix.boundary_order = 0  # UNORDERED (single page)
-                    if null_count >= 0:
-                        cix.null_counts.append(null_count)
+                if fmeta.row_groups[rg].columns[ci].write_column_index:
+                    var cix = (
+                        fmeta.row_groups[rg].columns[ci].column_index_out.copy()
+                    )
                     var coff = len(self.out)
                     var clen = cix.append_to(self.out)
                     fmeta.row_groups[rg].columns[ci].column_index_offset = coff
                     fmeta.row_groups[rg].columns[ci].column_index_length = clen
 
-                # OffsetIndex: the single data page's location and row start.
-                var oix = OffsetIndex()
-                var loc = PageLocation()
-                loc.offset = dp_offset
-                loc.compressed_page_size = dp_size
-                loc.first_row_index = 0
-                oix.page_locations.append(loc^)
-                var ooff = len(self.out)
-                var olen = oix.append_to(self.out)
-                fmeta.row_groups[rg].columns[ci].offset_index_offset = ooff
-                fmeta.row_groups[rg].columns[ci].offset_index_length = olen
+                var oix = (
+                    fmeta.row_groups[rg].columns[ci].offset_index_out.copy()
+                )
+                if len(oix.page_locations) > 0:
+                    var ooff = len(self.out)
+                    var olen = oix.append_to(self.out)
+                    fmeta.row_groups[rg].columns[ci].offset_index_offset = ooff
+                    fmeta.row_groups[rg].columns[ci].offset_index_length = olen
 
 
 def write_table(

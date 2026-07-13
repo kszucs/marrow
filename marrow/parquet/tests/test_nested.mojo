@@ -10,7 +10,11 @@ from std.testing import assert_equal, assert_true, assert_false
 from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
-from marrow.parquet import read_table, write_table
+from marrow.parquet import (
+    read_table,
+    write_table,
+    read_page_bounds,
+)
 from marrow.tabular import Table
 from marrow.c_data import CArrowArrayStream
 
@@ -465,6 +469,47 @@ def test_list_of_map() raises:
         pa.list_(pa.map_(pa.string(), pa.int64())),
         "none",
     )
+
+
+def test_page_split_nested() raises:
+    # a list column with >20 000 top-level rows must split into multiple pages,
+    # each ending on a record boundary (whole lists never cross a page)
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var lists = Python.list()
+    for i in range(30000):
+        var row = Python.list()
+        row.append(i)
+        row.append(i + 1)
+        lists.append(row)
+    var want = pa.table(
+        Python.dict(l=pa.array(lists, type=pa.list_(pa.int64())))
+    )
+    var path = String("/tmp/marrow_split_nested.parquet")
+    var t = CArrowArrayStream.from_pycapsule(
+        want.__arrow_c_stream__(Python.none())
+    ).to_table()
+    write_table(t, path, use_dictionary=False)
+
+    # PyArrow reads every list back (proves per-page rep/def levels are valid)
+    assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+    # marrow round-trips
+    var back = _to_pa(read_table(path))
+    assert_true(
+        Bool(
+            back.column(0)
+            .combine_chunks()
+            .equals(want.column(0).combine_chunks())
+        )
+    )
+    # >1 page, and the pages tile all 30 000 top-level rows
+    var pbs = read_page_bounds(path)
+    assert_true(len(pbs[0][0]) > 1)
+    var total = 0
+    for p in range(len(pbs[0][0])):
+        total += pbs[0][0][p].copy().num_rows
+    assert_equal(total, 30000)
+    remove(path)
 
 
 def main() raises:

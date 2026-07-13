@@ -1132,7 +1132,9 @@ struct ColumnChunk(Copyable, Movable, ThriftWritable):
     var offset_index_length: Int
     var column_index_offset: Int  # -1 if absent
     var column_index_length: Int
-    var data_page_size: Int  # writer-only: the single data page's total bytes
+    var offset_index_out: OffsetIndex  # writer-only: per-data-page locations
+    var column_index_out: ColumnIndex  # writer-only: per-data-page stats
+    var write_column_index: Bool  # writer-only: emit the ColumnIndex
     var bloom_bytes: List[UInt8]  # writer-only: the built bloom filter bitset
 
     def __init__(out self):
@@ -1142,7 +1144,9 @@ struct ColumnChunk(Copyable, Movable, ThriftWritable):
         self.offset_index_length = 0
         self.column_index_offset = -1
         self.column_index_length = 0
-        self.data_page_size = 0
+        self.offset_index_out = OffsetIndex()
+        self.column_index_out = ColumnIndex()
+        self.write_column_index = False
         self.bloom_bytes = List[UInt8]()
 
     @staticmethod

@@ -3,7 +3,12 @@ from std.math import isnan, isinf
 from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
-from marrow.parquet import read_table, write_table
+from marrow.parquet import (
+    read_table,
+    write_table,
+    read_page_index,
+    read_page_bounds,
+)
 from marrow.parquet.writer import FileWriter
 from marrow.parquet.codecs import Compression, Encoding
 from marrow.tabular import Table
@@ -901,6 +906,71 @@ def test_compression_lz4() raises:
 
 def test_compression_zstd() raises:
     _compression_roundtrip(Compression.ZSTD, "ZSTD")
+
+
+def _page_rows(path: String, col: Int) raises -> Int:
+    """Total rows across a column's data pages (must equal the row count)."""
+    var pbs = read_page_bounds(path)
+    var total = 0
+    for p in range(len(pbs[0][col])):
+        total += pbs[0][col][p].copy().num_rows
+    return total
+
+
+def test_page_split_flat() raises:
+    # 50 000 rows > the 20 000 rows-per-page cap -> multiple data pages
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var ints = Python.list()
+    for i in range(50000):
+        ints.append(i)
+    var want = pa.table(Python.dict(i=pa.array(ints, type=pa.int64())))
+    var path = String("/tmp/marrow_split_flat.parquet")
+    write_table(_to_marrow(want), path, use_dictionary=False)
+
+    # PyArrow reads every row back
+    assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+    # marrow round-trips
+    assert_equal(read_table(path).num_rows(), 50000)
+
+    # the chunk is split into >1 page and the pages tile all rows
+    var pbs = read_page_bounds(path)
+    assert_true(len(pbs[0][0]) > 1)
+    assert_equal(_page_rows(path, 0), 50000)
+    # per-page bounds are populated; first page starts at value 0
+    assert_equal(pbs[0][0][0].copy().min.value().as_int64().value(), 0)
+
+    # OffsetIndex first_row_index is a cumulative, increasing sequence
+    var pi = read_page_index(path)
+    ref oi = pi[0][0].offset_index.value()
+    var expected = 0
+    for k in range(len(oi.page_locations)):
+        assert_equal(oi.page_locations[k].first_row_index, expected)
+        expected += pbs[0][0][k].copy().num_rows
+    remove(path)
+
+
+def test_page_split_dictionary() raises:
+    # low-cardinality strings, dictionary-encoded: one shared dictionary page
+    # followed by several RLE_DICTIONARY data pages
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var strs = Python.list()
+    for i in range(50000):
+        strs.append(Python.str("k") + Python.str(i % 100))
+    var want = pa.table(Python.dict(s=pa.array(strs)))
+    var path = String("/tmp/marrow_split_dict.parquet")
+    write_table(_to_marrow(want), path, use_dictionary=True)
+
+    assert_true(Bool(pq.read_table(path).column(0).equals(want.column(0))))
+    assert_equal(read_table(path).num_rows(), 50000)
+    var pbs = read_page_bounds(path)
+    assert_true(len(pbs[0][0]) > 1)
+    assert_equal(_page_rows(path, 0), 50000)
+    # a single dictionary page precedes the data pages
+    var cc = pq.ParquetFile(path).metadata.row_group(0).column(0)
+    assert_true(Bool(cc.dictionary_page_offset < cc.data_page_offset))
+    remove(path)
 
 
 def main() raises:
