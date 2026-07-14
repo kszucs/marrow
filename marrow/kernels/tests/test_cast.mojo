@@ -2,7 +2,7 @@ from std.testing import assert_equal, assert_true, assert_raises
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, NullArray
-from marrow.builders import array
+from marrow.builders import array, FixedSizeBinaryBuilder
 from marrow.dtypes import (
     bool_,
     null,
@@ -24,6 +24,10 @@ from marrow.dtypes import (
     float32,
     float64,
     string,
+    binary,
+    large_binary,
+    large_string,
+    fixed_size_binary_,
     Int16Type,
     Int32Type,
     Float16Type,
@@ -333,6 +337,82 @@ def test_null_to_string() raises:
     var r = cast(a, string)
     assert_true(r.dtype() == string)
     assert_equal(r.null_count(), 2)
+
+
+# ---------------------------------------------------------------------------
+# Binary-like family (utf8 / large_utf8 / binary / large_binary / fsb)
+# ---------------------------------------------------------------------------
+
+
+def test_string_to_binary_roundtrip() raises:
+    var s: AnyArray = array(["ab", "cd", "e"])
+    var b = cast(s, binary)  # relabel, same 32-bit offsets
+    assert_true(b.dtype() == binary)
+    var back = cast(b, string)  # validates UTF-8, relabel
+    assert_true(back.as_string() == array(["ab", "cd", "e"]))
+
+
+def test_string_to_large_string_widen_narrow() raises:
+    var s: AnyArray = array(["ab", "cd", "e"])
+    var ls = cast(s, large_string)  # 32 → 64-bit offsets
+    assert_true(ls.dtype() == large_string)
+    var back = cast(ls, string)  # 64 → 32-bit offsets
+    assert_true(back.as_string() == array(["ab", "cd", "e"]))
+
+
+def test_binary_to_large_binary() raises:
+    var b = cast(array(["xy", "z"]), binary)
+    var lb = cast(b, large_binary)
+    assert_true(lb.dtype() == large_binary)
+    assert_true(cast(lb, string).as_string() == array(["xy", "z"]))
+
+
+def test_large_string_to_numeric() raises:
+    var ls = cast(array(["1", "22", "-3"]), large_string)
+    var r = cast(ls, int32)
+    assert_true(r.as_int32() == array([1, 22, -3], int32))
+
+
+def test_large_string_to_bool() raises:
+    var ls = cast(array(["true", "0", "False"]), large_string)
+    assert_true(cast(ls, bool_).as_bool() == array([True, False, False]))
+
+
+def test_numeric_to_large_string() raises:
+    var ls = cast(array([1, 2, 3], int32), large_string)
+    assert_true(ls.dtype() == large_string)
+    assert_true(cast(ls, int32).as_int32() == array([1, 2, 3], int32))
+
+
+def test_bool_to_large_string() raises:
+    var ls = cast(array([True, False]), large_string)
+    assert_equal(String(ls.as_large_string()[0]), "true")
+    assert_equal(String(ls.as_large_string()[1]), "false")
+
+
+def test_fixed_size_binary_roundtrip() raises:
+    var s: AnyArray = array(["ab", "cd", "ef"])
+    var fsb = cast(s, fixed_size_binary_(2))
+    assert_true(fsb.dtype() == fixed_size_binary_(2).to_any())
+    var back = cast(fsb, string)
+    assert_true(back.as_string() == array(["ab", "cd", "ef"]))
+
+
+def test_binary_to_fixed_size_binary_width_mismatch_raises() raises:
+    var b = cast(array(["ab", "c"]), binary)  # "c" is 1 byte, target width 2
+    with assert_raises():
+        _ = cast(b, fixed_size_binary_(2))
+
+
+def test_binary_to_string_invalid_utf8_raises() raises:
+    # A raw 0xFF byte is not valid UTF-8; safe mode must reject it.
+    var raw = List[UInt8]()
+    raw.append(0xFF)
+    var fb = FixedSizeBinaryBuilder(1)
+    fb.append(Span(raw))
+    var bad: AnyArray = cast(fb.finish(), binary)
+    with assert_raises():
+        _ = cast(bad, string, safe=True)
 
 
 def main() raises:

@@ -21,32 +21,40 @@ and grabs ``NumericCast.core`` directly.
 """
 
 from std.collections.string import atol, atof, StringSlice
+from std.collections.string._utf8 import _is_valid_utf8
 from std.sys import bit_width_of
 
 from ..arrays import (
     AnyArray,
     ArrayData,
+    BinaryLikeArray,
     BoolArray,
+    FixedSizeBinaryArray,
     PrimitiveArray,
     StringArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..builders import AnyBuilder, StringBuilder
+from ..builders import AnyBuilder, BinaryLikeBuilder, FixedSizeBinaryBuilder
 from ..utils import variant_dispatch_raises
 from ..views import apply, apply_checked
 from ..dtypes import (
     AnyDataType,
+    BinaryLikeType,
     DType,
+    FixedSizeBinaryType,
     NumericType,
+    StringLikeType,
     TimeUnit,
 )
 from .helpers import Kernel
 from .execution import ExecutionContext
 
 
-# Restrict ``variant_dispatch_raises`` to the numeric dtype variants — resolves a
-# runtime dtype to a concrete ``NumericType`` parameter.
+# Restrict ``variant_dispatch_raises`` to a dtype family — each resolves a runtime
+# dtype to a concrete trait-bound parameter for the nested cast dispatch.
 comptime _IsNumeric[T: Movable] = conforms_to(T, NumericType)
+comptime _IsBinaryLike[T: Movable] = conforms_to(T, BinaryLikeType)
+comptime _IsStringLike[T: Movable] = conforms_to(T, StringLikeType)
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +338,8 @@ struct StringToNum(Kernel):
 
     @staticmethod
     def apply[
-        To: NumericType, safe: Bool
-    ](array: StringArray) raises -> PrimitiveArray[To]:
+        From: StringLikeType, To: NumericType, safe: Bool
+    ](array: BinaryLikeArray[From]) raises -> PrimitiveArray[To]:
         comptime native = To.native
         var n = len(array)
         var buf = Buffer.alloc_zeroed[native](n)
@@ -378,7 +386,9 @@ struct StringToBool(Kernel):
     comptime name = "string_to_bool"
 
     @staticmethod
-    def apply[safe: Bool](array: StringArray) raises -> BoolArray:
+    def apply[
+        From: StringLikeType, safe: Bool
+    ](array: BinaryLikeArray[From]) raises -> BoolArray:
         var n = len(array)
         var data = Bitmap.alloc_zeroed(n)
         var valid = Bitmap.alloc_zeroed(n)
@@ -417,9 +427,9 @@ struct NumToString(Kernel):
 
     @staticmethod
     def apply[
-        From: NumericType
-    ](array: PrimitiveArray[From]) raises -> StringArray:
-        var b = StringBuilder(len(array))
+        From: NumericType, To: StringLikeType
+    ](array: PrimitiveArray[From]) raises -> BinaryLikeArray[To]:
+        var b = BinaryLikeBuilder[To](len(array))
         for i in range(len(array)):
             if array.is_valid(i):
                 b.append(String(array.unsafe_get(i)))
@@ -434,11 +444,116 @@ struct BoolToString(Kernel):
     comptime name = "bool_to_string"
 
     @staticmethod
-    def apply(array: BoolArray) raises -> StringArray:
-        var b = StringBuilder(len(array))
+    def apply[
+        To: StringLikeType
+    ](array: BoolArray) raises -> BinaryLikeArray[To]:
+        var b = BinaryLikeBuilder[To](len(array))
         for i in range(len(array)):
             if array.is_valid(i):
                 b.append("true" if array[i].value() else "false")
+            else:
+                b.append_null()
+        return b.finish()
+
+
+# ---------------------------------------------------------------------------
+# BinaryLikeCast — binary/large_binary/utf8/large_utf8 ↔ each other
+# ---------------------------------------------------------------------------
+
+
+struct BinaryLikeCast(Kernel):
+    """Cast between the binary-like containers (binary, large_binary, utf8,
+    large_utf8). Equal physical offset width → a zero-copy relabel that shares
+    the offset and value buffers; differing width (32↔64-bit offsets) → a rebuild
+    through a builder. Producing a UTF-8 string from raw bytes validates every
+    element under ``safe`` (raising on malformed UTF-8)."""
+
+    comptime name = "binary_like_cast"
+
+    @staticmethod
+    def apply[
+        From: BinaryLikeType, To: BinaryLikeType, safe: Bool
+    ](array: BinaryLikeArray[From]) raises -> BinaryLikeArray[To]:
+        comptime bytes_to_text = conforms_to(
+            To, StringLikeType
+        ) and not conforms_to(From, StringLikeType)
+        comptime if safe and bytes_to_text:
+            Self._check_utf8(array)
+        comptime if From.offset == To.offset:
+            # Identical physical layout → relabel only, no allocation.
+            return BinaryLikeArray[To](
+                length=array.length,
+                nulls=array.nulls,
+                offset=array.offset,
+                bitmap=array.bitmap.copy(),
+                offsets=array.offsets.copy(),
+                values=array.values.copy(),
+            )
+        else:
+            var b = BinaryLikeBuilder[To](len(array))
+            for i in range(len(array)):
+                if array.is_valid(i):
+                    b.append(array.unsafe_get(UInt(i)))
+                else:
+                    b.append_null()
+            return b.finish()
+
+    @staticmethod
+    def _check_utf8[From: BinaryLikeType](array: BinaryLikeArray[From]) raises:
+        for i in range(len(array)):
+            if array.is_valid(i) and not _is_valid_utf8(
+                array.unsafe_get(UInt(i)).as_bytes()
+            ):
+                raise Error("cast: invalid UTF-8 in binary → string cast")
+
+
+# ---------------------------------------------------------------------------
+# FixedSizeBinaryCast — fixed_size_binary ↔ variable-length binary
+# ---------------------------------------------------------------------------
+
+
+struct FixedSizeBinaryCast(Kernel):
+    """Cast fixed-size-binary ↔ variable-length binary. ``to_binary`` derives the
+    offset buffer from the fixed width and shares the data bytes; ``from_binary``
+    packs each element into a fixed cell, raising when a length ≠ the width."""
+
+    comptime name = "fixed_size_binary_cast"
+
+    @staticmethod
+    def to_binary[
+        To: BinaryLikeType
+    ](array: FixedSizeBinaryArray) raises -> BinaryLikeArray[To]:
+        var n = len(array)
+        var w = array.byte_width
+        var total = array.offset + n  # offsets cover the whole physical prefix
+        comptime if To.offset == DType.int32:
+            if total * w > Int(Int32.MAX):
+                raise Error("cast: byte span too large for 32-bit offsets")
+        var out = Buffer.alloc_uninit[To.offset](total + 1)
+        var dst = out.view[To.offset]()
+        for j in range(total + 1):
+            dst.store[1](j, Scalar[To.offset](j * w))
+        return BinaryLikeArray[To](
+            length=n,
+            nulls=array.nulls,
+            offset=array.offset,
+            bitmap=array.bitmap.copy(),
+            offsets=out.to_immutable(),
+            values=array.buffer.copy(),
+        )
+
+    @staticmethod
+    def from_binary[
+        From: BinaryLikeType
+    ](
+        array: BinaryLikeArray[From], byte_width: Int
+    ) raises -> FixedSizeBinaryArray:
+        var b = FixedSizeBinaryBuilder(byte_width, len(array))
+        for i in range(len(array)):
+            if array.is_valid(i):
+                b.append(
+                    array.unsafe_get(UInt(i)).as_bytes()
+                )  # raises on width
             else:
                 b.append_null()
         return b.finish()
@@ -502,9 +617,15 @@ struct Cast(Kernel):
         array: AnyArray, to: AnyDataType, ctx: ExecutionContext
     ) raises -> AnyArray:
         var src = array.dtype()
-        # string family first, so bool↔string / numeric↔string route here.
-        if src.is_string() or to.is_string():
-            return Self._string[safe](array, to, ctx)
+        # Binary-like family first, so bytes ↔ bytes and string ↔ numeric/bool
+        # (incl. large_utf8 / fixed_size_binary) all route here.
+        if (
+            src.is_binary_like()
+            or to.is_binary_like()
+            or src.is_fixed_size_binary()
+            or to.is_fixed_size_binary()
+        ):
+            return Self._binary[safe](array, to)
         elif src.is_numeric() and to.is_numeric():
             return Self._numeric[safe](array, to, ctx)
         elif src.is_bool() or to.is_bool():
@@ -603,41 +724,109 @@ struct Cast(Kernel):
             )
 
     @staticmethod
-    def _string[
+    def _binary[
         safe: Bool
-    ](
-        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
-    ) raises -> AnyArray:
+    ](array: AnyArray, to: AnyDataType) raises -> AnyArray:
+        """Binary-like family: bytes ↔ bytes (relabel / offset re-width /
+        fixed-size packing) and string ↔ numeric/bool (parse / format)."""
         var src = array.dtype()
-        if src.is_string():
-            var s = array.as_string().copy()
+        if src.is_binary_like() and to.is_binary_like():
+            return Self._relabel_binary[safe](array, to)
+        elif src.is_fixed_size_binary() and to.is_binary_like():
+            var fsb = array.as_fixed_size_binary().copy()
+
+            @parameter
+            def to_bin[To: BinaryLikeType](d: To) raises -> AnyArray:
+                return FixedSizeBinaryCast.to_binary[To](fsb).to_any()
+
+            return variant_dispatch_raises[
+                BinaryLikeType, predicate=_IsBinaryLike, func=to_bin
+            ](to._v)
+        elif src.is_binary_like() and to.is_fixed_size_binary():
+            var width = to.as_fixed_size_binary().byte_width
+
+            @parameter
+            def from_bin[From: BinaryLikeType](s: From) raises -> AnyArray:
+                var a = BinaryLikeArray[From](array.to_data())
+                return FixedSizeBinaryCast.from_binary[From](a, width).to_any()
+
+            return variant_dispatch_raises[
+                BinaryLikeType, predicate=_IsBinaryLike, func=from_bin
+            ](src._v)
+        elif src.is_string() or src.is_large_string():
+            return Self._parse_string[safe](array, to)
+        elif to.is_string() or to.is_large_string():
+            return Self._format_string(array, to)
+        raise Error(t"cast: unsupported cast {src} -> {to}")
+
+    @staticmethod
+    def _relabel_binary[
+        safe: Bool
+    ](array: AnyArray, to: AnyDataType) raises -> AnyArray:
+        @parameter
+        def on_src[From: BinaryLikeType](s: From) raises -> AnyArray:
+            var a = BinaryLikeArray[From](array.to_data())
+
+            @parameter
+            def on_to[To: BinaryLikeType](d: To) raises -> AnyArray:
+                return BinaryLikeCast.apply[From, To, safe](a).to_any()
+
+            return variant_dispatch_raises[
+                BinaryLikeType, predicate=_IsBinaryLike, func=on_to
+            ](to._v)
+
+        return variant_dispatch_raises[
+            BinaryLikeType, predicate=_IsBinaryLike, func=on_src
+        ](array.dtype()._v)
+
+    @staticmethod
+    def _parse_string[
+        safe: Bool
+    ](array: AnyArray, to: AnyDataType) raises -> AnyArray:
+        @parameter
+        def on_str[From: StringLikeType](s: From) raises -> AnyArray:
+            var a = BinaryLikeArray[From](array.to_data())
             if to.is_bool():
-                return StringToBool.apply[safe](s).to_any()
+                return StringToBool.apply[From, safe](a).to_any()
             elif to.is_numeric():
 
                 @parameter
                 def to_num[To: NumericType](d: To) raises -> AnyArray:
-                    return StringToNum.apply[To, safe](s).to_any()
+                    return StringToNum.apply[From, To, safe](a).to_any()
 
                 return variant_dispatch_raises[
                     NumericType, predicate=_IsNumeric, func=to_num
                 ](to._v)
-            raise Error(t"cast: string → {to} is not supported")
-        else:  # target is string
+            raise Error(t"cast: {array.dtype()} → {to} is not supported")
+
+        return variant_dispatch_raises[
+            StringLikeType, predicate=_IsStringLike, func=on_str
+        ](array.dtype()._v)
+
+    @staticmethod
+    def _format_string(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+        var src = array.dtype()
+
+        @parameter
+        def on_target[To: StringLikeType](d: To) raises -> AnyArray:
             if src.is_bool():
-                return BoolToString.apply(array.as_bool()).to_any()
+                return BoolToString.apply[To](array.as_bool().copy()).to_any()
             elif src.is_numeric():
 
                 @parameter
                 def from_num[From: NumericType](s: From) raises -> AnyArray:
-                    return NumToString.apply(
+                    return NumToString.apply[From, To](
                         array.as_primitive[From]()
                     ).to_any()
 
                 return variant_dispatch_raises[
                     NumericType, predicate=_IsNumeric, func=from_num
                 ](src._v)
-            raise Error(t"cast: {src} → string is not supported")
+            raise Error(t"cast: {src} → {to} is not supported")
+
+        return variant_dispatch_raises[
+            StringLikeType, predicate=_IsStringLike, func=on_target
+        ](to._v)
 
 
 # ---------------------------------------------------------------------------
