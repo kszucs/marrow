@@ -33,10 +33,15 @@ from ..arrays import (
     DictionaryArray,
     FixedSizeBinaryArray,
     PrimitiveArray,
-    StringArray,
 )
 from ..buffers import Buffer, Bitmap
-from ..builders import AnyBuilder, BinaryLikeBuilder, FixedSizeBinaryBuilder
+from ..builders import (
+    AnyBuilder,
+    BinaryLikeBuilder,
+    BoolBuilder,
+    FixedSizeBinaryBuilder,
+    PrimitiveBuilder,
+)
 from ..utils import variant_dispatch_raises
 from ..views import apply, apply_checked
 from ..dtypes import (
@@ -472,43 +477,22 @@ struct StringToNum(Kernel):
     def apply[
         From: StringLikeType, To: NumericType, safe: Bool
     ](array: BinaryLikeArray[From]) raises -> PrimitiveArray[To]:
-        comptime native = To.native
-        var n = len(array)
-        var buf = Buffer.alloc_zeroed[native](n)
-        var view = buf.view[native](0, n)
-        var valid = Bitmap.alloc_zeroed(n)
-        var nulls = 0
-        for i in range(n):
+        var b = PrimitiveBuilder[To](len(array))
+        for i in range(len(array)):
             if not array.is_valid(i):
-                nulls += 1
+                b.append_null()
                 continue
             var s = array.unsafe_get(UInt(i))
-            var value = Scalar[native](0)
-            var ok = True
             try:
-                value = Self._parse[native](s)
+                b.append(Self._parse[To.native](s))
             except:
-                ok = False
-            if ok:
-                view.store[1](i, value)
-                valid.set(i)
-            else:
                 comptime if safe:
                     raise Error(
                         t"cast: cannot parse '{s}' as {AnyDataType(To())}"
                     )
                 else:
-                    nulls += 1
-        var out_bitmap = Optional[Bitmap[]]()
-        if nulls > 0:
-            out_bitmap = valid.to_immutable()
-        return PrimitiveArray[To](
-            length=n,
-            nulls=nulls,
-            offset=0,
-            bitmap=out_bitmap,
-            buffer=buf.to_immutable(),
-        )
+                    b.append_null()
+        return b.finish()
 
 
 struct StringToBool(Kernel):
@@ -536,35 +520,22 @@ struct StringToBool(Kernel):
     def apply[
         From: StringLikeType, safe: Bool
     ](array: BinaryLikeArray[From]) raises -> BoolArray:
-        var n = len(array)
-        var data = Bitmap.alloc_zeroed(n)
-        var valid = Bitmap.alloc_zeroed(n)
-        var nulls = 0
-        for i in range(n):
+        var b = BoolBuilder(len(array))
+        for i in range(len(array)):
             if not array.is_valid(i):
-                nulls += 1
+                b.append_null()
                 continue
             var s = String(array.unsafe_get(UInt(i))).lower()
             if s == "true" or s == "1":
-                data.set(i)
-                valid.set(i)
+                b.append(True)
             elif s == "false" or s == "0":
-                valid.set(i)
+                b.append(False)
             else:
                 comptime if safe:
                     raise Error(t"cast: cannot parse '{s}' as bool")
                 else:
-                    nulls += 1
-        var out_bitmap = Optional[Bitmap[]]()
-        if nulls > 0:
-            out_bitmap = valid.to_immutable()
-        return BoolArray(
-            length=n,
-            nulls=nulls,
-            offset=0,
-            bitmap=out_bitmap,
-            buffer=data.to_immutable(),
-        )
+                    b.append_null()
+        return b.finish()
 
 
 struct NumToString(Kernel):
