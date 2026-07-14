@@ -1,32 +1,23 @@
-"""Cast kernels — convert an array from one Arrow type to another.
+"""Cast kernels — one slim ``Kernel`` struct per conversion.
 
-Cast is a **two-level dispatcher**:
+Each kernel is a separate struct implementing ``Kernel`` and doing **one**
+conversion, so it can be optimized and monomorphized in isolation (and grabbed
+directly by the AOT expression layer):
 
-- **Level 1 — between families** (the top-level ``cast`` function): inspects the
-  source and target type families and delegates to the matching family struct.
-- **Level 2 — within a family** (each family struct's ``dispatch``): the typed,
-  monomorphized switch that instantiates the concrete ``[From, To]`` kernel.
+- ``NumericCast`` — numeric ↔ numeric SIMD ``pop.cast``; ``core`` /
+  ``core_checked`` are the lane functors (the latter reused by the fused AOT
+  node). ``safe`` is a **comptime** parameter selecting checked vs unchecked.
+- ``NumToBool`` / ``BoolToNum`` — bit-pack (``x != 0``) / bit-unpack (``True→1``).
+- ``TemporalReinterpret`` / ``TemporalScale`` — relabel to the underlying
+  integer, or unit-scale it.
+- ``StringToNum`` / ``NumToString`` / ``StringToBool`` / ``BoolToString`` —
+  per-element ``atol``/``atof`` parse or format (variable-length, builder-based).
+- ``NullCast`` — an all-null array of the target type.
 
-One struct per family:
-
-- ``NumericCast`` — numeric ↔ numeric via SIMD ``pop.cast``; also carries the
-  ``core[In, Out, W]`` lane functor reused by the fused AOT ``Cast`` node.
-- ``BoolCast`` — bit-packed bool ↔ numeric.
-- ``TemporalCast`` — temporal reinterpret + unit scaling.
-- ``StringCast`` — string ↔ numeric/bool (per-element parse / format).
-- ``NullCast`` — null → any (all-null array of the target type).
-
-Future families (decimal, dictionary, list/struct, binary, string ↔ temporal)
-slot into the level-1 dispatcher as one more ``elif`` each without touching the
-existing structs.
-
-Semantics
----------
-``safe=False`` is the raw ``SIMD.cast`` fast path: float→int truncates toward
-zero, integer narrowing wraps (two's-complement), no overflow saturation
-(NaN/inf/out-of-range are undefined), matching ``numpy.astype``. ``safe=True``
-(the default, matching PyArrow) runs a separate verification pass that raises on
-any lossy conversion. Validity (the null bitmap) is always preserved unchanged.
+Runtime family / dtype / safe **dispatch** over these kernels is the separate
+``Cast`` struct at the bottom (``safe`` resolved to a comptime parameter once,
+then threaded through); the fused AOT node in ``marrow.expr.values`` bypasses it
+and grabs ``NumericCast.core`` directly.
 """
 
 from std.collections.string import atol, atof, StringSlice
@@ -53,26 +44,26 @@ from .helpers import Kernel
 from .execution import ExecutionContext
 
 
-# Predicate restricting ``variant_dispatch_raises`` to the numeric dtype
-# variants — resolves a runtime dtype to a concrete ``NumericType`` parameter.
+# Restrict ``variant_dispatch_raises`` to the numeric dtype variants — resolves a
+# runtime dtype to a concrete ``NumericType`` parameter.
 comptime _IsNumeric[T: Movable] = conforms_to(T, NumericType)
 
 
 # ---------------------------------------------------------------------------
-# NumericCast — fixed-width SIMD family
+# NumericCast — numeric ↔ numeric
 # ---------------------------------------------------------------------------
 
 
 struct NumericCast(Kernel):
     """Numeric ↔ numeric cast: one ``pop.cast`` per SIMD lane."""
 
-    comptime name = "cast"
+    comptime name = "numeric_cast"
 
     @always_inline
     @staticmethod
     def core[In: DType, Out: DType, W: Int](a: SIMD[In, W]) -> SIMD[Out, W]:
         """Unchecked cast — one ``pop.cast``. Used by the unsafe / lossless path
-        and the fused AOT node."""
+        and the fused AOT ``Cast`` node."""
         return a.cast[Out]()
 
     @always_inline
@@ -87,10 +78,10 @@ struct NumericCast(Kernel):
         return (out, out.cast[In]().ne(a))
 
     @staticmethod
-    def _needs_check[In: DType, Out: DType]() -> Bool:
+    def needs_check[In: DType, Out: DType]() -> Bool:
         """Whether the (In, Out) pair can lose information and so needs a
-        safe-mode verification pass. Provably-exact pairs return False so the
-        check is dead-code-eliminated and safe casts stay branchless."""
+        safe-mode check. Provably-exact pairs return False so the check is
+        dead-code-eliminated and safe casts stay branchless."""
         comptime if In == Out:
             return False
         elif In.is_floating_point() and Out.is_floating_point():
@@ -128,7 +119,7 @@ struct NumericCast(Kernel):
             buf = Buffer.alloc_uninit[Out](length)
         var dst = buf.view[Out](0, length)
 
-        comptime if safe and Self._needs_check[In, Out]():
+        comptime if safe and Self.needs_check[In, Out]():
             # Fused checked map: cast + validate each lane in a single pass; the
             # map fails on the first unrepresentable value. Serial — a failing
             # block raises, which can't cross parallel / GPU boundaries.
@@ -153,78 +144,31 @@ struct NumericCast(Kernel):
             buffer=buf.to_immutable(),
         )
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray,
-        to: AnyDataType,
-        safe: Bool = True,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        """Level-2 within-family dispatch. Resolves the runtime source/target
-        dtypes to comptime ``NumericType`` params via ``variant_dispatch_raises``
-        and the runtime ``safe`` flag to the comptime ``apply`` instantiation.
-        """
-        var src_dt = array.dtype()
-
-        @parameter
-        def on_source[From: NumericType](src: From) raises -> AnyArray:
-            var typed = array.as_primitive[From]().copy()
-
-            @parameter
-            def on_target[To: NumericType](dst: To) raises -> AnyArray:
-                if safe:
-                    return NumericCast.apply[From, To, True](
-                        typed, ctx
-                    ).to_any()
-                return NumericCast.apply[From, To, False](typed, ctx).to_any()
-
-            return variant_dispatch_raises[
-                NumericType, predicate=_IsNumeric, func=on_target
-            ](to._v)
-
-        return variant_dispatch_raises[
-            NumericType, predicate=_IsNumeric, func=on_source
-        ](src_dt._v)
-
 
 # ---------------------------------------------------------------------------
-# BoolCast — bit-packed bool ↔ numeric family
+# NumToBool / BoolToNum — bit-packed bool ↔ numeric
 # ---------------------------------------------------------------------------
 
 
-struct BoolCast(Kernel):
-    """Cast between the bit-packed ``BoolArray`` and numeric arrays.
+struct NumToBool(Kernel):
+    """numeric → bool: ``x != 0``, bit-packed. Lossless; validity preserved."""
 
-    ``numeric → bool`` maps ``x != 0``; ``bool → numeric`` maps ``True→1,
-    False→0``. Always lossless, so ``safe`` is ignored. Validity is preserved.
-
-    The ``core`` functors are ``@always_inline`` so a fused AOT expression node
-    can inline them into a single vectorize loop, like ``NumericCast.core``.
-    """
-
-    comptime name = "cast_bool"
+    comptime name = "num_to_bool"
 
     @always_inline
     @staticmethod
-    def core_to_bool[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[DType.bool, W]:
+    def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ne(0)
 
-    @always_inline
     @staticmethod
-    def core_from_bool[
-        Out: DType, W: Int
-    ](m: SIMD[DType.bool, W]) -> SIMD[Out, W]:
-        return m.cast[Out]()
-
-    @staticmethod
-    def num_to_bool[
+    def apply[
         From: NumericType
     ](array: PrimitiveArray[From], ctx: ExecutionContext) raises -> BoolArray:
         var length = len(array)
         var result = Bitmap.alloc_device(
             ctx.device.value(), length
         ) if ctx.is_gpu() else Bitmap.alloc_uninit(length)
-        apply[From.native, Self.core_to_bool[From.native, _]](
+        apply[From.native, Self.core[From.native, _]](
             array.values(), result.view(), ctx
         )
         return BoolArray(
@@ -235,8 +179,19 @@ struct BoolCast(Kernel):
             buffer=result.to_immutable(),
         )
 
+
+struct BoolToNum(Kernel):
+    """bool → numeric: ``True→1, False→0``. Lossless; validity preserved."""
+
+    comptime name = "bool_to_num"
+
+    @always_inline
     @staticmethod
-    def bool_to_num[
+    def core[Out: DType, W: Int](m: SIMD[DType.bool, W]) -> SIMD[Out, W]:
+        return m.cast[Out]()
+
+    @staticmethod
+    def apply[
         To: NumericType
     ](array: BoolArray, ctx: ExecutionContext) raises -> PrimitiveArray[To]:
         comptime Out = To.native
@@ -246,7 +201,7 @@ struct BoolCast(Kernel):
             buf = Buffer.alloc_device[Out](ctx.device.value(), length)
         else:
             buf = Buffer.alloc_uninit[Out](length)
-        apply[Out, Self.core_from_bool[Out, _]](
+        apply[Out, Self.core[Out, _]](
             array.values(), buf.view[Out](0, length), ctx
         )
         return PrimitiveArray[To](
@@ -257,60 +212,39 @@ struct BoolCast(Kernel):
             buffer=buf.to_immutable(),
         )
 
+
+# ---------------------------------------------------------------------------
+# TemporalReinterpret / TemporalScale
+# ---------------------------------------------------------------------------
+
+
+struct TemporalReinterpret(Kernel):
+    """Relabel an integer/temporal buffer as ``to`` without moving data.
+    Requires matching physical width (zero-copy)."""
+
+    comptime name = "temporal_reinterpret"
+
     @staticmethod
-    def dispatch(
-        array: AnyArray,
-        to: AnyDataType,
-        safe: Bool = True,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        if array.dtype().is_bool():
-            # bool → numeric (bool → bool identity is handled by the level-1
-            # dispatcher's zero-copy fast path).
-            var b = array.as_bool().copy()
-
-            @parameter
-            def to_numeric[To: NumericType](dst: To) raises -> AnyArray:
-                return Self.bool_to_num[To](b, ctx).to_any()
-
-            return variant_dispatch_raises[
-                NumericType, predicate=_IsNumeric, func=to_numeric
-            ](to._v)
-        else:
-            # numeric → bool
-            if not to.is_bool():
-                raise Error(t"cast: expected bool target, got {to}")
-            var src_dt = array.dtype()
-
-            @parameter
-            def from_numeric[From: NumericType](src: From) raises -> AnyArray:
-                return Self.num_to_bool(
-                    array.as_primitive[From](), ctx
-                ).to_any()
-
-            return variant_dispatch_raises[
-                NumericType, predicate=_IsNumeric, func=from_numeric
-            ](src_dt._v)
+    def apply(data: ArrayData, to: AnyDataType) raises -> AnyArray:
+        return AnyArray.from_data(
+            ArrayData(
+                dtype=to.copy(),
+                length=data.length,
+                nulls=data.nulls,
+                offset=data.offset,
+                bitmap=data.bitmap,
+                buffers=data.buffers.copy(),
+                children=[],
+            )
+        )
 
 
-# ---------------------------------------------------------------------------
-# TemporalCast — reinterpret + unit scaling family
-# ---------------------------------------------------------------------------
+struct TemporalScale(Kernel):
+    """Scale a temporal column's underlying integers by ``factor`` (multiply if
+    ``up``, else integer-divide), computing in int64 to avoid overflow, then
+    narrow to ``DstN`` and relabel as ``to``."""
 
-
-struct TemporalCast(Kernel):
-    """Cast between temporal types and their underlying integers.
-
-    - **temporal ↔ integer** (matching width): zero-copy reinterpret.
-    - **temporal ↔ temporal** at the same resolution and width: reinterpret.
-    - **temporal ↔ temporal** with differing units: scale the underlying
-      integers by the ratio of their nanosecond resolutions (upscale multiplies,
-      downscale integer-divides, truncating toward zero).
-
-    Timezone is metadata only — a naive↔aware relabel changes no values.
-    """
-
-    comptime name = "cast_temporal"
+    comptime name = "temporal_scale"
 
     @staticmethod
     def _unit_ns(u: TimeUnit) -> Int64:
@@ -325,8 +259,9 @@ struct TemporalCast(Kernel):
             return 1  # nanosecond
 
     @staticmethod
-    def _ns_per_tick(dt: AnyDataType) raises -> Int64:
-        """Nanoseconds represented by one tick of a temporal dtype."""
+    def ns_per_tick(dt: AnyDataType) raises -> Int64:
+        """Nanoseconds represented by one tick of a temporal dtype — drives the
+        dispatcher's reinterpret-vs-scale choice and the scale factor."""
         if dt.is_date32():
             return 86_400_000_000_000  # days
         elif dt.is_date64():
@@ -342,23 +277,7 @@ struct TemporalCast(Kernel):
         raise Error(t"cast: {dt} is not a temporal type")
 
     @staticmethod
-    def _reinterpret(data: ArrayData, to: AnyDataType) raises -> AnyArray:
-        """Relabel an integer/temporal buffer as ``to`` without moving data.
-        Requires matching physical width."""
-        return AnyArray.from_data(
-            ArrayData(
-                dtype=to.copy(),
-                length=data.length,
-                nulls=data.nulls,
-                offset=data.offset,
-                bitmap=data.bitmap,
-                buffers=data.buffers.copy(),
-                children=[],
-            )
-        )
-
-    @staticmethod
-    def _scale[
+    def apply[
         SrcN: DType, DstN: DType
     ](
         data: ArrayData,
@@ -367,10 +286,6 @@ struct TemporalCast(Kernel):
         up: Bool,
         ctx: ExecutionContext,
     ) raises -> AnyArray:
-        """Multiply (up) or integer-divide (down) each element by ``factor``,
-        computing in int64 to avoid overflow, then narrow to ``DstN`` and
-        relabel as ``to``. The per-lane scale closes over ``factor``/``up`` and
-        runs through the capturing ``apply`` (parallel / device-dispatched)."""
         var length = data.length
         var buf = Buffer.alloc_uninit[DstN](length)
         var src = data.buffers[0].view[SrcN](data.offset, length)
@@ -394,72 +309,17 @@ struct TemporalCast(Kernel):
             )
         )
 
-    @staticmethod
-    def dispatch(
-        array: AnyArray,
-        to: AnyDataType,
-        safe: Bool = True,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        var src = array.dtype()
-        var data = array.to_data()
-
-        if src.is_integer() or to.is_integer():
-            # temporal ↔ integer reinterpret (widths must match)
-            if src.byte_width() != to.byte_width():
-                raise Error(
-                    t"cast: cannot reinterpret {src} as {to} (width mismatch)"
-                )
-            return Self._reinterpret(data, to)
-
-        # temporal ↔ temporal
-        var ns_from = Self._ns_per_tick(src)
-        var ns_to = Self._ns_per_tick(to)
-        if ns_from == ns_to and src.byte_width() == to.byte_width():
-            return Self._reinterpret(data, to)
-
-        var up = ns_from > ns_to
-        var factor = (ns_from // ns_to) if up else (ns_to // ns_from)
-        if src.byte_width() == 4:
-            if to.byte_width() == 4:
-                return Self._scale[DType.int32, DType.int32](
-                    data, to, factor, up, ctx
-                )
-            else:
-                return Self._scale[DType.int32, DType.int64](
-                    data, to, factor, up, ctx
-                )
-        else:
-            if to.byte_width() == 4:
-                return Self._scale[DType.int64, DType.int32](
-                    data, to, factor, up, ctx
-                )
-            else:
-                return Self._scale[DType.int64, DType.int64](
-                    data, to, factor, up, ctx
-                )
-
 
 # ---------------------------------------------------------------------------
-# StringCast — string ↔ numeric family (designed; parse/format is future work)
+# StringToNum / NumToString / StringToBool / BoolToString
 # ---------------------------------------------------------------------------
 
 
-struct StringCast(Kernel):
-    """Cast between UTF-8 strings and numeric/bool types.
+struct StringToNum(Kernel):
+    """Parse strings to a numeric type. ``safe`` is comptime: safe=True raises on
+    an unparseable value, safe=False nulls it — the dead branch is elided."""
 
-    Variable-length, so this is builder-based rather than SIMD:
-
-    - **string → numeric**: per-element parse (``atol``/``atof``); an unparseable
-      value raises (``safe=True``) or nulls the slot (``safe=False``).
-    - **string → bool**: ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive).
-    - **numeric/bool → string**: per-element format into a ``StringBuilder``
-      (``bool`` → ``"true"``/``"false"``).
-
-    ``string ↔ temporal`` / ``decimal`` is not yet implemented.
-    """
-
-    comptime name = "cast_string"
+    comptime name = "string_to_num"
 
     @staticmethod
     def _parse[native: DType](s: StringSlice) raises -> Scalar[native]:
@@ -469,11 +329,9 @@ struct StringCast(Kernel):
             return Scalar[native](atol(s))
 
     @staticmethod
-    def string_to_num[
+    def apply[
         To: NumericType, safe: Bool
     ](array: StringArray) raises -> PrimitiveArray[To]:
-        """Parse strings to ``To``. ``safe`` is comptime: safe=True raises on an
-        unparseable value, safe=False nulls it — the dead branch is elided."""
         comptime native = To.native
         var n = len(array)
         var buf = Buffer.alloc_zeroed[native](n)
@@ -512,8 +370,15 @@ struct StringCast(Kernel):
             buffer=buf.to_immutable(),
         )
 
+
+struct StringToBool(Kernel):
+    """Parse ``"true"``/``"false"``/``"1"``/``"0"`` (case-insensitive) to bool.
+    ``safe`` comptime: raise vs null on an unrecognized value."""
+
+    comptime name = "string_to_bool"
+
     @staticmethod
-    def string_to_bool[safe: Bool](array: StringArray) raises -> BoolArray:
+    def apply[safe: Bool](array: StringArray) raises -> BoolArray:
         var n = len(array)
         var data = Bitmap.alloc_zeroed(n)
         var valid = Bitmap.alloc_zeroed(n)
@@ -544,8 +409,14 @@ struct StringCast(Kernel):
             buffer=data.to_immutable(),
         )
 
+
+struct NumToString(Kernel):
+    """Format a numeric array to strings (per-element ``String(value)``)."""
+
+    comptime name = "num_to_string"
+
     @staticmethod
-    def num_to_string[
+    def apply[
         From: NumericType
     ](array: PrimitiveArray[From]) raises -> StringArray:
         var b = StringBuilder(len(array))
@@ -556,8 +427,14 @@ struct StringCast(Kernel):
                 b.append_null()
         return b.finish()
 
+
+struct BoolToString(Kernel):
+    """Format a bool array to ``"true"``/``"false"`` strings."""
+
+    comptime name = "bool_to_string"
+
     @staticmethod
-    def bool_to_string(array: BoolArray) raises -> StringArray:
+    def apply(array: BoolArray) raises -> StringArray:
         var b = StringBuilder(len(array))
         for i in range(len(array)):
             if array.is_valid(i):
@@ -566,27 +443,181 @@ struct StringCast(Kernel):
                 b.append_null()
         return b.finish()
 
+
+# ---------------------------------------------------------------------------
+# NullCast — null → any
+# ---------------------------------------------------------------------------
+
+
+struct NullCast(Kernel):
+    """Cast a null array to any target type: an all-null array of that type."""
+
+    comptime name = "null_cast"
+
     @staticmethod
-    def dispatch(
+    def apply(array: AnyArray, to: AnyDataType) raises -> AnyArray:
+        var n = len(array)
+        var b = AnyBuilder(to.copy(), capacity=n)
+        for _ in range(n):
+            b.append_null()
+        return b.finish()
+
+
+# ---------------------------------------------------------------------------
+# Cast — runtime dispatcher over the kernels above
+# ---------------------------------------------------------------------------
+
+
+struct Cast(Kernel):
+    """Runtime family / dtype / safe dispatch to the flat cast kernels.
+
+    ``safe`` is resolved to a comptime parameter **once** (in ``apply``) and
+    threaded through the family routers, so the checked / unchecked numeric and
+    string kernels are picked at compile time with no per-call-site branch.
+    """
+
+    comptime name = "cast"
+
+    @staticmethod
+    def apply(
         array: AnyArray,
         to: AnyDataType,
         safe: Bool = True,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
         var src = array.dtype()
+        if src == to:
+            return array.copy()  # identity → zero-copy
+        elif src.is_null():
+            return NullCast.apply(array, to)  # null → any
+        elif safe:
+            return Self._route[True](array, to, ctx)
+        else:
+            return Self._route[False](array, to, ctx)
+
+    @staticmethod
+    def _route[
+        safe: Bool
+    ](
+        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var src = array.dtype()
+        # string family first, so bool↔string / numeric↔string route here.
+        if src.is_string() or to.is_string():
+            return Self._string[safe](array, to, ctx)
+        elif src.is_numeric() and to.is_numeric():
+            return Self._numeric[safe](array, to, ctx)
+        elif src.is_bool() or to.is_bool():
+            return Self._bool(array, to, ctx)
+        elif src.is_temporal() or to.is_temporal():
+            return Self._temporal(array, to, ctx)
+        raise Error(t"cast: unsupported cast {src} -> {to}")
+
+    @staticmethod
+    def _numeric[
+        safe: Bool
+    ](
+        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var src_dt = array.dtype()
+
+        @parameter
+        def on_source[From: NumericType](s: From) raises -> AnyArray:
+            var typed = array.as_primitive[From]().copy()
+
+            @parameter
+            def on_target[To: NumericType](d: To) raises -> AnyArray:
+                return NumericCast.apply[From, To, safe](typed, ctx).to_any()
+
+            return variant_dispatch_raises[
+                NumericType, predicate=_IsNumeric, func=on_target
+            ](to._v)
+
+        return variant_dispatch_raises[
+            NumericType, predicate=_IsNumeric, func=on_source
+        ](src_dt._v)
+
+    @staticmethod
+    def _bool(
+        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        if array.dtype().is_bool():  # bool → numeric
+            var b = array.as_bool().copy()
+
+            @parameter
+            def to_num[To: NumericType](d: To) raises -> AnyArray:
+                return BoolToNum.apply[To](b, ctx).to_any()
+
+            return variant_dispatch_raises[
+                NumericType, predicate=_IsNumeric, func=to_num
+            ](to._v)
+        else:  # numeric → bool
+            if not to.is_bool():
+                raise Error(t"cast: expected bool target, got {to}")
+            var src_dt = array.dtype()
+
+            @parameter
+            def from_num[From: NumericType](s: From) raises -> AnyArray:
+                return NumToBool.apply(array.as_primitive[From](), ctx).to_any()
+
+            return variant_dispatch_raises[
+                NumericType, predicate=_IsNumeric, func=from_num
+            ](src_dt._v)
+
+    @staticmethod
+    def _temporal(
+        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var src = array.dtype()
+        var data = array.to_data()
+        var same_width = src.byte_width() == to.byte_width()
+        # temporal ↔ integer, or same-resolution temporal ↔ temporal: reinterpret.
+        if src.is_integer() or to.is_integer():
+            if not same_width:
+                raise Error(
+                    t"cast: cannot reinterpret {src} as {to} (width mismatch)"
+                )
+            return TemporalReinterpret.apply(data, to)
+        var ns_from = TemporalScale.ns_per_tick(src)
+        var ns_to = TemporalScale.ns_per_tick(to)
+        if ns_from == ns_to and same_width:
+            return TemporalReinterpret.apply(data, to)
+        # otherwise scale the underlying integers by the unit ratio.
+        var up = ns_from > ns_to
+        var factor = (ns_from // ns_to) if up else (ns_to // ns_from)
+        if src.byte_width() == 4:
+            if to.byte_width() == 4:
+                return TemporalScale.apply[DType.int32, DType.int32](
+                    data, to, factor, up, ctx
+                )
+            return TemporalScale.apply[DType.int32, DType.int64](
+                data, to, factor, up, ctx
+            )
+        else:
+            if to.byte_width() == 4:
+                return TemporalScale.apply[DType.int64, DType.int32](
+                    data, to, factor, up, ctx
+                )
+            return TemporalScale.apply[DType.int64, DType.int64](
+                data, to, factor, up, ctx
+            )
+
+    @staticmethod
+    def _string[
+        safe: Bool
+    ](
+        array: AnyArray, to: AnyDataType, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var src = array.dtype()
         if src.is_string():
             var s = array.as_string().copy()
             if to.is_bool():
-                if safe:
-                    return Self.string_to_bool[True](s).to_any()
-                return Self.string_to_bool[False](s).to_any()
+                return StringToBool.apply[safe](s).to_any()
             elif to.is_numeric():
 
                 @parameter
-                def to_num[To: NumericType](dst: To) raises -> AnyArray:
-                    if safe:
-                        return Self.string_to_num[To, True](s).to_any()
-                    return Self.string_to_num[To, False](s).to_any()
+                def to_num[To: NumericType](d: To) raises -> AnyArray:
+                    return StringToNum.apply[To, safe](s).to_any()
 
                 return variant_dispatch_raises[
                     NumericType, predicate=_IsNumeric, func=to_num
@@ -594,12 +625,12 @@ struct StringCast(Kernel):
             raise Error(t"cast: string → {to} is not supported")
         else:  # target is string
             if src.is_bool():
-                return Self.bool_to_string(array.as_bool()).to_any()
+                return BoolToString.apply(array.as_bool()).to_any()
             elif src.is_numeric():
 
                 @parameter
-                def from_num[From: NumericType](f: From) raises -> AnyArray:
-                    return Self.num_to_string(
+                def from_num[From: NumericType](s: From) raises -> AnyArray:
+                    return NumToString.apply(
                         array.as_primitive[From]()
                     ).to_any()
 
@@ -610,31 +641,7 @@ struct StringCast(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# NullCast — null → any (all-null of the target type)
-# ---------------------------------------------------------------------------
-
-
-struct NullCast(Kernel):
-    """Cast a null array to any target type: an all-null array of that type."""
-
-    comptime name = "cast_null"
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray,
-        to: AnyDataType,
-        safe: Bool = True,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        var n = len(array)
-        var b = AnyBuilder(to.copy(), capacity=n)
-        for _ in range(n):
-            b.append_null()
-        return b.finish()
-
-
-# ---------------------------------------------------------------------------
-# Public API
+# Public entry points
 # ---------------------------------------------------------------------------
 
 
@@ -645,9 +652,9 @@ def cast[
     safe: Bool = True,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[To]:
-    """Typed numeric cast: ``cast[Int32Type, Float64Type](arr)``. ``safe`` is a
-    runtime convenience here — selecting ``NumericCast.apply``'s comptime kernel;
-    call ``NumericCast.apply[From, To, safe]`` directly for a fully-monomorphized
+    """Typed numeric cast: ``cast[Int32Type, Float64Type](arr)`` — a runtime
+    convenience selecting ``NumericCast.apply``'s comptime kernel. Call
+    ``NumericCast.apply[From, To, safe]`` directly for a fully-monomorphized
     (e.g. AOT-fused) cast."""
     if safe:
         return NumericCast.apply[From, To, True](array, ctx)
@@ -660,24 +667,5 @@ def cast(
     safe: Bool = True,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Cast ``array`` to dtype ``to`` (level-1 family dispatcher).
-
-    ``safe=True`` (default) raises on any lossy conversion; ``safe=False`` uses
-    the raw truncating/wrapping ``SIMD.cast`` fast path.
-    """
-    var src = array.dtype()
-    if src == to:
-        return array.copy()  # identity → zero-copy
-    elif src.is_null():
-        return NullCast.dispatch(array, to, safe, ctx)  # null → any
-    elif src.is_string() or to.is_string():
-        # string family first, so bool↔string / numeric↔string route here
-        # rather than to the bool/numeric families.
-        return StringCast.dispatch(array, to, safe, ctx)
-    elif src.is_numeric() and to.is_numeric():
-        return NumericCast.dispatch(array, to, safe, ctx)
-    elif src.is_bool() or to.is_bool():
-        return BoolCast.dispatch(array, to, safe, ctx)
-    elif src.is_temporal() or to.is_temporal():
-        return TemporalCast.dispatch(array, to, safe, ctx)
-    raise Error(t"cast: unsupported cast {src} -> {to}")
+    """Cast ``array`` to dtype ``to`` (runtime family dispatch → ``Cast``)."""
+    return Cast.apply(array, to, safe, ctx)
