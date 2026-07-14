@@ -66,7 +66,7 @@ def test_row_group_prune_decision() raises:
         mins.append(stats[rg][0].min.copy())
         maxs.append(stats[rg][0].max.copy())
         var ps = PruneStats(Schema(copy=sch), mins^, maxs^)
-        keep.append(pred.prune_bound(ps).maybe_true)
+        keep.append(pred.prune(ps).maybe_true)
     assert_false(keep[0])  # x in [0, 999] can never exceed 1500 -> prune
     assert_true(keep[1])  # [1000, 1999]
     assert_true(keep[2])  # [2000, 2999]

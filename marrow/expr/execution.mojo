@@ -230,7 +230,7 @@ struct ParquetScanProcessor(Processor):
             maxs.append(rg_stats[c].max.copy())
         return (
             self._predicate.value()
-            .prune_bound(self._bounds_of(mins, maxs))
+            .prune(self._bounds_of(mins, maxs))
             .maybe_true
         )
 
@@ -261,7 +261,7 @@ struct ParquetScanProcessor(Processor):
                         maxs.append(None)
                 keep.append(
                     self._predicate.value()
-                    .prune_bound(self._bounds_of(mins, maxs))
+                    .prune(self._bounds_of(mins, maxs))
                     .maybe_true
                 )
                 page_rows.append(pages[p].num_rows)

@@ -48,6 +48,7 @@ from ..kernels.compare import (
     greater_equal,
 )
 from ..kernels.string import string_lengths
+from ..kernels.cast import cast as cast_array
 
 
 # ---------------------------------------------------------------------------
@@ -74,6 +75,7 @@ comptime NOT: UInt8 = 16
 comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime LENGTH: UInt8 = 20
+comptime CAST: UInt8 = 21
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +103,8 @@ struct DynValue(
     var _kind_data: UInt8
     var _value: Optional[AnyScalar]
     var _name: String
+    var _cast_to: Optional[AnyDataType]
+    """Target dtype for a CAST node (None for every other tag)."""
 
     def __init__(
         out self,
@@ -109,12 +113,14 @@ struct DynValue(
         kind_data: UInt8,
         var value: Optional[AnyScalar],
         var name: String,
+        var cast_to: Optional[AnyDataType] = None,
     ):
         self._tag = tag
         self._args = args^
         self._kind_data = kind_data
         self._value = value.copy()
         self._name = name^
+        self._cast_to = cast_to^
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
@@ -124,6 +130,7 @@ struct DynValue(
         self._kind_data = copy._kind_data
         self._value = copy._value.copy()
         self._name = copy._name.copy()
+        self._cast_to = copy._cast_to.copy()
 
     # Explicit (empty) destructor so this self-referential struct
     # (`_args: List[DynValue]`) is ImplicitlyDeletable; fields are still destroyed
@@ -182,6 +189,8 @@ struct DynValue(
     def dtype(self) -> Optional[AnyDataType]:
         if self._tag == LITERAL:
             return self._value.value().type()
+        elif self._tag == CAST:
+            return self._cast_to.copy()
         return None
 
     def eval(self, batch: RecordBatch) raises -> AnyArray:
@@ -242,6 +251,8 @@ struct DynValue(
             return is_null(self._args[0].eval(batch))
         elif self._tag == LENGTH:
             return string_lengths(self._args[0].eval(batch)).to_any()
+        elif self._tag == CAST:
+            return cast_array(self._args[0].eval(batch), self._cast_to.value())
         elif self._tag == IF_ELSE:
             return select(
                 self._args[0].eval(batch),
@@ -251,9 +262,9 @@ struct DynValue(
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         """Pruning evaluation by tag (the runtime counterpart of the fused
-        nodes' `prune_bound`): column -> its stats interval, literal -> a point
+        nodes' `prune`): column -> its stats interval, literal -> a point
         interval, comparisons -> the min/max rule, AND/OR -> combine. Anything
         not modelled (arithmetic, NOT, IS_NULL, ...) is conservatively unknown /
         maybe-true, so a caller only ever skips data it has proven cannot match.
@@ -272,43 +283,33 @@ struct DynValue(
             )
         elif self._tag == EQ:
             return PruneBound.boolean(
-                self._args[0]
-                .prune_bound(stats)
-                .maybe_eq(self._args[1].prune_bound(stats))
+                self._args[0].prune(stats).maybe_eq(self._args[1].prune(stats))
             )
         elif self._tag == LT:
             return PruneBound.boolean(
-                self._args[0]
-                .prune_bound(stats)
-                .maybe_lt(self._args[1].prune_bound(stats))
+                self._args[0].prune(stats).maybe_lt(self._args[1].prune(stats))
             )
         elif self._tag == LE:
             return PruneBound.boolean(
-                self._args[0]
-                .prune_bound(stats)
-                .maybe_le(self._args[1].prune_bound(stats))
+                self._args[0].prune(stats).maybe_le(self._args[1].prune(stats))
             )
         elif self._tag == GT:
             return PruneBound.boolean(
-                self._args[0]
-                .prune_bound(stats)
-                .maybe_gt(self._args[1].prune_bound(stats))
+                self._args[0].prune(stats).maybe_gt(self._args[1].prune(stats))
             )
         elif self._tag == GE:
             return PruneBound.boolean(
-                self._args[0]
-                .prune_bound(stats)
-                .maybe_ge(self._args[1].prune_bound(stats))
+                self._args[0].prune(stats).maybe_ge(self._args[1].prune(stats))
             )
         elif self._tag == AND:
             return PruneBound.boolean(
-                self._args[0].prune_bound(stats).maybe_true
-                and self._args[1].prune_bound(stats).maybe_true
+                self._args[0].prune(stats).maybe_true
+                and self._args[1].prune(stats).maybe_true
             )
         elif self._tag == OR:
             return PruneBound.boolean(
-                self._args[0].prune_bound(stats).maybe_true
-                or self._args[1].prune_bound(stats).maybe_true
+                self._args[0].prune(stats).maybe_true
+                or self._args[1].prune(stats).maybe_true
             )
         else:
             return PruneBound.unknown()
@@ -349,6 +350,8 @@ struct DynValue(
             return "is_null"
         elif self._tag == LENGTH:
             return "length"
+        elif self._tag == CAST:
+            return "cast"
         elif self._tag == IF_ELSE:
             return "if_else"
         else:
@@ -388,6 +391,18 @@ struct DynValue(
             kind_data=0,
             value=None,
             name=String(),
+        )
+
+    def cast(self, to: AnyDataType) -> DynValue:
+        """Build a runtime cast node — ``col("a").cast(float64)``. Evaluated by
+        the ``marrow.kernels.cast`` router (numeric/bool/temporal families)."""
+        return DynValue(
+            tag=CAST,
+            args=[self.copy()],
+            kind_data=0,
+            value=None,
+            name=String(),
+            cast_to=to.copy(),
         )
 
     # Operator overloads (methods on DynValue)

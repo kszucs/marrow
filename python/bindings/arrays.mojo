@@ -916,6 +916,12 @@ struct PyStructConverter(PyConverter):
     var _field_keys: List[PythonObject]
     var py: PyHelpers
 
+    # Explicit (empty) destructor so this type is ImplicitlyDeletable despite the
+    # `List[PyAnyConverter]` field (PyAnyConverter is recursive, so not
+    # implicitly deletable); fields are still destroyed automatically.
+    def __del__(deinit self):
+        pass
+
     def __init__(out self, builder: AnyBuilder) raises:
         self._builder = builder
         var dtype = builder.as_struct().dtype()

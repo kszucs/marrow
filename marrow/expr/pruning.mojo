@@ -12,12 +12,13 @@ result: a scan still applies the exact predicate to whatever it decodes.
 or a page's ColumnIndex entry). `PruneBound` is the result of evaluating one node
 against it: an interval `[lo, hi]` for a numeric sub-expression, or `maybe_true`
 for a boolean predicate. Both `DynValue` (dynamic) and the fused comptime `Value`
-nodes (static) implement `prune_bound(stats)`, so either kind of expression can be
+nodes (static) implement `prune(stats)`, so either kind of expression can be
 evaluated against the index.
 """
 
 from ..scalars import AnyScalar
 from ..schema import Schema
+from ..utils import variant_dispatch_raises
 from .. import dtypes as dt
 
 
@@ -60,23 +61,81 @@ struct PruneBound(Copyable, Movable):
     # fused nodes and the DynValue interpreter, so they share one definition.
     def maybe_gt(self, other: Self) raises -> Bool:
         """`self > other` — possible iff max(self) > min(other)."""
-        return gt_or_unknown(self.hi, other.lo)
+        var c = Self._cmp_bounds(self.hi, other.lo)
+        return not c or c.value() > 0
 
     def maybe_ge(self, other: Self) raises -> Bool:
-        return ge_or_unknown(self.hi, other.lo)
+        var c = Self._cmp_bounds(self.hi, other.lo)
+        return not c or c.value() >= 0
 
     def maybe_lt(self, other: Self) raises -> Bool:
         """`self < other` — possible iff min(self) < max(other)."""
-        return lt_or_unknown(self.lo, other.hi)
+        var c = Self._cmp_bounds(self.lo, other.hi)
+        return not c or c.value() < 0
 
     def maybe_le(self, other: Self) raises -> Bool:
-        return le_or_unknown(self.lo, other.hi)
+        var c = Self._cmp_bounds(self.lo, other.hi)
+        return not c or c.value() <= 0
 
     def maybe_eq(self, other: Self) raises -> Bool:
         """`self == other` — possible iff the two intervals overlap."""
-        return le_or_unknown(self.lo, other.hi) and ge_or_unknown(
-            self.hi, other.lo
-        )
+        return self.maybe_le(other) and self.maybe_ge(other)
+
+    # --- comparison primitives (conservative: unknown / incomparable → None) ---
+
+    @staticmethod
+    def _cmp_bounds(
+        a: Optional[AnyScalar], b: Optional[AnyScalar]
+    ) raises -> Optional[Int]:
+        """Three-way compare two interval bounds, or None when either is unknown
+        (missing) or incomparable — callers treat None as "maybe", staying
+        conservative."""
+        if not a or not b:
+            return None
+        return Self._cmp_scalar(a.value(), b.value())
+
+    @staticmethod
+    def _cmp[T: DType](x: Scalar[T], y: Scalar[T]) -> Int:
+        return -1 if x < y else (1 if x > y else 0)
+
+    @staticmethod
+    def _cmp_scalar(a: AnyScalar, b: AnyScalar) raises -> Optional[Int]:
+        """Three-way compare two valid scalars of the same type; None if either
+        is null, the types differ, or the type is not orderable here.
+
+        The numeric arm reuses ``AnyDataType.dispatch_numeric`` — the same
+        runtime-dtype → comptime-``NumericType`` selector the cast/compare
+        kernels use — so the per-dtype comparison is written once here instead
+        of a hand-rolled 11-way switch."""
+        if not a.is_valid() or not b.is_valid():
+            return None
+        var t = a.type()
+        if t != b.type():
+            return None
+        if t.is_numeric():
+            comptime IsNumeric[T: Movable] = conforms_to(T, dt.NumericType)
+
+            @parameter
+            def cmp_typed[T: dt.NumericType](witness: T) raises -> Int:
+                return Self._cmp(
+                    a.as_primitive[T]().value(), b.as_primitive[T]().value()
+                )
+
+            return variant_dispatch_raises[
+                dt.NumericType, predicate=IsNumeric, func=cmp_typed
+            ](t._v)
+        elif t.is_string():
+            var x = a.as_string().to_string()
+            var y = b.as_string().to_string()
+            var xb = x.as_bytes()
+            var yb = y.as_bytes()
+            var n = min(len(xb), len(yb))
+            for i in range(n):
+                if xb[i] != yb[i]:
+                    return -1 if xb[i] < yb[i] else 1
+            return Self._cmp(len(xb), len(yb))
+        else:
+            return None
 
 
 struct PruneStats(Copyable, Movable):
@@ -108,92 +167,3 @@ struct PruneStats(Copyable, Movable):
         self, name: String
     ) raises -> Tuple[Optional[AnyScalar], Optional[AnyScalar]]:
         return self.by_index(self.schema.get_field_index(name))
-
-
-# ---------------------------------------------------------------------------
-# Scalar comparison — exact per-type; returns None when incomparable so callers
-# stay conservative (never skip on an uncertain comparison).
-# ---------------------------------------------------------------------------
-
-
-def _c[T: DType](x: Scalar[T], y: Scalar[T]) -> Int:
-    return -1 if x < y else (1 if x > y else 0)
-
-
-def _cmp_scalar(a: AnyScalar, b: AnyScalar) raises -> Optional[Int]:
-    """Three-way compare two valid scalars of the same type; None if either is
-    null, the types differ, or the type is not orderable here."""
-    if not a.is_valid() or not b.is_valid():
-        return None
-    var t = a.type()
-    if t != b.type():
-        return None
-    if t == dt.int8:
-        return _c(a.as_int8().value(), b.as_int8().value())
-    elif t == dt.int16:
-        return _c(a.as_int16().value(), b.as_int16().value())
-    elif t == dt.int32:
-        return _c(a.as_int32().value(), b.as_int32().value())
-    elif t == dt.int64:
-        return _c(a.as_int64().value(), b.as_int64().value())
-    elif t == dt.uint8:
-        return _c(a.as_uint8().value(), b.as_uint8().value())
-    elif t == dt.uint16:
-        return _c(a.as_uint16().value(), b.as_uint16().value())
-    elif t == dt.uint32:
-        return _c(a.as_uint32().value(), b.as_uint32().value())
-    elif t == dt.uint64:
-        return _c(a.as_uint64().value(), b.as_uint64().value())
-    elif t == dt.float32:
-        return _c(a.as_float32().value(), b.as_float32().value())
-    elif t == dt.float64:
-        return _c(a.as_float64().value(), b.as_float64().value())
-    elif t.is_string():
-        var x = a.as_string().to_string()
-        var y = b.as_string().to_string()
-        var xb = x.as_bytes()
-        var yb = y.as_bytes()
-        var n = min(len(xb), len(yb))
-        for i in range(n):
-            if xb[i] != yb[i]:
-                return -1 if xb[i] < yb[i] else 1
-        return _c(len(xb), len(yb))
-    else:
-        return None
-
-
-# `a <op> b`, or True when either bound is unknown / incomparable (conservative).
-def gt_or_unknown(
-    a: Optional[AnyScalar], b: Optional[AnyScalar]
-) raises -> Bool:
-    if not a or not b:
-        return True
-    var c = _cmp_scalar(a.value(), b.value())
-    return True if not c else c.value() > 0
-
-
-def ge_or_unknown(
-    a: Optional[AnyScalar], b: Optional[AnyScalar]
-) raises -> Bool:
-    if not a or not b:
-        return True
-    var c = _cmp_scalar(a.value(), b.value())
-    return True if not c else c.value() >= 0
-
-
-def lt_or_unknown(
-    a: Optional[AnyScalar], b: Optional[AnyScalar]
-) raises -> Bool:
-    if not a or not b:
-        return True
-    var c = _cmp_scalar(a.value(), b.value())
-    return True if not c else c.value() < 0
-
-
-def le_or_unknown(
-    a: Optional[AnyScalar], b: Optional[AnyScalar]
-) raises -> Bool:
-    if not a or not b:
-        return True
-    var c = _cmp_scalar(a.value(), b.value())
-    return True if not c else c.value() <= 0

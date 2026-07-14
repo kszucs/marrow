@@ -382,3 +382,137 @@ def pymethod[
         return method(ptr[], A0(py=arg0), items^)
 
     return wrapper
+
+
+# ---------------------------------------------------------------------------
+# Concrete Int / Bool argument overloads.
+#
+# On the pinned Mojo nightly the builtin ``Int`` and ``Bool`` types do not
+# nominally conform to ``ConvertibleFromPython``, so the generic
+# ``A: ConvertibleFromPython`` overloads above reject them. These concrete
+# overloads convert such arguments directly via ``Int(py=...)`` / ``Bool(py=...)``
+# (both supported). They never clash with the generic overloads because those
+# require the argument type to conform, which Int/Bool do not.
+# ---------------------------------------------------------------------------
+
+
+def pyfunction[
+    R: ConvertibleToPython,
+    //,
+    func: def(Int) raises thin -> R,
+]() -> def(PythonObject) raises thin -> PythonObject:
+    def wrapper(arg0: PythonObject) raises -> PythonObject:
+        return func(Int(py=arg0))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A3: ConvertibleFromPython,
+    R: ConvertibleToPython,
+    //,
+    func: def(A0, Bool, Bool, A3) raises thin -> R,
+]() -> def(
+    PythonObject, PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        arg0: PythonObject,
+        arg1: PythonObject,
+        arg2: PythonObject,
+        arg3: PythonObject,
+    ) raises -> PythonObject:
+        return func(A0(py=arg0), Bool(py=arg1), Bool(py=arg2), A3(py=arg3))
+
+    return wrapper
+
+
+def pyfunction[
+    A0: ConvertibleFromPython,
+    A1: ConvertibleFromPython,
+    A3: ConvertibleFromPython,
+    R: ConvertibleToPython,
+    //,
+    func: def(A0, A1, Bool, A3) raises thin -> R,
+]() -> def(
+    PythonObject, PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        arg0: PythonObject,
+        arg1: PythonObject,
+        arg2: PythonObject,
+        arg3: PythonObject,
+    ) raises -> PythonObject:
+        return func(A0(py=arg0), A1(py=arg1), Bool(py=arg2), A3(py=arg3))
+
+    return wrapper
+
+
+def pymethod[
+    T: AnyType,
+    //,
+    method: def(T, Int) raises thin -> Bool,
+]() -> def(
+    UnsafePointer[T, MutAnyOrigin], PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+    ) raises -> PythonObject:
+        return method(ptr[], Int(py=arg))
+
+    return wrapper
+
+
+def pymethod[
+    T: AnyType,
+    R: ConvertibleToPython,
+    //,
+    method: def(T, Int) raises thin -> R,
+]() -> def(
+    UnsafePointer[T, MutAnyOrigin], PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+    ) raises -> PythonObject:
+        return method(ptr[], Int(py=arg))
+
+    return wrapper
+
+
+def pymethod[
+    T: AnyType,
+    R: ConvertibleToPython,
+    //,
+    method: def(T, Int, Int) raises thin -> R,
+]() -> def(
+    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        ptr: UnsafePointer[T, MutAnyOrigin],
+        arg0: PythonObject,
+        arg1: PythonObject,
+    ) raises -> PythonObject:
+        return method(ptr[], Int(py=arg0), Int(py=arg1))
+
+    return wrapper
+
+
+def pymethod[
+    T: AnyType,
+    A1: ConvertibleFromPython,
+    A2: ConvertibleFromPython,
+    R: ConvertibleToPython,
+    //,
+    method: def(T, Int, A1, A2) raises thin -> R,
+]() -> def(
+    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject, PythonObject
+) raises thin -> PythonObject:
+    def wrapper(
+        ptr: UnsafePointer[T, MutAnyOrigin],
+        arg0: PythonObject,
+        arg1: PythonObject,
+        arg2: PythonObject,
+    ) raises -> PythonObject:
+        return method(ptr[], Int(py=arg0), A1(py=arg1), A2(py=arg2))
+
+    return wrapper

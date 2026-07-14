@@ -1126,6 +1126,31 @@ def apply[
 def apply[
     In: DType,
     Out: DType,
+    op: def[W: Int](SIMD[In, W]) capturing[_] -> SIMD[Out, W],
+](
+    src: BufferView[In, _],
+    dst: BufferView[mut=True, Out, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Like the type-mapping unary ``apply`` above, but ``op`` may *capture*
+    runtime state (e.g. a scale factor). Same CPU serial/parallel + GPU dispatch
+    via ``ctx``, so a captured-state map still parallelizes and offloads."""
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](src.load[W](i)))
+
+    _apply_dispatch[Out, has_accelerator_support[In, Out](), process](
+        length, ctx
+    )
+
+
+def apply[
+    In: DType,
+    Out: DType,
     op: BinaryFn[In, Out],
 ](
     lhs: BufferView[In, _],
@@ -1189,6 +1214,56 @@ def apply[
                 length + max_pad,
             )
 
+            elementwise[process, gpu_width, target="gpu"](
+                Coord(padded), ctx.device.value()
+            )
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            process[W](Coord(i))
+
+        vectorize[cpu_width](length, lane)
+
+
+def apply[
+    In: DType,
+    op: UnaryFn[In, DType.bool],
+](
+    src: BufferView[In, _],
+    dst: BitmapView[mut=True, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Apply a unary predicate and bit-pack results into a bitmap.
+
+    Maps W elements per call, packs the ``SIMD[bool, W]`` result into the
+    output bitmap via ``BitmapView.store``. Used e.g. for numeric→bool casts
+    (``op = {x => x.ne(0)}``). Over-read on the tail is safe (Arrow 64-byte
+    padding). CPU parallelism via ``ctx`` is not used here — bit-packed outputs
+    need whole-byte-aligned stride to avoid scalar read-modify-write races
+    between workers; threading support is future work.
+    """
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](src.load[W](i)))
+
+    if ctx.is_gpu():
+        comptime if has_accelerator_support[In]():
+            comptime gpu_width = max(
+                8, simd_width_of[In, target=get_gpu_target()]()
+            )
+            comptime max_pad = 64 // size_of[Scalar[In]]()
+            var padded = min(
+                math.align_up(length, gpu_width),
+                length + max_pad,
+            )
             elementwise[process, gpu_width, target="gpu"](
                 Coord(padded), ctx.device.value()
             )
@@ -1478,8 +1553,15 @@ def _reduce_dispatch[
     if ctx.is_gpu():
         # float16 triggers an internal f32→f16 rebind failure in the GPU
         # reduction backend (_reduce_generator_wrapper uses f32 accumulators
-        # for f16 and cannot rebind back); exclude it until the stdlib fixes it.
-        comptime if has_accelerator_support[T]() and T != DType.float16:
+        # for f16 and cannot rebind back); bool fails Metal IR verification in
+        # the same backend. Exclude both until the stdlib fixes them (they fall
+        # through to the CPU path, which is correct — the reducer reads host
+        # data anyway).
+        comptime if (
+            has_accelerator_support[T]()
+            and T != DType.float16
+            and T != DType.bool
+        ):
 
             @always_inline
             @parameter
@@ -1614,3 +1696,87 @@ def reduce[
         return src.load[W](idx[0])
 
     return _reduce_dispatch[T, input_fn, combine](len(src), identity, ctx)
+
+
+comptime CheckedFn[In: DType, Out: DType] = def[W: Int](
+    SIMD[In, W]
+) thin -> Tuple[SIMD[Out, W], SIMD[DType.bool, W]]
+"""A unary map that returns ``(mapped value, bad?)`` per lane — the mapped value
+and whether that lane failed, computed together so neither is recomputed."""
+
+
+def apply_checked[
+    In: DType,
+    Out: DType,
+    op: CheckedFn[In, Out],
+](src: BufferView[In, _], dst: BufferView[mut=True, Out, _],) raises:
+    """Map ``op(src) → dst`` where ``op`` yields ``(value, bad)`` per lane; the
+    whole map *fails* the moment any lane is flagged ``bad``, reporting the first
+    offending input value.
+
+    Serial by design: a failing block aborts the map, and exceptions can't cross
+    parallel-worker or GPU-kernel boundaries. Use the plain ``apply`` for the
+    unconditional, parallel / device-dispatched map; layer this on when a value
+    must be validated as it is mapped (the mapped result is reused, not
+    recomputed)."""
+    var length = len(dst)
+    comptime w = max(8, simd_byte_width() // size_of[Scalar[In]]())
+    var i = 0
+    var simd_end = (length // w) * w
+    while i < simd_end:
+        _checked_block[In, Out, op, w](src, dst, i)
+        i += w
+    while i < length:
+        _checked_block[In, Out, op, 1](src, dst, i)
+        i += 1
+
+
+def apply_checked[
+    In: DType,
+    Out: DType,
+    op: CheckedFn[In, Out],
+](
+    src: BufferView[In, _],
+    validity: BitmapView[_],
+    dst: BufferView[mut=True, Out, _],
+) raises:
+    """``apply_checked`` that skips null lanes (they may hold unrepresentable
+    junk): the ``bad`` flag is masked by ``validity`` so only valid lanes can
+    fail the map."""
+    var length = len(dst)
+    comptime w = max(8, simd_byte_width() // size_of[Scalar[In]]())
+    var i = 0
+    var simd_end = (length // w) * w
+    while i < simd_end:
+        _checked_block[In, Out, op, w](src, dst, i, validity.mask[w](i))
+        i += w
+    while i < length:
+        _checked_block[In, Out, op, 1](src, dst, i, validity.mask[1](i))
+        i += 1
+
+
+@always_inline
+def _checked_block[
+    In: DType,
+    Out: DType,
+    op: CheckedFn[In, Out],
+    W: Int,
+](
+    src: BufferView[In, _],
+    dst: BufferView[mut=True, Out, _],
+    i: Int,
+    valid: SIMD[DType.bool, W] = SIMD[DType.bool, W](fill=True),
+) raises:
+    """Map one block (storing the mapped value) and raise on the first valid
+    lane the op flagged."""
+    var v = src.load[W](i)
+    var result = op[W](v)
+    dst.store[W](i, result[0])
+    var bad = result[1] & valid
+    if bad.reduce_or():
+        comptime for k in range(W):
+            if bad[k]:
+                raise Error(
+                    t"value {SIMD[In, 1](v[k])} is not representable in the"
+                    t" target type"
+                )

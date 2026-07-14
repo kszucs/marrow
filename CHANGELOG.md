@@ -32,6 +32,10 @@
 - Aggregates: `sum`, `product`, `min`, `max`, `mean`, `any`, `all`.
 - Boolean logic with Kleene three-valued semantics, plus `is_null`,
   `is_nan`, `is_inf`.
+- `cast` across every family -- numeric, boolean, temporal, decimal
+  rescale, string parse and format, binary-like relabelling, nested list
+  and struct, and dictionary decode -- in checked and unchecked modes,
+  with `safe` a compile-time parameter.
 - `hash_join` -- inner, left, right, full, semi and anti -- over a
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and

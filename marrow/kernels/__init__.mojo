@@ -54,5 +54,6 @@ from .compare import (
     greater,
     greater_equal,
 )
+from .cast import cast
 from .filter import filter, drop_null, take
 from .sort import sort_indices, sort
