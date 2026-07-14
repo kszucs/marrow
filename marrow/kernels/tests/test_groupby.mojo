@@ -7,7 +7,7 @@ from marrow.arrays import (
     StringArray,
     StructArray,
 )
-from marrow.builders import array, PrimitiveBuilder, StringBuilder
+from marrow.builders import array, PrimitiveBuilder, StringBuilder, Int32Builder
 from marrow.dtypes import (
     int8,
     int32,
@@ -26,13 +26,18 @@ from marrow.dtypes import (
     Float64Type,
     AnyDataType,
 )
-from marrow.kernels.groupby import group_by
+from marrow.kernels.groupby import (
+    group_by,
+    _group_by_serial,
+    _group_by_parallel,
+)
 from marrow.kernels.aggregate import (
     SumKernel,
     MinKernel,
     MaxKernel,
     CountKernel,
     MeanKernel,
+    sum,
 )
 
 
@@ -323,6 +328,47 @@ def test_groupby_sum_and_count_share_keys() raises:
     ref c = counts.columns[1].as_int64()
     assert_equal(c[0].value(), 2)
     assert_equal(c[1].value(), 2)
+
+
+# ---------------------------------------------------------------------------
+# group_by — parallel path matches serial
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_parallel_matches_serial() raises:
+    """The radix-partition-parallel path produces the same groups and sums as
+    the serial path (group order differs — partitions are by hash — so compare
+    the group count and the total of the aggregate column)."""
+    var kb = Int32Builder(3000)
+    var vb = Int32Builder(3000)
+    for i in range(3000):
+        kb.append(Scalar[int32.native](i % 50))
+        vb.append(Scalar[int32.native](i))
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+
+    var children = List[AnyArray]()
+    children.append(keys.copy())
+    var kd = keys.to_data()
+    var sa = StructArray(
+        dtype=struct_(Field("k", kd.dtype.copy())),
+        length=kd.length,
+        nulls=kd.nulls,
+        offset=kd.offset,
+        bitmap=kd.bitmap,
+        children=children^,
+    )
+
+    var serial = _group_by_serial[SumKernel](sa, vals)
+    var parallel = _group_by_parallel[SumKernel](sa, vals, 4)
+
+    assert_equal(serial.num_rows(), 50)
+    assert_equal(parallel.num_rows(), 50)
+    # Total across all groups is order-independent — must match exactly.
+    var serial_total = sum(serial.column(1)).as_int64().value()
+    var parallel_total = sum(parallel.column(1)).as_int64().value()
+    assert_equal(serial_total, parallel_total)
+    assert_equal(serial_total, 4498500)  # sum(0..2999)
 
 
 def main() raises:
