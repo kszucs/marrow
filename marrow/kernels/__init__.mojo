@@ -44,7 +44,7 @@ from marrow.dtypes import (
     float64,
 )
 from .execution import ExecutionContext
-from .aggregate import sum, product, min, max, any, all
+from .aggregate import sum, product, min, max, mean, any, all
 from .arithmetic import add, subtract, multiply, divide
 from .compare import (
     equal,

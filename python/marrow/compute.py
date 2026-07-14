@@ -82,6 +82,15 @@ def max(array, *, skip_nulls=True, memory_pool=None):
     return Scalar.wrap(_ma.max(array.unwrap(), _serial()))
 
 
+def mean(array, *, skip_nulls=True, memory_pool=None):
+    """Compute the arithmetic mean of an array, as a float64 scalar.
+
+    Nulls are excluded. Returns a null scalar for an empty or all-null array.
+    Equivalent to ``pyarrow.compute.mean``.
+    """
+    return Scalar.wrap(_ma.mean(array.unwrap(), _serial()))
+
+
 def any(array, *, skip_nulls=True, memory_pool=None):
     """Return whether any element in the array is true.
 

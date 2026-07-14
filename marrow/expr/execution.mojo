@@ -20,13 +20,24 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 
 from std.memory import ArcPointer
 
-from ..arrays import AnyArray, StructArray
+from ..arrays import AnyArray, StructArray, UInt32Array
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
 from ..kernels.groupby import HashGrouper
+from ..kernels.aggregate import (
+    AggKernel,
+    AggState,
+    for_value_dtype,
+    SumKernel,
+    MinKernel,
+    MaxKernel,
+    CountKernel,
+    MeanKernel,
+)
+from ..dtypes import NumericType
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -406,13 +417,85 @@ struct ProjectProcessor(Processor):
 
 
 struct AggregateProcessor(Processor):
-    """Blocking: consume all input into a grouper, then emit once."""
+    """Blocking: drain all input, then aggregate each column once.
+
+    Keys are grouped by a keys-only ``HashGrouper``. Because ``AggState[K, V]``
+    is fully typed (no ``AnyBuilder``), it can't be stored across the runtime,
+    heterogeneous aggregate set — so this blocking node buffers the per-batch
+    group ids and value columns, then for each aggregate resolves ``(K, V)`` via
+    the tag + input dtype and drives one typed ``AggState[K, V]`` over all
+    batches. The typed hot loop is the trade for buffering the (already fully
+    consumed) input.
+
+    Runtime aggregate dispatch (the dynamic plan's ``name -> kernel`` selection)
+    lives here as an ``AggTag`` + ``_for_agg`` tag switch — mirroring
+    ``DynValue`` — so the kernel layer stays purely typed."""
+
+    # -- runtime aggregate tags + tag->kernel dispatch -----------------------
+
+    comptime AGG_SUM: UInt8 = 0
+    comptime AGG_MIN: UInt8 = 1
+    comptime AGG_MAX: UInt8 = 2
+    comptime AGG_COUNT: UInt8 = 3
+    comptime AGG_MEAN: UInt8 = 4
+
+    @staticmethod
+    def tag_from_name(name: String) raises -> UInt8:
+        if name == "sum":
+            return Self.AGG_SUM
+        elif name == "min":
+            return Self.AGG_MIN
+        elif name == "max":
+            return Self.AGG_MAX
+        elif name == "count":
+            return Self.AGG_COUNT
+        elif name == "mean":
+            return Self.AGG_MEAN
+        raise Error("unknown aggregate function: ", name)
+
+    @staticmethod
+    def _for_agg[
+        job: def[K: AggKernel]() raises capturing [_] -> None
+    ](tag: UInt8) raises:
+        """Resolve a runtime aggregate tag to its comptime kernel, run `job[K]`.
+        """
+        if tag == Self.AGG_SUM:
+            job[SumKernel]()
+        elif tag == Self.AGG_MIN:
+            job[MinKernel]()
+        elif tag == Self.AGG_MAX:
+            job[MaxKernel]()
+        elif tag == Self.AGG_COUNT:
+            job[CountKernel]()
+        elif tag == Self.AGG_MEAN:
+            job[MeanKernel]()
+        else:
+            raise Error("unknown aggregate tag ", Int(tag))
+
+    @staticmethod
+    def out_dtype(tag: UInt8, value_dtype: dt.AnyDataType) raises -> dt.AnyDataType:
+        """Output/accumulator dtype for an aggregate tag on a given input dtype.
+        """
+        var box = List[dt.AnyDataType]()
+
+        @parameter
+        def by_kind[K: AggKernel]() raises:
+            @parameter
+            def by_value[V: NumericType]() raises:
+                box.append(dt.AnyDataType(K.AccType[V]()))
+
+            for_value_dtype[by_value](value_dtype)
+
+        Self._for_agg[by_kind](tag)
+        return box[0].copy()
 
     var input: AnyProcessor
     var keys: List[AnyValue]
     var aggs: List[AnyValue]
     var _schema: Schema
     var _grouper: HashGrouper
+    var _tags: List[UInt8]
+    var _value_dtypes: List[dt.AnyDataType]
     var _emitted: Bool
 
     def __init__(
@@ -424,20 +507,25 @@ struct AggregateProcessor(Processor):
         var funcs: List[String],
         var value_dtypes: List[dt.AnyDataType],
         var schema: Schema,
-    ):
+    ) raises:
         self.input = input^
         self.keys = keys^
         self.aggs = aggs^
         self._schema = schema^
-        self._grouper = HashGrouper(funcs^, value_dtypes^)
+        self._grouper = HashGrouper()
+        self._tags = List[UInt8]()
+        self._value_dtypes = List[dt.AnyDataType]()
+        for i in range(len(funcs)):
+            self._tags.append(Self.tag_from_name(funcs[i]))
+            self._value_dtypes.append(value_dtypes[i].copy())
         self._emitted = False
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
     def _key_fields(self) -> List[dt.Field]:
-        # The output schema is key fields followed by aggregate fields, so the
-        # first len(keys) fields are the group keys.
+        # Output schema is key fields then aggregate fields; the first
+        # len(keys) fields are the group keys.
         var fields = List[dt.Field]()
         for i in range(len(self.keys)):
             fields.append(self._schema.fields[i].copy())
@@ -446,6 +534,10 @@ struct AggregateProcessor(Processor):
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
             raise Exhausted()
+
+        # Phase 1 — drain input, buffering per-batch group ids + value columns.
+        var gids_per_batch = List[UInt32Array]()
+        var values_per_batch = List[List[AnyArray]]()
         while True:
             try:
                 var batch = self.input.pull()
@@ -460,22 +552,53 @@ struct AggregateProcessor(Processor):
                     bitmap=None,
                     children=key_children^,
                 )
-                var gids = self._grouper.consume_keys(key_struct)
-                var val_arrays = List[AnyArray]()
+                gids_per_batch.append(self._grouper.consume_keys(key_struct))
+                var vals = List[AnyArray]()
                 for i in range(len(self.aggs)):
-                    val_arrays.append(self.aggs[i].to_array(batch))
-                self._grouper.consume_values(gids, val_arrays)
+                    vals.append(self.aggs[i].to_array(batch))
+                values_per_batch.append(vals^)
             except Exhausted:
                 break
         self._emitted = True
-        # The grouper generates its own aggregate column names (col{i}_{func}).
-        # Re-label with the plan's declared schema so plan.schema() matches the
-        # executed output exactly (columns are in the same key-then-agg order).
-        var raw = self._grouper.finish(self._key_fields())
-        var cols = List[AnyArray]()
-        for ref c in raw.columns:
-            cols.append(c.copy())
+
+        # Phase 2 — key columns + one typed AggState per aggregate.
+        var kfields = self._key_fields()
+        var cols = self._grouper.key_columns(kfields)
+        var num_groups = self._grouper.num_groups()
+        for i in range(len(self._tags)):
+            cols.append(
+                self._aggregate(i, gids_per_batch, values_per_batch, num_groups)
+            )
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
+
+    def _aggregate(
+        self,
+        i: Int,
+        gids_per_batch: List[UInt32Array],
+        values_per_batch: List[List[AnyArray]],
+        num_groups: Int,
+    ) raises -> AnyArray:
+        """Drive one typed `AggState[K, V]` over all buffered batches for
+        aggregate `i`, resolving `(K, V)` from its tag + input dtype."""
+        var box = List[AnyArray]()
+
+        @parameter
+        def by_kind[K: AggKernel]() raises:
+            @parameter
+            def by_value[V: NumericType]() raises:
+                var state = AggState[K, V]()
+                for b in range(len(gids_per_batch)):
+                    state.update(
+                        gids_per_batch[b],
+                        values_per_batch[b][i].as_primitive[V](),
+                        num_groups,
+                    )
+                box.append(state.finish(num_groups).to_any())
+
+            for_value_dtype[by_value](self._value_dtypes[i])
+
+        Self._for_agg[by_kind](self._tags[i])
+        return box[0].copy()
 
 
 struct JoinProcessor(Processor):

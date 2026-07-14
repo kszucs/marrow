@@ -288,17 +288,16 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                         + String(i)
                     )
                 fields.append(Field("key" + String(i), kdt.value().copy()))
+        # Output dtype comes from the kernel's accumulator algebra (`acc_dtype`):
+        # sum widens integers to int64; min/max preserve the input dtype;
+        # count is int64; mean is float64.
         for i in range(len(funcs)):
-            if funcs[i] == "count":
-                fields.append(Field(funcs[i], AnyDataType(int64)))
-            elif funcs[i] == "mean":
-                fields.append(Field(funcs[i], AnyDataType(float64)))
-            else:
-                var maybe_dt = _value_dtype(resolved_values[i], input_schema)
-                if maybe_dt and maybe_dt.value().is_integer():
-                    fields.append(Field(funcs[i], AnyDataType(int64)))
-                else:
-                    fields.append(Field(funcs[i], AnyDataType(float64)))
+            var tag = AggregateProcessor.tag_from_name(funcs[i])
+            var maybe_dt = _value_dtype(resolved_values[i], input_schema)
+            var vdt = maybe_dt.value().copy() if maybe_dt else AnyDataType(
+                float64
+            )
+            fields.append(Field(funcs[i], AggregateProcessor.out_dtype(tag, vdt)))
         var out_schema = Schema(fields=fields^)
 
         # Value accumulator dtypes (the input dtype of each aggregated value

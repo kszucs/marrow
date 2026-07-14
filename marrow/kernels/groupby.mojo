@@ -1,601 +1,61 @@
-"""Fused group-by + aggregation kernel.
+"""Hash grouping — keys-only.
 
-ClickHouse-style two-phase architecture:
-  1. **Phase 1** — hash keys, resolve every row to a group index
-  2. **Phase 2** — each ``AggregateFunction`` scatter-updates per-group
-     state in a single O(N) pass
+Two-phase group-by:
+  1. **Phase 1** — ``HashGrouper`` hashes the key columns and resolves every row
+     to a dense group index, storing the unique key rows.
+  2. **Phase 2** — aggregate accumulation, layered on top by the caller using an
+     ``AggKernel``'s grouped methods (``scatter``/``grow``/``finish``).
 
-Abstractions:
-  - ``AggregateState``: per-group data held in an ``AnyBuilder``
-    (one element per group). Type-erased — can hold any builder type.
-  - ``AggregateFunction``: logic (create/add_batch/merge/insert_result_into)
-    operating on ``AggregateState``. Defines how states are merged.
-  - ``HashGrouper``: hash table + two-phase pipeline orchestration.
+The grouper itself is **aggregate-agnostic**: aggregates are ``AggKernel``
+types (``aggregate.mojo``), and any runtime ``name -> kernel`` selection lives in
+the expression layer (``marrow/expr``). The typed ``group_by[K]`` convenience
+below ties the two together for the compile-time / AOT path (one aggregate,
+known statically), fully monomorphized with no runtime kernel dispatch.
 """
 
-from std.memory import ArcPointer
-from ..arrays import PrimitiveArray, StructArray, AnyArray, UInt32Array
-from ..builders import (
-    PrimitiveBuilder,
-    AnyBuilder,
-    Int64Builder,
-    UInt32Builder,
-    Float64Builder,
-)
-from ..dtypes import (
-    PrimitiveType,
-    AnyDataType,
-    Field,
-    BoolType,
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    Float16Type,
-    Float32Type,
-    Float64Type,
-    bool_,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
-    struct_,
-)
+from ..arrays import StructArray, AnyArray, UInt32Array
+from ..builders import AnyBuilder, UInt32Builder
+from ..dtypes import Field, struct_, uint32, NumericType
 from ..schema import Schema
 from ..tabular import RecordBatch
 from .hashtable import SwissHashTable
 from .hashing import rapidhash
 from .execution import ExecutionContext
+from .aggregate import AggKernel, AggState, for_value_dtype
 
 
 # ---------------------------------------------------------------------------
-# AggregateState — per-group data in a type-erased builder
+# HashGrouper — keys-only hash grouping
 # ---------------------------------------------------------------------------
-
-
-struct AggregateState(Movable):
-    """Per-group accumulator data stored as builder elements.
-
-    Each group occupies one slot in the builder. ``AggregateFunction``
-    creates new slots, scatter-updates existing ones, and finalizes
-    the builder into the result column.
-
-    Type-erased via ``AnyBuilder`` — the same abstraction works for
-    float64 values (sum/min/max), int64 counts, or future list/string
-    builders (collect/first/last).
-    """
-
-    var builder: AnyBuilder
-
-    @implicit
-    def __init__[T: PrimitiveType](out self, var builder: PrimitiveBuilder[T]):
-        self.builder = builder^
-
-    def length(self) -> Int:
-        return self.builder.length()
-
-    def dtype(self) -> AnyDataType:
-        return self.builder.dtype()
-
-    def finish(mut self) raises -> AnyArray:
-        return self.builder.finish()
-
-
-# ---------------------------------------------------------------------------
-# AggregateFunction — logic operating on AggregateState
-# ---------------------------------------------------------------------------
-
-
-def _read_as_float64(col: AnyArray, row: Int) raises -> Float64:
-    """Read any numeric element as Float64."""
-    if col.dtype() == bool_:
-        return Float64(col.as_bool()[row].value())
-    elif col.dtype() == int8:
-        return Float64(col.as_int8().unsafe_get(row))
-    elif col.dtype() == int16:
-        return Float64(col.as_int16().unsafe_get(row))
-    elif col.dtype() == int32:
-        return Float64(col.as_int32().unsafe_get(row))
-    elif col.dtype() == int64:
-        return Float64(col.as_int64().unsafe_get(row))
-    elif col.dtype() == uint8:
-        return Float64(col.as_uint8().unsafe_get(row))
-    elif col.dtype() == uint16:
-        return Float64(col.as_uint16().unsafe_get(row))
-    elif col.dtype() == uint32:
-        return Float64(col.as_uint32().unsafe_get(row))
-    elif col.dtype() == uint64:
-        return Float64(col.as_uint64().unsafe_get(row))
-    elif col.dtype() == float16:
-        return Float64(col.as_float16().unsafe_get(row))
-    elif col.dtype() == float32:
-        return Float64(col.as_float32().unsafe_get(row))
-    elif col.dtype() == float64:
-        return Float64(col.as_float64().unsafe_get(row))
-    raise Error("unsupported dtype for aggregation: ", col.dtype())
-
-
-def _add_batch_typed_int[
-    T: PrimitiveType
-](
-    name: String,
-    mut val_ptr: Int64Builder,
-    mut cnt_ptr: Int64Builder,
-    group_ids: UInt32Array,
-    input_col: AnyArray,
-    has_bitmap: Bool,
-) raises:
-    """Type-specialized inner loop for integer sum/min/max (int64 accumulator).
-
-    Resolves the typed array once before the loop to avoid per-row dtype
-    dispatch and enable SIMD vectorization.
-    """
-    var n = len(group_ids)
-    ref arr = input_col.as_primitive[T]()
-    for i in range(n):
-        if has_bitmap and not input_col.is_valid(i):
-            continue
-        var g = Int(group_ids.unsafe_get(i))
-        var cnt = Int(cnt_ptr.unsafe_get(g))
-        if name == "count":
-            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-            continue
-        var val = Scalar[int64.native](arr.unsafe_get(i))
-        var cur = val_ptr.unsafe_get(g)
-        if name == "sum":
-            val_ptr.unsafe_set(g, cur + val)
-        elif name == "min":
-            if cnt == 0 or val < cur:
-                val_ptr.unsafe_set(g, val)
-        elif name == "max":
-            if cnt == 0 or val > cur:
-                val_ptr.unsafe_set(g, val)
-        cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-
-
-def _add_batch_typed[
-    T: PrimitiveType
-](
-    name: String,
-    mut val_ptr: Float64Builder,
-    mut cnt_ptr: Int64Builder,
-    group_ids: UInt32Array,
-    input_col: AnyArray,
-    has_bitmap: Bool,
-) raises:
-    """Type-specialized inner loop for float/mean-path aggregation.
-
-    Resolves the typed array once before the loop to avoid per-row dtype
-    dispatch and enable SIMD vectorization.
-    """
-    var n = len(group_ids)
-    ref arr = input_col.as_primitive[T]()
-    for i in range(n):
-        if has_bitmap and not input_col.is_valid(i):
-            continue
-        var g = Int(group_ids.unsafe_get(i))
-        var cnt = Int(cnt_ptr.unsafe_get(g))
-        if name == "count":
-            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-            continue
-        var val = Float64(arr.unsafe_get(i))
-        var cur = Float64(val_ptr.unsafe_get(g))
-        if name == "sum" or name == "mean":
-            val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
-        elif name == "min":
-            if cnt == 0 or val < cur:
-                val_ptr.unsafe_set(g, Scalar[float64.native](val))
-        elif name == "max":
-            if cnt == 0 or val > cur:
-                val_ptr.unsafe_set(g, Scalar[float64.native](val))
-        cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-
-
-def _add_batch_bool(
-    name: String,
-    mut val_ptr: Float64Builder,
-    mut cnt_ptr: Int64Builder,
-    group_ids: UInt32Array,
-    input_col: AnyArray,
-    has_bitmap: Bool,
-) raises:
-    """Bool-specialized inner loop for add_batch."""
-    var n = len(group_ids)
-    ref arr = input_col.as_bool()
-    for i in range(n):
-        if has_bitmap and not input_col.is_valid(i):
-            continue
-        var g = Int(group_ids.unsafe_get(i))
-        var cnt = Int(cnt_ptr.unsafe_get(g))
-        if name == "count":
-            cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-            continue
-        var val = Float64(arr[i].value())
-        var cur = Float64(val_ptr.unsafe_get(g))
-        if name == "sum" or name == "mean":
-            val_ptr.unsafe_set(g, Scalar[float64.native](cur + val))
-        elif name == "min":
-            if cnt == 0 or val < cur:
-                val_ptr.unsafe_set(g, Scalar[float64.native](val))
-        elif name == "max":
-            if cnt == 0 or val > cur:
-                val_ptr.unsafe_set(g, Scalar[float64.native](val))
-        cnt_ptr.unsafe_set(g, Scalar[int64.native](cnt + 1))
-
-
-struct AggregateFunction(Copyable, Movable):
-    """Logic for one aggregation, operating on ``AggregateState``.
-
-    Follows ClickHouse's ``IAggregateFunction`` naming:
-      - ``create()``             — init state for a new group
-      - ``add_batch()``          — scatter-update from a batch (O(N))
-      - ``merge()``              — combine partial states
-      - ``insert_result_into()`` — finalize one group into output
-
-    The function defines HOW states are merged. The state is just data.
-    """
-
-    var name: String
-    var values: AggregateState  # per-group running value (int64 or float64)
-    var counts: AggregateState  # per-group valid count (int64)
-    var _value_dtype: AnyDataType
-
-    def __init__(out self, name: String, var value_dtype: AnyDataType):
-        self.name = name
-        var is_int = value_dtype.is_integer() and name != "mean"
-        self._value_dtype = value_dtype^
-        if is_int:
-            self.values = Int64Builder()
-        else:
-            self.values = Float64Builder()
-        self.counts = Int64Builder()
-
-    def __init__(out self, *, copy: Self):
-        self.name = copy.name
-        self._value_dtype = copy._value_dtype.copy()
-        if copy._value_dtype.is_integer() and copy.name != "mean":
-            self.values = Int64Builder()
-        else:
-            self.values = Float64Builder()
-        self.counts = Int64Builder()
-
-    def num_groups(self) -> Int:
-        return self.values.length()
-
-    def create(mut self) raises:
-        """Initialize state for a newly created group."""
-        if self._value_dtype.is_integer() and self.name != "mean":
-            self.values.builder.as_int64().append(Scalar[int64.native](0))
-        else:
-            self.values.builder.as_float64().append(Scalar[float64.native](0))
-        self.counts.builder.as_int64().append(Scalar[int64.native](0))
-
-    def add_batch(
-        mut self,
-        group_ids: UInt32Array,
-        input_col: AnyArray,
-    ) raises:
-        """Scatter-update: single O(N) pass over the batch.
-
-        Dtype is resolved once before the loop and dispatched to a
-        type-specialized helper, avoiding per-row dtype dispatch overhead.
-        Integer types (sum/min/max) use an int64 accumulator; all other
-        types use a float64 accumulator.
-        """
-        var has_bitmap = input_col.null_count() > 0
-        var use_int = self._value_dtype.is_integer() and self.name != "mean"
-        ref cnt_ptr = self.counts.builder.as_int64()
-        var dt = input_col.dtype()
-
-        if use_int:
-            ref int_ptr = self.values.builder.as_int64()
-            if dt == int8:
-                _add_batch_typed_int[Int8Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int16:
-                _add_batch_typed_int[Int16Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int32:
-                _add_batch_typed_int[Int32Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int64:
-                _add_batch_typed_int[Int64Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint8:
-                _add_batch_typed_int[UInt8Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint16:
-                _add_batch_typed_int[UInt16Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint32:
-                _add_batch_typed_int[UInt32Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint64:
-                _add_batch_typed_int[UInt64Type](
-                    self.name,
-                    int_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            else:
-                raise Error("unsupported integer dtype: ", dt)
-        else:
-            ref val_ptr = self.values.builder.as_float64()
-            if dt == bool_:
-                _add_batch_bool(
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int8:
-                _add_batch_typed[Int8Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int16:
-                _add_batch_typed[Int16Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int32:
-                _add_batch_typed[Int32Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == int64:
-                _add_batch_typed[Int64Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint8:
-                _add_batch_typed[UInt8Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint16:
-                _add_batch_typed[UInt16Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint32:
-                _add_batch_typed[UInt32Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == uint64:
-                _add_batch_typed[UInt64Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == float16:
-                _add_batch_typed[Float16Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == float32:
-                _add_batch_typed[Float32Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            elif dt == float64:
-                _add_batch_typed[Float64Type](
-                    self.name,
-                    val_ptr,
-                    cnt_ptr,
-                    group_ids,
-                    input_col,
-                    has_bitmap,
-                )
-            else:
-                raise Error("unsupported dtype for aggregation: ", dt)
-
-    def finish(
-        mut self, col_name: String, num_groups: Int
-    ) raises -> Tuple[Field, AnyArray]:
-        """Finalize state into a result (field, column) pair."""
-        if self.name == "count":
-            return (
-                Field(col_name, AnyDataType(int64)),
-                self.counts.finish(),
-            )
-
-        if self.name == "mean":
-            # Compute value / count for each group.
-            var b = Float64Builder(capacity=num_groups)
-            ref val_ptr = self.values.builder.as_float64()
-            ref cnt_ptr = self.counts.builder.as_int64()
-            for g in range(num_groups):
-                var c = Int(cnt_ptr.unsafe_get(g))
-                if c > 0:
-                    var v = Float64(val_ptr.unsafe_get(g))
-                    b.append(Scalar[float64.native](v / Float64(c)))
-                else:
-                    b.append_null()
-            return (
-                Field(col_name, AnyDataType(float64)),
-                b.finish().to_any(),
-            )
-
-        ref cnt_ptr = self.counts.builder.as_int64()
-        if self._value_dtype.is_integer():
-            var b = Int64Builder(capacity=num_groups)
-            ref int_ptr = self.values.builder.as_int64()
-            for g in range(num_groups):
-                var c = Int(cnt_ptr.unsafe_get(g))
-                if c > 0:
-                    b.append(int_ptr.unsafe_get(g))
-                else:
-                    b.append_null()
-            return (
-                Field(col_name, AnyDataType(int64)),
-                b.finish().to_any(),
-            )
-        else:
-            var b = Float64Builder(capacity=num_groups)
-            ref val_ptr = self.values.builder.as_float64()
-            for g in range(num_groups):
-                var c = Int(cnt_ptr.unsafe_get(g))
-                if c > 0:
-                    b.append(val_ptr.unsafe_get(g))
-                else:
-                    b.append_null()
-            return (
-                Field(col_name, AnyDataType(float64)),
-                b.finish().to_any(),
-            )
-
-
-# ---------------------------------------------------------------------------
-# HashGrouper — hash table + aggregate orchestration
-# ---------------------------------------------------------------------------
-
-
-def _concat_single(existing: AnyArray, single: AnyArray) raises -> AnyArray:
-    """Append a length-1 array slice to an existing array."""
-    var ab = AnyBuilder(existing.dtype(), existing.length() + 1)
-    ab.extend(existing)
-    ab.extend(single)
-    return ab.finish()
 
 
 struct HashGrouper(Movable):
-    """Hash-based grouped aggregation engine (ClickHouse-style).
+    """Keys-only hash grouper (ClickHouse-style, ``SwissHashTable``-backed).
 
-    Two-phase batch consumption:
-      Phase 1: hash keys → resolve per-row group indices, call
-               ``create()`` on each ``AggregateFunction`` for new groups
-      Phase 2: each ``AggregateFunction.add_batch()`` scatter-updates
+    ``consume_keys`` hashes a batch of key rows, returns their dense group ids,
+    and appends newly-seen key rows to a per-column builder. Call it repeatedly
+    to accumulate groups across batches. NULL keys are treated as equal (same
+    group), matching SQL GROUP BY semantics (unlike join, where NULL != NULL).
 
-    Supports incremental consumption: ``consume()`` can be called
-    multiple times with successive batches. State accumulates.
-
-    Uses ``SwissHashTable`` — the same hash table struct used by ``HashJoin``.
-    NULL keys are treated as equal (same group), consistent with SQL
-    GROUP BY semantics (unlike join where NULL != NULL).
+    Aggregate state is owned by the caller, not the grouper — see ``group_by``
+    (typed/AOT path) and the expression layer (runtime path).
     """
 
     var _table: SwissHashTable[rapidhash]
-    var _group_keys: List[AnyArray]
-    var _functions: List[AggregateFunction]
+    var _key_builders: List[AnyBuilder]
 
-    def __init__(
-        out self, agg_names: List[String], value_dtypes: List[AnyDataType]
-    ):
+    def __init__(out self):
         self._table = SwissHashTable[rapidhash]()
-        self._group_keys = List[AnyArray]()
-        self._functions = List[AggregateFunction]()
-        for i in range(len(agg_names)):
-            self._functions.append(
-                AggregateFunction(agg_names[i], value_dtypes[i].copy())
-            )
+        self._key_builders = List[AnyBuilder]()
 
     def num_groups(self) -> Int:
         return self._table.num_keys()
 
     def consume_keys(mut self, keys: StructArray) raises -> UInt32Array:
-        """Hash keys and resolve group indices. Returns group_ids array.
+        """Hash keys and resolve group indices. Returns the per-row group ids.
 
-        Can be called multiple times — groups accumulate across calls.
-        New keys get new group IDs; existing keys return their previous ID.
-        Uses ``insert`` for pipelined hash table lookups.
+        New keys get new (dense, contiguous) group ids; existing keys return
+        their previous id. Safe to call across multiple batches.
         """
         var n = len(keys)
         if n == 0:
@@ -606,7 +66,6 @@ struct HashGrouper(Movable):
         var bids = self._table.insert(keys)
         var new_groups = self._table.num_keys() - prev
 
-        # Register new groups: store key rows + create aggregate state.
         if new_groups > 0:
             var seen = List[Bool](length=new_groups, fill=False)
             for i in range(n):
@@ -615,7 +74,7 @@ struct HashGrouper(Movable):
                     seen[gid - prev] = True
                     self._register_new_group(keys, i)
 
-        # Convert int32 bucket_ids → uint32 group_ids.
+        # Convert int32 bucket ids → uint32 group ids.
         var gid_builder = UInt32Builder(capacity=n)
         for i in range(n):
             gid_builder.unsafe_append(
@@ -623,121 +82,91 @@ struct HashGrouper(Movable):
             )
         return gid_builder.finish()
 
-    def consume_values(
-        mut self,
-        group_ids: UInt32Array,
-        values: List[AnyArray],
-    ) raises:
-        """Scatter-update aggregate state using pre-resolved group_ids.
+    def key_fields(self, keys: StructArray) -> List[Field]:
+        """The key columns' fields, taken from a keys struct's dtype."""
+        var fields = List[Field]()
+        ref st = keys.dtype.as_struct()
+        for k in range(len(st.fields)):
+            fields.append(Field(st.fields[k].name, st.fields[k].dtype.copy()))
+        return fields^
 
-        Each AggregateFunction does a single O(N) pass over the batch.
-        Values are processed and discarded — not stored.
-        """
-        for a in range(len(self._functions)):
-            self._functions[a].add_batch(group_ids, values[a])
-
-    def consume(mut self, keys: StructArray, values: List[AnyArray]) raises:
-        """Convenience: consume_keys + consume_values in one call."""
-        self.consume_values(self.consume_keys(keys), values)
-
-    def finish(mut self, key_fields: List[Field]) raises -> RecordBatch:
-        """Build result RecordBatch from key columns + finalized states."""
-        var num_groups = self._table.num_keys()
-        var result_fields = List[Field]()
-        var result_cols = List[AnyArray]()
-
-        # Key columns.
+    def key_columns(mut self, key_fields: List[Field]) raises -> List[AnyArray]:
+        """The unique group-key columns (empty arrays when no groups yet).
+        Finishes the per-column key builders — call once, at emit time."""
+        var cols = List[AnyArray]()
         for k in range(len(key_fields)):
-            result_fields.append(
-                Field(key_fields[k].name, key_fields[k].dtype.copy())
-            )
-            if num_groups == 0:
+            if len(self._key_builders) == 0:
                 var empty = AnyBuilder(key_fields[k].dtype)
-                result_cols.append(empty.finish())
+                cols.append(empty.finish())
             else:
-                result_cols.append(self._group_keys[k].copy())
-
-        # Aggregate columns.
-        for a in range(len(self._functions)):
-            var col_name = (
-                String("col") + String(a) + "_" + self._functions[a].name
-            )
-            var pair = self._functions[a].finish(col_name, num_groups)
-            result_fields.append(pair[0].copy())
-            result_cols.append(pair[1].copy())
-
-        return RecordBatch(
-            schema=Schema(fields=result_fields^),
-            columns=result_cols^,
-        )
-
-    # --- hash table internals ---
+                cols.append(self._key_builders[k].finish())
+        return cols^
 
     def _register_new_group(mut self, keys: StructArray, row: Int) raises:
-        """Store key row for a newly created group + create aggregate state."""
-        if len(self._group_keys) == 0:
+        """Append the key row for a newly created group to the per-column
+        builders (O(1) amortized — no per-group column rebuild)."""
+        if len(self._key_builders) == 0:
             for k in range(len(keys.children)):
-                self._group_keys.append(keys.children[k].slice(row, 1).copy())
-        else:
-            for k in range(len(keys.children)):
-                var new_val = _concat_single(
-                    self._group_keys[k], keys.children[k].slice(row, 1)
-                )
-                self._group_keys[k] = new_val^
-
-        for a in range(len(self._functions)):
-            self._functions[a].create()
+                self._key_builders.append(AnyBuilder(keys.children[k].dtype()))
+        for k in range(len(keys.children)):
+            self._key_builders[k].extend(keys.children[k].slice(row, 1))
 
 
 # ---------------------------------------------------------------------------
-# groupby — public API
+# group_by — typed single-aggregate convenience (compile-time / AOT path)
 # ---------------------------------------------------------------------------
 
 
-def groupby(
+def group_by[
+    K: AggKernel
+](
     keys: StructArray,
-    values: List[AnyArray],
-    aggregations: List[String],
+    value: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> RecordBatch:
-    """Fused grouped aggregation on a struct array of keys.
+    """Grouped aggregation with a single, statically-known aggregate kernel.
 
-    Supported aggregations: ``"sum"``, ``"min"``, ``"max"``,
-    ``"count"``, ``"mean"``.
-
-    Returns:
-        RecordBatch with unique key columns + aggregated value columns.
+    Monomorphized on ``K``; the input dtype ``V`` is resolved once here at the
+    boundary, then the fully typed ``AggState[K, V]`` does the work. For runtime,
+    multi-aggregate queries (kernels chosen from a plan), the expression layer
+    drives the same ``AggState`` behind its own tag dispatch.
     """
-    if len(values) != len(aggregations):
-        raise Error("groupby: len(values) != len(aggregations)")
+    var grouper = HashGrouper()
+    var gids = grouper.consume_keys(keys)
+    var num_groups = grouper.num_groups()
 
-    var value_dtypes = List[AnyDataType]()
-    for i in range(len(values)):
-        value_dtypes.append(values[i].dtype())
+    var box = List[AnyArray]()
 
-    var grouper = HashGrouper(aggregations, value_dtypes^)
-    grouper.consume(keys, values)
+    @parameter
+    def by_value[V: NumericType]() raises:
+        var state = AggState[K, V]()
+        state.update(gids, value.as_primitive[V](), num_groups)
+        box.append(state.finish(num_groups))
 
-    var key_fields = List[Field]()
-    ref key_struct = keys.dtype.as_struct()
-    for k in range(len(key_struct.fields)):
-        key_fields.append(
-            Field(
-                key_struct.fields[k].name,
-                key_struct.fields[k].dtype.copy(),
-            )
-        )
+    for_value_dtype[by_value](value.dtype())
+    var agg_col = box[0].copy()
 
-    return grouper.finish(key_fields)
+    var kfields = grouper.key_fields(keys)
+    var result_fields = List[Field]()
+    for k in range(len(kfields)):
+        result_fields.append(kfields[k].copy())
+    result_fields.append(Field(K.name, agg_col.dtype().copy()))
+
+    var result_cols = grouper.key_columns(kfields)
+    result_cols.append(agg_col^)
+    return RecordBatch(
+        schema=Schema(fields=result_fields^), columns=result_cols^
+    )
 
 
-def groupby(
+def group_by[
+    K: AggKernel
+](
     key: AnyArray,
-    values: List[AnyArray],
-    aggregations: List[String],
+    value: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> RecordBatch:
-    """Fused grouped aggregation on a single key column."""
+    """``group_by[K]`` on a single key column."""
     var children = List[AnyArray]()
     children.append(key.copy())
     var key_data = key.to_data()
@@ -749,4 +178,4 @@ def groupby(
         bitmap=key_data.bitmap,
         children=children^,
     )
-    return groupby(sa, values, aggregations, ctx)
+    return group_by[K](sa, value, ctx)

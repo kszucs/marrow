@@ -4,6 +4,14 @@
 
 ### Features
 
+- **Scalar `mean` reduction** (`marrow.kernels.aggregate.mean`, `mk.mean`,
+  `marrow.compute.mean`): arithmetic mean of the valid elements as a float64
+  scalar (nulls excluded from sum and divisor; null result for empty/all-null),
+  matching `pyarrow.compute.mean`.
+- **Grouped `min`/`max` preserve the input dtype** (PyArrow-correct): `min(int32)`
+  now returns `int32` rather than widening to `int64`. `sum` still widens
+  integers to `int64`; `count` is `int64`; `mean` is `float64`.
+
 - **Cast kernels** (`marrow.kernels.cast`, `mk.cast`): monomorphized numeric,
   bool, and temporal casts behind a two-level dispatcher — a top-level `cast`
   routes on the type family, and each family struct (`NumericCast`, `BoolCast`,
@@ -424,6 +432,29 @@
 
 ### Refactors
 
+- **Trait-based aggregate kernels + fully typed `AggState`**
+  (`marrow.kernels.aggregate`): grouped aggregation no longer dispatches on an
+  aggregate *name string* per row. Each aggregate is a **type** implementing one
+  `AggKernel` trait — the pure algebra of a fold (`AccType`/`identity`/SIMD
+  `combine`/`finalize`) plus a default whole-array `reduce`. A reduction is the
+  single-full-group case, so `mean`/`count` reduce like `sum` (`SELECT avg(col)`);
+  `sum`/`min`/`max`/`product` override `reduce` with a SIMD `views.reduce` fast
+  path. One SIMD `combine[T, W]` per kernel serves both the vectorized reduce and
+  the grouped scatter (folded at `W=1` over each value cast to `A`).
+  Per-group state is `AggState[K, V]` — **fully typed** (a
+  `PrimitiveBuilder[K.AccType[V]]` accumulator + valid-count column; no
+  `AnyBuilder`/`AnyArray`/`AnyScalar`), so `update`/`finish` are monomorphized
+  with zero dtype dispatch. It's also the extension point for richer aggregates
+  (variance = sum+sumsq+count, distinct) — pair a kernel with a different state
+  struct. The one irreducible runtime data-dtype→comptime bridge is
+  `for_value_dtype`, invoked once at each boundary (`reduce`, `group_by[K]`, the
+  processor). `HashGrouper` is now keys-only (per-column key builders, no more
+  O(n²) rebuild); `group_by[K]` ties keys + one typed kernel for the AOT path.
+  The runtime, plan-driven `name -> kernel` selection lives in the expression
+  layer (`AggregateProcessor` + an `AggKind`-free `_for_agg` tag switch),
+  mirroring `DynValue` — the kernel layer stays purely typed, no enum or vtable.
+  `min`/`max` grouped output now preserves the input dtype; the old ~190-line
+  duplicated dtype/name `if`/`elif` chains are gone.
 - **Parquet module overhaul — enum types, one decoder, one column reader**
   (`marrow.parquet`): the flat integer-constant families are gone, replaced by
   small namespaced value types that own their behaviour. `Compression`
