@@ -29,6 +29,7 @@ from ..arrays import (
     ArrayData,
     BinaryLikeArray,
     BoolArray,
+    DictionaryArray,
     FixedSizeBinaryArray,
     PrimitiveArray,
     StringArray,
@@ -45,9 +46,11 @@ from ..dtypes import (
     NumericType,
     StringLikeType,
     TimeUnit,
+    int32,
 )
 from .helpers import Kernel
 from .execution import ExecutionContext
+from .filter import take
 
 
 # Restrict ``variant_dispatch_raises`` to a dtype family — each resolves a runtime
@@ -759,6 +762,99 @@ struct DecimalCast(Kernel):
 
 
 # ---------------------------------------------------------------------------
+# ListCast / StructCast / DictionaryCast — nested + dictionary
+# ---------------------------------------------------------------------------
+
+
+struct ListCast(Kernel):
+    """Cast a list-like array (list / large_list) to another of the same kind by
+    recursively casting its child values to the target's value type; the offset
+    buffer and validity are shared unchanged."""
+
+    comptime name = "list_cast"
+
+    @staticmethod
+    def apply(
+        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var data = array.to_data()
+        var child = AnyArray.from_data(data.children[0].copy())
+        var target = (
+            to.as_large_list()
+            .value_type()
+            .copy() if to.is_large_list() else to.as_list()
+            .value_type()
+            .copy()
+        )
+        var new_child = cast(child, target, safe, ctx)
+        return AnyArray.from_data(
+            ArrayData(
+                dtype=to.copy(),
+                length=data.length,
+                nulls=data.nulls,
+                offset=data.offset,
+                bitmap=data.bitmap,
+                buffers=data.buffers.copy(),
+                children=[new_child.to_data()],
+            )
+        )
+
+
+struct StructCast(Kernel):
+    """Cast struct → struct by recursively casting each field to the target
+    field's type (matched by position); the field counts must match."""
+
+    comptime name = "struct_cast"
+
+    @staticmethod
+    def apply(
+        array: AnyArray, to: AnyDataType, safe: Bool, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        var data = array.to_data()
+        ref fields = to.as_struct().fields
+        if len(fields) != len(data.children):
+            raise Error(
+                t"cast: struct field count mismatch {array.dtype()} -> {to}"
+            )
+        var children = List[ArrayData]()
+        for i in range(len(data.children)):
+            var field_arr = AnyArray.from_data(data.children[i].copy())
+            var casted = cast(field_arr, fields[i].dtype, safe, ctx)
+            children.append(casted.to_data())
+        return AnyArray.from_data(
+            ArrayData(
+                dtype=to.copy(),
+                length=data.length,
+                nulls=data.nulls,
+                offset=data.offset,
+                bitmap=data.bitmap,
+                buffers=data.buffers.copy(),
+                children=children^,
+            )
+        )
+
+
+struct DictionaryCast(Kernel):
+    """Decode a dictionary array — gather its values by index (``take``) — then
+    cast the decoded values to the target type when it differs."""
+
+    comptime name = "dictionary_cast"
+
+    @staticmethod
+    def decode(
+        array: DictionaryArray,
+        to: AnyDataType,
+        safe: Bool,
+        ctx: ExecutionContext,
+    ) raises -> AnyArray:
+        var indices = cast(array.indices(), int32, False, ctx).as_int32().copy()
+        var decoded = take(array.dictionary().copy(), indices, ctx)
+        if decoded.dtype() == to:
+            return decoded^
+        return cast(decoded, to, safe, ctx)
+
+
+# ---------------------------------------------------------------------------
 # Cast — runtime dispatcher over the kernels above
 # ---------------------------------------------------------------------------
 
@@ -797,9 +893,14 @@ struct Cast(Kernel):
         array: AnyArray, to: AnyDataType, ctx: ExecutionContext
     ) raises -> AnyArray:
         var src = array.dtype()
-        # Binary-like family first, so bytes ↔ bytes and string ↔ numeric/bool
+        # A dictionary source decodes first, whatever the target family is.
+        if src.is_dictionary():
+            return DictionaryCast.decode(
+                array.as_dictionary().copy(), to, safe, ctx
+            )
+        # Binary-like family, so bytes ↔ bytes and string ↔ numeric/bool
         # (incl. large_utf8 / fixed_size_binary) all route here.
-        if (
+        elif (
             src.is_binary_like()
             or to.is_binary_like()
             or src.is_fixed_size_binary()
@@ -814,6 +915,12 @@ struct Cast(Kernel):
             return Self._bool(array, to, ctx)
         elif src.is_temporal() or to.is_temporal():
             return Self._temporal(array, to, ctx)
+        elif (src.is_list() and to.is_list()) or (
+            src.is_large_list() and to.is_large_list()
+        ):
+            return ListCast.apply(array, to, safe, ctx)
+        elif src.is_struct() and to.is_struct():
+            return StructCast.apply(array, to, safe, ctx)
         raise Error(t"cast: unsupported cast {src} -> {to}")
 
     @staticmethod

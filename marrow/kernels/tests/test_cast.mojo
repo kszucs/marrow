@@ -1,8 +1,14 @@
 from std.testing import assert_equal, assert_true, assert_raises
 from marrow.testing import TestSuite
 
-from marrow.arrays import AnyArray, NullArray
-from marrow.builders import array, FixedSizeBinaryBuilder
+from marrow.arrays import AnyArray, NullArray, DictionaryArray
+from marrow.builders import (
+    array,
+    FixedSizeBinaryBuilder,
+    ListBuilder,
+    StructBuilder,
+    Int32Builder,
+)
 from marrow.dtypes import (
     bool_,
     null,
@@ -30,6 +36,10 @@ from marrow.dtypes import (
     fixed_size_binary_,
     decimal64,
     decimal128,
+    list_,
+    struct_,
+    dictionary,
+    field,
     Int16Type,
     Int32Type,
     Float16Type,
@@ -452,6 +462,70 @@ def test_decimal_nulls_preserved() raises:
     var d = cast(array([1, None, 3], int64), decimal128(10, 2))
     assert_equal(d.null_count(), 1)
     assert_true(not d.is_valid(1))
+
+
+# ---------------------------------------------------------------------------
+# Nested (list / struct) + dictionary decode
+# ---------------------------------------------------------------------------
+
+
+def test_list_to_list_cast() raises:
+    var ib = Int32Builder()
+    ib.append(1)
+    ib.append(2)
+    ib.append(3)
+    var lb = ListBuilder(ib^)
+    lb.append_valid()  # one list [1, 2, 3]
+    var lst: AnyArray = lb.finish()
+    var casted = cast(lst, list_(int64))  # list<int32> → list<int64>
+    assert_true(casted.dtype() == list_(int64).to_any())
+    ref child = casted.as_list().values()
+    assert_true(child.as_int64() == array([1, 2, 3], int64))
+
+
+def test_struct_to_struct_cast() raises:
+    var sb = StructBuilder([field("a", int32), field("b", int32)], capacity=2)
+    sb.field_builder(0).as_int32().append(1)
+    sb.field_builder(0).as_int32().append(2)
+    sb.field_builder(1).as_int32().append(10)
+    sb.field_builder(1).as_int32().append(20)
+    sb.append_valid()
+    sb.append_valid()
+    var st: AnyArray = sb.finish()
+    var casted = cast(st, struct_([field("a", int64), field("b", float64)]))
+    assert_true(casted.dtype().is_struct())
+    assert_true(casted.as_struct().field(0).as_int64() == array([1, 2], int64))
+    assert_true(
+        casted.as_struct().field(1).as_float64() == array([10.0, 20.0], float64)
+    )
+
+
+def test_dictionary_decode() raises:
+    var values: AnyArray = array(["a", "b", "c"])
+    var indices: AnyArray = array([0, 2, 1, 0], int32)
+    var d: AnyArray = DictionaryArray(
+        dtype=dictionary(int32, string).to_any(),
+        length=4,
+        nulls=0,
+        offset=0,
+        indices=indices^,
+        values=values^,
+    )
+    assert_true(cast(d, string).as_string() == array(["a", "c", "b", "a"]))
+
+
+def test_dictionary_decode_then_cast() raises:
+    var values: AnyArray = array([10, 20, 30], int32)
+    var indices: AnyArray = array([0, 1, 2, 1], int32)
+    var d: AnyArray = DictionaryArray(
+        dtype=dictionary(int32, int32).to_any(),
+        length=4,
+        nulls=0,
+        offset=0,
+        indices=indices^,
+        values=values^,
+    )
+    assert_true(cast(d, int64).as_int64() == array([10, 20, 30, 20], int64))
 
 
 def main() raises:

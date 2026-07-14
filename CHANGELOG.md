@@ -21,8 +21,22 @@
   PyArrow-style `marrow.compute.cast(arr, target_type, safe=…)` exposes it to
   Python. Also **string ↔ numeric/bool** (per-element `atol`/`atof` parse and
   format; `safe=True` raises on an unparseable value, `safe=False` nulls it) and
-  **null → any** (all-null array of the target type). `decimal`/`dictionary`/
-  nested/`string ↔ temporal` casts remain designed extension points.
+  **null → any** (all-null array of the target type).
+- **More cast families** (`marrow.kernels.cast`): the cast router now also covers
+  - **binary-like** — `utf8`/`large_utf8`/`binary`/`large_binary` ↔ each other
+    (zero-copy relabel when the offset width matches, else an offset rebuild;
+    bytes→utf8 validates UTF-8 under `safe`) and `fixed_size_binary` ↔ binary;
+    `large_utf8` now parses/formats to numeric/bool like `utf8`.
+  - **decimal** (`DecimalCast`, decimal32/64/128/256) — decimal ↔ decimal
+    (rescale by `10^Δscale`, widening the backing integer as needed), decimal ↔
+    integer, and decimal ↔ float.
+  - **nested** — `list`/`large_list` → same-kind list (recursively casting the
+    child values) and `struct` → `struct` (recursively casting each field).
+  - **dictionary decode** — a dictionary source is gathered by index (`take`) and
+    the decoded values cast to the target type.
+
+  Remaining designed extension points: dictionary *encode*, `string ↔ temporal`,
+  cross-kind list (`list ↔ large_list`/`fixed_size_list`), and `map`.
 
 - **`distinct_count` statistic** (`marrow.parquet`): a dictionary-encoded column
   chunk now writes `Statistics.distinct_count` (its dictionary size = the number
