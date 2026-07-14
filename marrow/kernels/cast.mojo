@@ -470,8 +470,10 @@ struct StringCast(Kernel):
 
     @staticmethod
     def string_to_num[
-        To: NumericType
-    ](array: StringArray, safe: Bool) raises -> PrimitiveArray[To]:
+        To: NumericType, safe: Bool
+    ](array: StringArray) raises -> PrimitiveArray[To]:
+        """Parse strings to ``To``. ``safe`` is comptime: safe=True raises on an
+        unparseable value, safe=False nulls it — the dead branch is elided."""
         comptime native = To.native
         var n = len(array)
         var buf = Buffer.alloc_zeroed[native](n)
@@ -492,10 +494,13 @@ struct StringCast(Kernel):
             if ok:
                 view.store[1](i, value)
                 valid.set(i)
-            elif safe:
-                raise Error(t"cast: cannot parse '{s}' as {AnyDataType(To())}")
             else:
-                nulls += 1
+                comptime if safe:
+                    raise Error(
+                        t"cast: cannot parse '{s}' as {AnyDataType(To())}"
+                    )
+                else:
+                    nulls += 1
         var out_bitmap = Optional[Bitmap[]]()
         if nulls > 0:
             out_bitmap = valid.to_immutable()
@@ -508,7 +513,7 @@ struct StringCast(Kernel):
         )
 
     @staticmethod
-    def string_to_bool(array: StringArray, safe: Bool) raises -> BoolArray:
+    def string_to_bool[safe: Bool](array: StringArray) raises -> BoolArray:
         var n = len(array)
         var data = Bitmap.alloc_zeroed(n)
         var valid = Bitmap.alloc_zeroed(n)
@@ -523,10 +528,11 @@ struct StringCast(Kernel):
                 valid.set(i)
             elif s == "false" or s == "0":
                 valid.set(i)
-            elif safe:
-                raise Error(t"cast: cannot parse '{s}' as bool")
             else:
-                nulls += 1
+                comptime if safe:
+                    raise Error(t"cast: cannot parse '{s}' as bool")
+                else:
+                    nulls += 1
         var out_bitmap = Optional[Bitmap[]]()
         if nulls > 0:
             out_bitmap = valid.to_immutable()
@@ -571,12 +577,16 @@ struct StringCast(Kernel):
         if src.is_string():
             var s = array.as_string().copy()
             if to.is_bool():
-                return Self.string_to_bool(s, safe).to_any()
+                if safe:
+                    return Self.string_to_bool[True](s).to_any()
+                return Self.string_to_bool[False](s).to_any()
             elif to.is_numeric():
 
                 @parameter
                 def to_num[To: NumericType](dst: To) raises -> AnyArray:
-                    return Self.string_to_num[To](s, safe).to_any()
+                    if safe:
+                        return Self.string_to_num[To, True](s).to_any()
+                    return Self.string_to_num[To, False](s).to_any()
 
                 return variant_dispatch_raises[
                     NumericType, predicate=_IsNumeric, func=to_num
