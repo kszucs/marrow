@@ -28,6 +28,8 @@ from marrow.dtypes import (
     large_binary,
     large_string,
     fixed_size_binary_,
+    decimal64,
+    decimal128,
     Int16Type,
     Int32Type,
     Float16Type,
@@ -413,6 +415,43 @@ def test_binary_to_string_invalid_utf8_raises() raises:
     var bad: AnyArray = cast(fb.finish(), binary)
     with assert_raises():
         _ = cast(bad, string, safe=True)
+
+
+# ---------------------------------------------------------------------------
+# Decimal ↔ numeric / decimal (constructed by casting from integers)
+# ---------------------------------------------------------------------------
+
+
+def test_int_to_decimal_roundtrip() raises:
+    var d = cast(array([1, 2, 3], int64), decimal128(10, 2))  # × 100
+    assert_true(d.dtype() == decimal128(10, 2).to_any())
+    assert_true(cast(d, int64).as_int64() == array([1, 2, 3], int64))
+
+
+def test_decimal_to_float() raises:
+    var d = cast(array([3], int64), decimal128(10, 2))  # 3 → 300 at scale 2
+    assert_true(cast(d, float64).as_float64() == array([3.0], float64))
+
+
+def test_float_to_decimal_roundtrip() raises:
+    var f: AnyArray = array([1.5, 2.25, -0.5], float64)
+    var d = cast(f, decimal128(10, 2))  # round(×100): 150, 225, -50
+    assert_true(
+        cast(d, float64).as_float64() == array([1.5, 2.25, -0.5], float64)
+    )
+
+
+def test_decimal_rescale_widen() raises:
+    var d = cast(array([1, 2], int64), decimal64(10, 1))  # scale 1: 10, 20
+    var d2 = cast(d, decimal128(20, 3))  # scale 1 → 3: × 100
+    assert_true(d2.dtype() == decimal128(20, 3).to_any())
+    assert_true(cast(d2, int64).as_int64() == array([1, 2], int64))
+
+
+def test_decimal_nulls_preserved() raises:
+    var d = cast(array([1, None, 3], int64), decimal128(10, 2))
+    assert_equal(d.null_count(), 1)
+    assert_true(not d.is_valid(1))
 
 
 def main() raises:
