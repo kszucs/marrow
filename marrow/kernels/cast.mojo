@@ -802,74 +802,36 @@ struct NullCast(Kernel):
 struct DecimalCast(Kernel):
     """Cast decimal ↔ decimal (rescale) and decimal ↔ numeric.
 
-    Integer-backed values — decimals, and plain integers taken at scale 0 —
-    rescale by ``10^(to_scale − from_scale)``: multiply when the scale widens,
-    truncating integer-divide when it narrows. Float conversions divide/multiply
-    by ``10^scale`` in floating point. Arithmetic is unchecked (wrapping /
-    truncating), matching the unsafe numeric path; validity is preserved.
-
-    ``dispatch`` owns the whole intra-family dispatch: the decimal side resolves
-    to its backing integer via ``_on_dec_native`` (int32/64/128/256), the numeric
-    side via ``_over_numeric``, and the concrete ``[FromN, ToN]`` lane kernels
-    (``_rescale`` / ``_to_float`` / ``_from_float``) do the work."""
+    Both sides resolve uniformly to a scalar native and a scale — a decimal to its
+    backing integer (int32/64/128/256) and its scale, a plain numeric to its own
+    native at scale 0. One ``_convert[FromN, ToN]`` then covers every case: an
+    integer rescale by ``10^(to_scale − from_scale)`` (multiply up, truncating
+    integer-divide down) when neither side is float, else a divide/multiply by
+    ``10^scale`` in float64 — float16 ↔ int128/256 has no direct compiler-rt path
+    (``__fixhfti`` / ``__floattihf``), so float64 is the intermediary. Arithmetic
+    is unchecked (wrapping / truncating); validity is preserved."""
 
     comptime name = "decimal_cast"
 
     @staticmethod
     def dispatch(array: AnyArray, to: AnyDataType) raises -> AnyArray:
-        var frm = array.dtype()
         var data = array.to_data()
-        var from_scale = Self._scale(frm)
+        var from_scale = Self._scale(array.dtype())
         var to_scale = Self._scale(to)
-        if frm.is_decimal() and to.is_decimal():
 
+        @parameter
+        def on_from[FromN: DType]() raises -> AnyArray:
             @parameter
-            def on_from[FN: DType]() raises -> AnyArray:
-                @parameter
-                def on_to[TN: DType]() raises -> AnyArray:
-                    return Self._rescale[FN, TN](
-                        data, to_scale - from_scale, to
-                    )
+            def on_to[ToN: DType]() raises -> AnyArray:
+                return Self._convert[FromN, ToN](data, from_scale, to_scale, to)
 
-                return Self._on_dec_native[on_to](to)
+            return Self._on_native[on_to](to)
 
-            return Self._on_dec_native[on_from](frm)
-        elif frm.is_decimal():  # decimal → numeric
-
-            @parameter
-            def dec_to_num[FN: DType]() raises -> AnyArray:
-                @parameter
-                def on_num[To: NumericType](d: To) raises -> AnyArray:
-                    comptime TN = To.native
-                    comptime if TN.is_floating_point():
-                        return Self._to_float[FN, TN](data, from_scale, to)
-                    else:
-                        return Self._rescale[FN, TN](data, -from_scale, to)
-
-                return _over_numeric[on_num](to)
-
-            return Self._on_dec_native[dec_to_num](frm)
-        elif to.is_decimal():  # numeric → decimal
-
-            @parameter
-            def num_to_dec[TN: DType]() raises -> AnyArray:
-                @parameter
-                def on_num[From: NumericType](s: From) raises -> AnyArray:
-                    comptime FN = From.native
-                    comptime if FN.is_floating_point():
-                        return Self._from_float[FN, TN](data, to_scale, to)
-                    else:
-                        return Self._rescale[FN, TN](data, to_scale, to)
-
-                return _over_numeric[on_num](frm)
-
-            return Self._on_dec_native[num_to_dec](to)
-        raise Error(t"cast: unsupported decimal cast {frm} -> {to}")
-
-    # -- scale + backing-integer resolution -----------------------------------
+        return Self._on_native[on_from](array.dtype())
 
     @staticmethod
     def _scale(dt: AnyDataType) -> Int:
+        """The decimal scale, or 0 for a plain integer/numeric."""
         if dt.is_decimal32():
             return dt.as_decimal32().scale
         elif dt.is_decimal64():
@@ -878,22 +840,71 @@ struct DecimalCast(Kernel):
             return dt.as_decimal128().scale
         elif dt.is_decimal256():
             return dt.as_decimal256().scale
-        return 0  # a non-decimal integer is scale 0
+        return 0
 
     @staticmethod
-    def _on_dec_native[
+    def _on_native[
         func: def[N: DType]() raises capturing[_] -> AnyArray
     ](dt: AnyDataType) raises -> AnyArray:
+        """Resolve a decimal to its backing integer, or a numeric to its own
+        native, then run ``func`` with that scalar ``DType``."""
         if dt.is_decimal32():
             return func[DType.int32]()
         elif dt.is_decimal64():
             return func[DType.int64]()
         elif dt.is_decimal128():
             return func[DType.int128]()
-        else:
+        elif dt.is_decimal256():
             return func[DType.int256]()
+        else:
 
-    # -- lane kernels ---------------------------------------------------------
+            @parameter
+            def by_num[T: NumericType](x: T) raises -> AnyArray:
+                return func[T.native]()
+
+            return _over_numeric[by_num](dt)
+
+    @staticmethod
+    def _convert[
+        FromN: DType, ToN: DType
+    ](
+        data: ArrayData, from_scale: Int, to_scale: Int, to: AnyDataType
+    ) raises -> AnyArray:
+        """Per-element conversion for the resolved native pair."""
+        comptime if FromN.is_floating_point():  # float → decimal
+            var f = Self._pow10[DType.float64](to_scale)
+
+            @parameter
+            def to_dec(x: Scalar[FromN]) -> Scalar[ToN]:
+                return round(x.cast[DType.float64]() * f).cast[ToN]()
+
+            return Self._map[FromN, ToN, to_dec](data, to)
+        elif ToN.is_floating_point():  # decimal → float
+            var f = Self._pow10[DType.float64](from_scale)
+
+            @parameter
+            def to_flt(x: Scalar[FromN]) -> Scalar[ToN]:
+                return (x.cast[DType.float64]() / f).cast[ToN]()
+
+            return Self._map[FromN, ToN, to_flt](data, to)
+        else:  # integer rescale by 10^(to_scale − from_scale)
+            var delta = to_scale - from_scale
+            if delta >= 0:
+                var f = Self._pow10[ToN](delta)
+
+                @parameter
+                def up(x: Scalar[FromN]) -> Scalar[ToN]:
+                    return x.cast[ToN]() * f
+
+                return Self._map[FromN, ToN, up](data, to)
+            else:
+                var f = Self._pow10[FromN](-delta)
+
+                @parameter
+                def down(x: Scalar[FromN]) -> Scalar[ToN]:
+                    return (x // f).cast[ToN]()
+
+                return Self._map[FromN, ToN, down](data, to)
 
     @staticmethod
     def _pow10[T: DType](n: Int) -> Scalar[T]:
@@ -903,13 +914,23 @@ struct DecimalCast(Kernel):
         return r
 
     @staticmethod
-    def _finish(
-        var out: Buffer[mut=True], data: ArrayData, to: AnyDataType
-    ) raises -> AnyArray:
+    def _map[
+        FromN: DType,
+        ToN: DType,
+        op: def(Scalar[FromN]) capturing[_] -> Scalar[ToN],
+    ](data: ArrayData, to: AnyDataType) raises -> AnyArray:
+        """Apply ``op`` to each element, writing a fresh ``ToN`` buffer relabelled
+        as ``to``. Scalar (int128/256 aren't reliably SIMD-vectorizable)."""
+        var n = data.length
+        var src = data.buffers[0].view[FromN](data.offset, n)
+        var out = Buffer.alloc_uninit[ToN](n)
+        var dst = out.view[ToN]()
+        for i in range(n):
+            dst.store[1](i, op(src.load[1](i)))
         return AnyArray.from_data(
             ArrayData(
                 dtype=to.copy(),
-                length=data.length,
+                length=n,
                 nulls=data.nulls,
                 offset=0,
                 bitmap=data.bitmap,
@@ -917,57 +938,6 @@ struct DecimalCast(Kernel):
                 children=[],
             )
         )
-
-    @staticmethod
-    def _rescale[
-        FromN: DType, ToN: DType
-    ](data: ArrayData, delta: Int, to: AnyDataType) raises -> AnyArray:
-        var n = data.length
-        var src = data.buffers[0].view[FromN](data.offset, n)
-        var out = Buffer.alloc_uninit[ToN](n)
-        var dst = out.view[ToN]()
-        if delta >= 0:
-            var f = Self._pow10[ToN](delta)
-            for i in range(n):
-                dst.store[1](i, src.load[1](i).cast[ToN]() * f)
-        else:
-            var f = Self._pow10[FromN](-delta)
-            for i in range(n):
-                dst.store[1](i, (src.load[1](i) // f).cast[ToN]())
-        return Self._finish(out^, data, to)
-
-    @staticmethod
-    def _to_float[
-        FromN: DType, ToN: DType
-    ](data: ArrayData, from_scale: Int, to: AnyDataType) raises -> AnyArray:
-        # ``SIMD.cast`` does every conversion, but float16 ↔ int128/int256 needs
-        # compiler-rt builtins (``__fixhfti`` / ``__floattihf``) that don't exist
-        # for any width, so compute in float64 and let it narrow to float16.
-        var n = data.length
-        var src = data.buffers[0].view[FromN](data.offset, n)
-        var out = Buffer.alloc_uninit[ToN](n)
-        var dst = out.view[ToN]()
-        var f = Self._pow10[DType.float64](from_scale)
-        for i in range(n):
-            dst.store[1](
-                i, (src.load[1](i).cast[DType.float64]() / f).cast[ToN]()
-            )
-        return Self._finish(out^, data, to)
-
-    @staticmethod
-    def _from_float[
-        FromN: DType, ToN: DType
-    ](data: ArrayData, to_scale: Int, to: AnyDataType) raises -> AnyArray:
-        var n = data.length
-        var src = data.buffers[0].view[FromN](data.offset, n)
-        var out = Buffer.alloc_uninit[ToN](n)
-        var dst = out.view[ToN]()
-        var f = Self._pow10[DType.float64](to_scale)
-        for i in range(n):
-            dst.store[1](
-                i, round(src.load[1](i).cast[DType.float64]() * f).cast[ToN]()
-            )
-        return Self._finish(out^, data, to)
 
 
 # ---------------------------------------------------------------------------
