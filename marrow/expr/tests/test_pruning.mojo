@@ -36,24 +36,24 @@ def _stats(xmin: Int, xmax: Int, ymin: Int, ymax: Int) raises -> PruneStats:
 def test_dyn_gt_literal() raises:
     var pred = col("x") > lit[Int64Type](Int64(100))
     # x in [0, 50] -> can never exceed 100 -> prune
-    assert_false(pred.prune_bound(_stats(0, 50, 0, 0)).maybe_true)
+    assert_false(pred.prune(_stats(0, 50, 0, 0)).maybe_true)
     # x in [0, 200] -> might exceed 100 -> keep
-    assert_true(pred.prune_bound(_stats(0, 200, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(0, 200, 0, 0)).maybe_true)
 
 
 def test_dyn_eq_literal() raises:
     var pred = col("x") == lit[Int64Type](Int64(5))
     # x in [10, 20] -> 5 not in range -> prune
-    assert_false(pred.prune_bound(_stats(10, 20, 0, 0)).maybe_true)
+    assert_false(pred.prune(_stats(10, 20, 0, 0)).maybe_true)
     # x in [0, 8] -> 5 in range -> keep
-    assert_true(pred.prune_bound(_stats(0, 8, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(0, 8, 0, 0)).maybe_true)
 
 
 def test_dyn_lt_literal() raises:
     var pred = col("x") < lit[Int64Type](Int64(10))
     # x in [20, 30] -> never below 10 -> prune
-    assert_false(pred.prune_bound(_stats(20, 30, 0, 0)).maybe_true)
-    assert_true(pred.prune_bound(_stats(0, 30, 0, 0)).maybe_true)
+    assert_false(pred.prune(_stats(20, 30, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(0, 30, 0, 0)).maybe_true)
 
 
 def test_dyn_and() raises:
@@ -62,9 +62,9 @@ def test_dyn_and() raises:
         col("x") < lit[Int64Type](Int64(200))
     )
     # x in [0, 50] -> first conjunct false everywhere -> prune
-    assert_false(pred.prune_bound(_stats(0, 50, 0, 0)).maybe_true)
+    assert_false(pred.prune(_stats(0, 50, 0, 0)).maybe_true)
     # x in [120, 180] -> both may hold -> keep
-    assert_true(pred.prune_bound(_stats(120, 180, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(120, 180, 0, 0)).maybe_true)
 
 
 def test_dyn_or() raises:
@@ -73,9 +73,9 @@ def test_dyn_or() raises:
         col("x") > lit[Int64Type](Int64(1000))
     )
     # x in [10, 20] -> neither branch possible -> prune
-    assert_false(pred.prune_bound(_stats(10, 20, 0, 0)).maybe_true)
+    assert_false(pred.prune(_stats(10, 20, 0, 0)).maybe_true)
     # x in [10, 2000] -> right branch possible -> keep
-    assert_true(pred.prune_bound(_stats(10, 2000, 0, 0)).maybe_true)
+    assert_true(pred.prune(_stats(10, 2000, 0, 0)).maybe_true)
 
 
 # ---------------------------------------------------------------------------
@@ -86,9 +86,9 @@ def test_dyn_or() raises:
 def test_fused_greater_col_col() raises:
     var pred = Greater(vcol("x", int64), vcol("y", int64))
     # x in [0,5], y in [10,20] -> max(x)=5 !> min(y)=10 -> prune
-    assert_false(pred.prune_bound(_stats(0, 5, 10, 20)).maybe_true)
+    assert_false(pred.prune(_stats(0, 5, 10, 20)).maybe_true)
     # x in [10,20], y in [0,5] -> may hold -> keep
-    assert_true(pred.prune_bound(_stats(10, 20, 0, 5)).maybe_true)
+    assert_true(pred.prune(_stats(10, 20, 0, 5)).maybe_true)
 
 
 # ---------------------------------------------------------------------------
@@ -98,12 +98,12 @@ def test_fused_greater_col_col() raises:
 
 def test_boxed_dyn_and_fused() raises:
     var boxed_dyn = AnyValue(col("x") > lit[Int64Type](Int64(100)))
-    assert_false(boxed_dyn.prune_bound(_stats(0, 50, 0, 0)).maybe_true)
-    assert_true(boxed_dyn.prune_bound(_stats(0, 200, 0, 0)).maybe_true)
+    assert_false(boxed_dyn.prune(_stats(0, 50, 0, 0)).maybe_true)
+    assert_true(boxed_dyn.prune(_stats(0, 200, 0, 0)).maybe_true)
 
     var boxed_fused = AnyValue(Greater(vcol("x", int64), vcol("y", int64)))
-    assert_false(boxed_fused.prune_bound(_stats(0, 5, 10, 20)).maybe_true)
-    assert_true(boxed_fused.prune_bound(_stats(10, 20, 0, 5)).maybe_true)
+    assert_false(boxed_fused.prune(_stats(0, 5, 10, 20)).maybe_true)
+    assert_true(boxed_fused.prune(_stats(10, 20, 0, 5)).maybe_true)
 
 
 def test_unknown_stats_keeps() raises:
@@ -116,7 +116,7 @@ def test_unknown_stats_keeps() raises:
     maxs.append(None)
     var stats = PruneStats(Schema(fields=fields^), mins^, maxs^)
     var pred = col("x") > lit[Int64Type](Int64(100))
-    assert_true(pred.prune_bound(stats).maybe_true)
+    assert_true(pred.prune(stats).maybe_true)
 
 
 def main() raises:

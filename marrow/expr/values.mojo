@@ -56,6 +56,7 @@ from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from ..buffers import Bitmap, Buffer
 from ..dtypes import AnyDataType, DType, NumericType
 from ..tabular import RecordBatch
+from ..kernels.cast import NumericCast
 from .pruning import PruneStats, PruneBound
 
 
@@ -100,7 +101,7 @@ trait Value(
     def name(self) -> String:
         return String()
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         """Evaluate this node against per-column statistics for pruning. The
         conservative default returns unknown bounds / maybe-true; nodes that can
         do better (columns, literals, comparisons) override it. Shared by the
@@ -187,6 +188,12 @@ trait NumericValue(Value):
         """Return the output data type (always known at compile time)."""
         return AnyDataType(Self.OutType())
 
+    def cast[Target: dt.NumericType](self, dtype: Target) -> Cast[Self, Target]:
+        """Wrap this node in a fused numeric cast to ``dtype`` —
+        ``col("a", int32).cast(int64)``. The result is a ``NumericValue`` so it
+        composes with ``Add``/``Less``/… in the same fused pass."""
+        return Cast[Self, Target](self.copy(), dtype)
+
 
 # ---------------------------------------------------------------------------
 # Add — comptime-typed binary add
@@ -263,6 +270,54 @@ struct Sub[L: NumericValue, R: NumericValue](NumericValue):
         writer.write(t", ")
         self.right.write_to(writer)
         writer.write(t")")
+
+
+# ---------------------------------------------------------------------------
+# Cast — comptime-typed numeric cast
+# ---------------------------------------------------------------------------
+
+
+struct Cast[C: NumericValue, To: dt.NumericType](NumericValue):
+    """Fused numeric cast: reinterprets a numeric child as ``To`` inside the
+    single fused vectorize loop — one ``pop.cast`` per lane, zero intermediate
+    arrays.
+
+    ``OutType``/``NativeType`` come from ``To`` (not the child), mirroring
+    ``Length``. Uses the raw truncating/wrapping ``SIMD.cast`` semantics (the
+    unsafe fast path); the eager ``marrow.kernels.cast`` offers safe checking.
+    Composes with ``Add``/``Less``/… so ``Cast(Add(a, b))`` collapses to one
+    pass.
+
+    Usage::
+
+        var expr = Cast(Add(col("a", int32), col("b", int32)), int64)
+        var result = expr.execute(batch)  # single fused pass
+    """
+
+    comptime OutType = Self.To
+    comptime NativeType = Self.To.native
+
+    var child: Self.C
+
+    def __init__(out self, var child: Self.C, dtype: Self.To):
+        """The ``dtype`` value is only used to infer the ``To`` type parameter
+        (like ``col(name, dtype)``)."""
+        self.child = child^
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        # Reuse the eager kernel's lane functor so the fused and eager numeric
+        # casts share a single conversion definition.
+        return NumericCast.core[Self.C.NativeType, Self.NativeType, W](
+            self.child.core[W](batch, idx)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Cast(")
+        self.child.write_to(writer)
+        writer.write(t", ", AnyDataType(Self.OutType()), t")")
 
 
 # ---------------------------------------------------------------------------
@@ -357,9 +412,9 @@ struct Less[L: NumericValue, R: NumericValue](BoolValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.lt(r)
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_lt(self.right.prune_bound(stats))
+            self.left.prune(stats).maybe_lt(self.right.prune(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -393,9 +448,9 @@ struct Greater[L: NumericValue, R: NumericValue](BoolValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.gt(r)
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_gt(self.right.prune_bound(stats))
+            self.left.prune(stats).maybe_gt(self.right.prune(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -428,9 +483,9 @@ struct Equal[L: NumericValue, R: NumericValue](BoolValue):
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return l.eq(r)
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         return PruneBound.boolean(
-            self.left.prune_bound(stats).maybe_eq(self.right.prune_bound(stats))
+            self.left.prune(stats).maybe_eq(self.right.prune(stats))
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -585,30 +640,6 @@ def col[T: dt.StringLikeType](var name: String, dtype: T) -> StringColumn:
 # holds ``List[AnyValue]``.
 
 
-def _value_to_array_tramp[
-    V: Value
-](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
-    return rebind[ArcPointer[V]](ptr)[].to_array(batch)
-
-
-def _value_name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-    return rebind[ArcPointer[V]](ptr)[].name()
-
-
-def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-    """One write trampoline for every boxed type (all conform to ``Value``,
-    which is ``Writable``)."""
-    var s = String()
-    rebind[ArcPointer[V]](ptr)[].write_to(s)
-    return s^
-
-
-def _prune_bound_tramp[
-    V: Value
-](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
-    return rebind[ArcPointer[V]](ptr)[].prune_bound(stats)
-
-
 struct AnyValue(Copyable, Movable, Writable):
     """Type-erased handle over a single value node — the one value box the
     relational layer holds. No tag and no ``eval()`` switch of its own, so
@@ -620,9 +651,33 @@ struct AnyValue(Copyable, Movable, Writable):
     ) thin raises -> AnyArray
     var _name_fn: def(ArcPointer[NoneType]) thin -> String
     var _write_to_str: def(ArcPointer[NoneType]) thin -> String
-    var _prune_bound_fn: def(
+    var _prune_fn: def(
         ArcPointer[NoneType], PruneStats
     ) thin raises -> PruneBound
+
+    # Per-boxed-type trampolines: one instantiation per concrete ``V`` recovers
+    # the erased node via ``rebind`` and forwards to its ``Value`` method.
+    @staticmethod
+    def _to_array_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+        return rebind[ArcPointer[V]](ptr)[].to_array(batch)
+
+    @staticmethod
+    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[V]](ptr)[].name()
+
+    @staticmethod
+    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        var s = String()
+        rebind[ArcPointer[V]](ptr)[].write_to(s)
+        return s^
+
+    @staticmethod
+    def _prune_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
+        return rebind[ArcPointer[V]](ptr)[].prune(stats)
 
     @implicit
     def __init__[V: Value](out self, value: V):
@@ -632,10 +687,10 @@ struct AnyValue(Copyable, Movable, Writable):
         fused-only path stays tiny."""
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
-        self._to_array = _value_to_array_tramp[V]
-        self._name_fn = _value_name_tramp[V]
-        self._write_to_str = _write_tramp[V]
-        self._prune_bound_fn = _prune_bound_tramp[V]
+        self._to_array = Self._to_array_tramp[V]
+        self._name_fn = Self._name_tramp[V]
+        self._write_to_str = Self._write_tramp[V]
+        self._prune_fn = Self._prune_tramp[V]
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self._to_array(self._boxed, batch)
@@ -643,12 +698,12 @@ struct AnyValue(Copyable, Movable, Writable):
     def name(self) -> String:
         return self._name_fn(self._boxed)
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         """Evaluate the boxed predicate against per-column statistics, returning
         whether it could be true (see ``marrow.expr.pruning``). Works for both a
         fused static predicate and a ``DynValue`` — the trampoline forwards to
         whichever node is boxed."""
-        return self._prune_bound_fn(self._boxed, stats)
+        return self._prune_fn(self._boxed, stats)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_to_str(self._boxed))
@@ -690,7 +745,7 @@ struct NumericColumn[T: dt.NumericType](NumericValue):
     def name(self) -> String:
         return self._name.copy()
 
-    def prune_bound(self, stats: PruneStats) raises -> PruneBound:
+    def prune(self, stats: PruneStats) raises -> PruneBound:
         var iv = stats.by_name(self._name)
         return PruneBound.interval(iv[0].copy(), iv[1].copy())
 

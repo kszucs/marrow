@@ -178,6 +178,20 @@ def take(data, indices, *, boundscheck=True, memory_pool=None):
     return Array.wrap(_ma.take(data.unwrap(), indices.unwrap(), _serial()))
 
 
+# ── Conversion ────────────────────────────────────────────────────────────────
+
+
+def cast(arr, target_type, *, safe=True, memory_pool=None):
+    """Cast *arr* to *target_type* (numeric, bool, or temporal).
+
+    With ``safe=True`` (the default) a lossy conversion raises; ``safe=False``
+    uses the raw truncating/wrapping conversion.
+
+    Equivalent to ``pyarrow.compute.cast``.
+    """
+    return Array.wrap(_ma.cast(arr.unwrap(), target_type, safe, _serial()))
+
+
 # ── Sorting ───────────────────────────────────────────────────────────────────
 
 

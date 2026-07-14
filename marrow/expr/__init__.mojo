@@ -61,6 +61,7 @@ from .dynamic import (
     IS_NULL,
     IF_ELSE,
     LENGTH,
+    CAST,
 )
 from ..kernels.execution import ExecutionContext
 from .execution import (

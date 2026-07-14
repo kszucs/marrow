@@ -38,6 +38,7 @@ from marrow.expr import (
     IS_NULL,
     IF_ELSE,
     LENGTH,
+    CAST,
 )
 
 
@@ -325,6 +326,21 @@ def test_kind_binary() raises:
     """Binary node reports its op as kind."""
     var expr = col(0) + col(1)
     assert_equal(expr.kind(), ADD)
+
+
+def test_dyn_cast_eval() raises:
+    """A cast node evaluates via the router and matches the eager kernel."""
+    var a = array([1, 2, 3], int64)
+    var batch = record_batch([a.copy()], names=["c0"])
+    var tmp = col(0).cast(float64).eval(batch)
+    assert_true(tmp.dtype() == float64)
+    assert_true(tmp.as_float64() == array([1.0, 2.0, 3.0], float64))
+
+
+def test_dyn_cast_dtype_and_kind() raises:
+    var expr = col(0).cast(float64)
+    assert_equal(expr.kind(), CAST)
+    assert_true(expr.dtype().value() == float64)
 
 
 def main() raises:

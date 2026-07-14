@@ -4,6 +4,23 @@
 
 ### Features
 
+- **Cast kernels** (`marrow.kernels.cast`, `mk.cast`): monomorphized numeric,
+  bool, and temporal casts behind a two-level dispatcher — a top-level `cast`
+  routes on the type family, and each family struct (`NumericCast`, `BoolCast`,
+  `TemporalCast`) does the within-family typed dispatch. Numeric casts build on
+  `SIMD.cast` (one `pop.cast` per lane); `safe=False` truncates/wraps like
+  `numpy.astype`, while `safe=True` (the default, matching PyArrow) raises on any
+  lossy conversion. Bool casts use `x != 0` / `True→1`; temporal casts reinterpret
+  to the underlying integer or scale by the unit ratio (e.g. `date32↔date64`,
+  `timestamp[s]↔[ms]`). A fused `Cast` expression node (`marrow.expr.values`) and
+  a `DynValue.cast(to)` runtime node let casts fuse into AOT-compiled expressions
+  (`Cast(Add(a, b), int64)` collapses to a single vectorized pass), and a
+  PyArrow-style `marrow.compute.cast(arr, target_type, safe=…)` exposes it to
+  Python. Also **string ↔ numeric/bool** (per-element `atol`/`atof` parse and
+  format; `safe=True` raises on an unparseable value, `safe=False` nulls it) and
+  **null → any** (all-null array of the target type). `decimal`/`dictionary`/
+  nested/`string ↔ temporal` casts remain designed extension points.
+
 - **`distinct_count` statistic** (`marrow.parquet`): a dictionary-encoded column
   chunk now writes `Statistics.distinct_count` (its dictionary size = the number
   of distinct non-null values); PLAIN/DELTA chunks leave it absent. `distinct_count`

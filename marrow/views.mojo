@@ -1205,6 +1205,56 @@ def apply[
 
 
 def apply[
+    In: DType,
+    op: UnaryFn[In, DType.bool],
+](
+    src: BufferView[In, _],
+    dst: BitmapView[mut=True, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Apply a unary predicate and bit-pack results into a bitmap.
+
+    Maps W elements per call, packs the ``SIMD[bool, W]`` result into the
+    output bitmap via ``BitmapView.store``. Used e.g. for numeric→bool casts
+    (``op = {x => x.ne(0)}``). Over-read on the tail is safe (Arrow 64-byte
+    padding). CPU parallelism via ``ctx`` is not used here — bit-packed outputs
+    need whole-byte-aligned stride to avoid scalar read-modify-write races
+    between workers; threading support is future work.
+    """
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](src.load[W](i)))
+
+    if ctx.is_gpu():
+        comptime if has_accelerator_support[In]():
+            comptime gpu_width = max(
+                8, simd_width_of[In, target=get_gpu_target()]()
+            )
+            comptime max_pad = 64 // size_of[Scalar[In]]()
+            var padded = min(
+                math.align_up(length, gpu_width),
+                length + max_pad,
+            )
+            elementwise[process, gpu_width, target="gpu"](
+                Coord(padded), ctx.device.value()
+            )
+        else:
+            raise Error("apply: no GPU accelerator available")
+    else:
+        comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            process[W](Coord(i))
+
+        vectorize[cpu_width](length, lane)
+
+
+def apply[
     Out: DType,
     op: UnaryFn[DType.bool, Out],
 ](

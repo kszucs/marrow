@@ -6,6 +6,7 @@ All GPU-capable functions accept an ``ExecutionContext`` as their last positiona
 from std.python import PythonObject
 from std.python.bindings import PythonModuleBuilder
 from marrow.arrays import AnyArray
+from marrow.dtypes import AnyDataType
 from marrow.scalars import AnyScalar
 import marrow.kernels as mk
 
@@ -43,6 +44,12 @@ def take(
     array: AnyArray, indices: AnyArray, ctx: ExecutionContext
 ) raises -> AnyArray:
     return mk.take(array, indices.as_int32().copy(), ctx)
+
+
+def cast(
+    array: AnyArray, target: AnyDataType, safe: Bool, ctx: ExecutionContext
+) raises -> AnyArray:
+    return mk.cast(array, target, safe, ctx)
 
 
 # ``pykernel`` — wrap a marrow kernel of uniform shape
@@ -105,3 +112,4 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pyfunction[sort_indices]()]("sort_indices")
     mb.def_function[pyfunction[sort]()]("sort")
     mb.def_function[pyfunction[take]()]("take")
+    mb.def_function[pyfunction[cast]()]("cast")

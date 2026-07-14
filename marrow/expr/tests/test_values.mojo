@@ -19,9 +19,28 @@ from marrow.testing import TestSuite
 
 from marrow.arrays import PrimitiveArray
 from marrow.builders import array
-from marrow.dtypes import Int64Type, int64, uint32, string
+from marrow.dtypes import (
+    Int32Type,
+    Int64Type,
+    Float64Type,
+    int32,
+    int64,
+    float64,
+    uint32,
+    string,
+)
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.values import Add, Sub, Less, Greater, Equal, Length, col
+from marrow.expr.values import (
+    Add,
+    Sub,
+    Less,
+    Greater,
+    Equal,
+    Length,
+    Cast,
+    col,
+)
+from marrow.kernels.cast import cast as eager_cast
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +345,77 @@ def test_comparison_dtype_is_bool() raises:
     """
     var lt = Less(col("a", int64), col("b", int64))
     assert_true(lt.dtype().is_bool())
+
+
+# ---------------------------------------------------------------------------
+# Fused Cast
+# ---------------------------------------------------------------------------
+
+
+def test_fused_cast_basic() raises:
+    """Cast(col(a), int64) widens an int32 column to int64 in one pass."""
+    var a = array([1, 2, 3], int32)
+    var batch = record_batch([a^], names=["c0"])
+    var expr = Cast(col("c0", int32), int64)
+    var result = expr.execute(batch)
+    assert_true(result == array([1, 2, 3], int64))
+
+
+def test_fused_cast_to_float() raises:
+    var a = array([1, 2, 3], int32)
+    var batch = record_batch([a^], names=["c0"])
+    var result = Cast(col("c0", int32), float64).execute(batch)
+    assert_true(result == array([1.0, 2.0, 3.0], float64))
+
+
+def test_fused_cast_over_add() raises:
+    """Cast(Add(a, b), int64) fuses the add and the cast into one pass and
+    matches the eager kernel applied to the eager add."""
+    var a = array([1, 2, 3], int32)
+    var b = array([10, 20, 30], int32)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var expr = Cast(Add(col("c0", int32), col("c1", int32)), int64)
+    var result = expr.execute(batch)
+    assert_true(result == array([11, 22, 33], int64))
+
+
+def test_fused_cast_matches_eager() raises:
+    var a = array([5, 6, 7, 8], int32)
+    var batch = record_batch([a.copy()], names=["c0"])
+    var fused = Cast(col("c0", int32), float64).execute(batch)
+    var eager = eager_cast(a.copy(), float64)
+    assert_true(fused == eager.as_float64())
+
+
+def test_fused_cast_composes_in_predicate() raises:
+    """Less(Cast(a, int64), col(b, int64)) — a cast child inside a predicate."""
+    var a = array([1, 2, 3], int32)
+    var b = array([5, 1, 9], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var mask = Less(Cast(col("c0", int32), int64), col("c1", int64)).execute(
+        batch
+    )
+    assert_true(mask == array([True, False, True]))
+
+
+def test_fused_cast_dtype_and_write() raises:
+    var expr = Cast(col("a", int32), int64)
+    assert_true(expr.dtype().is_int64())
+    assert_equal(String(expr), "Cast(Col[a], int64)")
+
+
+def test_cast_method_on_node() raises:
+    """The ``.cast(dtype)`` method on a NumericValue builds the same fused node
+    and composes with other nodes."""
+    var a = array([1, 2, 3], int32)
+    var b = array([10, 20, 30], int32)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    # (a + b).cast(int64)
+    var expr = Add(col("c0", int32), col("c1", int32)).cast(int64)
+    assert_true(expr.execute(batch) == array([11, 22, 33], int64))
+    # a.cast(float64)
+    var f = col("c0", int32).cast(float64).execute(batch)
+    assert_true(f == array([1.0, 2.0, 3.0], float64))
 
 
 def main() raises:
