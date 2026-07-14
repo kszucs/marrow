@@ -29,10 +29,8 @@ zero, integer narrowing wraps (two's-complement), no overflow saturation
 any lossy conversion. Validity (the null bitmap) is always preserved unchanged.
 """
 
-from std.algorithm.backend.vectorize import vectorize
 from std.collections.string import atol, atof, StringSlice
-from std.sys import bit_width_of, size_of
-from std.sys.info import simd_byte_width
+from std.sys import bit_width_of
 
 from ..arrays import (
     AnyArray,
@@ -44,7 +42,7 @@ from ..arrays import (
 from ..buffers import Buffer, Bitmap
 from ..builders import AnyBuilder, StringBuilder
 from ..utils import variant_dispatch_raises
-from ..views import apply
+from ..views import apply, apply_checked
 from ..dtypes import (
     AnyDataType,
     DType,
@@ -73,7 +71,20 @@ struct NumericCast(Kernel):
     @always_inline
     @staticmethod
     def core[In: DType, Out: DType, W: Int](a: SIMD[In, W]) -> SIMD[Out, W]:
+        """Unchecked cast — one ``pop.cast``. Used by the unsafe / lossless path
+        and the fused AOT node."""
         return a.cast[Out]()
+
+    @always_inline
+    @staticmethod
+    def core_checked[
+        In: DType, Out: DType, W: Int
+    ](a: SIMD[In, W]) -> Tuple[SIMD[Out, W], SIMD[DType.bool, W]]:
+        """Checked cast — returns ``(out, bad)`` where ``bad`` marks lanes that
+        don't round-trip. Casts forward **once** and reuses ``out`` for the
+        back-cast, so the safe path does no redundant work."""
+        var out = a.cast[Out]()
+        return (out, out.cast[In]().ne(a))
 
     @staticmethod
     def _needs_check[In: DType, Out: DType]() -> Bool:
@@ -97,65 +108,15 @@ struct NumericCast(Kernel):
             return True  # signed → unsigned: negatives always overflow
 
     @staticmethod
-    def _raise_loss[
-        From: NumericType, To: NumericType
-    ](array: PrimitiveArray[From]) raises:
-        """Scan for the first valid value not representable as ``To`` and raise
-        with it. Called after a vectorized check flags a failure."""
-        comptime In = From.native
-        comptime Out = To.native
-        for j in range(len(array)):
-            if array.is_valid(j):
-                var v = array.unsafe_get(j)
-                if v.cast[Out]().cast[In]() != v:
-                    raise Error(
-                        t"cast: value {v} out of range for {AnyDataType(To())}"
-                    )
-        raise Error(t"cast: value out of range for {AnyDataType(To())}")
-
-    @staticmethod
-    def _verify[
-        From: NumericType, To: NumericType
-    ](array: PrimitiveArray[From]) raises:
-        """Raise if any valid element of ``array`` is not exactly representable
-        as ``To`` (vectorized round-trip + mask-reduce). Used on the GPU path,
-        where the cast runs on-device and the check runs on the host input; the
-        CPU path fuses this check into the cast pass (see ``apply``)."""
-        comptime In = From.native
-        comptime Out = To.native
-        comptime if Self._needs_check[In, Out]():
-            var length = len(array)
-            var src = array.values()
-            var validity = array.validity()
-            comptime w = max(1, simd_byte_width() // size_of[Scalar[In]]())
-            var acc = SIMD[DType.bool, w](fill=False)
-            var i = 0
-            while i + w <= length:
-                var bad = (
-                    src.load[w](i).cast[Out]().cast[In]().ne(src.load[w](i))
-                )
-                if validity:
-                    bad = bad & validity.value().mask[w](i)
-                acc = acc | bad
-                i += w
-            var failed = acc.reduce_or()
-            while i < length:
-                if not validity or validity.value().test(i):
-                    var v = src.load[1](i)
-                    if v.cast[Out]().cast[In]() != v:
-                        failed = True
-                i += 1
-            if failed:
-                Self._raise_loss[From, To](array)
-
-    @staticmethod
     def apply[
-        From: NumericType, To: NumericType
+        From: NumericType, To: NumericType, safe: Bool = True
     ](
         array: PrimitiveArray[From],
-        safe: Bool = True,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[To]:
+        """Cast ``array`` to ``To``. ``safe`` is a **comptime** parameter so the
+        checked / unchecked kernel is selected at instantiation — usable from
+        AOT-compiled fused expressions."""
         comptime In = From.native
         comptime Out = To.native
         var length = len(array)
@@ -167,44 +128,21 @@ struct NumericCast(Kernel):
             buf = Buffer.alloc_uninit[Out](length)
         var dst = buf.view[Out](0, length)
 
-        comptime if Self._needs_check[In, Out]():
-            if safe and not ctx.is_gpu():
-                # Fused single pass: cast + store + round-trip check, masking
-                # null lanes. One memory pass instead of cast-then-verify.
-                var src = array.values()
-                var validity = array.validity()
-                comptime w = max(1, simd_byte_width() // size_of[Scalar[In]]())
-                var acc = SIMD[DType.bool, w](fill=False)
-                var i = 0
-                while i + w <= length:
-                    var v = src.load[w](i)
-                    var out = v.cast[Out]()
-                    dst.store[w](i, out)
-                    var bad = out.cast[In]().ne(v)
-                    if validity:
-                        bad = bad & validity.value().mask[w](i)
-                    acc = acc | bad
-                    i += w
-                var failed = acc.reduce_or()
-                while i < length:
-                    var v = src.load[1](i)
-                    var out = v.cast[Out]()
-                    dst.store[1](i, out)
-                    if (not validity or validity.value().test(i)) and out.cast[
-                        In
-                    ]() != v:
-                        failed = True
-                    i += 1
-                if failed:
-                    Self._raise_loss[From, To](array)
+        comptime if safe and Self._needs_check[In, Out]():
+            # Fused checked map: cast + validate each lane in a single pass; the
+            # map fails on the first unrepresentable value. Serial — a failing
+            # block raises, which can't cross parallel / GPU boundaries.
+            var validity = array.validity()
+            if validity:
+                apply_checked[In, Out, Self.core_checked[In, Out, _]](
+                    array.values(), validity.value(), dst
+                )
             else:
-                # unsafe, or GPU (device store): branchless cast, then verify
-                # separately on the host input when safe.
-                apply[In, Out, Self.core[In, Out, _]](array.values(), dst, ctx)
-                if safe:
-                    Self._verify[From, To](array)
+                apply_checked[In, Out, Self.core_checked[In, Out, _]](
+                    array.values(), dst
+                )
         else:
-            # provably exact: never any check
+            # Unsafe, or provably-exact: one branchless, parallel / device pass.
             apply[In, Out, Self.core[In, Out, _]](array.values(), dst, ctx)
 
         return PrimitiveArray[To](
@@ -222,10 +160,10 @@ struct NumericCast(Kernel):
         safe: Bool = True,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        """Level-2 within-family dispatch. Resolves both the runtime source and
-        target dtypes to comptime ``NumericType`` parameters via
-        ``variant_dispatch_raises`` (no hand-written 11×11 switch), then
-        instantiates ``apply[From, To]``."""
+        """Level-2 within-family dispatch. Resolves the runtime source/target
+        dtypes to comptime ``NumericType`` params via ``variant_dispatch_raises``
+        and the runtime ``safe`` flag to the comptime ``apply`` instantiation.
+        """
         var src_dt = array.dtype()
 
         @parameter
@@ -234,7 +172,11 @@ struct NumericCast(Kernel):
 
             @parameter
             def on_target[To: NumericType](dst: To) raises -> AnyArray:
-                return NumericCast.apply[From, To](typed, safe, ctx).to_any()
+                if safe:
+                    return NumericCast.apply[From, To, True](
+                        typed, ctx
+                    ).to_any()
+                return NumericCast.apply[From, To, False](typed, ctx).to_any()
 
             return variant_dispatch_raises[
                 NumericType, predicate=_IsNumeric, func=on_target
@@ -419,31 +361,27 @@ struct TemporalCast(Kernel):
     def _scale[
         SrcN: DType, DstN: DType
     ](
-        data: ArrayData, to: AnyDataType, factor: Int64, up: Bool
+        data: ArrayData,
+        to: AnyDataType,
+        factor: Int64,
+        up: Bool,
+        ctx: ExecutionContext,
     ) raises -> AnyArray:
         """Multiply (up) or integer-divide (down) each element by ``factor``,
         computing in int64 to avoid overflow, then narrow to ``DstN`` and
-        relabel as ``to``."""
+        relabel as ``to``. The per-lane scale closes over ``factor``/``up`` and
+        runs through the capturing ``apply`` (parallel / device-dispatched)."""
         var length = data.length
         var buf = Buffer.alloc_uninit[DstN](length)
         var src = data.buffers[0].view[SrcN](data.offset, length)
-        var dst = buf.view[DstN](0, length)
-        comptime width = max(
-            1, simd_byte_width() // size_of[Scalar[DType.int64]]()
-        )
 
         @parameter
         @always_inline
-        def process[W: Int](i: Int) -> None:
-            var v = src.load[W](i).cast[DType.int64]()
-            var r = (v * factor) if up else (v // factor)
-            dst.store[W](i, r.cast[DstN]())
+        def scale[W: Int](v: SIMD[SrcN, W]) -> SIMD[DstN, W]:
+            var x = v.cast[DType.int64]()
+            return ((x * factor) if up else (x // factor)).cast[DstN]()
 
-        @always_inline
-        def lane[W: Int](i: Int):
-            process[W](i)
-
-        vectorize[width](length, lane)
+        apply[SrcN, DstN, scale](src, buf.view[DstN](0, length), ctx)
         return AnyArray.from_data(
             ArrayData(
                 dtype=to.copy(),
@@ -485,20 +423,20 @@ struct TemporalCast(Kernel):
         if src.byte_width() == 4:
             if to.byte_width() == 4:
                 return Self._scale[DType.int32, DType.int32](
-                    data, to, factor, up
+                    data, to, factor, up, ctx
                 )
             else:
                 return Self._scale[DType.int32, DType.int64](
-                    data, to, factor, up
+                    data, to, factor, up, ctx
                 )
         else:
             if to.byte_width() == 4:
                 return Self._scale[DType.int64, DType.int32](
-                    data, to, factor, up
+                    data, to, factor, up, ctx
                 )
             else:
                 return Self._scale[DType.int64, DType.int64](
-                    data, to, factor, up
+                    data, to, factor, up, ctx
                 )
 
 
@@ -697,8 +635,13 @@ def cast[
     safe: Bool = True,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[To]:
-    """Typed numeric cast: ``cast[Int32Type, Float64Type](arr)``."""
-    return NumericCast.apply[From, To](array, safe, ctx)
+    """Typed numeric cast: ``cast[Int32Type, Float64Type](arr)``. ``safe`` is a
+    runtime convenience here — selecting ``NumericCast.apply``'s comptime kernel;
+    call ``NumericCast.apply[From, To, safe]`` directly for a fully-monomorphized
+    (e.g. AOT-fused) cast."""
+    if safe:
+        return NumericCast.apply[From, To, True](array, ctx)
+    return NumericCast.apply[From, To, False](array, ctx)
 
 
 def cast(
