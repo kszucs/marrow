@@ -16,7 +16,13 @@ known statically), fully monomorphized with no runtime kernel dispatch.
 from std.algorithm.functional import sync_parallelize
 from std.sys.info import num_physical_cores
 
-from ..arrays import StructArray, AnyArray, UInt32Array, Int32Array
+from ..arrays import (
+    StructArray,
+    AnyArray,
+    UInt32Array,
+    UInt64Array,
+    Int32Array,
+)
 from ..builders import AnyBuilder, UInt32Builder
 from ..dtypes import Field, AnyDataType, struct_, uint32, NumericType
 from ..schema import Schema
@@ -56,11 +62,15 @@ struct HashGrouper(Movable):
     def num_groups(self) -> Int:
         return self._table.num_keys()
 
-    def consume_keys(mut self, keys: StructArray) raises -> UInt32Array:
+    def consume_keys(
+        mut self, keys: StructArray, hashes: Optional[UInt64Array] = None
+    ) raises -> UInt32Array:
         """Hash keys and resolve group indices. Returns the per-row group ids.
 
         New keys get new (dense, contiguous) group ids; existing keys return
-        their previous id. Safe to call across multiple batches.
+        their previous id. Safe to call across multiple batches. Pass
+        ``hashes`` when the caller already computed them (e.g. the parallel
+        path reuses the partitioner's hashes) to skip the re-hash.
         """
         var n = len(keys)
         if n == 0:
@@ -68,7 +78,9 @@ struct HashGrouper(Movable):
             return empty.finish()
 
         var prev = self._table.num_keys()
-        var bids = self._table.insert(keys)
+        var bids = self._table.insert_hashes(
+            hashes.value()
+        ) if hashes else self._table.insert(keys)
         var new_groups = self._table.num_keys() - prev
 
         if new_groups > 0:
@@ -189,54 +201,64 @@ def _group_by_serial[
     )
 
 
+def _partition_columns[
+    op: def(Int32Array, UInt64Array) raises capturing[_] -> List[AnyArray]
+](keys: StructArray, num_threads: Int) raises -> List[List[AnyArray]]:
+    """Reusable radix-partition-parallel driver.
+
+    Hash ``keys`` once, split rows into ``2**_RADIX_BITS`` partitions by the top
+    hash bits, then run ``op(row_indices, hashes)`` for each partition on its own
+    worker (partitions are independent — no locks). Returns each partition's
+    output columns, in partition order. Encapsulates the hash/partition/dispatch/
+    collect boilerplate shared by partition-parallel kernels (cf. ``HashJoin``).
+    """
+    var ctx = ExecutionContext.parallel(num_threads)
+    var partitioner = RadixPartitioner(
+        num_bits=_RADIX_BITS, num_threads=num_threads
+    )
+    var partitions = partitioner.partition(rapidhash(keys, ctx))
+    var p = len(partitions)
+
+    # Pre-sized slots — workers assign by index without racing on list growth.
+    var slots = List[Optional[List[AnyArray]]](length=p, fill=None)
+
+    @parameter
+    def worker(i: Int) raises:
+        slots[i] = op(
+            partitions[i].row_indices.value().copy(),
+            partitions[i].hashes.copy(),
+        )
+
+    sync_parallelize[worker](p)
+
+    var out = List[List[AnyArray]]()
+    for i in range(p):
+        out.append(slots[i].value().copy())
+    return out^
+
+
 def _group_by_parallel[
     K: AggKernel
 ](keys: StructArray, value: AnyArray, num_threads: Int) raises -> RecordBatch:
     """Radix-partition-parallel grouped aggregation.
 
-    Hash the keys once, partition rows by the top ``_RADIX_BITS`` of the hash,
-    then group + aggregate each partition independently on its own worker
-    (each key lands in exactly one partition, so per-partition groups are
-    disjoint). Merge = per-column `concat` of the partition results."""
-    var ctx = ExecutionContext.parallel(num_threads)
+    A key lands in exactly one partition, so per-partition groups are disjoint —
+    each partition groups + aggregates independently and the merge is a plain
+    per-column ``concat``. Reuses the partitioner's hashes for grouping (no
+    re-hash). The partition/parallel plumbing lives in ``_partition_columns``.
+    """
 
-    # Output schema (keys then the aggregate), computed once up front so empty
-    # partitions still contribute correctly-typed columns.
-    ref kstruct = keys.dtype.as_struct()
-    var num_key_cols = len(kstruct.fields)
-    var out_fields = List[Field]()
-    for k in range(num_key_cols):
-        out_fields.append(kstruct.fields[k].copy())
-    var agg_box = List[AnyDataType]()
-
+    # Per-partition: group (reusing the partition hashes) + aggregate, returning
+    # [key columns..., aggregate column].
     @parameter
-    def agg_dtype[V: NumericType]() raises:
-        agg_box.append(AnyDataType(K.AccType[V]()))
-
-    for_value_dtype[agg_dtype](value.dtype())
-    out_fields.append(Field(K.name, agg_box[0].copy()))
-    var num_cols = num_key_cols + 1
-
-    # 1. Hash keys (parallel) and partition rows by the top hash bits.
-    var hashes = rapidhash(keys, ctx)
-    var partitioner = RadixPartitioner(
-        num_bits=_RADIX_BITS, num_threads=num_threads
-    )
-    var partitions = partitioner.partition(hashes^)
-    var p = len(partitions)
-
-    # 2. Per-partition parallel group + aggregate. Pre-sized slots let workers
-    # assign by index without racing on list growth.
-    var part_cols = List[Optional[List[AnyArray]]](length=p, fill=None)
-
-    @parameter
-    def worker(i: Int) raises:
-        var rows = partitions[i].row_indices.value().copy()
+    def aggregate_partition(
+        rows: Int32Array, hashes: UInt64Array
+    ) raises -> List[AnyArray]:
         var pkeys = take(keys, rows)
         var pvals = take(value, rows)
 
         var grouper = HashGrouper()
-        var gids = grouper.consume_keys(pkeys)
+        var gids = grouper.consume_keys(pkeys, Optional(hashes.copy()))
         var ng = grouper.num_groups()
 
         var box = List[AnyArray]()
@@ -249,20 +271,34 @@ def _group_by_parallel[
 
         for_value_dtype[by_value](pvals.dtype())
 
-        var kfields = grouper.key_fields(pkeys)
-        var cols = grouper.key_columns(kfields)
+        var cols = grouper.key_columns(grouper.key_fields(pkeys))
         cols.append(box[0].copy())
-        part_cols[i] = cols^
+        return cols^
 
-    sync_parallelize[worker](p)
+    var parts = _partition_columns[aggregate_partition](keys, num_threads)
 
-    # 3. Merge: concat each output column across partitions (groups are disjoint
-    # by construction, so this is a straight vertical concatenation).
+    # Output schema: keys then the aggregate.
+    ref kstruct = keys.dtype.as_struct()
+    var num_cols = len(kstruct.fields) + 1
+    var out_fields = List[Field]()
+    for k in range(len(kstruct.fields)):
+        out_fields.append(kstruct.fields[k].copy())
+    var agg_box = List[AnyDataType]()
+
+    @parameter
+    def agg_dtype[V: NumericType]() raises:
+        agg_box.append(AnyDataType(K.AccType[V]()))
+
+    for_value_dtype[agg_dtype](value.dtype())
+    out_fields.append(Field(K.name, agg_box[0].copy()))
+
+    # Merge: concat each output column across partitions (groups are disjoint).
+    var ctx = ExecutionContext.parallel(num_threads)
     var out_cols = List[AnyArray]()
     for c in range(num_cols):
         var chunks = List[AnyArray]()
-        for i in range(p):
-            chunks.append(part_cols[i].value()[c].copy())
+        for i in range(len(parts)):
+            chunks.append(parts[i][c].copy())
         out_cols.append(concat(chunks, ctx))
 
     return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
