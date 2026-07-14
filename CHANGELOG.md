@@ -12,9 +12,12 @@
   `numpy.astype`, while `safe=True` (the default, matching PyArrow) raises on any
   lossy conversion. Bool casts use `x != 0` / `True→1`; temporal casts reinterpret
   to the underlying integer or scale by the unit ratio (e.g. `date32↔date64`,
-  `timestamp[s]↔[ms]`). A fused `Cast` expression node (`marrow.expr.values`) and
-  a `DynValue.cast(to)` runtime node let casts fuse into AOT-compiled expressions
-  (`Cast(Add(a, b), int64)` collapses to a single vectorized pass), and a
+  `timestamp[s]↔[ms]`). Fused cast expression nodes (`marrow.expr.values`) —
+  numeric→numeric (`Cast`), numeric→bool (`NumToBoolValue`), and bool→numeric
+  (`BoolToNumValue`), all reached through a single `.cast(dtype)` method on the
+  `NumericValue`/`BoolValue` nodes — plus a `DynValue.cast(to)` runtime node let
+  casts fuse into AOT-compiled expressions (`Cast(Add(a, b), int64)` collapses to
+  a single vectorized pass, `(a < b).cast(int8)` bit-unpacks in place), and a
   PyArrow-style `marrow.compute.cast(arr, target_type, safe=…)` exposes it to
   Python. Also **string ↔ numeric/bool** (per-element `atol`/`atof` parse and
   format; `safe=True` raises on an unparseable value, `safe=False` nulls it) and

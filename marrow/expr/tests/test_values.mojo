@@ -23,6 +23,8 @@ from marrow.dtypes import (
     Int32Type,
     Int64Type,
     Float64Type,
+    bool_,
+    int8,
     int32,
     int64,
     float64,
@@ -38,6 +40,8 @@ from marrow.expr.values import (
     Equal,
     Length,
     Cast,
+    NumToBoolValue,
+    BoolToNumValue,
     col,
 )
 from marrow.kernels.cast import cast as eager_cast
@@ -416,6 +420,78 @@ def test_cast_method_on_node() raises:
     # a.cast(float64)
     var f = col("c0", int32).cast(float64).execute(batch)
     assert_true(f == array([1.0, 2.0, 3.0], float64))
+
+
+# ---------------------------------------------------------------------------
+# Fused numeric → bool cast (NumToBoolValue)
+# ---------------------------------------------------------------------------
+
+
+def test_fused_num_to_bool() raises:
+    """Cast(col(a, int32), bool_) → x != 0, bit-packed in one pass."""
+    var a = array([0, 5, 0, -3], int32)
+    var batch = record_batch([a^], names=["c0"])
+    var mask = col("c0", int32).cast(bool_).execute(batch)
+    assert_true(mask == array([False, True, False, True]))
+
+
+def test_fused_num_to_bool_matches_eager() raises:
+    var a = array([0, 1, 2, 0, 7], int32)
+    var batch = record_batch([a.copy()], names=["c0"])
+    var fused = col("c0", int32).cast(bool_).execute(batch)
+    var eager = eager_cast(a.copy(), bool_)
+    assert_true(fused == eager.as_bool())
+
+
+def test_fused_num_to_bool_over_add() raises:
+    """(a + b).cast(bool_) fuses the add and the != 0 into one pass."""
+    var a = array([1, 0, 2], int32)
+    var b = array([-1, 0, 3], int32)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var mask = (
+        Add(col("c0", int32), col("c1", int32)).cast(bool_).execute(batch)
+    )
+    assert_true(mask == array([False, False, True]))  # 0, 0, 5
+
+
+def test_fused_num_to_bool_write() raises:
+    var expr = NumToBoolValue(col("a", int32))
+    assert_true(expr.dtype().is_bool())
+    assert_equal(String(expr), "Cast(Col[a], bool)")
+
+
+# ---------------------------------------------------------------------------
+# Fused bool → numeric cast (BoolToNumValue)
+# ---------------------------------------------------------------------------
+
+
+def test_fused_bool_to_num() raises:
+    """(a < b).cast(int8) → 1/0 written straight into the fused buffer."""
+    var a = array([1, 2, 3], int32)
+    var b = array([5, 1, 9], int32)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var counts = (
+        Less(col("c0", int32), col("c1", int32)).cast(int8).execute(batch)
+    )
+    assert_true(counts == array([1, 0, 1], int8))
+
+
+def test_fused_bool_to_num_composes() raises:
+    """A bool→num cast is a NumericValue, so it composes back into arithmetic:
+    (a < b).cast(int32) + (b < a).cast(int32) is 1 wherever they differ."""
+    var a = array([1, 2, 3], int32)
+    var b = array([5, 2, 1], int32)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var lt = Less(col("c0", int32), col("c1", int32)).cast(int32)
+    var gt = Greater(col("c0", int32), col("c1", int32)).cast(int32)
+    var result = Add(lt, gt).execute(batch)
+    assert_true(result == array([1, 0, 1], int32))  # <, ==, >
+
+
+def test_fused_bool_to_num_write() raises:
+    var expr = BoolToNumValue(Less(col("a", int32), col("b", int32)), int8)
+    assert_true(expr.dtype().is_int8())
+    assert_equal(String(expr), "Cast(Less(Col[a], Col[b]), int8)")
 
 
 def main() raises:

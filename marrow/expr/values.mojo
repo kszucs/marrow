@@ -56,7 +56,7 @@ from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from ..buffers import Bitmap, Buffer
 from ..dtypes import AnyDataType, DType, NumericType
 from ..tabular import RecordBatch
-from ..kernels.cast import NumericCast
+from ..kernels.cast import NumericCast, NumToBool, BoolToNum
 from .pruning import PruneStats, PruneBound
 
 
@@ -194,6 +194,13 @@ trait NumericValue(Value):
         composes with ``Add``/``Less``/… in the same fused pass."""
         return Cast[Self, Target](self.copy(), dtype)
 
+    def cast(self, dtype: dt.BoolType) -> NumToBoolValue[Self]:
+        """Wrap this node in a fused ``x != 0`` cast to bool —
+        ``col("a", int32).cast(bool_)``. The result is a ``BoolValue`` so it
+        composes with the predicate nodes in the same fused pass. Selected over
+        the numeric overload above by the concrete ``BoolType`` argument."""
+        return NumToBoolValue[Self](self.copy())
+
 
 # ---------------------------------------------------------------------------
 # Add — comptime-typed binary add
@@ -321,6 +328,83 @@ struct Cast[C: NumericValue, To: dt.NumericType](NumericValue):
 
 
 # ---------------------------------------------------------------------------
+# NumToBoolValue — fused numeric → bool cast
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct NumToBoolValue[C: NumericValue](BoolValue):
+    """Fused numeric → bool cast: ``x != 0`` per lane, bit-packed straight into
+    the fused ``BoolArray`` in one vectorized pass — no intermediate array.
+
+    ``NativeType`` is the child's numeric native (it drives the vectorize
+    width); the output dtype is always ``bool_``. Reuses ``NumToBool.core`` so
+    the fused and eager numeric→bool casts share one conversion definition.
+
+    Usage::
+
+        var pred = Cast(col("a", int32), bool_)  # a != 0
+    """
+
+    comptime NativeType = Self.C.NativeType
+
+    var child: Self.C
+
+    @always_inline
+    def core[W: Int](self, batch: RecordBatch, idx: Int) -> SIMD[DType.bool, W]:
+        return NumToBool.core[Self.C.NativeType, W](
+            self.child.core[W](batch, idx)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Cast(")
+        self.child.write_to(writer)
+        writer.write(t", bool)")
+
+
+# ---------------------------------------------------------------------------
+# BoolToNumValue — fused bool → numeric cast
+# ---------------------------------------------------------------------------
+
+
+struct BoolToNumValue[C: BoolValue, To: dt.NumericType](NumericValue):
+    """Fused bool → numeric cast: ``True→1, False→0`` per lane, written straight
+    into the fused output buffer in one vectorized pass — no intermediate array.
+
+    ``OutType``/``NativeType`` come from ``To`` (the vectorize width is driven by
+    the output native). Reuses ``BoolToNum.core`` so the fused and eager
+    bool→numeric casts share one conversion definition.
+
+    Usage::
+
+        var expr = (col("a", int32) < col("b", int32)).cast(int8)  # 0/1
+    """
+
+    comptime OutType = Self.To
+    comptime NativeType = Self.To.native
+
+    var child: Self.C
+
+    def __init__(out self, var child: Self.C, dtype: Self.To):
+        """The ``dtype`` value is only used to infer the ``To`` type parameter
+        (like ``col(name, dtype)``)."""
+        self.child = child^
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return BoolToNum.core[Self.NativeType, W](
+            self.child.core[W](batch, idx)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Cast(")
+        self.child.write_to(writer)
+        writer.write(t", ", AnyDataType(Self.OutType()), t")")
+
+
+# ---------------------------------------------------------------------------
 # BoolValue trait — boolean comptime expression nodes (comparisons/predicates)
 # ---------------------------------------------------------------------------
 
@@ -388,6 +472,15 @@ trait BoolValue(Value):
 
     def to_array(self, batch: RecordBatch) raises -> AnyArray:
         return self.execute(batch).to_any()
+
+    def cast[
+        Target: dt.NumericType
+    ](self, dtype: Target) -> BoolToNumValue[Self, Target]:
+        """Wrap this predicate in a fused ``True→1, False→0`` cast to numeric
+        ``dtype`` — ``(col("a", int32) < col("b", int32)).cast(int8)``. The
+        result is a ``NumericValue`` so it composes with ``Add``/``Less``/… in
+        the same fused pass."""
+        return BoolToNumValue[Self, Target](self.copy(), dtype)
 
 
 # ---------------------------------------------------------------------------
