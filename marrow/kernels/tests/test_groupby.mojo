@@ -27,12 +27,7 @@ from marrow.dtypes import (
     Float64Type,
     AnyDataType,
 )
-from marrow.kernels.groupby import (
-    GroupBy,
-    _group_by_serial,
-    _group_by_radix,
-    _group_by_thread_local,
-)
+from marrow.kernels.groupby import GroupBy
 from marrow.kernels.aggregate import (
     SumKernel,
     MinKernel,
@@ -376,9 +371,9 @@ def test_groupby_parallel_matches_serial() raises:
         children=children^,
     )
 
-    _assert_matches_expected(_group_by_serial[SumKernel](sa, vals))
-    _assert_matches_expected(_group_by_radix[SumKernel](sa, vals, 4))
-    _assert_matches_expected(_group_by_thread_local[SumKernel](sa, vals, 4))
+    _assert_matches_expected(GroupBy._serial[SumKernel](sa, vals))
+    _assert_matches_expected(GroupBy._radix[SumKernel](sa, vals, 4))
+    _assert_matches_expected(GroupBy._thread_local[SumKernel](sa, vals, 4))
 
 
 def _mean_for_key(result: RecordBatch, key: Int) raises -> Optional[Float64]:
@@ -422,8 +417,8 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
         children=children^,
     )
 
-    var serial = _group_by_serial[MeanKernel](sa, vals)
-    var threaded = _group_by_thread_local[MeanKernel](sa, vals, 4)
+    var serial = GroupBy._serial[MeanKernel](sa, vals)
+    var threaded = GroupBy._thread_local[MeanKernel](sa, vals, 4)
     assert_equal(serial.num_rows(), 4)
     assert_equal(threaded.num_rows(), 4)
     for key in range(4):
