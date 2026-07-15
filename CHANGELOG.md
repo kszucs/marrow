@@ -432,6 +432,33 @@
 
 ### Refactors
 
+- **Faster grouped aggregation** (`marrow.kernels.groupby`): several passes and
+  allocations removed from the hot path. `HashGrouper.consume_keys` now returns
+  the table's bucket ids directly as the group ids (they already are the dense
+  group ids) instead of copying them into a fresh `UInt32Array` — one full O(N)
+  pass + allocation gone; new-group detection early-stops once every new group's
+  first row is found (near-instant for low cardinality) instead of scanning all N
+  rows, and materializes the new key rows with one `take` + bulk `extend` per
+  column rather than a slice/extend per group. The group-by hash table grows
+  adaptively (starting small, doubling on demand) instead of pre-sizing to `2*N`
+  slots, so a low-cardinality group-by no longer allocates and memsets a huge
+  ctrl buffer to hold a handful of keys (the join build side keeps pre-sizing).
+  The radix-parallel path records each new group's first-occurrence *original*
+  row and gathers the unique key columns once at the end (`num_groups` rows)
+  instead of two full-`N` per-partition `take` gathers. A new **thread-local
+  partial-aggregation** parallel path (`_group_by_thread_local`, backed by
+  `AggState.into_partials` / `AggState.merge`) handles large low-/mid-cardinality
+  inputs: every core aggregates an equal contiguous chunk into its own table,
+  then a cheap serial merge folds the partials (`mean` merges as (Σsum, Σcount),
+  finalized once). Unlike radix — which can't use more threads than there are
+  distinct keys — it scales with core count even for a handful of groups, so 1M
+  rows × 10 groups dropped from ~2.0 ms to ~0.65 ms (16 cores). Serial↔parallel
+  dispatch is cardinality-aware (cheap strided probe): small and low-/mid-card
+  inputs below 200K rows stay serial, large low-/mid-card inputs go thread-local,
+  and high-card inputs go radix (where the thread-local merge would degrade to
+  O(N)). Net vs. the old radix-only path: ~34% faster on 10K-row `sum`, ~20% on
+  100K, and ~3.3× on 1M — now ahead of Polars/PyArrow/DuckDB at 1M across
+  cardinalities on a 16-core box.
 - **Trait-based aggregate kernels + fully typed `AggState`**
   (`marrow.kernels.aggregate`): grouped aggregation no longer dispatches on an
   aggregate *name string* per row. Each aggregate is a **type** implementing one

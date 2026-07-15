@@ -20,7 +20,7 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 
 from std.memory import ArcPointer
 
-from ..arrays import AnyArray, StructArray, UInt32Array
+from ..arrays import AnyArray, StructArray, Int32Array
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
@@ -455,7 +455,7 @@ struct AggregateProcessor(Processor):
 
     @staticmethod
     def _for_agg[
-        job: def[K: AggKernel]() raises capturing [_] -> None
+        job: def[K: AggKernel]() raises capturing[_] -> None
     ](tag: UInt8) raises:
         """Resolve a runtime aggregate tag to its comptime kernel, run `job[K]`.
         """
@@ -473,7 +473,9 @@ struct AggregateProcessor(Processor):
             raise Error("unknown aggregate tag ", Int(tag))
 
     @staticmethod
-    def out_dtype(tag: UInt8, value_dtype: dt.AnyDataType) raises -> dt.AnyDataType:
+    def out_dtype(
+        tag: UInt8, value_dtype: dt.AnyDataType
+    ) raises -> dt.AnyDataType:
         """Output/accumulator dtype for an aggregate tag on a given input dtype.
         """
         var box = List[dt.AnyDataType]()
@@ -536,7 +538,7 @@ struct AggregateProcessor(Processor):
             raise Exhausted()
 
         # Phase 1 — drain input, buffering per-batch group ids + value columns.
-        var gids_per_batch = List[UInt32Array]()
+        var gids_per_batch = List[Int32Array]()
         var values_per_batch = List[List[AnyArray]]()
         while True:
             try:
@@ -574,7 +576,7 @@ struct AggregateProcessor(Processor):
     def _aggregate(
         self,
         i: Int,
-        gids_per_batch: List[UInt32Array],
+        gids_per_batch: List[Int32Array],
         values_per_batch: List[List[AnyArray]],
         num_groups: Int,
     ) raises -> AnyArray:

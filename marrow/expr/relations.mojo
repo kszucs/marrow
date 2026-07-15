@@ -297,7 +297,9 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             var vdt = maybe_dt.value().copy() if maybe_dt else AnyDataType(
                 float64
             )
-            fields.append(Field(funcs[i], AggregateProcessor.out_dtype(tag, vdt)))
+            fields.append(
+                Field(funcs[i], AggregateProcessor.out_dtype(tag, vdt))
+            )
         var out_schema = Schema(fields=fields^)
 
         # Value accumulator dtypes (the input dtype of each aggregated value

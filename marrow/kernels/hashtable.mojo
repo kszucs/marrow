@@ -552,7 +552,10 @@ struct SwissHashTable[
 
         If the current capacity is insufficient, allocates new ctrl/slots
         buffers with ``2n`` slots (next power of 2), then re-inserts all
-        existing entries. Also grows ``_bucket_hashes`` if needed.
+        existing entries. ``_bucket_hashes`` is sized to the (power-of-two)
+        capacity, an upper bound on the bucket count — so bucket ids assigned
+        up to ``_max_count`` never overflow it (the adaptive-growth path relies
+        on this, since it doubles capacity mid-insert rather than pre-sizing).
         """
         var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
         if needed > self._capacity:
@@ -578,9 +581,10 @@ struct SwissHashTable[
                     self._set_ctrl(slot, h)
                     self._set_slot(slot, bid)
 
-        # Grow _bucket_hashes if needed.
-        if n * size_of[Self.H]() > len(self._bucket_hashes):
-            self._bucket_hashes.resize[DType.uint64](n)
+            # Bucket ids are dense and bounded by ``_max_count < _capacity``,
+            # so ``_capacity`` entries always suffice.
+            if needed * size_of[Self.H]() > len(self._bucket_hashes):
+                self._bucket_hashes.resize[DType.uint64](needed)
 
     # ------------------------------------------------------------------
     # Hash-level operations — public for callers that have pre-computed
@@ -589,7 +593,9 @@ struct SwissHashTable[
     # tables without re-hashing).
     # ------------------------------------------------------------------
 
-    def insert_hashes(mut self, hashes: UInt64Array) raises -> Int32Array:
+    def insert_hashes(
+        mut self, hashes: UInt64Array, grow_adaptively: Bool = False
+    ) raises -> Int32Array:
         """Batch insert hashes, returning a bucket ID per input hash.
 
         For each hash:
@@ -602,12 +608,20 @@ struct SwissHashTable[
         Prefetches ctrl groups ``_PIPE_DEPTH`` iterations ahead to hide
         memory latency on the critical lookup path.
 
+        ``grow_adaptively`` controls capacity policy. The default (``False``)
+        pre-sizes to ``2*len(hashes)`` slots — right for the build side of a
+        join, where the key count is ~``n``. Group-by passes ``True``: distinct
+        keys are usually far fewer than rows, so the table starts small and
+        doubles on demand (the resize check in the loop), avoiding a huge
+        alloc + ctrl memset when cardinality is low.
+
         Returns:
             ``Int32Array`` of length ``len(hashes)`` where
             element ``i`` is the bucket ID for ``hashes[i]``.
         """
         var n = len(hashes)
-        self.reserve(n)
+        if not grow_adaptively:
+            self.reserve(n)
 
         var bid_builder = Int32Builder(capacity=n, zeroed=False)
 
@@ -764,6 +778,7 @@ struct SwissHashTable[
         mut self,
         keys: StructArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
+        grow_adaptively: Bool = False,
     ) raises -> Int32Array:
         """Hash keys and insert, returning a bucket ID per row.
 
@@ -773,9 +788,13 @@ struct SwissHashTable[
         ``ctx`` is forwarded to the hasher only — the insert loop itself
         is serial (concurrent inserts would require atomic slot claiming;
         the designed concurrency pattern is partition-parallel with one
-        table per partition).
+        table per partition). ``grow_adaptively`` is forwarded to
+        ``insert_hashes`` — group-by sets it so the table grows on demand
+        rather than pre-sizing to the row count.
         """
-        return self.insert_hashes(Self.hasher(keys, ctx))
+        return self.insert_hashes(
+            Self.hasher(keys, ctx), grow_adaptively=grow_adaptively
+        )
 
     def build(
         mut self,

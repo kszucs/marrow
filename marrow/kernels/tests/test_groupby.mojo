@@ -8,6 +8,7 @@ from marrow.arrays import (
     StructArray,
 )
 from marrow.builders import array, PrimitiveBuilder, StringBuilder, Int32Builder
+from marrow.tabular import RecordBatch
 from marrow.dtypes import (
     int8,
     int32,
@@ -29,7 +30,8 @@ from marrow.dtypes import (
 from marrow.kernels.groupby import (
     group_by,
     _group_by_serial,
-    _group_by_parallel,
+    _group_by_radix,
+    _group_by_thread_local,
 )
 from marrow.kernels.aggregate import (
     SumKernel,
@@ -335,10 +337,24 @@ def test_groupby_sum_and_count_share_keys() raises:
 # ---------------------------------------------------------------------------
 
 
+def _assert_matches_expected(result: RecordBatch) raises:
+    """Both parallel paths emit group order by hash, so verify the group count,
+    the order-independent total, and each group's key↔sum association. Keys are
+    `i % 50` over `i` in 0..2999, so group k holds {k, k+50, ..., k+50*59} and
+    its sum is 60*k + 88500."""
+    assert_equal(result.num_rows(), 50)
+    assert_equal(sum(result.column(1)).as_int64().value(), 4498500)
+    ref pk = result.column(0).as_int32()
+    ref ps = result.column(1).as_int64()
+    for i in range(result.num_rows()):
+        var k = Int(pk[i].value())
+        assert_equal(ps[i].value(), Int64(60 * k + 88500))
+
+
 def test_groupby_parallel_matches_serial() raises:
-    """The radix-partition-parallel path produces the same groups and sums as
-    the serial path (group order differs — partitions are by hash — so compare
-    the group count and the total of the aggregate column)."""
+    """Both the radix and thread-local parallel paths produce the same groups
+    and sums as the serial path (group order differs — by hash — so compare the
+    group count, the total, and the per-group key↔sum association)."""
     var kb = Int32Builder(3000)
     var vb = Int32Builder(3000)
     for i in range(3000):
@@ -359,16 +375,63 @@ def test_groupby_parallel_matches_serial() raises:
         children=children^,
     )
 
-    var serial = _group_by_serial[SumKernel](sa, vals)
-    var parallel = _group_by_parallel[SumKernel](sa, vals, 4)
+    _assert_matches_expected(_group_by_serial[SumKernel](sa, vals))
+    _assert_matches_expected(_group_by_radix[SumKernel](sa, vals, 4))
+    _assert_matches_expected(_group_by_thread_local[SumKernel](sa, vals, 4))
 
-    assert_equal(serial.num_rows(), 50)
-    assert_equal(parallel.num_rows(), 50)
-    # Total across all groups is order-independent — must match exactly.
-    var serial_total = sum(serial.column(1)).as_int64().value()
-    var parallel_total = sum(parallel.column(1)).as_int64().value()
-    assert_equal(serial_total, parallel_total)
-    assert_equal(serial_total, 4498500)  # sum(0..2999)
+
+def _mean_for_key(result: RecordBatch, key: Int) raises -> Optional[Float64]:
+    """The mean-aggregate value for `key` in a group_by result (None if the
+    group's output is null — i.e. all values were null)."""
+    ref k = result.column(0).as_int32()
+    ref v = result.column(1).as_float64()
+    for i in range(result.num_rows()):
+        if Int(k[i].value()) == key:
+            return None if not v.is_valid(i) else Optional(v[i].value())
+    return None
+
+
+def test_groupby_thread_local_mean_nulls_match_serial() raises:
+    """The thread-local merge folds partial `(Σsum, Σcount)` per group and
+    finalizes once — so `mean` across chunks (with nulls, and an all-null group)
+    must match the serial path exactly. Group 3 is entirely null → null output;
+    the merge must carry that through the per-thread count."""
+    var kb = Int32Builder(4000)
+    var vb = PrimitiveBuilder[Float64Type](4000)
+    for i in range(4000):
+        var g = i % 4
+        kb.append(Scalar[int32.native](g))
+        # Group 3 is all-null; elsewhere null every 7th row.
+        if g == 3 or i % 7 == 0:
+            vb.append_null()
+        else:
+            vb.append(Scalar[float64.native](Float64(i)))
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+
+    var children = List[AnyArray]()
+    children.append(keys.copy())
+    var kd = keys.to_data()
+    var sa = StructArray(
+        dtype=struct_(Field("k", kd.dtype.copy())),
+        length=kd.length,
+        nulls=kd.nulls,
+        offset=kd.offset,
+        bitmap=kd.bitmap,
+        children=children^,
+    )
+
+    var serial = _group_by_serial[MeanKernel](sa, vals)
+    var threaded = _group_by_thread_local[MeanKernel](sa, vals, 4)
+    assert_equal(serial.num_rows(), 4)
+    assert_equal(threaded.num_rows(), 4)
+    for key in range(4):
+        var a = _mean_for_key(serial, key)
+        var b = _mean_for_key(threaded, key)
+        assert_equal(a.__bool__(), b.__bool__())
+        if a:
+            assert_true(abs(a.value() - b.value()) < 1e-9)
+    assert_false(_mean_for_key(threaded, 3).__bool__())  # all-null group
 
 
 def main() raises:

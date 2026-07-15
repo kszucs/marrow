@@ -17,8 +17,8 @@ dtype switch is the boundary bridge ``for_value_dtype``.
 
 import std.math as math
 
-from ..arrays import BoolArray, PrimitiveArray, AnyArray, UInt32Array
-from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, UInt32Builder
+from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
+from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar
 from ..views import reduce
@@ -87,9 +87,9 @@ trait AggKernel(Kernel):
         (`SELECT avg(col)`). Same-type reductions (`sum`/`min`/`max`/`product`)
         override it with the SIMD `dispatch` fast path."""
         var n = len(array)
-        var gb = UInt32Builder(n)
+        var gb = Int32Builder(n)
         for _ in range(n):
-            gb.append(Scalar[uint32.native](0))
+            gb.append(Scalar[int32.native](0))
         var gids = gb.finish()
         var box = List[AnyScalar]()
 
@@ -559,7 +559,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
 
     def update(
         mut self,
-        group_ids: UInt32Array,
+        group_ids: Int32Array,
         input: PrimitiveArray[Self.V],
         num_groups: Int,
     ) raises:
@@ -612,3 +612,43 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
             else:
                 b.append_null()
         return b.finish()
+
+    def into_partials(
+        mut self,
+    ) raises -> Tuple[PrimitiveArray[Self.Acc], Int64Array]:
+        """Freeze the raw (non-finalized) per-group accumulator and valid-count
+        columns — the partial state a parallel merge folds together. Consumes
+        the builders."""
+        return (self.acc.finish(), self.cnt.finish())
+
+    def merge(
+        mut self,
+        group_ids: Int32Array,
+        part_acc: PrimitiveArray[Self.Acc],
+        part_cnt: Int64Array,
+        num_groups: Int,
+    ) raises:
+        """Fold another partial's per-group `(acc, cnt)` into this state at
+        remapped group ids: `group_ids[j]` is *this* state's group id for the
+        partial's local group `j`. Grows to `num_groups` first (new slots =
+        `K.identity` / count 0), then combines accumulators and sums counts.
+
+        Combining is exact for every kernel because the accumulator is the raw
+        fold (`sum`/`min`/`max`/`product`) and the count is carried separately —
+        so `mean` merges as (Σsum, Σcount) and finalizes once at the end. An
+        all-null local group contributes `identity` (a no-op under `combine`)
+        and count 0, so it correctly leaves the target unchanged."""
+        comptime A = Self.Acc.native
+        while self.acc.length() < num_groups:
+            self.acc.append(Self.K.identity[A]())
+            self.cnt.append(Scalar[int64.native](0))
+
+        var gids = group_ids.values()
+        var acc = part_acc.values()
+        var cnt = part_cnt.values()
+        for j in range(len(group_ids)):
+            var g = Int(gids[j])
+            self.acc.unsafe_set(
+                g, Self.K.combine[A, 1](self.acc.unsafe_get(g), acc[j])
+            )
+            self.cnt.unsafe_set(g, self.cnt.unsafe_get(g) + cnt[j])
