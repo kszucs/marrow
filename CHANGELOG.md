@@ -4,6 +4,18 @@
 
 ### Features
 
+- **Python group-by** (`marrow.RecordBatch.group_by`): grouped aggregation is
+  now exposed to Python with a PyArrow-compatible API —
+  `rb.group_by(keys).aggregate([("v", "sum"), ("v", "mean"), ...])` returns a
+  `RecordBatch` of the unique key columns plus one `<value>_<func>` column per
+  aggregate (`sum`/`mean`/`min`/`max`/`count`/`product`), grouped in a single
+  pass over the keys. Backed by the `GroupBy` kernel and its serial/thread-local/
+  radix strategy selection. A new `python/marrow/tests/bench_groupby.py`
+  benchmarks it apples-to-apples against pyarrow, polars, and duckdb (all through
+  their Python APIs) across row counts and cardinalities — run with
+  `pixi run -e bench pytest python/marrow/tests/bench_groupby.py --benchmark
+  --competition`.
+
 - **Scalar `mean` reduction** (`marrow.kernels.aggregate.mean`, `mk.mean`,
   `marrow.compute.mean`): arithmetic mean of the valid elements as a float64
   scalar (nulls excluded from sum and divisor; null result for empty/all-null),
