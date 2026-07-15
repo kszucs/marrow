@@ -13,7 +13,7 @@ Submodules:
   - `aggregate.mojo` — reductions using ``std.algorithm`` (sum, min, max, etc.)
   - `filter.mojo` — selection/filter kernels
   - `sort.mojo` — sort kernels
-  - `groupby.mojo` — fused groupby with aggregation (sum, min, max, count, mean)
+  - `groupby.mojo` — `GroupBy` grouped aggregation (sum, min, max, count, mean)
   - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, AnyArray
 """
 

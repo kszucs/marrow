@@ -432,6 +432,15 @@
 
 ### Refactors
 
+- **`GroupBy` type** (`marrow.kernels.groupby`): grouped aggregation is now a
+  `GroupBy` value (mirroring PyArrow's `table.group_by(keys)`) rather than the
+  free `group_by[K]` functions. Build once from a key column or key struct, then
+  apply `aggregate[K](value)` or the `sum` / `product` / `min` / `max` / `count`
+  / `mean` shorthands. The serial/thread-local/radix strategy — and its one-time
+  cardinality probe — is resolved at construction and reused across aggregate
+  calls (grouping cost is value-independent). `ctx` is now honoured: it sets the
+  worker budget (`ExecutionContext.serial()` forces the serial path), defaulting
+  to `auto()`; previously the free function ignored `ctx` entirely.
 - **Faster grouped aggregation** (`marrow.kernels.groupby`): several passes and
   allocations removed from the hot path. `HashGrouper.consume_keys` now returns
   the table's bucket ids directly as the group ids (they already are the dense

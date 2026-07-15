@@ -28,7 +28,7 @@ from marrow.dtypes import (
     AnyDataType,
 )
 from marrow.kernels.groupby import (
-    group_by,
+    GroupBy,
     _group_by_serial,
     _group_by_radix,
     _group_by_thread_local,
@@ -43,7 +43,8 @@ from marrow.kernels.aggregate import (
 )
 
 
-# Aggregates are typed kernels: `group_by[K]` picks the kernel at compile time.
+# Aggregates are typed kernels: `GroupBy(keys).aggregate[K]` (or the `.sum` /
+# `.min` / … shorthands) picks the kernel at compile time.
 # (The runtime, string/plan-driven multi-aggregate path is covered by the
 # expression-layer tests in `marrow/expr/tests/test_streaming.mojo`.)
 
@@ -57,7 +58,7 @@ def test_groupby_sum_basic() raises:
     """Sum aggregation: [1,2,1,3,2] keys, [10,20,30,40,50] values."""
     var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
     var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
 
     # 3 groups: key=1 (sum=40), key=2 (sum=70), key=3 (sum=40)
     assert_equal(result.num_rows(), 3)
@@ -79,7 +80,7 @@ def test_groupby_sum_basic() raises:
 def test_groupby_sum_all_same_key() raises:
     var keys: AnyArray = array([5, 5, 5], int32)
     var vals: AnyArray = array([1, 2, 3], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 1)
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 6)
@@ -93,7 +94,7 @@ def test_groupby_sum_all_same_key() raises:
 def test_groupby_min() raises:
     var keys: AnyArray = array([1, 2, 1, 2], int32)
     var vals: AnyArray = array([30, 10, 20, 40], int32)
-    var result = group_by[MinKernel](keys, vals)
+    var result = GroupBy(keys).min(vals)
     # min preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     assert_true(result.schema.fields[1].dtype == AnyDataType(int32))
     ref m = result.columns[1].as_int32()
@@ -104,7 +105,7 @@ def test_groupby_min() raises:
 def test_groupby_max() raises:
     var keys: AnyArray = array([1, 2, 1, 2], int32)
     var vals: AnyArray = array([30, 10, 20, 40], int32)
-    var result = group_by[MaxKernel](keys, vals)
+    var result = GroupBy(keys).max(vals)
     # max preserves the input dtype (PyArrow-correct), so int32 in -> int32 out.
     assert_true(result.schema.fields[1].dtype == AnyDataType(int32))
     ref m = result.columns[1].as_int32()
@@ -116,7 +117,7 @@ def test_groupby_sum_int64_precision() raises:
     """Sum of int64 values above 2**53 must not lose precision via float64."""
     var keys: AnyArray = array([1, 1], int32)
     var vals: AnyArray = array([9_007_199_254_740_993, 1], int64)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 1)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref s = result.columns[1].as_int64()
@@ -129,7 +130,7 @@ def test_groupby_min_int64_precision() raises:
     var vals: AnyArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
-    var result = group_by[MinKernel](keys, vals)
+    var result = GroupBy(keys).min(vals)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
     assert_equal(m[0].value(), 9_007_199_254_740_993)
@@ -141,7 +142,7 @@ def test_groupby_max_int64_precision() raises:
     var vals: AnyArray = array(
         [9_007_199_254_740_993, 9_007_199_254_740_995], int64
     )
-    var result = group_by[MaxKernel](keys, vals)
+    var result = GroupBy(keys).max(vals)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref m = result.columns[1].as_int64()
     assert_equal(m[0].value(), 9_007_199_254_740_995)
@@ -152,7 +153,7 @@ def test_groupby_sum_uint8_widens_to_int64() raises:
     """
     var keys: AnyArray = array([1, 1], int32)
     var vals: AnyArray = array([100, 50], uint8)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_true(result.schema.fields[1].dtype == AnyDataType(int64))
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 150)
@@ -166,7 +167,7 @@ def test_groupby_sum_uint8_widens_to_int64() raises:
 def test_groupby_count() raises:
     var keys: AnyArray = array([1, 2, 1, 3, 2], int32)
     var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
-    var result = group_by[CountKernel](keys, vals)
+    var result = GroupBy(keys).count(vals)
     ref c = result.columns[1].as_int64()
     assert_equal(c[0].value(), 2)  # key=1: 2 rows
     assert_equal(c[1].value(), 2)  # key=2: 2 rows
@@ -181,7 +182,7 @@ def test_groupby_count() raises:
 def test_groupby_mean() raises:
     var keys: AnyArray = array([1, 2, 1, 2], int32)
     var vals: AnyArray = array([10, 20, 30, 40], int32)
-    var result = group_by[MeanKernel](keys, vals)
+    var result = GroupBy(keys).mean(vals)
     ref m = result.columns[1].as_float64()
     assert_equal(m[0].value(), 20.0)  # (10+30)/2
     assert_equal(m[1].value(), 30.0)  # (20+40)/2
@@ -192,7 +193,7 @@ def test_groupby_sum_float64_preserved() raises:
     """
     var keys: AnyArray = array([1, 1], int32)
     var vals: AnyArray = array([1.5, 2.5], float64)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_true(result.schema.fields[1].dtype == AnyDataType(float64))
     ref s = result.columns[1].as_float64()
     assert_equal(s[0].value(), 4.0)
@@ -207,7 +208,7 @@ def test_groupby_null_keys() raises:
     """Null keys form their own group."""
     var keys: AnyArray = array([1, None, 2, None, 1], int32)
     var vals: AnyArray = array([10, 20, 30, 40, 50], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 3)
     # Group order: 1, null, 2
     ref s = result.columns[1].as_int64()
@@ -220,7 +221,7 @@ def test_groupby_null_values_skipped() raises:
     """Null values are skipped in aggregation."""
     var keys: AnyArray = array([1, 1, 1], int32)
     var vals: AnyArray = array([10, None, 30], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 40)  # 10 + 30 (null skipped)
 
@@ -229,7 +230,7 @@ def test_groupby_count_skips_nulls() raises:
     """Count only counts non-null values."""
     var keys: AnyArray = array([1, 1, 1], int32)
     var vals: AnyArray = array([10, None, 30], int32)
-    var result = group_by[CountKernel](keys, vals)
+    var result = GroupBy(keys).count(vals)
     ref c = result.columns[1].as_int64()
     assert_equal(c[0].value(), 2)  # 2 non-null values
 
@@ -247,7 +248,7 @@ def test_groupby_string_key() raises:
     b.append("b")
     var keys: AnyArray = b.finish()
     var vals: AnyArray = array([10, 20, 30, 40], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 40)  # "a": 10+30
@@ -276,7 +277,7 @@ def test_groupby_multikey() raises:
         children=children^,
     )
     var vals: AnyArray = array([1, 2, 3, 4], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 4)  # 4 unique combos
 
 
@@ -288,7 +289,7 @@ def test_groupby_multikey() raises:
 def test_groupby_empty() raises:
     var keys: AnyArray = array(int32)
     var vals: AnyArray = array(int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 0)
 
 
@@ -300,7 +301,7 @@ def test_groupby_empty() raises:
 def test_groupby_bool_key() raises:
     var keys: AnyArray = array([True, False, True, False, True])
     var vals: AnyArray = array([1, 2, 3, 4, 5], int32)
-    var result = group_by[SumKernel](keys, vals)
+    var result = GroupBy(keys).sum(vals)
     assert_equal(result.num_rows(), 2)
     ref s = result.columns[1].as_int64()
     assert_equal(s[0].value(), 9)  # True: 1+3+5
@@ -319,8 +320,8 @@ def test_groupby_sum_and_count_share_keys() raises:
     var keys: AnyArray = array([1, 2, 1, 2], int32)
     var vals: AnyArray = array([10, 20, 30, 40], int32)
 
-    var sums = group_by[SumKernel](keys, vals)
-    var counts = group_by[CountKernel](keys, vals)
+    var sums = GroupBy(keys).sum(vals)
+    var counts = GroupBy(keys).count(vals)
 
     assert_equal(sums.num_rows(), 2)
     assert_equal(counts.num_rows(), 2)

@@ -9,7 +9,7 @@ from std.benchmark import BenchMetric, keep
 from marrow.arrays import AnyArray
 from marrow.builders import PrimitiveBuilder, Int32Builder, Float64Builder
 from marrow.dtypes import int32, float64, Int32Type, Float64Type
-from marrow.kernels.groupby import group_by
+from marrow.kernels.groupby import GroupBy
 from marrow.kernels.aggregate import (
     AggKernel,
     SumKernel,
@@ -42,7 +42,7 @@ def _bench_group_by[K: AggKernel](mut b: Benchmark, n: Int) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(group_by[K](keys, vals))
+        keep(GroupBy(keys).aggregate[K](vals))
 
     b.iter[call]()
     keep(keys)

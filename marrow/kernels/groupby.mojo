@@ -8,13 +8,13 @@ Two-phase group-by:
 
 The grouper itself is **aggregate-agnostic**: aggregates are ``AggKernel``
 types (``aggregate.mojo``), and any runtime ``name -> kernel`` selection lives in
-the expression layer (``marrow/expr``). The typed ``group_by[K]`` convenience
-below ties the two together for the compile-time / AOT path (one aggregate,
-known statically), fully monomorphized with no runtime kernel dispatch.
+the expression layer (``marrow/expr``). The ``GroupBy`` type below ties the two
+together for the compile-time / AOT path (one statically-known aggregate),
+fully monomorphized with no runtime kernel dispatch, and picks the serial /
+thread-local / radix execution strategy from row count + cardinality.
 """
 
 from std.algorithm.functional import sync_parallelize
-from std.sys.info import num_physical_cores
 
 from ..arrays import (
     StructArray,
@@ -32,7 +32,17 @@ from .hashing import rapidhash
 from .execution import ExecutionContext
 from .filter import take
 from .concat import concat
-from .aggregate import AggKernel, AggState, for_value_dtype
+from .aggregate import (
+    AggKernel,
+    AggState,
+    for_value_dtype,
+    SumKernel,
+    ProductKernel,
+    MinKernel,
+    MaxKernel,
+    CountKernel,
+    MeanKernel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +58,7 @@ struct HashGrouper(Movable):
     to accumulate groups across batches. NULL keys are treated as equal (same
     group), matching SQL GROUP BY semantics (unlike join, where NULL != NULL).
 
-    Aggregate state is owned by the caller, not the grouper — see ``group_by``
+    Aggregate state is owned by the caller, not the grouper — see ``GroupBy``
     (typed/AOT path) and the expression layer (runtime path).
     """
 
@@ -139,13 +149,7 @@ struct HashGrouper(Movable):
 
 
 # ---------------------------------------------------------------------------
-# group_by — typed single-aggregate grouped aggregation.
-#
-# Serial for small inputs; radix-partition-parallel for large ones (same
-# pattern as `HashJoin`): hash keys once, split rows by the top hash bits into
-# independent partitions, then group+aggregate each partition on its own thread.
-# A key hashes to exactly one partition, so groups never span partitions — the
-# merge is a plain per-column `concat`, no cross-partition combine.
+# GroupBy — grouped aggregation over a fixed set of key columns.
 # ---------------------------------------------------------------------------
 
 
@@ -164,22 +168,21 @@ comptime _CARD_SAMPLE_ROWS = 4096
 """Rows sampled (strided) to estimate cardinality on the dispatch boundary."""
 
 
-def group_by[
-    K: AggKernel
-](
-    keys: StructArray,
-    value: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> RecordBatch:
-    """Grouped aggregation with a single, statically-known aggregate kernel.
+struct GroupBy(Movable):
+    """Grouped aggregation over a fixed set of key columns.
 
-    Monomorphized on ``K``; the input dtype ``V`` is resolved once at the
-    boundary, then the fully typed ``AggState[K, V]`` does the work. For runtime,
-    multi-aggregate queries (kernels chosen from a plan), the expression layer
-    drives the same ``AggState`` behind its own tag dispatch.
+    Mirrors PyArrow's ``table.group_by(keys)``: build once from the key columns,
+    then apply an aggregate with ``aggregate[K]`` — or the ``sum`` / ``product``
+    / ``min`` / ``max`` / ``count`` / ``mean`` shorthands. Each aggregate is a
+    statically-known ``AggKernel``, so the result is fully monomorphized (the
+    input dtype ``V`` is resolved once at the boundary and the typed
+    ``AggState[K, V]`` does the work); runtime, plan-driven multi-aggregate
+    queries live in the expression layer instead.
 
-    Three execution strategies, chosen by row count *and* cardinality (estimated
-    once, cheaply, from a strided sample):
+    The execution **strategy** is picked once at construction — from the row
+    count, the worker budget (``ctx``), and a cheap one-time cardinality estimate
+    — and reused across ``aggregate`` calls, since what the strategy trades off
+    is the *grouping* cost, which is independent of the value column:
 
     - **serial** — small inputs, and low-/mid-cardinality inputs below
       ``_PARALLEL_ALWAYS_ROWS`` (fewer, larger groups → the single-table scatter
@@ -193,16 +196,92 @@ def group_by[
       where a key lands in one partition so groups never span threads and the
       thread-local merge would instead become an O(N) serial bottleneck.
     """
-    var nt = num_physical_cores()
-    var n = len(keys)
-    if nt <= 1 or n < _PARALLEL_MIN_ROWS:
-        return _group_by_serial[K](keys, value)
-    var high_card = _is_high_cardinality(keys, n)
-    if n < _PARALLEL_ALWAYS_ROWS and not high_card:
-        return _group_by_serial[K](keys, value)
-    if high_card:
-        return _group_by_radix[K](keys, value, nt)
-    return _group_by_thread_local[K](keys, value, nt)
+
+    comptime _SERIAL: UInt8 = 0
+    comptime _THREAD_LOCAL: UInt8 = 1
+    comptime _RADIX: UInt8 = 2
+
+    var _keys: StructArray
+    var _num_threads: Int
+    var _strategy: UInt8
+
+    def __init__(
+        out self,
+        keys: StructArray,
+        ctx: ExecutionContext = ExecutionContext.auto(),
+    ) raises:
+        """Group by a struct of key columns (multi-key GROUP BY)."""
+        self._keys = keys.copy()
+        self._num_threads = ctx.resolved_num_threads()
+        self._strategy = Self._choose_strategy(self._keys, self._num_threads)
+
+    def __init__(
+        out self,
+        key: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.auto(),
+    ) raises:
+        """Group by a single key column."""
+        var children = List[AnyArray]()
+        children.append(key.copy())
+        var kd = key.to_data()
+        self = Self(
+            StructArray(
+                dtype=struct_(Field("key", kd.dtype.copy())),
+                length=kd.length,
+                nulls=kd.nulls,
+                offset=kd.offset,
+                bitmap=kd.bitmap,
+                children=children^,
+            ),
+            ctx,
+        )
+
+    @staticmethod
+    def _choose_strategy(keys: StructArray, num_threads: Int) raises -> UInt8:
+        var n = len(keys)
+        if num_threads <= 1 or n < _PARALLEL_MIN_ROWS:
+            return Self._SERIAL
+        var high_card = _is_high_cardinality(keys, n)
+        if n < _PARALLEL_ALWAYS_ROWS and not high_card:
+            return Self._SERIAL
+        if high_card:
+            return Self._RADIX
+        return Self._THREAD_LOCAL
+
+    def aggregate[K: AggKernel](self, value: AnyArray) raises -> RecordBatch:
+        """Aggregate ``value`` per group with kernel ``K``. Returns a batch of
+        the unique key columns followed by the aggregate column."""
+        if self._strategy == Self._THREAD_LOCAL:
+            return _group_by_thread_local[K](
+                self._keys, value, self._num_threads
+            )
+        elif self._strategy == Self._RADIX:
+            return _group_by_radix[K](self._keys, value, self._num_threads)
+        return _group_by_serial[K](self._keys, value)
+
+    def sum(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group sum (integers widen to int64, floats stay float64)."""
+        return self.aggregate[SumKernel](value)
+
+    def product(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group product."""
+        return self.aggregate[ProductKernel](value)
+
+    def min(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group minimum (preserves the input dtype)."""
+        return self.aggregate[MinKernel](value)
+
+    def max(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group maximum (preserves the input dtype)."""
+        return self.aggregate[MaxKernel](value)
+
+    def count(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group count of valid (non-null) values, as int64."""
+        return self.aggregate[CountKernel](value)
+
+    def mean(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group arithmetic mean, as float64."""
+        return self.aggregate[MeanKernel](value)
 
 
 def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -468,25 +547,3 @@ def _group_by_radix[
     out_fields.append(Field(K.name, agg_box[0].copy()))
 
     return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
-
-
-def group_by[
-    K: AggKernel
-](
-    key: AnyArray,
-    value: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> RecordBatch:
-    """``group_by[K]`` on a single key column."""
-    var children = List[AnyArray]()
-    children.append(key.copy())
-    var key_data = key.to_data()
-    var sa = StructArray(
-        dtype=struct_(Field("key", key_data.dtype.copy())),
-        length=key_data.length,
-        nulls=key_data.nulls,
-        offset=key_data.offset,
-        bitmap=key_data.bitmap,
-        children=children^,
-    )
-    return group_by[K](sa, value, ctx)
