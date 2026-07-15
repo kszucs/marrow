@@ -485,8 +485,14 @@ struct GroupBy(Movable):
             _pi: Int, rows: Int32Array, part_hashes: UInt64Array
         ) raises -> Tuple[Int32Array, AnyArray]:
             var n = len(rows)
+            # Pre-size the table to the partition's row count (an upper bound on
+            # its group count) instead of growing adaptively: this path only runs
+            # for high cardinality, so most rows are distinct keys and the table
+            # would otherwise rehash ~log2(groups) times during the build. The
+            # over-allocation is bounded (rows/groups is small at high card) and
+            # the extra ctrl memset is bandwidth-cheap — net ~5% faster.
             var table = SwissHashTable[rapidhash]()
-            var gids = table.insert_hashes(part_hashes, grow_adaptively=True)
+            var gids = table.insert_hashes(part_hashes, grow_adaptively=False)
             var ng = table.num_keys()
 
             # First-occurrence original row per new group (bids are dense and
