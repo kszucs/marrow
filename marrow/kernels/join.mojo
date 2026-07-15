@@ -106,7 +106,6 @@ See ``docs/joins-design.md`` for the high-level architecture and the
 ``Phase 1b`` performance table.
 """
 
-from std.algorithm.functional import sync_parallelize
 from std.gpu.host import DeviceContext
 from std.sys.info import num_physical_cores
 
@@ -133,7 +132,8 @@ from .boolean import and_
 from .compare import equal
 from .execution import ExecutionContext
 from .filter import take, filter
-from .hashtable import SwissHashTable, RadixPartitioner
+from .hashtable import SwissHashTable
+from .partition import RadixPartitioner
 from .hashing import rapidhash
 
 # ---------------------------------------------------------------------------
@@ -298,13 +298,10 @@ comptime _PARALLEL_THRESHOLD = 100_000
 """Below this build-side row count the parallel path falls back to serial —
 partitioning overhead dominates below ~100k rows on typical inputs."""
 
-# TODO(partitioned-op): the divide/map/gather logic in `build_parallel`
-# and `probe_parallel` is duplicated (hash → partition → per-partition
-# parallel work → merge). A reusable `PartitionedOp[T]` trait with a
-# `partition_apply` driver would collapse both call sites and be reusable
-# for future partition-parallel kernels (groupby, radix sort). Deferred
-# until Mojo's generics make variable-output-shape abstractions
-# practical. See docs/joins-design.md → "Known limits / future work".
+# The hash → partition → per-partition parallel work → merge skeleton shared by
+# `build_parallel`, `probe_parallel`, and the radix group-by lives in
+# `RadixPartitioner.map_partitions` (partition.mojo); each call site supplies
+# only its per-partition op and its own merge.
 
 comptime _DEFAULT_RADIX_BITS = 6
 """Default radix fanout for ``RadixPartitioner`` (64 partitions).
@@ -468,43 +465,37 @@ struct HashJoin[
 
         var left_keys = left.select(left_key_indices)
 
-        # 1. Hash once, in parallel.
-        var hashes = Self.hasher(
-            left_keys, ExecutionContext.parallel(self._num_threads)
-        )
-
-        # 2. Partition.
+        # Pre-size one table per partition; each is built *in place* by the
+        # matching worker (avoids moving/copying a SwissHashTable out of a
+        # result), so the op only returns the cheap (keys, rows) per partition.
         var partitioner = RadixPartitioner(
             num_bits=self._radix_bits, num_threads=self._num_threads
         )
-        var partitions = partitioner.partition(hashes^)
-        var p = len(partitions)
-
-        # 3. Allocate per-partition slots — pre-sized so workers can
-        # assign by index without racing on list growth.
+        var p = partitioner.num_partitions()
         var tables = List[SwissHashTable[Self.hasher]](capacity=p)
         for _ in range(p):
             tables.append(SwissHashTable[Self.hasher]())
-        var part_keys = List[Optional[StructArray]](length=p, fill=None)
-        var part_rows = List[Optional[Int32Array]](length=p, fill=None)
 
-        # 4. Parallel per-partition work: gather keys + build table.
         @parameter
-        def build_worker(i: Int) raises:
-            var rows = partitions[i].row_indices.value().copy()
+        def build_partition(
+            i: Int, rows: Int32Array, part_hashes: UInt64Array
+        ) raises -> Tuple[StructArray, Int32Array]:
             var k = take(left_keys, rows)
-            tables[i].build_hashes(partitions[i].hashes.copy())
-            part_keys[i] = k^
-            part_rows[i] = rows^
+            tables[i].build_hashes(part_hashes)
+            return (k^, rows.copy())
 
-        sync_parallelize[build_worker](p)
+        var hashes = Self.hasher(
+            left_keys, ExecutionContext.parallel(self._num_threads)
+        )
+        var parts = partitioner.map_partitions[
+            Tuple[StructArray, Int32Array], build_partition
+        ](hashes^)
 
-        # 5. Unwrap Optionals into dense lists (order preserved).
         var keys_out = List[StructArray](capacity=p)
         var rows_out = List[Int32Array](capacity=p)
-        for i in range(p):
-            keys_out.append(part_keys[i].value().copy())
-            rows_out.append(part_rows[i].value().copy())
+        for i in range(len(parts)):
+            keys_out.append(parts[i][0].copy())
+            rows_out.append(parts[i][1].copy())
 
         self._tables = tables^
         self._left_partition_keys = keys_out^
@@ -529,45 +520,43 @@ struct HashJoin[
         """
         var right_keys = right.select(right_key_indices)
         var right_n = len(right)
-
-        # 1. Hash probe side in parallel.
-        var probe_hashes = Self.hasher(
-            right_keys, ExecutionContext.parallel(self._num_threads)
-        )
-
-        # 2. Partition probe rows.
-        var partitioner = RadixPartitioner(
-            num_bits=self._radix_bits, num_threads=self._num_threads
-        )
-        var probe_partitions = partitioner.partition(probe_hashes^)
-        var p = len(probe_partitions)
-
-        # 3. Parallel probe — each worker gathers its probe keys, looks
-        # them up, and remaps partition-local row indices to global row
-        # numbering. Pre-sized Optional slots let workers assign by
-        # partition index without racing on list growth.
-        var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
-        var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
         var single = strictness == JOIN_ANY
 
+        # Per-partition probe: gather this partition's probe keys, look them up
+        # in the matching build-side table `i` (same radix bits → same
+        # partition), and remap partition-local indices to global row numbers.
         @parameter
-        def probe_worker(i: Int) raises:
-            var rows = probe_partitions[i].row_indices.value().copy()
+        def probe_partition(
+            i: Int, rows: Int32Array, part_hashes: UInt64Array
+        ) raises -> IndexPairs:
             var probe_keys_i = take(right_keys, rows)
             var pairs = self._tables[i].probe(
                 self._left_partition_keys[i],
                 probe_keys_i,
                 len(self._left_partition_keys[i]),
                 single_match=single,
-                hashes=probe_partitions[i].hashes.copy(),
+                hashes=part_hashes.copy(),
             )
-            # Remap partition-local indices → original row indices.
-            part_build_idx[i] = take(self._left_partition_rows[i], pairs[0])
-            part_probe_idx[i] = take(rows, pairs[1])
+            return (
+                take(self._left_partition_rows[i], pairs[0]),
+                take(rows, pairs[1]),
+            )
 
-        sync_parallelize[probe_worker](p)
+        # 1. Hash probe side in parallel; 2-3. partition + parallel probe.
+        var probe_hashes = Self.hasher(
+            right_keys, ExecutionContext.parallel(self._num_threads)
+        )
+        var pairs_per_partition = RadixPartitioner(
+            num_bits=self._radix_bits, num_threads=self._num_threads
+        ).map_partitions[IndexPairs, probe_partition](probe_hashes^)
 
-        # 5. Concat per-partition pairs into a single IndexPairs.
+        # 4. Concat per-partition pairs into a single IndexPairs.
+        var p = len(pairs_per_partition)
+        var part_build_idx = List[Optional[Int32Array]](length=p, fill=None)
+        var part_probe_idx = List[Optional[Int32Array]](length=p, fill=None)
+        for i in range(p):
+            part_build_idx[i] = pairs_per_partition[i][0].copy()
+            part_probe_idx[i] = pairs_per_partition[i][1].copy()
         var combined_build = _concat_int32(part_build_idx^)
         var combined_probe = _concat_int32(part_probe_idx^)
         var verified = (combined_build^, combined_probe^)

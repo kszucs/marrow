@@ -432,6 +432,16 @@
 
 ### Refactors
 
+- **Shared radix partition-parallel driver** (`marrow.kernels.partition`): the
+  partitioning layer (`Partition` / `Partitioner` / `NoPartition` /
+  `RadixPartitioner`) moved out of `hashtable.mojo` into its own `partition.mojo`,
+  and gained `RadixPartitioner.map_partitions[R, op]` — the reusable
+  hash → partition → per-partition parallel op → collect skeleton. The hash join
+  (`build_parallel` + `probe_parallel`) and the radix group-by (`GroupBy._radix`)
+  now route through it instead of each re-implementing the partition/dispatch/
+  collect boilerplate, resolving the standing `TODO(partitioned-op)`. Results are
+  *moved* out of the per-partition slots (never copied — a partition's `R` may
+  own a `SwissHashTable`). Behaviour and performance unchanged.
 - **`GroupBy` type** (`marrow.kernels.groupby`): grouped aggregation is now a
   `GroupBy` value (mirroring PyArrow's `table.group_by(keys)`) rather than the
   free `group_by[K]` functions. Build once from a key column or key struct, then

@@ -27,7 +27,8 @@ from ..builders import AnyBuilder, Int32Builder
 from ..dtypes import Field, AnyDataType, struct_, NumericType
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .hashtable import SwissHashTable, RadixPartitioner
+from .hashtable import SwissHashTable
+from .partition import RadixPartitioner
 from .hashing import rapidhash
 from .execution import ExecutionContext
 from .filter import take
@@ -475,26 +476,17 @@ struct GroupBy(Movable):
         ``take`` gathers (keys + finished key columns) the previous version paid.
         """
         var ctx = ExecutionContext.parallel(num_threads)
-        var partitioner = RadixPartitioner(
-            num_bits=_RADIX_BITS, num_threads=num_threads
-        )
-        var partitions = partitioner.partition(rapidhash(keys, ctx))
-        var p = len(partitions)
 
-        # Pre-sized slots — workers assign by index without racing on list growth.
-        var first_slots = List[Optional[Int32Array]](length=p, fill=None)
-        var agg_slots = List[Optional[AnyArray]](length=p, fill=None)
-
+        # Per-partition: group by the (already computed) hashes + aggregate,
+        # returning (first-occurrence original rows, aggregate column). Groups
+        # are disjoint across partitions, so no cross-partition combine is needed.
         @parameter
-        def worker(pi: Int) raises:
-            ref rows = partitions[pi].row_indices.value()
+        def aggregate_partition(
+            _pi: Int, rows: Int32Array, part_hashes: UInt64Array
+        ) raises -> Tuple[Int32Array, AnyArray]:
             var n = len(rows)
-
-            # Group this partition's rows by their (already computed) hashes.
             var table = SwissHashTable[rapidhash]()
-            var gids = table.insert_hashes(
-                partitions[pi].hashes, grow_adaptively=True
-            )
+            var gids = table.insert_hashes(part_hashes, grow_adaptively=True)
             var ng = table.num_keys()
 
             # First-occurrence original row per new group (bids are dense and
@@ -510,26 +502,32 @@ struct GroupBy(Movable):
 
             # Values in partition order, aligned with `gids`, for the scatter.
             var pvals = take(value, rows)
+            var box = List[AnyArray]()
 
             @parameter
             def by_value[V: NumericType]() raises:
                 var state = AggState[K, V]()
                 state.update(gids, pvals.as_primitive[V](), ng)
-                agg_slots[pi] = state.finish(ng).to_any()
+                box.append(state.finish(ng).to_any())
 
             for_value_dtype[by_value](value.dtype())
-            first_slots[pi] = first.finish()
+            return (first.finish(), box[0].copy())
 
-        sync_parallelize[worker](p)
+        var hashes = rapidhash(keys, ctx)
+        var parts = RadixPartitioner(
+            num_bits=_RADIX_BITS, num_threads=num_threads
+        ).map_partitions[Tuple[Int32Array, AnyArray], aggregate_partition](
+            hashes^
+        )
 
-        # Merge — groups are disjoint across partitions, so the global unique-key set
-        # is just their union. Concatenate the first-occurrence rows, gather the key
-        # columns from the original keys once, and concatenate the aggregates.
+        # Merge — the global unique-key set is the union of the partitions'.
+        # Concatenate the first-occurrence rows, gather the key columns from the
+        # original keys once, and concatenate the aggregate columns.
         var first_chunks = List[AnyArray]()
         var agg_chunks = List[AnyArray]()
-        for i in range(p):
-            first_chunks.append(first_slots[i].value().copy())
-            agg_chunks.append(agg_slots[i].value().copy())
+        for i in range(len(parts)):
+            first_chunks.append(parts[i][0].copy())
+            agg_chunks.append(parts[i][1].copy())
         var first_any = concat(first_chunks, ctx)
         ref first_rows = first_any.as_int32()
 
