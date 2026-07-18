@@ -37,6 +37,7 @@ from .aggregate import (
     AggKernel,
     AggState,
     for_value_dtype,
+    for_agg_tag,
     SumKernel,
     ProductKernel,
     MinKernel,
@@ -177,8 +178,10 @@ struct GroupBy(Movable):
     / ``min`` / ``max`` / ``count`` / ``mean`` shorthands. Each aggregate is a
     statically-known ``AggKernel``, so the result is fully monomorphized (the
     input dtype ``V`` is resolved once at the boundary and the typed
-    ``AggState[K, V]`` does the work); runtime, plan-driven multi-aggregate
-    queries live in the expression layer instead.
+    ``AggState[K, V]`` does the work). ``aggregate_runtime`` is the runtime
+    counterpart: it applies several aggregates chosen from tags in a *single*
+    grouping pass (the keys are hashed/grouped once, not once per aggregate) —
+    used by the Python ``group_by(...).aggregate([...])`` binding.
 
     The execution **strategy** is picked once at construction — from the row
     count, the worker budget (``ctx``), and a cheap one-time cardinality estimate
@@ -554,5 +557,264 @@ struct GroupBy(Movable):
 
         for_value_dtype[agg_dtype](value.dtype())
         out_fields.append(Field(K.name, agg_box[0].copy()))
+
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    # -----------------------------------------------------------------------
+    # Runtime multi-aggregate — group ONCE, apply N runtime-selected aggregates
+    # in the same pass. `tags` are `agg_tag_from_name` codes; the aggregate
+    # columns are named by kernel (callers rename as needed). This is the path
+    # the Python `group_by(...).aggregate([...])` binding uses, so a multi-agg
+    # query hashes/probes the keys once instead of once per aggregate.
+    # -----------------------------------------------------------------------
+
+    def aggregate_runtime(
+        self, values: List[AnyArray], tags: List[UInt8]
+    ) raises -> RecordBatch:
+        """Apply several aggregates over one grouping of the keys.
+
+        ``values[j]`` is aggregated with the kernel for ``tags[j]``. Returns the
+        unique key columns followed by one column per aggregate."""
+        if self._strategy == Self._THREAD_LOCAL:
+            return Self._thread_local_multi(
+                self._keys, values, tags, self._num_threads
+            )
+        elif self._strategy == Self._RADIX:
+            return Self._radix_multi(
+                self._keys, values, tags, self._num_threads
+            )
+        return Self._serial_multi(self._keys, values, tags)
+
+    @staticmethod
+    def _agg_name(tag: UInt8) raises -> String:
+        """The kernel name for an aggregate tag (default output column name)."""
+        var box = List[String]()
+
+        @parameter
+        def name[K: AggKernel]() raises:
+            box.append(String(K.name))
+
+        for_agg_tag[name](tag)
+        return box[0]
+
+    @staticmethod
+    def _agg_over_gids(
+        gids: Int32Array, value: AnyArray, num_groups: Int, tag: UInt8
+    ) raises -> AnyArray:
+        """Aggregate ``value`` over precomputed group ids ``gids`` (one typed
+        ``AggState`` resolved from the runtime tag + value dtype)."""
+        var box = List[AnyArray]()
+
+        @parameter
+        def run[K: AggKernel]() raises:
+            @parameter
+            def by_value[V: NumericType]() raises:
+                var state = AggState[K, V]()
+                state.update(gids, value.as_primitive[V](), num_groups)
+                box.append(state.finish(num_groups).to_any())
+
+            for_value_dtype[by_value](value.dtype())
+
+        for_agg_tag[run](tag)
+        return box[0].copy()
+
+    @staticmethod
+    def _serial_multi(
+        keys: StructArray, values: List[AnyArray], tags: List[UInt8]
+    ) raises -> RecordBatch:
+        var grouper = HashGrouper()
+        var gids = grouper.consume_keys(keys)
+        var ng = grouper.num_groups()
+
+        var kfields = grouper.key_fields(keys)
+        var out_fields = List[Field]()
+        for k in range(len(kfields)):
+            out_fields.append(kfields[k].copy())
+        var out_cols = grouper.key_columns(kfields)
+
+        for j in range(len(tags)):
+            var col = Self._agg_over_gids(gids, values[j], ng, tags[j])
+            out_fields.append(
+                Field(Self._agg_name(tags[j]), col.dtype().copy())
+            )
+            out_cols.append(col^)
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    @staticmethod
+    def _thread_local_multi(
+        keys: StructArray,
+        values: List[AnyArray],
+        tags: List[UInt8],
+        num_threads: Int,
+    ) raises -> RecordBatch:
+        var n = len(keys)
+        var na = len(tags)
+        var chunk = (n + num_threads - 1) // num_threads
+
+        var part_keys = List[Optional[StructArray]](
+            length=num_threads, fill=None
+        )
+        # Per (thread, aggregate) partial state, flattened as [t * na + j].
+        var part_acc = List[Optional[AnyArray]](
+            length=num_threads * na, fill=None
+        )
+        var part_cnt = List[Optional[Int64Array]](
+            length=num_threads * na, fill=None
+        )
+
+        @parameter
+        def worker(t: Int) raises:
+            var start = t * chunk
+            if start >= n:
+                return
+            var length = min(chunk, n - start)
+            var kchunk = Self._slice_struct(keys, start, length)
+
+            var grouper = HashGrouper()
+            var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
+            var ng = grouper.num_groups()
+
+            var kfields = grouper.key_fields(kchunk)
+            var kcols = grouper.key_columns(kfields)
+            part_keys[t] = StructArray(
+                dtype=keys.dtype.copy(),
+                length=ng,
+                nulls=0,
+                offset=0,
+                bitmap=None,
+                children=kcols^,
+            )
+
+            for j in range(na):
+                var vchunk = values[j].slice(start, length)
+
+                @parameter
+                def run_local[K: AggKernel]() raises:
+                    @parameter
+                    def by_value[V: NumericType]() raises:
+                        var state = AggState[K, V]()
+                        state.update(gids, vchunk.as_primitive[V](), ng)
+                        var parts = state.into_partials()
+                        part_acc[t * na + j] = parts[0].copy().to_any()
+                        part_cnt[t * na + j] = parts[1].copy()
+
+                    for_value_dtype[by_value](vchunk.dtype())
+
+                for_agg_tag[run_local](tags[j])
+
+        sync_parallelize[worker](num_threads)
+
+        # Merge — re-key every chunk into the global grouper ONCE (shared across
+        # aggregates), then fold each aggregate's partials at the global ids.
+        var gg = HashGrouper()
+        var l2g = List[Int32Array]()
+        for t in range(num_threads):
+            if part_keys[t]:
+                l2g.append(gg.consume_keys(part_keys[t].value()))
+            else:
+                var empty = Int32Builder(0)
+                l2g.append(empty.finish())
+        var ngg = gg.num_groups()
+
+        var kfields = gg.key_fields(keys)
+        var out_fields = List[Field]()
+        for k in range(len(kfields)):
+            out_fields.append(kfields[k].copy())
+        var out_cols = gg.key_columns(kfields)
+
+        for j in range(na):
+            var box = List[AnyArray]()
+
+            @parameter
+            def run_merge[K: AggKernel]() raises:
+                @parameter
+                def by_value[V: NumericType]() raises:
+                    var gstate = AggState[K, V]()
+                    for t in range(num_threads):
+                        if not part_keys[t]:
+                            continue
+                        gstate.merge(
+                            l2g[t],
+                            part_acc[t * na + j]
+                            .value()
+                            .as_primitive[K.AccType[V]](),
+                            part_cnt[t * na + j].value(),
+                            ngg,
+                        )
+                    box.append(gstate.finish(ngg).to_any())
+
+                for_value_dtype[by_value](values[j].dtype())
+
+            for_agg_tag[run_merge](tags[j])
+            out_fields.append(
+                Field(Self._agg_name(tags[j]), box[0].dtype().copy())
+            )
+            out_cols.append(box[0].copy())
+
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    @staticmethod
+    def _radix_multi(
+        keys: StructArray,
+        values: List[AnyArray],
+        tags: List[UInt8],
+        num_threads: Int,
+    ) raises -> RecordBatch:
+        var ctx = ExecutionContext.parallel(num_threads)
+        var na = len(tags)
+
+        @parameter
+        def agg_partition(
+            _pi: Int, rows: Int32Array, part_hashes: UInt64Array
+        ) raises -> Tuple[Int32Array, List[AnyArray]]:
+            var nrows = len(rows)
+            var table = SwissHashTable[rapidhash]()
+            var gids = table.insert_hashes(part_hashes, grow_adaptively=False)
+            var ng = table.num_keys()
+
+            var first = Int32Builder(capacity=ng, zeroed=False)
+            var next_new = 0
+            for i in range(nrows):
+                if Int(gids.unsafe_get(i)) == next_new:
+                    first.unsafe_append(rows.unsafe_get(i))
+                    next_new += 1
+                    if next_new == ng:
+                        break
+
+            var agg_cols = List[AnyArray]()
+            for j in range(na):
+                var pvals = take(values[j], rows)
+                agg_cols.append(Self._agg_over_gids(gids, pvals, ng, tags[j]))
+            return (first.finish(), agg_cols^)
+
+        var hashes = rapidhash(keys, ctx)
+        var parts = RadixPartitioner(
+            num_bits=_RADIX_BITS, num_threads=num_threads
+        ).map_partitions[Tuple[Int32Array, List[AnyArray]], agg_partition](
+            hashes^
+        )
+
+        var first_chunks = List[AnyArray]()
+        for i in range(len(parts)):
+            first_chunks.append(parts[i][0].copy())
+        var first_any = concat(first_chunks, ctx)
+        ref first_rows = first_any.as_int32()
+
+        ref kstruct = keys.dtype.as_struct()
+        var out_fields = List[Field]()
+        var out_cols = List[AnyArray]()
+        for k in range(len(kstruct.fields)):
+            out_fields.append(kstruct.fields[k].copy())
+            out_cols.append(take(keys.children[k], first_rows, ctx))
+
+        for j in range(na):
+            var chunks = List[AnyArray]()
+            for i in range(len(parts)):
+                chunks.append(parts[i][1][j].copy())
+            var col = concat(chunks, ctx)
+            out_fields.append(
+                Field(Self._agg_name(tags[j]), col.dtype().copy())
+            )
+            out_cols.append(col^)
 
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)

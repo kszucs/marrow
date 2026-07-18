@@ -19,6 +19,7 @@ from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from marrow.kernels.groupby import GroupBy
+from marrow.kernels.aggregate import agg_tag_from_name
 from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
@@ -486,27 +487,6 @@ def _record_batch_join(
     ).to_python_object()
 
 
-def _group_by_agg(
-    gb: GroupBy, value: AnyArray, func: String
-) raises -> RecordBatch:
-    """Dispatch a runtime aggregate-function name to the typed `GroupBy` kernel.
-    """
-    if func == "sum":
-        return gb.sum(value)
-    elif func == "mean":
-        return gb.mean(value)
-    elif func == "min":
-        return gb.min(value)
-    elif func == "max":
-        return gb.max(value)
-    elif func == "count":
-        return gb.count(value)
-    elif func == "product":
-        return gb.product(value)
-    else:
-        raise Error("group_by: unknown aggregate function '", func, "'")
-
-
 def _record_batch_group_by(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     keys: PythonObject,
@@ -524,8 +504,8 @@ def _record_batch_group_by(
         num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
 
     Returns a RecordBatch of the unique key columns followed by one aggregate
-    column per (value, func). The group order is deterministic for a given key
-    set, so multiple aggregates align row-for-row.
+    column per (value, func), named ``<value>_<func>`` to match PyArrow. The
+    keys are grouped once and every aggregate is computed in that pass.
     """
     ref rb = ptr[]
 
@@ -538,29 +518,35 @@ def _record_batch_group_by(
         key_indices.append(idx)
     var key_struct = rb.select(key_indices).to_struct_array()
 
-    var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
-
-    var out_fields = List[Field]()
-    var out_columns = List[AnyArray]()
+    # Resolve the (value column, aggregate tag) pairs and their output names.
+    var value_cols = List[AnyArray]()
+    var tags = List[UInt8]()
+    var agg_names = List[String]()
     for j in range(Int(funcs.__len__())):
         var vname = String(py=values[j])
         var vidx = rb.schema.get_field_index(vname)
         if vidx == -1:
             raise Error("group_by: value column '", vname, "' not found")
         var func = String(py=funcs[j])
-        var res = _group_by_agg(gb, rb.column(vidx), func)
-        # `res` is [key columns..., aggregate column]. Take the key columns once
-        # (from the first aggregate), then each aggregate's trailing column,
-        # named ``<value>_<func>`` to match PyArrow.
-        var last = len(res.columns) - 1
-        if j == 0:
-            for c in range(last):
-                out_fields.append(res.schema.fields[c].copy())
-                out_columns.append(res.columns[c].copy())
+        value_cols.append(rb.column(vidx).copy())
+        tags.append(agg_tag_from_name(func))
+        agg_names.append(vname + "_" + func)
+
+    var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
+    var res = gb.aggregate_runtime(value_cols, tags)
+
+    # `res` is [key columns..., aggregate columns...]; rename the aggregates.
+    var n_keys = len(res.columns) - len(tags)
+    var out_fields = List[Field]()
+    var out_columns = List[AnyArray]()
+    for c in range(n_keys):
+        out_fields.append(res.schema.fields[c].copy())
+        out_columns.append(res.columns[c].copy())
+    for j in range(len(tags)):
         out_fields.append(
-            Field(vname + "_" + func, res.schema.fields[last].dtype.copy())
+            Field(agg_names[j], res.schema.fields[n_keys + j].dtype.copy())
         )
-        out_columns.append(res.columns[last].copy())
+        out_columns.append(res.columns[n_keys + j].copy())
     return RecordBatch(
         schema=Schema(fields=out_fields^), columns=out_columns^
     ).to_python_object()

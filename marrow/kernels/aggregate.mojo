@@ -311,6 +311,57 @@ struct MeanKernel(AggKernel):
 
 
 # ---------------------------------------------------------------------------
+# Runtime aggregate tags — the one place a runtime function *name* resolves to
+# a comptime `AggKernel`. Used by any runtime, multi-aggregate driver (the
+# expression layer's `AggregateProcessor`, the Python group-by binding).
+# ---------------------------------------------------------------------------
+
+comptime AGG_SUM: UInt8 = 0
+comptime AGG_MIN: UInt8 = 1
+comptime AGG_MAX: UInt8 = 2
+comptime AGG_COUNT: UInt8 = 3
+comptime AGG_MEAN: UInt8 = 4
+comptime AGG_PRODUCT: UInt8 = 5
+
+
+def agg_tag_from_name(name: String) raises -> UInt8:
+    """Map an aggregate function name to its tag."""
+    if name == "sum":
+        return AGG_SUM
+    elif name == "min":
+        return AGG_MIN
+    elif name == "max":
+        return AGG_MAX
+    elif name == "count":
+        return AGG_COUNT
+    elif name == "mean":
+        return AGG_MEAN
+    elif name == "product":
+        return AGG_PRODUCT
+    raise Error("unknown aggregate function: ", name)
+
+
+def for_agg_tag[
+    job: def[K: AggKernel]() raises capturing[_] -> None
+](tag: UInt8) raises:
+    """Resolve a runtime aggregate tag to its comptime kernel, run `job[K]`."""
+    if tag == AGG_SUM:
+        job[SumKernel]()
+    elif tag == AGG_MIN:
+        job[MinKernel]()
+    elif tag == AGG_MAX:
+        job[MaxKernel]()
+    elif tag == AGG_COUNT:
+        job[CountKernel]()
+    elif tag == AGG_MEAN:
+        job[MeanKernel]()
+    elif tag == AGG_PRODUCT:
+        job[ProductKernel]()
+    else:
+        raise Error("unknown aggregate tag ", Int(tag))
+
+
+# ---------------------------------------------------------------------------
 # Public API — thin wrappers
 # ---------------------------------------------------------------------------
 
