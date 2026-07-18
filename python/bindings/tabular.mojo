@@ -18,6 +18,9 @@ from std.memory import ArcPointer, UnsafePointer
 from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
+from marrow.kernels.groupby import GroupBy
+from marrow.kernels.aggregate import agg_tag_from_name
+from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
 from helpers import pymethod
@@ -484,6 +487,71 @@ def _record_batch_join(
     ).to_python_object()
 
 
+def _record_batch_group_by(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    keys: PythonObject,
+    values: PythonObject,
+    funcs: PythonObject,
+    num_threads: PythonObject,
+) raises -> PythonObject:
+    """Grouped aggregation over one or more key columns.
+
+    Args:
+        keys: Python list of key column names to group by.
+        values: Python list of value column names, one per aggregate.
+        funcs: Python list of aggregate function names ("sum", "mean", "min",
+            "max", "count", "product"), parallel to ``values``.
+        num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
+
+    Returns a RecordBatch of the unique key columns followed by one aggregate
+    column per (value, func), named ``<value>_<func>`` to match PyArrow. The
+    keys are grouped once and every aggregate is computed in that pass.
+    """
+    ref rb = ptr[]
+
+    var key_indices = List[Int]()
+    for i in range(Int(keys.__len__())):
+        var name = String(py=keys[i])
+        var idx = rb.schema.get_field_index(name)
+        if idx == -1:
+            raise Error("group_by: key column '", name, "' not found")
+        key_indices.append(idx)
+    var key_struct = rb.select(key_indices).to_struct_array()
+
+    # Resolve the (value column, aggregate tag) pairs and their output names.
+    var value_cols = List[AnyArray]()
+    var tags = List[UInt8]()
+    var agg_names = List[String]()
+    for j in range(Int(funcs.__len__())):
+        var vname = String(py=values[j])
+        var vidx = rb.schema.get_field_index(vname)
+        if vidx == -1:
+            raise Error("group_by: value column '", vname, "' not found")
+        var func = String(py=funcs[j])
+        value_cols.append(rb.column(vidx).copy())
+        tags.append(agg_tag_from_name(func))
+        agg_names.append(vname + "_" + func)
+
+    var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
+    var res = gb.aggregate_runtime(value_cols, tags)
+
+    # `res` is [key columns..., aggregate columns...]; rename the aggregates.
+    var n_keys = len(res.columns) - len(tags)
+    var out_fields = List[Field]()
+    var out_columns = List[AnyArray]()
+    for c in range(n_keys):
+        out_fields.append(res.schema.fields[c].copy())
+        out_columns.append(res.columns[c].copy())
+    for j in range(len(tags)):
+        out_fields.append(
+            Field(agg_names[j], res.schema.fields[n_keys + j].dtype.copy())
+        )
+        out_columns.append(res.columns[n_keys + j].copy())
+    return RecordBatch(
+        schema=Schema(fields=out_fields^), columns=out_columns^
+    ).to_python_object()
+
+
 def _record_batch_sort_by(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     by: PythonObject,
@@ -584,6 +652,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_arrow_c_schema]("__arrow_c_schema__")
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
+        .def_method[_record_batch_group_by]("group_by")
     )
     _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
         _record_batch_str

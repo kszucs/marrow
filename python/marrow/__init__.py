@@ -289,6 +289,36 @@ class RecordBatch(_Wrapper):
     def join(self, right, keys, right_keys=None, join_type="left semi", **kwargs):
         return RecordBatch.wrap(self._binding.join(right.unwrap(), keys, right_keys))
 
+    def group_by(self, keys, num_threads=0):
+        """Group by one or more key columns (PyArrow-style).
+
+        Returns a ``RecordBatchGroupBy`` on which ``.aggregate([(col, func)])``
+        applies the aggregates. ``num_threads``: 0 auto (all cores), 1 serial,
+        >=2 that many.
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+        return RecordBatchGroupBy(self, list(keys), num_threads)
+
+
+class RecordBatchGroupBy:
+    """A grouping over a RecordBatch's key columns; apply ``aggregate``.
+
+    Mirrors ``pyarrow.TableGroupBy``: ``rb.group_by("k").aggregate([("v", "sum")])``.
+    """
+
+    def __init__(self, batch, keys, num_threads=0):
+        self._batch = batch
+        self._keys = keys
+        self._num_threads = num_threads
+
+    def aggregate(self, aggregations):
+        values = [col for col, _ in aggregations]
+        funcs = [func for _, func in aggregations]
+        return RecordBatch.wrap(
+            self._batch._binding.group_by(self._keys, values, funcs, self._num_threads)
+        )
+
 
 # ── Table ──────────────────────────────────────────────────────────────────────
 
@@ -461,6 +491,10 @@ def min(a, ctx=None):
 
 def max(a, ctx=None):
     return Scalar.wrap(_ma.max(a.unwrap(), ctx or _serial()))
+
+
+def mean(a, ctx=None):
+    return Scalar.wrap(_ma.mean(a.unwrap(), ctx or _serial()))
 
 
 def any(a, ctx=None):

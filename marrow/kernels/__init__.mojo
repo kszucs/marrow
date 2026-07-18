@@ -13,7 +13,7 @@ Submodules:
   - `aggregate.mojo` — reductions using ``std.algorithm`` (sum, min, max, etc.)
   - `filter.mojo` — selection/filter kernels
   - `sort.mojo` — sort kernels
-  - `groupby.mojo` — fused groupby with aggregation (sum, min, max, count, mean)
+  - `groupby.mojo` — `GroupBy` grouped aggregation (sum, min, max, count, mean)
   - `hashing.mojo` — hash_ for PrimitiveArray, StringArray, StructArray, AnyArray
 """
 
@@ -44,7 +44,7 @@ from marrow.dtypes import (
     float64,
 )
 from .execution import ExecutionContext
-from .aggregate import sum, product, min, max, any, all
+from .aggregate import sum, product, min, max, mean, any, all
 from .arithmetic import add, subtract, multiply, divide
 from .compare import (
     equal,

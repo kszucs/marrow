@@ -99,6 +99,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.product]()]("product")
     mb.def_function[pykernel[mk.min]()]("min")
     mb.def_function[pykernel[mk.max]()]("max")
+    mb.def_function[pykernel[mk.mean]()]("mean")
     mb.def_function[pykernel[mk.any]()]("any")
     mb.def_function[pykernel[mk.all]()]("all")
     mb.def_function[pykernel[mk.drop_null]()]("drop_null")

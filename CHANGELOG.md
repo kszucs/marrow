@@ -36,6 +36,9 @@
   rescale, string parse and format, binary-like relabelling, nested list
   and struct, and dictionary decode -- in checked and unchecked modes,
   with `safe` a compile-time parameter.
+- Hash group-by: `HashGrouper` resolves key rows to dense group ids, and
+  the aggregate operators fold through a `Grouping` placement strategy.
+  Radix-partitioned across threads, with per-thread tables.
 - `hash_join` -- inner, left, right, full, semi and anti -- over a
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and

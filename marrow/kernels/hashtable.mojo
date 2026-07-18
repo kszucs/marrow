@@ -1,15 +1,10 @@
 """Swiss Table hash table for join and groupby kernels.
 
-Provides:
-  - ``SwissHashTable`` — SIMD group matching with pipelined probing
-  - ``Partition`` / ``Partitioner`` / ``NoPartition`` — partitioning layer
-
-Architecture:
-  Hash Function  →  Partitioner  →  SwissHashTable  →  Operator (join / groupby)
-  Each layer is independently swappable.
+``SwissHashTable`` — a flat open-addressing table with SIMD group matching and
+pipelined probing. The radix partitioning layer that fans work across threads
+lives in ``partition.mojo``.
 """
 
-from std.algorithm.functional import sync_parallelize
 from std.bit import count_trailing_zeros, next_power_of_two
 from std.gpu.host import DeviceContext
 from std.memory import pack_bits
@@ -32,239 +27,12 @@ from .hashing import rapidhash
 
 
 # ---------------------------------------------------------------------------
-# Partitioner — splits rows into partitions by hash
-# ---------------------------------------------------------------------------
-
-
-struct Partition(Copyable, Movable):
-    """A subset of rows with pre-computed hashes.
-
-    ``row_indices = None`` means all rows in order (NoPartition fast-path,
-    avoids allocating an identity index array).
-    """
-
-    var row_indices: Optional[Int32Array]
-    var hashes: UInt64Array
-
-    def __init__(
-        out self,
-        var hashes: UInt64Array,
-        var row_indices: Optional[Int32Array] = None,
-    ):
-        self.hashes = hashes^
-        self.row_indices = row_indices^
-
-    def __init__(out self, *, copy: Self):
-        self.hashes = copy.hashes.copy()
-        self.row_indices = copy.row_indices.copy()
-
-    def num_rows(self) -> Int:
-        return len(self.hashes)
-
-    def original_row(self, i: Int) -> Int:
-        """Map partition-local index → original row index."""
-        if self.row_indices:
-            return Int(self.row_indices.value().unsafe_get(i))
-        return i
-
-
-trait Partitioner(Movable):
-    """Splits rows into partitions by hash prefix."""
-
-    def num_partitions(self) -> Int:
-        ...
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        ...
-
-
-struct NoPartition(Partitioner):
-    """Single partition containing all rows (default, current behavior)."""
-
-    def __init__(out self):
-        pass
-
-    def num_partitions(self) -> Int:
-        return 1
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        var result = List[Partition]()
-        result.append(Partition(hashes^))
-        return result^
-
-
-struct RadixPartitioner(Partitioner):
-    """Partition rows by the top ``num_bits`` of their hash.
-
-    The partitioner is the key enabler of partition-parallel joins: each
-    partition is independent, so per-partition hash-table builds and probes
-    run in parallel with zero cross-thread synchronization.
-
-    Partition count is ``2^num_bits``.  Default (``num_bits=6`` → 64
-    partitions) is chosen so each partition's hash table tends to fit in
-    L2 cache on typical build sides.
-
-    Top bits are used for partitioning (``h >> (64 - num_bits)``) while the
-    ``SwissHashTable`` probes with low bits (``h & mask``). This split
-    keeps the partition router and the per-table probe order independent,
-    avoiding double-hashing.
-
-    Parallelism of the partitioning pass itself is deliberately deferred:
-    the scatter loop is a memory-bandwidth-bound pass that's already quick
-    relative to the build phase, and the win from parallel scatter is
-    modest compared to the partition-parallel build/probe it enables.
-    """
-
-    var num_bits: Int
-    """Number of top hash bits consumed by partition routing."""
-
-    var _num_partitions: Int
-    """Cached ``1 << num_bits``."""
-
-    var num_threads: Int
-    """Workers used for the histogram + scatter passes. ``1`` forces
-    serial; ``>1`` uses per-thread histograms and parallel scatter."""
-
-    def __init__(out self, num_bits: Int = 6, num_threads: Int = 1):
-        self.num_bits = num_bits
-        self._num_partitions = 1 << num_bits
-        self.num_threads = max(1, num_threads)
-
-    def __init__(out self, *, copy: Self):
-        self.num_bits = copy.num_bits
-        self._num_partitions = copy._num_partitions
-        self.num_threads = copy.num_threads
-
-    def num_partitions(self) -> Int:
-        return self._num_partitions
-
-    def partition(self, var hashes: UInt64Array) raises -> List[Partition]:
-        """Split ``hashes`` into ``num_partitions()`` partitions by top bits.
-
-        Each returned ``Partition`` carries the per-partition hash array
-        and an ``Int32`` ``row_indices`` mapping partition-local rows back
-        to the original input row number.
-
-        Implementation: per-thread histogram → prefix-sum per (thread,
-        partition) → parallel scatter into two shared flat buffers (one
-        for Int32 row indices, one for UInt64 hashes). Each partition is
-        then exposed as a zero-copy ``PrimitiveArray`` slice with
-        ``offset`` baked in — ref-counted via ``ArcPointer`` on the
-        immutable buffer, so all partitions share the same backing
-        storage.  Total allocation: 2 flat buffers of N elements each.
-        No atomics: each (thread, partition) writes into a distinct
-        contiguous slot computed by the prefix sum.
-        """
-        var n = len(hashes)
-        var p = self._num_partitions
-        var shift = UInt64(64 - self.num_bits)
-        var src = hashes.values()
-
-        var nt = self.num_threads
-        if n < _MIN_PARALLEL_PARTITION_ROWS:
-            nt = 1  # dispatch overhead would dominate
-        var chunk = (n + nt - 1) // nt
-
-        # 1. Per-thread histogram — ``histograms[t * p + pid]`` is the
-        # count of rows for partition ``pid`` handled by thread ``t``.
-        var histograms = List[Int](length=nt * p, fill=0)
-
-        @parameter
-        def hist_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
-            var base = t * p
-            for i in range(start, end):
-                var pid = Int(UInt64(src.load[1](i)) >> shift)
-                histograms[base + pid] += 1
-
-        sync_parallelize[hist_worker](nt)
-
-        # 2. Partition-major prefix sum → per-thread write offsets into
-        # the flat buffers.  ``write_offsets[t * p + pid]`` is where
-        # thread ``t`` starts writing partition ``pid``'s rows.
-        var write_offsets = List[Int](length=nt * p, fill=0)
-        var partition_offsets = List[Int](length=p + 1, fill=0)
-        var counts = List[Int](length=p, fill=0)
-        var running = 0
-        for pid in range(p):
-            partition_offsets[pid] = running
-            for t in range(nt):
-                write_offsets[t * p + pid] = running
-                running += histograms[t * p + pid]
-            counts[pid] = running - partition_offsets[pid]
-        partition_offsets[p] = running
-
-        # 3. Allocate the two flat buffers (N rows total each).
-        var row_buf = Buffer.alloc_uninit[int32.native](n)
-        var hash_buf = Buffer.alloc_uninit[uint64.native](n)
-        var row_view = row_buf.view[int32.native](0, n)
-        var hash_view = hash_buf.view[uint64.native](0, n)
-
-        # 4. Parallel scatter — each thread scans its chunk and writes
-        # into its precomputed per-partition slots.  No cross-thread
-        # contention: every thread ``t`` owns indices ``t * p .. (t+1) * p``
-        # of ``write_offsets`` exclusively, so we mutate that array in
-        # place as the cursor — avoiding a per-worker ``List[Int]``
-        # allocation (each alloc contends on tcmalloc's page heap
-        # spinlock, which showed up as ~11% of worker time in profiling).
-        @parameter
-        def scatter_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
-            var base = t * p
-            for i in range(start, end):
-                var h = UInt64(src.load[1](i))
-                var pid = Int(h >> shift)
-                var pos = write_offsets[base + pid]
-                row_view.store[1](pos, Int32(i))
-                hash_view.store[1](pos, h)
-                write_offsets[base + pid] = pos + 1
-
-        sync_parallelize[scatter_worker](nt)
-
-        # 5. Freeze buffers once, then expose per-partition slices via
-        # ref-counted shares (ArcPointer bumps — O(1)).
-        var row_imm = row_buf^.to_immutable()
-        var hash_imm = hash_buf^.to_immutable()
-
-        var result = List[Partition](capacity=p)
-        for pid in range(p):
-            var sz = counts[pid]
-            var off = partition_offsets[pid]
-            var row_arr = Int32Array(
-                length=sz,
-                nulls=0,
-                offset=off,
-                bitmap=None,
-                buffer=row_imm.copy(),
-            )
-            var hash_arr = UInt64Array(
-                length=sz,
-                nulls=0,
-                offset=off,
-                bitmap=None,
-                buffer=hash_imm.copy(),
-            )
-            result.append(Partition(hash_arr^, row_arr^))
-        return result^
-
-
-# ---------------------------------------------------------------------------
 # SwissHashTable — flat open-addressing hash table
 # ---------------------------------------------------------------------------
 
 
 comptime _GROUP_WIDTH: Int = 16
 """Number of control bytes per group (matches Mojo Dict / abseil)."""
-
-comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
-"""Row count below which the partitioner collapses to a single worker —
-dispatch + per-thread histogram overhead would dominate."""
 
 comptime _CTRL_EMPTY: UInt8 = 0xFF
 """Control byte for an empty slot."""
@@ -552,7 +320,10 @@ struct SwissHashTable[
 
         If the current capacity is insufficient, allocates new ctrl/slots
         buffers with ``2n`` slots (next power of 2), then re-inserts all
-        existing entries. Also grows ``_bucket_hashes`` if needed.
+        existing entries. ``_bucket_hashes`` is sized to the (power-of-two)
+        capacity, an upper bound on the bucket count — so bucket ids assigned
+        up to ``_max_count`` never overflow it (the adaptive-growth path relies
+        on this, since it doubles capacity mid-insert rather than pre-sizing).
         """
         var needed = Int(next_power_of_two(max(n * 2, _GROUP_WIDTH)))
         if needed > self._capacity:
@@ -578,9 +349,10 @@ struct SwissHashTable[
                     self._set_ctrl(slot, h)
                     self._set_slot(slot, bid)
 
-        # Grow _bucket_hashes if needed.
-        if n * size_of[Self.H]() > len(self._bucket_hashes):
-            self._bucket_hashes.resize[DType.uint64](n)
+            # Bucket ids are dense and bounded by ``_max_count < _capacity``,
+            # so ``_capacity`` entries always suffice.
+            if needed * size_of[Self.H]() > len(self._bucket_hashes):
+                self._bucket_hashes.resize[DType.uint64](needed)
 
     # ------------------------------------------------------------------
     # Hash-level operations — public for callers that have pre-computed
@@ -589,7 +361,9 @@ struct SwissHashTable[
     # tables without re-hashing).
     # ------------------------------------------------------------------
 
-    def insert_hashes(mut self, hashes: UInt64Array) raises -> Int32Array:
+    def insert_hashes(
+        mut self, hashes: UInt64Array, grow_adaptively: Bool = False
+    ) raises -> Int32Array:
         """Batch insert hashes, returning a bucket ID per input hash.
 
         For each hash:
@@ -602,12 +376,20 @@ struct SwissHashTable[
         Prefetches ctrl groups ``_PIPE_DEPTH`` iterations ahead to hide
         memory latency on the critical lookup path.
 
+        ``grow_adaptively`` controls capacity policy. The default (``False``)
+        pre-sizes to ``2*len(hashes)`` slots — right for the build side of a
+        join, where the key count is ~``n``. Group-by passes ``True``: distinct
+        keys are usually far fewer than rows, so the table starts small and
+        doubles on demand (the resize check in the loop), avoiding a huge
+        alloc + ctrl memset when cardinality is low.
+
         Returns:
             ``Int32Array`` of length ``len(hashes)`` where
             element ``i`` is the bucket ID for ``hashes[i]``.
         """
         var n = len(hashes)
-        self.reserve(n)
+        if not grow_adaptively:
+            self.reserve(n)
 
         var bid_builder = Int32Builder(capacity=n, zeroed=False)
 
@@ -764,6 +546,7 @@ struct SwissHashTable[
         mut self,
         keys: StructArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
+        grow_adaptively: Bool = False,
     ) raises -> Int32Array:
         """Hash keys and insert, returning a bucket ID per row.
 
@@ -773,9 +556,13 @@ struct SwissHashTable[
         ``ctx`` is forwarded to the hasher only — the insert loop itself
         is serial (concurrent inserts would require atomic slot claiming;
         the designed concurrency pattern is partition-parallel with one
-        table per partition).
+        table per partition). ``grow_adaptively`` is forwarded to
+        ``insert_hashes`` — group-by sets it so the table grows on demand
+        rather than pre-sizing to the row count.
         """
-        return self.insert_hashes(Self.hasher(keys, ctx))
+        return self.insert_hashes(
+            Self.hasher(keys, ctx), grow_adaptively=grow_adaptively
+        )
 
     def build(
         mut self,

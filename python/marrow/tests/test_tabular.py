@@ -400,3 +400,47 @@ def test_table_to_pylist():
     assert len(rows) == 2
     assert rows[0]["a"] == 1
     assert rows[1]["b"] == "y"
+
+
+# ── group_by ─────────────────────────────────────────────────────────────────
+
+
+def _gb_batch():
+    return ma.record_batch(
+        {
+            "k": ma.array([1, 2, 1, 2, 1], type=ma.int32()),
+            "v": ma.array([10.0, 20.0, 30.0, 40.0, 50.0], type=ma.float64()),
+        }
+    )
+
+
+def test_group_by_sum():
+    out = _gb_batch().group_by("k").aggregate([("v", "sum")])
+    got = {r["k"]: r["v_sum"] for r in out.to_pylist()}
+    assert got == {1: 90.0, 2: 60.0}
+    assert out.column_names() == ["k", "v_sum"]
+
+
+def test_group_by_all_aggregates():
+    gb = _gb_batch().group_by("k")
+    for func, expected in [
+        ("mean", {1: 30.0, 2: 30.0}),
+        ("min", {1: 10.0, 2: 20.0}),
+        ("max", {1: 50.0, 2: 40.0}),
+        ("count", {1: 3, 2: 2}),
+    ]:
+        out = _gb_batch().group_by("k").aggregate([("v", func)])
+        got = {r["k"]: r[f"v_{func}"] for r in out.to_pylist()}
+        assert got == expected, func
+
+
+def test_group_by_multi_aggregate():
+    out = _gb_batch().group_by("k").aggregate([("v", "sum"), ("v", "mean")])
+    assert out.column_names() == ["k", "v_sum", "v_mean"]
+    rows = {r["k"]: (r["v_sum"], r["v_mean"]) for r in out.to_pylist()}
+    assert rows == {1: (90.0, 30.0), 2: (60.0, 30.0)}
+
+
+def test_group_by_unknown_function_raises():
+    with pytest.raises(Exception):
+        _gb_batch().group_by("k").aggregate([("v", "median")])
