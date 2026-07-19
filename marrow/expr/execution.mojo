@@ -31,11 +31,8 @@ from ..kernels.aggregate import (
     AggKernel,
     AggState,
     for_value_dtype,
-    SumKernel,
-    MinKernel,
-    MaxKernel,
-    CountKernel,
-    MeanKernel,
+    for_agg_tag,
+    agg_tag_from_name,
 )
 from ..dtypes import NumericType
 from ..kernels.join import HashJoin
@@ -428,49 +425,9 @@ struct AggregateProcessor(Processor):
     consumed) input.
 
     Runtime aggregate dispatch (the dynamic plan's ``name -> kernel`` selection)
-    lives here as an ``AggTag`` + ``_for_agg`` tag switch — mirroring
-    ``DynValue`` — so the kernel layer stays purely typed."""
-
-    # -- runtime aggregate tags + tag->kernel dispatch -----------------------
-
-    comptime AGG_SUM: UInt8 = 0
-    comptime AGG_MIN: UInt8 = 1
-    comptime AGG_MAX: UInt8 = 2
-    comptime AGG_COUNT: UInt8 = 3
-    comptime AGG_MEAN: UInt8 = 4
-
-    @staticmethod
-    def tag_from_name(name: String) raises -> UInt8:
-        if name == "sum":
-            return Self.AGG_SUM
-        elif name == "min":
-            return Self.AGG_MIN
-        elif name == "max":
-            return Self.AGG_MAX
-        elif name == "count":
-            return Self.AGG_COUNT
-        elif name == "mean":
-            return Self.AGG_MEAN
-        raise Error("unknown aggregate function: ", name)
-
-    @staticmethod
-    def _for_agg[
-        job: def[K: AggKernel]() raises capturing[_] -> None
-    ](tag: UInt8) raises:
-        """Resolve a runtime aggregate tag to its comptime kernel, run `job[K]`.
-        """
-        if tag == Self.AGG_SUM:
-            job[SumKernel]()
-        elif tag == Self.AGG_MIN:
-            job[MinKernel]()
-        elif tag == Self.AGG_MAX:
-            job[MaxKernel]()
-        elif tag == Self.AGG_COUNT:
-            job[CountKernel]()
-        elif tag == Self.AGG_MEAN:
-            job[MeanKernel]()
-        else:
-            raise Error("unknown aggregate tag ", Int(tag))
+    uses the shared ``agg_tag_from_name`` + ``for_agg_tag`` tag switch from
+    ``marrow.kernels.aggregate`` — mirroring ``DynValue`` — so the typed
+    ``AggState[K, V]`` hot loop carries no dispatch."""
 
     @staticmethod
     def out_dtype(
@@ -488,7 +445,7 @@ struct AggregateProcessor(Processor):
 
             for_value_dtype[by_value](value_dtype)
 
-        Self._for_agg[by_kind](tag)
+        for_agg_tag[by_kind](tag)
         return box[0].copy()
 
     var input: AnyProcessor
@@ -518,7 +475,7 @@ struct AggregateProcessor(Processor):
         self._tags = List[UInt8]()
         self._value_dtypes = List[dt.AnyDataType]()
         for i in range(len(funcs)):
-            self._tags.append(Self.tag_from_name(funcs[i]))
+            self._tags.append(agg_tag_from_name(funcs[i]))
             self._value_dtypes.append(value_dtypes[i].copy())
         self._emitted = False
 
@@ -599,7 +556,7 @@ struct AggregateProcessor(Processor):
 
             for_value_dtype[by_value](self._value_dtypes[i])
 
-        Self._for_agg[by_kind](self._tags[i])
+        for_agg_tag[by_kind](self._tags[i])
         return box[0].copy()
 
 

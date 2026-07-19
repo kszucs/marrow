@@ -41,6 +41,7 @@ from ..tabular import RecordBatch
 from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
+from ..kernels.aggregate import agg_tag_from_name
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -292,7 +293,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         # sum widens integers to int64; min/max preserve the input dtype;
         # count is int64; mean is float64.
         for i in range(len(funcs)):
-            var tag = AggregateProcessor.tag_from_name(funcs[i])
+            var tag = agg_tag_from_name(funcs[i])
             var maybe_dt = _value_dtype(resolved_values[i], input_schema)
             var vdt = maybe_dt.value().copy() if maybe_dt else AnyDataType(
                 float64
