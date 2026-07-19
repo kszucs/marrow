@@ -4,6 +4,16 @@
 
 ### Features
 
+- **Distinct-count kernels** (`marrow.kernels.distinct`, `mk.count_distinct` /
+  `mk.approx_count_distinct`): whole-array cardinality reductions returning an
+  `int64` scalar, both excluding nulls (SQL `COUNT(DISTINCT x)` / PyArrow
+  `only_valid`). `count_distinct` is exact — it dedups the per-row hashes through
+  the same `SwissHashTable` the group-by uses, so it shares that 64-bit-hash
+  basis. `approx_count_distinct` is a HyperLogLog estimate (2**14 registers,
+  ~0.65% standard error, fixed 16 KiB regardless of cardinality) with linear
+  counting in the small-cardinality regime, mirroring
+  `pyarrow.compute.approx_count_distinct`.
+
 - **Python group-by** (`marrow.RecordBatch.group_by`): grouped aggregation is
   now exposed to Python with a PyArrow-compatible API —
   `rb.group_by(keys).aggregate([("v", "sum"), ("v", "mean"), ...])` returns a
