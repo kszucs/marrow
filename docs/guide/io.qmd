@@ -1,0 +1,141 @@
+---
+title: "File I/O"
+---
+
+Marrow reads and writes two on-disk formats: the **Arrow IPC** format (both the
+file and stream framings) for zero-overhead round trips of the in-memory layout,
+and **Parquet** for compact, columnar long-term storage.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## Arrow IPC
+
+The Arrow IPC format serialises `RecordBatch`es with essentially no
+transformation of the columnar buffers, so writing and reading it back is fast
+and lossless across every implemented type — nested, dictionary, temporal and
+null columns included.
+
+### Writing and reading a file
+
+```{python}
+import tempfile, os
+
+batch = ma.record_batch({
+    "id":   ma.array([1, 2, 3, 4]),
+    "name": ma.array(["Alice", "Bob", None, "Dave"]),
+})
+
+path = os.path.join(tempfile.mkdtemp(), "people.arrow")
+
+ma.write_ipc_file(path, batches=[batch])
+restored = ma.read_ipc_file(path)
+
+print("batches read:", len(restored))
+print(restored[0].to_pylist())
+```
+
+`read_ipc_file` returns a list of `RecordBatch`es. Round-tripping preserves
+nulls and types exactly:
+
+```{python}
+print("null preserved:", restored[0].column("name"))
+print("schema matches: ", restored[0].schema())
+```
+
+### Reading just the schema
+
+When you only need the column layout, `read_ipc_file_schema` reads the header
+and returns a zero-row batch:
+
+```{python}
+header = ma.read_ipc_file_schema(path)
+print(header.schema())
+print("rows:", header.num_rows())
+```
+
+### File vs. stream
+
+The IPC **file** format is seekable and carries a footer, ideal for random
+access. The IPC **stream** format is a flat sequence of batches, ideal for
+pipes and sockets. The API mirrors PyArrow:
+
+| Operation | File | Stream |
+|-----------|------|--------|
+| Write | `write_ipc_file(path, batches=[...])` | `write_ipc_stream(path, batches=[...])` |
+| Read | `read_ipc_file(path)` | `read_ipc_stream(path)` |
+| Schema only | `read_ipc_file_schema(path)` | `read_ipc_stream_schema(path)` |
+
+```{python}
+stream_path = os.path.join(tempfile.mkdtemp(), "people.arrows")
+ma.write_ipc_stream(stream_path, batches=[batch])
+print(ma.read_ipc_stream(stream_path)[0].to_pydict())
+```
+
+## Parquet
+
+Marrow ships a **from-scratch** Parquet reader and writer — it decodes and
+encodes the Parquet format itself, with no PyArrow at runtime. The Python API
+lives in `marrow.parquet` and mirrors `pyarrow.parquet`:
+
+```{python}
+import marrow.parquet as pq
+
+table = ma.table({
+    "id":     ma.array([1, 2, 3, 4]),
+    "city":   ma.array(["NYC", "LA", None, "SEA"]),
+    "amount": ma.array([10.0, 20.0, 30.0, 40.0]),
+})
+
+pq_path = os.path.join(tempfile.mkdtemp(), "cities.parquet")
+pq.write_table(table, pq_path)
+
+restored = pq.read_table(pq_path)
+print(restored.to_pydict())
+```
+
+### Column projection
+
+Pass `columns=` to read only a subset of top-level columns (in the given
+order) — the reader skips the others entirely:
+
+```{python}
+subset = pq.read_table(pq_path, columns=["city", "id"])
+print(subset.column_names())
+```
+
+### Compression and page version
+
+`write_table` accepts a `compression` codec and a Parquet data-page version:
+
+```{python}
+pq.write_table(table, pq_path, compression="zstd", data_page_version="2.0")
+print(pq.read_table(pq_path).num_rows())
+```
+
+| Argument | Values | Default |
+|----------|--------|---------|
+| `compression` | `"snappy"`, `"zstd"`, `"lz4"`, `"none"` | `"snappy"` |
+| `data_page_version` | `"1.0"`, `"2.0"` | `"1.0"` |
+
+The writer also emits column statistics (min/max/null/distinct counts), a page
+index, and bloom filters, so readers on the other side can prune row groups and
+pages. `write_table` accepts any Arrow-C-stream object too, so a PyArrow table
+can be written directly.
+
+::: {.callout-note}
+The Mojo API mirrors the Python one — `from marrow.parquet import read_table,
+write_table` operate on a marrow `Table`, and the `marrow/parquet` package also
+exposes lower-level metadata, statistics, page-index and bloom-filter readers.
+:::
+
+## Choosing a format
+
+- **Arrow IPC** — you want the fastest possible read/write and are staying inside
+  the Arrow ecosystem. The bytes on disk are the columnar buffers.
+- **Parquet** — you want compression, column pruning and row-group / page
+  statistics for archival or interchange with data-lake tooling.

@@ -1,0 +1,143 @@
+---
+title: "10-minute quickstart"
+subtitle: "From zero to arrays, compute and tables"
+---
+
+This tour takes you through the essentials of Marrow from Python: building
+arrays, running compute kernels, and assembling columns into a table. Every
+snippet on this page is executed when the docs are built, so the output you see
+is real.
+
+## Install
+
+Marrow is a Mojo project with a Python binding compiled to a native extension.
+Clone the repository and build the extension with [pixi](https://pixi.sh):
+
+```bash
+git clone https://github.com/kszucs/marrow
+cd marrow
+pixi run build_python     # compiles the native extension (python/marrow/libmarrow.so)
+```
+
+Then make it importable and bring it in under the customary `ma` alias:
+
+```{python}
+import sys
+sys.path.insert(0, "../../python")   # point at the built extension
+import marrow as ma
+```
+
+::: {.callout-tip}
+The API deliberately mirrors [PyArrow](https://arrow.apache.org/docs/python/).
+If you know `pa.array`, `pa.record_batch` and `pa.table`, you already know most
+of Marrow.
+:::
+
+## Create an array
+
+`ma.array()` turns a Python list into a columnar array. The type is inferred in
+a single pass, and `None` marks a null position:
+
+```{python}
+a = ma.array([1, 2, 3, None, 5])
+print(a)
+print("length:    ", len(a))
+print("null count:", a.null_count())
+print("type:      ", a.type())
+```
+
+Pass `type=` to skip inference and coerce the data to a specific type — this is
+also the fastest path:
+
+```{python}
+f = ma.array([1, 2, 3], type=ma.float32())
+print(f)
+```
+
+Strings, nested lists and structs all work the same way:
+
+```{python}
+print(ma.array(["hello", None, "world"]))
+print(ma.array([[1, 2], [3, 4, 5], None]))
+print(ma.array([{"x": 1, "y": 1.5}, {"x": 2, "y": 2.5}]))
+```
+
+## Compute on arrays
+
+Compute kernels are vectorized and null-aware, and the names mirror
+`pyarrow.compute`. A null in either operand propagates to the result:
+
+```{python}
+x = ma.array([1, 2, 3, None, 5])
+y = ma.array([10, 20, 30, 40, 50])
+
+print("add:     ", ma.add(x, y))        # index 3 is null
+print("multiply:", ma.multiply(y, y))
+```
+
+Aggregates reduce an array to a scalar and **skip** nulls:
+
+```{python}
+print("sum:", ma.sum(x))
+print("min:", ma.min(x))
+print("max:", ma.max(x))
+```
+
+Comparisons return a boolean array, which you can feed straight into `filter`:
+
+```{python}
+big  = ma.greater(y, ma.array([15, 15, 15, 15, 15]))
+print("mask:  ", big)
+print("kept:  ", ma.filter(y, big))
+print("no nulls:", ma.drop_null(x))
+```
+
+Sorting handles nulls explicitly and returns either the sorted values or the
+sort indices:
+
+```{python}
+s = ma.array([3, 1, None, 2, 5])
+print("sorted:  ", ma.sort(s))
+print("desc:    ", ma.sort(s, ascending=False, null_placement="at_end"))
+print("argsort: ", s.argsort())
+```
+
+## Assemble a table
+
+A `RecordBatch` is a schema plus a set of equal-length columns — the workhorse
+tabular structure:
+
+```{python}
+people = ma.record_batch({
+    "name":   ma.array(["Alice", "Bob", "Carol", "Dave"]),
+    "age":    ma.array([34, 28, 45, 52]),
+    "salary": ma.array([95_000, 72_000, 120_000, 88_000]),
+})
+print(people)
+print("shape:", people.shape())
+```
+
+Inspect it as native Python with `to_pydict()` (column-oriented) or
+`to_pylist()` (row-oriented):
+
+```{python}
+print(people.to_pydict())
+print(people.to_pylist())
+```
+
+Select columns, slice rows, and sort by one or more keys:
+
+```{python}
+print(people.select(["name", "salary"]).to_pydict())
+print(people.slice(1, 2).to_pylist())
+print(people.sort_by([("age", "descending")]).to_pylist())
+```
+
+## Where to go next
+
+- **[Build a data pipeline](data-pipeline.qmd)** — a worked example that filters,
+  sorts and joins two datasets.
+- **[Arrays](../guide/arrays.qmd)** — every array type in depth.
+- **[Compute kernels](../guide/compute.qmd)** — the full kernel catalogue and
+  null semantics.
+- **[Tables & joins](../guide/tables.qmd)** — `RecordBatch`, `Table` and hash joins.

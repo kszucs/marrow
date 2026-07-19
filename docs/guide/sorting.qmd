@@ -1,0 +1,118 @@
+---
+title: "Sorting"
+---
+
+Marrow sorts arrays and tables with an adaptive strategy: a pattern-defeating
+quicksort for small inputs, an LSD radix sort for large ones, and a parallel
+radix sort at scale. Nulls are ordered explicitly — you choose whether they
+sort to the front or the back.
+
+```{python}
+#| echo: false
+import sys
+sys.path.insert(0, "../../python")
+import marrow as ma
+```
+
+## Sorting an array
+
+`ma.sort` returns a sorted copy; the array's `.argsort()` method (or
+`ma.sort_indices`) returns the indices that would sort it (an `int32` array),
+leaving the input untouched:
+
+```{python}
+a = ma.array([3, 1, None, 2, 5])
+
+print("sorted:      ", ma.sort(a))
+print("argsort:     ", a.argsort())
+print("sort_indices:", ma.sort_indices(a))
+```
+
+### Direction and null placement
+
+Both functions accept `ascending` and `null_placement` keyword arguments:
+
+```{python}
+print(ma.sort(a, ascending=True,  null_placement="at_start"))
+print(ma.sort(a, ascending=True,  null_placement="at_end"))
+print(ma.sort(a, ascending=False, null_placement="at_end"))
+```
+
+| Argument | Values | Default |
+|----------|--------|---------|
+| `ascending` | `True` / `False` | `True` |
+| `null_placement` | `"at_start"` / `"at_end"` | `"at_start"` |
+
+Sorting works across types — strings order lexicographically:
+
+```{python}
+words = ma.array(["pear", "apple", None, "cherry"])
+print(ma.sort(words, null_placement="at_end"))
+```
+
+## Sorting a table
+
+`RecordBatch.sort_by` reorders whole rows by a key column. Pass a list of
+`(column, "ascending" | "descending")` tuples and a null-placement argument
+(`None` for the default):
+
+```{python}
+people = ma.record_batch({
+    "name": ma.array(["Alice", "Bob", "Carol", "Dave"]),
+    "age":  ma.array([34, 28, 45, 28]),
+})
+
+print(people.sort_by([("age", "ascending")]).to_pylist())
+```
+
+Multi-column keys work from Python too — ties on the first key break on the
+next, and each key carries its own direction:
+
+```{python}
+print(people.sort_by([("age", "ascending"), ("name", "descending")]).to_pylist())
+```
+
+`sort_by` also accepts a `num_threads` argument (`0` auto-selects cores, `1`
+forces the serial path) for large batches.
+
+## Under the hood — the Mojo sort kernel
+
+At the Mojo level the `sort` and `argsort` kernels support **multi-column** keys
+directly. `argsort` returns an index array; `sort` applies those indices.
+
+```mojo
+from marrow.kernels.sort import argsort, sort
+from marrow.arrays import array
+from marrow.dtypes import int64
+
+var values = array[int64]([3, 1, 4, 1, 5, 9, 2, 6])
+
+# Indices that would sort the array
+var idx = argsort(values, ascending=True, nulls_first=True)
+
+# A sorted copy
+var ordered = sort(values, ascending=True, nulls_first=True)
+```
+
+Multi-column sort operates on a `StructArray`, ordering rows by a list of key
+column indices with a per-key ascending flag:
+
+```mojo
+from marrow.kernels.sort import sort
+
+# rows sorted by column 0 ascending, ties broken by column 1 descending
+var ordered = sort(struct_array, key_indices=[0, 1], ascending=[True, False])
+```
+
+### Algorithm selection
+
+The kernel adapts to the input size automatically:
+
+| Input size | Strategy |
+|------------|----------|
+| `N < 32,768` | PDQsort (pattern-defeating quicksort) |
+| `N ≥ 32,768` | LSD radix sort |
+| `N ≥ 524,288` | Parallel radix sort |
+
+You never choose the algorithm — the kernel picks the fastest one for the data
+in front of it.

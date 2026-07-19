@@ -1,0 +1,86 @@
+---
+title: "GPU execution"
+subtitle: "Experimental device dispatch through ExecutionContext"
+execute:
+  enabled: false
+---
+
+A handful of Marrow's kernels can run on the GPU — Metal on Apple Silicon, CUDA
+on NVIDIA — through Mojo's `DeviceContext`. This is **experimental**: the GPU
+and CPU paths share the same kernel source, and only a few kernels are wired up
+so far. Treat it as infrastructure to build on, not a turnkey speed-up.
+
+::: {.callout-note}
+The code on this page is Mojo. GPU dispatch is a native-level capability driven
+by an `ExecutionContext`; it is not exposed as a distinct mode in the Python
+bindings today.
+:::
+
+## What can run on the GPU
+
+Device dispatch is implemented for element-wise kernels only:
+
+| Kernel group | GPU path | Notes |
+|--------------|:--------:|-------|
+| Arithmetic (`add`, `sub`, `mul`, `div`, …) | yes | via `elementwise[target="gpu"]` |
+| Comparisons (`equal`, `less`, `greater`, …) | yes | returns a `BoolArray` |
+| Hashing | yes | used by the hash-table kernels |
+| Sort, join, aggregate, filter | no | CPU only |
+
+## ExecutionContext
+
+Every kernel that can use a device takes an `ExecutionContext` as its last
+argument. It bundles two independent choices — CPU worker count and an optional
+GPU device — behind three factory methods:
+
+```mojo
+from marrow.kernels.execution import ExecutionContext
+from gpu.host import DeviceContext
+
+var cpu       = ExecutionContext.serial()            # single-threaded CPU
+var threaded  = ExecutionContext.parallel(num_threads=0)  # 0 = all cores
+var on_device = ExecutionContext.gpu(DeviceContext())     # run on the GPU
+```
+
+The default constructor (`ExecutionContext()`) is serial CPU with no device.
+
+```mojo
+from marrow.kernels.arithmetic import add
+from marrow.arrays import array
+from marrow.dtypes import int64
+
+var a = array[int64]([1, 2, 3, 4])
+var b = array[int64]([10, 20, 30, 40])
+
+var cpu_result = add(a, b, ExecutionContext.serial())
+var gpu_result = add(a, b, ExecutionContext.gpu(DeviceContext()))
+```
+
+## Device transfer
+
+Transfers are explicit, so you always know when data crosses the bus:
+
+| Method | Effect |
+|--------|--------|
+| `PrimitiveArray[T].to_device(ctx)` | upload array data to the GPU |
+| `PrimitiveArray[T].to_host(ctx)` | download it back to the CPU |
+| `Buffer.to_device(ctx)` / `Bitmap.to_device(ctx)` | low-level transfers |
+
+A kernel result produced on the device is device-resident (null host pointer,
+device buffer set); call `.to_host(ctx)` before reading it on the CPU.
+
+## When it is (and isn't) worth it
+
+The kernels wired to the GPU today are all **low arithmetic intensity** — roughly
+one operation per element. For those, moving data to and from the device usually
+costs more than it saves, and CPU SIMD is competitive or faster. The GPU path
+becomes interesting only when the data is *already* resident on the device and
+several kernels run over it before the result is read back.
+
+## Caveats
+
+- **Null bitmaps are not propagated on the device.** GPU binary kernels compute
+  values only; null-aware arithmetic is CPU-only for now. Use the CPU path when
+  either input has nulls.
+- Coverage is narrow — sorting, joins, aggregation and filtering have no GPU
+  path.

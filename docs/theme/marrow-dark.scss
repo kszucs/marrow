@@ -1,0 +1,65 @@
+/*-- scss:defaults --*/
+
+// ===========================================================================
+// Marrow — dark theme (default). Palette drawn from the logo: molten
+// red → orange → amber chevrons glowing on near-black.
+// ===========================================================================
+
+// Brand ramp ---------------------------------------------------------------
+$mr-red:    #e5341f;
+$mr-orange: #ff6a00;
+$mr-amber:  #ffc400;
+
+// Surfaces -----------------------------------------------------------------
+$mr-bg:        #0b0d12;   // page
+$mr-bg-2:      #11141c;   // raised surface
+$mr-bg-3:      #171b26;   // cards / code
+$mr-border:    #262b38;
+$mr-text:      #e9ecf3;
+$mr-muted:     #99a1b3;
+
+// Typography ---------------------------------------------------------------
+$font-family-sans-serif: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+$headings-font-family:   "Space Grotesk", "Inter", sans-serif;
+$font-family-monospace:  "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+$headings-font-weight:   600;
+
+// Bootstrap core ------------------------------------------------------------
+$body-bg:      $mr-bg;
+$body-color:   $mr-text;
+$primary:      $mr-orange;
+$link-color:   #ff9042;
+$link-hover-color: $mr-amber;
+$border-color: $mr-border;
+
+// Navbar --------------------------------------------------------------------
+$navbar-bg:    rgba(11, 13, 18, 0.72);
+$navbar-fg:    $mr-text;
+$navbar-hl:    $mr-amber;
+
+// Code ----------------------------------------------------------------------
+$code-color:      #ffb066;
+$code-bg:         rgba(255, 106, 0, 0.08);
+$code-block-bg:   #0e1017;
+
+// Tables --------------------------------------------------------------------
+$table-border-color: $mr-border;
+
+// TOC / sidebar
+$toc-color: $mr-muted;
+
+/*-- scss:rules --*/
+
+:root {
+  --mr-red:    #{$mr-red};
+  --mr-orange: #{$mr-orange};
+  --mr-amber:  #{$mr-amber};
+  --mr-bg:     #{$mr-bg};
+  --mr-bg-2:   #{$mr-bg-2};
+  --mr-bg-3:   #{$mr-bg-3};
+  --mr-border: #{$mr-border};
+  --mr-text:   #{$mr-text};
+  --mr-muted:  #{$mr-muted};
+  --mr-grad:   linear-gradient(100deg, #{$mr-red} 0%, #{$mr-orange} 48%, #{$mr-amber} 100%);
+  --mr-glow:   0 0 40px rgba(255, 106, 0, 0.35);
+}

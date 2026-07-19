@@ -4,6 +4,11 @@ title: "Expression Execution"
 
 The `marrow/expr` module provides a lazy expression system for building and executing query plans. Expressions are composed into a logical plan tree, then compiled by a `Planner` into a pull-based processor hierarchy that streams `RecordBatch` results.
 
+::: {.callout-note}
+The examples on this page use the Mojo `marrow.expr` API. They illustrate the
+native expression layer rather than the Python bindings.
+:::
+
 ```{python}
 #| echo: false
 import sys
@@ -100,35 +105,44 @@ adults = source.filter(col("age") > lit(30))
 
 ### Project
 
-`.select(*exprs)` evaluates expressions and returns a new schema with the selected/computed columns.
+`.select(*names)` keeps a subset of columns by name (projection of computed
+expressions is not yet available through `select`):
 
 ```python
-projected = adults.select(col("name"), col("age"), (col("age") - lit(18)).alias("years_of_work"))
+projected = adults.select("name", "age")
 ```
 
-Note: `alias()` is not yet implemented in the expression layer — column names in `Project` follow the expression tree structure.
+### Aggregate
+
+`.aggregate(keys, values, funcs)` groups by the key columns and applies the
+named aggregate functions to the value columns.
+
+```python
+totals = source.aggregate(["dept"], ["salary"], ["sum"])
+```
 
 ## Executing a plan
 
-`ExecutionContext` configures execution parameters. `execute(plan, ctx)` runs the plan and returns a `List[RecordBatch]`.
+`execute(plan)` opens the plan into a fresh pull-based processor tree, drains
+it, and returns a single `RecordBatch`. A plan is a pure description, so it can
+be executed repeatedly. An optional `ExecutionContext` selects the execution
+mode:
 
 ```python
 from marrow.expr import execute, ExecutionContext
 
-ctx = ExecutionContext()
-batches = execute(plan, ctx)
+result = execute(plan)                       # serial by default
+result = execute(plan, ExecutionContext())   # explicit context
 ```
 
-### ExecutionContext options
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `morsel_size` | 1024 | Number of rows per output batch |
+`ExecutionContext` comes from `marrow.kernels.execution` and offers
+`.serial()`, `.parallel()` and `.gpu(device)` constructors — see
+[GPU acceleration](gpu.qmd).
 
 ## End-to-end example
 
 ```python
-from marrow.expr import col, lit, in_memory_table, execute, ExecutionContext
+from marrow.expr import col, lit, in_memory_table, execute
 
 # Source data
 batch = ma.record_batch(
@@ -144,30 +158,29 @@ batch = ma.record_batch(
 plan = (
     in_memory_table(batch)
     .filter((col("age") > lit(30)) & (col("salary") > lit(80_000)))
-    .select(col("name"), col("salary"))
+    .select("name", "salary")
 )
 
-# Execute
-ctx = ExecutionContext()
-results = execute(plan, ctx)
-
-for rb in results:
-    print(rb)
+# Execute — returns a single RecordBatch
+result = execute(plan)
+print(result)
 ```
 
 ## Reading from Parquet
 
-Plans that scan Parquet files work identically. The file is read on demand during execution.
+Plans that scan Parquet files work identically. The file is read on demand
+during execution, and a `.filter` above a `parquet_scan` pushes its predicate
+into the scan so row groups and pages can be pruned using the file's
+statistics.
 
 ```python
-from marrow.expr import col, lit, parquet_scan, execute, ExecutionContext
+from marrow.expr import col, lit, parquet_scan, execute
 
 plan = (
     parquet_scan("employees.parquet")
     .filter(col("age") > lit(30))
-    .select(col("name"), col("age"))
+    .select("name", "age")
 )
 
-ctx = ExecutionContext()
-results = execute(plan, ctx)
+result = execute(plan)
 ```

@@ -114,3 +114,7 @@
 - The comptime lane exists so a query can be compiled to a small,
   self-contained binary: the closed world is dead-code-eliminable, so a
   program links only the kernels its expressions name.
+
+### Tooling
+
+- A Quarto documentation site with guides, tutorials and examples.

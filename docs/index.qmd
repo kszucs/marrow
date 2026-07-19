@@ -1,99 +1,184 @@
 ---
-title: "Marrow"
-subtitle: "Apache Arrow in Mojo"
+pagetitle: "Marrow — Apache Arrow in Mojo"
+toc: false
+anchor-sections: false
+sidebar: false
+format:
+  html:
+    css: theme/marrow.css
 ---
 
-Marrow is an implementation of [Apache Arrow](https://arrow.apache.org) written in [Mojo](https://www.modular.com/mojo). It provides a columnar in-memory array format with null handling, SIMD-accelerated compute kernels, GPU support, and a Python binding layer that outperforms PyArrow on numeric array construction.
+```{=html}
+<section class="mr-hero column-screen">
+  <img class="mr-hero-logo" src="assets/logo.png" alt="marrow — Apache Arrow in Mojo">
+  <h1>The Arrow columnar format,<br><span class="mr-gradient">rebuilt in Mojo</span></h1>
+  <p class="lead">
+    A columnar in-memory data library with null-aware SIMD compute kernels,
+    hash joins, adaptive sorting, and zero-copy interoperability with PyArrow —
+    fast enough to beat PyArrow at typed array construction.
+  </p>
+  <div class="mr-badges">
+    <span class="mr-badge">Written in <strong>Mojo</strong></span>
+    <span class="mr-badge">Zero-copy <strong>PyArrow</strong> interop</span>
+    <span class="mr-badge">Null-aware <strong>SIMD</strong> kernels</span>
+    <span class="mr-badge">Arrow <strong>C Data Interface</strong></span>
+  </div>
+  <div class="mr-cta">
+    <a class="mr-btn mr-btn-primary" href="tutorials/quickstart.html">Get started →</a>
+    <a class="mr-btn mr-btn-ghost" href="guide/arrays.html">Browse the guide</a>
+    <a class="mr-btn mr-btn-ghost" href="https://github.com/kszucs/marrow">View on GitHub</a>
+  </div>
+  <div class="mr-install">
+    <span class="mr-prompt">$</span> pixi run build_python
+    <span class="mr-dot">·</span>
+    <span class="mr-prompt">&gt;&gt;&gt;</span> import marrow as ma
+  </div>
+</section>
 
-## Build
+<div class="mr-stats column-page">
+  <div class="mr-stat">
+    <span class="mr-num mr-gradient">~3×</span>
+    <span class="mr-lbl">faster int64 typed array construction vs PyArrow</span>
+  </div>
+  <div class="mr-stat">
+    <span class="mr-num mr-gradient">6</span>
+    <span class="mr-lbl">hash-join types — inner, left, right, full, semi, anti</span>
+  </div>
+  <div class="mr-stat">
+    <span class="mr-num mr-gradient">0</span>
+    <span class="mr-lbl">copies exchanging data with the Arrow ecosystem</span>
+  </div>
+</div>
 
-```bash
-git clone https://github.com/kszucs/marrow
-cd marrow
-pixi run build_python    # compiles python/marrow.so
+<p class="mr-eyebrow">Why marrow</p>
+<h2 class="mr-section-title">What you get</h2>
+
+<div class="mr-grid column-page">
+  <div class="mr-card">
+    <span class="mr-ico">🧱</span>
+    <h3>Full columnar type system</h3>
+    <p>Primitive, string, binary, list, fixed-size list, struct, dictionary,
+    temporal and decimal arrays — laid out exactly to the Arrow spec, with a
+    separate validity bitmap for nulls.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">⚡</span>
+    <h3>SIMD compute kernels</h3>
+    <p>Arithmetic, comparisons, aggregates, group-by, sorting, filtering,
+    casting and hashing — vectorized and null-aware, with the same three-valued
+    logic as SQL.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">🎮</span>
+    <h3>GPU-capable kernels</h3>
+    <p>Element-wise arithmetic, comparison and hashing kernels can dispatch to
+    Metal or CUDA through an <code>ExecutionContext</code> — experimental, and
+    sharing the exact CPU code path.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">🔗</span>
+    <h3>Zero-copy interop</h3>
+    <p>The Arrow C Data Interface means marrow arrays cross into PyArrow,
+    DataFusion and Polars as pointer exchanges — no serialization, no copies.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">🧮</span>
+    <h3>Relational query layer</h3>
+    <p>Build lazy plans — filter, project, aggregate, join, Parquet scan — that a
+    planner compiles into a pull-based streaming executor over record batches.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">🐍</span>
+    <h3>A familiar Python API</h3>
+    <p><code>import marrow as ma</code> and reach for the PyArrow names you
+    already know — <code>array</code>, <code>record_batch</code>, <code>table</code>,
+    <code>sort</code>, <code>filter</code>, <code>join</code>.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">💾</span>
+    <h3>Native Parquet &amp; Arrow IPC</h3>
+    <p>A from-scratch Parquet reader and writer — snappy/zstd/lz4, statistics,
+    page index and bloom filters, no PyArrow at runtime — plus Arrow IPC file
+    and stream round-trips.</p>
+  </div>
+</div>
 ```
 
-Then in Python:
-
-```python
-import marrow as ma
-```
-
-## 5-minute example
+<p class="mr-eyebrow">See it in action</p>
+<h2 class="mr-section-title">Sixty seconds with marrow</h2>
 
 ```{python}
+#| echo: false
 import sys
 sys.path.insert(0, "../python")
 import marrow as ma
 ```
 
-### Create arrays
+Build arrays straight from Python data — the type is inferred in a single pass,
+and `None` marks a null:
 
 ```{python}
-# Primitive arrays — type is inferred from the Python data
-a = ma.array([1, 2, 3, None, 5])
-b = ma.array([10, 20, 30, 40, 50])
+ages   = ma.array([25, 35, 45, None, 55])
+names  = ma.array(["Alice", "Bob", "Carol", "Dave", "Eve"])
+salary = ma.array([70_000, 90_000, 110_000, 50_000, 130_000])
 
-print(a)
-print(b)
-```
-
-```{python}
-# Strings and nested structures work too
-names  = ma.array(["Alice", "Bob", None, "Dana"])
-scores = ma.array([9.5, 8.2, 7.8, None])
+print(ages)
 print(names)
-print(scores)
 ```
 
-### Arithmetic
-
-Null values propagate through element-wise operations — if either input is null, the output is null.
+Compute is vectorized and null-aware — a null in either operand propagates,
+and aggregates skip nulls:
 
 ```{python}
-result = ma.add(a, b, None)
-print(result)   # index 3 is null because a[3] is null
+next_year = ma.add(ages, ma.array([1, 1, 1, 1, 1]))
+print("age next year:", next_year)   # index 3 stays null
+print("total payroll:", ma.sum(salary))
 ```
+
+Assemble columns into a `RecordBatch`, then sort and reshape it with a
+PyArrow-shaped API:
 
 ```{python}
-print(ma.mul(a, b, None))
+people = ma.record_batch({"age": ages, "name": names, "salary": salary})
+
+senior = people.sort_by([("salary", "descending")])
+print(senior.to_pylist())
 ```
 
-### Aggregates
-
-Aggregates skip null values.
+Every array speaks the Arrow C Data Interface, so it round-trips through the
+rest of the ecosystem with zero copies:
 
 ```{python}
-print("sum:    ", ma.sum_(a, None))    # 1+2+3+5 = 11, null skipped
-print("min:    ", ma.min_(a, None))
-print("max:    ", ma.max_(a, None))
-print("product:", ma.product(a, None))
+#| eval: false
+import pyarrow as pa
+pa_table = pa.record_batch(people)     # marrow → PyArrow, no copy
+back     = ma.record_batch(pa_table)   # PyArrow → marrow, no copy
 ```
 
-### Filter and drop nulls
+```{=html}
+<p class="mr-eyebrow">Keep going</p>
+<h2 class="mr-section-title">Where to next</h2>
 
-```{python}
-mask = ma.array([True, False, True, False, True])
-print("filter:", ma.filter_(a, mask))
-print("drop nulls:", ma.drop_nulls(a))
+<div class="mr-grid column-page">
+  <a class="mr-card" href="tutorials/quickstart.html">
+    <span class="mr-ico">🚀</span>
+    <h3>10-minute quickstart</h3>
+    <p>Install marrow and tour arrays, compute and tables end to end.</p>
+  </a>
+  <a class="mr-card" href="tutorials/data-pipeline.html">
+    <span class="mr-ico">🛠️</span>
+    <h3>Build a data pipeline</h3>
+    <p>Load, filter, sort and join a dataset in one worked example.</p>
+  </a>
+  <a class="mr-card" href="guide/arrays.html">
+    <span class="mr-ico">📚</span>
+    <h3>The guide</h3>
+    <p>Deep dives on arrays, types, compute, tables, I/O and GPU.</p>
+  </a>
+  <a class="mr-card" href="guide/interop.html">
+    <span class="mr-ico">🔌</span>
+    <h3>PyArrow interop</h3>
+    <p>Benchmarks and the zero-copy C Data Interface, up close.</p>
+  </a>
+</div>
 ```
-
-### Inspect arrays
-
-```{python}
-print("length:    ", a.__len__())
-print("null count:", a.null_count())
-print("type:      ", a.type())
-print("is_valid(3):", a.is_valid(3))   # False — index 3 is null
-```
-
----
-
-## What's next
-
-| Page | What you'll learn |
-|------|------------------|
-| [Arrays](guide/arrays.qmd) | All array types, nulls, slicing, nested structures |
-| [Compute](guide/compute.qmd) | Arithmetic, aggregates, filter, drop_nulls |
-| [Type System](guide/types.qmd) | Type inference, explicit schemas, struct types |
-| [PyArrow Interop](guide/interop.qmd) | Benchmarks vs PyArrow, zero-copy C Data Interface |

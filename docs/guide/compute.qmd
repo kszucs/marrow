@@ -11,18 +11,24 @@ sys.path.insert(0, "../../python")
 import marrow as ma
 ```
 
+The Python names mirror `pyarrow.compute`, so `ma.add`, `ma.subtract`,
+`ma.sum`, `ma.filter` behave like their PyArrow counterparts. The same
+functions are also available under `marrow.compute` (e.g.
+`import marrow.compute as mc; mc.add(a, b)`) for drop-in `pyarrow.compute`
+compatibility.
+
 ## Arithmetic
 
-Element-wise binary operations: `add`, `sub`, `mul`, `div`.
+Element-wise binary operations: `add`, `subtract`, `multiply`, `divide`.
 
 ```{python}
 a = ma.array([1, 2, 3, 4, 5], type=ma.int64())
 b = ma.array([10, 20, 30, 40, 50], type=ma.int64())
 
-print("add:", ma.add(a, b, None))
-print("sub:", ma.sub(b, a, None))
-print("mul:", ma.mul(a, b, None))
-print("div:", ma.div(b, a, None))
+print("add:     ", ma.add(a, b))
+print("subtract:", ma.subtract(b, a))
+print("multiply:", ma.multiply(a, b))
+print("divide:  ", ma.divide(b, a))
 ```
 
 Floats work the same way:
@@ -30,8 +36,8 @@ Floats work the same way:
 ```{python}
 x = ma.array([1.0, 2.0, 3.0])
 y = ma.array([0.5, 1.5, 2.5])
-print("add:", ma.add(x, y, None))
-print("div:", ma.div(x, y, None))
+print("add:   ", ma.add(x, y))
+print("divide:", ma.divide(x, y))
 ```
 
 ### Null propagation
@@ -42,7 +48,7 @@ If **either** operand at a position is null, the result at that position is null
 a = ma.array([1, None, 3, None])
 b = ma.array([10, 20, 30, 40])
 
-result = ma.add(a, b, None)
+result = ma.add(a, b)
 print(result)    # index 1 and 3 are null
 print("null count:", result.null_count())
 ```
@@ -52,7 +58,7 @@ print("null count:", result.null_count())
 a = ma.array([None, 2, 3, None])
 b = ma.array([10, None, 30, None])
 
-print(ma.add(a, b, None))   # null at 0, 1, and 3
+print(ma.add(a, b))   # null at 0, 1, and 3
 ```
 
 ## Aggregates
@@ -64,63 +70,89 @@ Aggregates reduce an array to a single scalar. They **skip null values** by defa
 ```{python}
 arr = ma.array([1, None, 3, None, 5])
 
-print("sum:    ", ma.sum_(arr, None))     # 1+3+5 = 9
-print("product:", ma.product(arr, None))  # 1*3*5 = 15
-print("min:    ", ma.min_(arr, None))
-print("max:    ", ma.max_(arr, None))
+print("sum:    ", ma.sum(arr))       # 1+3+5 = 9
+print("product:", ma.product(arr))   # 1*3*5 = 15
+print("min:    ", ma.min(arr))
+print("max:    ", ma.max(arr))
+print("mean:   ", ma.mean(arr))      # always a float64 scalar → 3.0
 ```
 
-Aggregates always return `float64` regardless of input type:
+`sum`, `product`, `min` and `max` return a scalar that **preserves the input
+type** — an `int32` array sums to an `int32` scalar. `mean` always returns a
+`float64` scalar:
 
 ```{python}
-ints = ma.array([10, 20, 30], type=ma.int32())
-result = ma.sum_(ints, None)
-print(result, type(result))
+ints   = ma.array([10, 20, 30], type=ma.int32())
+result = ma.sum(ints)
+print(result, "of type", result.type())
+```
+
+### Counting distinct values
+
+`count_distinct` counts unique non-null values exactly; `approx_count_distinct`
+estimates the count with a fixed-size HyperLogLog sketch (16 KiB, ~0.65 %
+standard error) — far cheaper in memory on high-cardinality columns:
+
+```{python}
+ids = ma.array([1, 1, 2, 3, 3, 3, None, 4])
+
+print("distinct:       ", ma.count_distinct(ids))          # 4
+print("approx distinct:", ma.approx_count_distinct(ids))   # ~4
 ```
 
 ### Identity values for empty / all-null input
+
+An empty or all-null array returns the operation's identity value: `0` for
+`sum`, `1` for `product`, and the extreme values of the type for `min` / `max`.
 
 ```{python}
 empty    = ma.array([], type=ma.int64())
 all_null = ma.array([None, None], type=ma.int64())
 
-print("sum of empty:      ", ma.sum_(empty, None))      # 0.0
-print("sum of all-null:   ", ma.sum_(all_null, None))    # 0.0
-print("product of empty:  ", ma.product(empty, None))    # 1.0
-print("min of empty:      ", ma.min_(empty, None))       # inf
-print("max of empty:      ", ma.max_(empty, None))       # -inf
+print("sum of empty:      ", ma.sum(empty))      # 0
+print("sum of all-null:   ", ma.sum(all_null))   # 0
+print("product of empty:  ", ma.product(empty))  # 1
+```
+
+For `min` / `max` the identity is the largest / smallest representable value of
+the type — using `float64` makes this readable:
+
+```{python}
+empty_f = ma.array([], type=ma.float64())
+print("min of empty:", ma.min(empty_f))   # +max float
+print("max of empty:", ma.max(empty_f))   # -max float
 ```
 
 ### Boolean aggregates
 
-`any_` and `all_` operate on boolean arrays. Nulls are skipped.
+`any` and `all` operate on boolean arrays. Nulls are skipped.
 
 ```{python}
 flags = ma.array([True, False, None, True])
-print("any_:", ma.any_(flags))   # True  — at least one True
-print("all_:", ma.all_(flags))   # False — False is present
+print("any:", ma.any(flags))   # True  — at least one True
+print("all:", ma.all(flags))   # False — False is present
 ```
 
 ```{python}
 all_true = ma.array([True, True, None])
-print("all_ with nulls:", ma.all_(all_true))   # True — only True values
+print("all with nulls:", ma.all(all_true))   # True — only True values
 
 all_false = ma.array([None, None], type=ma.bool_())
-print("all_ empty/null:", ma.all_(all_false))   # True (identity)
-print("any_ empty/null:", ma.any_(all_false))   # False (identity)
+print("all empty/null:", ma.all(all_false))   # True (identity)
+print("any empty/null:", ma.any(all_false))   # False (identity)
 ```
 
 ## Selection
 
-### filter_
+### filter
 
-`filter_(array, mask)` keeps elements where the boolean mask is `True`. The mask must be a `BoolArray` of the same length.
+`filter(array, mask)` keeps elements where the boolean mask is `True`. The mask must be a `BoolArray` of the same length.
 
 ```{python}
 arr  = ma.array([10, 20, 30, 40, 50])
 mask = ma.array([True, False, True, False, True])
 
-print(ma.filter_(arr, mask))   # [10, 30, 50]
+print(ma.filter(arr, mask))   # [10, 30, 50]
 ```
 
 Nulls in the source array are preserved through the filter:
@@ -129,7 +161,7 @@ Nulls in the source array are preserved through the filter:
 arr  = ma.array([1, None, 3, 4, None])
 mask = ma.array([True, True, False, True, True])
 
-print(ma.filter_(arr, mask))   # [1, NULL, 4, NULL]
+print(ma.filter(arr, mask))   # [1, NULL, 4, NULL]
 ```
 
 Nulls in the mask are treated as `False` (the element is excluded):
@@ -138,23 +170,24 @@ Nulls in the mask are treated as `False` (the element is excluded):
 arr  = ma.array([1, 2, 3, 4])
 mask = ma.array([True, None, True, None])
 
-print(ma.filter_(arr, mask))   # [1, 3]
+print(ma.filter(arr, mask))   # [1, 3]
 ```
 
-### drop_nulls
+### drop_null
 
-`drop_nulls(array)` removes all null positions. Equivalent to `filter_(array, validity_bitmap)`.
+`drop_null(array)` removes all null positions. Equivalent to filtering by the
+array's own validity bitmap.
 
 ```{python}
 arr = ma.array([1, None, 3, None, 5])
-print(ma.drop_nulls(arr))   # [1, 3, 5]
+print(ma.drop_null(arr))   # [1, 3, 5]
 ```
 
 Works on numeric array types:
 
 ```{python}
 f = ma.array([1.0, None, 3.0, None, 5.0])
-print(ma.drop_nulls(f))
+print(ma.drop_null(f))
 ```
 
 ## Comparisons
@@ -165,30 +198,52 @@ Element-wise comparison kernels return a boolean array. Nulls propagate: if eith
 a = ma.array([1, 2, 3, None, 5])
 b = ma.array([1, 3, 2, 4,    5])
 
-print("equal:        ", ma.equal(a, b, None))
-print("not_equal:    ", ma.not_equal(a, b, None))
-print("less:         ", ma.less(a, b, None))
-print("less_equal:   ", ma.less_equal(a, b, None))
-print("greater:      ", ma.greater(a, b, None))
-print("greater_equal:", ma.greater_equal(a, b, None))
+print("equal:        ", ma.equal(a, b))
+print("not_equal:    ", ma.not_equal(a, b))
+print("less:         ", ma.less(a, b))
+print("less_equal:   ", ma.less_equal(a, b))
+print("greater:      ", ma.greater(a, b))
+print("greater_equal:", ma.greater_equal(a, b))
 ```
 
 The null at index 3 propagates to all output arrays:
 
 ```{python}
-result = ma.equal(a, b, None)
+result = ma.equal(a, b)
 print("null count:", result.null_count())   # 1
 print("is_valid(3):", result.is_valid(3))   # False
 ```
+
+## Casting
+
+`cast` converts an array to another type. It lives in `marrow.compute` (the
+`pyarrow.compute` mirror). By default a lossy conversion raises; pass
+`safe=False` for the raw truncating/wrapping conversion.
+
+```{python}
+from marrow import compute as mc
+
+ints = ma.array([1, 2, 3], type=ma.int32())
+print("to float64:", mc.cast(ints, ma.float64()))
+
+# safe=False truncates toward zero instead of raising
+floats = ma.array([1.9, -1.9, 2.5], type=ma.float64())
+print("truncated: ", mc.cast(floats, ma.int32(), safe=False))
+```
+
+Casts cover the numeric, boolean, string/binary and temporal families,
+including decimal rescaling and dictionary decode at the Mojo level.
 
 ## Null behaviour summary
 
 | Operation | Null input | Null output |
 |-----------|-----------|-------------|
-| `add`, `sub`, `mul`, `div` | either operand null | null propagates |
+| `add`, `subtract`, `multiply`, `divide` | either operand null | null propagates |
 | `equal`, `less`, `greater`, ... | either operand null | null propagates |
-| `sum_`, `product`, `min_`, `max_` | element null | element skipped |
-| `any_`, `all_` | element null | element skipped |
-| `filter_` (source null) | source element null | null preserved in output |
-| `filter_` (mask null) | mask element null | element excluded |
-| `drop_nulls` | element null | element removed |
+| `sum`, `product`, `min`, `max`, `mean` | element null | element skipped |
+| `count_distinct`, `approx_count_distinct` | element null | element skipped |
+| `any`, `all` | element null | element skipped |
+| `filter` (source null) | source element null | null preserved in output |
+| `filter` (mask null) | mask element null | element excluded |
+| `drop_null` | element null | element removed |
+| `cast` | element null | null preserved |
