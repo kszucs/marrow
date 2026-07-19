@@ -322,6 +322,17 @@ comptime AGG_MAX: UInt8 = 2
 comptime AGG_COUNT: UInt8 = 3
 comptime AGG_MEAN: UInt8 = 4
 comptime AGG_PRODUCT: UInt8 = 5
+# Distinct aggregates are not `AggKernel` folds (they carry a hash set / HLL
+# sketch, not a scalar accumulator), so they have tags but no `for_agg_tag`
+# case — the group-by driver routes them to the `distinct` kernels instead.
+comptime AGG_COUNT_DISTINCT: UInt8 = 6
+comptime AGG_APPROX_COUNT_DISTINCT: UInt8 = 7
+
+
+def agg_is_distinct(tag: UInt8) -> Bool:
+    """Whether ``tag`` is a distinct aggregate (routed to the distinct kernels
+    rather than the `AggState` fold path)."""
+    return tag == AGG_COUNT_DISTINCT or tag == AGG_APPROX_COUNT_DISTINCT
 
 
 def agg_tag_from_name(name: String) raises -> UInt8:
@@ -338,6 +349,10 @@ def agg_tag_from_name(name: String) raises -> UInt8:
         return AGG_MEAN
     elif name == "product":
         return AGG_PRODUCT
+    elif name == "count_distinct":
+        return AGG_COUNT_DISTINCT
+    elif name == "approx_count_distinct":
+        return AGG_APPROX_COUNT_DISTINCT
     raise Error("unknown aggregate function: ", name)
 
 

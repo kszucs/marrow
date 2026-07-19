@@ -14,6 +14,18 @@
   counting in the small-cardinality regime, mirroring
   `pyarrow.compute.approx_count_distinct`.
 
+- **Grouped distinct counts** (`GroupBy.count_distinct` /
+  `GroupBy.approx_count_distinct`, and the `"count_distinct"` /
+  `"approx_count_distinct"` functions in the Python
+  `rb.group_by(keys).aggregate([...])` API): per-group `COUNT(DISTINCT v)`.
+  Exact grouping dedups `(group_id, value)` pairs in a single `SwissHashTable`
+  (the join's table) and bumps a per-group counter on each newly-seen pair — one
+  pass, `O(distinct pairs)` memory, no per-group set. Approx keeps one
+  HyperLogLog sketch per group (2**11 registers, 2 KiB/group). A distinct
+  aggregate can share the single grouping pass with fold aggregates (e.g.
+  `[("v","sum"),("v","count_distinct")]`); any aggregate set containing a
+  distinct one groups serially (distinct isn't yet radix-parallelized).
+
 - **Python group-by** (`marrow.RecordBatch.group_by`): grouped aggregation is
   now exposed to Python with a PyArrow-compatible API —
   `rb.group_by(keys).aggregate([("v", "sum"), ("v", "mean"), ...])` returns a

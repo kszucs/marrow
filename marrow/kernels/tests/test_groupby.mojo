@@ -430,5 +430,66 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
     assert_false(_mean_for_key(threaded, 3).__bool__())  # all-null group
 
 
+# ---------------------------------------------------------------------------
+# group_by — count_distinct / approx_count_distinct
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_count_distinct_basic() raises:
+    # key=1 sees values {10, 10, 20} -> 2 distinct; key=2 sees {30, 30} -> 1.
+    var keys: AnyArray = array([1, 1, 1, 2, 2], int32)
+    var vals: AnyArray = array([10, 10, 20, 30, 30], int32)
+    var result = GroupBy(keys).count_distinct(vals)
+    assert_equal(result.num_rows(), 2)
+    assert_equal(result.num_columns(), 2)
+    assert_true(result.schema.fields[1].name == "count_distinct")
+    ref k = result.columns[0].as_int32()
+    ref c = result.columns[1].as_int64()
+    assert_equal(k[0].value(), 1)
+    assert_equal(c[0].value(), 2)
+    assert_equal(k[1].value(), 2)
+    assert_equal(c[1].value(), 1)
+
+
+def test_groupby_count_distinct_excludes_nulls() raises:
+    var keys: AnyArray = array([1, 1, 1, 1], int32)
+    var vb = Int32Builder(4)
+    vb.append(5)
+    vb.append_null()
+    vb.append(5)
+    vb.append_null()
+    var result = GroupBy(keys).count_distinct(vb.finish())
+    assert_equal(result.num_rows(), 1)
+    ref c = result.columns[1].as_int64()
+    assert_equal(c[0].value(), 1)  # only {5} counts
+
+
+def test_groupby_count_distinct_all_null_group() raises:
+    var keys: AnyArray = array([7, 7], int32)
+    var vb = Int32Builder(2)
+    vb.append_null()
+    vb.append_null()
+    var result = GroupBy(keys).count_distinct(vb.finish())
+    ref c = result.columns[1].as_int64()
+    assert_equal(c[0].value(), 0)
+
+
+def test_groupby_approx_count_distinct_matches_exact_small() raises:
+    # small per-group cardinalities → linear counting is near-exact.
+    var kb = Int32Builder(3000)
+    var vb = Int32Builder(3000)
+    for i in range(3000):
+        kb.append(Int32(i % 3))  # 3 groups
+        vb.append(Int32(i % 300))  # up to 100 distinct per group
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+    var result = GroupBy(keys).approx_count_distinct(vals)
+    assert_equal(result.num_rows(), 3)
+    ref c = result.columns[1].as_int64()
+    for g in range(3):
+        # p=11 sketch → ~2.3% standard error; allow a few-sigma band.
+        assert_true(abs(c[g].value() - 100) <= 10)
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

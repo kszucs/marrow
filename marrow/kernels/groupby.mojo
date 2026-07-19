@@ -38,12 +38,19 @@ from .aggregate import (
     AggState,
     for_value_dtype,
     for_agg_tag,
+    agg_is_distinct,
+    AGG_COUNT_DISTINCT,
+    AGG_APPROX_COUNT_DISTINCT,
     SumKernel,
     ProductKernel,
     MinKernel,
     MaxKernel,
     CountKernel,
     MeanKernel,
+)
+from .distinct import (
+    count_distinct_grouped,
+    approx_count_distinct_grouped,
 )
 
 
@@ -284,6 +291,24 @@ struct GroupBy(Movable):
     def mean(self, value: AnyArray) raises -> RecordBatch:
         """Per-group arithmetic mean, as float64."""
         return self.aggregate[MeanKernel](value)
+
+    def count_distinct(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group exact count of distinct non-null values, as int64."""
+        return self._distinct(value, AGG_COUNT_DISTINCT)
+
+    def approx_count_distinct(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group approximate distinct count (HyperLogLog), as int64."""
+        return self._distinct(value, AGG_APPROX_COUNT_DISTINCT)
+
+    def _distinct(self, value: AnyArray, tag: UInt8) raises -> RecordBatch:
+        """Group once (serially) and emit the unique keys plus one distinct-count
+        column. Distinct aggregates aren't yet parallelized (see
+        ``aggregate_runtime``); this shares that group-once path."""
+        var values = List[AnyArray]()
+        values.append(value.copy())
+        var tags = List[UInt8]()
+        tags.append(tag)
+        return Self._serial_multi(self._keys, values, tags)
 
     @staticmethod
     def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -575,7 +600,17 @@ struct GroupBy(Movable):
 
         ``values[j]`` is aggregated with the kernel for ``tags[j]``. Returns the
         unique key columns followed by one column per aggregate."""
-        if self._strategy == Self._THREAD_LOCAL:
+        # Distinct aggregates (count_distinct / approx) don't fit the thread-local
+        # partial + merge machinery (their state is a hash set / HLL sketch, not a
+        # mergeable scalar), so any set containing one groups once, serially.
+        var has_distinct = False
+        for j in range(len(tags)):
+            if agg_is_distinct(tags[j]):
+                has_distinct = True
+                break
+        if has_distinct:
+            return Self._serial_multi(self._keys, values, tags)
+        elif self._strategy == Self._THREAD_LOCAL:
             return Self._thread_local_multi(
                 self._keys, values, tags, self._num_threads
             )
@@ -604,7 +639,7 @@ struct GroupBy(Movable):
         var out_fields = List[Field]()
         var out_cols = List[AnyArray]()
         for j in range(len(tags)):
-            var col = Self._agg_over_gids(gids, values[j], 1, tags[j])
+            var col = Self._col_over_gids(gids, values[j], 1, tags[j])
             out_fields.append(
                 Field(Self._agg_name(tags[j]), col.dtype().copy())
             )
@@ -614,6 +649,10 @@ struct GroupBy(Movable):
     @staticmethod
     def _agg_name(tag: UInt8) raises -> String:
         """The kernel name for an aggregate tag (default output column name)."""
+        if tag == AGG_COUNT_DISTINCT:
+            return "count_distinct"
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return "approx_count_distinct"
         var box = List[String]()
 
         @parameter
@@ -622,6 +661,19 @@ struct GroupBy(Movable):
 
         for_agg_tag[name](tag)
         return box[0]
+
+    @staticmethod
+    def _col_over_gids(
+        gids: Int32Array, value: AnyArray, num_groups: Int, tag: UInt8
+    ) raises -> AnyArray:
+        """Compute one aggregate column over precomputed ``gids`` — routing
+        distinct aggregates to the ``distinct`` kernels and every fold aggregate
+        to the typed ``AggState`` path."""
+        if tag == AGG_COUNT_DISTINCT:
+            return count_distinct_grouped(gids, value, num_groups)
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return approx_count_distinct_grouped(gids, value, num_groups)
+        return Self._agg_over_gids(gids, value, num_groups, tag)
 
     @staticmethod
     def _agg_over_gids(
@@ -659,7 +711,7 @@ struct GroupBy(Movable):
         var out_cols = grouper.key_columns(kfields)
 
         for j in range(len(tags)):
-            var col = Self._agg_over_gids(gids, values[j], ng, tags[j])
+            var col = Self._col_over_gids(gids, values[j], ng, tags[j])
             out_fields.append(
                 Field(Self._agg_name(tags[j]), col.dtype().copy())
             )
