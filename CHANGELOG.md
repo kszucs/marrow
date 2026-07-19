@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **Vectorized whole-table aggregation** (`SELECT agg(x)` with no GROUP BY): the
+  whole-table path now computes each aggregate with the SIMD whole-array
+  reduction instead of the grouped scalar scatter (a single-accumulator
+  dependency chain). `count` is `O(1)` (valid count is metadata), `mean` is a
+  vectorized sum ÷ count, `count_distinct` goes straight to the direct scalar
+  kernel (one hash pass, no `struct[gid, value]` re-hash), and `sum`/`product`
+  widen to the int64/float64 accumulator via a vectorized `cast` before the SIMD
+  reduce so narrow integers don't overflow (matching the grouped path). ~5× on a
+  `sum`+`count`+`avg` whole-table query (3.8 ms → 0.77 ms at 1M rows). Collapsing
+  the widening `cast` into the reduction (removing the one intermediate) is left
+  to expression-layer fusion.
+
 ### Features
 
 - **Distinct-count kernels** (`marrow.kernels.distinct`, `mk.count_distinct` /

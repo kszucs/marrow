@@ -49,9 +49,12 @@ from .aggregate import (
     MeanKernel,
 )
 from .distinct import (
+    count_distinct,
+    approx_count_distinct,
     count_distinct_grouped,
     approx_count_distinct_grouped,
 )
+from ..scalars import AnyScalar
 
 
 # ---------------------------------------------------------------------------
@@ -628,29 +631,44 @@ struct GroupBy(Movable):
 
     @staticmethod
     def aggregate_whole(
-        values: List[AnyArray], tags: List[UInt8]
+        values: List[AnyArray],
+        tags: List[UInt8],
+        ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> RecordBatch:
         """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
 
-        A single implicit group: every row maps to group 0, reusing the same
-        typed ``AggState`` as the grouped path. Returns a one-row batch of the
-        aggregate columns (named by kernel; callers rename as needed)."""
-        var n = len(values[0]) if len(values) > 0 else 0
-        # All group ids 0 — the builder's buffer is zero-filled, so just commit
-        # the length rather than appending n zeros.
-        var zeros = Int32Builder(n)
-        zeros.set_length(n)
-        var gids = zeros.finish()
-
+        A single implicit group, computed with the vectorized whole-array
+        reductions (SIMD ``AggKernel.reduce``, ``O(1)`` count, direct scalar
+        ``count_distinct``) rather than the grouped scatter. Returns a one-row
+        batch of the aggregate columns (named by kernel; callers rename)."""
         var out_fields = List[Field]()
         var out_cols = List[AnyArray]()
         for j in range(len(tags)):
-            var col = Self._col_over_gids(gids, values[j], 1, tags[j])
+            var col = Self._whole_col(values[j], tags[j], ctx)
             out_fields.append(
                 Field(Self._agg_name(tags[j]), col.dtype().copy())
             )
             out_cols.append(col^)
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    @staticmethod
+    def _whole_col(
+        value: AnyArray, tag: UInt8, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        """One whole-table aggregate as a 1-row column — the SIMD/``O(1)`` scalar
+        reduction broadcast to length 1 (``AnyScalar.repeat``)."""
+        if tag == AGG_COUNT_DISTINCT:
+            return count_distinct(value, ctx).to_any().repeat(1)
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return approx_count_distinct(value, ctx).to_any().repeat(1)
+        var box = List[AnyScalar]()
+
+        @parameter
+        def run[K: AggKernel]() raises:
+            box.append(K.reduce(value, ctx))
+
+        for_agg_tag[run](tag)
+        return box[0].repeat(1)
 
     @staticmethod
     def _agg_name(tag: UInt8) raises -> String:

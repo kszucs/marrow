@@ -20,10 +20,32 @@ import std.math as math
 from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
-from ..scalars import PrimitiveScalar, AnyScalar
+from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
 from ..views import reduce
+from .cast import cast
 from .helpers import Kernel
 from .execution import ExecutionContext
+
+
+def _reduce_widened[
+    K: AggKernel
+](
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyScalar:
+    """Whole-array reduce that accumulates in the int64 / float64 accumulator
+    (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
+    path's widening. Widening is a vectorized `cast` (skipped when the input is
+    already wide) followed by the SIMD `apply`; both stay fully vectorized."""
+    if array.dtype().is_integer():
+        if array.dtype() == int64:
+            return K.apply(array.as_int64(), ctx).to_any()
+        return K.apply(cast(array, int64, True, ctx).as_int64(), ctx).to_any()
+    else:
+        if array.dtype() == float64:
+            return K.apply(array.as_float64(), ctx).to_any()
+        return K.apply(
+            cast(array, float64, True, ctx).as_float64(), ctx
+        ).to_any()
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +208,8 @@ struct SumKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
+        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
+        return _reduce_widened[Self](array, ctx)
 
 
 struct ProductKernel(AggKernel):
@@ -213,7 +236,8 @@ struct ProductKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
+        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
+        return _reduce_widened[Self](array, ctx)
 
 
 struct MinKernel(AggKernel):
@@ -288,6 +312,13 @@ struct CountKernel(AggKernel):
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return Scalar[A](count)
 
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> AnyScalar:
+        # Valid count is metadata — no scan.
+        return Int64Scalar(Int64(len(array) - array.null_count())).to_any()
+
 
 struct MeanKernel(AggKernel):
     """Sums into a float64 accumulator; divides by the valid count on finish."""
@@ -308,6 +339,21 @@ struct MeanKernel(AggKernel):
     @staticmethod
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return acc / Scalar[A](count)
+
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> AnyScalar:
+        # Vectorized sum (widened, SIMD) divided by the valid count.
+        var cnt = len(array) - array.null_count()
+        if cnt == 0:
+            return Float64Scalar(None, float64).to_any()  # null
+        var total = SumKernel.reduce(array, ctx)
+        var s = (
+            total.as_float64().value() if total.type()
+            == float64 else Float64(total.as_int64().value())
+        )
+        return Float64Scalar(s / Float64(cnt)).to_any()
 
 
 # ---------------------------------------------------------------------------
