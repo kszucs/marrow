@@ -47,7 +47,7 @@ constantly.
 ```{python}
 def filter_rows(batch, mask):
     """Keep the rows of `batch` where boolean `mask` is True."""
-    cols = [ma.filter_(batch.column(n), mask) for n in batch.column_names()]
+    cols = [ma.filter(batch.column(n), mask) for n in batch.column_names()]
     return ma.record_batch(cols, names=batch.column_names())
 ```
 
@@ -57,7 +57,7 @@ array of the threshold:
 
 ```{python}
 threshold = ma.array([80_000] * employees.num_rows())
-well_paid = ma.greater(employees.column("salary"), threshold, None)
+well_paid = ma.greater(employees.column("salary"), threshold)
 print("mask:", well_paid)
 
 top_earners = filter_rows(employees, well_paid)
@@ -68,33 +68,29 @@ print(top_earners.to_pylist())
 
 `sort_by` orders a batch by one or more keys. Pass a list of
 `(column, "ascending" | "descending")` tuples; the second argument controls
-null placement (`None` uses the default):
+null placement (`None` uses the default). Multi-column keys are honoured —
+ties on the first key break on the next:
 
 ```{python}
-by_salary = top_earners.sort_by([("salary", "descending")], None)
+by_salary = top_earners.sort_by([("dept_id", "ascending"), ("salary", "descending")])
 print(by_salary.to_pylist())
 ```
-
-::: {.callout-note}
-Sorting by a **single** key is supported from Python today; multi-key
-`sort_by` at the Python layer is still in progress. The underlying Mojo sort
-kernel already handles multi-column keys — see [Sorting](../guide/sorting.qmd).
-:::
 
 ## Step 3 — join
 
 `join` performs a hash join between two record batches on named key columns.
-The signature is `join(right, keys, right_keys, join_type, num_threads)`:
+The signature is
+`join(right, keys, right_keys=None, join_type="inner", num_threads=0)`:
 
 - `keys` — list of left-side key column names,
 - `right_keys` — right-side names, or `None` to reuse `keys`,
 - `join_type` — `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"` or `"anti"`,
-- `num_threads` — `0` auto-selects, `1` forces the serial path.
+- `num_threads` — `0` auto-selects cores, `1` forces the serial path.
 
 Enrich each employee with their department name:
 
 ```{python}
-enriched = employees.join(departments, ["dept_id"], None, "inner", 0)
+enriched = employees.join(departments, ["dept_id"], join_type="inner")
 print(enriched.to_pylist())
 ```
 
@@ -108,30 +104,42 @@ sort, project.
 
 ```{python}
 # 1. join employees to their departments
-joined = employees.join(departments, ["dept_id"], None, "inner", 0)
+joined = employees.join(departments, ["dept_id"], join_type="inner")
 
 # 2. keep the well-paid rows
-mask = ma.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()), None)
+mask = ma.greater(joined.column("salary"), ma.array([80_000] * joined.num_rows()))
 filtered = filter_rows(joined, mask)
 
 # 3. sort by salary, highest first
-sorted_ = filtered.sort_by([("salary", "descending")], None)
+sorted_ = filtered.sort_by([("salary", "descending")])
 
 # 4. project the columns we care about
 report = sorted_.select(["name", "dept", "salary"])
 print(report.to_pylist())
 ```
 
-## Step 5 — aggregate a column
+## Step 5 — aggregate
 
-Reduce a column to a single figure with an aggregate kernel — nulls are skipped
+Reduce a single column to a scalar with an aggregate kernel — nulls are skipped
 automatically:
 
 ```{python}
 salaries = report.column("salary")
 print("headcount:  ", report.num_rows())
-print("total spend:", ma.sum_(salaries, None))
-print("top salary: ", ma.max_(salaries, None))
+print("total spend:", ma.sum(salaries))
+print("top salary: ", ma.max(salaries))
+```
+
+Or aggregate the whole table at once, and group by a key to get per-group
+figures — the same `group_by(...).aggregate(...)` shape as PyArrow:
+
+```{python}
+# whole-table: total headcount and payroll in one row
+print(joined.aggregate([("salary", "count"), ("salary", "sum")]).to_pylist())
+
+# per-department: average salary and headcount
+by_dept = joined.group_by("dept").aggregate([("salary", "mean"), ("salary", "count")])
+print(by_dept.to_pylist())
 ```
 
 ## Where to go next

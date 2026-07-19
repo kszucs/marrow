@@ -42,26 +42,30 @@ Arrow should be a first-class citizen in Mojo's ecosystem. This implementation p
 - `PrimitiveBuilder[T]`, `StringBuilder`, `ListBuilder`, `FixedSizeListBuilder`, `StructBuilder`
 - `AnyBuilder` — type-erased builder using function-pointer vtable dispatch (O(1) copy via `ArcPointer`)
 
-**Compute kernels** (SIMD-vectorized, null-aware)
-- Arithmetic: `add`, `sub`, `mul`, `div`, `floordiv`, `mod`, `neg`, `abs_`, `min_`, `max_`
+**Compute kernels** (SIMD-vectorized, null-aware; names mirror `pyarrow.compute`)
+- Arithmetic: `add`, `subtract`, `multiply`, `divide`, `floordiv`, `mod`, `neg`, `abs_`, `min_element_wise`, `max_element_wise`
 - Math (unary): `sign`, `sqrt`, `exp`, `exp2`, `log`, `log2`, `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sin`, `cos`
 - Math (binary): `pow_`
 - Comparisons: `equal`, `not_equal`, `less`, `less_equal`, `greater`, `greater_equal` → `BoolArray` (CPU + GPU)
-- Aggregates: `sum_`, `product`, `min_`, `max_`, `any_`, `all_` (null-skipping)
-- Group-by: `groupby(keys, values, aggregations)` — fused hash+aggregate, returns `RecordBatch`
+- Aggregates: `sum`, `product`, `min`, `max`, `mean`, `any`, `all` (null-skipping)
+- Distinct counts: `count_distinct` (exact), `approx_count_distinct` (HyperLogLog); whole-array and grouped
+- Cast: `cast` — numeric/bool/temporal/decimal families, string↔numeric parse/format, dictionary decode; safe (checked) and unsafe modes
+- Group-by: `GroupBy(keys).sum(values)` / `.min` / `.max` / typed `.aggregate[K]`; radix-partition-parallel, returns `RecordBatch`
 - Hashing: `hash_` for primitive, string, and struct arrays
-- Selection: `filter_`, `drop_nulls`
+- Selection: `filter`, `drop_null`, `take`
 - Sort: `argsort` (returns index array), `sort` (stable sort); LSD radix for N ≥ 32 768, PDQsort below; parallel radix for N ≥ 524 288; `nulls_first`/`nulls_last`; multi-column `sort(StructArray, key_indices, ascending)`
 - Join: `hash_join` — inner, left, right, full, semi, anti; partition-parallel
 - Strings: `string_lengths`
 
-**Expression execution** — two independent implementations behind one API shape (see `docs/aot-relations-design.md`)
-- `marrow.dyn` — type-erased, runtime-dispatched. Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …); relational plan nodes `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate` with `.filter()`, `.select()`, `.aggregate()` chaining; pull-based streaming executor (`Planner` compiles a plan into typed processor trees; `execute()` collects `RecordBatch` results). This is what the Python bindings drive.
-- `marrow.aot` — comptime-typed, fully-monomorphized. A query's entire shape lives in its type (`Table`, `Column[Tbl, name, T]`, `Project`, `Filter`), compiling to fused SIMD loops with no tag dispatch — measured ~33x smaller stripped binary than the `dyn` equivalent (`benchmarks/binary_size/`).
+**Expression execution** (`marrow.expr`) — two dispatch styles behind one relational API (see `docs/aot-relations-design.md`)
+- **Runtime (dynamic)** — the `DynValue` node (`marrow/expr/dynamic.mojo`), type-erased and runtime-dispatched. Build lazy expression trees with `col()`, `lit()`, `if_else()` and operator overloads (`+`, `-`, `*`, `/`, `>`, `<`, `==`, `&`, `|`, …); relational plan nodes `InMemoryTable`, `Filter`, `Project`, `ParquetScan`, `Aggregate`, `Join` with `.filter()`, `.select()`, `.aggregate()`, `.join()` chaining; pull-based streaming executor (`execute(plan)` opens a processor tree and returns a `RecordBatch`). A `.filter` above a `ParquetScan` pushes its predicate into the scan for row-group/page pruning. This is what the Python bindings drive.
+- **Fused (AOT)** — the comptime-typed algebra (`marrow/expr/values.mojo`), fully monomorphized. A query's entire shape lives in its type (`Table`, `Column[Tbl, name, T]`, `Project`, `Filter`), compiling to fused SIMD loops with no tag dispatch — measured ~33x smaller stripped binary than the dynamic equivalent (`benchmarks/binary_size/`).
 
-**Parquet I/O** (`marrow/parquet`)
-- `read_table(path)` — read a Parquet file into a marrow `Table`
-- `write_table(table, path)` — write a marrow `Table` to Parquet
+**Parquet I/O** (`marrow/parquet`) — a from-scratch reader/writer, no PyArrow at runtime
+- `read_table(path, columns=None)` — decode a Parquet file into a marrow `Table`, with optional column projection
+- `write_table(table, path, compression=..., data_page_version=...)` — encode a `Table`; snappy / zstd / lz4 / none, data page v1 & v2
+- Column statistics (min/max/null/distinct), page index, and bloom filters on write; row-group & page pruning on read
+- Python API mirrors `pyarrow.parquet`: `import marrow.parquet as pq; pq.read_table(...)` / `pq.write_table(...)`
 
 **Python bindings** — `import marrow as ma`
 - `array(values, type=None)` — create any array type from Python lists with type inference
@@ -113,25 +117,43 @@ structs = ma.array([{"x": 1, "y": 1.5}, {"x": 2, "y": 2.5}], type=t)
 # ── Arithmetic (null-propagating) ─────────────────────────────────────────────
 
 b = ma.array([10, 20, 30, None, 50])
-result = ma.add(a, b)      # null where either input is null
-result = ma.sub(a, b)
-result = ma.mul(a, b)
-result = ma.div(a, b)
+result = ma.add(a, b)          # null where either input is null
+result = ma.subtract(a, b)
+result = ma.multiply(a, b)
+result = ma.divide(a, b)
 
 # ── Aggregates (null-skipping) ────────────────────────────────────────────────
 
-ma.sum_(a)       # → 11.0  (skips the null at index 3)
-ma.product(a)    # → 30.0
-ma.min_(a)       # → 1.0
-ma.max_(a)       # → 5.0
-ma.any_(ma.array([False, True, None]))   # → True
-ma.all_(ma.array([True, True, None]))   # → True
+ma.sum(a)        # → 11   (skips the null at index 3)
+ma.product(a)    # → 30
+ma.min(a)        # → 1
+ma.max(a)        # → 5
+ma.mean(a)       # → 2.75 (float64)
+ma.count_distinct(a)          # → 4
+ma.approx_count_distinct(a)   # → ~4 (HyperLogLog)
+ma.any(ma.array([False, True, None]))   # → True
+ma.all(ma.array([True, True, None]))    # → True
 
 # ── Selection ─────────────────────────────────────────────────────────────────
 
 mask = ma.array([True, False, True, False, True])
-ma.filter_(a, mask)    # [1, 3, 5]
-ma.drop_nulls(a)       # [1, 2, 3, 5]  (removes index 3)
+ma.filter(a, mask)     # [1, 3, 5]
+ma.drop_null(a)        # [1, 2, 3, 5]  (removes index 3)
+
+# ── Casting (marrow.compute mirrors pyarrow.compute) ──────────────────────────
+
+from marrow import compute as mc
+mc.cast(a, ma.float64())               # int64 → float64
+mc.cast(f, ma.int32(), safe=False)     # truncating float → int
+
+# ── Tables: group-by, aggregate, sort, join ───────────────────────────────────
+
+rb  = ma.record_batch({"k": ma.array([1, 2, 1]), "v": ma.array([10, 20, 30])})
+dim = ma.record_batch({"k": ma.array([1, 2]), "label": ma.array(["a", "b"])})
+rb.group_by("k").aggregate([("v", "sum"), ("v", "count_distinct")])
+rb.aggregate([("v", "sum")])                       # whole-table, one row
+rb.sort_by([("k", "ascending"), ("v", "descending")])
+rb.join(dim, ["k"], join_type="inner")
 
 # ── Array methods ─────────────────────────────────────────────────────────────
 
@@ -205,18 +227,18 @@ print(strs)   # StringArray([hello, NULL, world])
 ### Compute kernels
 
 ```mojo
-from marrow.kernels.arithmetic import add, sub, mul, div, sqrt, log, sin
-from marrow.kernels.aggregate import sum_, min_, max_, any_, all_
-from marrow.kernels.filter import filter_, drop_nulls
+from marrow.kernels.arithmetic import add, subtract, multiply, divide, sqrt, log, sin
+from marrow.kernels.aggregate import sum, min, max, mean, any, all
+from marrow.kernels.filter import filter, drop_null, take
 from marrow.kernels.compare import equal, less, greater_equal
-from marrow.kernels.groupby import groupby
+from marrow.kernels.groupby import GroupBy
 
 var x = array[int64]([1, 2, 3, 4])
 var y = array[int64]([10, 20, 30, 40])
 
 var z = add(x, y)               # Int64Array([11, 22, 33, 44])
-var total = sum_[int64](x)      # 10
-var filtered = filter_[int64](x, array[bool_]([True, False, True, False]))
+var total = sum(x)              # 10  (type inferred from x)
+var filtered = filter(x, array[bool_]([True, False, True, False]))
 
 var a = array[int64]([1, 2, 3, 4])
 var b = array[int64]([1, 3, 2, 4])
@@ -228,16 +250,16 @@ var f = array[float64]([1.0, 4.0, 9.0, 16.0])
 var s = sqrt(f)                 # Float64Array([1.0, 2.0, 3.0, 4.0])
 var l = log(f)                  # natural log
 
-# Group-by
+# Group-by — GroupBy(keys).sum/min/max(values) → RecordBatch
 var keys = array[int64]([1, 2, 1, 2, 1])
 var vals = array[float64]([10.0, 20.0, 30.0, 40.0, 50.0])
-var result = groupby(keys, [vals], ["sum"])   # RecordBatch: key=[1,2], sum=[90.0, 60.0]
+var result = GroupBy(keys).sum(vals)   # RecordBatch: key=[1,2], sum=[90.0, 60.0]
 ```
 
 ### Expression execution
 
 ```mojo
-from marrow.dyn import col, lit, in_memory_table, execute, ExecutionContext
+from marrow.expr import col, lit, in_memory_table, execute
 from marrow.tabular import record_batch
 
 var batch = record_batch(
@@ -246,10 +268,9 @@ var batch = record_batch(
 )
 var plan = in_memory_table(batch)
     .filter(col("age") > lit(30))
-    .select(col("name"), col("age"))
+    .select("name", "age")
 
-var ctx = ExecutionContext()
-var results = execute(plan, ctx)   # List[RecordBatch]
+var result = execute(plan)   # a single RecordBatch
 ```
 
 ### Parquet I/O
@@ -258,7 +279,7 @@ var results = execute(plan, ctx)   # List[RecordBatch]
 from marrow.parquet import read_table, write_table
 
 var tbl = read_table("data.parquet")
-write_table(tbl, "output.parquet")
+write_table(tbl, "output.parquet")   # native encoder — no PyArrow at runtime
 ```
 
 ### Zero-copy PyArrow interop (C Data Interface)
@@ -306,8 +327,8 @@ pixi run -e bench bench_python       # Python array construction vs PyArrow
 pixi run -e bench bench              # CPU SIMD arithmetic benchmarks
 
 # Side-by-side comparison table: marrow vs polars vs pyarrow vs duckdb
-pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_compute.py --competition
-pixi run -e bench pytest --benchmark --no-mojo python/tests/bench_join.py --competition
+pixi run -e bench pytest --benchmark --no-mojo python/marrow/tests/bench_compute.py --competition
+pixi run -e bench pytest --benchmark --no-mojo python/marrow/tests/bench_join.py --competition
 ```
 
 ## GPU Execution (experimental)
@@ -338,7 +359,7 @@ propagate null bitmaps.
 
 3. **Type coverage**: Boolean, numeric, string, binary, fixed-size binary, list, fixed-size list, large binary/string/list, struct, dictionary, null, temporal (date32/64, time32/64, timestamp, duration), and decimal (32/64/128/256) types are implemented. Union types are not yet supported.
 
-4. **Parquet I/O**: `read_table` / `write_table` bridge through PyArrow's `pyarrow.parquet` over the Arrow C Stream Interface — Marrow does not decode the Parquet format itself.
+4. **Parquet I/O**: Marrow reads and writes Parquet natively — it decodes and encodes the format itself with no PyArrow at runtime (snappy / zstd / lz4 compression, data page v1 & v2, statistics, page index, bloom filters). Modular (Parquet) encryption and some rarer encodings are not yet supported.
 
 5. **GPU null handling**: Binary arithmetic kernels on the GPU do not propagate null bitmaps (GPU `bitmap_and` is not yet implemented). Null-aware GPU arithmetic is CPU-only for now.
 

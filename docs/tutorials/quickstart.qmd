@@ -16,7 +16,7 @@ Clone the repository and build the extension with [pixi](https://pixi.sh):
 ```bash
 git clone https://github.com/kszucs/marrow
 cd marrow
-pixi run build_python     # compiles python/marrow.so
+pixi run build_python     # compiles the native extension (python/marrow/libmarrow.so)
 ```
 
 Then make it importable and bring it in under the customary `ma` alias:
@@ -64,33 +64,32 @@ print(ma.array([{"x": 1, "y": 1.5}, {"x": 2, "y": 2.5}]))
 
 ## Compute on arrays
 
-Compute kernels are vectorized and null-aware. Arithmetic takes a trailing
-execution argument — pass `None` to run on the CPU. A null in either operand
-propagates to the result:
+Compute kernels are vectorized and null-aware, and the names mirror
+`pyarrow.compute`. A null in either operand propagates to the result:
 
 ```{python}
 x = ma.array([1, 2, 3, None, 5])
 y = ma.array([10, 20, 30, 40, 50])
 
-print("add:", ma.add(x, y, None))   # index 3 is null
-print("mul:", ma.mul(y, y, None))
+print("add:     ", ma.add(x, y))        # index 3 is null
+print("multiply:", ma.multiply(y, y))
 ```
 
 Aggregates reduce an array to a scalar and **skip** nulls:
 
 ```{python}
-print("sum:", ma.sum_(x, None))
-print("min:", ma.min_(x, None))
-print("max:", ma.max_(x, None))
+print("sum:", ma.sum(x))
+print("min:", ma.min(x))
+print("max:", ma.max(x))
 ```
 
-Comparisons return a boolean array, which you can feed straight into `filter_`:
+Comparisons return a boolean array, which you can feed straight into `filter`:
 
 ```{python}
-big  = ma.greater(y, ma.array([15, 15, 15, 15, 15]), None)
+big  = ma.greater(y, ma.array([15, 15, 15, 15, 15]))
 print("mask:  ", big)
-print("kept:  ", ma.filter_(y, big))
-print("no nulls:", ma.drop_nulls(x))
+print("kept:  ", ma.filter(y, big))
+print("no nulls:", ma.drop_null(x))
 ```
 
 Sorting handles nulls explicitly and returns either the sorted values or the
@@ -100,7 +99,7 @@ sort indices:
 s = ma.array([3, 1, None, 2, 5])
 print("sorted:  ", ma.sort(s))
 print("desc:    ", ma.sort(s, ascending=False, null_placement="at_end"))
-print("argsort: ", ma.argsort(s))
+print("argsort: ", s.argsort())
 ```
 
 ## Assemble a table
@@ -131,7 +130,7 @@ Select columns, slice rows, and sort by one or more keys:
 ```{python}
 print(people.select(["name", "salary"]).to_pydict())
 print(people.slice(1, 2).to_pylist())
-print(people.sort_by([("age", "descending")], None).to_pylist())
+print(people.sort_by([("age", "descending")]).to_pylist())
 ```
 
 ## Where to go next

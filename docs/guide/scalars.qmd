@@ -30,7 +30,7 @@ print(first.type())       # int64
 Aggregate kernels also return scalars:
 
 ```{python}
-total = ma.sum_(a, None)
+total = ma.sum(a)
 print(total, "|", total.as_py(), "|", total.type())
 ```
 

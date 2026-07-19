@@ -79,13 +79,15 @@ Column mutations return a **new** batch — arrays are immutable. Each takes a
 ```{python}
 rank = ma.field("rank", ma.int64(), True, None)
 
-with_rank    = batch.append_column(rank, ma.array([1, 2, 3, 4]))
-inserted     = batch.add_column(0, rank, ma.array([1, 2, 3, 4]))
-renamed      = batch.rename_columns(["ID", "NAME", "SCORE"])
+with_rank     = batch.append_column(rank, ma.array([1, 2, 3, 4]))
+inserted      = batch.add_column(0, rank, ma.array([1, 2, 3, 4]))
+replaced      = batch.set_column(2, rank, ma.array([1, 2, 3, 4]))
+renamed       = batch.rename_columns(["ID", "NAME", "SCORE"])
 without_score = batch.remove_column(2)
 
 print("appended: ", with_rank.column_names())
 print("inserted: ", inserted.column_names())
+print("replaced: ", replaced.column_names())
 print("renamed:  ", renamed.column_names())
 print("removed:  ", without_score.column_names())
 ```
@@ -96,13 +98,11 @@ print("removed:  ", without_score.column_names())
 (`None` for the default, or `"at_start"` / `"at_end"`):
 
 ```{python}
-print(batch.sort_by([("score", "descending")], None).to_pylist())
+print(batch.sort_by([("score", "descending")]).to_pylist())
 ```
 
-::: {.callout-note}
-Single-key `sort_by` is available from Python today. The Mojo sort kernel
-supports multi-column keys — see [Sorting](sorting.qmd) for the full story.
-:::
+Multi-column keys work too — pass more `(column, direction)` tuples and ties on
+the first key break on the next. See [Sorting](sorting.qmd) for the full story.
 
 ## Joins
 
@@ -118,16 +118,17 @@ depts = ma.record_batch({
     "dept":    ma.array(["Engineering", "Sales", "Marketing"]),
 })
 
-inner = people.join(depts, ["dept_id"], None, "inner", 0)
+inner = people.join(depts, ["dept_id"], join_type="inner")
 print(inner.to_pylist())
 ```
 
-The signature is `join(right, keys, right_keys, join_type, num_threads)`:
+The signature is
+`join(right, keys, right_keys=None, join_type="inner", num_threads=0)`:
 
 | Argument | Meaning |
 |----------|---------|
 | `right` | the right-hand `RecordBatch` |
-| `keys` | list of left-side key column names |
+| `keys` | list of left-side key column names (a bare string is also accepted) |
 | `right_keys` | right-side names, or `None` to reuse `keys` |
 | `join_type` | `"inner"`, `"left"`, `"right"`, `"full"`, `"semi"`, `"anti"` |
 | `num_threads` | `0` auto-selects cores; `1` forces the serial path |
@@ -136,12 +137,45 @@ The supported join types:
 
 ```{python}
 for kind in ["inner", "left", "right", "full", "semi", "anti"]:
-    out = people.join(depts, ["dept_id"], None, kind, 0)
+    out = people.join(depts, ["dept_id"], join_type=kind)
     print(f"{kind:>6}: {out.num_rows()} rows, columns={out.column_names()}")
 ```
 
 Columns whose names collide across the two inputs are suffixed with `_right`,
 matching PyArrow.
+
+## Grouping & aggregation
+
+Reduce a whole batch to a single row with `aggregate`, passing a list of
+`(column, function)` pairs. Each result column is named `<column>_<function>`;
+counting a column with no nulls gives the row count (`COUNT(*)`):
+
+```{python}
+sales = ma.record_batch({
+    "region": ma.array(["EU", "US", "EU", "US", "EU"]),
+    "amount": ma.array([10, 20, 30, 40, 50]),
+})
+
+print(sales.aggregate([("amount", "sum"), ("amount", "mean"), ("amount", "count")]).to_pylist())
+```
+
+`group_by(keys)` first partitions the rows by one or more key columns, then
+`aggregate` produces one row per group — the same shape as
+`pyarrow.TableGroupBy`:
+
+```{python}
+by_region = sales.group_by("region").aggregate([
+    ("amount", "sum"),
+    ("amount", "count_distinct"),
+])
+print(by_region.to_pylist())
+```
+
+The supported aggregate functions are `count`, `sum`, `product`, `mean`,
+`min`, `max`, `count_distinct` and `approx_count_distinct` (HyperLogLog). They
+operate on numeric value columns (the key columns may be any type).
+`group_by(keys, num_threads=0)` accepts the same threading control as `join`;
+`0` uses a radix-partitioned parallel path across all cores.
 
 ## Tables
 
@@ -169,3 +203,10 @@ print("batches:", len(table.to_batches()))
 A table can carry many batches at once. Because each batch is a separate chunk,
 appending data never re-copies the columns already present — the reason Arrow
 tables scale to streaming and out-of-core workloads.
+
+::: {.callout-note}
+The `sort_by`, `join`, `group_by` and `aggregate` operations live on
+`RecordBatch`, not `Table`. To run them over a multi-chunk `Table`, work with
+its batches (`table.to_batches()`) — a single-chunk table exposes its one batch
+directly.
+:::

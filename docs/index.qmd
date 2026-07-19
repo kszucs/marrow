@@ -64,8 +64,9 @@ format:
   <div class="mr-card">
     <span class="mr-ico">⚡</span>
     <h3>SIMD compute kernels</h3>
-    <p>Arithmetic, comparisons, aggregates, sorting, filtering and hashing —
-    vectorized and null-aware, with the same three-valued logic as SQL.</p>
+    <p>Arithmetic, comparisons, aggregates, group-by, sorting, filtering,
+    casting and hashing — vectorized and null-aware, with the same three-valued
+    logic as SQL.</p>
   </div>
   <div class="mr-card">
     <span class="mr-ico">🎮</span>
@@ -91,7 +92,14 @@ format:
     <h3>A familiar Python API</h3>
     <p><code>import marrow as ma</code> and reach for the PyArrow names you
     already know — <code>array</code>, <code>record_batch</code>, <code>table</code>,
-    <code>sort</code>, <code>filter_</code>, <code>join</code>.</p>
+    <code>sort</code>, <code>filter</code>, <code>join</code>.</p>
+  </div>
+  <div class="mr-card">
+    <span class="mr-ico">💾</span>
+    <h3>Native Parquet &amp; Arrow IPC</h3>
+    <p>A from-scratch Parquet reader and writer — snappy/zstd/lz4, statistics,
+    page index and bloom filters, no PyArrow at runtime — plus Arrow IPC file
+    and stream round-trips.</p>
   </div>
 </div>
 ```
@@ -122,9 +130,9 @@ Compute is vectorized and null-aware — a null in either operand propagates,
 and aggregates skip nulls:
 
 ```{python}
-next_year = ma.add(ages, ma.array([1, 1, 1, 1, 1]), None)
+next_year = ma.add(ages, ma.array([1, 1, 1, 1, 1]))
 print("age next year:", next_year)   # index 3 stays null
-print("total payroll:", ma.sum_(salary, None))
+print("total payroll:", ma.sum(salary))
 ```
 
 Assemble columns into a `RecordBatch`, then sort and reshape it with a
@@ -133,7 +141,7 @@ PyArrow-shaped API:
 ```{python}
 people = ma.record_batch({"age": ages, "name": names, "salary": salary})
 
-senior = people.sort_by([("salary", "descending")], None)
+senior = people.sort_by([("salary", "descending")])
 print(senior.to_pylist())
 ```
 

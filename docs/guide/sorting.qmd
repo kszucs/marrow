@@ -16,14 +16,16 @@ import marrow as ma
 
 ## Sorting an array
 
-`sort` returns a sorted copy; `argsort` returns the indices that would sort the
-array (an `int32` array), leaving the input untouched:
+`ma.sort` returns a sorted copy; the array's `.argsort()` method (or
+`ma.sort_indices`) returns the indices that would sort it (an `int32` array),
+leaving the input untouched:
 
 ```{python}
 a = ma.array([3, 1, None, 2, 5])
 
-print("sorted: ", ma.sort(a))
-print("argsort:", ma.argsort(a))
+print("sorted:      ", ma.sort(a))
+print("argsort:     ", a.argsort())
+print("sort_indices:", ma.sort_indices(a))
 ```
 
 ### Direction and null placement
@@ -60,13 +62,18 @@ people = ma.record_batch({
     "age":  ma.array([34, 28, 45, 28]),
 })
 
-print(people.sort_by([("age", "ascending")], None).to_pylist())
+print(people.sort_by([("age", "ascending")]).to_pylist())
 ```
 
-::: {.callout-note}
-Single-key `sort_by` is exposed from Python today. Multi-column sorting at the
-Python layer is still in progress; the Mojo kernel below already supports it.
-:::
+Multi-column keys work from Python too — ties on the first key break on the
+next, and each key carries its own direction:
+
+```{python}
+print(people.sort_by([("age", "ascending"), ("name", "descending")]).to_pylist())
+```
+
+`sort_by` also accepts a `num_threads` argument (`0` auto-selects cores, `1`
+forces the serial path) for large batches.
 
 ## Under the hood — the Mojo sort kernel
 

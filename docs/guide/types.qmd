@@ -40,6 +40,9 @@ Temporal types take a resolution unit (and, for timestamps, an optional time zon
 | `ma.time32(unit)` / `ma.time64(unit)` | time of day |
 | `ma.timestamp(unit, tz=None)` | timestamp |
 | `ma.duration(unit)` | elapsed time |
+| `ma.year_month_interval()` | months interval |
+| `ma.day_time_interval()` | days + milliseconds interval |
+| `ma.month_day_nano_interval()` | months + days + nanoseconds interval |
 
 Nested and named types are built from helper functions:
 
