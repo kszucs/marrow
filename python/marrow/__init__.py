@@ -286,8 +286,16 @@ class RecordBatch(_Wrapper):
     def set_column(self, i, field, column):
         return RecordBatch.wrap(self._binding.set_column(i, field, column.unwrap()))
 
-    def join(self, right, keys, right_keys=None, join_type="left semi", **kwargs):
-        return RecordBatch.wrap(self._binding.join(right.unwrap(), keys, right_keys))
+    def join(self, right, keys, right_keys=None, join_type="inner", num_threads=0):
+        if isinstance(keys, str):
+            keys = [keys]
+        if isinstance(right_keys, str):
+            right_keys = [right_keys]
+        return RecordBatch.wrap(
+            self._binding.join(
+                right.unwrap(), keys, right_keys, join_type, num_threads
+            )
+        )
 
     def group_by(self, keys, num_threads=0):
         """Group by one or more key columns (PyArrow-style).
