@@ -21,7 +21,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
-from ..views import reduce, reduce_widening
+from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
 
@@ -33,8 +33,8 @@ def _reduce_widened[
 ) raises -> AnyScalar:
     """Whole-array reduce that accumulates in the int64 / float64 accumulator
     (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
-    path's widening. The widening is *fused* into the SIMD reduce (`reduce_widening`
-    casts each lane as it is loaded), so no widened copy of the input is
+    path's widening. The widening is *fused* into the SIMD reduce (`reduce` casts
+    each lane to `Acc` as it is loaded), so no widened copy of the input is
     materialized; when the input is already the accumulator width the per-lane
     cast is a compile-time no-op."""
     var box = List[AnyScalar]()
@@ -42,16 +42,15 @@ def _reduce_widened[
     @parameter
     def run[V: NumericType]() raises:
         comptime Acc = K.AccType[V].native
-        comptime combine = K.combine[Acc, _]
         var identity = K.identity[Acc]()
         ref prim = array.as_primitive[V]()
         var value: Scalar[Acc]
         if prim.bitmap:
-            value = reduce_widening[V.native, Acc, combine](
+            value = reduce[V.native, K.combine, Acc](
                 prim.values(), prim.validity().value(), identity, ctx
             )
         else:
-            value = reduce_widening[V.native, Acc, combine](
+            value = reduce[V.native, K.combine, Acc](
                 prim.values(), identity, ctx
             )
         box.append(PrimitiveScalar[K.AccType[V]](value).to_any())
@@ -147,15 +146,14 @@ trait AggKernel(Kernel):
         `views.reduce` — the fast path for same-type reductions (sum/min/max/
         product). Null elements are replaced by `identity`."""
         comptime native = T.native
-        comptime combine = Self.combine[native, _]
         var identity = Self.identity[native]()
         var value: Scalar[native]
         if array.bitmap:
-            value = reduce[native, combine](
+            value = reduce[native, Self.combine](
                 array.values(), array.validity().value(), identity, ctx
             )
         else:
-            value = reduce[native, combine](array.values(), identity, ctx)
+            value = reduce[native, Self.combine](array.values(), identity, ctx)
         return PrimitiveScalar[T](value, array.dtype.copy())
 
     @staticmethod

@@ -21,12 +21,13 @@
   vectorized sum ÷ count, `count_distinct` goes straight to the direct scalar
   kernel (one hash pass, no `struct[gid, value]` re-hash), and `sum`/`product`
   widen to the int64/float64 accumulator so narrow integers don't overflow
-  (matching the grouped path). The widening is **fused into the reduction** — a
-  new `reduce_widening` views primitive casts each SIMD lane as it is loaded, so
-  no widened copy of the input is materialized, and when the input already
-  matches the accumulator width the per-lane cast is a compile-time no-op
-  (widening happens only when actually needed). ~7× overall on a
-  `sum`+`count`+`avg` whole-table query (3.8 ms → 0.52 ms at 1M rows).
+  (matching the grouped path). The widening is **fused into the reduction** —
+  `views.reduce` gained an accumulator dtype parameter (`reduce[In, combine,
+  Acc=In]`) that casts each SIMD lane to `Acc` as it is loaded, so no widened
+  copy of the input is materialized, and when `Acc == In` (the default) the
+  per-lane cast is a compile-time no-op (widening happens only when actually
+  needed — same-type reduces are unchanged). ~7× overall on a `sum`+`count`+`avg`
+  whole-table query (3.8 ms → 0.52 ms at 1M rows).
 
 ### Features
 
