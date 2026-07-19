@@ -55,6 +55,7 @@ from ..dtypes import (
 from ..builders import array as _primitive_array
 from .execution import ExecutionContext
 from .filter import take as _take
+from .partition import radix_histogram
 
 
 comptime _RADIX_THRESHOLD: Int = 32_768
@@ -286,42 +287,29 @@ def _radix_sort_indices[
         )
         var mask = UInt64((1 << bits_this_pass) - 1)
 
-        # [~0.9 ms parallel per pass at N=10M] Per-thread histogram.
-        var histograms = List[Int](length=nt * bucket_count, fill=0)
+        # [~0.9 ms parallel per pass at N=10M] Per-thread histogram + prefix sum
+        # (shared with the radix partitioner, cf. ``radix_histogram``).
         var ka_h = key_a.view[DType.uint64](0, n)
 
         @parameter
-        def hist_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
-            var base = t * bucket_count
-            for i in range(start, end):
-                histograms[
-                    base + Int((ka_h.unsafe_get(i) >> shift) & mask)
-                ] += 1
+        def bucket_of(i: Int) -> Int:
+            return Int((ka_h.unsafe_get(i) >> shift) & mask)
 
-        sync_parallelize[hist_worker](nt)
+        var offsets = radix_histogram[bucket_of](n, bucket_count, nt)
+        var write_offsets = offsets[0].copy()
+        ref bucket_start = offsets[1]
 
-        # Pass skipping: 256 comparisons to save a full scatter pass.
-        # No cost for random data; skips entire passes for clustered/timestamp data.
+        # Pass skipping: if only one bucket is non-empty every element shares
+        # these bits, so the data is already ordered for this pass — skip the
+        # scatter. Free for random data, a big win for clustered / timestamp IDs.
         var non_zero = 0
         for b in range(bucket_count):
-            for t in range(nt):
-                if histograms[t * bucket_count + b] > 0:
-                    non_zero += 1
+            if bucket_start[b + 1] > bucket_start[b]:
+                non_zero += 1
+                if non_zero > 1:
                     break
         if non_zero <= 1:
             continue
-
-        # [~0.02 ms] Partition-major prefix sum → per-thread write offsets.
-        var write_offsets = List[Int](length=nt * bucket_count, fill=0)
-        var running = 0
-        for b in range(bucket_count):
-            for t in range(nt):
-                write_offsets[t * bucket_count + b] = running
-                running += histograms[t * bucket_count + b]
 
         # [~4.9 ms parallel per pass at N=10M] Parallel scatter.
         # Random writes into output buffer; cache-miss rate is the core bottleneck.
