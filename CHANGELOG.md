@@ -4,6 +4,16 @@
 
 ### Refactors
 
+- **Parallel whole-table `count_distinct`**: at scale (≥200k rows, parallel ctx)
+  the exact whole-array `count_distinct` is radix-partition-parallel — a value
+  hashes to exactly one partition, so distinct values split disjointly and the
+  total is the *sum* of per-partition distinct counts, with no merge (the
+  whole-array analogue of the grouped radix path). ~2× at 1M rows, making the
+  whole-table `COUNT(DISTINCT UserID)` beat polars and pyarrow (2.1 ms vs 2.7 /
+  4.7). Whole-table fold reductions stay serial — the SIMD reduce only benefits
+  from threads well above these sizes, and that gating belongs in the reduce
+  primitive (deferred).
+
 - **Vectorized whole-table aggregation** (`SELECT agg(x)` with no GROUP BY): the
   whole-table path now computes each aggregate with the SIMD whole-array
   reduction instead of the grouped scalar scatter (a single-accumulator

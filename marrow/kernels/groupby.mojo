@@ -631,20 +631,29 @@ struct GroupBy(Movable):
 
     @staticmethod
     def aggregate_whole(
-        values: List[AnyArray],
-        tags: List[UInt8],
-        ctx: ExecutionContext = ExecutionContext.serial(),
+        values: List[AnyArray], tags: List[UInt8], num_threads: Int = 0
     ) raises -> RecordBatch:
         """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
 
         A single implicit group, computed with the vectorized whole-array
         reductions (SIMD ``AggKernel.reduce``, ``O(1)`` count, direct scalar
         ``count_distinct``) rather than the grouped scatter. Returns a one-row
-        batch of the aggregate columns (named by kernel; callers rename)."""
+        batch of the aggregate columns (named by kernel; callers rename).
+
+        Distinct aggregates get a parallel ctx (``count_distinct`` self-gates on
+        size, going radix-partition-parallel at scale); fold reductions stay
+        serial — the whole-array SIMD reduce only benefits from threads well above
+        these sizes, and that gating belongs in the reduce primitive itself."""
+        var par = ExecutionContext.parallel(num_threads)
+        var ser = ExecutionContext.serial()
         var out_fields = List[Field]()
         var out_cols = List[AnyArray]()
         for j in range(len(tags)):
-            var col = Self._whole_col(values[j], tags[j], ctx)
+            var col: AnyArray
+            if agg_is_distinct(tags[j]):
+                col = Self._whole_col(values[j], tags[j], par)
+            else:
+                col = Self._whole_col(values[j], tags[j], ser)
             out_fields.append(
                 Field(Self._agg_name(tags[j]), col.dtype().copy())
             )

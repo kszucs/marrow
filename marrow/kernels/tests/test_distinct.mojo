@@ -5,6 +5,7 @@ from marrow.arrays import AnyArray
 from marrow.builders import array, nulls, Int64Builder, StringBuilder
 from marrow.dtypes import int32, int64, string
 from marrow.kernels.distinct import count_distinct, approx_count_distinct
+from marrow.kernels.execution import ExecutionContext
 
 
 def test_count_distinct_basic() raises:
@@ -89,6 +90,21 @@ def test_approx_excludes_nulls() raises:
             b.append(Int64(i % 50))
     var est = Int(approx_count_distinct(b.finish()).value())
     assert_true(abs(est - 50) <= 1)
+
+
+def test_count_distinct_parallel_matches_serial() raises:
+    """Above the parallel threshold, radix-on-value (Σ per-partition distinct,
+    no merge) agrees exactly with the serial hash-set dedup. 300k rows with a
+    known 5000 distinct values, plus a null tail."""
+    var b = Int64Builder(300_000)
+    for i in range(300_000):
+        if i < 3000:
+            b.append_null()
+        else:
+            b.append(Int64(i % 5000))
+    var a: AnyArray = b.finish()
+    assert_equal(count_distinct(a, ExecutionContext.serial()).value(), 5000)
+    assert_equal(count_distinct(a, ExecutionContext.parallel(4)).value(), 5000)
 
 
 def main() raises:

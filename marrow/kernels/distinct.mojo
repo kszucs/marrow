@@ -21,13 +21,19 @@ Both exclude nulls — SQL ``COUNT(DISTINCT x)`` semantics, PyArrow's ``only_val
 import std.math as math
 from std.bit import count_leading_zeros
 
-from ..arrays import AnyArray, Int32Array, Int64Array, StructArray
+from ..arrays import AnyArray, Int32Array, Int64Array, UInt64Array, StructArray
 from ..builders import Int64Builder
 from ..dtypes import Field, int32, struct_
 from ..scalars import Int64Scalar
 from .execution import ExecutionContext
 from .hashing import rapidhash
 from .hashtable import SwissHashTable
+from .partition import RadixPartitioner
+
+
+comptime _PARALLEL_DISTINCT_MIN_ROWS = 200_000
+"""Below this the serial hash-set dedup wins — radix partition + thread dispatch
+overhead would dominate."""
 
 
 # ---------------------------------------------------------------------------
@@ -88,13 +94,39 @@ def count_distinct(
     ~n^2/2^64 — the same basis group-by itself dedups on). Nulls are excluded
     (SQL ``COUNT(DISTINCT x)`` / PyArrow ``only_valid``): every null hashes to a
     single sentinel bucket, subtracted off when the array has any null.
+
+    At scale with a parallel ``ctx`` the dedup is radix-partition-parallel: a
+    value hashes to exactly one partition, so distinct values are split disjointly
+    and the total is the *sum* of per-partition distinct counts — no merge, the
+    whole-array analogue of the grouped radix path.
     """
     var hashes = rapidhash(array, ctx)
-    var table = SwissHashTable[rapidhash]()
-    _ = table.insert_hashes(hashes, grow_adaptively=True)
-    var n = table.num_keys()
+    var nt = ctx.resolved_num_threads()
+    var n: Int
+    if nt <= 1 or len(array) < _PARALLEL_DISTINCT_MIN_ROWS:
+        var table = SwissHashTable[rapidhash]()
+        _ = table.insert_hashes(hashes, grow_adaptively=True)
+        n = table.num_keys()
+    else:
+
+        @parameter
+        def count_partition(
+            _pi: Int, _rows: Int32Array, part_hashes: UInt64Array
+        ) raises -> Int:
+            var table = SwissHashTable[rapidhash]()
+            _ = table.insert_hashes(part_hashes, grow_adaptively=True)
+            return table.num_keys()
+
+        var counts = RadixPartitioner(
+            num_bits=6, num_threads=nt
+        ).map_partitions[Int, count_partition](hashes^)
+        n = 0
+        for i in range(len(counts)):
+            n += counts[i]
     if array.null_count() > 0:
-        n -= 1  # drop the single sentinel bucket every null collapsed into
+        n -= (
+            1  # the single sentinel bucket every null collapsed into (one part)
+        )
     return Int64Scalar(Int64(n))
 
 
