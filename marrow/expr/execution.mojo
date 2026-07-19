@@ -30,11 +30,11 @@ from ..kernels.groupby import HashGrouper
 from ..kernels.aggregate import (
     AggKernel,
     AggState,
-    for_value_dtype,
     for_agg_tag,
     agg_tag_from_name,
 )
 from ..dtypes import NumericType
+from ..utils import dispatch_over_numeric
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -440,10 +440,10 @@ struct AggregateProcessor(Processor):
         @parameter
         def by_kind[K: AggKernel]() raises:
             @parameter
-            def by_value[V: NumericType]() raises:
+            def by_value[V: NumericType](d: V) raises:
                 box.append(dt.AnyDataType(K.AccType[V]()))
 
-            for_value_dtype[by_value](value_dtype)
+            dispatch_over_numeric[by_value](value_dtype)
 
         for_agg_tag[by_kind](tag)
         return box[0].copy()
@@ -544,7 +544,7 @@ struct AggregateProcessor(Processor):
         @parameter
         def by_kind[K: AggKernel]() raises:
             @parameter
-            def by_value[V: NumericType]() raises:
+            def by_value[V: NumericType](d: V) raises:
                 var state = AggState[K, V]()
                 for b in range(len(gids_per_batch)):
                     state.update(
@@ -554,7 +554,7 @@ struct AggregateProcessor(Processor):
                     )
                 box.append(state.finish(num_groups).to_any())
 
-            for_value_dtype[by_value](self._value_dtypes[i])
+            dispatch_over_numeric[by_value](self._value_dtypes[i])
 
         for_agg_tag[by_kind](self._tags[i])
         return box[0].copy()

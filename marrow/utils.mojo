@@ -259,7 +259,9 @@ def variant_dispatch_raises[
             if v.isa[T]():
                 comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
-    abort("unreachable: variant_dispatch_raises")
+    raise Error(
+        "variant_dispatch_raises: no arm matched the active variant type"
+    )
 
 
 # TODO: using `ref v` should support both `read` and `mut` args but the compiler crashes
@@ -278,7 +280,9 @@ def variant_dispatch_raises[
             if v.isa[T]():
                 comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
-    abort("unreachable: variant_dispatch_raises")
+    raise Error(
+        "variant_dispatch_raises: no arm matched the active variant type"
+    )
 
 
 # ---------------------------------------------------------------------------
