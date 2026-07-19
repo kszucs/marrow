@@ -91,6 +91,24 @@ def mean(array, *, skip_nulls=True, memory_pool=None):
     return Scalar.wrap(_ma.mean(array.unwrap(), _serial()))
 
 
+def count_distinct(array, *, mode="only_valid", memory_pool=None):
+    """Count the distinct (unique) non-null values in an array, exactly.
+
+    Equivalent to ``pyarrow.compute.count_distinct`` with the default
+    ``mode="only_valid"`` (nulls excluded).
+    """
+    return Scalar.wrap(_ma.count_distinct(array.unwrap(), _serial()))
+
+
+def approx_count_distinct(array, *, memory_pool=None):
+    """Estimate the number of distinct non-null values via HyperLogLog.
+
+    A fixed 16 KiB sketch with ~0.65% standard error. Equivalent to
+    ``pyarrow.compute.approx_count_distinct``.
+    """
+    return Scalar.wrap(_ma.approx_count_distinct(array.unwrap(), _serial()))
+
+
 def any(array, *, skip_nulls=True, memory_pool=None):
     """Return whether any element in the array is true.
 

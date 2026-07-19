@@ -505,6 +505,16 @@ def mean(a, ctx=None):
     return Scalar.wrap(_ma.mean(a.unwrap(), ctx or _serial()))
 
 
+def count_distinct(a, ctx=None):
+    return Scalar.wrap(_ma.count_distinct(a.unwrap(), ctx or _serial()))
+
+
+def approx_count_distinct(a, ctx=None):
+    return Scalar.wrap(
+        _ma.approx_count_distinct(a.unwrap(), ctx or _serial())
+    )
+
+
 def any(a, ctx=None):
     return _ma.any(a.unwrap(), ctx or _serial())
 
