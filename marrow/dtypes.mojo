@@ -45,7 +45,7 @@ from std.python import PythonObject
 from std.python.conversions import ConvertibleFromPython, ConvertibleToPython
 from std.sys.compile import codegen_unreachable
 
-from .utils import _always_true, variant_dispatch, variant_dispatch_raises
+from .utils import variant_dispatch, variant_dispatch_raises
 
 
 # ---------------------------------------------------------------------------
@@ -828,15 +828,11 @@ struct AnyDataType(
         if not self.is_primitive():
             raise Error("byte_width is only defined for primitive types")
 
-        comptime IsPrimitive[T: Movable] = conforms_to(T, PrimitiveType)
-
         @parameter
         def f[T: PrimitiveType](t: T) -> Int:
             return t.byte_width()
 
-        return variant_dispatch[PrimitiveType, predicate=IsPrimitive, func=f](
-            self._v
-        )
+        return variant_dispatch[PrimitiveType, func=f](self._v)
 
     # --- convenience predicates ---
 
