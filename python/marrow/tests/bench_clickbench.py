@@ -30,31 +30,78 @@ pytestmark = pytest.mark.skipif(
 )
 
 # Columns used across the queries below (a slice of the 105-column schema).
-_COLS = ["RegionID", "UserID", "SearchEngineID", "AdvEngineID", "ResolutionWidth", "IsRefresh"]
+_COLS = [
+    "RegionID",
+    "UserID",
+    "SearchEngineID",
+    "AdvEngineID",
+    "ResolutionWidth",
+    "IsRefresh",
+]
 
-# key, and the per-engine aggregate spec. marrow's count(<non-null key>) == COUNT(*).
+# The GROUP BY core of a spread of ClickBench queries, restricted to the
+# numeric-key count/sum/avg/min/max marrow's group_by exposes today (ClickBench
+# proper also uses COUNT(DISTINCT), string LIKE, and date functions marrow lacks;
+# ORDER BY ... LIMIT is dropped so the comparison is the aggregation itself).
+# marrow's count(<non-null key>) == COUNT(*).
 QUERIES = {
-    # low cardinality (~39 groups), multi-aggregate
+    # Q7 shape — very low cardinality (~6 groups), single aggregate.
+    "advengine": dict(
+        key="AdvEngineID",
+        aggs=[("AdvEngineID", "count")],
+        pl=lambda df: df.group_by("AdvEngineID").agg(pl.len()),
+        sql="SELECT AdvEngineID, count(*) FROM hits GROUP BY AdvEngineID",
+    ),
+    # low cardinality (~39 groups), multi-aggregate.
     "searchengine": dict(
         key="SearchEngineID",
-        aggs=[("SearchEngineID", "count"), ("IsRefresh", "sum"), ("ResolutionWidth", "mean")],
+        aggs=[
+            ("SearchEngineID", "count"),
+            ("IsRefresh", "sum"),
+            ("ResolutionWidth", "mean"),
+        ],
         pl=lambda df: df.group_by("SearchEngineID").agg(
             [pl.len(), pl.col("IsRefresh").sum(), pl.col("ResolutionWidth").mean()]
         ),
         sql="SELECT SearchEngineID, count(*), sum(IsRefresh), avg(ResolutionWidth)"
         " FROM hits GROUP BY SearchEngineID",
     ),
-    # mid cardinality (~1242 groups), multi-aggregate
+    # Q9 shape — mid cardinality (~1242 groups), multi-aggregate.
     "region": dict(
         key="RegionID",
-        aggs=[("RegionID", "count"), ("AdvEngineID", "sum"), ("ResolutionWidth", "mean")],
+        aggs=[
+            ("RegionID", "count"),
+            ("AdvEngineID", "sum"),
+            ("ResolutionWidth", "mean"),
+        ],
         pl=lambda df: df.group_by("RegionID").agg(
             [pl.len(), pl.col("AdvEngineID").sum(), pl.col("ResolutionWidth").mean()]
         ),
         sql="SELECT RegionID, count(*), sum(AdvEngineID), avg(ResolutionWidth)"
         " FROM hits GROUP BY RegionID",
     ),
-    # high cardinality (~80k groups), single aggregate
+    # mid cardinality, min/max aggregates.
+    "region_minmax": dict(
+        key="RegionID",
+        aggs=[("ResolutionWidth", "min"), ("ResolutionWidth", "max")],
+        pl=lambda df: df.group_by("RegionID").agg(
+            [
+                pl.col("ResolutionWidth").min().alias("mn"),
+                pl.col("ResolutionWidth").max().alias("mx"),
+            ]
+        ),
+        sql="SELECT RegionID, min(ResolutionWidth), max(ResolutionWidth)"
+        " FROM hits GROUP BY RegionID",
+    ),
+    # Q14 shape — two key columns (~3045 groups).
+    "multikey": dict(
+        key=["RegionID", "SearchEngineID"],
+        aggs=[("RegionID", "count")],
+        pl=lambda df: df.group_by(["RegionID", "SearchEngineID"]).agg(pl.len()),
+        sql="SELECT RegionID, SearchEngineID, count(*)"
+        " FROM hits GROUP BY RegionID, SearchEngineID",
+    ),
+    # Q15 shape — high cardinality (~80k groups), single aggregate.
     "user": dict(
         key="UserID",
         aggs=[("UserID", "count")],
