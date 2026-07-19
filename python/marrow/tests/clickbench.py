@@ -131,8 +131,7 @@ QUERIES = {
         key="RegionID",
         aggs=[("UserID", "count_distinct")],
         pl=lambda df: df.group_by("RegionID").agg(pl.col("UserID").n_unique()),
-        sql="SELECT RegionID, count(distinct UserID) FROM hits"
-        " GROUP BY RegionID",
+        sql="SELECT RegionID, count(distinct UserID) FROM hits GROUP BY RegionID",
     ),
     # Q16 shape — GROUP BY + ORDER BY count DESC, key ASC LIMIT 10. The key
     # tie-break makes the top-N deterministic (so it's comparable across

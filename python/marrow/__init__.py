@@ -510,9 +510,7 @@ def count_distinct(a, ctx=None):
 
 
 def approx_count_distinct(a, ctx=None):
-    return Scalar.wrap(
-        _ma.approx_count_distinct(a.unwrap(), ctx or _serial())
-    )
+    return Scalar.wrap(_ma.approx_count_distinct(a.unwrap(), ctx or _serial()))
 
 
 def any(a, ctx=None):
