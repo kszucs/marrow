@@ -160,6 +160,48 @@ def test_all_empty_or_all_null_returns_true():
     assert ma.all(ma.array([True, True], type=ma.bool_())) == True
 
 
+# ── count_distinct / approx_count_distinct ────────────────────────────────────
+
+
+def test_count_distinct_basic():
+    assert ma.count_distinct(ma.array([1, 2, 2, 3, 3, 3])) == 3
+
+
+def test_count_distinct_excludes_nulls():
+    assert ma.count_distinct(ma.array([1, 2, None, 2, None, 3])) == 3
+
+
+def test_count_distinct_empty_and_all_null():
+    assert ma.count_distinct(ma.array([], type=ma.int64())) == 0
+    assert ma.count_distinct(ma.array([None, None], type=ma.int64())) == 0
+
+
+def test_count_distinct_matches_pyarrow():
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    a = pa.array(np.random.default_rng(0).integers(0, 4000, 200_000))
+    assert ma.count_distinct(ma.array(a)) == pc.count_distinct(a).as_py()
+
+
+def test_approx_count_distinct_small_is_near_exact():
+    # linear-counting regime keeps small cardinalities within ~1 of exact
+    a = ma.array([i % 100 for i in range(5000)])
+    assert abs(int(ma.approx_count_distinct(a).as_py()) - 100) <= 2
+
+
+def test_approx_count_distinct_within_tolerance():
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    a = pa.array(np.arange(1_000_000))
+    true = pc.count_distinct(a).as_py()
+    est = int(ma.approx_count_distinct(ma.array(a)).as_py())
+    assert abs(est - true) / true < 0.02
+
+
 # ── subtract ─────────────────────────────────────────────────────────────────
 
 

@@ -552,10 +552,51 @@ def _record_batch_group_by(
     ).to_python_object()
 
 
+def _record_batch_aggregate(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    values: PythonObject,
+    funcs: PythonObject,
+) raises -> PythonObject:
+    """Whole-table aggregation (no GROUP BY).
+
+    Args:
+        values: value column names, one per aggregate.
+        funcs: aggregate function names ("sum"/"mean"/"min"/"max"/"count"/
+            "product"), parallel to ``values``.
+
+    Returns a one-row RecordBatch with a ``<value>_<func>`` column per
+    aggregate. ``count`` of a non-null column gives ``COUNT(*)``.
+    """
+    ref rb = ptr[]
+    var value_cols = List[AnyArray]()
+    var tags = List[UInt8]()
+    var names = List[String]()
+    for j in range(Int(funcs.__len__())):
+        var vname = String(py=values[j])
+        var vidx = rb.schema.get_field_index(vname)
+        if vidx == -1:
+            raise Error("aggregate: column '", vname, "' not found")
+        value_cols.append(rb.column(vidx).copy())
+        var func = String(py=funcs[j])
+        tags.append(agg_tag_from_name(func))
+        names.append(vname + "_" + func)
+
+    var res = GroupBy.aggregate_whole(value_cols, tags)
+    var out_fields = List[Field]()
+    var out_cols = List[AnyArray]()
+    for j in range(len(tags)):
+        out_fields.append(Field(names[j], res.schema.fields[j].dtype.copy()))
+        out_cols.append(res.columns[j].copy())
+    return RecordBatch(
+        schema=Schema(fields=out_fields^), columns=out_cols^
+    ).to_python_object()
+
+
 def _record_batch_sort_by(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     by: PythonObject,
     null_placement: PythonObject,
+    num_threads: PythonObject,
 ) raises -> PythonObject:
     """Sort a RecordBatch by one or more columns.
 
@@ -563,6 +604,7 @@ def _record_batch_sort_by(
         by: Column name (str), or list of (name, "ascending"/"descending")
             tuples.  A bare string sorts ascending.
         null_placement: ``"at_start"`` (default) or ``"at_end"``.
+        num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
     """
     var nulls_first = True
     if not null_placement.__is__(PythonObject(None)):
@@ -599,7 +641,11 @@ def _record_batch_sort_by(
                 ascending.append(asc)
 
     var result_sa = _sort_kernel(
-        ptr[].to_struct_array(), key_indices, ascending, nulls_first
+        ptr[].to_struct_array(),
+        key_indices,
+        ascending,
+        nulls_first,
+        ctx=ExecutionContext.parallel(Int(py=num_threads)),
     )
     var out_fields = List[Field]()
     for ref f in result_sa.dtype.as_struct().fields:
@@ -653,6 +699,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
         .def_method[_record_batch_group_by]("group_by")
+        .def_method[_record_batch_aggregate]("aggregate")
     )
     _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
         _record_batch_str

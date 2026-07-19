@@ -260,8 +260,8 @@ class RecordBatch(_Wrapper):
             for i in range(self.num_rows())
         ]
 
-    def sort_by(self, by, null_placement=None):
-        return RecordBatch.wrap(self._binding.sort_by(by, null_placement))
+    def sort_by(self, by, null_placement=None, num_threads=0):
+        return RecordBatch.wrap(self._binding.sort_by(by, null_placement, num_threads))
 
     def select(self, columns):
         return RecordBatch.wrap(self._binding.select(columns))
@@ -299,6 +299,14 @@ class RecordBatch(_Wrapper):
         if isinstance(keys, str):
             keys = [keys]
         return RecordBatchGroupBy(self, list(keys), num_threads)
+
+    def aggregate(self, aggregations):
+        """Whole-table aggregation (no grouping): ``[(col, func), ...]`` → a
+        one-row RecordBatch with a ``<col>_<func>`` column per aggregate.
+        ``count`` of a non-null column gives ``COUNT(*)``."""
+        values = [col for col, _ in aggregations]
+        funcs = [func for _, func in aggregations]
+        return RecordBatch.wrap(self._binding.aggregate(values, funcs))
 
 
 class RecordBatchGroupBy:
@@ -495,6 +503,14 @@ def max(a, ctx=None):
 
 def mean(a, ctx=None):
     return Scalar.wrap(_ma.mean(a.unwrap(), ctx or _serial()))
+
+
+def count_distinct(a, ctx=None):
+    return Scalar.wrap(_ma.count_distinct(a.unwrap(), ctx or _serial()))
+
+
+def approx_count_distinct(a, ctx=None):
+    return Scalar.wrap(_ma.approx_count_distinct(a.unwrap(), ctx or _serial()))
 
 
 def any(a, ctx=None):

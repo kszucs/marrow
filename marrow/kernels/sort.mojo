@@ -55,6 +55,7 @@ from ..dtypes import (
 from ..builders import array as _primitive_array
 from .execution import ExecutionContext
 from .filter import take as _take
+from .partition import radix_histogram
 
 
 comptime _RADIX_THRESHOLD: Int = 32_768
@@ -286,42 +287,29 @@ def _radix_sort_indices[
         )
         var mask = UInt64((1 << bits_this_pass) - 1)
 
-        # [~0.9 ms parallel per pass at N=10M] Per-thread histogram.
-        var histograms = List[Int](length=nt * bucket_count, fill=0)
+        # [~0.9 ms parallel per pass at N=10M] Per-thread histogram + prefix sum
+        # (shared with the radix partitioner, cf. ``radix_histogram``).
         var ka_h = key_a.view[DType.uint64](0, n)
 
         @parameter
-        def hist_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
-            var base = t * bucket_count
-            for i in range(start, end):
-                histograms[
-                    base + Int((ka_h.unsafe_get(i) >> shift) & mask)
-                ] += 1
+        def bucket_of(i: Int) -> Int:
+            return Int((ka_h.unsafe_get(i) >> shift) & mask)
 
-        sync_parallelize[hist_worker](nt)
+        var offsets = radix_histogram[bucket_of](n, bucket_count, nt)
+        var write_offsets = offsets[0].copy()
+        ref bucket_start = offsets[1]
 
-        # Pass skipping: 256 comparisons to save a full scatter pass.
-        # No cost for random data; skips entire passes for clustered/timestamp data.
+        # Pass skipping: if only one bucket is non-empty every element shares
+        # these bits, so the data is already ordered for this pass — skip the
+        # scatter. Free for random data, a big win for clustered / timestamp IDs.
         var non_zero = 0
         for b in range(bucket_count):
-            for t in range(nt):
-                if histograms[t * bucket_count + b] > 0:
-                    non_zero += 1
+            if bucket_start[b + 1] > bucket_start[b]:
+                non_zero += 1
+                if non_zero > 1:
                     break
         if non_zero <= 1:
             continue
-
-        # [~0.02 ms] Partition-major prefix sum → per-thread write offsets.
-        var write_offsets = List[Int](length=nt * bucket_count, fill=0)
-        var running = 0
-        for b in range(bucket_count):
-            for t in range(nt):
-                write_offsets[t * bucket_count + b] = running
-                running += histograms[t * bucket_count + b]
 
         # [~4.9 ms parallel per pass at N=10M] Parallel scatter.
         # Random writes into output buffer; cache-miss rate is the core bottleneck.
@@ -659,15 +647,19 @@ def sort(
 ) raises -> StructArray:
     """Sort a StructArray by the specified key columns.
 
-    Phase 1: single key column only (``len(key_indices) == 1``).
-    Phase 2 will add multi-column permutation refinement.
+    Multi-column sort is done column-wise (no row comparator): LSD-style stable
+    passes, least-significant key first — each pass is one ``sort_indices`` over
+    a single reordered column plus a gather to compose the permutation, so a
+    later (more-significant) key sorts primarily while the earlier passes survive
+    as tie-breakers via stability.
 
     Args:
         array: Input StructArray.
-        key_indices: Column indices to sort by (Phase 1: exactly one).
+        key_indices: Column indices to sort by, most-significant first.
         ascending: Per-key sort direction.
         nulls_first: Where to place null rows.
-        stable: Preserve relative order of equal rows.
+        stable: Preserve relative order of equal rows (single-key path only;
+            the multi-key path is always stable by construction).
         limit: If set, return only the first ``limit`` rows.
         ctx: Execution context.
 
@@ -678,14 +670,44 @@ def sort(
         raise Error("sort: key_indices must not be empty")
     if len(key_indices) != len(ascending):
         raise Error("sort: key_indices and ascending must have the same length")
-    if len(key_indices) > 1:
-        raise Error(
-            "sort: multi-column sort not yet implemented (Phase 2); "
-            "pass a single key_indices element"
-        )
 
-    var key_col = array.field(key_indices[0])
-    var indices = sort_indices(
-        key_col, ascending[0], nulls_first, stable, limit, ctx
+    if len(key_indices) == 1:
+        var indices = sort_indices(
+            array.field(key_indices[0]),
+            ascending[0],
+            nulls_first,
+            stable,
+            limit,
+            ctx,
+        )
+        return _take(array, indices)
+
+    # Multi-column, column-oriented LSD: stable-sort by the least-significant
+    # key first, then successively by more-significant keys. Each pass sorts one
+    # reordered column and gathers to compose the running permutation; every
+    # pass is stable, so a less-significant key's order is preserved as the
+    # tie-break under a more-significant one.
+    var last = len(key_indices) - 1
+    var perm = sort_indices(
+        array.field(key_indices[last]),
+        ascending=ascending[last],
+        nulls_first=nulls_first,
+        stable=True,
+        ctx=ctx,
     )
-    return _take(array, indices)
+    for i in reversed(range(last)):
+        var reordered = _take(array.field(key_indices[i]), perm)
+        var local = sort_indices(
+            reordered,
+            ascending=ascending[i],
+            nulls_first=nulls_first,
+            stable=True,
+            ctx=ctx,
+        )
+        perm = _take(perm, local, ctx)
+
+    if limit:
+        var lim = limit.value()
+        if lim < len(perm):
+            perm = perm.slice(0, lim)
+    return _take(array, perm)

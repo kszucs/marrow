@@ -720,16 +720,12 @@ def test_bitmapview_write_to() raises:
 
 
 @always_inline
-def _add_i32[
-    W: Int
-](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+def _add_i32[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 
 @always_inline
-def _max_i32[
-    W: Int
-](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+def _max_i32[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return math.max(a, b)
 
 

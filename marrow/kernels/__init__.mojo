@@ -55,5 +55,6 @@ from .compare import (
     greater_equal,
 )
 from .cast import cast
+from .distinct import count_distinct, approx_count_distinct
 from .filter import filter, drop_null, take
 from .sort import sort_indices, sort

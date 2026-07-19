@@ -52,6 +52,18 @@ def cast(
     return mk.cast(array, target, safe, ctx)
 
 
+# Thin ``-> AnyScalar`` wrappers so the concrete ``Int64Scalar``-returning
+# distinct kernels match the ``pyfunction`` scalar shape.
+def count_distinct(array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
+    return mk.count_distinct(array, ctx)
+
+
+def approx_count_distinct(
+    array: AnyArray, ctx: ExecutionContext
+) raises -> AnyScalar:
+    return mk.approx_count_distinct(array, ctx)
+
+
 # ``pykernel`` — wrap a marrow kernel of uniform shape
 # ``(AnyArray..., ExecutionContext) -> R`` as a Python-callable. Each overload
 # pins the full signature so Mojo can resolve the AnyArray runtime overload
@@ -110,6 +122,10 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.less_equal]()]("less_equal")
     mb.def_function[pykernel[mk.greater]()]("greater")
     mb.def_function[pykernel[mk.greater_equal]()]("greater_equal")
+    mb.def_function[pyfunction[count_distinct]()]("count_distinct")
+    mb.def_function[pyfunction[approx_count_distinct]()](
+        "approx_count_distinct"
+    )
     mb.def_function[pyfunction[sort_indices]()]("sort_indices")
     mb.def_function[pyfunction[sort]()]("sort")
     mb.def_function[pyfunction[take]()]("take")

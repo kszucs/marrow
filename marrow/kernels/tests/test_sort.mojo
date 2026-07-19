@@ -870,6 +870,44 @@ def test_sort_struct_value_integrity() raises:
     _assert_values_sorted(v)
 
 
+def test_sort_struct_multi_key_asc_asc() raises:
+    # ORDER BY k ASC, v ASC — the secondary key breaks ties within equal k
+    # (column-oriented LSD sort). Expect (1,20),(1,40),(2,10),(2,20),(2,30).
+    var sa = _make_struct([2, 1, 2, 1, 2], [30, 20, 10, 40, 20])
+    var result = sort(sa, [0, 1], [True, True])
+    var k = result.field(0)
+    var v = result.field(1)
+    assert_equal(k[0].as_int32().value(), Int32(1))
+    assert_equal(v[0].as_int32().value(), Int32(20))
+    assert_equal(k[1].as_int32().value(), Int32(1))
+    assert_equal(v[1].as_int32().value(), Int32(40))
+    assert_equal(k[2].as_int32().value(), Int32(2))
+    assert_equal(v[2].as_int32().value(), Int32(10))
+    assert_equal(k[3].as_int32().value(), Int32(2))
+    assert_equal(v[3].as_int32().value(), Int32(20))
+    assert_equal(k[4].as_int32().value(), Int32(2))
+    assert_equal(v[4].as_int32().value(), Int32(30))
+
+
+def test_sort_struct_multi_key_asc_desc() raises:
+    # ORDER BY k ASC, v DESC — mixed per-key direction.
+    # Expect (1,40),(1,20),(2,30),(2,20),(2,10).
+    var sa = _make_struct([2, 1, 2, 1, 2], [30, 20, 10, 40, 20])
+    var result = sort(sa, [0, 1], [True, False])
+    var k = result.field(0)
+    var v = result.field(1)
+    assert_equal(k[0].as_int32().value(), Int32(1))
+    assert_equal(v[0].as_int32().value(), Int32(40))
+    assert_equal(k[1].as_int32().value(), Int32(1))
+    assert_equal(v[1].as_int32().value(), Int32(20))
+    assert_equal(k[2].as_int32().value(), Int32(2))
+    assert_equal(v[2].as_int32().value(), Int32(30))
+    assert_equal(k[3].as_int32().value(), Int32(2))
+    assert_equal(v[3].as_int32().value(), Int32(20))
+    assert_equal(k[4].as_int32().value(), Int32(2))
+    assert_equal(v[4].as_int32().value(), Int32(10))
+
+
 # ---------------------------------------------------------------------------
 # ExecutionContext — use N > _PARALLEL_THRESHOLD (524_288) to exercise the
 # parallel radix path; verify endpoints and midpoint of a reverse-sorted array.

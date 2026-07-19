@@ -24,6 +24,52 @@ comptime _MIN_PARALLEL_PARTITION_ROWS: Int = 65_536
 dispatch + per-thread histogram overhead would dominate."""
 
 
+def radix_histogram[
+    bucket_of: def(Int) capturing[_] -> Int
+](n: Int, num_buckets: Int, num_threads: Int) -> Tuple[List[Int], List[Int]]:
+    """One counting/radix pass' histogram + partition-major prefix sum.
+
+    Buckets ``n`` items (``bucket_of(i)`` gives item ``i``'s bucket in
+    ``[0, num_buckets)``) with per-thread histograms, then prefix-sums them into
+    per-thread write cursors — the shared front half of the radix *sort* and the
+    radix *partitioner* (only the scatter payload differs, so that stays with
+    each caller). Column-oriented, no atomics.
+
+    Returns ``(write_offsets, bucket_start)``:
+    - ``write_offsets[t * num_buckets + b]`` — where thread ``t`` starts writing
+      bucket ``b``. Each ``(t, b)`` owns a disjoint slot, so the caller's scatter
+      mutates this in place as a cursor without synchronization.
+    - ``bucket_start[b]`` — global start of bucket ``b`` (``bucket_start[0]==0``,
+      ``bucket_start[num_buckets]==n``); ``bucket_start[b+1]-bucket_start[b]`` is
+      bucket ``b``'s size.
+    """
+    var chunk = (n + num_threads - 1) // num_threads
+    var hist = List[Int](length=num_threads * num_buckets, fill=0)
+
+    @parameter
+    def hist_worker(t: Int):
+        var start = t * chunk
+        if start >= n:
+            return
+        var end = min(start + chunk, n)
+        var base = t * num_buckets
+        for i in range(start, end):
+            hist[base + bucket_of(i)] += 1
+
+    sync_parallelize[hist_worker](num_threads)
+
+    var write_offsets = List[Int](length=num_threads * num_buckets, fill=0)
+    var bucket_start = List[Int](length=num_buckets + 1, fill=0)
+    var running = 0
+    for b in range(num_buckets):
+        bucket_start[b] = running
+        for t in range(num_threads):
+            write_offsets[t * num_buckets + b] = running
+            running += hist[t * num_buckets + b]
+    bucket_start[num_buckets] = running
+    return (write_offsets^, bucket_start^)
+
+
 # ---------------------------------------------------------------------------
 # Partitioner — splits rows into partitions by hash
 # ---------------------------------------------------------------------------
@@ -158,37 +204,15 @@ struct RadixPartitioner(Partitioner):
             nt = 1  # dispatch overhead would dominate
         var chunk = (n + nt - 1) // nt
 
-        # 1. Per-thread histogram — ``histograms[t * p + pid]`` is the
-        # count of rows for partition ``pid`` handled by thread ``t``.
-        var histograms = List[Int](length=nt * p, fill=0)
-
+        # 1-2. Histogram rows by top-bit partition id + prefix-sum into per-thread
+        # write cursors (shared with the radix sort, cf. ``radix_histogram``).
         @parameter
-        def hist_worker(t: Int):
-            var start = t * chunk
-            if start >= n:
-                return
-            var end = min(start + chunk, n)
-            var base = t * p
-            for i in range(start, end):
-                var pid = Int(UInt64(src.load[1](i)) >> shift)
-                histograms[base + pid] += 1
+        def bucket_of(i: Int) -> Int:
+            return Int(UInt64(src.load[1](i)) >> shift)
 
-        sync_parallelize[hist_worker](nt)
-
-        # 2. Partition-major prefix sum → per-thread write offsets into
-        # the flat buffers.  ``write_offsets[t * p + pid]`` is where
-        # thread ``t`` starts writing partition ``pid``'s rows.
-        var write_offsets = List[Int](length=nt * p, fill=0)
-        var partition_offsets = List[Int](length=p + 1, fill=0)
-        var counts = List[Int](length=p, fill=0)
-        var running = 0
-        for pid in range(p):
-            partition_offsets[pid] = running
-            for t in range(nt):
-                write_offsets[t * p + pid] = running
-                running += histograms[t * p + pid]
-            counts[pid] = running - partition_offsets[pid]
-        partition_offsets[p] = running
+        var offsets = radix_histogram[bucket_of](n, p, nt)
+        var write_offsets = offsets[0].copy()
+        var partition_offsets = offsets[1].copy()  # bucket_start
 
         # 3. Allocate the two flat buffers (N rows total each).
         var row_buf = Buffer.alloc_uninit[int32.native](n)
@@ -227,8 +251,8 @@ struct RadixPartitioner(Partitioner):
 
         var result = List[Partition](capacity=p)
         for pid in range(p):
-            var sz = counts[pid]
             var off = partition_offsets[pid]
+            var sz = partition_offsets[pid + 1] - off
             var row_arr = Int32Array(
                 length=sz,
                 nulls=0,

@@ -39,6 +39,11 @@
 - Hash group-by: `HashGrouper` resolves key rows to dense group ids, and
   the aggregate operators fold through a `Grouping` placement strategy.
   Radix-partitioned across threads, with per-thread tables.
+- Multi-column sort: `sort` and `sort_indices`, LSD radix above 32,768
+  elements and PDQsort below, parallel radix above 524,288,
+  `nulls_first`/`nulls_last`, and stable ordering honoured.
+- `count_distinct` (exact) and `approx_count_distinct` (HyperLogLog),
+  whole-array and grouped, both radix-parallel.
 - `hash_join` -- inner, left, right, full, semi and anti -- over a
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and

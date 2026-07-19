@@ -38,6 +38,9 @@ from .aggregate import (
     AggState,
     for_value_dtype,
     for_agg_tag,
+    agg_is_distinct,
+    AGG_COUNT_DISTINCT,
+    AGG_APPROX_COUNT_DISTINCT,
     SumKernel,
     ProductKernel,
     MinKernel,
@@ -45,6 +48,13 @@ from .aggregate import (
     CountKernel,
     MeanKernel,
 )
+from .distinct import (
+    count_distinct,
+    approx_count_distinct,
+    count_distinct_grouped,
+    approx_count_distinct_grouped,
+)
+from ..scalars import AnyScalar
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +294,24 @@ struct GroupBy(Movable):
     def mean(self, value: AnyArray) raises -> RecordBatch:
         """Per-group arithmetic mean, as float64."""
         return self.aggregate[MeanKernel](value)
+
+    def count_distinct(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group exact count of distinct non-null values, as int64."""
+        return self._distinct(value, AGG_COUNT_DISTINCT)
+
+    def approx_count_distinct(self, value: AnyArray) raises -> RecordBatch:
+        """Per-group approximate distinct count (HyperLogLog), as int64."""
+        return self._distinct(value, AGG_APPROX_COUNT_DISTINCT)
+
+    def _distinct(self, value: AnyArray, tag: UInt8) raises -> RecordBatch:
+        """Emit the unique keys plus one distinct-count column, reusing
+        ``aggregate_runtime``'s strategy dispatch (serial, or radix-parallel — the
+        thread-local path can't merge distinct state)."""
+        var values = List[AnyArray]()
+        values.append(value.copy())
+        var tags = List[UInt8]()
+        tags.append(tag)
+        return self.aggregate_runtime(values, tags)
 
     @staticmethod
     def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -575,19 +603,89 @@ struct GroupBy(Movable):
 
         ``values[j]`` is aggregated with the kernel for ``tags[j]``. Returns the
         unique key columns followed by one column per aggregate."""
-        if self._strategy == Self._THREAD_LOCAL:
-            return Self._thread_local_multi(
+        # Distinct aggregates (count_distinct / approx) carry a hash set / HLL
+        # sketch, not a mergeable scalar, so the thread-local partial + merge path
+        # can't combine them across threads. The radix path can — it partitions by
+        # key hash, so a group lands wholly in one partition and its distinct count
+        # is final without any cross-partition merge. Route any distinct set to
+        # radix when parallel, else serial.
+        var has_distinct = False
+        for j in range(len(tags)):
+            if agg_is_distinct(tags[j]):
+                has_distinct = True
+                break
+
+        if self._strategy == Self._RADIX:
+            return Self._radix_multi(
                 self._keys, values, tags, self._num_threads
             )
-        elif self._strategy == Self._RADIX:
-            return Self._radix_multi(
+        elif self._strategy == Self._THREAD_LOCAL:
+            if has_distinct:
+                return Self._radix_multi(
+                    self._keys, values, tags, self._num_threads
+                )
+            return Self._thread_local_multi(
                 self._keys, values, tags, self._num_threads
             )
         return Self._serial_multi(self._keys, values, tags)
 
     @staticmethod
+    def aggregate_whole(
+        values: List[AnyArray], tags: List[UInt8], num_threads: Int = 0
+    ) raises -> RecordBatch:
+        """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
+
+        A single implicit group, computed with the vectorized whole-array
+        reductions (SIMD ``AggKernel.reduce``, ``O(1)`` count, direct scalar
+        ``count_distinct``) rather than the grouped scatter. Returns a one-row
+        batch of the aggregate columns (named by kernel; callers rename).
+
+        Distinct aggregates get a parallel ctx (``count_distinct`` self-gates on
+        size, going radix-partition-parallel at scale); fold reductions stay
+        serial — the whole-array SIMD reduce only benefits from threads well above
+        these sizes, and that gating belongs in the reduce primitive itself."""
+        var par = ExecutionContext.parallel(num_threads)
+        var ser = ExecutionContext.serial()
+        var out_fields = List[Field]()
+        var out_cols = List[AnyArray]()
+        for j in range(len(tags)):
+            var col: AnyArray
+            if agg_is_distinct(tags[j]):
+                col = Self._whole_col(values[j], tags[j], par)
+            else:
+                col = Self._whole_col(values[j], tags[j], ser)
+            out_fields.append(
+                Field(Self._agg_name(tags[j]), col.dtype().copy())
+            )
+            out_cols.append(col^)
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    @staticmethod
+    def _whole_col(
+        value: AnyArray, tag: UInt8, ctx: ExecutionContext
+    ) raises -> AnyArray:
+        """One whole-table aggregate as a 1-row column — the SIMD/``O(1)`` scalar
+        reduction broadcast to length 1 (``AnyScalar.repeat``)."""
+        if tag == AGG_COUNT_DISTINCT:
+            return count_distinct(value, ctx).to_any().repeat(1)
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return approx_count_distinct(value, ctx).to_any().repeat(1)
+        var box = List[AnyScalar]()
+
+        @parameter
+        def run[K: AggKernel]() raises:
+            box.append(K.reduce(value, ctx))
+
+        for_agg_tag[run](tag)
+        return box[0].repeat(1)
+
+    @staticmethod
     def _agg_name(tag: UInt8) raises -> String:
         """The kernel name for an aggregate tag (default output column name)."""
+        if tag == AGG_COUNT_DISTINCT:
+            return "count_distinct"
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return "approx_count_distinct"
         var box = List[String]()
 
         @parameter
@@ -596,6 +694,19 @@ struct GroupBy(Movable):
 
         for_agg_tag[name](tag)
         return box[0]
+
+    @staticmethod
+    def _col_over_gids(
+        gids: Int32Array, value: AnyArray, num_groups: Int, tag: UInt8
+    ) raises -> AnyArray:
+        """Compute one aggregate column over precomputed ``gids`` — routing
+        distinct aggregates to the ``distinct`` kernels and every fold aggregate
+        to the typed ``AggState`` path."""
+        if tag == AGG_COUNT_DISTINCT:
+            return count_distinct_grouped(gids, value, num_groups)
+        elif tag == AGG_APPROX_COUNT_DISTINCT:
+            return approx_count_distinct_grouped(gids, value, num_groups)
+        return Self._agg_over_gids(gids, value, num_groups, tag)
 
     @staticmethod
     def _agg_over_gids(
@@ -633,7 +744,7 @@ struct GroupBy(Movable):
         var out_cols = grouper.key_columns(kfields)
 
         for j in range(len(tags)):
-            var col = Self._agg_over_gids(gids, values[j], ng, tags[j])
+            var col = Self._col_over_gids(gids, values[j], ng, tags[j])
             out_fields.append(
                 Field(Self._agg_name(tags[j]), col.dtype().copy())
             )
@@ -784,7 +895,9 @@ struct GroupBy(Movable):
             var agg_cols = List[AnyArray]()
             for j in range(na):
                 var pvals = take(values[j], rows)
-                agg_cols.append(Self._agg_over_gids(gids, pvals, ng, tags[j]))
+                # Groups never span partitions, so each partition's distinct
+                # counts (like its folds) are final — concatenated, never merged.
+                agg_cols.append(Self._col_over_gids(gids, pvals, ng, tags[j]))
             return (first.finish(), agg_cols^)
 
         var hashes = rapidhash(keys, ctx)

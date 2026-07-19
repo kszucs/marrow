@@ -29,9 +29,7 @@ def _double_i32[W: Int](v: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
 
 
 @always_inline
-def _add_i32[
-    W: Int
-](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+def _add_i32[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 
@@ -512,18 +510,12 @@ def test_apply_comparison_to_bitmap_gpu() raises:
 
 
 @always_inline
-def _add_i32_gpu[
-    W: Int
-](a: SIMD[DType.int32, W], b: SIMD[DType.int32, W]) -> SIMD[DType.int32, W]:
+def _add_i32_gpu[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 
 @always_inline
-def _add_f32_gpu[
-    W: Int
-](a: SIMD[DType.float32, W], b: SIMD[DType.float32, W]) -> SIMD[
-    DType.float32, W
-]:
+def _add_f32_gpu[T: DType, W: Int](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[T, W]:
     return a + b
 
 

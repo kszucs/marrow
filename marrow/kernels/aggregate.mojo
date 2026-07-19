@@ -20,10 +20,43 @@ import std.math as math
 from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
-from ..scalars import PrimitiveScalar, AnyScalar
+from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
+
+
+def _reduce_widened[
+    K: AggKernel
+](
+    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> AnyScalar:
+    """Whole-array reduce that accumulates in the int64 / float64 accumulator
+    (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
+    path's widening. The widening is *fused* into the SIMD reduce (`reduce` casts
+    each lane to `Acc` as it is loaded), so no widened copy of the input is
+    materialized; when the input is already the accumulator width the per-lane
+    cast is a compile-time no-op."""
+    var box = List[AnyScalar]()
+
+    @parameter
+    def run[V: NumericType]() raises:
+        comptime Acc = K.AccType[V].native
+        var identity = K.identity[Acc]()
+        ref prim = array.as_primitive[V]()
+        var value: Scalar[Acc]
+        if prim.bitmap:
+            value = reduce[V.native, K.combine, Acc](
+                prim.values(), prim.validity().value(), identity, ctx
+            )
+        else:
+            value = reduce[V.native, K.combine, Acc](
+                prim.values(), identity, ctx
+            )
+        box.append(PrimitiveScalar[K.AccType[V]](value).to_any())
+
+    for_value_dtype[run](array.dtype())
+    return box[0].copy()
 
 
 # ---------------------------------------------------------------------------
@@ -113,15 +146,14 @@ trait AggKernel(Kernel):
         `views.reduce` — the fast path for same-type reductions (sum/min/max/
         product). Null elements are replaced by `identity`."""
         comptime native = T.native
-        comptime combine = Self.combine[native, _]
         var identity = Self.identity[native]()
         var value: Scalar[native]
         if array.bitmap:
-            value = reduce[native, combine](
+            value = reduce[native, Self.combine](
                 array.values(), array.validity().value(), identity, ctx
             )
         else:
-            value = reduce[native, combine](array.values(), identity, ctx)
+            value = reduce[native, Self.combine](array.values(), identity, ctx)
         return PrimitiveScalar[T](value, array.dtype.copy())
 
     @staticmethod
@@ -186,7 +218,8 @@ struct SumKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
+        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
+        return _reduce_widened[Self](array, ctx)
 
 
 struct ProductKernel(AggKernel):
@@ -213,7 +246,8 @@ struct ProductKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
-        return Self.dispatch(array, ctx)  # SIMD whole-array fast path
+        # Widen to the int64/float64 accumulator so narrow ints don't overflow.
+        return _reduce_widened[Self](array, ctx)
 
 
 struct MinKernel(AggKernel):
@@ -288,6 +322,13 @@ struct CountKernel(AggKernel):
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return Scalar[A](count)
 
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> AnyScalar:
+        # Valid count is metadata — no scan.
+        return Int64Scalar(Int64(len(array) - array.null_count())).to_any()
+
 
 struct MeanKernel(AggKernel):
     """Sums into a float64 accumulator; divides by the valid count on finish."""
@@ -309,6 +350,21 @@ struct MeanKernel(AggKernel):
     def finalize[A: DType](acc: Scalar[A], count: Int) -> Scalar[A]:
         return acc / Scalar[A](count)
 
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> AnyScalar:
+        # Vectorized sum (widened, SIMD) divided by the valid count.
+        var cnt = len(array) - array.null_count()
+        if cnt == 0:
+            return Float64Scalar(None, float64).to_any()  # null
+        var total = SumKernel.reduce(array, ctx)
+        var s = (
+            total.as_float64().value() if total.type()
+            == float64 else Float64(total.as_int64().value())
+        )
+        return Float64Scalar(s / Float64(cnt)).to_any()
+
 
 # ---------------------------------------------------------------------------
 # Runtime aggregate tags — the one place a runtime function *name* resolves to
@@ -322,6 +378,17 @@ comptime AGG_MAX: UInt8 = 2
 comptime AGG_COUNT: UInt8 = 3
 comptime AGG_MEAN: UInt8 = 4
 comptime AGG_PRODUCT: UInt8 = 5
+# Distinct aggregates are not `AggKernel` folds (they carry a hash set / HLL
+# sketch, not a scalar accumulator), so they have tags but no `for_agg_tag`
+# case — the group-by driver routes them to the `distinct` kernels instead.
+comptime AGG_COUNT_DISTINCT: UInt8 = 6
+comptime AGG_APPROX_COUNT_DISTINCT: UInt8 = 7
+
+
+def agg_is_distinct(tag: UInt8) -> Bool:
+    """Whether ``tag`` is a distinct aggregate (routed to the distinct kernels
+    rather than the `AggState` fold path)."""
+    return tag == AGG_COUNT_DISTINCT or tag == AGG_APPROX_COUNT_DISTINCT
 
 
 def agg_tag_from_name(name: String) raises -> UInt8:
@@ -338,6 +405,10 @@ def agg_tag_from_name(name: String) raises -> UInt8:
         return AGG_MEAN
     elif name == "product":
         return AGG_PRODUCT
+    elif name == "count_distinct":
+        return AGG_COUNT_DISTINCT
+    elif name == "approx_count_distinct":
+        return AGG_APPROX_COUNT_DISTINCT
     raise Error("unknown aggregate function: ", name)
 
 

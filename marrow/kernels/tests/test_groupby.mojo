@@ -35,6 +35,7 @@ from marrow.kernels.aggregate import (
     CountKernel,
     MeanKernel,
     sum,
+    AGG_COUNT_DISTINCT,
 )
 
 
@@ -428,6 +429,109 @@ def test_groupby_thread_local_mean_nulls_match_serial() raises:
         if a:
             assert_true(abs(a.value() - b.value()) < 1e-9)
     assert_false(_mean_for_key(threaded, 3).__bool__())  # all-null group
+
+
+# ---------------------------------------------------------------------------
+# group_by — count_distinct / approx_count_distinct
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_count_distinct_basic() raises:
+    # key=1 sees values {10, 10, 20} -> 2 distinct; key=2 sees {30, 30} -> 1.
+    var keys: AnyArray = array([1, 1, 1, 2, 2], int32)
+    var vals: AnyArray = array([10, 10, 20, 30, 30], int32)
+    var result = GroupBy(keys).count_distinct(vals)
+    assert_equal(result.num_rows(), 2)
+    assert_equal(result.num_columns(), 2)
+    assert_true(result.schema.fields[1].name == "count_distinct")
+    ref k = result.columns[0].as_int32()
+    ref c = result.columns[1].as_int64()
+    assert_equal(k[0].value(), 1)
+    assert_equal(c[0].value(), 2)
+    assert_equal(k[1].value(), 2)
+    assert_equal(c[1].value(), 1)
+
+
+def test_groupby_count_distinct_excludes_nulls() raises:
+    var keys: AnyArray = array([1, 1, 1, 1], int32)
+    var vb = Int32Builder(4)
+    vb.append(5)
+    vb.append_null()
+    vb.append(5)
+    vb.append_null()
+    var result = GroupBy(keys).count_distinct(vb.finish())
+    assert_equal(result.num_rows(), 1)
+    ref c = result.columns[1].as_int64()
+    assert_equal(c[0].value(), 1)  # only {5} counts
+
+
+def test_groupby_count_distinct_all_null_group() raises:
+    var keys: AnyArray = array([7, 7], int32)
+    var vb = Int32Builder(2)
+    vb.append_null()
+    vb.append_null()
+    var result = GroupBy(keys).count_distinct(vb.finish())
+    ref c = result.columns[1].as_int64()
+    assert_equal(c[0].value(), 0)
+
+
+def test_groupby_approx_count_distinct_matches_exact_small() raises:
+    # small per-group cardinalities → linear counting is near-exact.
+    var kb = Int32Builder(3000)
+    var vb = Int32Builder(3000)
+    for i in range(3000):
+        kb.append(Int32(i % 3))  # 3 groups
+        vb.append(Int32(i % 300))  # up to 100 distinct per group
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+    var result = GroupBy(keys).approx_count_distinct(vals)
+    assert_equal(result.num_rows(), 3)
+    ref c = result.columns[1].as_int64()
+    for g in range(3):
+        # p=11 sketch → ~2.3% standard error; allow a few-sigma band.
+        assert_true(abs(c[g].value() - 100) <= 10)
+
+
+def _assert_all_distinct_10(result: RecordBatch) raises:
+    """10 groups, each with exactly 10 distinct values (see the pattern below).
+    """
+    assert_equal(result.num_rows(), 10)
+    ref c = result.column(1).as_int64()
+    for i in range(10):
+        assert_equal(c[i].value(), 10)
+
+
+def test_groupby_count_distinct_radix_matches_serial() raises:
+    """The radix-partition-parallel path computes per-group distinct counts
+    (each partition's groups are disjoint, so counts concatenate — no merge) and
+    agrees with the serial path. keys = i%10, values = i%100, so within group k
+    the values are exactly {v in 0..99 : v ≡ k (mod 10)} → 10 distinct each."""
+    var kb = Int32Builder(3000)
+    var vb = Int32Builder(3000)
+    for i in range(3000):
+        kb.append(Scalar[int32.native](i % 10))
+        vb.append(Scalar[int32.native](i % 100))
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+
+    var children = List[AnyArray]()
+    children.append(keys.copy())
+    var kd = keys.to_data()
+    var sa = StructArray(
+        dtype=struct_(Field("k", kd.dtype.copy())),
+        length=kd.length,
+        nulls=kd.nulls,
+        offset=kd.offset,
+        bitmap=kd.bitmap,
+        children=children^,
+    )
+    var values = List[AnyArray]()
+    values.append(vals.copy())
+    var tags = List[UInt8]()
+    tags.append(AGG_COUNT_DISTINCT)
+
+    _assert_all_distinct_10(GroupBy._serial_multi(sa, values, tags))
+    _assert_all_distinct_10(GroupBy._radix_multi(sa, values, tags, 4))
 
 
 def main() raises:

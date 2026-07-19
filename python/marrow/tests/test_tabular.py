@@ -441,6 +441,83 @@ def test_group_by_multi_aggregate():
     assert rows == {1: (90.0, 30.0), 2: (60.0, 30.0)}
 
 
+def test_group_by_count_distinct():
+    rb = ma.record_batch(
+        {
+            "k": ma.array([1, 1, 1, 2, 2], type=ma.int32()),
+            "v": ma.array([10, 10, 20, 30, 30], type=ma.int32()),
+        }
+    )
+    out = rb.group_by("k").aggregate([("v", "count_distinct")])
+    got = {r["k"]: r["v_count_distinct"] for r in out.to_pylist()}
+    assert got == {1: 2, 2: 1}
+    assert out.column_names() == ["k", "v_count_distinct"]
+
+
+def test_group_by_count_distinct_matches_pyarrow():
+    import numpy as np
+    import pyarrow as pa
+
+    rng = np.random.default_rng(1)
+    tbl = pa.table(
+        {"k": rng.integers(0, 100, 100_000), "v": rng.integers(0, 5000, 100_000)}
+    )
+    rb = ma.record_batch(tbl.to_batches()[0])
+    ref = {
+        r["k"]: r["v_count_distinct"]
+        for r in tbl.group_by("k").aggregate([("v", "count_distinct")]).to_pylist()
+    }
+    got = {
+        r["k"]: r["v_count_distinct"]
+        for r in pa.record_batch(
+            rb.group_by("k").aggregate([("v", "count_distinct")])
+        ).to_pylist()
+    }
+    assert got == ref
+
+
+def test_group_by_count_distinct_mixed_with_folds():
+    # a distinct aggregate shares the single grouping pass with fold aggregates
+    rb = ma.record_batch(
+        {
+            "k": ma.array([1, 1, 2, 2, 2], type=ma.int32()),
+            "v": ma.array([5, 5, 7, 8, 8], type=ma.int32()),
+        }
+    )
+    out = rb.group_by("k").aggregate([("v", "sum"), ("v", "count_distinct")])
+    assert out.column_names() == ["k", "v_sum", "v_count_distinct"]
+    rows = {r["k"]: (r["v_sum"], r["v_count_distinct"]) for r in out.to_pylist()}
+    assert rows == {1: (10, 1), 2: (23, 2)}
+
+
+def test_group_by_approx_count_distinct():
+    rb = ma.record_batch(
+        {
+            "k": ma.array([i % 4 for i in range(4000)], type=ma.int32()),
+            "v": ma.array([i % 200 for i in range(4000)], type=ma.int32()),
+        }
+    )
+    out = rb.group_by("k").aggregate([("v", "approx_count_distinct")])
+    # each group sees 50 distinct values (200/4); allow HLL error band
+    got = {r["k"]: r["v_approx_count_distinct"] for r in out.to_pylist()}
+    for g in range(4):
+        assert abs(got[g] - 50) <= 6
+
+
+def test_aggregate_whole_table_sum_widens_narrow_int():
+    # 100k * 200 = 20M overflows a uint8/int16 accumulator; the whole-table
+    # reduce widens to int64 (fused, no materialized cast) like the grouped path.
+    import numpy as np
+    import pyarrow as pa
+
+    rb = ma.record_batch(
+        pa.record_batch({"v": pa.array(np.full(100_000, 200, dtype=np.uint8))})
+    )
+    out = pa.record_batch(rb.aggregate([("v", "sum"), ("v", "mean")])).to_pylist()[0]
+    assert out["v_sum"] == 20_000_000
+    assert out["v_mean"] == 200.0
+
+
 def test_group_by_unknown_function_raises():
     with pytest.raises(Exception):
         _gb_batch().group_by("k").aggregate([("v", "median")])
