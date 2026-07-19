@@ -300,6 +300,14 @@ class RecordBatch(_Wrapper):
             keys = [keys]
         return RecordBatchGroupBy(self, list(keys), num_threads)
 
+    def aggregate(self, aggregations):
+        """Whole-table aggregation (no grouping): ``[(col, func), ...]`` → a
+        one-row RecordBatch with a ``<col>_<func>`` column per aggregate.
+        ``count`` of a non-null column gives ``COUNT(*)``."""
+        values = [col for col, _ in aggregations]
+        funcs = [func for _, func in aggregations]
+        return RecordBatch.wrap(self._binding.aggregate(values, funcs))
+
 
 class RecordBatchGroupBy:
     """A grouping over a RecordBatch's key columns; apply ``aggregate``.

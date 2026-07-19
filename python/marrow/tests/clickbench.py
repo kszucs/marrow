@@ -125,6 +125,29 @@ QUERIES = {
         pl=lambda df: df.group_by("UserID").agg(pl.len()),
         sql="SELECT UserID, count(*) FROM hits GROUP BY UserID",
     ),
+    # ----- whole-table aggregates (no GROUP BY), key=[] -----
+    # Q1 — COUNT(*).
+    "count_star": dict(
+        key=[],
+        aggs=[("AdvEngineID", "count")],
+        pl=lambda df: df.select(pl.len()),
+        sql="SELECT count(*) FROM hits",
+    ),
+    # Q3 — SUM, COUNT(*), AVG.
+    "totals": dict(
+        key=[],
+        aggs=[
+            ("AdvEngineID", "sum"),
+            ("AdvEngineID", "count"),
+            ("ResolutionWidth", "mean"),
+        ],
+        pl=lambda df: df.select(
+            pl.col("AdvEngineID").sum(),
+            pl.len(),
+            pl.col("ResolutionWidth").mean(),
+        ),
+        sql="SELECT sum(AdvEngineID), count(*), avg(ResolutionWidth) FROM hits",
+    ),
 }
 
 ENGINES = ["marrow", "pyarrow", "polars", "duckdb", "datafusion"]
@@ -166,8 +189,11 @@ def load():
 def run_native(engine, h, q):
     """Run a query and materialize the result in the engine's native form
     (this is what the benchmark times)."""
+    grouped = len(keys(q)) > 0
     if engine == "marrow":
-        return h["rb"].group_by(q["key"]).aggregate(q["aggs"])
+        if grouped:
+            return h["rb"].group_by(q["key"]).aggregate(q["aggs"])
+        return h["rb"].aggregate(q["aggs"])
     if engine == "pyarrow":
         return h["tbl"].group_by(keys(q)).aggregate(q["aggs"])
     if engine == "polars":

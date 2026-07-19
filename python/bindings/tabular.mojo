@@ -552,6 +552,46 @@ def _record_batch_group_by(
     ).to_python_object()
 
 
+def _record_batch_aggregate(
+    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    values: PythonObject,
+    funcs: PythonObject,
+) raises -> PythonObject:
+    """Whole-table aggregation (no GROUP BY).
+
+    Args:
+        values: value column names, one per aggregate.
+        funcs: aggregate function names ("sum"/"mean"/"min"/"max"/"count"/
+            "product"), parallel to ``values``.
+
+    Returns a one-row RecordBatch with a ``<value>_<func>`` column per
+    aggregate. ``count`` of a non-null column gives ``COUNT(*)``.
+    """
+    ref rb = ptr[]
+    var value_cols = List[AnyArray]()
+    var tags = List[UInt8]()
+    var names = List[String]()
+    for j in range(Int(funcs.__len__())):
+        var vname = String(py=values[j])
+        var vidx = rb.schema.get_field_index(vname)
+        if vidx == -1:
+            raise Error("aggregate: column '", vname, "' not found")
+        value_cols.append(rb.column(vidx).copy())
+        var func = String(py=funcs[j])
+        tags.append(agg_tag_from_name(func))
+        names.append(vname + "_" + func)
+
+    var res = GroupBy.aggregate_whole(value_cols, tags)
+    var out_fields = List[Field]()
+    var out_cols = List[AnyArray]()
+    for j in range(len(tags)):
+        out_fields.append(Field(names[j], res.schema.fields[j].dtype.copy()))
+        out_cols.append(res.columns[j].copy())
+    return RecordBatch(
+        schema=Schema(fields=out_fields^), columns=out_cols^
+    ).to_python_object()
+
+
 def _record_batch_sort_by(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     by: PythonObject,
@@ -653,6 +693,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
         .def_method[_record_batch_sort_by]("sort_by")
         .def_method[_record_batch_join]("join")
         .def_method[_record_batch_group_by]("group_by")
+        .def_method[_record_batch_aggregate]("aggregate")
     )
     _ = rb_py.def_method[_record_batch_str]("__str__").def_method[
         _record_batch_str

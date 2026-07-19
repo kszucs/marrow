@@ -586,6 +586,32 @@ struct GroupBy(Movable):
         return Self._serial_multi(self._keys, values, tags)
 
     @staticmethod
+    def aggregate_whole(
+        values: List[AnyArray], tags: List[UInt8]
+    ) raises -> RecordBatch:
+        """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
+
+        A single implicit group: every row maps to group 0, reusing the same
+        typed ``AggState`` as the grouped path. Returns a one-row batch of the
+        aggregate columns (named by kernel; callers rename as needed)."""
+        var n = len(values[0]) if len(values) > 0 else 0
+        # All group ids 0 — the builder's buffer is zero-filled, so just commit
+        # the length rather than appending n zeros.
+        var zeros = Int32Builder(n)
+        zeros.set_length(n)
+        var gids = zeros.finish()
+
+        var out_fields = List[Field]()
+        var out_cols = List[AnyArray]()
+        for j in range(len(tags)):
+            var col = Self._agg_over_gids(gids, values[j], 1, tags[j])
+            out_fields.append(
+                Field(Self._agg_name(tags[j]), col.dtype().copy())
+            )
+            out_cols.append(col^)
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
+
+    @staticmethod
     def _agg_name(tag: UInt8) raises -> String:
         """The kernel name for an aggregate tag (default output column name)."""
         var box = List[String]()
