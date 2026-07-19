@@ -21,8 +21,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
-from ..views import reduce
-from .cast import cast
+from ..views import reduce, reduce_widening
 from .helpers import Kernel
 from .execution import ExecutionContext
 
@@ -34,18 +33,31 @@ def _reduce_widened[
 ) raises -> AnyScalar:
     """Whole-array reduce that accumulates in the int64 / float64 accumulator
     (`K.AccType`), so narrow integer inputs don't overflow — matching the grouped
-    path's widening. Widening is a vectorized `cast` (skipped when the input is
-    already wide) followed by the SIMD `apply`; both stay fully vectorized."""
-    if array.dtype().is_integer():
-        if array.dtype() == int64:
-            return K.apply(array.as_int64(), ctx).to_any()
-        return K.apply(cast(array, int64, True, ctx).as_int64(), ctx).to_any()
-    else:
-        if array.dtype() == float64:
-            return K.apply(array.as_float64(), ctx).to_any()
-        return K.apply(
-            cast(array, float64, True, ctx).as_float64(), ctx
-        ).to_any()
+    path's widening. The widening is *fused* into the SIMD reduce (`reduce_widening`
+    casts each lane as it is loaded), so no widened copy of the input is
+    materialized; when the input is already the accumulator width the per-lane
+    cast is a compile-time no-op."""
+    var box = List[AnyScalar]()
+
+    @parameter
+    def run[V: NumericType]() raises:
+        comptime Acc = K.AccType[V].native
+        comptime combine = K.combine[Acc, _]
+        var identity = K.identity[Acc]()
+        ref prim = array.as_primitive[V]()
+        var value: Scalar[Acc]
+        if prim.bitmap:
+            value = reduce_widening[V.native, Acc, combine](
+                prim.values(), prim.validity().value(), identity, ctx
+            )
+        else:
+            value = reduce_widening[V.native, Acc, combine](
+                prim.values(), identity, ctx
+            )
+        box.append(PrimitiveScalar[K.AccType[V]](value).to_any())
+
+    for_value_dtype[run](array.dtype())
+    return box[0].copy()
 
 
 # ---------------------------------------------------------------------------

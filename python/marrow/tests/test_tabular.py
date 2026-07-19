@@ -504,6 +504,20 @@ def test_group_by_approx_count_distinct():
         assert abs(got[g] - 50) <= 6
 
 
+def test_aggregate_whole_table_sum_widens_narrow_int():
+    # 100k * 200 = 20M overflows a uint8/int16 accumulator; the whole-table
+    # reduce widens to int64 (fused, no materialized cast) like the grouped path.
+    import numpy as np
+    import pyarrow as pa
+
+    rb = ma.record_batch(
+        pa.record_batch({"v": pa.array(np.full(100_000, 200, dtype=np.uint8))})
+    )
+    out = pa.record_batch(rb.aggregate([("v", "sum"), ("v", "mean")])).to_pylist()[0]
+    assert out["v_sum"] == 20_000_000
+    assert out["v_mean"] == 200.0
+
+
 def test_group_by_unknown_function_raises():
     with pytest.raises(Exception):
         _gb_batch().group_by("k").aggregate([("v", "median")])

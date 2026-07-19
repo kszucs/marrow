@@ -1698,6 +1698,56 @@ def reduce[
     return _reduce_dispatch[T, input_fn, combine](len(src), identity, ctx)
 
 
+def reduce_widening[
+    In: DType,
+    Acc: DType,
+    combine: def[W: Int](SIMD[Acc, W], SIMD[Acc, W]) thin -> SIMD[Acc, W],
+](
+    src: BufferView[In, _],
+    identity: Scalar[Acc],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Scalar[Acc]:
+    """Reduce ``src`` accumulating in the wider ``Acc``.
+
+    Each SIMD lane is widened (``cast[Acc]``) as it is loaded, so no widened copy
+    of ``src`` is ever materialized — the fused form of ``cast`` then ``reduce``
+    that lets a narrow-integer sum accumulate in int64 without overflowing. When
+    ``In == Acc`` the per-lane cast is a compile-time no-op, so this is also the
+    zero-overhead same-type path (widening happens only when actually needed).
+    """
+
+    @always_inline
+    @parameter
+    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
+        return src.load[W](idx[0]).cast[Acc]()
+
+    return _reduce_dispatch[Acc, input_fn, combine](len(src), identity, ctx)
+
+
+def reduce_widening[
+    In: DType,
+    Acc: DType,
+    combine: def[W: Int](SIMD[Acc, W], SIMD[Acc, W]) thin -> SIMD[Acc, W],
+](
+    src: BufferView[In, _],
+    bitmap: BitmapView[_],
+    identity: Scalar[Acc],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> Scalar[Acc]:
+    """``reduce_widening`` that replaces null lanes with ``identity`` (so they
+    have no effect), reading the mask straight from ``bitmap``."""
+
+    @always_inline
+    @parameter
+    def input_fn[W: Int, rank: Int](idx: IndexList[rank]) -> SIMD[Acc, W]:
+        var i = idx[0]
+        return bitmap.mask[W](i).select(
+            src.load[W](i).cast[Acc](), SIMD[Acc, W](identity)
+        )
+
+    return _reduce_dispatch[Acc, input_fn, combine](len(src), identity, ctx)
+
+
 comptime CheckedFn[In: DType, Out: DType] = def[W: Int](
     SIMD[In, W]
 ) thin -> Tuple[SIMD[Out, W], SIMD[DType.bool, W]]

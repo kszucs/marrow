@@ -20,11 +20,13 @@
   dependency chain). `count` is `O(1)` (valid count is metadata), `mean` is a
   vectorized sum ÷ count, `count_distinct` goes straight to the direct scalar
   kernel (one hash pass, no `struct[gid, value]` re-hash), and `sum`/`product`
-  widen to the int64/float64 accumulator via a vectorized `cast` before the SIMD
-  reduce so narrow integers don't overflow (matching the grouped path). ~5× on a
-  `sum`+`count`+`avg` whole-table query (3.8 ms → 0.77 ms at 1M rows). Collapsing
-  the widening `cast` into the reduction (removing the one intermediate) is left
-  to expression-layer fusion.
+  widen to the int64/float64 accumulator so narrow integers don't overflow
+  (matching the grouped path). The widening is **fused into the reduction** — a
+  new `reduce_widening` views primitive casts each SIMD lane as it is loaded, so
+  no widened copy of the input is materialized, and when the input already
+  matches the accumulator width the per-lane cast is a compile-time no-op
+  (widening happens only when actually needed). ~7× overall on a
+  `sum`+`count`+`avg` whole-table query (3.8 ms → 0.52 ms at 1M rows).
 
 ### Features
 
