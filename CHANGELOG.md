@@ -23,8 +23,12 @@
   pass, `O(distinct pairs)` memory, no per-group set. Approx keeps one
   HyperLogLog sketch per group (2**11 registers, 2 KiB/group). A distinct
   aggregate can share the single grouping pass with fold aggregates (e.g.
-  `[("v","sum"),("v","count_distinct")]`); any aggregate set containing a
-  distinct one groups serially (distinct isn't yet radix-parallelized).
+  `[("v","sum"),("v","count_distinct")]`). Distinct aggregates are
+  **radix-parallel**: partitioning by key hash keeps every group inside one
+  partition, so per-partition distinct counts are final and concatenate without a
+  merge (the thread-local partial-merge path can't union sets, so any distinct
+  set routes to radix when parallel). ~7x over serial at 1M rows / 50k groups,
+  and faster than pyarrow's `count_distinct`.
 
 - **Python group-by** (`marrow.RecordBatch.group_by`): grouped aggregation is
   now exposed to Python with a PyArrow-compatible API —

@@ -35,6 +35,7 @@ from marrow.kernels.aggregate import (
     CountKernel,
     MeanKernel,
     sum,
+    AGG_COUNT_DISTINCT,
 )
 
 
@@ -489,6 +490,48 @@ def test_groupby_approx_count_distinct_matches_exact_small() raises:
     for g in range(3):
         # p=11 sketch → ~2.3% standard error; allow a few-sigma band.
         assert_true(abs(c[g].value() - 100) <= 10)
+
+
+def _assert_all_distinct_10(result: RecordBatch) raises:
+    """10 groups, each with exactly 10 distinct values (see the pattern below).
+    """
+    assert_equal(result.num_rows(), 10)
+    ref c = result.column(1).as_int64()
+    for i in range(10):
+        assert_equal(c[i].value(), 10)
+
+
+def test_groupby_count_distinct_radix_matches_serial() raises:
+    """The radix-partition-parallel path computes per-group distinct counts
+    (each partition's groups are disjoint, so counts concatenate — no merge) and
+    agrees with the serial path. keys = i%10, values = i%100, so within group k
+    the values are exactly {v in 0..99 : v ≡ k (mod 10)} → 10 distinct each."""
+    var kb = Int32Builder(3000)
+    var vb = Int32Builder(3000)
+    for i in range(3000):
+        kb.append(Scalar[int32.native](i % 10))
+        vb.append(Scalar[int32.native](i % 100))
+    var keys: AnyArray = kb.finish()
+    var vals: AnyArray = vb.finish()
+
+    var children = List[AnyArray]()
+    children.append(keys.copy())
+    var kd = keys.to_data()
+    var sa = StructArray(
+        dtype=struct_(Field("k", kd.dtype.copy())),
+        length=kd.length,
+        nulls=kd.nulls,
+        offset=kd.offset,
+        bitmap=kd.bitmap,
+        children=children^,
+    )
+    var values = List[AnyArray]()
+    values.append(vals.copy())
+    var tags = List[UInt8]()
+    tags.append(AGG_COUNT_DISTINCT)
+
+    _assert_all_distinct_10(GroupBy._serial_multi(sa, values, tags))
+    _assert_all_distinct_10(GroupBy._radix_multi(sa, values, tags, 4))
 
 
 def main() raises:

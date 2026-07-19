@@ -301,14 +301,14 @@ struct GroupBy(Movable):
         return self._distinct(value, AGG_APPROX_COUNT_DISTINCT)
 
     def _distinct(self, value: AnyArray, tag: UInt8) raises -> RecordBatch:
-        """Group once (serially) and emit the unique keys plus one distinct-count
-        column. Distinct aggregates aren't yet parallelized (see
-        ``aggregate_runtime``); this shares that group-once path."""
+        """Emit the unique keys plus one distinct-count column, reusing
+        ``aggregate_runtime``'s strategy dispatch (serial, or radix-parallel — the
+        thread-local path can't merge distinct state)."""
         var values = List[AnyArray]()
         values.append(value.copy())
         var tags = List[UInt8]()
         tags.append(tag)
-        return Self._serial_multi(self._keys, values, tags)
+        return self.aggregate_runtime(values, tags)
 
     @staticmethod
     def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -600,22 +600,28 @@ struct GroupBy(Movable):
 
         ``values[j]`` is aggregated with the kernel for ``tags[j]``. Returns the
         unique key columns followed by one column per aggregate."""
-        # Distinct aggregates (count_distinct / approx) don't fit the thread-local
-        # partial + merge machinery (their state is a hash set / HLL sketch, not a
-        # mergeable scalar), so any set containing one groups once, serially.
+        # Distinct aggregates (count_distinct / approx) carry a hash set / HLL
+        # sketch, not a mergeable scalar, so the thread-local partial + merge path
+        # can't combine them across threads. The radix path can — it partitions by
+        # key hash, so a group lands wholly in one partition and its distinct count
+        # is final without any cross-partition merge. Route any distinct set to
+        # radix when parallel, else serial.
         var has_distinct = False
         for j in range(len(tags)):
             if agg_is_distinct(tags[j]):
                 has_distinct = True
                 break
-        if has_distinct:
-            return Self._serial_multi(self._keys, values, tags)
-        elif self._strategy == Self._THREAD_LOCAL:
-            return Self._thread_local_multi(
+
+        if self._strategy == Self._RADIX:
+            return Self._radix_multi(
                 self._keys, values, tags, self._num_threads
             )
-        elif self._strategy == Self._RADIX:
-            return Self._radix_multi(
+        elif self._strategy == Self._THREAD_LOCAL:
+            if has_distinct:
+                return Self._radix_multi(
+                    self._keys, values, tags, self._num_threads
+                )
+            return Self._thread_local_multi(
                 self._keys, values, tags, self._num_threads
             )
         return Self._serial_multi(self._keys, values, tags)
@@ -862,7 +868,9 @@ struct GroupBy(Movable):
             var agg_cols = List[AnyArray]()
             for j in range(na):
                 var pvals = take(values[j], rows)
-                agg_cols.append(Self._agg_over_gids(gids, pvals, ng, tags[j]))
+                # Groups never span partitions, so each partition's distinct
+                # counts (like its folds) are final — concatenated, never merged.
+                agg_cols.append(Self._col_over_gids(gids, pvals, ng, tags[j]))
             return (first.finish(), agg_cols^)
 
         var hashes = rapidhash(keys, ctx)
