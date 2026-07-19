@@ -21,6 +21,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
+from ..utils import dispatch_over_numeric
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -162,29 +163,12 @@ trait AggKernel(Kernel):
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyScalar:
         """Runtime-dtype entry to the SIMD `apply` (same-type reductions)."""
-        if array.dtype() == int8:
-            return Self.apply(array.as_int8(), ctx)
-        elif array.dtype() == int16:
-            return Self.apply(array.as_int16(), ctx)
-        elif array.dtype() == int32:
-            return Self.apply(array.as_int32(), ctx)
-        elif array.dtype() == int64:
-            return Self.apply(array.as_int64(), ctx)
-        elif array.dtype() == uint8:
-            return Self.apply(array.as_uint8(), ctx)
-        elif array.dtype() == uint16:
-            return Self.apply(array.as_uint16(), ctx)
-        elif array.dtype() == uint32:
-            return Self.apply(array.as_uint32(), ctx)
-        elif array.dtype() == uint64:
-            return Self.apply(array.as_uint64(), ctx)
-        elif array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx)
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx)
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx)
-        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyScalar:
+            return Self.apply(array.as_primitive[T](), ctx)
+
+        return dispatch_over_numeric[leaf](array.dtype())
 
 
 # ---------------------------------------------------------------------------

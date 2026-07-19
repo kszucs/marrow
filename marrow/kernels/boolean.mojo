@@ -18,6 +18,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
+    NumericType,
     PrimitiveType,
     Int8Type,
     Int16Type,
@@ -30,19 +31,9 @@ from ..dtypes import (
     Float16Type,
     Float32Type,
     Float64Type,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
     bool_ as bool_dt,
 )
+from ..utils import dispatch_over_numeric
 from ..views import BitmapView
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -288,29 +279,12 @@ def is_null(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Runtime-typed is_null."""
-    if arr.dtype() == int8:
-        return is_null(arr.as_int8(), ctx).to_any()
-    elif arr.dtype() == int16:
-        return is_null(arr.as_int16(), ctx).to_any()
-    elif arr.dtype() == int32:
-        return is_null(arr.as_int32(), ctx).to_any()
-    elif arr.dtype() == int64:
-        return is_null(arr.as_int64(), ctx).to_any()
-    elif arr.dtype() == uint8:
-        return is_null(arr.as_uint8(), ctx).to_any()
-    elif arr.dtype() == uint16:
-        return is_null(arr.as_uint16(), ctx).to_any()
-    elif arr.dtype() == uint32:
-        return is_null(arr.as_uint32(), ctx).to_any()
-    elif arr.dtype() == uint64:
-        return is_null(arr.as_uint64(), ctx).to_any()
-    elif arr.dtype() == float16:
-        return is_null(arr.as_float16(), ctx).to_any()
-    elif arr.dtype() == float32:
-        return is_null(arr.as_float32(), ctx).to_any()
-    elif arr.dtype() == float64:
-        return is_null(arr.as_float64(), ctx).to_any()
-    raise Error(t"is_null: unsupported dtype {arr.dtype()}")
+
+    @parameter
+    def leaf[T: NumericType](d: T) raises -> AnyArray:
+        return is_null(arr.as_primitive[T](), ctx).to_any()
+
+    return dispatch_over_numeric[leaf](arr.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -353,47 +327,14 @@ def select(
         raise Error(
             t"select: dtype mismatch: {then_.dtype()} vs {else_.dtype()}"
         )
-    ref bool_mask = mask.as_bool()
-    if then_.dtype() == int8:
-        return select(bool_mask, then_.as_int8(), else_.as_int8(), ctx).to_any()
-    elif then_.dtype() == int16:
+
+    @parameter
+    def leaf[T: NumericType](d: T) raises -> AnyArray:
         return select(
-            bool_mask, then_.as_int16(), else_.as_int16(), ctx
+            mask.as_bool(),
+            then_.as_primitive[T](),
+            else_.as_primitive[T](),
+            ctx,
         ).to_any()
-    elif then_.dtype() == int32:
-        return select(
-            bool_mask, then_.as_int32(), else_.as_int32(), ctx
-        ).to_any()
-    elif then_.dtype() == int64:
-        return select(
-            bool_mask, then_.as_int64(), else_.as_int64(), ctx
-        ).to_any()
-    elif then_.dtype() == uint8:
-        return select(
-            bool_mask, then_.as_uint8(), else_.as_uint8(), ctx
-        ).to_any()
-    elif then_.dtype() == uint16:
-        return select(
-            bool_mask, then_.as_uint16(), else_.as_uint16(), ctx
-        ).to_any()
-    elif then_.dtype() == uint32:
-        return select(
-            bool_mask, then_.as_uint32(), else_.as_uint32(), ctx
-        ).to_any()
-    elif then_.dtype() == uint64:
-        return select(
-            bool_mask, then_.as_uint64(), else_.as_uint64(), ctx
-        ).to_any()
-    elif then_.dtype() == float16:
-        return select(
-            bool_mask, then_.as_float16(), else_.as_float16(), ctx
-        ).to_any()
-    elif then_.dtype() == float32:
-        return select(
-            bool_mask, then_.as_float32(), else_.as_float32(), ctx
-        ).to_any()
-    elif then_.dtype() == float64:
-        return select(
-            bool_mask, then_.as_float64(), else_.as_float64(), ctx
-        ).to_any()
-    raise Error(t"select: unsupported dtype {then_.dtype()}")
+
+    return dispatch_over_numeric[leaf](then_.dtype())

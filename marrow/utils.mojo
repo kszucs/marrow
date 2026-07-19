@@ -23,6 +23,14 @@ from std.os import abort
 from std.sys import has_accelerator, CompilationTarget, size_of
 from std.sys.info import _accelerator_arch
 
+from .dtypes import (
+    AnyDataType,
+    BinaryLikeType,
+    FloatingType,
+    NumericType,
+    StringLikeType,
+)
+
 
 # ---------------------------------------------------------------------------
 # Little-endian byte / bit / varint primitives
@@ -271,3 +279,69 @@ def variant_dispatch_raises[
                 comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
     abort("unreachable: variant_dispatch_raises")
+
+
+# ---------------------------------------------------------------------------
+# Per-dtype-family dispatch adapters
+#
+# Thin wrappers over `variant_dispatch_raises` that fix the trait + predicate to
+# a dtype family, so a kernel's runtime dispatch reads as
+# `dispatch_over_numeric[leaf](array.dtype())` instead of an 11-way
+# `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
+# resolved to its concrete comptime type `T`; the return type `R` is inferred
+# from `func`. A dtype outside the family hits the `abort("unreachable: ...")`
+# in `variant_dispatch_raises` — these adapters are only called once the dtype
+# is known to belong to the family.
+# ---------------------------------------------------------------------------
+
+
+comptime _IsNumeric[T: Movable] = conforms_to(T, NumericType)
+comptime _IsFloating[T: Movable] = conforms_to(T, FloatingType)
+comptime _IsStringLike[T: Movable] = conforms_to(T, StringLikeType)
+comptime _IsBinaryLike[T: Movable] = conforms_to(T, BinaryLikeType)
+
+
+def dispatch_over_numeric[
+    R: AnyType,
+    //,
+    func: def[T: NumericType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime numeric dtype to its comptime type and run `func`."""
+    return variant_dispatch_raises[
+        NumericType, predicate=_IsNumeric, func=func
+    ](dt._v)
+
+
+def dispatch_over_floating[
+    R: AnyType,
+    //,
+    func: def[T: FloatingType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime floating dtype to its comptime type and run `func`."""
+    return variant_dispatch_raises[
+        FloatingType, predicate=_IsFloating, func=func
+    ](dt._v)
+
+
+def dispatch_over_stringlike[
+    R: AnyType,
+    //,
+    func: def[T: StringLikeType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime string-like dtype to its comptime type and run `func`.
+    """
+    return variant_dispatch_raises[
+        StringLikeType, predicate=_IsStringLike, func=func
+    ](dt._v)
+
+
+def dispatch_over_binarylike[
+    R: AnyType,
+    //,
+    func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime binary-like dtype to its comptime type and run `func`.
+    """
+    return variant_dispatch_raises[
+        BinaryLikeType, predicate=_IsBinaryLike, func=func
+    ](dt._v)

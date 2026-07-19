@@ -9,8 +9,9 @@ Three tiers per operation:
   output buffer, propagates null bitmaps, dispatches CPU/GPU via ``apply()``.
   Also exported as a standalone typed function for convenience.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: runtime-typed entry
-  point; dispatches to the typed ``apply`` overload via the dtype switch in
-  ``helpers.py``. Also exported as a standalone function.
+  point; resolves the runtime dtype to the typed ``apply`` overload via
+  ``dispatch_over_numeric`` / ``dispatch_over_floating`` (``marrow.utils``).
+  Also exported as a standalone function.
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
 element values and are **not** part of this tier scheme.
@@ -23,19 +24,10 @@ from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import (
     PrimitiveType,
+    NumericType,
     FloatingType,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
 )
+from ..utils import dispatch_over_floating, dispatch_over_numeric
 from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
@@ -104,35 +96,14 @@ trait BinaryNumericKernel(BinaryKernel):
                 t"{Self.name}: dtype mismatch: {left.dtype()} vs"
                 t" {right.dtype()}"
             )
-        if left.dtype() == int8:
-            return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
-        elif left.dtype() == int16:
-            return Self.apply(left.as_int16(), right.as_int16(), ctx).to_any()
-        elif left.dtype() == int32:
-            return Self.apply(left.as_int32(), right.as_int32(), ctx).to_any()
-        elif left.dtype() == int64:
-            return Self.apply(left.as_int64(), right.as_int64(), ctx).to_any()
-        elif left.dtype() == uint8:
-            return Self.apply(left.as_uint8(), right.as_uint8(), ctx).to_any()
-        elif left.dtype() == uint16:
-            return Self.apply(left.as_uint16(), right.as_uint16(), ctx).to_any()
-        elif left.dtype() == uint32:
-            return Self.apply(left.as_uint32(), right.as_uint32(), ctx).to_any()
-        elif left.dtype() == uint64:
-            return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
-        elif left.dtype() == float16:
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
             return Self.apply(
-                left.as_float16(), right.as_float16(), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
-        elif left.dtype() == float32:
-            return Self.apply(
-                left.as_float32(), right.as_float32(), ctx
-            ).to_any()
-        elif left.dtype() == float64:
-            return Self.apply(
-                left.as_float64(), right.as_float64(), ctx
-            ).to_any()
-        raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
+
+        return dispatch_over_numeric[leaf](left.dtype())
 
 
 trait BinaryFloatKernel(BinaryKernel):
@@ -149,22 +120,14 @@ trait BinaryFloatKernel(BinaryKernel):
                 t"{Self.name}: dtype mismatch: {left.dtype()} vs"
                 t" {right.dtype()}"
             )
-        if left.dtype() == float16:
+
+        @parameter
+        def leaf[T: FloatingType](d: T) raises -> AnyArray:
             return Self.apply(
-                left.as_float16(), right.as_float16(), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
-        elif left.dtype() == float32:
-            return Self.apply(
-                left.as_float32(), right.as_float32(), ctx
-            ).to_any()
-        elif left.dtype() == float64:
-            return Self.apply(
-                left.as_float64(), right.as_float64(), ctx
-            ).to_any()
-        raise Error(
-            t"{Self.name}: unsupported dtype {left.dtype()}, expected float"
-            t" type"
-        )
+
+        return dispatch_over_floating[leaf](left.dtype())
 
 
 trait UnaryKernel(Kernel):
@@ -216,29 +179,11 @@ trait UnaryNumericKernel(UnaryKernel):
         array: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if array.dtype() == int8:
-            return Self.apply(array.as_int8(), ctx).to_any()
-        elif array.dtype() == int16:
-            return Self.apply(array.as_int16(), ctx).to_any()
-        elif array.dtype() == int32:
-            return Self.apply(array.as_int32(), ctx).to_any()
-        elif array.dtype() == int64:
-            return Self.apply(array.as_int64(), ctx).to_any()
-        elif array.dtype() == uint8:
-            return Self.apply(array.as_uint8(), ctx).to_any()
-        elif array.dtype() == uint16:
-            return Self.apply(array.as_uint16(), ctx).to_any()
-        elif array.dtype() == uint32:
-            return Self.apply(array.as_uint32(), ctx).to_any()
-        elif array.dtype() == uint64:
-            return Self.apply(array.as_uint64(), ctx).to_any()
-        elif array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx).to_any()
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx).to_any()
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx).to_any()
-        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_any()
+
+        return dispatch_over_numeric[leaf](array.dtype())
 
 
 trait UnaryFloatKernel(UnaryKernel):
@@ -249,16 +194,11 @@ trait UnaryFloatKernel(UnaryKernel):
         array: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx).to_any()
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx).to_any()
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx).to_any()
-        raise Error(
-            t"{Self.name}: unsupported dtype {array.dtype()}, expected float"
-            t" type"
-        )
+        @parameter
+        def leaf[T: FloatingType](d: T) raises -> AnyArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_any()
+
+        return dispatch_over_floating[leaf](array.dtype())
 
 
 # ---------------------------------------------------------------------------
