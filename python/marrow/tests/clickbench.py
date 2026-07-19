@@ -7,8 +7,8 @@ order-independent and float-tolerant.
 
 The queries are the GROUP BY core of a spread of ClickBench queries
 (https://github.com/ClickHouse/ClickBench), restricted to the numeric-key
-count/sum/avg/min/max marrow's ``group_by`` exposes today (ClickBench proper
-also uses COUNT(DISTINCT), string LIKE, and date functions marrow lacks;
+count/sum/avg/min/max/count_distinct marrow's ``group_by`` exposes today
+(ClickBench proper also uses string LIKE and date functions marrow lacks; most
 ORDER BY ... LIMIT is dropped so the comparison is the aggregation itself).
 
 The dataset isn't vendored — set ``MARROW_CLICKBENCH_HITS`` to a ``hits`` parquet
@@ -125,6 +125,15 @@ QUERIES = {
         pl=lambda df: df.group_by("UserID").agg(pl.len()),
         sql="SELECT UserID, count(*) FROM hits GROUP BY UserID",
     ),
+    # Q13 shape — GROUP BY with COUNT(DISTINCT): distinct UserIDs per region
+    # (mid-cardinality key, high distinct count per group).
+    "region_distinct": dict(
+        key="RegionID",
+        aggs=[("UserID", "count_distinct")],
+        pl=lambda df: df.group_by("RegionID").agg(pl.col("UserID").n_unique()),
+        sql="SELECT RegionID, count(distinct UserID) FROM hits"
+        " GROUP BY RegionID",
+    ),
     # Q16 shape — GROUP BY + ORDER BY count DESC, key ASC LIMIT 10. The key
     # tie-break makes the top-N deterministic (so it's comparable across
     # engines). ``top`` = (aggregate output column, n).
@@ -146,6 +155,13 @@ QUERIES = {
         aggs=[("AdvEngineID", "count")],
         pl=lambda df: df.select(pl.len()),
         sql="SELECT count(*) FROM hits",
+    ),
+    # Q5 — COUNT(DISTINCT UserID).
+    "distinct_users": dict(
+        key=[],
+        aggs=[("UserID", "count_distinct")],
+        pl=lambda df: df.select(pl.col("UserID").n_unique()),
+        sql="SELECT count(distinct UserID) FROM hits",
     ),
     # Q3 — SUM, COUNT(*), AVG.
     "totals": dict(
