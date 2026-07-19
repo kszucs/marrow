@@ -260,8 +260,8 @@ class RecordBatch(_Wrapper):
             for i in range(self.num_rows())
         ]
 
-    def sort_by(self, by, null_placement=None):
-        return RecordBatch.wrap(self._binding.sort_by(by, null_placement))
+    def sort_by(self, by, null_placement=None, num_threads=0):
+        return RecordBatch.wrap(self._binding.sort_by(by, null_placement, num_threads))
 
     def select(self, columns):
         return RecordBatch.wrap(self._binding.select(columns))

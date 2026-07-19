@@ -596,6 +596,7 @@ def _record_batch_sort_by(
     ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
     by: PythonObject,
     null_placement: PythonObject,
+    num_threads: PythonObject,
 ) raises -> PythonObject:
     """Sort a RecordBatch by one or more columns.
 
@@ -603,6 +604,7 @@ def _record_batch_sort_by(
         by: Column name (str), or list of (name, "ascending"/"descending")
             tuples.  A bare string sorts ascending.
         null_placement: ``"at_start"`` (default) or ``"at_end"``.
+        num_threads: 0 (auto — all cores), 1 (serial), or >=2 (that many).
     """
     var nulls_first = True
     if not null_placement.__is__(PythonObject(None)):
@@ -639,7 +641,11 @@ def _record_batch_sort_by(
                 ascending.append(asc)
 
     var result_sa = _sort_kernel(
-        ptr[].to_struct_array(), key_indices, ascending, nulls_first
+        ptr[].to_struct_array(),
+        key_indices,
+        ascending,
+        nulls_first,
+        ctx=ExecutionContext.parallel(Int(py=num_threads)),
     )
     var out_fields = List[Field]()
     for ref f in result_sa.dtype.as_struct().fields:
