@@ -125,6 +125,20 @@ QUERIES = {
         pl=lambda df: df.group_by("UserID").agg(pl.len()),
         sql="SELECT UserID, count(*) FROM hits GROUP BY UserID",
     ),
+    # Q16 shape — GROUP BY + ORDER BY count DESC, key ASC LIMIT 10. The key
+    # tie-break makes the top-N deterministic (so it's comparable across
+    # engines). ``top`` = (aggregate output column, n).
+    "user_top": dict(
+        key="UserID",
+        aggs=[("UserID", "count")],
+        top=("UserID_count", 10),
+        pl=lambda df: df.group_by("UserID")
+        .agg(pl.len().alias("UserID_count"))
+        .sort(["UserID_count", "UserID"], descending=[True, False])
+        .head(10),
+        sql="SELECT UserID, count(*) AS UserID_count FROM hits GROUP BY UserID"
+        " ORDER BY UserID_count DESC, UserID ASC LIMIT 10",
+    ),
     # ----- whole-table aggregates (no GROUP BY), key=[] -----
     # Q1 — COUNT(*).
     "count_star": dict(
@@ -186,16 +200,32 @@ def load():
     return h
 
 
+def _apply_top(res, q):
+    """Apply ORDER BY <agg> DESC, <keys> ASC LIMIT n if the query has ``top``.
+
+    marrow and pyarrow share the ``sort_by([(name, dir), ...]).slice(0, n)`` API.
+    The key tie-break makes the top-N deterministic across engines.
+    """
+    if "top" not in q:
+        return res
+    by, n = q["top"]
+    order = [(by, "descending")] + [(k, "ascending") for k in keys(q)]
+    return res.sort_by(order).slice(0, n)
+
+
 def run_native(engine, h, q):
     """Run a query and materialize the result in the engine's native form
     (this is what the benchmark times)."""
     grouped = len(keys(q)) > 0
     if engine == "marrow":
         if grouped:
-            return h["rb"].group_by(q["key"]).aggregate(q["aggs"])
-        return h["rb"].aggregate(q["aggs"])
+            res = h["rb"].group_by(q["key"]).aggregate(q["aggs"])
+        else:
+            res = h["rb"].aggregate(q["aggs"])
+        return _apply_top(res, q)
     if engine == "pyarrow":
-        return h["tbl"].group_by(keys(q)).aggregate(q["aggs"])
+        res = h["tbl"].group_by(keys(q)).aggregate(q["aggs"])
+        return _apply_top(res, q)
     if engine == "polars":
         return q["pl"](h["df"])
     if engine == "duckdb":

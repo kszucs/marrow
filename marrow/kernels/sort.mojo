@@ -659,15 +659,19 @@ def sort(
 ) raises -> StructArray:
     """Sort a StructArray by the specified key columns.
 
-    Phase 1: single key column only (``len(key_indices) == 1``).
-    Phase 2 will add multi-column permutation refinement.
+    Multi-column sort is done column-wise (no row comparator): LSD-style stable
+    passes, least-significant key first — each pass is one ``sort_indices`` over
+    a single reordered column plus a gather to compose the permutation, so a
+    later (more-significant) key sorts primarily while the earlier passes survive
+    as tie-breakers via stability.
 
     Args:
         array: Input StructArray.
-        key_indices: Column indices to sort by (Phase 1: exactly one).
+        key_indices: Column indices to sort by, most-significant first.
         ascending: Per-key sort direction.
         nulls_first: Where to place null rows.
-        stable: Preserve relative order of equal rows.
+        stable: Preserve relative order of equal rows (single-key path only;
+            the multi-key path is always stable by construction).
         limit: If set, return only the first ``limit`` rows.
         ctx: Execution context.
 
@@ -678,14 +682,44 @@ def sort(
         raise Error("sort: key_indices must not be empty")
     if len(key_indices) != len(ascending):
         raise Error("sort: key_indices and ascending must have the same length")
-    if len(key_indices) > 1:
-        raise Error(
-            "sort: multi-column sort not yet implemented (Phase 2); "
-            "pass a single key_indices element"
-        )
 
-    var key_col = array.field(key_indices[0])
-    var indices = sort_indices(
-        key_col, ascending[0], nulls_first, stable, limit, ctx
+    if len(key_indices) == 1:
+        var indices = sort_indices(
+            array.field(key_indices[0]),
+            ascending[0],
+            nulls_first,
+            stable,
+            limit,
+            ctx,
+        )
+        return _take(array, indices)
+
+    # Multi-column, column-oriented LSD: stable-sort by the least-significant
+    # key first, then successively by more-significant keys. Each pass sorts one
+    # reordered column and gathers to compose the running permutation; every
+    # pass is stable, so a less-significant key's order is preserved as the
+    # tie-break under a more-significant one.
+    var last = len(key_indices) - 1
+    var perm = sort_indices(
+        array.field(key_indices[last]),
+        ascending=ascending[last],
+        nulls_first=nulls_first,
+        stable=True,
+        ctx=ctx,
     )
-    return _take(array, indices)
+    for i in reversed(range(last)):
+        var reordered = _take(array.field(key_indices[i]), perm)
+        var local = sort_indices(
+            reordered,
+            ascending=ascending[i],
+            nulls_first=nulls_first,
+            stable=True,
+            ctx=ctx,
+        )
+        perm = _take(perm, local, ctx)
+
+    if limit:
+        var lim = limit.value()
+        if lim < len(perm):
+            perm = perm.slice(0, lim)
+    return _take(array, perm)
