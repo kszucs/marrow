@@ -1217,36 +1217,50 @@ def take(
     var bmb = Bitmap.alloc_zeroed(n)
     var null_count = 0
 
-    # Materialize the `size`-strided child indices into a raw Int32 buffer; a
-    # null index expands to `size` null child slots (child validity bitmap).
+    # Materialize the `size`-strided child indices into a raw (uninitialized)
+    # Int32 buffer. Only when some index is null do we need a child validity
+    # bitmap (a null index expands to `size` null child slots); the common
+    # no-null path skips that zeroed allocation entirely.
     var child_idx_buf = Buffer.alloc_uninit[Int32Type.native](total)
     var civ = child_idx_buf.view[Int32Type.native]()
-    var child_bm = Bitmap.alloc_zeroed(total)
+    var child_bitmap: Optional[Bitmap[]] = None
+    var child_nulls = 0
     var pos = 0
-    for k in range(n):
-        if has_null_idx and not indices.is_valid(k):
-            null_count += 1
-            for _ in range(size):
-                civ.unsafe_set(pos, Int32(0))
-                pos += 1
-        else:
+
+    if has_null_idx:
+        var child_bm = Bitmap.alloc_zeroed(total)
+        for k in range(n):
+            if not indices.is_valid(k):
+                null_count += 1
+                child_nulls += size
+                for _ in range(size):
+                    civ.unsafe_set(pos, Int32(0))
+                    pos += 1
+            else:
+                var idx = Int(indices.unsafe_get(k))
+                var base = (array.offset + idx) * size
+                for j in range(size):
+                    civ.unsafe_set(pos, Int32(base + j))
+                    child_bm.set(pos)
+                    pos += 1
+                if array.is_valid(idx):
+                    bmb.set(k)
+                else:
+                    null_count += 1
+        if child_nulls > 0:
+            child_bitmap = child_bm.to_immutable(length=total)
+    else:
+        for k in range(n):
             var idx = Int(indices.unsafe_get(k))
             var base = (array.offset + idx) * size
             for j in range(size):
                 civ.unsafe_set(pos, Int32(base + j))
-                child_bm.set(pos)
                 pos += 1
             if array.is_valid(idx):
                 bmb.set(k)
             else:
                 null_count += 1
 
-    var child_bitmap: Optional[Bitmap[]] = None
-    var child_nulls = 0
-    if has_null_idx:
-        child_nulls = total - child_bm.view().count_set_bits()
-        if child_nulls > 0:
-            child_bitmap = child_bm.to_immutable(length=total)
     var child_indices = Int32Array(
         dtype=int32,
         length=total,
