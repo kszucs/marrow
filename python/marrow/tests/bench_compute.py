@@ -466,3 +466,106 @@ def test_marrow_less(benchmark, ma_arrays, n, dtype, a, b):
 def test_pyarrow_less(benchmark, pa_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
     benchmark(pc.less, pa_arrays[a], pa_arrays[b])
+
+
+# ── Nested selection (filter / take) vs PyArrow & Polars ─────────────────────
+#
+# Nested/complex types round-tripped from a single PyArrow source into each
+# library so all three benchmark the same data. Exercises marrow's typed
+# columnar filter/take for list, struct and dictionary arrays.
+
+
+def _make_take_indices(n):
+    import random
+
+    rng = random.Random(0)
+    return [rng.randrange(n) for _ in range(n)]
+
+
+def _nested_source(n):
+    return {
+        "list": pa.array([[i, i + 1, i + 2] for i in range(n)], pa.list_(pa.int64())),
+        "struct": pa.array(
+            [{"a": i, "b": str(i)} for i in range(n)],
+            pa.struct([("a", pa.int64()), ("b", pa.string())]),
+        ),
+        "dict": pa.array([f"v{i % 32}" for i in range(n)]).dictionary_encode(),
+    }
+
+
+@pytest.fixture(scope="session")
+def nested_pa(n):
+    return _nested_source(n)
+
+
+@pytest.fixture(scope="session")
+def nested_ma(n):
+    return {k: ma.array(v) for k, v in _nested_source(n).items()}
+
+
+@pytest.fixture(scope="session")
+def nested_pl(n):
+    return {k: pl.from_arrow(v) for k, v in _nested_source(n).items()}
+
+
+@pytest.fixture(scope="session")
+def sel_ma(n):
+    return {
+        "mask": ma.array(_make_mask_random(n, 50), type=ma.bool_()),
+        "idx": ma.array(_make_take_indices(n), type=ma.int32()),
+    }
+
+
+@pytest.fixture(scope="session")
+def sel_pa(n):
+    return {
+        "mask": pa.array(_make_mask_random(n, 50), pa.bool_()),
+        "idx": pa.array(_make_take_indices(n), pa.int32()),
+    }
+
+
+@pytest.fixture(scope="session")
+def sel_pl(n):
+    return {
+        "mask": pl.Series(_make_mask_random(n, 50), dtype=pl.Boolean),
+        "idx": pl.Series(_make_take_indices(n), dtype=pl.Int32),
+    }
+
+
+_nested_keys = pytest.mark.parametrize("key", ["list", "struct", "dict"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_marrow_filter_nested(benchmark, nested_ma, sel_ma, key):
+    benchmark(ma.filter, nested_ma[key], sel_ma["mask"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_pyarrow_filter_nested(benchmark, nested_pa, sel_pa, key):
+    benchmark(nested_pa[key].filter, sel_pa["mask"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_polars_filter_nested(benchmark, nested_pl, sel_pl, key):
+    benchmark(nested_pl[key].filter, sel_pl["mask"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_marrow_take_nested(benchmark, nested_ma, sel_ma, key):
+    benchmark(ma.take, nested_ma[key], sel_ma["idx"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_pyarrow_take_nested(benchmark, nested_pa, sel_pa, key):
+    benchmark(nested_pa[key].take, sel_pa["idx"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_polars_take_nested(benchmark, nested_pl, sel_pl, key):
+    benchmark(nested_pl[key].gather, sel_pl["idx"])
