@@ -25,6 +25,8 @@ from ..arrays import (
     PrimitiveArray,
     StringArray,
     StructArray,
+    ListLikeArray,
+    FixedSizeListArray,
     AnyArray,
     UInt64Array,
 )
@@ -34,6 +36,7 @@ from ..views import apply
 from .execution import ExecutionContext
 from ..dtypes import (
     PrimitiveType,
+    ListLikeType,
     Int8Type,
     Int16Type,
     Int32Type,
@@ -403,6 +406,53 @@ def rapidhash(
     return result^
 
 
+def rapidhash[
+    T: ListLikeType
+](
+    keys: ListLikeArray[T],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> UInt64Array:
+    """Hash a list/large-list/map array row-wise: hash the whole child once, then
+    fold the child hashes over each row's element range (column-wise, no
+    row-encoding). Null rows hash to ``NULL_HASH_SENTINEL``."""
+    var n = len(keys)
+    var child_hashes = rapidhash(keys.values().copy(), ctx)
+    var builder = UInt64Builder(n)
+    for i in range(n):
+        if not keys.is_valid(i):
+            builder.append(NULL_HASH_SENTINEL)
+        else:
+            var h = UInt64(0)
+            var rng = keys.child_range(i)
+            for j in range(rng[0], rng[1]):
+                h = _combine_hashes[1](h, child_hashes.unsafe_get(j))
+            builder.append(h)
+    return builder.finish()
+
+
+def rapidhash(
+    keys: FixedSizeListArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> UInt64Array:
+    """Hash a fixed-size-list array row-wise: hash the child once, fold each
+    row's ``list_size`` child hashes. Null rows hash to ``NULL_HASH_SENTINEL``.
+    """
+    var n = len(keys)
+    var size = keys.dtype.as_fixed_size_list().size
+    var child_hashes = rapidhash(keys.values().copy(), ctx)
+    var builder = UInt64Builder(n)
+    for i in range(n):
+        if not keys.is_valid(i):
+            builder.append(NULL_HASH_SENTINEL)
+        else:
+            var h = UInt64(0)
+            var base = (keys.offset + i) * size
+            for j in range(size):
+                h = _combine_hashes[1](h, child_hashes.unsafe_get(base + j))
+            builder.append(h)
+    return builder.finish()
+
+
 def rapidhash(
     keys: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
@@ -436,6 +486,14 @@ def rapidhash(
         return rapidhash(keys.as_string(), ctx)
     elif keys.dtype().is_struct():
         return rapidhash(keys.as_struct(), ctx)
+    elif keys.dtype().is_list():
+        return rapidhash(keys.as_list(), ctx)
+    elif keys.dtype().is_large_list():
+        return rapidhash(keys.as_large_list(), ctx)
+    elif keys.dtype().is_map():
+        return rapidhash(keys.as_map(), ctx)
+    elif keys.dtype().is_fixed_size_list():
+        return rapidhash(keys.as_fixed_size_list(), ctx)
     else:
         raise Error("rapidhash: unsupported dtype ", keys.dtype())
 

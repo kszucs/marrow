@@ -12,11 +12,12 @@ from marrow.dtypes import int64, float64, Int64Type, Float64Type
 
 from marrow.kernels.compare import (
     equal,
-    not_equal,
-    less,
-    less_equal,
-    greater,
-    greater_equal,
+    EqKernel,
+    NeKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
 )
 
 
@@ -29,7 +30,7 @@ def test_equal_true_and_false() raises:
     """Equal: True where values match, False elsewhere."""
     var a = array([1, 2, 3, 4, 5], int64)
     var b = array([1, 0, 3, 0, 5], int64)
-    var result = equal[Int64Type](a, b)
+    var result = EqKernel.apply[Int64Type](a, b)
 
     assert_true(result[0].value())  # 1 == 1
     assert_false(result[1].value())  # 2 != 0
@@ -42,7 +43,7 @@ def test_not_equal() raises:
     """``not_equal`` is the inverse of equal."""
     var a = array([1, 2, 3], int64)
     var b = array([1, 9, 3], int64)
-    var result = not_equal[Int64Type](a, b)
+    var result = NeKernel.apply[Int64Type](a, b)
 
     assert_false(result[0].value())  # 1 == 1
     assert_true(result[1].value())  # 2 != 9
@@ -53,7 +54,7 @@ def test_less() raises:
     """``less``: True where a < b."""
     var a = array([1, 5, 3, 10], int64)
     var b = array([5, 1, 3, 20], int64)
-    var result = less[Int64Type](a, b)
+    var result = LtKernel.apply[Int64Type](a, b)
 
     assert_true(result[0].value())  # 1 < 5
     assert_false(result[1].value())  # 5 > 1
@@ -65,7 +66,7 @@ def test_less_equal() raises:
     """``less_equal``: True where a <= b."""
     var a = array([1, 5, 3, 10], int64)
     var b = array([5, 1, 3, 20], int64)
-    var result = less_equal[Int64Type](a, b)
+    var result = LeKernel.apply[Int64Type](a, b)
 
     assert_true(result[0].value())  # 1 <= 5
     assert_false(result[1].value())  # 5 > 1
@@ -77,7 +78,7 @@ def test_greater() raises:
     """``greater``: True where a > b."""
     var a = array([5, 1, 3, 20], int64)
     var b = array([1, 5, 3, 10], int64)
-    var result = greater[Int64Type](a, b)
+    var result = GtKernel.apply[Int64Type](a, b)
 
     assert_true(result[0].value())  # 5 > 1
     assert_false(result[1].value())  # 1 < 5
@@ -89,7 +90,7 @@ def test_greater_equal() raises:
     """``greater_equal``: True where a >= b."""
     var a = array([5, 1, 3, 20], int64)
     var b = array([1, 5, 3, 10], int64)
-    var result = greater_equal[Int64Type](a, b)
+    var result = GeKernel.apply[Int64Type](a, b)
 
     assert_true(result[0].value())  # 5 >= 1
     assert_false(result[1].value())  # 1 < 5
@@ -114,7 +115,7 @@ def test_less_float64() raises:
     bb.unsafe_append(5.0)
     var a = ab.finish()
     var b = bb.finish()
-    var result = less[Float64Type](a, b)
+    var result = LtKernel.apply[Float64Type](a, b)
 
     assert_false(result[0].value())  # 1.0 == 1.0
     assert_false(result[1].value())  # 2.5 > 2.0
@@ -132,7 +133,7 @@ def test_length_mismatch_raises() raises:
     var b = array([1, 2], int64)
     var raised = False
     try:
-        _ = equal[Int64Type](a, b)
+        _ = EqKernel.apply[Int64Type](a, b)
     except:
         raised = True
     assert_true(raised)
@@ -147,8 +148,8 @@ def test_single_element() raises:
     """Comparisons work on length-1 arrays."""
     var a = array([7], int64)
     var b = array([7], int64)
-    assert_true(equal[Int64Type](a, b)[0].value())
-    assert_false(less[Int64Type](a, b)[0].value())
+    assert_true(EqKernel.apply[Int64Type](a, b)[0].value())
+    assert_false(LtKernel.apply[Int64Type](a, b)[0].value())
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +162,7 @@ def test_non_aligned_length() raises:
     var n = 7
     var a = array([1, 2, 3, 4, 5, 6, 7], int64)
     var b = array([7, 6, 5, 4, 3, 2, 1], int64)
-    var result = less[Int64Type](a, b)
+    var result = LtKernel.apply[Int64Type](a, b)
 
     for i in range(n):
         var expected = a[i].value() < b[i].value()
@@ -177,7 +178,7 @@ def test_output_length() raises:
     """Output array has the same length as inputs."""
     var a = array([10, 20, 30, 40, 50], int64)
     var b = array([10, 10, 40, 40, 40], int64)
-    var result = greater_equal[Int64Type](a, b)
+    var result = GeKernel.apply[Int64Type](a, b)
     assert_equal(len(result), 5)
 
 
@@ -221,7 +222,7 @@ def test_equal_large_array() raises:
         bb.unsafe_append(Scalar[int64.native](i))
     var a = ab.finish()
     var b = bb.finish()
-    var result = equal[Int64Type](a, b)
+    var result = EqKernel.apply[Int64Type](a, b)
     assert_equal(len(result), n)
     for i in range(n):
         assert_true(result[i].value())

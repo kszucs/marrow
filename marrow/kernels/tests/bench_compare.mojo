@@ -7,7 +7,7 @@ from std.benchmark import BenchMetric, keep
 
 from marrow.builders import arange
 from marrow.dtypes import Int32Type, Int64Type
-from marrow.kernels.compare import equal
+from marrow.kernels.compare import EqKernel
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -24,7 +24,7 @@ def bench_equal_int32_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int32Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
     b.iter[call]()
 
@@ -37,7 +37,7 @@ def bench_equal_int32_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int32Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
     b.iter[call]()
 
@@ -50,7 +50,7 @@ def bench_equal_int32_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int32Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int32Type](lhs, rhs)))
 
     b.iter[call]()
 
@@ -68,7 +68,7 @@ def bench_equal_int64_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int64Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
     b.iter[call]()
 
@@ -81,7 +81,7 @@ def bench_equal_int64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int64Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
     b.iter[call]()
 
@@ -94,7 +94,7 @@ def bench_equal_int64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(len(equal[Int64Type](lhs, rhs)))
+        keep(len(EqKernel.apply[Int64Type](lhs, rhs)))
 
     b.iter[call]()
 

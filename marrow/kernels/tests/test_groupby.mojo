@@ -34,7 +34,6 @@ from marrow.kernels.aggregate import (
     MaxKernel,
     CountKernel,
     MeanKernel,
-    sum,
     AGG_COUNT_DISTINCT,
 )
 
@@ -340,7 +339,9 @@ def _assert_matches_expected(result: RecordBatch) raises:
     `i % 50` over `i` in 0..2999, so group k holds {k, k+50, ..., k+50*59} and
     its sum is 60*k + 88500."""
     assert_equal(result.num_rows(), 50)
-    assert_equal(sum(result.column(1)).as_int64().value(), 4498500)
+    assert_equal(
+        SumKernel.dispatch(result.column(1)).as_int64().value(), 4498500
+    )
     ref pk = result.column(0).as_int32()
     ref ps = result.column(1).as_int64()
     for i in range(result.num_rows()):

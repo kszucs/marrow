@@ -235,7 +235,7 @@ def test_fused_column_write_to() raises:
 def test_fused_add_write_to() raises:
     """Add.write_to produces nested readable output."""
     var expr = Add(col("a", int64), col("b", int64))
-    assert_equal(String(expr), "Add(Col[a], Col[b])")
+    assert_equal(String(expr), "add(Col[a], Col[b])")
 
 
 # ---------------------------------------------------------------------------

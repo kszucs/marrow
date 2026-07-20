@@ -7,10 +7,9 @@ Three tiers per operation:
   kernel fusion.
 - **Tier 1 (apply)** — ``KernelStruct.apply[T: PrimitiveType]``: allocates an
   output buffer, propagates null bitmaps, dispatches CPU/GPU via ``apply()``.
-  Also exported as a standalone typed function for convenience.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: runtime-typed entry
-  point; dispatches to the typed ``apply`` overload via the dtype switch in
-  ``helpers.py``. Also exported as a standalone function.
+  point; resolves the runtime dtype to the typed ``apply`` overload via
+  ``dispatch_over_numeric`` / ``dispatch_over_floating`` (``marrow.utils``).
 
 Structural kernels (filter, sort, concat, …) operate on array layout rather than
 element values and are **not** part of this tier scheme.
@@ -23,19 +22,10 @@ from ..buffers import Buffer
 from ..views import apply
 from ..dtypes import (
     PrimitiveType,
+    NumericType,
     FloatingType,
-    int8,
-    int16,
-    int32,
-    int64,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
-    float16,
-    float32,
-    float64,
 )
+from ..utils import dispatch_over_floating, dispatch_over_numeric
 from .helpers import Kernel, bitmap_and
 from .execution import ExecutionContext
 
@@ -104,35 +94,14 @@ trait BinaryNumericKernel(BinaryKernel):
                 t"{Self.name}: dtype mismatch: {left.dtype()} vs"
                 t" {right.dtype()}"
             )
-        if left.dtype() == int8:
-            return Self.apply(left.as_int8(), right.as_int8(), ctx).to_any()
-        elif left.dtype() == int16:
-            return Self.apply(left.as_int16(), right.as_int16(), ctx).to_any()
-        elif left.dtype() == int32:
-            return Self.apply(left.as_int32(), right.as_int32(), ctx).to_any()
-        elif left.dtype() == int64:
-            return Self.apply(left.as_int64(), right.as_int64(), ctx).to_any()
-        elif left.dtype() == uint8:
-            return Self.apply(left.as_uint8(), right.as_uint8(), ctx).to_any()
-        elif left.dtype() == uint16:
-            return Self.apply(left.as_uint16(), right.as_uint16(), ctx).to_any()
-        elif left.dtype() == uint32:
-            return Self.apply(left.as_uint32(), right.as_uint32(), ctx).to_any()
-        elif left.dtype() == uint64:
-            return Self.apply(left.as_uint64(), right.as_uint64(), ctx).to_any()
-        elif left.dtype() == float16:
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
             return Self.apply(
-                left.as_float16(), right.as_float16(), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
-        elif left.dtype() == float32:
-            return Self.apply(
-                left.as_float32(), right.as_float32(), ctx
-            ).to_any()
-        elif left.dtype() == float64:
-            return Self.apply(
-                left.as_float64(), right.as_float64(), ctx
-            ).to_any()
-        raise Error(t"{Self.name}: unsupported dtype {left.dtype()}")
+
+        return dispatch_over_numeric[leaf](left.dtype())
 
 
 trait BinaryFloatKernel(BinaryKernel):
@@ -149,22 +118,14 @@ trait BinaryFloatKernel(BinaryKernel):
                 t"{Self.name}: dtype mismatch: {left.dtype()} vs"
                 t" {right.dtype()}"
             )
-        if left.dtype() == float16:
+
+        @parameter
+        def leaf[T: FloatingType](d: T) raises -> AnyArray:
             return Self.apply(
-                left.as_float16(), right.as_float16(), ctx
+                left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
-        elif left.dtype() == float32:
-            return Self.apply(
-                left.as_float32(), right.as_float32(), ctx
-            ).to_any()
-        elif left.dtype() == float64:
-            return Self.apply(
-                left.as_float64(), right.as_float64(), ctx
-            ).to_any()
-        raise Error(
-            t"{Self.name}: unsupported dtype {left.dtype()}, expected float"
-            t" type"
-        )
+
+        return dispatch_over_floating[leaf](left.dtype())
 
 
 trait UnaryKernel(Kernel):
@@ -216,29 +177,11 @@ trait UnaryNumericKernel(UnaryKernel):
         array: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if array.dtype() == int8:
-            return Self.apply(array.as_int8(), ctx).to_any()
-        elif array.dtype() == int16:
-            return Self.apply(array.as_int16(), ctx).to_any()
-        elif array.dtype() == int32:
-            return Self.apply(array.as_int32(), ctx).to_any()
-        elif array.dtype() == int64:
-            return Self.apply(array.as_int64(), ctx).to_any()
-        elif array.dtype() == uint8:
-            return Self.apply(array.as_uint8(), ctx).to_any()
-        elif array.dtype() == uint16:
-            return Self.apply(array.as_uint16(), ctx).to_any()
-        elif array.dtype() == uint32:
-            return Self.apply(array.as_uint32(), ctx).to_any()
-        elif array.dtype() == uint64:
-            return Self.apply(array.as_uint64(), ctx).to_any()
-        elif array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx).to_any()
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx).to_any()
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx).to_any()
-        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_any()
+
+        return dispatch_over_numeric[leaf](array.dtype())
 
 
 trait UnaryFloatKernel(UnaryKernel):
@@ -249,16 +192,11 @@ trait UnaryFloatKernel(UnaryKernel):
         array: AnyArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        if array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx).to_any()
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx).to_any()
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx).to_any()
-        raise Error(
-            t"{Self.name}: unsupported dtype {array.dtype()}, expected float"
-            t" type"
-        )
+        @parameter
+        def leaf[T: FloatingType](d: T) raises -> AnyArray:
+            return Self.apply(array.as_primitive[T](), ctx).to_any()
+
+        return dispatch_over_floating[leaf](array.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -515,456 +453,3 @@ struct CosKernel(UnaryFloatKernel):
     def core[T: DType, W: Int](a: SIMD[T, W]) -> SIMD[T, W]:
         comptime assert T.is_floating_point()
         return math.cos(a)
-
-
-# ---------------------------------------------------------------------------
-# Public API — typed thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def add[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise addition."""
-    return AddKernel.apply[T](left, right, ctx)
-
-
-def subtract[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise subtraction."""
-    return SubKernel.apply[T](left, right, ctx)
-
-
-def multiply[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise multiplication."""
-    return MulKernel.apply[T](left, right, ctx)
-
-
-def divide[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise true division."""
-    return DivKernel.apply[T](left, right, ctx)
-
-
-def floordiv[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise floor division."""
-    return FloordivKernel.apply[T](left, right, ctx)
-
-
-def mod[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise modulo."""
-    return ModKernel.apply[T](left, right, ctx)
-
-
-def min_element_wise[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise minimum."""
-    return MinKernel.apply[T](left, right, ctx)
-
-
-def max_element_wise[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise maximum."""
-    return MaxKernel.apply[T](left, right, ctx)
-
-
-def pow_[
-    T: FloatingType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise power: result[i] = left[i] ** right[i]."""
-    return PowKernel.apply[T](left, right, ctx)
-
-
-def neg[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise negation."""
-    return NegKernel.apply[T](array, ctx)
-
-
-def abs_[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise absolute value."""
-    return AbsKernel.apply[T](array, ctx)
-
-
-def sign[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise sign: -1, 0, or 1."""
-    return SignKernel.apply[T](array, ctx)
-
-
-def sqrt[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise square root."""
-    return SqrtKernel.apply[T](array, ctx)
-
-
-def exp[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise natural exponential (e^x)."""
-    return ExpKernel.apply[T](array, ctx)
-
-
-def exp2[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise base-2 exponential (2^x)."""
-    return Exp2Kernel.apply[T](array, ctx)
-
-
-def log[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise natural logarithm."""
-    return LogKernel.apply[T](array, ctx)
-
-
-def log2[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise base-2 logarithm."""
-    return Log2Kernel.apply[T](array, ctx)
-
-
-def log10[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise base-10 logarithm."""
-    return Log10Kernel.apply[T](array, ctx)
-
-
-def log1p[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise log(1 + x)."""
-    return Log1pKernel.apply[T](array, ctx)
-
-
-def floor[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise floor."""
-    return FloorKernel.apply[T](array, ctx)
-
-
-def ceil[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise ceiling."""
-    return CeilKernel.apply[T](array, ctx)
-
-
-def trunc[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise truncation toward zero."""
-    return TruncKernel.apply[T](array, ctx)
-
-
-def round[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise rounding to nearest integer."""
-    return RoundKernel.apply[T](array, ctx)
-
-
-def sin[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise sine."""
-    return SinKernel.apply[T](array, ctx)
-
-
-def cos[
-    T: FloatingType
-](
-    array: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[T]:
-    """Element-wise cosine."""
-    return CosKernel.apply[T](array, ctx)
-
-
-# ---------------------------------------------------------------------------
-# Runtime dispatch — AnyArray-typed thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def add(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return AddKernel.dispatch(left, right, ctx)
-
-
-def subtract(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return SubKernel.dispatch(left, right, ctx)
-
-
-def multiply(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return MulKernel.dispatch(left, right, ctx)
-
-
-def divide(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return DivKernel.dispatch(left, right, ctx)
-
-
-def floordiv(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return FloordivKernel.dispatch(left, right, ctx)
-
-
-def mod(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return ModKernel.dispatch(left, right, ctx)
-
-
-def min_element_wise(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return MinKernel.dispatch(left, right, ctx)
-
-
-def max_element_wise(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return MaxKernel.dispatch(left, right, ctx)
-
-
-def neg(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return NegKernel.dispatch(array, ctx)
-
-
-def abs_(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return AbsKernel.dispatch(array, ctx)
-
-
-def sign(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return SignKernel.dispatch(array, ctx)
-
-
-def pow_(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return PowKernel.dispatch(left, right, ctx)
-
-
-def sqrt(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return SqrtKernel.dispatch(array, ctx)
-
-
-def exp(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return ExpKernel.dispatch(array, ctx)
-
-
-def exp2(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return Exp2Kernel.dispatch(array, ctx)
-
-
-def log(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return LogKernel.dispatch(array, ctx)
-
-
-def log2(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return Log2Kernel.dispatch(array, ctx)
-
-
-def log10(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return Log10Kernel.dispatch(array, ctx)
-
-
-def log1p(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return Log1pKernel.dispatch(array, ctx)
-
-
-def floor(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return FloorKernel.dispatch(array, ctx)
-
-
-def ceil(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return CeilKernel.dispatch(array, ctx)
-
-
-def trunc(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return TruncKernel.dispatch(array, ctx)
-
-
-def round(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return RoundKernel.dispatch(array, ctx)
-
-
-def sin(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return SinKernel.dispatch(array, ctx)
-
-
-def cos(
-    array: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return CosKernel.dispatch(array, ctx)

@@ -202,6 +202,7 @@ _FILTER_CASES = [
     ("float64_50pct", "float64_a", "mask_50", 50, "uniform"),
     ("string_50pct", "string", "mask_50", 50, "uniform"),
     ("string_10pct", "string", "mask_10", 10, "uniform"),
+    ("string_rand50", "string", "mask_rand50", 50, "random"),
     ("int64_rand50", "int64_a", "mask_rand50", 50, "random"),
     ("int64_rand10", "int64_a", "mask_rand10", 10, "random"),
     ("int64_rand90", "int64_a", "mask_rand90", 90, "random"),
@@ -466,3 +467,163 @@ def test_marrow_less(benchmark, ma_arrays, n, dtype, a, b):
 def test_pyarrow_less(benchmark, pa_arrays, n, dtype, a, b):
     benchmark.extra_info.update(lib="pyarrow", n=n, dtype=dtype)
     benchmark(pc.less, pa_arrays[a], pa_arrays[b])
+
+
+# ── Nested selection (filter / take) vs PyArrow & Polars ─────────────────────
+#
+# Nested/complex types round-tripped from a single PyArrow source into each
+# library so all three benchmark the same data. Exercises marrow's typed
+# columnar filter/take for list, struct and dictionary arrays.
+
+
+def _make_take_indices(n):
+    import random
+
+    rng = random.Random(0)
+    return [rng.randrange(n) for _ in range(n)]
+
+
+def _nested_source(n):
+    return {
+        "list": pa.array([[i, i + 1, i + 2] for i in range(n)], pa.list_(pa.int64())),
+        "struct": pa.array(
+            [{"a": i, "b": str(i)} for i in range(n)],
+            pa.struct([("a", pa.int64()), ("b", pa.string())]),
+        ),
+        "dict": pa.array([f"v{i % 32}" for i in range(n)]).dictionary_encode(),
+    }
+
+
+@pytest.fixture(scope="session")
+def nested_pa(n):
+    return _nested_source(n)
+
+
+@pytest.fixture(scope="session")
+def nested_ma(n):
+    return {k: ma.array(v) for k, v in _nested_source(n).items()}
+
+
+@pytest.fixture(scope="session")
+def nested_pl(n):
+    return {k: pl.from_arrow(v) for k, v in _nested_source(n).items()}
+
+
+@pytest.fixture(scope="session")
+def sel_ma(n):
+    return {
+        "mask": ma.array(_make_mask_random(n, 50), type=ma.bool_()),
+        "idx": ma.array(_make_take_indices(n), type=ma.int32()),
+    }
+
+
+@pytest.fixture(scope="session")
+def sel_pa(n):
+    return {
+        "mask": pa.array(_make_mask_random(n, 50), pa.bool_()),
+        "idx": pa.array(_make_take_indices(n), pa.int32()),
+    }
+
+
+@pytest.fixture(scope="session")
+def sel_pl(n):
+    return {
+        "mask": pl.Series(_make_mask_random(n, 50), dtype=pl.Boolean),
+        "idx": pl.Series(_make_take_indices(n), dtype=pl.Int32),
+    }
+
+
+_nested_keys = pytest.mark.parametrize("key", ["list", "struct", "dict"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_marrow_filter_nested(benchmark, nested_ma, sel_ma, key):
+    benchmark(ma.filter, nested_ma[key], sel_ma["mask"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_pyarrow_filter_nested(benchmark, nested_pa, sel_pa, key):
+    benchmark(nested_pa[key].filter, sel_pa["mask"])
+
+
+@pytest.mark.benchmark(group="filter_nested")
+@_nested_keys
+def test_polars_filter_nested(benchmark, nested_pl, sel_pl, key):
+    benchmark(nested_pl[key].filter, sel_pl["mask"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_marrow_take_nested(benchmark, nested_ma, sel_ma, key):
+    benchmark(ma.take, nested_ma[key], sel_ma["idx"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_pyarrow_take_nested(benchmark, nested_pa, sel_pa, key):
+    benchmark(nested_pa[key].take, sel_pa["idx"])
+
+
+@pytest.mark.benchmark(group="take_nested")
+@_nested_keys
+def test_polars_take_nested(benchmark, nested_pl, sel_pl, key):
+    benchmark(nested_pl[key].gather, sel_pl["idx"])
+
+
+# ── Nested hashing (group-by on a nested key) vs Polars ──────────────────────
+#
+# Exercises marrow's nested `rapidhash` end-to-end through a grouped sum on a
+# list/struct key column. PyArrow is omitted: it raises ArrowNotImplementedError
+# for keys of list/struct type, so only marrow and polars can group nested keys.
+
+_HASH_GROUPS = 1000  # distinct key values → real hash-table work
+
+
+def _hash_source(n):
+    return {
+        "list": pa.array(
+            [[i % _HASH_GROUPS, (i + 1) % _HASH_GROUPS] for i in range(n)],
+            pa.list_(pa.int64()),
+        ),
+        "struct": pa.array(
+            [{"a": i % _HASH_GROUPS, "b": (i + 1) % _HASH_GROUPS} for i in range(n)],
+            pa.struct([("a", pa.int64()), ("b", pa.int64())]),
+        ),
+    }
+
+
+@pytest.fixture(scope="session")
+def hash_ma(n):
+    v = list(range(n))
+    return {
+        k: ma.record_batch({"k": ma.array(arr), "v": ma.array(v)})
+        for k, arr in _hash_source(n).items()
+    }
+
+
+@pytest.fixture(scope="session")
+def hash_pl(n):
+    v = list(range(n))
+    return {
+        k: pl.DataFrame({"k": pl.from_arrow(arr), "v": pl.Series(v)})
+        for k, arr in _hash_source(n).items()
+    }
+
+
+_hash_keys = pytest.mark.parametrize("key", ["list", "struct"])
+
+
+@pytest.mark.benchmark(group="groupby_nested")
+@_hash_keys
+def test_marrow_groupby_nested(benchmark, hash_ma, key):
+    rb = hash_ma[key]
+    benchmark(lambda: rb.group_by("k").aggregate([("v", "sum")]))
+
+
+@pytest.mark.benchmark(group="groupby_nested")
+@_hash_keys
+def test_polars_groupby_nested(benchmark, hash_pl, key):
+    df = hash_pl[key]
+    benchmark(lambda: df.group_by("k").agg(pl.col("v").sum()))

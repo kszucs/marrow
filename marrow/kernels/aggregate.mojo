@@ -11,8 +11,9 @@ path (used by ``mean``/``count``), and same-type reductions
 fast path.
 
 Runtime ``name -> kernel`` selection lives in the expression layer
-(``marrow/expr``), mirroring ``DynValue``'s tag switch. The only runtime *data*
-dtype switch is the boundary bridge ``for_value_dtype``.
+(``marrow/expr``), mirroring ``DynValue``'s tag switch. The runtime *data* dtype
+is resolved to the comptime ``V`` at the boundary via ``dispatch_over_numeric``
+(``marrow.utils``), so ``AggState[K, V]`` itself is fully typed with no dispatch.
 """
 
 import std.math as math
@@ -21,6 +22,7 @@ from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
 from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
 from ..dtypes import *
 from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
+from ..utils import dispatch_over_numeric
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -37,10 +39,9 @@ def _reduce_widened[
     each lane to `Acc` as it is loaded), so no widened copy of the input is
     materialized; when the input is already the accumulator width the per-lane
     cast is a compile-time no-op."""
-    var box = List[AnyScalar]()
 
     @parameter
-    def run[V: NumericType]() raises:
+    def run[V: NumericType](d: V) raises -> AnyScalar:
         comptime Acc = K.AccType[V].native
         var identity = K.identity[Acc]()
         ref prim = array.as_primitive[V]()
@@ -53,10 +54,9 @@ def _reduce_widened[
             value = reduce[V.native, K.combine, Acc](
                 prim.values(), identity, ctx
             )
-        box.append(PrimitiveScalar[K.AccType[V]](value).to_any())
+        return PrimitiveScalar[K.AccType[V]](value).to_any()
 
-    for_value_dtype[run](array.dtype())
-    return box[0].copy()
+    return dispatch_over_numeric[run](array.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -124,16 +124,14 @@ trait AggKernel(Kernel):
         for _ in range(n):
             gb.append(Scalar[int32.native](0))
         var gids = gb.finish()
-        var box = List[AnyScalar]()
 
         @parameter
-        def job[V: NumericType]() raises:
+        def job[V: NumericType](d: V) raises -> AnyScalar:
             var state = AggState[Self, V]()
             state.update(gids, array.as_primitive[V](), 1)
-            box.append(state.finish(1)[0])
+            return state.finish(1)[0]
 
-        for_value_dtype[job](array.dtype())
-        return box[0].copy()
+        return dispatch_over_numeric[job](array.dtype())
 
     @staticmethod
     def apply[
@@ -162,29 +160,12 @@ trait AggKernel(Kernel):
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyScalar:
         """Runtime-dtype entry to the SIMD `apply` (same-type reductions)."""
-        if array.dtype() == int8:
-            return Self.apply(array.as_int8(), ctx)
-        elif array.dtype() == int16:
-            return Self.apply(array.as_int16(), ctx)
-        elif array.dtype() == int32:
-            return Self.apply(array.as_int32(), ctx)
-        elif array.dtype() == int64:
-            return Self.apply(array.as_int64(), ctx)
-        elif array.dtype() == uint8:
-            return Self.apply(array.as_uint8(), ctx)
-        elif array.dtype() == uint16:
-            return Self.apply(array.as_uint16(), ctx)
-        elif array.dtype() == uint32:
-            return Self.apply(array.as_uint32(), ctx)
-        elif array.dtype() == uint64:
-            return Self.apply(array.as_uint64(), ctx)
-        elif array.dtype() == float16:
-            return Self.apply(array.as_float16(), ctx)
-        elif array.dtype() == float32:
-            return Self.apply(array.as_float32(), ctx)
-        elif array.dtype() == float64:
-            return Self.apply(array.as_float64(), ctx)
-        raise Error(t"{Self.name}: unsupported dtype {array.dtype()}")
+
+        @parameter
+        def leaf[T: NumericType](d: T) raises -> AnyScalar:
+            return Self.apply(array.as_primitive[T](), ctx)
+
+        return dispatch_over_numeric[leaf](array.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -433,95 +414,6 @@ def for_agg_tag[
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def sum[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> PrimitiveScalar[T]:
-    """Sum all valid (non-null) elements. Returns 0 if empty or all null."""
-    return SumKernel.apply[T](array, ctx)
-
-
-def sum(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    return SumKernel.dispatch(array, ctx)
-
-
-def product[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> PrimitiveScalar[T]:
-    """Multiply all valid (non-null) elements. Returns 1 if empty or all null.
-    """
-    return ProductKernel.apply[T](array, ctx)
-
-
-def product(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    return ProductKernel.dispatch(array, ctx)
-
-
-def min[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> PrimitiveScalar[T]:
-    """Minimum of all valid (non-null) elements.
-
-    Returns MAX_FINITE if empty or all null.
-    """
-    return MinKernel.apply[T](array, ctx)
-
-
-def min(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    return MinKernel.dispatch(array, ctx)
-
-
-def max[
-    T: PrimitiveType
-](
-    array: PrimitiveArray[T], ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> PrimitiveScalar[T]:
-    """Maximum of all valid (non-null) elements.
-
-    Returns MIN_FINITE if empty or all null.
-    """
-    return MaxKernel.apply[T](array, ctx)
-
-
-def max(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    return MaxKernel.dispatch(array, ctx)
-
-
-# ---------------------------------------------------------------------------
-# mean — arithmetic mean as float64
-# ---------------------------------------------------------------------------
-
-
-def mean(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> AnyScalar:
-    """Arithmetic mean of all valid (non-null) elements, as float64.
-
-    A whole-array reduction like ``sum``/``min``/``max`` — the single-(full-)group
-    case of ``MeanKernel``. Returns a null float64 scalar for an empty or all-null
-    array. Mirrors ``pyarrow.compute.mean``.
-    """
-    return MeanKernel.reduce(array, ctx)
-
-
-# ---------------------------------------------------------------------------
 # any / all  (bool arrays) — implemented via SIMD bitmap operations
 # ---------------------------------------------------------------------------
 
@@ -602,53 +494,13 @@ def all(
 # added by pairing its `AggKernel` with a different state struct exposing the
 # same `update`/`finish` shape.
 
-# ---------------------------------------------------------------------------
-# for_value_dtype — the one runtime data-dtype -> comptime `V` bridge.
-#
-# The input array's dtype is a runtime fact, so *some* switch must cross into
-# the typed world. It lives here (not inside `AggState`), invoked once at the
-# boundary — `AggKernel.reduce`, `group_by[K]`, and the expression-layer
-# processor — so `AggState[K, V]` itself is fully typed with no dispatch.
-# ---------------------------------------------------------------------------
-
-
-def for_value_dtype[
-    job: def[V: NumericType]() raises capturing[_] -> None
-](dtype: AnyDataType) raises:
-    """Resolve a runtime numeric dtype to the comptime `V` and run `job[V]()`.
-    """
-    if dtype == int8:
-        job[Int8Type]()
-    elif dtype == int16:
-        job[Int16Type]()
-    elif dtype == int32:
-        job[Int32Type]()
-    elif dtype == int64:
-        job[Int64Type]()
-    elif dtype == uint8:
-        job[UInt8Type]()
-    elif dtype == uint16:
-        job[UInt16Type]()
-    elif dtype == uint32:
-        job[UInt32Type]()
-    elif dtype == uint64:
-        job[UInt64Type]()
-    elif dtype == float16:
-        job[Float16Type]()
-    elif dtype == float32:
-        job[Float32Type]()
-    elif dtype == float64:
-        job[Float64Type]()
-    else:
-        raise Error("aggregate: unsupported input dtype ", dtype)
-
 
 # ---------------------------------------------------------------------------
 # AggState — per-group state for a *fully typed* (kernel, input dtype) pair.
 #
 # `acc` is a real `PrimitiveBuilder[K.AccType[V]]` (not erased), so `update` /
 # `finish` carry no dtype dispatch at all — the runtime dtype was resolved once
-# at the boundary by `for_value_dtype`. The count column drives NULL output for
+# at the boundary by `dispatch_over_numeric`. The count column drives NULL output for
 # empty/all-null groups and the `mean` divisor. A richer aggregate (variance,
 # distinct, ...) pairs its kernel with a different state struct of this shape.
 #
@@ -663,7 +515,7 @@ struct AggState[K: AggKernel, V: NumericType](Movable):
     (`Acc = K.AccType[V]`), `update` takes a `PrimitiveArray[V]`, and `finish`
     returns a `PrimitiveArray[Acc]` — no `AnyBuilder`/`AnyArray`/`AnyScalar`
     anywhere, so the hot loops are fully monomorphized. The runtime dtype was
-    resolved once at the boundary (`for_value_dtype`) before this type existed.
+    resolved once at the boundary (`dispatch_over_numeric`) before this type existed.
     A richer aggregate (variance, distinct, ...) pairs its kernel with a
     different state struct of this shape."""
 

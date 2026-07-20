@@ -1,6 +1,6 @@
 """Benchmarks for arithmetic kernel variants.
 
-CPU: add() with no nulls and with 10% nulls, across sizes 1k–1M for int32
+CPU: AddKernel with no nulls and with 10% nulls, across sizes 1k–1M for int32
 and float64.
 
 Run with: pixi run pytest marrow/kernels/tests/bench_arithmetic.mojo --benchmark
@@ -11,7 +11,7 @@ from std.benchmark import BenchMetric, keep
 from marrow.arrays import PrimitiveArray
 from marrow.builders import arange, PrimitiveBuilder
 from marrow.dtypes import Int32Type, Float64Type, NumericType
-from marrow.kernels.arithmetic import add
+from marrow.kernels.arithmetic import AddKernel
 from marrow.kernels.execution import ExecutionContext
 from marrow.testing import BenchSuite, Benchmark
 
@@ -42,7 +42,7 @@ def bench_add_int32_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -55,7 +55,7 @@ def bench_add_int32_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -68,7 +68,7 @@ def bench_add_int32_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -81,7 +81,7 @@ def bench_add_int32_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -99,7 +99,7 @@ def bench_add_nulls_int32_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -112,7 +112,7 @@ def bench_add_nulls_int32_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -125,7 +125,7 @@ def bench_add_nulls_int32_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -138,7 +138,7 @@ def bench_add_nulls_int32_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Int32Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -156,7 +156,7 @@ def bench_add_float64_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -169,7 +169,7 @@ def bench_add_float64_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -182,7 +182,7 @@ def bench_add_float64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -195,7 +195,7 @@ def bench_add_float64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(0))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(0))
 
     b.iter[call]()
 
@@ -213,7 +213,7 @@ def bench_add_nulls_float64_1k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -226,7 +226,7 @@ def bench_add_nulls_float64_10k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -239,7 +239,7 @@ def bench_add_nulls_float64_100k(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -252,7 +252,7 @@ def bench_add_nulls_float64_1m(mut b: Benchmark) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Float64Type](lhs, rhs).unsafe_get(1))
+        keep(AddKernel.apply[Float64Type](lhs, rhs).unsafe_get(1))
 
     b.iter[call]()
 
@@ -274,7 +274,7 @@ def _bench_add_1m_ctx(mut b: Benchmark, ctx: ExecutionContext) raises:
     @always_inline
     @parameter
     def call() raises:
-        keep(add[Int32Type](lhs, rhs, ctx).unsafe_get(0))
+        keep(AddKernel.apply[Int32Type](lhs, rhs, ctx).unsafe_get(0))
 
     b.iter[call]()
     keep(lhs)

@@ -23,6 +23,14 @@ from std.os import abort
 from std.sys import has_accelerator, CompilationTarget, size_of
 from std.sys.info import _accelerator_arch
 
+from .dtypes import (
+    AnyDataType,
+    BinaryLikeType,
+    FloatingType,
+    NumericType,
+    StringLikeType,
+)
+
 
 # ---------------------------------------------------------------------------
 # Little-endian byte / bit / varint primitives
@@ -166,19 +174,6 @@ struct Crc32(Copyable, Movable):
         return c.value()
 
 
-# `_TypePredicateGenerator` was moved from a top-level alias in
-# `std.builtin.variadics` to a member of `TypeList` in Mojo 1.0.0b1; redeclare
-# the underlying MLIR generator type here so our variant-dispatch helpers keep
-# accepting an arbitrary type predicate.
-comptime _TypePredicateGenerator[T: type_of(AnyType)] = __mlir_type[
-    `!lit.generator<<"Type": `,
-    T,
-    `>`,
-    Bool,
-    `>`,
-]
-
-
 def has_accelerator_support[*dtypes: DType]() -> Bool:
     """Check if there is accelerator support for all given dtypes.
 
@@ -211,27 +206,23 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
     return True
 
 
-comptime _always_true[T: Movable] = True
-
-
 def variant_dispatch[
     R: AnyType,
     //,
     Trait: type_of(AnyType),
     *Ts: Movable,
-    predicate: _TypePredicateGenerator[Movable] = _always_true,
     func: def[T: Trait](T) capturing[_] -> R,
 ](ref v: Variant[*Ts]) -> R:
     """Dispatch *func* to the active type in *v*, reinterpreted as *Trait*.
 
-    Only types matching *predicate* are dispatched. Defaults to all types,
-    so passing no predicate covers the full variant.
+    Only the variant types conforming to *Trait* are dispatched (the rest can't
+    satisfy *func*'s `T: Trait` bound); pass a `Trait` every variant type
+    conforms to (e.g. the container's own trait) to cover the full variant.
     """
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if predicate[T]:
+        comptime if conforms_to(T, Trait):
             if v.isa[T]():
-                comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
     abort("unreachable: variant_dispatch")
 
@@ -241,17 +232,17 @@ def variant_dispatch_raises[
     //,
     Trait: type_of(AnyType),
     *Ts: Movable,
-    predicate: _TypePredicateGenerator[Movable] = _always_true,
     func: def[T: Trait](T) raises capturing[_] -> R,
 ](ref v: Variant[*Ts]) raises -> R:
     """Like *variant_dispatch* but *func* may raise."""
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if predicate[T]:
+        comptime if conforms_to(T, Trait):
             if v.isa[T]():
-                comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
-    abort("unreachable: variant_dispatch_raises")
+    raise Error(
+        "variant_dispatch_raises: no arm matched the active variant type"
+    )
 
 
 # TODO: using `ref v` should support both `read` and `mut` args but the compiler crashes
@@ -260,14 +251,66 @@ def variant_dispatch_raises[
     //,
     Trait: type_of(AnyType),
     *Ts: Movable,
-    predicate: _TypePredicateGenerator[Movable] = _always_true,
     func: def[T: Trait](mut T) raises capturing[_] -> R,
 ](mut v: Variant[*Ts]) raises -> R:
     """Like *variant_dispatch_raises* but *func* takes a mutable reference."""
     comptime for i in range(len(Ts)):
         comptime T = Ts[i]
-        comptime if predicate[T]:
+        comptime if conforms_to(T, Trait):
             if v.isa[T]():
-                comptime assert conforms_to(T, Trait)
                 return func(rebind[downcast[T, Trait]](v[T]))
-    abort("unreachable: variant_dispatch_raises")
+    raise Error(
+        "variant_dispatch_raises: no arm matched the active variant type"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-dtype-family dispatch adapters
+#
+# Thin wrappers over `variant_dispatch_raises` that fix the trait to a dtype
+# family, so a kernel's runtime dispatch reads as
+# `dispatch_over_numeric[leaf](array.dtype())` instead of an 11-way
+# `if dtype == int8 ... elif ...` cascade. `func` receives the runtime dtype
+# resolved to its concrete comptime type `T`; the return type `R` is inferred
+# from `func`. A dtype outside the family raises (the family trait bound filters
+# it out, so no arm matches) — the aggregate boundary relies on this to reject
+# non-numeric columns catchably.
+# ---------------------------------------------------------------------------
+
+
+def dispatch_over_numeric[
+    R: AnyType,
+    //,
+    func: def[T: NumericType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime numeric dtype to its comptime type and run `func`."""
+    return variant_dispatch_raises[NumericType, func=func](dt._v)
+
+
+def dispatch_over_floating[
+    R: AnyType,
+    //,
+    func: def[T: FloatingType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime floating dtype to its comptime type and run `func`."""
+    return variant_dispatch_raises[FloatingType, func=func](dt._v)
+
+
+def dispatch_over_stringlike[
+    R: AnyType,
+    //,
+    func: def[T: StringLikeType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime string-like dtype to its comptime type and run `func`.
+    """
+    return variant_dispatch_raises[StringLikeType, func=func](dt._v)
+
+
+def dispatch_over_binarylike[
+    R: AnyType,
+    //,
+    func: def[T: BinaryLikeType](T) raises capturing[_] -> R,
+](dt: AnyDataType) raises -> R:
+    """Resolve a runtime binary-like dtype to its comptime type and run `func`.
+    """
+    return variant_dispatch_raises[BinaryLikeType, func=func](dt._v)

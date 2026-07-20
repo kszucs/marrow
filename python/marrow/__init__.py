@@ -292,9 +292,7 @@ class RecordBatch(_Wrapper):
         if isinstance(right_keys, str):
             right_keys = [right_keys]
         return RecordBatch.wrap(
-            self._binding.join(
-                right.unwrap(), keys, right_keys, join_type, num_threads
-            )
+            self._binding.join(right.unwrap(), keys, right_keys, join_type, num_threads)
         )
 
     def group_by(self, keys, num_threads=0):

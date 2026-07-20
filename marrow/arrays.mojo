@@ -134,6 +134,14 @@ struct ArrayData(Copyable, Movable):
     # Explicit (empty) destructor so this self-referential struct
     # (`children: List[ArrayData]`) is ImplicitlyDeletable; fields are still
     # destroyed automatically after the body runs.
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
+
     def __del__(deinit self):
         pass
 
@@ -218,6 +226,17 @@ struct BoolArray(Array):
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Bitmap[mut=False]
+
+    @staticmethod
+    def empty() raises -> BoolArray:
+        """A zero-length bool array."""
+        return BoolArray(
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=Bitmap.alloc_zeroed(0).to_immutable(),
+        )
 
     def __init__(out self, data: ArrayData) raises:
         if len(data.buffers) != 1:
@@ -371,6 +390,18 @@ struct PrimitiveArray[T: PrimitiveType](Array):
     var offset: Int
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Buffer[mut=False]
+
+    @staticmethod
+    def empty(dtype: Self.T) raises -> Self:
+        """A zero-length array of `dtype`."""
+        return Self(
+            dtype=dtype,
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=Buffer.alloc_zeroed[Self.T.native](0).to_immutable(),
+        )
 
     def __init__(
         out self,
@@ -629,6 +660,18 @@ struct BinaryLikeArray[T: BinaryLikeType](Array):
     var offsets: Buffer[mut=False]
     var values: Buffer[mut=False]
 
+    @staticmethod
+    def empty() raises -> Self:
+        """A zero-length binary-like array."""
+        return Self(
+            length=0,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            offsets=Buffer.alloc_zeroed[Self.T.offset](1).to_immutable(),
+            values=Buffer.alloc_zeroed[DType.uint8](0).to_immutable(),
+        )
+
     def __init__(
         out self, var *values: String, __list_literal__: NoneType
     ) raises:
@@ -794,6 +837,14 @@ struct ListLikeArray[T: ListLikeType](Array):
     var bitmap: Optional[Bitmap[mut=False]]
     var offsets: Buffer[mut=False]
     var child: OwnedPointer[AnyArray]
+
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
 
     def __init__(
         out self,
@@ -1099,6 +1150,14 @@ struct FixedSizeListArray(Array):
     var bitmap: Optional[Bitmap[mut=False]]
     var child: OwnedPointer[AnyArray]
 
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
+
     def __init__(
         out self,
         *,
@@ -1328,6 +1387,14 @@ struct FixedSizeBinaryArray(Array):
     var bitmap: Optional[Bitmap[mut=False]]
     var buffer: Buffer[mut=False]
 
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
+
     def __init__(out self, data: ArrayData) raises:
         if not data.dtype.is_fixed_size_binary():
             raise Error("FixedSizeBinaryArray requires fixed_size_binary dtype")
@@ -1470,6 +1537,14 @@ struct StructArray(Array):
     var bitmap: Optional[Bitmap[mut=False]]
     var children: List[AnyArray]
 
+    def validity(
+        ref self,
+    ) -> Optional[BitmapView[origin_of(self.bitmap._value)]]:
+        """Validity bitmap view, or None if all values are valid."""
+        if not self.bitmap:
+            return None
+        return self.bitmap.value().view(self.offset, self.length)
+
     def __init__(out self, data: ArrayData) raises:
         var children = List[AnyArray]()
         for c in data.children:
@@ -1560,7 +1635,7 @@ struct StructArray(Array):
         # discriminant to 0 (the first type), corrupting already-stored scalars.
         var fields = List[AnyScalar](capacity=len(self.children))
         for i in range(len(self.children)):
-            fields.append(self.children[i][index])
+            fields.append(self.children[i][self.offset + index])
         return StructScalar(
             dtype=self.dtype.copy(), value=fields^, is_valid=True
         )
@@ -1779,10 +1854,10 @@ struct DictionaryArray(Array):
     def is_valid(self, index: Int) -> Bool:
         return self._indices[].is_valid(self._offset + index)
 
-    def indices(self) -> AnyArray:
-        """Return the indices array. Matches PyArrow's DictionaryArray.indices.
-        """
-        return self._indices[].copy()
+    def indices(self) raises -> AnyArray:
+        """The logical index array (the dictionary's `_offset` applied). Matches
+        PyArrow's DictionaryArray.indices."""
+        return self._indices[].slice(self._offset, self._length)
 
     def dictionary(self) -> AnyArray:
         """Return the dictionary (values) array. Matches PyArrow's DictionaryArray.dictionary.
@@ -2169,6 +2244,11 @@ struct AnyArray(
         T: PrimitiveType
     ](ref self) -> ref[self._v] PrimitiveArray[T]:
         return self._as[PrimitiveArray[T]]()
+
+    def as_binary_like[
+        T: BinaryLikeType
+    ](ref self) -> ref[self._v] BinaryLikeArray[T]:
+        return self._as[BinaryLikeArray[T]]()
 
     def as_null(ref self) -> ref[self._v] NullArray:
         return self._as[NullArray]()

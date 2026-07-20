@@ -1,8 +1,8 @@
 """Compute kernels for marrow.
 
-Re-exports all kernel implementations from the submodules so callers can
-``import marrow.kernels as mk`` and use e.g. ``mk.add``, ``mk.sum``,
-``mk.filter``, ``mk.sort`` directly.
+Re-exports kernel structs from the submodules so callers can
+``import marrow.kernels as mk`` and use e.g. ``mk.AddKernel.dispatch``,
+``mk.SumKernel.dispatch``, ``mk.filter``, ``mk.sort`` directly.
 
 Shared dispatch helpers (``bitmap_and``, ``binary_array_dispatch`` etc.) live
 in ``marrow.kernels.helpers`` to keep this file as a thin re-export layer.
@@ -44,15 +44,24 @@ from marrow.dtypes import (
     float64,
 )
 from .execution import ExecutionContext
-from .aggregate import sum, product, min, max, mean, any, all
-from .arithmetic import add, subtract, multiply, divide
+from .aggregate import (
+    SumKernel,
+    ProductKernel,
+    MinKernel,
+    MaxKernel,
+    MeanKernel,
+    any,
+    all,
+)
+from .arithmetic import AddKernel, SubKernel, MulKernel, DivKernel
 from .compare import (
     equal,
-    not_equal,
-    less,
-    less_equal,
-    greater,
-    greater_equal,
+    EqKernel,
+    NeKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
 )
 from .cast import cast
 from .distinct import count_distinct, approx_count_distinct

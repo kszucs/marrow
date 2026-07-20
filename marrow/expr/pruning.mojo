@@ -113,7 +113,6 @@ struct PruneBound(Copyable, Movable):
         if t != b.type():
             return None
         if t.is_numeric():
-            comptime IsNumeric[T: Movable] = conforms_to(T, dt.NumericType)
 
             @parameter
             def cmp_typed[T: dt.NumericType](witness: T) raises -> Int:
@@ -121,9 +120,7 @@ struct PruneBound(Copyable, Movable):
                     a.as_primitive[T]().value(), b.as_primitive[T]().value()
                 )
 
-            return variant_dispatch_raises[
-                dt.NumericType, predicate=IsNumeric, func=cmp_typed
-            ](t._v)
+            return variant_dispatch_raises[dt.NumericType, func=cmp_typed](t._v)
         elif t.is_string():
             var x = a.as_string().to_string()
             var y = b.as_string().to_string()

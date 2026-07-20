@@ -2011,6 +2011,63 @@ def test_dictionary_array_slice() raises:
     assert_equal(head[0].value().as_string().to_string(), "a")
 
 
+def test_dictionary_indices_offset() raises:
+    # A sliced dictionary's .indices() must apply the logical offset, not just
+    # return the raw index buffer.
+    var vb = StringBuilder()
+    vb.append("a")
+    vb.append("b")
+    vb.append("c")
+    var ib = Int32Builder()
+    for i in range(3):
+        ib.append(Int32(i))
+    var indices: AnyArray = ib.finish()
+    var values: AnyArray = vb.finish()
+    var arr = DictionaryArray.from_arrays(indices^, values^)
+
+    var full_any = arr.indices()
+    ref full = full_any.as_int32()
+    assert_equal(len(full), 3)
+    assert_equal(full[0].value(), 0)
+
+    var sliced_any = arr.slice(1, 2).indices()
+    ref idx = sliced_any.as_int32()
+    assert_equal(len(idx), 2)
+    assert_equal(idx[0].value(), 1)
+    assert_equal(idx[1].value(), 2)
+
+
+def test_validity_accessor() raises:
+    # .validity() exposes the null bitmap on nested arrays (list / fsl / struct /
+    # fixed-size-binary share one implementation) and is None when fully valid.
+    var ib = Int64Builder()
+    ib.append(1)
+    var lb = ListBuilder(ib^)
+    lb.append_valid()
+    lb.append_null()
+    var lst = lb.finish()
+    var v = lst.validity()
+    assert_true(Bool(v))
+    assert_true(v.value().test(0))
+    assert_false(v.value().test(1))
+
+    var ib2 = Int64Builder()
+    ib2.append(1)
+    var lb2 = ListBuilder(ib2^)
+    lb2.append_valid()
+    var lst2 = lb2.finish()
+    assert_false(Bool(lst2.validity()))
+
+
+def test_empty_factory() raises:
+    # empty() builds a zero-length, null-free array of the given type.
+    assert_equal(len(BoolArray.empty()), 0)
+    assert_equal(len(StringArray.empty()), 0)
+    var prim = PrimitiveArray[Int32Type].empty(Int32Type())
+    assert_equal(len(prim), 0)
+    assert_equal(prim.null_count(), 0)
+
+
 def test_dictionary_array_data_roundtrip() raises:
     var vb = StringBuilder()
     vb.append("x")

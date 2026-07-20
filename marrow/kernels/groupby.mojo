@@ -33,10 +33,10 @@ from .hashing import rapidhash
 from .execution import ExecutionContext
 from .filter import take
 from .concat import concat
+from ..utils import dispatch_over_numeric
 from .aggregate import (
     AggKernel,
     AggState,
-    for_value_dtype,
     for_agg_tag,
     agg_is_distinct,
     AGG_COUNT_DISTINCT,
@@ -343,16 +343,13 @@ struct GroupBy(Movable):
         var gids = grouper.consume_keys(keys)
         var num_groups = grouper.num_groups()
 
-        var box = List[AnyArray]()
-
         @parameter
-        def by_value[V: NumericType]() raises:
+        def by_value[V: NumericType](d: V) raises -> AnyArray:
             var state = AggState[K, V]()
             state.update(gids, value.as_primitive[V](), num_groups)
-            box.append(state.finish(num_groups).to_any())
+            return state.finish(num_groups).to_any()
 
-        for_value_dtype[by_value](value.dtype())
-        var agg_col = box[0].copy()
+        var agg_col = dispatch_over_numeric[by_value](value.dtype())
 
         var kfields = grouper.key_fields(keys)
         var result_fields = List[Field]()
@@ -441,23 +438,22 @@ struct GroupBy(Movable):
             )
 
             @parameter
-            def by_value[V: NumericType]() raises:
+            def by_value[V: NumericType](d: V) raises:
                 var state = AggState[K, V]()
                 state.update(gids, vchunk.as_primitive[V](), ng)
                 var parts = state.into_partials()
                 part_acc[t] = parts[0].copy().to_any()
                 part_cnt[t] = parts[1].copy()
 
-            for_value_dtype[by_value](value.dtype())
+            dispatch_over_numeric[by_value](value.dtype())
 
         sync_parallelize[worker](num_threads)
 
         # Merge — serial, but touches only `num_threads × groups` rows.
         var gg = HashGrouper()
-        var box = List[AnyArray]()
 
         @parameter
-        def merge_value[V: NumericType]() raises:
+        def merge_value[V: NumericType](d: V) raises -> AnyArray:
             var gstate = AggState[K, V]()
             for t in range(num_threads):
                 if not part_keys[t]:
@@ -470,10 +466,9 @@ struct GroupBy(Movable):
                     part_cnt[t].value(),
                     gng,
                 )
-            box.append(gstate.finish(gg.num_groups()).to_any())
+            return gstate.finish(gg.num_groups()).to_any()
 
-        for_value_dtype[merge_value](value.dtype())
-        var agg_col = box[0].copy()
+        var agg_col = dispatch_over_numeric[merge_value](value.dtype())
 
         var kfields = gg.key_fields(keys)
         var out_fields = List[Field]()
@@ -539,16 +534,17 @@ struct GroupBy(Movable):
 
             # Values in partition order, aligned with `gids`, for the scatter.
             var pvals = take(value, rows)
-            var box = List[AnyArray]()
 
             @parameter
-            def by_value[V: NumericType]() raises:
+            def by_value[V: NumericType](d: V) raises -> AnyArray:
                 var state = AggState[K, V]()
                 state.update(gids, pvals.as_primitive[V](), ng)
-                box.append(state.finish(ng).to_any())
+                return state.finish(ng).to_any()
 
-            for_value_dtype[by_value](value.dtype())
-            return (first.finish(), box[0].copy())
+            return (
+                first.finish(),
+                dispatch_over_numeric[by_value](value.dtype()),
+            )
 
         var hashes = rapidhash(keys, ctx)
         var parts = RadixPartitioner(
@@ -577,14 +573,13 @@ struct GroupBy(Movable):
         out_cols.append(concat(agg_chunks, ctx))
 
         # Aggregate output field dtype.
-        var agg_box = List[AnyDataType]()
-
         @parameter
-        def agg_dtype[V: NumericType]() raises:
-            agg_box.append(AnyDataType(K.AccType[V]()))
+        def agg_dtype[V: NumericType](d: V) raises -> AnyDataType:
+            return AnyDataType(K.AccType[V]())
 
-        for_value_dtype[agg_dtype](value.dtype())
-        out_fields.append(Field(K.name, agg_box[0].copy()))
+        out_fields.append(
+            Field(K.name, dispatch_over_numeric[agg_dtype](value.dtype()))
+        )
 
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
@@ -719,12 +714,12 @@ struct GroupBy(Movable):
         @parameter
         def run[K: AggKernel]() raises:
             @parameter
-            def by_value[V: NumericType]() raises:
+            def by_value[V: NumericType](d: V) raises:
                 var state = AggState[K, V]()
                 state.update(gids, value.as_primitive[V](), num_groups)
                 box.append(state.finish(num_groups).to_any())
 
-            for_value_dtype[by_value](value.dtype())
+            dispatch_over_numeric[by_value](value.dtype())
 
         for_agg_tag[run](tag)
         return box[0].copy()
@@ -802,14 +797,14 @@ struct GroupBy(Movable):
                 @parameter
                 def run_local[K: AggKernel]() raises:
                     @parameter
-                    def by_value[V: NumericType]() raises:
+                    def by_value[V: NumericType](d: V) raises:
                         var state = AggState[K, V]()
                         state.update(gids, vchunk.as_primitive[V](), ng)
                         var parts = state.into_partials()
                         part_acc[t * na + j] = parts[0].copy().to_any()
                         part_cnt[t * na + j] = parts[1].copy()
 
-                    for_value_dtype[by_value](vchunk.dtype())
+                    dispatch_over_numeric[by_value](vchunk.dtype())
 
                 for_agg_tag[run_local](tags[j])
 
@@ -839,7 +834,7 @@ struct GroupBy(Movable):
             @parameter
             def run_merge[K: AggKernel]() raises:
                 @parameter
-                def by_value[V: NumericType]() raises:
+                def by_value[V: NumericType](d: V) raises:
                     var gstate = AggState[K, V]()
                     for t in range(num_threads):
                         if not part_keys[t]:
@@ -854,7 +849,7 @@ struct GroupBy(Movable):
                         )
                     box.append(gstate.finish(ngg).to_any())
 
-                for_value_dtype[by_value](values[j].dtype())
+                dispatch_over_numeric[by_value](values[j].dtype())
 
             for_agg_tag[run_merge](tags[j])
             out_fields.append(

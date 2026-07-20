@@ -44,6 +44,8 @@
   `nulls_first`/`nulls_last`, and stable ordering honoured.
 - `count_distinct` (exact) and `approx_count_distinct` (HyperLogLog),
   whole-array and grouped, both radix-parallel.
+- Columnar `filter`, `take` and `drop_null` for every array type,
+  operating on mask and index views.
 - `hash_join` -- inner, left, right, full, semi and anti -- over a
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and

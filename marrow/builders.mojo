@@ -1247,7 +1247,8 @@ struct StructBuilder(Builder):
         self.extend(arr.as_struct())
 
     def extend(mut self, arr: StructArray) raises:
-        """Bulk-append all elements from an existing StructArray."""
+        """Bulk-append all elements from an existing StructArray (honouring the
+        source's logical offset for both validity and children)."""
         var n = arr.length
         self.reserve(n)
         if arr.nulls == 0:
@@ -1256,11 +1257,11 @@ struct StructBuilder(Builder):
             self._null_count += arr.nulls
             if arr.bitmap:
                 var bm = arr.bitmap.value()
-                self._bitmap.extend(bm, self._length, n)
+                self._bitmap.extend(bm.view(arr.offset, n), self._length, n)
             else:
                 self._bitmap.set_range(self._length, n, True)
         for f in range(len(arr.children)):
-            self._children[f].extend(arr.children[f].copy())
+            self._children[f].extend(arr.children[f].slice(arr.offset, n))
         self._length += n
 
     def reserve(mut self, additional: Int) raises:
