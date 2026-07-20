@@ -76,32 +76,6 @@ from .helpers import Kernel
 from .string import string_lengths
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# selection helper — materialize set-bit positions as indices
-# ---------------------------------------------------------------------------
-
-
-def _mask_to_indices(mask: BoolArray) raises -> Int32Array:
-    """Materialize the positions where `mask` is set as an `Int32Array`.
-
-    Lets the offset/nested `filter` reuse the typed `take` gather instead of
-    re-implementing per-type value copying.
-    """
-    var n = len(mask)
-    var sel = mask.values()
-    var out_len = sel.count_set_bits()
-    var builder = PrimitiveBuilder[Int32Type](out_len)
-    for i in range(n):
-        if sel.test(i):
-            builder.append(Int32(i))
-    return builder.finish()
-
-
 trait SelectionKernel(Kernel):
     """Base for columnar selection kernels (``Filter`` / ``Take``).
 
@@ -271,7 +245,7 @@ struct Filter(SelectionKernel):
             bitmap=None,
             buffer=data.bitmap.value(),
         )
-        return filter(array, selection^, ctx)
+        return Filter.dispatch(array, selection^, ctx)
 
     @staticmethod
     def apply[
@@ -558,9 +532,48 @@ struct Filter(SelectionKernel):
         selection: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> FixedSizeBinaryArray:
-        """Filter a fixed-size-binary array by gathering the selected fixed-width
-        blocks via `take`."""
-        return take(array, _mask_to_indices(selection), ctx)
+        """Filter a fixed-size-binary array by compacting the fixed-width byte
+        blocks where selection is set (branch-free word-wise CTZ scan)."""
+        var n = len(array)
+        var bw = array.byte_width
+        var sel = selection.values()
+        var out_len, sel_start, sel_end = sel.count_set_bits_with_range()
+        var src_view = array.buffer.view[DType.uint8]()
+        var out = Buffer.alloc_uninit[DType.uint8](out_len * bw)
+        var out_view = out.view[DType.uint8]()
+
+        var dst = 0
+        var wb = 0
+        while wb < n:
+            var w = sel.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                var i = wb + Int(count_trailing_zeros(w))
+                out_view.slice(dst * bw).copy_from(
+                    src_view.slice((array.offset + i) * bw), bw
+                )
+                dst += 1
+                w &= w - 1
+            wb += 64
+
+        var bm: Optional[Bitmap[]] = None
+        var null_count = 0
+        if array.bitmap:
+            var filtered_bm, nc = array.bitmap.value().view(
+                array.offset, n
+            ).filter(sel, sel_start, sel_end, out_len)
+            bm = filtered_bm
+            null_count = nc
+        return FixedSizeBinaryArray(
+            length=out_len,
+            nulls=null_count,
+            offset=0,
+            byte_width=bw,
+            bitmap=bm,
+            buffer=out.to_immutable(),
+        )
 
     @staticmethod
     def apply[
@@ -570,9 +583,69 @@ struct Filter(SelectionKernel):
         selection: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> ListLikeArray[T]:
-        """Filter a list/large-list/map array by gathering the selected rows via
-        `take` (offset-remap + child gather)."""
-        return take(array, _mask_to_indices(selection), ctx)
+        """Filter a list/large-list/map array column-wise: mark each selected
+        row's contiguous child range in a child mask and filter the child
+        recursively, building the output offsets in the same pass — no index
+        materialization, no `take`."""
+        comptime O = T.offset
+        var n = len(array)
+        var sel = selection.values()
+        var out_len = sel.count_set_bits()
+        var offsets = array.offsets.view[O]()
+        var child = array.values().copy()
+
+        var new_offsets = Buffer.alloc_uninit[O](out_len + 1)
+        var no = new_offsets.view[O]()
+        no.unsafe_set(0, Scalar[O](0))
+        var child_mask = Bitmap.alloc_zeroed(len(child))
+        var need_bm = Bool(array.bitmap)
+        var bmb = Bitmap.alloc_zeroed(out_len)
+        var null_count = 0
+        var total = 0
+        var j = 0
+        var wb = 0
+        while wb < n:
+            var w = sel.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                var i = wb + Int(count_trailing_zeros(w))
+                var s = Int(offsets.unsafe_get(array.offset + i))
+                var e = Int(offsets.unsafe_get(array.offset + i + 1))
+                if e > s:
+                    child_mask.set_range(s, e - s, True)
+                total += e - s
+                if need_bm:
+                    if array.is_valid(i):
+                        bmb.set(j)
+                    else:
+                        null_count += 1
+                j += 1
+                no.unsafe_set(j, Scalar[O](total))
+                w &= w - 1
+            wb += 64
+
+        var child_sel = BoolArray(
+            length=len(child),
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=child_mask.to_immutable(),
+        )
+        var new_child = Filter.dispatch(child, child_sel^, ctx)
+        var bm: Optional[Bitmap[]] = None
+        if need_bm:
+            bm = bmb.to_immutable(length=out_len)
+        return ListLikeArray[T](
+            dtype=array.dtype.copy(),
+            length=out_len,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm,
+            offsets=new_offsets.to_immutable(),
+            values=new_child^,
+        )
 
     @staticmethod
     def apply(
@@ -580,9 +653,56 @@ struct Filter(SelectionKernel):
         selection: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> FixedSizeListArray:
-        """Filter a fixed-size-list array by gathering the selected rows via `take`.
-        """
-        return take(array, _mask_to_indices(selection), ctx)
+        """Filter a fixed-size-list array column-wise: mark each selected row's
+        `size` contiguous child slots and filter the child recursively."""
+        var n = len(array)
+        var size = array.dtype.as_fixed_size_list().size
+        var sel = selection.values()
+        var out_len = sel.count_set_bits()
+        var child = array.values().copy()
+
+        var child_mask = Bitmap.alloc_zeroed(len(child))
+        var need_bm = Bool(array.bitmap)
+        var bmb = Bitmap.alloc_zeroed(out_len)
+        var null_count = 0
+        var j = 0
+        var wb = 0
+        while wb < n:
+            var w = sel.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                var i = wb + Int(count_trailing_zeros(w))
+                child_mask.set_range((array.offset + i) * size, size, True)
+                if need_bm:
+                    if array.is_valid(i):
+                        bmb.set(j)
+                    else:
+                        null_count += 1
+                j += 1
+                w &= w - 1
+            wb += 64
+
+        var child_sel = BoolArray(
+            length=len(child),
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=child_mask.to_immutable(),
+        )
+        var new_child = Filter.dispatch(child, child_sel^, ctx)
+        var bm: Optional[Bitmap[]] = None
+        if need_bm:
+            bm = bmb.to_immutable(length=out_len)
+        return FixedSizeListArray(
+            dtype=array.dtype.copy(),
+            length=out_len,
+            nulls=null_count,
+            offset=0,
+            bitmap=bm,
+            values=new_child^,
+        )
 
     @staticmethod
     def apply(
@@ -608,8 +728,7 @@ struct Filter(SelectionKernel):
                 children=List[ArrayData](),
             )
         )
-        var sel_any: AnyArray = selection.copy()
-        var new_indices = filter(logical_indices, sel_any, ctx)
+        var new_indices = Filter.dispatch(logical_indices, selection.copy(), ctx)
         var new_nulls = new_indices.null_count()
         return DictionaryArray(
             dtype=array.type(),
@@ -639,8 +758,10 @@ struct Filter(SelectionKernel):
         var children = List[AnyArray]()
         for c in range(len(array.children)):
             children.append(
-                filter(
-                    array.children[c].slice(array.offset, n), selection.copy(), ctx
+                Filter.dispatch(
+                    array.children[c].slice(array.offset, n),
+                    selection.copy(),
+                    ctx,
                 )
             )
 
@@ -971,7 +1092,7 @@ struct Take(SelectionKernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = take(array.values().copy(), child_indices, ctx)
+        var new_child = Take.dispatch(array.values().copy(), child_indices, ctx)
         return ListLikeArray[T](
             dtype=array.dtype.copy(),
             length=n,
@@ -1055,7 +1176,7 @@ struct Take(SelectionKernel):
         var bm: Optional[Bitmap[]] = None
         if need_bm:
             bm = bmb.to_immutable(length=n)
-        var new_child = take(array.values().copy(), child_indices, ctx)
+        var new_child = Take.dispatch(array.values().copy(), child_indices, ctx)
         return FixedSizeListArray(
             dtype=array.dtype.copy(),
             length=n,
@@ -1085,7 +1206,7 @@ struct Take(SelectionKernel):
                 children=List[ArrayData](),
             )
         )
-        var new_indices = take(logical_indices, indices, ctx)
+        var new_indices = Take.dispatch(logical_indices, indices, ctx)
         var new_nulls = new_indices.null_count()
         return DictionaryArray(
             dtype=array.type(),
@@ -1112,7 +1233,9 @@ struct Take(SelectionKernel):
         var children = List[AnyArray]()
         for c in range(len(array.children)):
             children.append(
-                take(array.children[c].slice(array.offset, n), indices, ctx)
+                Take.dispatch(
+                    array.children[c].slice(array.offset, n), indices, ctx
+                )
             )
 
         var bm: Optional[Bitmap[]] = None
@@ -1352,7 +1475,7 @@ def drop_null[
         bitmap=None,
         buffer=array.bitmap.value(),
     )
-    return filter[T](array, selection, ctx)
+    return Filter.apply(array, selection, ctx)
 
 
 def _drop_null_bool(
@@ -1368,4 +1491,4 @@ def _drop_null_bool(
         bitmap=None,
         buffer=array.bitmap.value(),
     )
-    return filter(array, selection, ctx)
+    return Filter.apply(array, selection, ctx)
