@@ -11,8 +11,9 @@ built by ``Table[Tbl]()`` / ``col(name, dtype)``; the fused algebra
 
 Expression nodes
 ----------------
-``Add[L, R]`` — fused binary add (generic over any two NumericValue children)
-``Sub[L, R]`` — fused binary subtract
+``FusedBinary[K, L, R]`` — fused binary numeric op, generic over the kernel ``K``
+    (which supplies the per-lane ``core`` functor) and its two NumericValue
+    children. ``Add`` / ``Sub`` are ``comptime`` aliases binding ``K``.
 ``Less[L, R]``, ``Greater[L, R]``, ``Equal[L, R]`` — fused binary comparisons; result is
     a bit-packed BoolArray, not a PrimitiveArray (see ``BoolValue`` below)
 ``Length[S]`` — fused string byte length
@@ -57,6 +58,7 @@ from ..buffers import Bitmap, Buffer
 from ..dtypes import AnyDataType, DType, NumericType
 from ..tabular import RecordBatch
 from ..kernels.cast import NumericCast, NumToBool, BoolToNum
+from ..kernels.arithmetic import BinaryKernel, AddKernel, SubKernel
 from .pruning import PruneStats, PruneBound
 
 
@@ -203,26 +205,29 @@ trait NumericValue(Value):
 
 
 # ---------------------------------------------------------------------------
-# Add — comptime-typed binary add
+# FusedBinary — one fused numeric binary node, generic over the kernel
 # ---------------------------------------------------------------------------
 
 
 @fieldwise_init
-struct Add[L: NumericValue, R: NumericValue](NumericValue):
-    """Fused binary add: evaluates left + right in a single vectorized pass.
+struct FusedBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+    NumericValue
+):
+    """Fused binary numeric op: ``K.core(left, right)`` evaluated in a single
+    vectorized pass, zero intermediate arrays.
 
-    Generic over any two ``NumericValue`` children, so the compiler can
-    inline the full ``core[W]()`` call chain.
+    Generic over *both* the kernel ``K`` (which supplies the per-lane functor
+    ``core``) and the two ``NumericValue`` children, so the compiler inlines the
+    whole ``core`` chain. The eager kernel (``K.apply``) and this fused node share
+    the one ``K.core`` definition — the functor lives only in the kernel.
 
-    ``comptime OutType`` and ``comptime NativeType`` are inherited from the
-    left child (both operands must have the same dtype).
+    ``OutType`` / ``NativeType`` are inherited from the left child (both operands
+    carry the same dtype; the right lane is cast to match).
 
     Usage::
 
-        var col_a = NumericColumn[Int64Type](0)
-        var col_b = NumericColumn[Int64Type](1)
-        var expr = Add(col_a, col_b)
-        var result = expr.execute(batch)  # single fused pass
+        var expr = Add(col("a", int64), col("b", int64))  # = FusedBinary[AddKernel]
+        var result = expr.execute(batch)                  # single fused pass
     """
 
     comptime OutType = Self.L.OutType
@@ -237,46 +242,18 @@ struct Add[L: NumericValue, R: NumericValue](NumericValue):
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
         var l = self.left.core[W](batch, idx)
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
-        return l + r
+        return Self.K.core[Self.NativeType, W](l, r)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Add(")
+        writer.write(Self.K.name, "(")
         self.left.write_to(writer)
         writer.write(t", ")
         self.right.write_to(writer)
         writer.write(t")")
 
 
-# ---------------------------------------------------------------------------
-# Sub — comptime-typed binary subtract
-# ---------------------------------------------------------------------------
-
-
-@fieldwise_init
-struct Sub[L: NumericValue, R: NumericValue](NumericValue):
-    """Fused binary subtract: evaluates left - right in a single vectorized pass.
-    """
-
-    comptime OutType = Self.L.OutType
-    comptime NativeType = Self.L.NativeType
-
-    var left: Self.L
-    var right: Self.R
-
-    @always_inline
-    def core[
-        W: Int
-    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        var l = self.left.core[W](batch, idx)
-        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
-        return l - r
-
-    def write_to[W: Writer](self, mut writer: W):
-        writer.write(t"Sub(")
-        self.left.write_to(writer)
-        writer.write(t", ")
-        self.right.write_to(writer)
-        writer.write(t")")
+comptime Add = FusedBinary[AddKernel, _, _]
+comptime Sub = FusedBinary[SubKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
