@@ -13,6 +13,7 @@ from std.sys import size_of
 from std.sys.info import simd_byte_width
 
 from ..arrays import (
+    Array,
     BoolArray,
     PrimitiveArray,
     StringArray,
@@ -248,60 +249,156 @@ def _mask_to_indices(mask: BoolArray) raises -> Int32Array:
     return builder.finish()
 
 
-struct Filter(Kernel):
-    """Selection kernel — keep elements where a boolean mask is True.
+trait SelectionKernel(Kernel):
+    """Base for columnar selection kernels (``Filter`` / ``Take``).
 
-    The typed leaf implementations live in the free ``filter`` overloads above;
-    ``dispatch`` resolves an ``AnyArray``'s runtime dtype to the matching leaf
-    (numeric dtypes fold into one ``dispatch_over_numeric`` arm).
+    A concrete kernel supplies the ``Selection`` type (the boolean mask for
+    filter, the ``Int32`` index array for take) and the per-type ``apply``
+    overloads; the shared ``dispatch`` resolves an ``AnyArray``'s runtime dtype
+    to the matching ``apply`` — the numeric dtypes fold into a single
+    ``dispatch_over_numeric`` arm.
     """
 
-    comptime name = "filter"
+    comptime Selection: Array
+
+    @staticmethod
+    def apply[
+        T: PrimitiveType
+    ](
+        array: PrimitiveArray[T],
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveArray[T]:
+        ...
+
+    @staticmethod
+    def apply(
+        array: BoolArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        ...
+
+    @staticmethod
+    def apply[
+        T: BinaryLikeType
+    ](
+        array: BinaryLikeArray[T],
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BinaryLikeArray[T]:
+        ...
+
+    @staticmethod
+    def apply(
+        array: NullArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> NullArray:
+        ...
+
+    @staticmethod
+    def apply(
+        array: FixedSizeBinaryArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> FixedSizeBinaryArray:
+        ...
+
+    @staticmethod
+    def apply[
+        T: ListLikeType
+    ](
+        array: ListLikeArray[T],
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> ListLikeArray[T]:
+        ...
+
+    @staticmethod
+    def apply(
+        array: FixedSizeListArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> FixedSizeListArray:
+        ...
+
+    @staticmethod
+    def apply(
+        array: DictionaryArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> DictionaryArray:
+        ...
+
+    @staticmethod
+    def apply(
+        array: StructArray,
+        selection: Self.Selection,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> StructArray:
+        ...
 
     @staticmethod
     def dispatch(
         array: AnyArray,
-        selection: AnyArray,
+        selection: Self.Selection,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        var mask = selection.as_bool().copy()
+        """Resolve `array`'s runtime dtype to the matching typed `apply`."""
         var dt = array.dtype()
-
         if dt == bool_:
-            return filter(array.as_bool().copy(), mask, ctx).to_any()
+            return Self.apply(array.as_bool().copy(), selection, ctx).to_any()
         elif dt.is_numeric():
 
             @parameter
             def leaf[T: NumericType](d: T) raises -> AnyArray:
-                return filter(array.as_primitive[T](), mask, ctx).to_any()
+                return Self.apply(
+                    array.as_primitive[T](), selection, ctx
+                ).to_any()
 
             return dispatch_over_numeric[leaf](dt)
         elif dt.is_string():
-            return filter(array.as_string(), mask, ctx).to_any()
+            return Self.apply(array.as_string(), selection, ctx).to_any()
         elif dt.is_binary():
-            return filter(array.as_binary(), mask, ctx).to_any()
+            return Self.apply(array.as_binary(), selection, ctx).to_any()
         elif dt.is_large_string():
-            return filter(array.as_large_string(), mask, ctx).to_any()
+            return Self.apply(array.as_large_string(), selection, ctx).to_any()
         elif dt.is_large_binary():
-            return filter(array.as_large_binary(), mask, ctx).to_any()
+            return Self.apply(array.as_large_binary(), selection, ctx).to_any()
         elif dt.is_null():
-            return filter(array.as_null(), mask, ctx).to_any()
+            return Self.apply(array.as_null(), selection, ctx).to_any()
         elif dt.is_fixed_size_binary():
-            return filter(array.as_fixed_size_binary(), mask, ctx).to_any()
+            return Self.apply(
+                array.as_fixed_size_binary(), selection, ctx
+            ).to_any()
         elif dt.is_struct():
-            return filter(array.as_struct(), mask, ctx).to_any()
+            return Self.apply(array.as_struct(), selection, ctx).to_any()
         elif dt.is_list():
-            return filter(array.as_list(), mask, ctx).to_any()
+            return Self.apply(array.as_list(), selection, ctx).to_any()
         elif dt.is_large_list():
-            return filter(array.as_large_list(), mask, ctx).to_any()
+            return Self.apply(array.as_large_list(), selection, ctx).to_any()
         elif dt.is_map():
-            return filter(array.as_map(), mask, ctx).to_any()
+            return Self.apply(array.as_map(), selection, ctx).to_any()
         elif dt.is_fixed_size_list():
-            return filter(array.as_fixed_size_list(), mask, ctx).to_any()
+            return Self.apply(
+                array.as_fixed_size_list(), selection, ctx
+            ).to_any()
         elif dt.is_dictionary():
-            return filter(array.as_dictionary(), mask, ctx).to_any()
+            return Self.apply(array.as_dictionary(), selection, ctx).to_any()
         else:
-            raise Error("filter: unsupported dtype ", dt)
+            raise Error(Self.name, ": unsupported dtype ", dt)
+
+
+struct Filter(SelectionKernel):
+    """Selection kernel — keep elements where a boolean mask is True.
+
+    The typed leaves are the ``apply`` overloads below; ``dispatch`` is inherited
+    from ``SelectionKernel``.
+    """
+
+    comptime name = "filter"
+    comptime Selection = BoolArray
 
     @staticmethod
     def drop_null(
@@ -724,59 +821,15 @@ struct Filter(Kernel):
         )
 
 
-struct Take(Kernel):
+struct Take(SelectionKernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
-    Typed leaves live in the free ``take`` overloads above; ``dispatch`` resolves
-    an ``AnyArray``'s runtime dtype (numeric dtypes fold into one
-    ``dispatch_over_numeric`` arm) and threads ``ctx`` to the primitive fast path.
+    The typed leaves are the ``apply`` overloads below; ``dispatch`` is inherited
+    from ``SelectionKernel``.
     """
 
     comptime name = "take"
-
-    @staticmethod
-    def dispatch(
-        array: AnyArray,
-        indices: Int32Array,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> AnyArray:
-        var dt = array.dtype()
-
-        if dt == bool_:
-            return take(array.as_bool().copy(), indices, ctx).to_any()
-        elif dt.is_numeric():
-
-            @parameter
-            def leaf[T: NumericType](d: T) raises -> AnyArray:
-                return take(array.as_primitive[T](), indices, ctx).to_any()
-
-            return dispatch_over_numeric[leaf](dt)
-        elif dt.is_string():
-            return take(array.as_string(), indices, ctx).to_any()
-        elif dt.is_binary():
-            return take(array.as_binary(), indices, ctx).to_any()
-        elif dt.is_large_string():
-            return take(array.as_large_string(), indices, ctx).to_any()
-        elif dt.is_large_binary():
-            return take(array.as_large_binary(), indices, ctx).to_any()
-        elif dt.is_null():
-            return take(array.as_null(), indices, ctx).to_any()
-        elif dt.is_fixed_size_binary():
-            return take(array.as_fixed_size_binary(), indices, ctx).to_any()
-        elif dt.is_struct():
-            return take(array.as_struct(), indices, ctx).to_any()
-        elif dt.is_list():
-            return take(array.as_list(), indices, ctx).to_any()
-        elif dt.is_large_list():
-            return take(array.as_large_list(), indices, ctx).to_any()
-        elif dt.is_map():
-            return take(array.as_map(), indices, ctx).to_any()
-        elif dt.is_fixed_size_list():
-            return take(array.as_fixed_size_list(), indices, ctx).to_any()
-        elif dt.is_dictionary():
-            return take(array.as_dictionary(), indices, ctx).to_any()
-        else:
-            raise Error("take: unsupported dtype ", dt)
+    comptime Selection = Int32Array
 
     @staticmethod
     def apply[
@@ -1250,7 +1303,7 @@ def filter(
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
     """Filter `array`, keeping elements where `selection` is True."""
-    return Filter.dispatch(array, selection, ctx)
+    return Filter.dispatch(array, selection.as_bool().copy(), ctx)
 
 
 def filter[
