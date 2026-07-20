@@ -37,6 +37,7 @@ from ..builders import (
 )
 from ..dtypes import (
     PrimitiveType,
+    NumericType,
     BinaryLikeType,
     ListLikeType,
     Int8Type,
@@ -66,9 +67,11 @@ from ..dtypes import (
 )
 from std.algorithm.functional import sync_parallelize
 
+from ..utils import dispatch_over_numeric
 from ..views import BitmapView, BufferView
 from .aggregate import sum
 from .execution import ExecutionContext
+from .helpers import Kernel
 from .string import string_lengths
 
 
@@ -660,77 +663,89 @@ def filter(
 # ---------------------------------------------------------------------------
 
 
+struct Filter(Kernel):
+    """Selection kernel — keep elements where a boolean mask is True.
+
+    The typed leaf implementations live in the free ``filter`` overloads above;
+    ``dispatch`` resolves an ``AnyArray``'s runtime dtype to the matching leaf
+    (numeric dtypes fold into one ``dispatch_over_numeric`` arm).
+    """
+
+    comptime name = "filter"
+
+    @staticmethod
+    def dispatch(
+        array: AnyArray,
+        selection: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        var mask = selection.as_bool().copy()
+        var dt = array.dtype()
+
+        if dt == bool_:
+            return filter(array.as_bool().copy(), mask, ctx).to_any()
+        elif dt.is_numeric():
+
+            @parameter
+            def leaf[T: NumericType](d: T) raises -> AnyArray:
+                return filter(array.as_primitive[T](), mask, ctx).to_any()
+
+            return dispatch_over_numeric[leaf](dt)
+        elif dt.is_string():
+            return filter(array.as_string(), mask, ctx).to_any()
+        elif dt.is_binary():
+            return filter(array.as_binary(), mask, ctx).to_any()
+        elif dt.is_large_string():
+            return filter(array.as_large_string(), mask, ctx).to_any()
+        elif dt.is_large_binary():
+            return filter(array.as_large_binary(), mask, ctx).to_any()
+        elif dt.is_null():
+            return filter(array.as_null(), mask, ctx).to_any()
+        elif dt.is_fixed_size_binary():
+            return filter(array.as_fixed_size_binary(), mask, ctx).to_any()
+        elif dt.is_struct():
+            return filter(array.as_struct(), mask, ctx).to_any()
+        elif dt.is_list():
+            return filter(array.as_list(), mask, ctx).to_any()
+        elif dt.is_large_list():
+            return filter(array.as_large_list(), mask, ctx).to_any()
+        elif dt.is_map():
+            return filter(array.as_map(), mask, ctx).to_any()
+        elif dt.is_fixed_size_list():
+            return filter(array.as_fixed_size_list(), mask, ctx).to_any()
+        elif dt.is_dictionary():
+            return filter(array.as_dictionary(), mask, ctx).to_any()
+        else:
+            raise Error("filter: unsupported dtype ", dt)
+
+    @staticmethod
+    def drop_null(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> AnyArray:
+        # A null array is entirely null, so every element is dropped.
+        if array.dtype().is_null():
+            return NullArray(length=0).to_any()
+        var data = array.to_data()
+        if not data.bitmap:
+            return array.copy()
+        # Use the validity bitmap directly as the selection (keep valid).
+        var selection = BoolArray(
+            length=data.length,
+            nulls=0,
+            offset=data.offset,
+            bitmap=None,
+            buffer=data.bitmap.value(),
+        )
+        return filter(array, selection^, ctx)
+
+
 def filter(
     array: AnyArray,
     selection: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Runtime-typed filter: dispatches to the correct typed overload.
-
-    Args:
-        array: The input array (runtime-typed).
-        selection: Bit-packed boolean selection (True = keep).
-        ctx: Execution context (currently unused — accepted for signature
-            uniformity across kernels).
-
-    Returns:
-        A new AnyArray with only the selected elements.
-    """
-    var mask = selection.as_bool().copy()
-
-    if array.dtype() == bool_:
-        return filter(array.as_bool().copy(), mask, ctx).to_any()
-
-    if array.dtype() == int8:
-        return filter(array.as_int8(), mask, ctx).to_any()
-    elif array.dtype() == int16:
-        return filter(array.as_int16(), mask, ctx).to_any()
-    elif array.dtype() == int32:
-        return filter(array.as_int32(), mask, ctx).to_any()
-    elif array.dtype() == int64:
-        return filter(array.as_int64(), mask, ctx).to_any()
-    elif array.dtype() == uint8:
-        return filter(array.as_uint8(), mask, ctx).to_any()
-    elif array.dtype() == uint16:
-        return filter(array.as_uint16(), mask, ctx).to_any()
-    elif array.dtype() == uint32:
-        return filter(array.as_uint32(), mask, ctx).to_any()
-    elif array.dtype() == uint64:
-        return filter(array.as_uint64(), mask, ctx).to_any()
-    elif array.dtype() == float16:
-        return filter(array.as_float16(), mask, ctx).to_any()
-    elif array.dtype() == float32:
-        return filter(array.as_float32(), mask, ctx).to_any()
-    elif array.dtype() == float64:
-        return filter(array.as_float64(), mask, ctx).to_any()
-
-    if array.dtype().is_string():
-        return filter(array.as_string(), mask, ctx).to_any()
-    elif array.dtype().is_binary():
-        return filter(array.as_binary(), mask, ctx).to_any()
-    elif array.dtype().is_large_string():
-        return filter(array.as_large_string(), mask, ctx).to_any()
-    elif array.dtype().is_large_binary():
-        return filter(array.as_large_binary(), mask, ctx).to_any()
-
-    if array.dtype().is_null():
-        return filter(array.as_null(), mask, ctx).to_any()
-    elif array.dtype().is_fixed_size_binary():
-        return filter(array.as_fixed_size_binary(), mask, ctx).to_any()
-    elif array.dtype().is_struct():
-        return filter(array.as_struct(), mask, ctx).to_any()
-    elif array.dtype().is_list():
-        return filter(array.as_list(), mask, ctx).to_any()
-    elif array.dtype().is_large_list():
-        return filter(array.as_large_list(), mask, ctx).to_any()
-    elif array.dtype().is_map():
-        return filter(array.as_map(), mask, ctx).to_any()
-    elif array.dtype().is_fixed_size_list():
-        return filter(array.as_fixed_size_list(), mask, ctx).to_any()
-    elif array.dtype().is_dictionary():
-        return filter(array.as_dictionary(), mask, ctx).to_any()
-
-    raise Error("filter: unsupported dtype ", array.dtype())
+    """Runtime-typed filter — dispatches to the matching typed overload."""
+    return Filter.dispatch(array, selection, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -787,34 +802,8 @@ def _drop_null_bool(
 def drop_null(
     array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
 ) raises -> AnyArray:
-    """Runtime-typed drop_null: dispatches to the correct typed version.
-
-    Args:
-        array: The input array (runtime-typed).
-        ctx: Execution context (currently unused — accepted for signature
-            uniformity across kernels).
-
-    Returns:
-        A new AnyArray with null elements removed.
-    """
-    # A null array is entirely null, so every element is dropped.
-    if array.dtype().is_null():
-        return NullArray(length=0).to_any()
-
-    var data = array.to_data()
-    if not data.bitmap:
-        return array.copy()
-
-    # Use the validity bitmap directly as the selection (True = keep valid),
-    # then dispatch to the typed `filter` for every array type.
-    var selection = BoolArray(
-        length=data.length,
-        nulls=0,
-        offset=data.offset,
-        bitmap=None,
-        buffer=data.bitmap.value(),
-    )
-    return filter(array, selection^, ctx)
+    """Runtime-typed drop_null — removes null elements via the validity bitmap."""
+    return Filter.drop_null(array, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -1012,59 +1001,62 @@ def take(
     Returns:
         A new AnyArray with one element per index.
     """
-    if array.dtype() == bool_:
-        return take(array.as_bool().copy(), indices, ctx).to_any()
+    return Take.dispatch(array, indices, ctx)
 
-    if array.dtype() == int8:
-        return take(array.as_int8(), indices, ctx).to_any()
-    elif array.dtype() == int16:
-        return take(array.as_int16(), indices, ctx).to_any()
-    elif array.dtype() == int32:
-        return take(array.as_int32(), indices, ctx).to_any()
-    elif array.dtype() == int64:
-        return take(array.as_int64(), indices, ctx).to_any()
-    elif array.dtype() == uint8:
-        return take(array.as_uint8(), indices, ctx).to_any()
-    elif array.dtype() == uint16:
-        return take(array.as_uint16(), indices, ctx).to_any()
-    elif array.dtype() == uint32:
-        return take(array.as_uint32(), indices, ctx).to_any()
-    elif array.dtype() == uint64:
-        return take(array.as_uint64(), indices, ctx).to_any()
-    elif array.dtype() == float16:
-        return take(array.as_float16(), indices, ctx).to_any()
-    elif array.dtype() == float32:
-        return take(array.as_float32(), indices, ctx).to_any()
-    elif array.dtype() == float64:
-        return take(array.as_float64(), indices, ctx).to_any()
 
-    if array.dtype().is_string():
-        return take(array.as_string(), indices, ctx).to_any()
-    elif array.dtype().is_binary():
-        return take(array.as_binary(), indices, ctx).to_any()
-    elif array.dtype().is_large_string():
-        return take(array.as_large_string(), indices, ctx).to_any()
-    elif array.dtype().is_large_binary():
-        return take(array.as_large_binary(), indices, ctx).to_any()
+struct Take(Kernel):
+    """Gather kernel — collect elements at arbitrary indices (null index → null).
 
-    if array.dtype().is_null():
-        return take(array.as_null(), indices, ctx).to_any()
-    elif array.dtype().is_fixed_size_binary():
-        return take(array.as_fixed_size_binary(), indices, ctx).to_any()
-    elif array.dtype().is_struct():
-        return take(array.as_struct(), indices, ctx).to_any()
-    elif array.dtype().is_list():
-        return take(array.as_list(), indices, ctx).to_any()
-    elif array.dtype().is_large_list():
-        return take(array.as_large_list(), indices, ctx).to_any()
-    elif array.dtype().is_map():
-        return take(array.as_map(), indices, ctx).to_any()
-    elif array.dtype().is_fixed_size_list():
-        return take(array.as_fixed_size_list(), indices, ctx).to_any()
-    elif array.dtype().is_dictionary():
-        return take(array.as_dictionary(), indices, ctx).to_any()
+    Typed leaves live in the free ``take`` overloads above; ``dispatch`` resolves
+    an ``AnyArray``'s runtime dtype (numeric dtypes fold into one
+    ``dispatch_over_numeric`` arm) and threads ``ctx`` to the primitive fast path.
+    """
 
-    raise Error("take: unsupported dtype ", array.dtype())
+    comptime name = "take"
+
+    @staticmethod
+    def dispatch(
+        array: AnyArray,
+        indices: Int32Array,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        var dt = array.dtype()
+
+        if dt == bool_:
+            return take(array.as_bool().copy(), indices, ctx).to_any()
+        elif dt.is_numeric():
+
+            @parameter
+            def leaf[T: NumericType](d: T) raises -> AnyArray:
+                return take(array.as_primitive[T](), indices, ctx).to_any()
+
+            return dispatch_over_numeric[leaf](dt)
+        elif dt.is_string():
+            return take(array.as_string(), indices, ctx).to_any()
+        elif dt.is_binary():
+            return take(array.as_binary(), indices, ctx).to_any()
+        elif dt.is_large_string():
+            return take(array.as_large_string(), indices, ctx).to_any()
+        elif dt.is_large_binary():
+            return take(array.as_large_binary(), indices, ctx).to_any()
+        elif dt.is_null():
+            return take(array.as_null(), indices, ctx).to_any()
+        elif dt.is_fixed_size_binary():
+            return take(array.as_fixed_size_binary(), indices, ctx).to_any()
+        elif dt.is_struct():
+            return take(array.as_struct(), indices, ctx).to_any()
+        elif dt.is_list():
+            return take(array.as_list(), indices, ctx).to_any()
+        elif dt.is_large_list():
+            return take(array.as_large_list(), indices, ctx).to_any()
+        elif dt.is_map():
+            return take(array.as_map(), indices, ctx).to_any()
+        elif dt.is_fixed_size_list():
+            return take(array.as_fixed_size_list(), indices, ctx).to_any()
+        elif dt.is_dictionary():
+            return take(array.as_dictionary(), indices, ctx).to_any()
+        else:
+            raise Error("take: unsupported dtype ", dt)
 
 
 def take(
