@@ -746,6 +746,10 @@ def drop_null(
     Returns:
         A new AnyArray with null elements removed.
     """
+    # A null array is entirely null, so every element is dropped.
+    if array.dtype().is_null():
+        return NullArray(length=0).to_any()
+
     var data = array.to_data()
     if not data.bitmap:
         return array.copy()
