@@ -18,9 +18,13 @@ from ..arrays import (
     StringArray,
     BinaryLikeArray,
     AnyArray,
+    ArrayData,
     StructArray,
     NullArray,
     FixedSizeBinaryArray,
+    ListLikeArray,
+    FixedSizeListArray,
+    DictionaryArray,
     Int32Array,
 )
 from ..buffers import Buffer
@@ -34,6 +38,7 @@ from ..builders import (
 from ..dtypes import (
     PrimitiveType,
     BinaryLikeType,
+    ListLikeType,
     Int8Type,
     Int16Type,
     Int32Type,
@@ -520,6 +525,38 @@ def filter(
     return take(array, _mask_to_indices(selection), ctx)
 
 
+def filter[
+    T: ListLikeType
+](
+    array: ListLikeArray[T],
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> ListLikeArray[T]:
+    """Filter a list/large-list/map array by gathering the selected rows via
+    `take` (offset-remap + child gather)."""
+    return take(array, _mask_to_indices(selection), ctx)
+
+
+def filter(
+    array: FixedSizeListArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> FixedSizeListArray:
+    """Filter a fixed-size-list array by gathering the selected rows via `take`.
+    """
+    return take(array, _mask_to_indices(selection), ctx)
+
+
+def filter(
+    array: DictionaryArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> DictionaryArray:
+    """Filter a dictionary array by gathering the selected rows via `take`
+    (filters the index array, shares the values)."""
+    return take(array, _mask_to_indices(selection), ctx)
+
+
 def filter(
     array: StructArray,
     selection: BoolArray,
@@ -631,6 +668,16 @@ def filter(
         return filter(array.as_fixed_size_binary(), mask, ctx).to_any()
     elif array.dtype().is_struct():
         return filter(array.as_struct(), mask, ctx).to_any()
+    elif array.dtype().is_list():
+        return filter(array.as_list(), mask, ctx).to_any()
+    elif array.dtype().is_large_list():
+        return filter(array.as_large_list(), mask, ctx).to_any()
+    elif array.dtype().is_map():
+        return filter(array.as_map(), mask, ctx).to_any()
+    elif array.dtype().is_fixed_size_list():
+        return filter(array.as_fixed_size_list(), mask, ctx).to_any()
+    elif array.dtype().is_dictionary():
+        return filter(array.as_dictionary(), mask, ctx).to_any()
 
     raise Error("filter: unsupported dtype ", array.dtype())
 
@@ -699,33 +746,20 @@ def drop_null(
     Returns:
         A new AnyArray with null elements removed.
     """
-    if array.dtype() == bool_:
-        return _drop_null_bool(array.as_bool().copy(), ctx).to_any()
+    var data = array.to_data()
+    if not data.bitmap:
+        return array.copy()
 
-    if array.dtype() == int8:
-        return drop_null(array.as_int8(), ctx).to_any()
-    elif array.dtype() == int16:
-        return drop_null(array.as_int16(), ctx).to_any()
-    elif array.dtype() == int32:
-        return drop_null(array.as_int32(), ctx).to_any()
-    elif array.dtype() == int64:
-        return drop_null(array.as_int64(), ctx).to_any()
-    elif array.dtype() == uint8:
-        return drop_null(array.as_uint8(), ctx).to_any()
-    elif array.dtype() == uint16:
-        return drop_null(array.as_uint16(), ctx).to_any()
-    elif array.dtype() == uint32:
-        return drop_null(array.as_uint32(), ctx).to_any()
-    elif array.dtype() == uint64:
-        return drop_null(array.as_uint64(), ctx).to_any()
-    elif array.dtype() == float16:
-        return drop_null(array.as_float16(), ctx).to_any()
-    elif array.dtype() == float32:
-        return drop_null(array.as_float32(), ctx).to_any()
-    elif array.dtype() == float64:
-        return drop_null(array.as_float64(), ctx).to_any()
-
-    raise Error("drop_null: unsupported dtype ", array.dtype())
+    # Use the validity bitmap directly as the selection (True = keep valid),
+    # then dispatch to the typed `filter` for every array type.
+    var selection = BoolArray(
+        length=data.length,
+        nulls=0,
+        offset=data.offset,
+        bitmap=None,
+        buffer=data.bitmap.value(),
+    )
+    return filter(array, selection^, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +998,16 @@ def take(
         return take(array.as_fixed_size_binary(), indices, ctx).to_any()
     elif array.dtype().is_struct():
         return take(array.as_struct(), indices, ctx).to_any()
+    elif array.dtype().is_list():
+        return take(array.as_list(), indices, ctx).to_any()
+    elif array.dtype().is_large_list():
+        return take(array.as_large_list(), indices, ctx).to_any()
+    elif array.dtype().is_map():
+        return take(array.as_map(), indices, ctx).to_any()
+    elif array.dtype().is_fixed_size_list():
+        return take(array.as_fixed_size_list(), indices, ctx).to_any()
+    elif array.dtype().is_dictionary():
+        return take(array.as_dictionary(), indices, ctx).to_any()
 
     raise Error("take: unsupported dtype ", array.dtype())
 
@@ -1023,6 +1067,136 @@ def take(
         byte_width=bw,
         bitmap=bm,
         buffer=out.to_immutable(),
+    )
+
+
+def take[
+    T: ListLikeType
+](
+    array: ListLikeArray[T],
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> ListLikeArray[T]:
+    """Gather rows from a list/large-list/map array: remap offsets and gather the
+    referenced child sub-ranges via a single child `take`. Null index or null
+    source row → null (empty) output row."""
+    comptime O = T.offset
+    var n = len(indices)
+    var out_offsets = Buffer.alloc_uninit[O](n + 1)
+    var oview = out_offsets.view[O]()
+    oview.unsafe_set(0, Scalar[O](0))
+
+    var child_indices = PrimitiveBuilder[Int32Type]()
+    var has_null_idx = indices.null_count() > 0
+    var need_bm = Bool(array.bitmap) or has_null_idx
+    var bmb = Bitmap.alloc_zeroed(n)
+    var null_count = 0
+    var total = 0
+
+    for k in range(n):
+        if has_null_idx and not indices.is_valid(k):
+            null_count += 1
+            oview.unsafe_set(k + 1, Scalar[O](total))
+            continue
+        var idx = Int(indices.unsafe_get(k))
+        if array.is_valid(idx):
+            var rng = array.child_range(idx)
+            for j in range(rng[0], rng[1]):
+                child_indices.append(Int32(j))
+            total += rng[1] - rng[0]
+            bmb.set(k)
+        else:
+            null_count += 1
+        oview.unsafe_set(k + 1, Scalar[O](total))
+
+    var bm: Optional[Bitmap[]] = None
+    if need_bm:
+        bm = bmb.to_immutable(length=n)
+    var new_child = take(array.values().copy(), child_indices.finish(), ctx)
+    return ListLikeArray[T](
+        dtype=array.dtype.copy(),
+        length=n,
+        nulls=null_count,
+        offset=0,
+        bitmap=bm,
+        offsets=out_offsets.to_immutable(),
+        values=new_child^,
+    )
+
+
+def take(
+    array: FixedSizeListArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> FixedSizeListArray:
+    """Gather rows from a fixed-size-list array: expand each row index into its
+    `list_size` contiguous child positions and gather the child in one `take`.
+    Null index → a null row of `list_size` null children."""
+    var n = len(indices)
+    var size = array.dtype.as_fixed_size_list().size
+    var child_indices = PrimitiveBuilder[Int32Type](n * size)
+    var has_null_idx = indices.null_count() > 0
+    var need_bm = Bool(array.bitmap) or has_null_idx
+    var bmb = Bitmap.alloc_zeroed(n)
+    var null_count = 0
+
+    for k in range(n):
+        if has_null_idx and not indices.is_valid(k):
+            null_count += 1
+            for _ in range(size):
+                child_indices.append_null()
+        else:
+            var idx = Int(indices.unsafe_get(k))
+            var base = (array.offset + idx) * size
+            for j in range(size):
+                child_indices.append(Int32(base + j))
+            if array.is_valid(idx):
+                bmb.set(k)
+            else:
+                null_count += 1
+
+    var bm: Optional[Bitmap[]] = None
+    if need_bm:
+        bm = bmb.to_immutable(length=n)
+    var new_child = take(array.values().copy(), child_indices.finish(), ctx)
+    return FixedSizeListArray(
+        dtype=array.dtype.copy(),
+        length=n,
+        nulls=null_count,
+        offset=0,
+        bitmap=bm,
+        values=new_child^,
+    )
+
+
+def take(
+    array: DictionaryArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> DictionaryArray:
+    """Gather rows from a dictionary array: gather its (logical) index array with
+    the fast primitive path and share the dictionary values unchanged."""
+    var data = array.to_data()
+    var logical_indices = AnyArray.from_data(
+        ArrayData(
+            dtype=data.dtype.as_dictionary().index_type().copy(),
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            bitmap=data.bitmap,
+            buffers=data.buffers.copy(),
+            children=List[ArrayData](),
+        )
+    )
+    var new_indices = take(logical_indices, indices, ctx)
+    var new_nulls = new_indices.null_count()
+    return DictionaryArray(
+        dtype=array.type(),
+        length=len(indices),
+        nulls=new_nulls,
+        offset=0,
+        indices=new_indices^,
+        values=array.dictionary(),
     )
 
 
