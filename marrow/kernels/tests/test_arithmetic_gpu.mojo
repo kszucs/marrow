@@ -5,7 +5,7 @@ from std.sys.info import CompilationTarget
 
 from marrow.builders import array, arange
 from marrow.dtypes import int32, float32, Int32Type, Float32Type
-from marrow.kernels.arithmetic import add
+from marrow.kernels.arithmetic import AddKernel
 
 
 def test_add_gpu() raises:
@@ -13,7 +13,7 @@ def test_add_gpu() raises:
     var ctx = DeviceContext()
     var a = array([1, 2, 3, 4], int32).to_device(ctx)
     var b = array([10, 20, 30, 40], int32).to_device(ctx)
-    var result = add[Int32Type](a, b, ctx).to_cpu(ctx)
+    var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_equal(result.unsafe_get(0), 11)
     assert_equal(result.unsafe_get(1), 22)
@@ -26,7 +26,7 @@ def test_add_gpu_large() raises:
     var ctx = DeviceContext()
     var a = arange[Int32Type](0, 10000).to_device(ctx)
     var b = arange[Int32Type](0, 10000).to_device(ctx)
-    var result = add[Int32Type](a, b, ctx).to_cpu(ctx)
+    var result = AddKernel.apply[Int32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 10000)
     assert_equal(result.unsafe_get(0), 0)
     assert_equal(result.unsafe_get(4999), 9998)
@@ -38,7 +38,7 @@ def test_add_gpu_float32() raises:
     var ctx = DeviceContext()
     var a = array([1, 2, 3, 4], float32).to_device(ctx)
     var b = array([10, 20, 30, 40], float32).to_device(ctx)
-    var result = add[Float32Type](a, b, ctx).to_cpu(ctx)
+    var result = AddKernel.apply[Float32Type](a, b, ctx).to_cpu(ctx)
     assert_equal(len(result), 4)
     assert_true(result.unsafe_get(0) == 11)
     assert_true(result.unsafe_get(1) == 22)
@@ -67,10 +67,10 @@ def test_chained_gpu_add() raises:
     var b = arange[Int32Type](0, 1000).to_device(ctx)
     var c = arange[Int32Type](0, 1000).to_device(ctx)
 
-    var ab = add[Int32Type](a, b, ctx)
+    var ab = AddKernel.apply[Int32Type](a, b, ctx)
     assert_true(ab.buffer.is_device())
 
-    var abc = add[Int32Type](ab, c, ctx).to_cpu(ctx)
+    var abc = AddKernel.apply[Int32Type](ab, c, ctx).to_cpu(ctx)
     assert_equal(len(abc), 1000)
     assert_equal(abc.unsafe_get(0), 0)
     assert_equal(abc.unsafe_get(1), 3)

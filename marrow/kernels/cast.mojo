@@ -976,22 +976,6 @@ struct DictionaryCast(Kernel):
 # ---------------------------------------------------------------------------
 
 
-def cast[
-    From: NumericType, To: NumericType
-](
-    array: PrimitiveArray[From],
-    safe: Bool = True,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> PrimitiveArray[To]:
-    """Typed numeric cast: ``cast[Int32Type, Float64Type](arr)`` — a runtime
-    convenience selecting ``NumericCast.apply``'s comptime kernel. Call
-    ``NumericCast.apply[From, To, safe]`` directly for a fully-monomorphized
-    (e.g. AOT-fused) cast."""
-    if safe:
-        return NumericCast.apply[From, To, True](array, ctx)
-    return NumericCast.apply[From, To, False](array, ctx)
-
-
 def cast(
     array: AnyArray,
     to: AnyDataType,

@@ -10,7 +10,12 @@ from marrow.arrays import (
 )
 from marrow.builders import array
 from marrow.dtypes import int64, float64, bool_ as bool_dt, uint32, Int64Type
-from marrow.kernels.arithmetic import add, subtract, abs_ as k_abs, neg as k_neg
+from marrow.kernels.arithmetic import (
+    AddKernel,
+    SubKernel,
+    AbsKernel,
+    NegKernel,
+)
 from marrow.kernels.string import string_lengths
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
@@ -73,7 +78,7 @@ def test_add_expr() raises:
     var b = array([10, 20, 30, 40, 50], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec(col(0) + col(1), batch)
-    assert_true(result == add[Int64Type](a, b))
+    assert_true(result == AddKernel.apply[Int64Type](a, b))
 
 
 def test_sub_expr() raises:
@@ -82,21 +87,21 @@ def test_sub_expr() raises:
     var b = array([1, 2, 3, 4, 5], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec(col(0) - col(1), batch)
-    assert_true(result == subtract[Int64Type](a, b))
+    assert_true(result == SubKernel.apply[Int64Type](a, b))
 
 
 def test_neg_expr() raises:
     """Operator -x matches kernels.neg."""
     var a = array([1, -2, 3, -4, 5], int64)
     var result = _exec(-col(0), record_batch([a.copy()], names=["c0"]))
-    assert_true(result == k_neg[Int64Type](a))
+    assert_true(result == NegKernel.apply[Int64Type](a))
 
 
 def test_abs_expr() raises:
     """Method .abs() matches kernels.abs_."""
     var a = array([-1, -2, 3, -4, 5], int64)
     var result = _exec(col(0).abs(), record_batch([a.copy()], names=["c0"]))
-    assert_true(result == k_abs[Int64Type](a))
+    assert_true(result == AbsKernel.apply[Int64Type](a))
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +115,9 @@ def test_abs_of_sub() raises:
     var b = array([5, 1, 3, 2, 10], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec((col(0) - col(1)).abs(), batch)
-    assert_true(result == k_abs[Int64Type](subtract[Int64Type](a, b)))
+    assert_true(
+        result == AbsKernel.apply[Int64Type](SubKernel.apply[Int64Type](a, b))
+    )
 
 
 def test_diff_of_squares() raises:
@@ -143,7 +150,7 @@ def test_non_aligned_length() raises:
     var b = array([10, 20, 30, 40, 50, 60, 70], int64)
     var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
     var result = _exec(col(0) + col(1), batch)
-    assert_true(result == add[Int64Type](a, b))
+    assert_true(result == AddKernel.apply[Int64Type](a, b))
 
 
 def test_write_to() raises:

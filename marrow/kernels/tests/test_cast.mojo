@@ -49,7 +49,7 @@ from marrow.dtypes import (
     UInt8Type,
     Int64Type,
 )
-from marrow.kernels.cast import cast
+from marrow.kernels.cast import cast, NumericCast
 
 
 # ---------------------------------------------------------------------------
@@ -59,19 +59,19 @@ from marrow.kernels.cast import cast
 
 def test_int_to_float_widen() raises:
     var a = array([1, 2, 3], int32)
-    var r = cast[Int32Type, Float64Type](a)
+    var r = NumericCast.apply[Int32Type, Float64Type](a)
     assert_true(r == array([1.0, 2.0, 3.0], float64))
 
 
 def test_float_to_int_truncates_toward_zero() raises:
     var a = array([1.9, -1.9, 2.5, -2.5], float64)
-    var r = cast[Float64Type, Int32Type](a, safe=False)
+    var r = NumericCast.apply[Float64Type, Int32Type, False](a)
     assert_true(r == array([1, -1, 2, -2], int32))
 
 
 def test_negative_narrowing_wraps() raises:
     var a = array([-1, 300, 44], int32)
-    var r = cast[Int32Type, UInt8Type](a, safe=False)
+    var r = NumericCast.apply[Int32Type, UInt8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 255)
     assert_equal(Int(r.unsafe_get(1)), 44)  # 300 & 0xFF
     assert_equal(Int(r.unsafe_get(2)), 44)
@@ -79,14 +79,14 @@ def test_negative_narrowing_wraps() raises:
 
 def test_int16_wraps_to_int8() raises:
     var a = array([300], int16)
-    var r = cast[Int16Type, Int8Type](a, safe=False)
+    var r = NumericCast.apply[Int16Type, Int8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 44)  # 300 & 0xFF = 44
 
 
 def test_float16_roundtrip() raises:
     var a = array([1.0, 2.5, -3.25], float32)
-    var half = cast[Float32Type, Float16Type](a)
-    var back = cast[Float16Type, Float32Type](half)
+    var half = NumericCast.apply[Float32Type, Float16Type](a)
+    var back = NumericCast.apply[Float16Type, Float32Type](half)
     assert_true(back == a)
 
 
@@ -97,7 +97,7 @@ def test_float16_roundtrip() raises:
 
 def test_nulls_preserved() raises:
     var a = array([1, None, 3], int32)
-    var r = cast[Int32Type, Float64Type](a)
+    var r = NumericCast.apply[Int32Type, Float64Type](a)
     assert_equal(r.nulls, 1)
     assert_true(r.is_valid(0))
     assert_true(not r.is_valid(1))
@@ -111,39 +111,39 @@ def test_nulls_preserved() raises:
 
 def test_safe_lossless_ok() raises:
     var a = array([1, 2, 3], int32)
-    var r = cast[Int32Type, Int64Type](a, safe=True)
+    var r = NumericCast.apply[Int32Type, Int64Type, True](a)
     assert_true(r == array([1, 2, 3], int64))
 
 
 def test_safe_overflow_raises() raises:
     var a = array([300], int32)
     with assert_raises():
-        _ = cast[Int32Type, Int8Type](a, safe=True)
+        _ = NumericCast.apply[Int32Type, Int8Type, True](a)
 
 
 def test_safe_float_truncation_raises() raises:
     var a = array([3.9], float64)
     with assert_raises():
-        _ = cast[Float64Type, Int32Type](a, safe=True)
+        _ = NumericCast.apply[Float64Type, Int32Type, True](a)
 
 
 def test_safe_negative_to_unsigned_raises() raises:
     var a = array([-1], int32)
     with assert_raises():
-        _ = cast[Int32Type, UInt8Type](a, safe=True)
+        _ = NumericCast.apply[Int32Type, UInt8Type, True](a)
 
 
 def test_safe_skips_null_lanes() raises:
     # A null lane holds arbitrary data that need not be representable; safe mode
     # must not raise on it.
     var a = array([1, None, 2], int32)
-    var r = cast[Int32Type, Int8Type](a, safe=True)
+    var r = NumericCast.apply[Int32Type, Int8Type, True](a)
     assert_equal(r.nulls, 1)
 
 
 def test_unsafe_overflow_ok() raises:
     var a = array([300], int32)
-    var r = cast[Int32Type, Int8Type](a, safe=False)
+    var r = NumericCast.apply[Int32Type, Int8Type, False](a)
     assert_equal(Int(r.unsafe_get(0)), 44)
 
 

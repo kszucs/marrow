@@ -702,3 +702,19 @@
   reference implementations, and runs cross-implementation tests against C++,
   Rust, Go, and Mojo. All four implementations pass: 119 cases across 14
   directional phases.
+
+### Refactors
+
+- **Drop delegating kernel convenience wrappers** (`arithmetic`, `boolean`,
+  `compare`, `aggregate`, `cast`): the free-standing typed (`add[T]`, `ceil[T]`,
+  `equal[T]`, `sum[T]`, `cast[From, To]`, …) and type-erased (`add`, `ceil`,
+  `not_equal`, `sum`, …) functions that merely delegated to the kernel structs
+  are removed. Callers now use the kernel structs directly — `AddKernel.apply[T]`
+  / `EqKernel.apply[T]` / `SumKernel.apply[T]` / `NumericCast.apply[From, To,
+  safe]` for the typed path, and `AddKernel.dispatch` / `NeKernel.dispatch` /
+  `SumKernel.dispatch` / `MeanKernel.reduce` for the runtime-typed path. The
+  expression layer is the primary Mojo-side API; the Python bindings keep thin
+  PyArrow-compatible wrappers. Kernels that carry real logic beyond delegation
+  are retained as free functions pending a struct-first port: `equal`'s
+  string / struct / `AnyArray` dispatch, `is_null` / `select`, `any` / `all`,
+  and the top-level `cast` dtype router.

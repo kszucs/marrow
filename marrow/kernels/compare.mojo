@@ -10,21 +10,21 @@ values (undefined per Arrow spec, but branch-free for performance).
 
 Available kernels
 -----------------
-* ``equal``          — left[i] == right[i]
-* ``not_equal``      — left[i] != right[i]
-* ``less``           — left[i] <  right[i]
-* ``less_equal``     — left[i] <= right[i]
-* ``greater``        — left[i] >  right[i]
-* ``greater_equal``  — left[i] >= right[i]
-
-Each has a typed overload ``def[T: DataType](PrimitiveArray[T], PrimitiveArray[T])``
-and a runtime-typed overload ``def(AnyArray, AnyArray)`` that resolves the dtype
-via ``dispatch_over_numeric`` (``marrow.utils``) in ``BinaryCompareKernel.dispatch``.
+* ``EqKernel``  — left[i] == right[i]
+* ``NeKernel``  — left[i] != right[i]
+* ``LtKernel``  — left[i] <  right[i]
+* ``LeKernel``  — left[i] <= right[i]
+* ``GtKernel``  — left[i] >  right[i]
+* ``GeKernel``  — left[i] >= right[i]
 
 Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 0 (core)** — ``KernelStruct.core[T, W]``: raw SIMD predicate.
 - **Tier 1 (apply)** — ``KernelStruct.apply[T]``: typed array API.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: type-erased entry.
+
+``equal`` additionally keeps free-function overloads for ``StringArray`` /
+``StructArray`` / ``AnyArray`` (string and nested equality not yet folded into
+``EqKernel``).
 """
 
 from ..arrays import (
@@ -211,77 +211,6 @@ struct GeKernel(BinaryCompareKernel):
 
 
 # ---------------------------------------------------------------------------
-# Typed public API — thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def equal[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise equality: result[i] = left[i] == right[i]."""
-    return EqKernel.apply[T](left, right, ctx)
-
-
-def not_equal[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise inequality: result[i] = left[i] != right[i]."""
-    return NeKernel.apply[T](left, right, ctx)
-
-
-def less[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise less-than: result[i] = left[i] < right[i]."""
-    return LtKernel.apply[T](left, right, ctx)
-
-
-def less_equal[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise less-or-equal: result[i] = left[i] <= right[i]."""
-    return LeKernel.apply[T](left, right, ctx)
-
-
-def greater[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise greater-than: result[i] = left[i] > right[i]."""
-    return GtKernel.apply[T](left, right, ctx)
-
-
-def greater_equal[
-    T: PrimitiveType
-](
-    left: PrimitiveArray[T],
-    right: PrimitiveArray[T],
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Element-wise greater-or-equal: result[i] = left[i] >= right[i]."""
-    return GeKernel.apply[T](left, right, ctx)
-
-
-# ---------------------------------------------------------------------------
 # String overloads
 # ---------------------------------------------------------------------------
 
@@ -337,7 +266,7 @@ def equal(
     Returns a boolean array where element ``i`` is True iff
     ``left[i] == right[i]`` across every child column.
     """
-    from .boolean import and_
+    from .boolean import AndKernel
 
     var n_keys = len(left.children)
     var mask = (
@@ -346,7 +275,7 @@ def equal(
         .copy()
     )
     for k in range(1, n_keys):
-        mask = and_(
+        mask = AndKernel.apply(
             mask,
             equal(left.children[k].copy(), right.children[k].copy(), ctx)
             .as_bool()
@@ -354,43 +283,3 @@ def equal(
             ctx,
         )
     return mask^
-
-
-def not_equal(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return NeKernel.dispatch(left, right, ctx)
-
-
-def less(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return LtKernel.dispatch(left, right, ctx)
-
-
-def less_equal(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return LeKernel.dispatch(left, right, ctx)
-
-
-def greater(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return GtKernel.dispatch(left, right, ctx)
-
-
-def greater_equal(
-    left: AnyArray,
-    right: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    return GeKernel.dispatch(left, right, ctx)

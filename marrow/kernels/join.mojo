@@ -128,7 +128,6 @@ from ..dtypes import (
     struct_,
     null,
 )
-from .boolean import and_
 from .compare import equal
 from .execution import ExecutionContext
 from .filter import take, filter

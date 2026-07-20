@@ -190,63 +190,6 @@ struct NotKernel(BoolUnaryKernel):
 
 
 # ---------------------------------------------------------------------------
-# Public API — thin wrappers
-# ---------------------------------------------------------------------------
-
-
-def and_(
-    lhs: BoolArray,
-    rhs: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Bitwise AND of two bit-packed bool arrays."""
-    return AndKernel.apply(lhs, rhs, ctx)
-
-
-def or_(
-    lhs: BoolArray,
-    rhs: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Bitwise OR of two bit-packed bool arrays."""
-    return OrKernel.apply(lhs, rhs, ctx)
-
-
-def not_(
-    arr: BoolArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> BoolArray:
-    """Bitwise NOT of a bit-packed bool array."""
-    return NotKernel.apply(arr, ctx)
-
-
-def and_(
-    lhs: AnyArray,
-    rhs: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Runtime-typed AND: dispatches to the typed BoolArray overload."""
-    return AndKernel.dispatch(lhs, rhs, ctx)
-
-
-def or_(
-    lhs: AnyArray,
-    rhs: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Runtime-typed OR: dispatches to the typed BoolArray overload."""
-    return OrKernel.dispatch(lhs, rhs, ctx)
-
-
-def not_(
-    arr: AnyArray,
-    ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> AnyArray:
-    """Runtime-typed NOT: dispatches to the typed BoolArray overload."""
-    return NotKernel.dispatch(arr, ctx)
-
-
-# ---------------------------------------------------------------------------
 # is_null
 # ---------------------------------------------------------------------------
 

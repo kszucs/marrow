@@ -37,15 +37,22 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from .values import Value
 from .pruning import PruneStats, PruneBound
-from ..kernels.arithmetic import add, subtract, multiply, divide, neg, abs_
-from ..kernels.boolean import and_, or_, not_, is_null, select
+from ..kernels.arithmetic import (
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
+    NegKernel,
+    AbsKernel,
+)
+from ..kernels.boolean import AndKernel, OrKernel, NotKernel, is_null, select
 from ..kernels.compare import (
     equal,
-    not_equal,
-    less,
-    less_equal,
-    greater,
-    greater_equal,
+    NeKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
 )
 from ..kernels.string import string_lengths
 from ..kernels.cast import cast as cast_array
@@ -208,45 +215,57 @@ struct DynValue(
         elif self._tag == LITERAL:
             return self._value.value().repeat(batch.num_rows())
         elif self._tag == ADD:
-            return add(self._args[0].eval(batch), self._args[1].eval(batch))
+            return AddKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == SUB:
-            return subtract(
+            return SubKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == MUL:
-            return multiply(
+            return MulKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == DIV:
-            return divide(self._args[0].eval(batch), self._args[1].eval(batch))
+            return DivKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == EQ:
             return equal(self._args[0].eval(batch), self._args[1].eval(batch))
         elif self._tag == NE:
-            return not_equal(
+            return NeKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == LT:
-            return less(self._args[0].eval(batch), self._args[1].eval(batch))
+            return LtKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == LE:
-            return less_equal(
+            return LeKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == GT:
-            return greater(self._args[0].eval(batch), self._args[1].eval(batch))
+            return GtKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == GE:
-            return greater_equal(
+            return GeKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == AND:
-            return and_(self._args[0].eval(batch), self._args[1].eval(batch))
+            return AndKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == OR:
-            return or_(self._args[0].eval(batch), self._args[1].eval(batch))
+            return OrKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == NEG:
-            return neg(self._args[0].eval(batch))
+            return NegKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == ABS:
-            return abs_(self._args[0].eval(batch))
+            return AbsKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == NOT:
-            return not_(self._args[0].eval(batch))
+            return NotKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
         elif self._tag == LENGTH:

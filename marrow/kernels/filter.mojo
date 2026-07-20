@@ -69,7 +69,6 @@ from std.algorithm.functional import sync_parallelize
 
 from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
-from .aggregate import sum
 from .execution import ExecutionContext
 from .helpers import Kernel
 from .string import string_lengths
