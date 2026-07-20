@@ -1116,33 +1116,55 @@ def take[
     var oview = out_offsets.view[O]()
     oview.unsafe_set(0, Scalar[O](0))
 
-    var child_indices = PrimitiveBuilder[Int32Type]()
     var has_null_idx = indices.null_count() > 0
     var need_bm = Bool(array.bitmap) or has_null_idx
     var bmb = Bitmap.alloc_zeroed(n)
     var null_count = 0
     var total = 0
 
+    # Pass 1: output offsets + validity + total child length (upfront so the
+    # child-index buffer is sized exactly — indices may repeat rows).
     for k in range(n):
         if has_null_idx and not indices.is_valid(k):
             null_count += 1
-            oview.unsafe_set(k + 1, Scalar[O](total))
+        else:
+            var idx = Int(indices.unsafe_get(k))
+            if array.is_valid(idx):
+                var rng = array.child_range(idx)
+                total += rng[1] - rng[0]
+                bmb.set(k)
+            else:
+                null_count += 1
+        oview.unsafe_set(k + 1, Scalar[O](total))
+
+    # Pass 2: materialize the (per-row contiguous) child indices into a raw
+    # Int32 buffer — no builder append / growth / null-bitmap overhead — then
+    # gather the child in a single dispatched `take`.
+    var child_idx_buf = Buffer.alloc_uninit[Int32Type.native](total)
+    var civ = child_idx_buf.view[Int32Type.native]()
+    var pos = 0
+    for k in range(n):
+        if has_null_idx and not indices.is_valid(k):
             continue
         var idx = Int(indices.unsafe_get(k))
         if array.is_valid(idx):
             var rng = array.child_range(idx)
             for j in range(rng[0], rng[1]):
-                child_indices.append(Int32(j))
-            total += rng[1] - rng[0]
-            bmb.set(k)
-        else:
-            null_count += 1
-        oview.unsafe_set(k + 1, Scalar[O](total))
+                civ.unsafe_set(pos, Int32(j))
+                pos += 1
+    var child_indices = Int32Array(
+        dtype=int32,
+        length=total,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=child_idx_buf.to_immutable(),
+    )
 
     var bm: Optional[Bitmap[]] = None
     if need_bm:
         bm = bmb.to_immutable(length=n)
-    var new_child = take(array.values().copy(), child_indices.finish(), ctx)
+    var new_child = take(array.values().copy(), child_indices, ctx)
     return ListLikeArray[T](
         dtype=array.dtype.copy(),
         length=n,
@@ -1164,31 +1186,55 @@ def take(
     Null index → a null row of `list_size` null children."""
     var n = len(indices)
     var size = array.dtype.as_fixed_size_list().size
-    var child_indices = PrimitiveBuilder[Int32Type](n * size)
+    var total = n * size
     var has_null_idx = indices.null_count() > 0
     var need_bm = Bool(array.bitmap) or has_null_idx
     var bmb = Bitmap.alloc_zeroed(n)
     var null_count = 0
 
+    # Materialize the `size`-strided child indices into a raw Int32 buffer; a
+    # null index expands to `size` null child slots (child validity bitmap).
+    var child_idx_buf = Buffer.alloc_uninit[Int32Type.native](total)
+    var civ = child_idx_buf.view[Int32Type.native]()
+    var child_bm = Bitmap.alloc_zeroed(total)
+    var pos = 0
     for k in range(n):
         if has_null_idx and not indices.is_valid(k):
             null_count += 1
             for _ in range(size):
-                child_indices.append_null()
+                civ.unsafe_set(pos, Int32(0))
+                pos += 1
         else:
             var idx = Int(indices.unsafe_get(k))
             var base = (array.offset + idx) * size
             for j in range(size):
-                child_indices.append(Int32(base + j))
+                civ.unsafe_set(pos, Int32(base + j))
+                child_bm.set(pos)
+                pos += 1
             if array.is_valid(idx):
                 bmb.set(k)
             else:
                 null_count += 1
 
+    var child_bitmap: Optional[Bitmap[]] = None
+    var child_nulls = 0
+    if has_null_idx:
+        child_nulls = total - child_bm.view().count_set_bits()
+        if child_nulls > 0:
+            child_bitmap = child_bm.to_immutable(length=total)
+    var child_indices = Int32Array(
+        dtype=int32,
+        length=total,
+        nulls=child_nulls,
+        offset=0,
+        bitmap=child_bitmap^,
+        buffer=child_idx_buf.to_immutable(),
+    )
+
     var bm: Optional[Bitmap[]] = None
     if need_bm:
         bm = bmb.to_immutable(length=n)
-    var new_child = take(array.values().copy(), child_indices.finish(), ctx)
+    var new_child = take(array.values().copy(), child_indices, ctx)
     return FixedSizeListArray(
         dtype=array.dtype.copy(),
         length=n,
