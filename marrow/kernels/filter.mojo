@@ -552,9 +552,35 @@ def filter(
     selection: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> DictionaryArray:
-    """Filter a dictionary array by gathering the selected rows via `take`
-    (filters the index array, shares the values)."""
-    return take(array, _mask_to_indices(selection), ctx)
+    """Filter a dictionary array by filtering its (logical) index array with the
+    fast sequential primitive path and sharing the dictionary values unchanged.
+
+    Filtering the fixed-width codes is a sequential bitmap compaction, far
+    cheaper than routing through `take` (index materialization + random gather).
+    """
+    var data = array.to_data()
+    var logical_indices = AnyArray.from_data(
+        ArrayData(
+            dtype=data.dtype.as_dictionary().index_type().copy(),
+            length=data.length,
+            nulls=data.nulls,
+            offset=data.offset,
+            bitmap=data.bitmap,
+            buffers=data.buffers.copy(),
+            children=List[ArrayData](),
+        )
+    )
+    var sel_any: AnyArray = selection.copy()
+    var new_indices = filter(logical_indices, sel_any, ctx)
+    var new_nulls = new_indices.null_count()
+    return DictionaryArray(
+        dtype=array.type(),
+        length=len(new_indices),
+        nulls=new_nulls,
+        offset=0,
+        indices=new_indices^,
+        values=array.dictionary(),
+    )
 
 
 def filter(
