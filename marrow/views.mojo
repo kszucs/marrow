@@ -370,10 +370,14 @@ struct BufferView[
                     and sel.load_bits[DType.uint64](i) == ALL_ONES
                 ):
                     i += 64
-                dst.slice(out_pos).copy_from(self.slice(run_start), i - run_start)
+                dst.slice(out_pos).copy_from(
+                    self.slice(run_start), i - run_start
+                )
                 out_pos += i - run_start
                 continue
-            out_pos += dst.slice(out_pos).compressed_store(self.slice(i), sel_word)
+            out_pos += dst.slice(out_pos).compressed_store(
+                self.slice(i), sel_word
+            )
             i += 64
 
         if i < sel_end:
@@ -381,7 +385,9 @@ struct BufferView[
             var mask = (UInt64(1) << UInt64(tail)) - 1
             var sel_word = sel.load_bits[DType.uint64](i) & mask
             if sel_word != 0:
-                dst.slice(out_pos).compressed_store_sparse(self.slice(i), sel_word)
+                dst.slice(out_pos).compressed_store_sparse(
+                    self.slice(i), sel_word
+                )
                 out_pos += Int(pop_count(sel_word))
 
         return buf.to_immutable()

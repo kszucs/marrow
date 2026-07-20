@@ -19,7 +19,6 @@ from ..arrays import (
     StringArray,
     BinaryLikeArray,
     AnyArray,
-    ArrayData,
     StructArray,
     NullArray,
     FixedSizeBinaryArray,
@@ -76,204 +75,95 @@ from .helpers import Kernel
 from .string import string_lengths
 
 
-trait SelectionKernel(Kernel):
-    """Base for columnar selection kernels (``Filter`` / ``Take``).
+struct Filter(Kernel):
+    """Selection kernel — keep elements where a boolean ``mask`` is True.
 
-    A concrete kernel supplies the ``Selection`` type (the boolean mask for
-    filter, the ``Int32`` index array for take) and the per-type ``apply``
-    overloads; the shared ``dispatch`` resolves an ``AnyArray``'s runtime dtype
-    to the matching ``apply`` — the numeric dtypes fold into a single
-    ``dispatch_over_numeric`` arm.
+    The typed leaves are the ``apply`` overloads below; each operates directly on
+    the mask ``BitmapView`` (no ``BoolArray`` wrapping — nested filters recurse by
+    handing a child ``BitmapView`` straight to ``dispatch``). ``dispatch``
+    resolves a runtime-typed array to the matching leaf.
     """
 
-    comptime Selection: Array
+    comptime name = "filter"
 
     @staticmethod
-    def apply[
-        T: PrimitiveType
-    ](
-        array: PrimitiveArray[T],
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> PrimitiveArray[T]:
-        ...
-
-    @staticmethod
-    def apply(
-        array: BoolArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BoolArray:
-        ...
-
-    @staticmethod
-    def apply[
-        T: BinaryLikeType
-    ](
-        array: BinaryLikeArray[T],
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> BinaryLikeArray[T]:
-        ...
-
-    @staticmethod
-    def apply(
-        array: NullArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> NullArray:
-        ...
-
-    @staticmethod
-    def apply(
-        array: FixedSizeBinaryArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> FixedSizeBinaryArray:
-        ...
-
-    @staticmethod
-    def apply[
-        T: ListLikeType
-    ](
-        array: ListLikeArray[T],
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> ListLikeArray[T]:
-        ...
-
-    @staticmethod
-    def apply(
-        array: FixedSizeListArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> FixedSizeListArray:
-        ...
-
-    @staticmethod
-    def apply(
-        array: DictionaryArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> DictionaryArray:
-        ...
-
-    @staticmethod
-    def apply(
-        array: StructArray,
-        selection: Self.Selection,
-        ctx: ExecutionContext = ExecutionContext.serial(),
-    ) raises -> StructArray:
-        ...
+    def _require_len(array_len: Int, mask_len: Int) raises:
+        """Validate the mask covers the array exactly (guards the compaction
+        loops against out-of-bounds reads on a mismatched mask)."""
+        if array_len != mask_len:
+            raise Error(
+                t"filter: array length {array_len} != mask length {mask_len}"
+            )
 
     @staticmethod
     def dispatch(
         array: AnyArray,
-        selection: Self.Selection,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> AnyArray:
-        """Resolve `array`'s runtime dtype to the matching typed `apply`."""
+        """Resolve `array`'s runtime dtype and filter it by `mask`."""
         var dt = array.dtype()
         if dt == bool_:
-            return Self.apply(array.as_bool().copy(), selection, ctx).to_any()
+            return Filter.apply(array.as_bool(), mask, ctx).to_any()
         elif dt.is_numeric():
 
             @parameter
-            def leaf[T: NumericType](d: T) raises -> AnyArray:
-                return Self.apply(
-                    array.as_primitive[T](), selection, ctx
-                ).to_any()
+            def numeric[T: NumericType](d: T) raises -> AnyArray:
+                return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
 
-            return dispatch_over_numeric[leaf](dt)
+            return dispatch_over_numeric[numeric](dt)
         elif dt.is_string():
-            return Self.apply(array.as_string(), selection, ctx).to_any()
+            return Filter.apply(array.as_string(), mask, ctx).to_any()
         elif dt.is_binary():
-            return Self.apply(array.as_binary(), selection, ctx).to_any()
+            return Filter.apply(array.as_binary(), mask, ctx).to_any()
         elif dt.is_large_string():
-            return Self.apply(array.as_large_string(), selection, ctx).to_any()
+            return Filter.apply(array.as_large_string(), mask, ctx).to_any()
         elif dt.is_large_binary():
-            return Self.apply(array.as_large_binary(), selection, ctx).to_any()
+            return Filter.apply(array.as_large_binary(), mask, ctx).to_any()
         elif dt.is_null():
-            return Self.apply(array.as_null(), selection, ctx).to_any()
+            return Filter.apply(array.as_null(), mask, ctx).to_any()
         elif dt.is_fixed_size_binary():
-            return Self.apply(
-                array.as_fixed_size_binary(), selection, ctx
+            return Filter.apply(
+                array.as_fixed_size_binary(), mask, ctx
             ).to_any()
         elif dt.is_struct():
-            return Self.apply(array.as_struct(), selection, ctx).to_any()
+            return Filter.apply(array.as_struct(), mask, ctx).to_any()
         elif dt.is_list():
-            return Self.apply(array.as_list(), selection, ctx).to_any()
+            return Filter.apply(array.as_list(), mask, ctx).to_any()
         elif dt.is_large_list():
-            return Self.apply(array.as_large_list(), selection, ctx).to_any()
+            return Filter.apply(array.as_large_list(), mask, ctx).to_any()
         elif dt.is_map():
-            return Self.apply(array.as_map(), selection, ctx).to_any()
+            return Filter.apply(array.as_map(), mask, ctx).to_any()
         elif dt.is_fixed_size_list():
-            return Self.apply(
-                array.as_fixed_size_list(), selection, ctx
-            ).to_any()
+            return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
         elif dt.is_dictionary():
-            return Self.apply(array.as_dictionary(), selection, ctx).to_any()
+            return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
         else:
-            raise Error(Self.name, ": unsupported dtype ", dt)
-
-
-struct Filter(SelectionKernel):
-    """Selection kernel — keep elements where a boolean mask is True.
-
-    The typed leaves are the ``apply`` overloads below; ``dispatch`` is inherited
-    from ``SelectionKernel``.
-    """
-
-    comptime name = "filter"
-    comptime Selection = BoolArray
+            raise Error("filter: unsupported dtype ", dt)
 
     @staticmethod
     def drop_null(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyArray:
-        # A null array is entirely null, so every element is dropped.
+        """Remove null elements: the validity bitmap is itself the keep-mask."""
         if array.dtype().is_null():
             return NullArray(length=0).to_any()
         var data = array.to_data()
         if not data.bitmap:
             return array.copy()
-        # Use the validity bitmap directly as the selection (keep valid).
-        var selection = BoolArray(
-            length=data.length,
-            nulls=0,
-            offset=data.offset,
-            bitmap=None,
-            buffer=data.bitmap.value(),
-        )
-        return Filter.dispatch(array, selection^, ctx)
+        return Filter.dispatch(array, data.validity().value(), ctx)
 
     @staticmethod
     def apply[
         T: PrimitiveType
     ](
         array: PrimitiveArray[T],
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> PrimitiveArray[T]:
-        """Filter a primitive array, keeping only elements where selection is True.
-
-        Args:
-            array: The input primitive array.
-            selection: Boolean selection mask (True = keep).
-            ctx: Execution context (currently unused — accepted for signature
-                uniformity across kernels).
-
-        Returns:
-            A new PrimitiveArray containing only the selected elements.
-        """
-        var n = len(array)
-        if n != len(selection):
-            raise Error(
-                t"filter: array length {n} != selection length {len(selection)}"
-            )
-
-        var sel_bm = selection.values()
-        var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
+        """Filter a primitive array, keeping elements where ``mask`` is set."""
+        Filter._require_len(len(array), len(mask))
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
             var empty_buf = Buffer.alloc_zeroed[T.native](0)
@@ -291,13 +181,13 @@ struct Filter(SelectionKernel):
         var null_count = 0
         if var val_bm := array.validity():
             var filtered_bm, nc = val_bm.value().filter(
-                sel_bm, sel_start, sel_end, out_len
+                mask, sel_start, sel_end, out_len
             )
             bm = filtered_bm
             null_count = nc
 
         var result_buf = array.values().filter(
-            sel_bm, sel_start, sel_end, out_len
+            mask, sel_start, sel_end, out_len
         )
         return PrimitiveArray[T](
             dtype=array.dtype.copy(),
@@ -311,28 +201,12 @@ struct Filter(SelectionKernel):
     @staticmethod
     def apply(
         array: BoolArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
-        """Filter a bool array, keeping only elements where selection is True.
-
-        Args:
-            array: The input bool array.
-            selection: Boolean selection mask (True = keep).
-            ctx: Execution context (currently unused — accepted for signature
-                uniformity across kernels).
-
-        Returns:
-            A new BoolArray containing only the selected elements.
-        """
-        var n = len(array)
-        if n != len(selection):
-            raise Error(
-                t"filter: array length {n} != selection length {len(selection)}"
-            )
-
-        var sel_bm = selection.values()
-        var out_len, sel_start, sel_end = sel_bm.count_set_bits_with_range()
+        """Filter a bool array, keeping elements where ``mask`` is set."""
+        Filter._require_len(len(array), len(mask))
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
             var empty_bm = Bitmap.alloc_zeroed(0)
@@ -348,16 +222,16 @@ struct Filter(SelectionKernel):
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if array.bitmap:
-            var val_bm = array.bitmap.value().view(array.offset, n)
+            var val_bm = array.validity().value()
             var filtered_bm, nc = val_bm.filter(
-                sel_bm, sel_start, sel_end, out_len
+                mask, sel_start, sel_end, out_len
             )
             bm = filtered_bm
             null_count = nc
 
         # Filter data.
         var filtered_data, _ = array.values().filter(
-            sel_bm, sel_start, sel_end, out_len
+            mask, sel_start, sel_end, out_len
         )
         return BoolArray(
             length=out_len,
@@ -372,34 +246,21 @@ struct Filter(SelectionKernel):
         T: BinaryLikeType
     ](
         array: BinaryLikeArray[T],
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BinaryLikeArray[T]:
         """Filter a binary-like array (string/binary, 32- or 64-bit offsets),
-        keeping only elements where selection is True.
+        keeping elements where ``mask`` is set.
 
-        Uses run merging: consecutive selected elements are copied with a single
-        memcpy call to reduce per-element overhead.  When the source has a
-        validity bitmap, it is filtered in the same pass (no second traversal).
-
-        Args:
-            array: The input binary-like array.
-            selection: Boolean selection mask (True = keep).
-            ctx: Execution context (currently unused — accepted for signature
-                uniformity across kernels).
-
-        Returns:
-            A new BinaryLikeArray[T] containing only the selected elements.
+        Word-wise CTZ over the mask visits only set bits (branch-free on
+        high-entropy masks); a fully-selected word copies its whole byte span in
+        one memcpy (run-merge for dense masks). Validity is filtered in the same
+        offset pass.
         """
+        Filter._require_len(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
-        if n != len(selection):
-            raise Error(
-                t"filter: array length {n} != selection length {len(selection)}"
-            )
-
-        var sel_bm = selection.values()
-        var out_len = sel_bm.count_set_bits()
+        var out_len = mask.count_set_bits()
 
         if out_len == 0:
             var empty_offsets = Buffer.alloc_zeroed[O](1)
@@ -435,7 +296,7 @@ struct Filter(SelectionKernel):
             var bm_builder = Bitmap.alloc_zeroed(out_len)
             var wb = 0
             while wb < n:
-                var w = sel_bm.load_bits[DType.uint64](wb)
+                var w = mask.load_bits[DType.uint64](wb)
                 var rem = n - wb
                 if rem < 64:
                     w &= (UInt64(1) << UInt64(rem)) - 1
@@ -457,7 +318,7 @@ struct Filter(SelectionKernel):
         else:
             var wb = 0
             while wb < n:
-                var w = sel_bm.load_bits[DType.uint64](wb)
+                var w = mask.load_bits[DType.uint64](wb)
                 var rem = n - wb
                 if rem < 64:
                     w &= (UInt64(1) << UInt64(rem)) - 1
@@ -483,7 +344,7 @@ struct Filter(SelectionKernel):
         var wb2 = 0
         while wb2 < n:
             var rem = n - wb2
-            var w = sel_bm.load_bits[DType.uint64](wb2)
+            var w = mask.load_bits[DType.uint64](wb2)
             if rem < 64:
                 w &= (UInt64(1) << UInt64(rem)) - 1
             if w == ALL_ONES:
@@ -519,40 +380,42 @@ struct Filter(SelectionKernel):
     @staticmethod
     def apply(
         array: NullArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> NullArray:
-        """Filter a null array — every element is null, so the result is a shorter
-        all-null array."""
-        return NullArray(length=selection.values().count_set_bits())
+        """Filter a null array — the result is a shorter all-null array."""
+        Filter._require_len(len(array), len(mask))
+        return NullArray(length=mask.count_set_bits())
 
     @staticmethod
     def apply(
         array: FixedSizeBinaryArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> FixedSizeBinaryArray:
         """Filter a fixed-size-binary array by compacting the fixed-width byte
-        blocks where selection is set (branch-free word-wise CTZ scan)."""
+        blocks where ``mask`` is set."""
+        Filter._require_len(len(array), len(mask))
         var n = len(array)
         var bw = array.byte_width
-        var sel = selection.values()
-        var out_len, sel_start, sel_end = sel.count_set_bits_with_range()
-        var src_view = array.buffer.view[DType.uint8]()
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
+        var src = array.buffer.view[DType.uint8]()
         var out = Buffer.alloc_uninit[DType.uint8](out_len * bw)
         var out_view = out.view[DType.uint8]()
 
+        # Compact selected byte blocks — word-wise CTZ over the mask visits only
+        # set bits (branch-free on high-entropy masks).
         var dst = 0
         var wb = 0
         while wb < n:
-            var w = sel.load_bits[DType.uint64](wb)
+            var w = mask.load_bits[DType.uint64](wb)
             var rem = n - wb
             if rem < 64:
                 w &= (UInt64(1) << UInt64(rem)) - 1
             while w != 0:
                 var i = wb + Int(count_trailing_zeros(w))
                 out_view.slice(dst * bw).copy_from(
-                    src_view.slice((array.offset + i) * bw), bw
+                    src.slice((array.offset + i) * bw), bw
                 )
                 dst += 1
                 w &= w - 1
@@ -561,10 +424,12 @@ struct Filter(SelectionKernel):
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if array.bitmap:
-            var filtered_bm, nc = array.bitmap.value().view(
-                array.offset, n
-            ).filter(sel, sel_start, sel_end, out_len)
-            bm = filtered_bm
+            var filtered, nc = (
+                array.validity()
+                .value()
+                .filter(mask, sel_start, sel_end, out_len)
+            )
+            bm = filtered
             null_count = nc
         return FixedSizeBinaryArray(
             length=out_len,
@@ -580,17 +445,17 @@ struct Filter(SelectionKernel):
         T: ListLikeType
     ](
         array: ListLikeArray[T],
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> ListLikeArray[T]:
         """Filter a list/large-list/map array column-wise: mark each selected
-        row's contiguous child range in a child mask and filter the child
-        recursively, building the output offsets in the same pass — no index
-        materialization, no `take`."""
+        row's contiguous child range and filter the child recursively, building
+        the output offsets in the same pass — no index materialization, no take.
+        """
+        Filter._require_len(len(array), len(mask))
         comptime O = T.offset
         var n = len(array)
-        var sel = selection.values()
-        var out_len = sel.count_set_bits()
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
         var offsets = array.offsets.view[O]()
         var child = array.values().copy()
 
@@ -598,14 +463,13 @@ struct Filter(SelectionKernel):
         var no = new_offsets.view[O]()
         no.unsafe_set(0, Scalar[O](0))
         var child_mask = Bitmap.alloc_zeroed(len(child))
-        var need_bm = Bool(array.bitmap)
-        var bmb = Bitmap.alloc_zeroed(out_len)
-        var null_count = 0
+        # Mark each selected row's contiguous child range + build offsets —
+        # word-wise CTZ over the mask (branch-free, only set bits visited).
         var total = 0
         var j = 0
         var wb = 0
         while wb < n:
-            var w = sel.load_bits[DType.uint64](wb)
+            var w = mask.load_bits[DType.uint64](wb)
             var rem = n - wb
             if rem < 64:
                 w &= (UInt64(1) << UInt64(rem)) - 1
@@ -616,27 +480,22 @@ struct Filter(SelectionKernel):
                 if e > s:
                     child_mask.set_range(s, e - s, True)
                 total += e - s
-                if need_bm:
-                    if array.is_valid(i):
-                        bmb.set(j)
-                    else:
-                        null_count += 1
                 j += 1
                 no.unsafe_set(j, Scalar[O](total))
                 w &= w - 1
             wb += 64
 
-        var child_sel = BoolArray(
-            length=len(child),
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=child_mask.to_immutable(),
-        )
-        var new_child = Filter.dispatch(child, child_sel^, ctx)
+        var new_child = Filter.dispatch(child, child_mask.view(), ctx)
         var bm: Optional[Bitmap[]] = None
-        if need_bm:
-            bm = bmb.to_immutable(length=out_len)
+        var null_count = 0
+        if array.bitmap:
+            var filtered, nc = (
+                array.validity()
+                .value()
+                .filter(mask, sel_start, sel_end, out_len)
+            )
+            bm = filtered
+            null_count = nc
         return ListLikeArray[T](
             dtype=array.dtype.copy(),
             length=out_len,
@@ -650,51 +509,42 @@ struct Filter(SelectionKernel):
     @staticmethod
     def apply(
         array: FixedSizeListArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> FixedSizeListArray:
         """Filter a fixed-size-list array column-wise: mark each selected row's
         `size` contiguous child slots and filter the child recursively."""
+        Filter._require_len(len(array), len(mask))
         var n = len(array)
         var size = array.dtype.as_fixed_size_list().size
-        var sel = selection.values()
-        var out_len = sel.count_set_bits()
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
         var child = array.values().copy()
-
         var child_mask = Bitmap.alloc_zeroed(len(child))
-        var need_bm = Bool(array.bitmap)
-        var bmb = Bitmap.alloc_zeroed(out_len)
-        var null_count = 0
-        var j = 0
+
+        # Mark each selected row's `size` contiguous child slots — word-wise CTZ.
         var wb = 0
         while wb < n:
-            var w = sel.load_bits[DType.uint64](wb)
+            var w = mask.load_bits[DType.uint64](wb)
             var rem = n - wb
             if rem < 64:
                 w &= (UInt64(1) << UInt64(rem)) - 1
             while w != 0:
                 var i = wb + Int(count_trailing_zeros(w))
                 child_mask.set_range((array.offset + i) * size, size, True)
-                if need_bm:
-                    if array.is_valid(i):
-                        bmb.set(j)
-                    else:
-                        null_count += 1
-                j += 1
                 w &= w - 1
             wb += 64
 
-        var child_sel = BoolArray(
-            length=len(child),
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=child_mask.to_immutable(),
-        )
-        var new_child = Filter.dispatch(child, child_sel^, ctx)
+        var new_child = Filter.dispatch(child, child_mask.view(), ctx)
         var bm: Optional[Bitmap[]] = None
-        if need_bm:
-            bm = bmb.to_immutable(length=out_len)
+        var null_count = 0
+        if array.bitmap:
+            var filtered, nc = (
+                array.validity()
+                .value()
+                .filter(mask, sel_start, sel_end, out_len)
+            )
+            bm = filtered
+            null_count = nc
         return FixedSizeListArray(
             dtype=array.dtype.copy(),
             length=out_len,
@@ -707,33 +557,18 @@ struct Filter(SelectionKernel):
     @staticmethod
     def apply(
         array: DictionaryArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> DictionaryArray:
-        """Filter a dictionary array by filtering its (logical) index array with the
-        fast sequential primitive path and sharing the dictionary values unchanged.
-
-        Filtering the fixed-width codes is a sequential bitmap compaction, far
-        cheaper than routing through `take` (index materialization + random gather).
-        """
-        var data = array.to_data()
-        var logical_indices = AnyArray.from_data(
-            ArrayData(
-                dtype=data.dtype.as_dictionary().index_type().copy(),
-                length=data.length,
-                nulls=data.nulls,
-                offset=data.offset,
-                bitmap=data.bitmap,
-                buffers=data.buffers.copy(),
-                children=List[ArrayData](),
-            )
-        )
-        var new_indices = Filter.dispatch(logical_indices, selection.copy(), ctx)
-        var new_nulls = new_indices.null_count()
+        """Filter a dictionary array by compacting its (logical) index codes with
+        the fast sequential primitive path and sharing the values unchanged — far
+        cheaper than a take (no index materialization, no random gather)."""
+        Filter._require_len(len(array), len(mask))
+        var new_indices = Filter.dispatch(array.indices(), mask, ctx)
         return DictionaryArray(
             dtype=array.type(),
             length=len(new_indices),
-            nulls=new_nulls,
+            nulls=new_indices.null_count(),
             offset=0,
             indices=new_indices^,
             values=array.dictionary(),
@@ -742,42 +577,30 @@ struct Filter(SelectionKernel):
     @staticmethod
     def apply(
         array: StructArray,
-        selection: BoolArray,
+        mask: BitmapView[_],
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> StructArray:
-        """Filter a struct array column-wise: filter each child by the same mask and
-        the struct-level validity, keeping the layout fully columnar."""
+        """Filter a struct array column-wise: filter every child by the same mask
+        and compact the struct-level validity."""
+        Filter._require_len(len(array), len(mask))
         var n = len(array)
-        if n != len(selection):
-            raise Error(
-                t"filter: array length {n} != selection length {len(selection)}"
-            )
-        var sel = selection.values()
-        var out_len = sel.count_set_bits()
+        var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
-        var children = List[AnyArray]()
-        for c in range(len(array.children)):
-            children.append(
-                Filter.dispatch(
-                    array.children[c].slice(array.offset, n),
-                    selection.copy(),
-                    ctx,
-                )
-            )
+        var children = [
+            Filter.dispatch(array.children[c].slice(array.offset, n), mask, ctx)
+            for c in range(len(array.children))
+        ]
 
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if array.bitmap:
-            var bmb = Bitmap.alloc_zeroed(out_len)
-            var j = 0
-            for i in range(n):
-                if sel.test(i):
-                    if array.is_valid(i):
-                        bmb.set(j)
-                    else:
-                        null_count += 1
-                    j += 1
-            bm = bmb.to_immutable(length=out_len)
+            var filtered, nc = (
+                array.validity()
+                .value()
+                .filter(mask, sel_start, sel_end, out_len)
+            )
+            bm = filtered
+            null_count = nc
 
         return StructArray(
             dtype=array.dtype.copy(),
@@ -789,15 +612,62 @@ struct Filter(SelectionKernel):
         )
 
 
-struct Take(SelectionKernel):
+struct Take(Kernel):
     """Gather kernel — collect elements at arbitrary indices (null index → null).
 
-    The typed leaves are the ``apply`` overloads below; ``dispatch`` is inherited
-    from ``SelectionKernel``.
+    The typed leaves are the ``apply`` overloads below; ``dispatch`` resolves a
+    runtime-typed array to the matching leaf.
     """
 
     comptime name = "take"
-    comptime Selection = Int32Array
+
+    @staticmethod
+    def dispatch(
+        array: AnyArray,
+        indices: Int32Array,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        """Resolve `array`'s runtime dtype and gather it at `indices`."""
+        var dt = array.dtype()
+        if dt == bool_:
+            return Take.apply(array.as_bool(), indices, ctx).to_any()
+        elif dt.is_numeric():
+
+            @parameter
+            def numeric[T: NumericType](d: T) raises -> AnyArray:
+                return Take.apply(
+                    array.as_primitive[T](), indices, ctx
+                ).to_any()
+
+            return dispatch_over_numeric[numeric](dt)
+        elif dt.is_string():
+            return Take.apply(array.as_string(), indices, ctx).to_any()
+        elif dt.is_binary():
+            return Take.apply(array.as_binary(), indices, ctx).to_any()
+        elif dt.is_large_string():
+            return Take.apply(array.as_large_string(), indices, ctx).to_any()
+        elif dt.is_large_binary():
+            return Take.apply(array.as_large_binary(), indices, ctx).to_any()
+        elif dt.is_null():
+            return Take.apply(array.as_null(), indices, ctx).to_any()
+        elif dt.is_fixed_size_binary():
+            return Take.apply(
+                array.as_fixed_size_binary(), indices, ctx
+            ).to_any()
+        elif dt.is_struct():
+            return Take.apply(array.as_struct(), indices, ctx).to_any()
+        elif dt.is_list():
+            return Take.apply(array.as_list(), indices, ctx).to_any()
+        elif dt.is_large_list():
+            return Take.apply(array.as_large_list(), indices, ctx).to_any()
+        elif dt.is_map():
+            return Take.apply(array.as_map(), indices, ctx).to_any()
+        elif dt.is_fixed_size_list():
+            return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
+        elif dt.is_dictionary():
+            return Take.apply(array.as_dictionary(), indices, ctx).to_any()
+        else:
+            raise Error("take: unsupported dtype ", dt)
 
     @staticmethod
     def apply[
@@ -1192,26 +1062,14 @@ struct Take(SelectionKernel):
         indices: Int32Array,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> DictionaryArray:
-        """Gather rows from a dictionary array: gather its (logical) index array with
-        the fast primitive path and share the dictionary values unchanged."""
-        var data = array.to_data()
-        var logical_indices = AnyArray.from_data(
-            ArrayData(
-                dtype=data.dtype.as_dictionary().index_type().copy(),
-                length=data.length,
-                nulls=data.nulls,
-                offset=data.offset,
-                bitmap=data.bitmap,
-                buffers=data.buffers.copy(),
-                children=List[ArrayData](),
-            )
-        )
-        var new_indices = Take.dispatch(logical_indices, indices, ctx)
-        var new_nulls = new_indices.null_count()
+        """Gather rows from a dictionary array: gather its (logical) index array
+        with the fast primitive path and share the dictionary values unchanged.
+        """
+        var new_indices = Take.dispatch(array.indices(), indices, ctx)
         return DictionaryArray(
             dtype=array.type(),
             length=len(indices),
-            nulls=new_nulls,
+            nulls=new_indices.null_count(),
             offset=0,
             indices=new_indices^,
             values=array.dictionary(),
@@ -1269,89 +1127,90 @@ struct Take(SelectionKernel):
 
 def filter(
     array: AnyArray,
-    selection: AnyArray,
+    mask: AnyArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> AnyArray:
-    """Filter `array`, keeping elements where `selection` is True."""
-    return Filter.dispatch(array, selection.as_bool().copy(), ctx)
+    """Filter `array`, keeping elements where boolean `mask` is True."""
+    var m = mask.as_bool().copy()
+    return Filter.dispatch(array, m.values(), ctx)
 
 
 def filter[
     T: PrimitiveType
 ](
     array: PrimitiveArray[T],
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> PrimitiveArray[T]:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: BoolArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BoolArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter[
     T: BinaryLikeType
 ](
     array: BinaryLikeArray[T],
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> BinaryLikeArray[T]:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: NullArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> NullArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: FixedSizeBinaryArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> FixedSizeBinaryArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter[
     T: ListLikeType
 ](
     array: ListLikeArray[T],
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> ListLikeArray[T]:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: FixedSizeListArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> FixedSizeListArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: DictionaryArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> DictionaryArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def filter(
     array: StructArray,
-    selection: BoolArray,
+    mask: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> StructArray:
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, mask.values(), ctx)
 
 
 def drop_null(
@@ -1468,14 +1327,7 @@ def drop_null[
     """
     if not array.bitmap:
         return array.copy()
-    var selection = BoolArray(
-        length=len(array),
-        nulls=0,
-        offset=array.offset,
-        bitmap=None,
-        buffer=array.bitmap.value(),
-    )
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, array.validity().value(), ctx)
 
 
 def _drop_null_bool(
@@ -1484,11 +1336,4 @@ def _drop_null_bool(
     """Drop null elements from a bool array."""
     if not array.bitmap:
         return array.copy()
-    var selection = BoolArray(
-        length=len(array),
-        nulls=0,
-        offset=array.offset,
-        bitmap=None,
-        buffer=array.bitmap.value(),
-    )
-    return Filter.apply(array, selection, ctx)
+    return Filter.apply(array, array.validity().value(), ctx)
