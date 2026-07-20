@@ -2245,6 +2245,11 @@ struct AnyArray(
     ](ref self) -> ref[self._v] PrimitiveArray[T]:
         return self._as[PrimitiveArray[T]]()
 
+    def as_binary_like[
+        T: BinaryLikeType
+    ](ref self) -> ref[self._v] BinaryLikeArray[T]:
+        return self._as[BinaryLikeArray[T]]()
+
     def as_null(ref self) -> ref[self._v] NullArray:
         return self._as[NullArray]()
 

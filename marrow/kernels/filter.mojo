@@ -67,7 +67,7 @@ from ..dtypes import (
 )
 from std.algorithm.functional import sync_parallelize
 
-from ..utils import dispatch_over_numeric
+from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .aggregate import sum
 from .execution import ExecutionContext
@@ -112,14 +112,15 @@ struct Filter(Kernel):
                 return Filter.apply(array.as_primitive[T](), mask, ctx).to_any()
 
             return dispatch_over_numeric[numeric](dt)
-        elif dt.is_string():
-            return Filter.apply(array.as_string(), mask, ctx).to_any()
-        elif dt.is_binary():
-            return Filter.apply(array.as_binary(), mask, ctx).to_any()
-        elif dt.is_large_string():
-            return Filter.apply(array.as_large_string(), mask, ctx).to_any()
-        elif dt.is_large_binary():
-            return Filter.apply(array.as_large_binary(), mask, ctx).to_any()
+        elif dt.is_binary_like():
+
+            @parameter
+            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+                return Filter.apply(
+                    array.as_binary_like[T](), mask, ctx
+                ).to_any()
+
+            return dispatch_over_binarylike[binarylike](dt)
         elif dt.is_null():
             return Filter.apply(array.as_null(), mask, ctx).to_any()
         elif dt.is_fixed_size_binary():
@@ -616,14 +617,15 @@ struct Take(Kernel):
                 ).to_any()
 
             return dispatch_over_numeric[numeric](dt)
-        elif dt.is_string():
-            return Take.apply(array.as_string(), indices, ctx).to_any()
-        elif dt.is_binary():
-            return Take.apply(array.as_binary(), indices, ctx).to_any()
-        elif dt.is_large_string():
-            return Take.apply(array.as_large_string(), indices, ctx).to_any()
-        elif dt.is_large_binary():
-            return Take.apply(array.as_large_binary(), indices, ctx).to_any()
+        elif dt.is_binary_like():
+
+            @parameter
+            def binarylike[T: BinaryLikeType](d: T) raises -> AnyArray:
+                return Take.apply(
+                    array.as_binary_like[T](), indices, ctx
+                ).to_any()
+
+            return dispatch_over_binarylike[binarylike](dt)
         elif dt.is_null():
             return Take.apply(array.as_null(), indices, ctx).to_any()
         elif dt.is_fixed_size_binary():
