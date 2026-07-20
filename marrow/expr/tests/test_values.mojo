@@ -35,6 +35,10 @@ from marrow.tabular import RecordBatch, record_batch
 from marrow.expr.values import (
     Add,
     Sub,
+    Mul,
+    Div,
+    Min,
+    Max,
     Less,
     Greater,
     Equal,
@@ -42,7 +46,9 @@ from marrow.expr.values import (
     Cast,
     NumToBoolValue,
     BoolToNumValue,
+    Literal,
     col,
+    lit,
 )
 from marrow.kernels.cast import cast as eager_cast
 
@@ -204,6 +210,41 @@ def test_fused_length_write_to() raises:
     """Length.write_to produces nested readable output."""
     var expr = Length(col("s", string))
     assert_equal(String(expr), "Length(StrCol[s])")
+
+
+# ---------------------------------------------------------------------------
+# Cross-type fusion — string→numeric bridge composed with numeric ops
+# ---------------------------------------------------------------------------
+
+
+def test_fused_len_times_literal() raises:
+    """``s.len() * 2`` — Length bridges string→uint32, Mul + Literal fuse."""
+    var s = array(["ab", "cde", "", "f"])
+    var batch = record_batch([s^], names=["s"])
+    var expr = Mul(Length(col("s", string)), lit(2, uint32))
+    var result = expr.execute(batch)
+    assert_true(result == array([4, 6, 0, 2], uint32))
+
+
+def test_fused_len_plus_col_times_literal() raises:
+    """``(s.len() + a) * 2`` — the flagship cross-type fused pass, one loop, no
+    intermediate arrays."""
+    var s = array(["ab", "cde", "", "f"])
+    var a = array([10, 20, 30, 40], uint32)
+    var batch = record_batch([s^, a^], names=["s", "a"])
+    var expr = Mul(
+        Add(Length(col("s", string)), col("a", uint32)),
+        lit(2, uint32),
+    )
+    var result = expr.execute(batch)
+    # (len + a) * 2 = ([2,3,0,1] + [10,20,30,40]) * 2 = [24, 46, 60, 82]
+    assert_true(result == array([24, 46, 60, 82], uint32))
+
+
+def test_fused_literal_write_to() raises:
+    """Literal.write_to shows the constant."""
+    var expr = lit(7, int64)
+    assert_equal(String(expr), "Lit[7]")
 
 
 # ---------------------------------------------------------------------------
