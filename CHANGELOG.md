@@ -4,6 +4,21 @@
 
 ### Features
 
+- **Columnar selection for all array types** (`filter` / `take` / `drop_null`):
+  the selection kernels now support every array type — including nested
+  `list` / `large_list` / `map` / `fixed_size_list` / `struct`, plus
+  `dictionary`, `binary` / `large_string` / `fixed_size_binary` and `null` —
+  fully **column-wise** with no row-encoding. Nested rows are gathered by their
+  contiguous child spans; struct is filtered/taken per child; dictionary shares
+  its values and only selects the codes. `rapidhash` likewise gained nested
+  support (`list` / `large_list` / `map` / `fixed_size_list`), so `group_by` and
+  joins work on nested key columns. Performance is best-in-class on the measured
+  cases: dictionary `filter` (sequential code compaction, not a gather) and
+  `list` / `fsl` `take` (raw-`Int32` child-index build + one dispatched child
+  gather) both beat PyArrow and Polars at every size (e.g. `list take` at 1M is
+  ~1.6× faster than PyArrow, ~7× faster than Polars; `dict filter` at 1M is ~11×
+  faster than PyArrow, on par with Polars).
+
 - **Distinct-count kernels** (`marrow.kernels.distinct`, `mk.count_distinct` /
   `mk.approx_count_distinct`): whole-array cardinality reductions returning an
   `int64` scalar, both excluding nulls (SQL `COUNT(DISTINCT x)` / PyArrow
