@@ -1560,7 +1560,7 @@ struct StructArray(Array):
         # discriminant to 0 (the first type), corrupting already-stored scalars.
         var fields = List[AnyScalar](capacity=len(self.children))
         for i in range(len(self.children)):
-            fields.append(self.children[i][index])
+            fields.append(self.children[i][self.offset + index])
         return StructScalar(
             dtype=self.dtype.copy(), value=fields^, is_valid=True
         )
