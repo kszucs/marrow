@@ -2059,6 +2059,15 @@ def test_validity_accessor() raises:
     assert_false(Bool(lst2.validity()))
 
 
+def test_empty_factory() raises:
+    # empty() builds a zero-length, null-free array of the given type.
+    assert_equal(len(BoolArray.empty()), 0)
+    assert_equal(len(StringArray.empty()), 0)
+    var prim = PrimitiveArray[Int32Type].empty(Int32Type())
+    assert_equal(len(prim), 0)
+    assert_equal(prim.null_count(), 0)
+
+
 def test_dictionary_array_data_roundtrip() raises:
     var vb = StringBuilder()
     vb.append("x")

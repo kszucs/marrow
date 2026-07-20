@@ -166,15 +166,7 @@ struct Filter(Kernel):
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
-            var empty_buf = Buffer.alloc_zeroed[T.native](0)
-            return PrimitiveArray[T](
-                dtype=array.dtype.copy(),
-                length=0,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=empty_buf.to_immutable(),
-            )
+            return PrimitiveArray[T].empty(array.dtype)
 
         # Filter validity bitmap.
         var bm: Optional[Bitmap[]] = None
@@ -209,14 +201,7 @@ struct Filter(Kernel):
         var out_len, sel_start, sel_end = mask.count_set_bits_with_range()
 
         if out_len == 0:
-            var empty_bm = Bitmap.alloc_zeroed(0)
-            return BoolArray(
-                length=0,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=empty_bm.to_immutable(),
-            )
+            return BoolArray.empty()
 
         # Filter validity bitmap.
         var bm: Optional[Bitmap[]] = None
@@ -263,16 +248,7 @@ struct Filter(Kernel):
         var out_len = mask.count_set_bits()
 
         if out_len == 0:
-            var empty_offsets = Buffer.alloc_zeroed[O](1)
-            var empty_values = Buffer.alloc_zeroed[DType.uint8](0)
-            return BinaryLikeArray[T](
-                length=0,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                offsets=empty_offsets.to_immutable(),
-                values=empty_values.to_immutable(),
-            )
+            return BinaryLikeArray[T].empty()
 
         comptime ALL_ONES = ~UInt64(0)
         var off = array.offset
