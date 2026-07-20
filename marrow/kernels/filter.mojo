@@ -19,6 +19,8 @@ from ..arrays import (
     BinaryLikeArray,
     AnyArray,
     StructArray,
+    NullArray,
+    FixedSizeBinaryArray,
     Int32Array,
 )
 from ..buffers import Buffer
@@ -478,6 +480,94 @@ def filter[
 
 
 # ---------------------------------------------------------------------------
+# filter — null & nested arrays
+# ---------------------------------------------------------------------------
+
+
+def _mask_to_indices(mask: BoolArray) raises -> Int32Array:
+    """Materialize the positions where `mask` is set as an `Int32Array`.
+
+    Lets the offset/nested `filter` reuse the typed `take` gather instead of
+    re-implementing per-type value copying.
+    """
+    var n = len(mask)
+    var sel = mask.values()
+    var out_len = sel.count_set_bits()
+    var builder = PrimitiveBuilder[Int32Type](out_len)
+    for i in range(n):
+        if sel.test(i):
+            builder.append(Int32(i))
+    return builder.finish()
+
+
+def filter(
+    array: NullArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> NullArray:
+    """Filter a null array — every element is null, so the result is a shorter
+    all-null array."""
+    return NullArray(length=selection.values().count_set_bits())
+
+
+def filter(
+    array: FixedSizeBinaryArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> FixedSizeBinaryArray:
+    """Filter a fixed-size-binary array by gathering the selected fixed-width
+    blocks via `take`."""
+    return take(array, _mask_to_indices(selection), ctx)
+
+
+def filter(
+    array: StructArray,
+    selection: BoolArray,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> StructArray:
+    """Filter a struct array column-wise: filter each child by the same mask and
+    the struct-level validity, keeping the layout fully columnar."""
+    var n = len(array)
+    if n != len(selection):
+        raise Error(
+            t"filter: array length {n} != selection length {len(selection)}"
+        )
+    var sel = selection.values()
+    var out_len = sel.count_set_bits()
+
+    var children = List[AnyArray]()
+    for c in range(len(array.children)):
+        children.append(
+            filter(
+                array.children[c].slice(array.offset, n), selection.copy(), ctx
+            )
+        )
+
+    var bm: Optional[Bitmap[]] = None
+    var null_count = 0
+    if array.bitmap:
+        var bmb = Bitmap.alloc_zeroed(out_len)
+        var j = 0
+        for i in range(n):
+            if sel.test(i):
+                if array.is_valid(i):
+                    bmb.set(j)
+                else:
+                    null_count += 1
+                j += 1
+        bm = bmb.to_immutable(length=out_len)
+
+    return StructArray(
+        dtype=array.dtype.copy(),
+        length=out_len,
+        nulls=null_count,
+        offset=0,
+        bitmap=bm,
+        children=children^,
+    )
+
+
+# ---------------------------------------------------------------------------
 # filter — runtime-typed dispatch
 # ---------------------------------------------------------------------------
 
@@ -534,6 +624,13 @@ def filter(
         return filter(array.as_large_string(), mask, ctx).to_any()
     elif array.dtype().is_large_binary():
         return filter(array.as_large_binary(), mask, ctx).to_any()
+
+    if array.dtype().is_null():
+        return filter(array.as_null(), mask, ctx).to_any()
+    elif array.dtype().is_fixed_size_binary():
+        return filter(array.as_fixed_size_binary(), mask, ctx).to_any()
+    elif array.dtype().is_struct():
+        return filter(array.as_struct(), mask, ctx).to_any()
 
     raise Error("filter: unsupported dtype ", array.dtype())
 
@@ -861,7 +958,72 @@ def take(
     elif array.dtype().is_large_binary():
         return take(array.as_large_binary(), indices, ctx).to_any()
 
+    if array.dtype().is_null():
+        return take(array.as_null(), indices, ctx).to_any()
+    elif array.dtype().is_fixed_size_binary():
+        return take(array.as_fixed_size_binary(), indices, ctx).to_any()
+    elif array.dtype().is_struct():
+        return take(array.as_struct(), indices, ctx).to_any()
+
     raise Error("take: unsupported dtype ", array.dtype())
+
+
+def take(
+    array: NullArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> NullArray:
+    """Gather from a null array — result is an all-null array of the index count.
+    """
+    return NullArray(length=len(indices))
+
+
+def take(
+    array: FixedSizeBinaryArray,
+    indices: Int32Array,
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises -> FixedSizeBinaryArray:
+    """Gather fixed-width byte blocks from a fixed-size-binary array. Null index
+    or null source row → null output block."""
+    var n = len(indices)
+    var bw = array.byte_width
+    var out = Buffer.alloc_zeroed[DType.uint8](n * bw)
+    var out_view = out.view[DType.uint8]()
+    var src_view = array.buffer.view[DType.uint8]()
+    var has_null_idx = indices.null_count() > 0
+
+    var bm: Optional[Bitmap[]] = None
+    var null_count = 0
+    if array.bitmap or has_null_idx:
+        var bmb = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if has_null_idx and not indices.is_valid(i):
+                null_count += 1
+            else:
+                var idx = Int(indices.unsafe_get(i))
+                if array.is_valid(idx):
+                    out_view.slice(i * bw).copy_from(
+                        src_view.slice((array.offset + idx) * bw), bw
+                    )
+                    bmb.set(i)
+                else:
+                    null_count += 1
+        bm = bmb.to_immutable(length=n)
+    else:
+        for i in range(n):
+            var idx = Int(indices.unsafe_get(i))
+            out_view.slice(i * bw).copy_from(
+                src_view.slice((array.offset + idx) * bw), bw
+            )
+
+    return FixedSizeBinaryArray(
+        length=n,
+        nulls=null_count,
+        offset=0,
+        byte_width=bw,
+        bitmap=bm,
+        buffer=out.to_immutable(),
+    )
 
 
 def take(
@@ -869,19 +1031,38 @@ def take(
     indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
 ) raises -> StructArray:
-    """Gather rows from a StructArray at the given indices.
+    """Gather rows from a StructArray at the given indices, column-wise.
 
-    Applies ``take`` to each child column independently.
+    Applies ``take`` to each child (sliced to the struct's logical window) and
+    gathers the struct-level validity (null index or null source row → null).
     """
+    var n = len(array)
+    var out_length = len(indices)
     var children = List[AnyArray]()
     for c in range(len(array.children)):
-        children.append(take(array.children[c].copy(), indices, ctx))
-    var out_length = len(indices)
+        children.append(
+            take(array.children[c].slice(array.offset, n), indices, ctx)
+        )
+
+    var bm: Optional[Bitmap[]] = None
+    var null_count = 0
+    var has_null_idx = indices.null_count() > 0
+    if array.bitmap or has_null_idx:
+        var bmb = Bitmap.alloc_zeroed(out_length)
+        for k in range(out_length):
+            if has_null_idx and not indices.is_valid(k):
+                null_count += 1
+            elif array.is_valid(Int(indices.unsafe_get(k))):
+                bmb.set(k)
+            else:
+                null_count += 1
+        bm = bmb.to_immutable(length=out_length)
+
     return StructArray(
         dtype=array.dtype.copy(),
         length=out_length,
-        nulls=0,
+        nulls=null_count,
         offset=0,
-        bitmap=None,
+        bitmap=bm,
         children=children^,
     )
