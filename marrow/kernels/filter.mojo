@@ -8,7 +8,7 @@ All functions support arrays with non-zero offsets (sliced arrays).
 """
 
 import std.math as math
-from std.bit import pop_count
+from std.bit import pop_count, count_trailing_zeros
 from std.sys import size_of
 from std.sys.info import simd_byte_width
 
@@ -405,12 +405,14 @@ def filter[
             values=empty_values.to_immutable(),
         )
 
+    comptime ALL_ONES = ~UInt64(0)
     var off = array.offset
     var offsets_view = array.offsets.view[O]()
     var values_view = array.values.view[DType.uint8]()
 
-    # Phase 1: build output offsets and compute total_bytes in a single pass.
-    # This eliminates the separate total_bytes scan over all n elements.
+    # Phase 1: build output offsets (+ filtered validity) and total_bytes in one
+    # pass. Word-wise CTZ over the selection bitmap iterates only set bits, so
+    # there is no per-element branch to mispredict on high-entropy masks.
     var out_offsets = Buffer.alloc_uninit[O](out_len + 1)
     var out_off_view = out_offsets.view[O]()
     var byte_pos = 0
@@ -423,56 +425,79 @@ def filter[
     if array.bitmap:
         var src_bm = array.bitmap.value()
         var bm_builder = Bitmap.alloc_zeroed(out_len)
-        for i in range(n):
-            if sel_bm.test(i):
+        var wb = 0
+        while wb < n:
+            var w = sel_bm.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                var idx = off + wb + Int(count_trailing_zeros(w))
                 byte_pos += Int(
-                    offsets_view.unsafe_get(off + i + 1)
-                    - offsets_view.unsafe_get(off + i)
+                    offsets_view.unsafe_get(idx + 1)
+                    - offsets_view.unsafe_get(idx)
                 )
-                var valid = src_bm.test(off + i)
-                if valid:
+                if src_bm.test(idx):
                     bm_builder.set(j)
                 else:
                     null_count += 1
                 j += 1
                 out_off_view.unsafe_set(j, Scalar[O](byte_pos))
+                w &= w - 1
+            wb += 64
         bm = bm_builder.to_immutable(length=out_len)
     else:
-        for i in range(n):
-            if sel_bm.test(i):
+        var wb = 0
+        while wb < n:
+            var w = sel_bm.load_bits[DType.uint64](wb)
+            var rem = n - wb
+            if rem < 64:
+                w &= (UInt64(1) << UInt64(rem)) - 1
+            while w != 0:
+                var idx = off + wb + Int(count_trailing_zeros(w))
                 byte_pos += Int(
-                    offsets_view.unsafe_get(off + i + 1)
-                    - offsets_view.unsafe_get(off + i)
+                    offsets_view.unsafe_get(idx + 1)
+                    - offsets_view.unsafe_get(idx)
                 )
                 j += 1
                 out_off_view.unsafe_set(j, Scalar[O](byte_pos))
+                w &= w - 1
+            wb += 64
 
     var total_bytes = byte_pos
 
-    # Phase 2: copy selected values using run-merging.
+    # Phase 2: copy selected bytes. A fully-selected word (ALL_ONES) copies its
+    # entire 64-element span in one memcpy (run-merge for dense/clustered
+    # masks); mixed words copy per element via CTZ (branch-free for random).
     var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
     var out_val_view = out_values.view[DType.uint8]()
     var dst_byte_pos = 0
-    var i = 0
-
-    while i < n:
-        if not sel_bm.test(i):
-            i += 1
-            continue
-
-        var run_start = i
-        i += 1
-        while i < n and sel_bm.test(i):
-            i += 1
-
-        var src_byte_start = Int(offsets_view.unsafe_get(off + run_start))
-        var src_byte_end = Int(offsets_view.unsafe_get(off + i))
-        var run_bytes = src_byte_end - src_byte_start
-        if run_bytes > 0:
-            out_val_view.slice(dst_byte_pos).copy_from(
-                values_view.slice(src_byte_start), run_bytes
-            )
-            dst_byte_pos += run_bytes
+    var wb2 = 0
+    while wb2 < n:
+        var rem = n - wb2
+        var w = sel_bm.load_bits[DType.uint64](wb2)
+        if rem < 64:
+            w &= (UInt64(1) << UInt64(rem)) - 1
+        if w == ALL_ONES:
+            var s = Int(offsets_view.unsafe_get(off + wb2))
+            var e = Int(offsets_view.unsafe_get(off + wb2 + 64))
+            if e > s:
+                out_val_view.slice(dst_byte_pos).copy_from(
+                    values_view.slice(s), e - s
+                )
+                dst_byte_pos += e - s
+        else:
+            while w != 0:
+                var idx = off + wb2 + Int(count_trailing_zeros(w))
+                var s = Int(offsets_view.unsafe_get(idx))
+                var run_bytes = Int(offsets_view.unsafe_get(idx + 1)) - s
+                if run_bytes > 0:
+                    out_val_view.slice(dst_byte_pos).copy_from(
+                        values_view.slice(s), run_bytes
+                    )
+                    dst_byte_pos += run_bytes
+                w &= w - 1
+        wb2 += 64
 
     return BinaryLikeArray[T](
         length=out_len,

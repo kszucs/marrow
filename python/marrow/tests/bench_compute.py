@@ -202,6 +202,7 @@ _FILTER_CASES = [
     ("float64_50pct", "float64_a", "mask_50", 50, "uniform"),
     ("string_50pct", "string", "mask_50", 50, "uniform"),
     ("string_10pct", "string", "mask_10", 10, "uniform"),
+    ("string_rand50", "string", "mask_rand50", 50, "random"),
     ("int64_rand50", "int64_a", "mask_rand50", 50, "random"),
     ("int64_rand10", "int64_a", "mask_rand10", 10, "random"),
     ("int64_rand90", "int64_a", "mask_rand90", 90, "random"),
