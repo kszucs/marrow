@@ -16,15 +16,22 @@ from ..arrays import (
     BoolArray,
     PrimitiveArray,
     StringArray,
+    BinaryLikeArray,
     AnyArray,
     StructArray,
     Int32Array,
 )
 from ..buffers import Buffer
 from ..buffers import Bitmap
-from ..builders import BoolBuilder, PrimitiveBuilder, StringBuilder
+from ..builders import (
+    BoolBuilder,
+    PrimitiveBuilder,
+    StringBuilder,
+    BinaryLikeBuilder,
+)
 from ..dtypes import (
     PrimitiveType,
+    BinaryLikeType,
     Int8Type,
     Int16Type,
     Int32Type,
@@ -346,26 +353,30 @@ def filter(
 # ---------------------------------------------------------------------------
 
 
-def filter(
-    array: StringArray,
+def filter[
+    T: BinaryLikeType
+](
+    array: BinaryLikeArray[T],
     selection: BoolArray,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StringArray:
-    """Filter a string array, keeping only elements where selection is True.
+) raises -> BinaryLikeArray[T]:
+    """Filter a binary-like array (string/binary, 32- or 64-bit offsets),
+    keeping only elements where selection is True.
 
     Uses run merging: consecutive selected elements are copied with a single
     memcpy call to reduce per-element overhead.  When the source has a
     validity bitmap, it is filtered in the same pass (no second traversal).
 
     Args:
-        array: The input string array.
+        array: The input binary-like array.
         selection: Boolean selection mask (True = keep).
         ctx: Execution context (currently unused — accepted for signature
             uniformity across kernels).
 
     Returns:
-        A new StringArray containing only the selected strings.
+        A new BinaryLikeArray[T] containing only the selected elements.
     """
+    comptime O = T.offset
     var n = len(array)
     if n != len(selection):
         raise Error(
@@ -376,9 +387,9 @@ def filter(
     var out_len = sel_bm.count_set_bits()
 
     if out_len == 0:
-        var empty_offsets = Buffer.alloc_zeroed[DType.uint32](1)
+        var empty_offsets = Buffer.alloc_zeroed[O](1)
         var empty_values = Buffer.alloc_zeroed[DType.uint8](0)
-        return StringArray(
+        return BinaryLikeArray[T](
             length=0,
             nulls=0,
             offset=0,
@@ -388,15 +399,15 @@ def filter(
         )
 
     var off = array.offset
-    var offsets_view = array.offsets.view[DType.uint32]()
+    var offsets_view = array.offsets.view[O]()
     var values_view = array.values.view[DType.uint8]()
 
     # Phase 1: build output offsets and compute total_bytes in a single pass.
     # This eliminates the separate total_bytes scan over all n elements.
-    var out_offsets = Buffer.alloc_uninit[DType.uint32](out_len + 1)
-    var out_off_view = out_offsets.view[DType.uint32]()
-    var byte_pos = UInt32(0)
-    out_off_view.unsafe_set(0, UInt32(0))
+    var out_offsets = Buffer.alloc_uninit[O](out_len + 1)
+    var out_off_view = out_offsets.view[O]()
+    var byte_pos = 0
+    out_off_view.unsafe_set(0, Scalar[O](0))
 
     var bm: Optional[Bitmap[]] = None
     var null_count = 0
@@ -407,29 +418,31 @@ def filter(
         var bm_builder = Bitmap.alloc_zeroed(out_len)
         for i in range(n):
             if sel_bm.test(i):
-                byte_pos += offsets_view.unsafe_get(
-                    off + i + 1
-                ) - offsets_view.unsafe_get(off + i)
+                byte_pos += Int(
+                    offsets_view.unsafe_get(off + i + 1)
+                    - offsets_view.unsafe_get(off + i)
+                )
                 var valid = src_bm.test(off + i)
                 if valid:
                     bm_builder.set(j)
                 else:
                     null_count += 1
                 j += 1
-                out_off_view.unsafe_set(j, byte_pos)
+                out_off_view.unsafe_set(j, Scalar[O](byte_pos))
         bm = bm_builder.to_immutable(length=out_len)
     else:
         for i in range(n):
             if sel_bm.test(i):
-                byte_pos += offsets_view.unsafe_get(
-                    off + i + 1
-                ) - offsets_view.unsafe_get(off + i)
+                byte_pos += Int(
+                    offsets_view.unsafe_get(off + i + 1)
+                    - offsets_view.unsafe_get(off + i)
+                )
                 j += 1
-                out_off_view.unsafe_set(j, byte_pos)
+                out_off_view.unsafe_set(j, Scalar[O](byte_pos))
 
-    var total_bytes = Int(byte_pos)
+    var total_bytes = byte_pos
 
-    # Phase 2: copy selected string values using run-merging.
+    # Phase 2: copy selected values using run-merging.
     var out_values = Buffer.alloc_uninit[DType.uint8](total_bytes)
     var out_val_view = out_values.view[DType.uint8]()
     var dst_byte_pos = 0
@@ -454,7 +467,7 @@ def filter(
             )
             dst_byte_pos += run_bytes
 
-    return StringArray(
+    return BinaryLikeArray[T](
         length=out_len,
         nulls=null_count,
         offset=0,
@@ -515,6 +528,12 @@ def filter(
 
     if array.dtype().is_string():
         return filter(array.as_string(), mask, ctx).to_any()
+    elif array.dtype().is_binary():
+        return filter(array.as_binary(), mask, ctx).to_any()
+    elif array.dtype().is_large_string():
+        return filter(array.as_large_string(), mask, ctx).to_any()
+    elif array.dtype().is_large_binary():
+        return filter(array.as_large_binary(), mask, ctx).to_any()
 
     raise Error("filter: unsupported dtype ", array.dtype())
 
@@ -756,25 +775,27 @@ def take(
     return builder.finish()
 
 
-def take(
-    array: StringArray,
+def take[
+    T: BinaryLikeType
+](
+    array: BinaryLikeArray[T],
     indices: Int32Array,
     ctx: ExecutionContext = ExecutionContext.serial(),
-) raises -> StringArray:
-    """Gather elements from a string array at the given indices.
+) raises -> BinaryLikeArray[T]:
+    """Gather elements from a binary-like array at the given indices.
 
     Null indices produce null output elements.
 
     Args:
-        array: Source string array.
+        array: Source binary-like array (string/binary, 32- or 64-bit offsets).
         indices: Row indices to gather. Null index → null output.
 
     Returns:
-        A new StringArray with one element per index.
+        A new BinaryLikeArray[T] with one element per index.
     """
     var n = len(indices)
     var has_null_indices = indices.null_count() > 0
-    var builder = StringBuilder(capacity=n)
+    var builder = BinaryLikeBuilder[T](capacity=n)
     for i in range(n):
         if has_null_indices and not indices.is_valid(i):
             builder.append_null()
@@ -833,6 +854,12 @@ def take(
 
     if array.dtype().is_string():
         return take(array.as_string(), indices, ctx).to_any()
+    elif array.dtype().is_binary():
+        return take(array.as_binary(), indices, ctx).to_any()
+    elif array.dtype().is_large_string():
+        return take(array.as_large_string(), indices, ctx).to_any()
+    elif array.dtype().is_large_binary():
+        return take(array.as_large_binary(), indices, ctx).to_any()
 
     raise Error("take: unsupported dtype ", array.dtype())
 
