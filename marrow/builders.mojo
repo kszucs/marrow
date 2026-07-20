@@ -90,6 +90,17 @@ trait Builder(ImplicitlyDeletable, Movable, Sized):
     def extend(mut self, arr: AnyArray) raises:
         ...
 
+    def extend(mut self, src: AnyArray, start: Int, length: Int) raises:
+        """Append the window ``src[start : start+length]`` to this builder.
+
+        This is the range-copy primitive that gather kernels drive: `take`
+        feeds it one row at a time, `filter` feeds it coalesced runs of set
+        bits. The default forwards to the whole-array ``extend`` on an O(1)
+        slice — which already copies each contiguous child span in a single
+        vectorized pass; hot builders may override to skip the slice.
+        """
+        self.extend(src.slice(start, length))
+
     def finish(
         mut self, *, shrink_to_fit: Bool = True
     ) raises -> Self.ArrayType:
@@ -300,6 +311,13 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
         @parameter
         def f[T: Builder](mut b: T) raises:
             b.extend(arr)
+
+        variant_dispatch_raises[Builder, func=f](self._ptr[])
+
+    def extend(mut self, src: AnyArray, start: Int, length: Int) raises:
+        @parameter
+        def f[T: Builder](mut b: T) raises:
+            b.extend(src, start, length)
 
         variant_dispatch_raises[Builder, func=f](self._ptr[])
 
