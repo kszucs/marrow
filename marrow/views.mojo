@@ -336,6 +336,56 @@ struct BufferView[
             count=count * size_of[Scalar[Self.T]](),
         )
 
+    def filter(
+        self,
+        sel: BitmapView[_],
+        sel_start: Int,
+        sel_end: Int,
+        out_len: Int,
+    ) -> Buffer[]:
+        """Filter these fixed-width values, keeping elements where `sel` is set.
+
+        Run-merges all-ones selection words (memcpy) and compress-stores mixed
+        words; a sparse tail only reads set-bit positions. `sel_start`/`sel_end`
+        are the 64-bit block bounds and `out_len` the pre-counted set-bit count.
+        """
+        comptime ALL_ONES = ~UInt64(0)
+        var buf = Buffer.alloc_uninit(out_len * size_of[Scalar[Self.T]]())
+        var dst = buf.view[Self.T](0, out_len)
+        var out_pos = 0
+        var i = sel_start
+
+        while i + 64 <= sel_end:
+            var sel_word = sel.load_bits[DType.uint64](i)
+            if sel_word == 0:
+                i += 64
+                while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
+                    i += 64
+                continue
+            if sel_word == ALL_ONES:
+                var run_start = i
+                i += 64
+                while (
+                    i + 64 <= sel_end
+                    and sel.load_bits[DType.uint64](i) == ALL_ONES
+                ):
+                    i += 64
+                dst.slice(out_pos).copy_from(self.slice(run_start), i - run_start)
+                out_pos += i - run_start
+                continue
+            out_pos += dst.slice(out_pos).compressed_store(self.slice(i), sel_word)
+            i += 64
+
+        if i < sel_end:
+            var tail = sel_end - i
+            var mask = (UInt64(1) << UInt64(tail)) - 1
+            var sel_word = sel.load_bits[DType.uint64](i) & mask
+            if sel_word != 0:
+                dst.slice(out_pos).compressed_store_sparse(self.slice(i), sel_word)
+                out_pos += Int(pop_count(sel_word))
+
+        return buf.to_immutable()
+
     def to_string_slice(self) -> StringSlice[Self.origin]:
         """Convert this byte view to a StringSlice with origin `self_o`."""
         return StringSlice(
@@ -943,6 +993,72 @@ struct BitmapView[
         var builder = Bitmap.alloc_uninit(self._length)
         apply[_and_not](self, other, builder.view())
         return builder^
+
+    def filter(
+        self,
+        sel: BitmapView[_],
+        sel_start: Int,
+        sel_end: Int,
+        out_len: Int,
+    ) -> Tuple[Bitmap[], Int]:
+        """Filter these bits, keeping positions where `sel` is set.
+
+        Uses `pext` + `compressed_store` in 64-bit blocks with run-merge for
+        all-ones / all-zeros blocks; works for both validity bitmaps and bool
+        data. `sel_start`/`sel_end` are the 64-bit block bounds and `out_len`
+        the pre-counted set-bit count. Returns `(filtered, zero_count)` where
+        `zero_count` is the number of zero bits in the output (the null count
+        when filtering a validity bitmap).
+        """
+        comptime ALL_ONES = ~UInt64(0)
+        var builder = Bitmap.alloc_zeroed(out_len)
+        var out = builder.view()
+        var bm_pos = 0
+        var zero_count = 0
+        var i = sel_start
+
+        while i + 64 <= sel_end:
+            var sel_word = sel.load_bits[DType.uint64](i)
+            if sel_word == 0:
+                i += 64
+                while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
+                    i += 64
+                continue
+            if sel_word == ALL_ONES:
+                var run_start = i
+                i += 64
+                while (
+                    i + 64 <= sel_end
+                    and sel.load_bits[DType.uint64](i) == ALL_ONES
+                ):
+                    i += 64
+                var j = run_start
+                while j < i:
+                    var src_word = self.load_bits[DType.uint64](j)
+                    out.compressed_store(bm_pos, src_word, 64)
+                    zero_count += 64 - Int(pop_count(src_word))
+                    bm_pos += 64
+                    j += 64
+                continue
+
+            var count = Int(pop_count(sel_word))
+            var compressed = self.pext(i, sel_word)
+            out.compressed_store(bm_pos, compressed, count)
+            zero_count += count - Int(pop_count(compressed))
+            bm_pos += count
+            i += 64
+
+        if i < sel_end:
+            var tail = sel_end - i
+            var mask = (UInt64(1) << UInt64(tail)) - 1
+            var sel_word = sel.load_bits[DType.uint64](i) & mask
+            if sel_word != 0:
+                var count = Int(pop_count(sel_word))
+                var compressed = self.pext(i, sel_word)
+                out.compressed_store(bm_pos, compressed, count)
+                zero_count += count - Int(pop_count(compressed))
+
+        return builder.to_immutable(length=out_len), zero_count
 
     def __and__(self, other: BitmapView[_]) raises -> Bitmap[mut=True]:
         return self.intersection(other)

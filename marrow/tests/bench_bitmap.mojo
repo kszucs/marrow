@@ -14,7 +14,7 @@ Run with: pixi run pytest marrow/tests/bench_bitmap.mojo --benchmark
 
 from std.benchmark import BenchMetric, keep
 
-from marrow.buffers import Bitmap
+from marrow.buffers import Bitmap, Buffer
 from marrow.testing import BenchSuite, Benchmark
 
 
@@ -793,6 +793,104 @@ def bench_pack_bools_w64_10m(mut b: Benchmark) raises:
 
 def bench_pack_bools_w64_100m(mut b: Benchmark) raises:
     _bench_pack_bools_w64(b, 100_000_000)
+
+
+# ---------------------------------------------------------------------------
+# BitmapView.filter — compact a bitmap by a selection (validity / bool filter)
+#
+# Alternating selection => every 64-bit word is "mixed", exercising the
+# pext + compressed_store path (the interesting case; all-ones / all-zeros
+# words hit the cheaper run-merge branches).
+# ---------------------------------------------------------------------------
+
+
+def _bench_filter_bits(mut b: Benchmark, size: Int) raises:
+    var src = _make_alternating(size)
+    var sel = _make_alternating(size)
+    var src_view = src.view()
+    var sel_view = sel.view()
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+    b.throughput(BenchMetric.elements, size)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        var res = src_view.filter(sel_view, sel_start, sel_end, out_len)
+        keep(res[0])
+        keep(res[1])
+
+    b.iter[call]()
+    keep(len(src))
+    keep(len(sel))
+
+
+def bench_filter_bits_1k(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 1_000)
+
+
+def bench_filter_bits_10k(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 10_000)
+
+
+def bench_filter_bits_100k(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 100_000)
+
+
+def bench_filter_bits_1m(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 1_000_000)
+
+
+def bench_filter_bits_10m(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 10_000_000)
+
+
+def bench_filter_bits_100m(mut b: Benchmark) raises:
+    _bench_filter_bits(b, 100_000_000)
+
+
+# ---------------------------------------------------------------------------
+# BufferView.filter — compact fixed-width (int64) values by a selection.
+# Alternating selection => the compress-store mixed path (not the memcpy
+# run-merge); this is the primitive `filter` hot loop.
+# ---------------------------------------------------------------------------
+
+
+def _bench_filter_values(mut b: Benchmark, size: Int) raises:
+    var buf = Buffer.alloc_uninit[DType.int64](size)
+    var sel = _make_alternating(size)
+    var src_view = buf.view[DType.int64](0, size)
+    var sel_view = sel.view()
+    var out_len, sel_start, sel_end = sel_view.count_set_bits_with_range()
+    b.throughput(BenchMetric.elements, size)
+
+    @always_inline
+    @parameter
+    def call() raises:
+        keep(src_view.filter(sel_view, sel_start, sel_end, out_len))
+
+    b.iter[call]()
+    keep(len(buf))
+    keep(len(sel))
+
+
+def bench_filter_values_1k(mut b: Benchmark) raises:
+    _bench_filter_values(b, 1_000)
+
+
+def bench_filter_values_10k(mut b: Benchmark) raises:
+    _bench_filter_values(b, 10_000)
+
+
+def bench_filter_values_100k(mut b: Benchmark) raises:
+    _bench_filter_values(b, 100_000)
+
+
+def bench_filter_values_1m(mut b: Benchmark) raises:
+    _bench_filter_values(b, 1_000_000)
+
+
+def bench_filter_values_10m(mut b: Benchmark) raises:
+    _bench_filter_values(b, 10_000_000)
 
 
 def main() raises:

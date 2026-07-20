@@ -82,155 +82,8 @@ from .string import string_lengths
 
 
 # ---------------------------------------------------------------------------
-# filter — bitmap / values helpers
+# selection helper — materialize set-bit positions as indices
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# Vectorized bitmap / fixed-width value filter primitives
-# ---------------------------------------------------------------------------
-
-
-def _filter_bits(
-    src: BitmapView[_],
-    sel: BitmapView[_],
-    sel_start: Int,
-    sel_end: Int,
-    out_len: Int,
-) -> Tuple[Bitmap[], Int]:
-    """Filter a bitmap, keeping bits where selection is set.
-
-    Uses ``BitmapView.pext`` + ``BitmapView.compressed_store`` in 64-bit
-    blocks with run-merge for all-ones and all-zeros blocks.  Works for
-    both validity bitmaps and bool data.
-
-    Args:
-        src: Source bitmap to filter.
-        sel: Selection bitmap (True = keep).
-        sel_start: First 64-bit-aligned block with set bits in sel.
-        sel_end: Past-the-end 64-bit-aligned block in sel.
-        out_len: Pre-counted number of set bits in sel.
-
-    Returns:
-        (filtered_bitmap, zero_bit_count) where zero_bit_count is the number
-        of zero bits in the filtered output (null count when filtering
-        validity bitmaps).
-    """
-    comptime ALL_ONES = ~UInt64(0)
-    var builder = Bitmap.alloc_zeroed(out_len)
-    var out = builder.view()
-    var bm_pos = 0
-    var zero_count = 0
-    var i = sel_start
-
-    while i + 64 <= sel_end:
-        var sel_word = sel.load_bits[DType.uint64](i)
-        if sel_word == 0:
-            i += 64
-            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
-                i += 64
-            continue
-        if sel_word == ALL_ONES:
-            var run_start = i
-            i += 64
-            while (
-                i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES
-            ):
-                i += 64
-            var j = run_start
-            while j < i:
-                var src_word = src.load_bits[DType.uint64](j)
-                out.compressed_store(bm_pos, src_word, 64)
-                zero_count += 64 - Int(pop_count(src_word))
-                bm_pos += 64
-                j += 64
-            continue
-
-        # Mixed block: pext + compressed_store.
-        var count = Int(pop_count(sel_word))
-        var compressed = src.pext(i, sel_word)
-        out.compressed_store(bm_pos, compressed, count)
-        zero_count += count - Int(pop_count(compressed))
-        bm_pos += count
-        i += 64
-
-    # Tail: masked pext + compressed_store.
-    if i < sel_end:
-        var tail = sel_end - i
-        var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load_bits[DType.uint64](i) & mask
-        if sel_word != 0:
-            var count = Int(pop_count(sel_word))
-            var compressed = src.pext(i, sel_word)
-            out.compressed_store(bm_pos, compressed, count)
-            zero_count += count - Int(pop_count(compressed))
-
-    return builder.to_immutable(length=out_len), zero_count
-
-
-def _filter_values[
-    T: DType
-](
-    src_buf: Buffer[],
-    src_offset: Int,
-    sel: BitmapView[_],
-    sel_start: Int,
-    sel_end: Int,
-    out_len: Int,
-) -> Buffer[]:
-    """Filter fixed-width values, keeping elements where selection is set.
-
-    Uses run-merge for all-ones blocks (memcpy) and density-adaptive
-    block dispatch for mixed blocks.
-
-    Args:
-        src_buf: Source data buffer.
-        src_offset: Element offset into src_buf.
-        sel: Selection bitmap view (True = keep).
-        sel_start: First 64-bit-aligned block with set bits in sel.
-        sel_end: Past-the-end 64-bit-aligned block in sel.
-        out_len: Pre-counted number of set bits in sel.
-
-    Returns:
-        A new Buffer containing only the selected elements.
-    """
-    comptime ALL_ONES = ~UInt64(0)
-    var buf = Buffer.alloc_uninit(out_len * size_of[Scalar[T]]())
-    var src = src_buf.view[T](src_offset)
-    var dst = buf.view[T](0, out_len)
-    var out_pos = 0
-    var i = sel_start
-
-    while i + 64 <= sel_end:
-        var sel_word = sel.load_bits[DType.uint64](i)
-        if sel_word == 0:
-            i += 64
-            while i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == 0:
-                i += 64
-            continue
-        if sel_word == ALL_ONES:
-            var run_start = i
-            i += 64
-            while (
-                i + 64 <= sel_end and sel.load_bits[DType.uint64](i) == ALL_ONES
-            ):
-                i += 64
-            dst.slice(out_pos).copy_from(src.slice(run_start), i - run_start)
-            out_pos += i - run_start
-            continue
-        out_pos += dst.slice(out_pos).compressed_store(src.slice(i), sel_word)
-        i += 64
-
-    # Tail: partial block — force sparse (only reads set-bit positions).
-    if i < sel_end:
-        var tail = sel_end - i
-        var mask = (UInt64(1) << UInt64(tail)) - 1
-        var sel_word = sel.load_bits[DType.uint64](i) & mask
-        if sel_word != 0:
-            dst.slice(out_pos).compressed_store_sparse(src.slice(i), sel_word)
-            out_pos += Int(pop_count(sel_word))
-
-    return buf.to_immutable()
 
 
 def _mask_to_indices(mask: BoolArray) raises -> Int32Array:
@@ -463,19 +316,14 @@ struct Filter(SelectionKernel):
         var bm: Optional[Bitmap[]] = None
         var null_count = 0
         if var val_bm := array.validity():
-            var filtered_bm, nc = _filter_bits(
-                val_bm.value(), sel_bm, sel_start, sel_end, out_len
+            var filtered_bm, nc = val_bm.value().filter(
+                sel_bm, sel_start, sel_end, out_len
             )
             bm = filtered_bm
             null_count = nc
 
-        var result_buf = _filter_values[T.native](
-            array.buffer,
-            array.offset,
-            sel_bm,
-            sel_start,
-            sel_end,
-            out_len,
+        var result_buf = array.values().filter(
+            sel_bm, sel_start, sel_end, out_len
         )
         return PrimitiveArray[T](
             dtype=array.dtype.copy(),
@@ -527,16 +375,15 @@ struct Filter(SelectionKernel):
         var null_count = 0
         if array.bitmap:
             var val_bm = array.bitmap.value().view(array.offset, n)
-            var filtered_bm, nc = _filter_bits(
-                val_bm, sel_bm, sel_start, sel_end, out_len
+            var filtered_bm, nc = val_bm.filter(
+                sel_bm, sel_start, sel_end, out_len
             )
             bm = filtered_bm
             null_count = nc
 
         # Filter data.
-        var data_bm = array.values()
-        var filtered_data, _ = _filter_bits(
-            data_bm, sel_bm, sel_start, sel_end, out_len
+        var filtered_data, _ = array.values().filter(
+            sel_bm, sel_start, sel_end, out_len
         )
         return BoolArray(
             length=out_len,
