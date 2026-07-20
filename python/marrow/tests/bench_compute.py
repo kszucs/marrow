@@ -569,3 +569,63 @@ def test_pyarrow_take_nested(benchmark, nested_pa, sel_pa, key):
 @_nested_keys
 def test_polars_take_nested(benchmark, nested_pl, sel_pl, key):
     benchmark(nested_pl[key].gather, sel_pl["idx"])
+
+
+# ── Nested hashing (group-by on a nested key) vs Polars ──────────────────────
+#
+# Exercises marrow's nested `rapidhash` end-to-end through a grouped sum on a
+# list/struct key column. PyArrow is omitted: it raises ArrowNotImplementedError
+# for keys of list/struct type, so only marrow and polars can group nested keys.
+
+_HASH_GROUPS = 1000  # distinct key values → real hash-table work
+
+
+def _hash_source(n):
+    return {
+        "list": pa.array(
+            [[i % _HASH_GROUPS, (i + 1) % _HASH_GROUPS] for i in range(n)],
+            pa.list_(pa.int64()),
+        ),
+        "struct": pa.array(
+            [
+                {"a": i % _HASH_GROUPS, "b": (i + 1) % _HASH_GROUPS}
+                for i in range(n)
+            ],
+            pa.struct([("a", pa.int64()), ("b", pa.int64())]),
+        ),
+    }
+
+
+@pytest.fixture(scope="session")
+def hash_ma(n):
+    v = list(range(n))
+    return {
+        k: ma.record_batch({"k": ma.array(arr), "v": ma.array(v)})
+        for k, arr in _hash_source(n).items()
+    }
+
+
+@pytest.fixture(scope="session")
+def hash_pl(n):
+    v = list(range(n))
+    return {
+        k: pl.DataFrame({"k": pl.from_arrow(arr), "v": pl.Series(v)})
+        for k, arr in _hash_source(n).items()
+    }
+
+
+_hash_keys = pytest.mark.parametrize("key", ["list", "struct"])
+
+
+@pytest.mark.benchmark(group="groupby_nested")
+@_hash_keys
+def test_marrow_groupby_nested(benchmark, hash_ma, key):
+    rb = hash_ma[key]
+    benchmark(lambda: rb.group_by("k").aggregate([("v", "sum")]))
+
+
+@pytest.mark.benchmark(group="groupby_nested")
+@_hash_keys
+def test_polars_groupby_nested(benchmark, hash_pl, key):
+    df = hash_pl[key]
+    benchmark(lambda: df.group_by("k").agg(pl.col("v").sum()))
