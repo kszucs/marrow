@@ -588,10 +588,7 @@ def _hash_source(n):
             pa.list_(pa.int64()),
         ),
         "struct": pa.array(
-            [
-                {"a": i % _HASH_GROUPS, "b": (i + 1) % _HASH_GROUPS}
-                for i in range(n)
-            ],
+            [{"a": i % _HASH_GROUPS, "b": (i + 1) % _HASH_GROUPS} for i in range(n)],
             pa.struct([("a", pa.int64()), ("b", pa.int64())]),
         ),
     }
