@@ -127,7 +127,7 @@ struct Schema(
         """Returns the names of the fields in the schema."""
         return [field.name for field in self.fields]
 
-    def field(self, *, index: Int) raises -> ref[self.fields] Field:
+    def field(self, *, index: Int) raises -> ref[self.fields[index]] Field:
         """Returns the field at the given index."""
         return self.fields[index]
 

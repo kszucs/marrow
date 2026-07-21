@@ -604,113 +604,113 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
 
     # --- typed downcasts ---
 
-    def _as[T: Scalar](ref self) -> ref[self._v] T:
+    def _as[T: Scalar](ref self) -> ref[self._v[T]] T:
         debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.type())
         return self._v[T]
 
-    def as_null(ref self) -> ref[self._v] NullScalar:
+    def as_null(ref self) -> ref[self._v[NullScalar]] NullScalar:
         return self._as[NullScalar]()
 
-    def as_bool(ref self) -> ref[self._v] BoolScalar:
+    def as_bool(ref self) -> ref[self._v[BoolScalar]] BoolScalar:
         return self._as[BoolScalar]()
 
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._v] PrimitiveScalar[T]:
+    ](ref self) -> ref[self._v[PrimitiveScalar[T]]] PrimitiveScalar[T]:
         return self._as[PrimitiveScalar[T]]()
 
-    def as_int8(ref self) -> ref[self._v] Int8Scalar:
+    def as_int8(ref self) -> ref[self._v[Int8Scalar]] Int8Scalar:
         return self._as[Int8Scalar]()
 
-    def as_int16(ref self) -> ref[self._v] Int16Scalar:
+    def as_int16(ref self) -> ref[self._v[Int16Scalar]] Int16Scalar:
         return self._as[Int16Scalar]()
 
-    def as_int32(ref self) -> ref[self._v] Int32Scalar:
+    def as_int32(ref self) -> ref[self._v[Int32Scalar]] Int32Scalar:
         return self._as[Int32Scalar]()
 
-    def as_int64(ref self) -> ref[self._v] Int64Scalar:
+    def as_int64(ref self) -> ref[self._v[Int64Scalar]] Int64Scalar:
         return self._as[Int64Scalar]()
 
-    def as_uint8(ref self) -> ref[self._v] UInt8Scalar:
+    def as_uint8(ref self) -> ref[self._v[UInt8Scalar]] UInt8Scalar:
         return self._as[UInt8Scalar]()
 
-    def as_uint16(ref self) -> ref[self._v] UInt16Scalar:
+    def as_uint16(ref self) -> ref[self._v[UInt16Scalar]] UInt16Scalar:
         return self._as[UInt16Scalar]()
 
-    def as_uint32(ref self) -> ref[self._v] UInt32Scalar:
+    def as_uint32(ref self) -> ref[self._v[UInt32Scalar]] UInt32Scalar:
         return self._as[UInt32Scalar]()
 
-    def as_uint64(ref self) -> ref[self._v] UInt64Scalar:
+    def as_uint64(ref self) -> ref[self._v[UInt64Scalar]] UInt64Scalar:
         return self._as[UInt64Scalar]()
 
-    def as_float16(ref self) -> ref[self._v] Float16Scalar:
+    def as_float16(ref self) -> ref[self._v[Float16Scalar]] Float16Scalar:
         return self._as[Float16Scalar]()
 
-    def as_float32(ref self) -> ref[self._v] Float32Scalar:
+    def as_float32(ref self) -> ref[self._v[Float32Scalar]] Float32Scalar:
         return self._as[Float32Scalar]()
 
-    def as_float64(ref self) -> ref[self._v] Float64Scalar:
+    def as_float64(ref self) -> ref[self._v[Float64Scalar]] Float64Scalar:
         return self._as[Float64Scalar]()
 
-    def as_string(ref self) -> ref[self._v] StringScalar:
+    def as_string(ref self) -> ref[self._v[StringScalar]] StringScalar:
         return self._as[StringScalar]()
 
-    def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryScalar:
+    def as_fixed_size_binary(ref self) -> ref[self._v[FixedSizeBinaryScalar]] FixedSizeBinaryScalar:
         return self._as[FixedSizeBinaryScalar]()
 
-    def as_date32(ref self) -> ref[self._v] Date32Scalar:
+    def as_date32(ref self) -> ref[self._v[Date32Scalar]] Date32Scalar:
         return self._as[Date32Scalar]()
 
-    def as_date64(ref self) -> ref[self._v] Date64Scalar:
+    def as_date64(ref self) -> ref[self._v[Date64Scalar]] Date64Scalar:
         return self._as[Date64Scalar]()
 
-    def as_time32(ref self) -> ref[self._v] Time32Scalar:
+    def as_time32(ref self) -> ref[self._v[Time32Scalar]] Time32Scalar:
         return self._as[Time32Scalar]()
 
-    def as_time64(ref self) -> ref[self._v] Time64Scalar:
+    def as_time64(ref self) -> ref[self._v[Time64Scalar]] Time64Scalar:
         return self._as[Time64Scalar]()
 
-    def as_duration(ref self) -> ref[self._v] DurationScalar:
+    def as_duration(ref self) -> ref[self._v[DurationScalar]] DurationScalar:
         return self._as[DurationScalar]()
 
-    def as_timestamp(ref self) -> ref[self._v] TimestampScalar:
+    def as_timestamp(ref self) -> ref[self._v[TimestampScalar]] TimestampScalar:
         return self._as[TimestampScalar]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._v] YearMonthIntervalScalar:
+    ) -> ref[self._v[YearMonthIntervalScalar]] YearMonthIntervalScalar:
         return self._as[YearMonthIntervalScalar]()
 
-    def as_day_time_interval(ref self) -> ref[self._v] DayTimeIntervalScalar:
+    def as_day_time_interval(ref self) -> ref[self._v[DayTimeIntervalScalar]] DayTimeIntervalScalar:
         return self._as[DayTimeIntervalScalar]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._v] MonthDayNanoIntervalScalar:
+    ) -> ref[self._v[MonthDayNanoIntervalScalar]] MonthDayNanoIntervalScalar:
         return self._as[MonthDayNanoIntervalScalar]()
 
-    def as_decimal32(ref self) -> ref[self._v] Decimal32Scalar:
+    def as_decimal32(ref self) -> ref[self._v[Decimal32Scalar]] Decimal32Scalar:
         return self._as[Decimal32Scalar]()
 
-    def as_decimal64(ref self) -> ref[self._v] Decimal64Scalar:
+    def as_decimal64(ref self) -> ref[self._v[Decimal64Scalar]] Decimal64Scalar:
         return self._as[Decimal64Scalar]()
 
-    def as_decimal128(ref self) -> ref[self._v] Decimal128Scalar:
+    def as_decimal128(ref self) -> ref[self._v[Decimal128Scalar]] Decimal128Scalar:
         return self._as[Decimal128Scalar]()
 
-    def as_decimal256(ref self) -> ref[self._v] Decimal256Scalar:
+    def as_decimal256(ref self) -> ref[self._v[Decimal256Scalar]] Decimal256Scalar:
         return self._as[Decimal256Scalar]()
 
-    def as_list(ref self) -> ref[self._v] ListScalar:
+    def as_list(ref self) -> ref[self._v[ListScalar]] ListScalar:
         return self._as[ListScalar]()
 
-    def as_fixed_size_list(ref self) -> ref[self._v] ListScalar:
+    def as_fixed_size_list(ref self) -> ref[self._v[ListScalar]] ListScalar:
         return self._as[ListScalar]()
 
-    def as_struct(ref self) -> ref[self._v] StructScalar:
+    def as_struct(ref self) -> ref[self._v[StructScalar]] StructScalar:
         return self._as[StructScalar]()
 
-    def as_dictionary(ref self) -> ref[self._v] DictionaryScalar:
+    def as_dictionary(ref self) -> ref[self._v[DictionaryScalar]] DictionaryScalar:
         return self._as[DictionaryScalar]()
 
     def __eq__(self, other: Self) -> Bool:

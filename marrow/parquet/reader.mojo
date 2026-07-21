@@ -15,7 +15,7 @@ from std.io.file import FileHandle
 from std.algorithm.functional import sync_parallelize
 from std.sys import size_of
 from std.sys.info import num_physical_cores
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 
 from ..arrays import AnyArray, ArrayData
 from ..buffers import Buffer, Bitmap
@@ -58,7 +58,7 @@ struct MappedFile(Movable):
     Decoded values are copied into owned Arrow buffers, so the map only needs to
     outlive the decode."""
 
-    var ptr: UnsafePointer[UInt8, ImmutUntrackedOrigin]
+    var ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
     var size: Int
 
     def __init__(out self, path: String) raises:
@@ -72,7 +72,7 @@ struct MappedFile(Movable):
         )
         # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
         var ptr = external_call[
-            "mmap", UnsafePointer[UInt8, ImmutUntrackedOrigin]
+            "mmap", UnsafePointer[UInt8, ImmUntrackedOrigin]
         ](UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0))
         _ = f^  # close the fd; mmap stays valid
         if Int(ptr) == 0 or Int(ptr) == -1:
@@ -80,8 +80,8 @@ struct MappedFile(Movable):
         self.ptr = ptr
         self.size = size
 
-    def span(self) -> Span[UInt8, ImmutUntrackedOrigin]:
-        return Span[UInt8, ImmutUntrackedOrigin](ptr=self.ptr, length=self.size)
+    def span(self) -> Span[UInt8, ImmUntrackedOrigin]:
+        return Span[UInt8, ImmUntrackedOrigin](ptr=self.ptr, length=self.size)
 
     def __del__(deinit self):
         _ = external_call["munmap", Int32](self.ptr, self.size)
@@ -99,7 +99,7 @@ struct Page(Movable):
     column chunk's dictionary page (vs a data page)."""
 
     var dictionary: Bool
-    var body: Span[UInt8, ImmutUntrackedOrigin]
+    var body: Span[UInt8, ImmUntrackedOrigin]
     var def_levels: List[Int32]
     var rep_levels: List[Int32]  # only populated for repeated (list) leaves
     var value_offset: Int
@@ -110,7 +110,7 @@ struct Page(Movable):
     def __init__(
         out self,
         *,
-        body: Span[UInt8, ImmutUntrackedOrigin],
+        body: Span[UInt8, ImmUntrackedOrigin],
         num_values: Int,
         num_present: Int,
         value_offset: Int = 0,
@@ -130,7 +130,7 @@ struct Page(Movable):
 
     @staticmethod
     def dictionary_page(
-        body: Span[UInt8, ImmutUntrackedOrigin], num_values: Int
+        body: Span[UInt8, ImmUntrackedOrigin], num_values: Int
     ) -> Page:
         """The column chunk's dictionary page — carries only its distinct values;
         no levels, no present/null distinction."""
@@ -157,7 +157,7 @@ struct Page(Movable):
     def is_dictionary(self) -> Bool:
         return self.encoding.is_dictionary()
 
-    def values(self) -> Span[UInt8, ImmutUntrackedOrigin]:
+    def values(self) -> Span[UInt8, ImmUntrackedOrigin]:
         """The value bytes (after any level prefix)."""
         return self.body[self.value_offset :]
 
@@ -194,18 +194,18 @@ struct PageReader[o: Origin[mut=False]](Movable):
         self.scratch = List[UInt8]()
 
     @staticmethod
-    def _untracked(s: Span[UInt8, _]) -> Span[UInt8, ImmutUntrackedOrigin]:
+    def _untracked(s: Span[UInt8, _]) -> Span[UInt8, ImmUntrackedOrigin]:
         """Drop origin tracking on a byte span. The backing storage (the mmap,
         or this reader's decompression scratch) is kept alive for as long as each
         page is consumed, so the untracked view is always valid in use."""
-        return rebind[Span[UInt8, ImmutUntrackedOrigin]](s)
+        return rebind[Span[UInt8, ImmUntrackedOrigin]](s)
 
     def _body(
         mut self,
         comp: Span[UInt8, _],
         uncompressed_size: Int,
         mut codecs: CompressionLibs,
-    ) raises -> Span[UInt8, ImmutUntrackedOrigin]:
+    ) raises -> Span[UInt8, ImmUntrackedOrigin]:
         """A view of the page body: the mmap bytes directly for uncompressed
         pages, or the reused scratch after decompressing."""
         var codec = Compression(self.meta.codec)
@@ -219,7 +219,7 @@ struct PageReader[o: Origin[mut=False]](Movable):
 
     def _data_page_v1(
         self,
-        var body: Span[UInt8, ImmutUntrackedOrigin],
+        var body: Span[UInt8, ImmUntrackedOrigin],
         num_values: Int,
         encoding: Encoding,
     ) raises -> Page:
@@ -490,7 +490,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
 
     `phys_dt` is the Parquet physical width read from the file, `store_dt` the
     Arrow storage width. When they match (the common case, incl. temporal types)
-    a whole all-present PLAIN page is one memcpy; when they differ (dt.int8/16 stored
+    a whole all-present PLAIN page is one unsafe_memcpy; when they differ (dt.int8/16 stored
     as physical INT32) each value is read wide and narrowed.
     """
 
@@ -535,14 +535,14 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         mask: Optional[List[Bool]] = None,
     ) raises:
         """Place `page.num_present` contiguous decoded values into the output
-        buffer, honoring definition levels — one memcpy when the page is
+        buffer, honoring definition levels — one unsafe_memcpy when the page is
         all-present and fully selected, else a per-row scatter that materializes
         the validity bitmap. With `mask`, only the rows it selects are placed
         (the page-boundary partial-page path). Every encoding funnels its decoded
         present values through here."""
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not mask and page.all_present():
-            memcpy(dest=vptr + self.wpos, src=present, count=page.num_present)
+            unsafe_memcpy(dest=vptr + self.wpos, src=present, count=page.num_present)
             if self.has_bitmap:
                 self.bitmap.set_range(self.wpos, page.num_present, True)
             self.wpos += page.num_present
@@ -567,7 +567,7 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         if page.dictionary:
             comptime if Self.SAME:
                 self.dict.resize(unsafe_uninit_length=page.num_values)
-                memcpy(
+                unsafe_memcpy(
                     dest=self.dict.unsafe_ptr(),
                     src=page.body.unsafe_ptr().bitcast[Scalar[Self.store_dt]](),
                     count=page.num_values,
@@ -1066,7 +1066,7 @@ struct BoolLeafBuilder(LeafBuilder):
 struct ColumnReader[o: Origin[mut=False]](Movable):
     """Decode one column chunk. `decode` picks the path from the leaf's max
     repetition: a flat leaf (`max_rep == 0`) fills a fixed-size `LeafBuilder`
-    with the PLAIN-memcpy / fused-gather fast paths; a repeated (list-element)
+    with the PLAIN-unsafe_memcpy / fused-gather fast paths; a repeated (list-element)
     leaf grows a builder while accumulating the Dremel rep/def levels the
     assembler folds into list offsets. Both share the per-encoding value
     decoders on `Encoding`, so every encoding works on either path."""
@@ -1101,7 +1101,7 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
             return self._dispatch[False](codecs)
 
     # -----------------------------------------------------------------------
-    # Flat path — fixed-size LeafBuilder, one memcpy/gather per all-present page
+    # Flat path — fixed-size LeafBuilder, one unsafe_memcpy/gather per all-present page
     # -----------------------------------------------------------------------
 
     def _run[

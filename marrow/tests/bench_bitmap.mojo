@@ -563,7 +563,7 @@ def bench_and_diff_offset_100m(mut b: Benchmark) raises:
 
 
 def _bench_pack_bools_w8(mut b: Benchmark, size: Int) raises:
-    alias W = 8
+    comptime W = 8
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
     var pattern = SIMD[DType.bool, W](
@@ -611,7 +611,7 @@ def bench_pack_bools_w8_100m(mut b: Benchmark) raises:
 
 
 def _bench_pack_bools_w32(mut b: Benchmark, size: Int) raises:
-    alias W = 32
+    comptime W = 32
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
     var pattern = SIMD[DType.bool, W](
@@ -690,7 +690,7 @@ def bench_pack_bools_w32_100m(mut b: Benchmark) raises:
 
 
 def _bench_pack_bools_w64(mut b: Benchmark, size: Int) raises:
-    alias W = 64
+    comptime W = 64
     var bm = Bitmap.alloc_zeroed(size)
     var bv = bm.view()
     var pattern = SIMD[DType.bool, W](

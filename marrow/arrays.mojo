@@ -1987,7 +1987,7 @@ struct ChunkedArray(Copyable, Movable, Writable):
             self.chunks[i].write_to(writer)
         writer.write("])")
 
-    def chunk(self, index: Int) -> ref[self.chunks] AnyArray:
+    def chunk(self, index: Int) -> ref[self.chunks[index]] AnyArray:
         """Returns the chunk at the given index.
 
         Args:
@@ -2236,131 +2236,131 @@ struct AnyArray(
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def _as[T: Array](ref self) -> ref[self._v] T:
+    def _as[T: Array](ref self) -> ref[self._v[T]] T:
         debug_assert(self._v.isa[T](), "_as: wrong type, holds ", self.dtype())
         return self._v[T]
 
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._v] PrimitiveArray[T]:
+    ](ref self) -> ref[self._v[PrimitiveArray[T]]] PrimitiveArray[T]:
         return self._as[PrimitiveArray[T]]()
 
     def as_binary_like[
         T: BinaryLikeType
-    ](ref self) -> ref[self._v] BinaryLikeArray[T]:
+    ](ref self) -> ref[self._v[BinaryLikeArray[T]]] BinaryLikeArray[T]:
         return self._as[BinaryLikeArray[T]]()
 
-    def as_null(ref self) -> ref[self._v] NullArray:
+    def as_null(ref self) -> ref[self._v[NullArray]] NullArray:
         return self._as[NullArray]()
 
-    def as_bool(ref self) -> ref[self._v] BoolArray:
+    def as_bool(ref self) -> ref[self._v[BoolArray]] BoolArray:
         return self._as[BoolArray]()
 
-    def as_int8(ref self) -> ref[self._v] Int8Array:
+    def as_int8(ref self) -> ref[self._v[Int8Array]] Int8Array:
         return self._as[Int8Array]()
 
-    def as_int16(ref self) -> ref[self._v] Int16Array:
+    def as_int16(ref self) -> ref[self._v[Int16Array]] Int16Array:
         return self._as[Int16Array]()
 
-    def as_int32(ref self) -> ref[self._v] Int32Array:
+    def as_int32(ref self) -> ref[self._v[Int32Array]] Int32Array:
         return self._as[Int32Array]()
 
-    def as_int64(ref self) -> ref[self._v] Int64Array:
+    def as_int64(ref self) -> ref[self._v[Int64Array]] Int64Array:
         return self._as[Int64Array]()
 
-    def as_uint8(ref self) -> ref[self._v] UInt8Array:
+    def as_uint8(ref self) -> ref[self._v[UInt8Array]] UInt8Array:
         return self._as[UInt8Array]()
 
-    def as_uint16(ref self) -> ref[self._v] UInt16Array:
+    def as_uint16(ref self) -> ref[self._v[UInt16Array]] UInt16Array:
         return self._as[UInt16Array]()
 
-    def as_uint32(ref self) -> ref[self._v] UInt32Array:
+    def as_uint32(ref self) -> ref[self._v[UInt32Array]] UInt32Array:
         return self._as[UInt32Array]()
 
-    def as_uint64(ref self) -> ref[self._v] UInt64Array:
+    def as_uint64(ref self) -> ref[self._v[UInt64Array]] UInt64Array:
         return self._as[UInt64Array]()
 
-    def as_float16(ref self) -> ref[self._v] Float16Array:
+    def as_float16(ref self) -> ref[self._v[Float16Array]] Float16Array:
         return self._as[Float16Array]()
 
-    def as_float32(ref self) -> ref[self._v] Float32Array:
+    def as_float32(ref self) -> ref[self._v[Float32Array]] Float32Array:
         return self._as[Float32Array]()
 
-    def as_float64(ref self) -> ref[self._v] Float64Array:
+    def as_float64(ref self) -> ref[self._v[Float64Array]] Float64Array:
         return self._as[Float64Array]()
 
-    def as_string(ref self) -> ref[self._v] StringArray:
+    def as_string(ref self) -> ref[self._v[StringArray]] StringArray:
         return self._as[StringArray]()
 
-    def as_binary(ref self) -> ref[self._v] BinaryArray:
+    def as_binary(ref self) -> ref[self._v[BinaryArray]] BinaryArray:
         return self._as[BinaryArray]()
 
-    def as_large_string(ref self) -> ref[self._v] LargeStringArray:
+    def as_large_string(ref self) -> ref[self._v[LargeStringArray]] LargeStringArray:
         return self._as[LargeStringArray]()
 
-    def as_large_binary(ref self) -> ref[self._v] LargeBinaryArray:
+    def as_large_binary(ref self) -> ref[self._v[LargeBinaryArray]] LargeBinaryArray:
         return self._as[LargeBinaryArray]()
 
-    def as_list(ref self) -> ref[self._v] ListArray:
+    def as_list(ref self) -> ref[self._v[ListArray]] ListArray:
         return self._as[ListArray]()
 
-    def as_large_list(ref self) -> ref[self._v] LargeListArray:
+    def as_large_list(ref self) -> ref[self._v[LargeListArray]] LargeListArray:
         return self._as[LargeListArray]()
 
-    def as_fixed_size_list(ref self) -> ref[self._v] FixedSizeListArray:
+    def as_fixed_size_list(ref self) -> ref[self._v[FixedSizeListArray]] FixedSizeListArray:
         return self._as[FixedSizeListArray]()
 
-    def as_fixed_size_binary(ref self) -> ref[self._v] FixedSizeBinaryArray:
+    def as_fixed_size_binary(ref self) -> ref[self._v[FixedSizeBinaryArray]] FixedSizeBinaryArray:
         return self._as[FixedSizeBinaryArray]()
 
-    def as_date32(ref self) -> ref[self._v] Date32Array:
+    def as_date32(ref self) -> ref[self._v[Date32Array]] Date32Array:
         return self._as[Date32Array]()
 
-    def as_date64(ref self) -> ref[self._v] Date64Array:
+    def as_date64(ref self) -> ref[self._v[Date64Array]] Date64Array:
         return self._as[Date64Array]()
 
-    def as_time32(ref self) -> ref[self._v] Time32Array:
+    def as_time32(ref self) -> ref[self._v[Time32Array]] Time32Array:
         return self._as[Time32Array]()
 
-    def as_time64(ref self) -> ref[self._v] Time64Array:
+    def as_time64(ref self) -> ref[self._v[Time64Array]] Time64Array:
         return self._as[Time64Array]()
 
-    def as_year_month_interval(ref self) -> ref[self._v] YearMonthIntervalArray:
+    def as_year_month_interval(ref self) -> ref[self._v[YearMonthIntervalArray]] YearMonthIntervalArray:
         return self._as[YearMonthIntervalArray]()
 
-    def as_day_time_interval(ref self) -> ref[self._v] DayTimeIntervalArray:
+    def as_day_time_interval(ref self) -> ref[self._v[DayTimeIntervalArray]] DayTimeIntervalArray:
         return self._as[DayTimeIntervalArray]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._v] MonthDayNanoIntervalArray:
+    ) -> ref[self._v[MonthDayNanoIntervalArray]] MonthDayNanoIntervalArray:
         return self._as[MonthDayNanoIntervalArray]()
 
-    def as_duration(ref self) -> ref[self._v] DurationArray:
+    def as_duration(ref self) -> ref[self._v[DurationArray]] DurationArray:
         return self._as[DurationArray]()
 
-    def as_timestamp(ref self) -> ref[self._v] TimestampArray:
+    def as_timestamp(ref self) -> ref[self._v[TimestampArray]] TimestampArray:
         return self._as[TimestampArray]()
 
-    def as_decimal32(ref self) -> ref[self._v] Decimal32Array:
+    def as_decimal32(ref self) -> ref[self._v[Decimal32Array]] Decimal32Array:
         return self._as[Decimal32Array]()
 
-    def as_decimal64(ref self) -> ref[self._v] Decimal64Array:
+    def as_decimal64(ref self) -> ref[self._v[Decimal64Array]] Decimal64Array:
         return self._as[Decimal64Array]()
 
-    def as_decimal128(ref self) -> ref[self._v] Decimal128Array:
+    def as_decimal128(ref self) -> ref[self._v[Decimal128Array]] Decimal128Array:
         return self._as[Decimal128Array]()
 
-    def as_decimal256(ref self) -> ref[self._v] Decimal256Array:
+    def as_decimal256(ref self) -> ref[self._v[Decimal256Array]] Decimal256Array:
         return self._as[Decimal256Array]()
 
-    def as_struct(ref self) -> ref[self._v] StructArray:
+    def as_struct(ref self) -> ref[self._v[StructArray]] StructArray:
         return self._as[StructArray]()
 
-    def as_map(ref self) -> ref[self._v] MapArray:
+    def as_map(ref self) -> ref[self._v[MapArray]] MapArray:
         return self._as[MapArray]()
 
-    def as_dictionary(ref self) -> ref[self._v] DictionaryArray:
+    def as_dictionary(ref self) -> ref[self._v[DictionaryArray]] DictionaryArray:
         return self._as[DictionaryArray]()
 
     # --- factory from generic layout ---
