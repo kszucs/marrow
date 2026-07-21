@@ -60,8 +60,7 @@ struct Statistics:
             if arr.is_valid(i):
                 var v = arr[i].value()
 
-                @parameter
-                if skip_nan:
+                comptime if skip_nan:
                     if isnan(v):
                         continue
                 if not seen:

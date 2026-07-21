@@ -1,5 +1,5 @@
 from std.ffi import external_call, c_char, CStringSlice
-from std.memory import ArcPointer, memcpy, Span
+from std.memory import ArcPointer, unsafe_memcpy
 from std.python import Python, PythonObject
 from std.python._cpython import CPython, PyObjectPtr
 from std.sys import size_of
@@ -44,7 +44,7 @@ def _alloc_c_string(s: String) -> UnsafePointer[c_char, MutUntrackedOrigin]:
     """
     var n = s.byte_length()
     var buf = alloc[c_char](n + 1)
-    memcpy(dest=buf.bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
+    unsafe_memcpy(dest=buf.bitcast[UInt8](), src=s.unsafe_ptr(), count=n)
     buf.bitcast[UInt8]()[n] = 0
     return UnsafePointer[c_char, MutUntrackedOrigin](
         unsafe_from_address=Int(buf)
@@ -73,7 +73,7 @@ def _encode_c_metadata(
     var head = 0
 
     var n_pairs = Int32(len(metadata))
-    memcpy(
+    unsafe_memcpy(
         dest=buf + head, src=UnsafePointer(to=n_pairs).bitcast[UInt8](), count=4
     )
     head += 4
@@ -81,22 +81,22 @@ def _encode_c_metadata(
         var k = entry.key
         var v = entry.value
         var k_len = Int32(k.byte_length())
-        memcpy(
+        unsafe_memcpy(
             dest=buf + head,
             src=UnsafePointer(to=k_len).bitcast[UInt8](),
             count=4,
         )
         head += 4
-        memcpy(dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length())
+        unsafe_memcpy(dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length())
         head += k.byte_length()
         var v_len = Int32(v.byte_length())
-        memcpy(
+        unsafe_memcpy(
             dest=buf + head,
             src=UnsafePointer(to=v_len).bitcast[UInt8](),
             count=4,
         )
         head += 4
-        memcpy(dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length())
+        unsafe_memcpy(dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length())
         head += v.byte_length()
     return buf.bitcast[c_char]()
 
@@ -112,20 +112,20 @@ def _decode_c_metadata(
     var head = 0
 
     var n_pairs = Int32(0)
-    memcpy(
+    unsafe_memcpy(
         dest=UnsafePointer(to=n_pairs).bitcast[UInt8](), src=p + head, count=4
     )
     head += 4
     for _ in range(Int(n_pairs)):
         var k_len = Int32(0)
-        memcpy(
+        unsafe_memcpy(
             dest=UnsafePointer(to=k_len).bitcast[UInt8](), src=p + head, count=4
         )
         head += 4
         var k = String(from_utf8=Span[Byte](ptr=p + head, length=Int(k_len)))
         head += Int(k_len)
         var v_len = Int32(0)
-        memcpy(
+        unsafe_memcpy(
             dest=UnsafePointer(to=v_len).bitcast[UInt8](), src=p + head, count=4
         )
         head += 4
@@ -300,7 +300,7 @@ struct CArrowSchema(Copyable, Movable):
                 dtype.as_list().value_field().copy()
             )
             var child0_ptr = alloc[CArrowSchema](1)
-            child0_ptr.init_pointee_move(child0^)
+            child0_ptr.unsafe_write(child0^)
             children[0] = child0_ptr
         elif dtype.is_large_list():
             fmt = "+L"
@@ -310,7 +310,7 @@ struct CArrowSchema(Copyable, Movable):
                 dtype.as_large_list().value_field().copy()
             )
             var child0_ptr = alloc[CArrowSchema](1)
-            child0_ptr.init_pointee_move(child0^)
+            child0_ptr.unsafe_write(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_list():
             ref fsl = dtype.as_fixed_size_list()
@@ -319,7 +319,7 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutUntrackedOrigin]](1)
             var child0 = CArrowSchema.from_field(fsl.value_field().copy())
             var child0_ptr = alloc[CArrowSchema](1)
-            child0_ptr.init_pointee_move(child0^)
+            child0_ptr.unsafe_write(child0^)
             children[0] = child0_ptr
         elif dtype.is_fixed_size_binary():
             ref fsb = dtype.as_fixed_size_binary()
@@ -390,7 +390,7 @@ struct CArrowSchema(Copyable, Movable):
             for i in range(Int(n_children)):
                 var child = CArrowSchema.from_field(st.fields[i])
                 var child_ptr = alloc[CArrowSchema](1)
-                child_ptr.init_pointee_move(child^)
+                child_ptr.unsafe_write(child^)
                 children[i] = child_ptr
         elif dtype.is_map():
             # "+m" with a single child = the non-nullable "entries" struct of
@@ -401,7 +401,7 @@ struct CArrowSchema(Copyable, Movable):
             children = alloc[UnsafePointer[CArrowSchema, MutUntrackedOrigin]](1)
             var entries = CArrowSchema.from_field(mt.entries_field())
             var entries_ptr = alloc[CArrowSchema](1)
-            entries_ptr.init_pointee_move(entries^)
+            entries_ptr.unsafe_write(entries^)
             children[0] = entries_ptr
             if mt.keys_sorted:
                 flags = ARROW_FLAG_MAP_KEYS_SORTED
@@ -434,7 +434,7 @@ struct CArrowSchema(Copyable, Movable):
                 )
             var dict_schema = CArrowSchema.from_dtype(dt.value_type())
             var dict_schema_ptr = alloc[CArrowSchema](1)
-            dict_schema_ptr.init_pointee_move(dict_schema^)
+            dict_schema_ptr.unsafe_write(dict_schema^)
             dictionary_ptr = dict_schema_ptr
             if dt.ordered:
                 flags = ARROW_FLAG_DICT_ORDERED
@@ -492,7 +492,7 @@ struct CArrowSchema(Copyable, Movable):
                 # Move each child value onto the heap so the pointer is stable.
                 var child = CArrowSchema.from_field(schema.fields[i])
                 var child_ptr = alloc[CArrowSchema](1)
-                child_ptr.init_pointee_move(child^)
+                child_ptr.unsafe_write(child^)
                 children[i] = child_ptr
 
         return CArrowSchema(
@@ -540,7 +540,7 @@ struct CArrowSchema(Copyable, Movable):
         ref cpy = py.cpython()
         # Move self onto the heap; the capsule destructor will free it.
         var ptr = alloc[CArrowSchema](1)
-        ptr.init_pointee_move(self^)
+        ptr.unsafe_write(self^)
         return PythonObject(
             from_owned=cpy.PyCapsule_New(
                 ptr.bitcast[NoneType](),
@@ -784,7 +784,7 @@ def _release_exported_array(
     if Int(ptr[].buffers) != 0:
         ptr[].buffers.free()
     var data_ptr = ptr[].private_data.bitcast[ArrayData]()
-    data_ptr.destroy_pointee()
+    data_ptr.unsafe_deinit_pointee()
     data_ptr.free()
     UnsafePointer(to=ptr[].release).bitcast[UInt64]()[0] = 0
 
@@ -1026,7 +1026,7 @@ struct CArrowArray(Copyable, Movable):
 
         # Heap-allocate ArrayData to keep ArcPointer ref-counts alive.
         var data_heap = alloc[ArrayData](1)
-        data_heap.init_pointee_move(data^)
+        data_heap.unsafe_write(data^)
 
         # Heap-allocate the buffers pointer array.
         # buffers[0] = validity bitmap (null pointer means all-valid).
@@ -1065,7 +1065,7 @@ struct CArrowArray(Copyable, Movable):
                     data_heap[].children[i].copy()
                 )
                 var child_ptr = alloc[CArrowArray](1)
-                child_ptr.init_pointee_move(child^)
+                child_ptr.unsafe_write(child^)
                 children_ptr[i] = child_ptr
 
         # For dictionary arrays, children[0] holds the values array; expose it
@@ -1074,7 +1074,7 @@ struct CArrowArray(Copyable, Movable):
         if is_dictionary and len(data_heap[].children) > 0:
             var dict_c = CArrowArray.from_data(data_heap[].children[0].copy())
             var dp = alloc[CArrowArray](1)
-            dp.init_pointee_move(dict_c^)
+            dp.unsafe_write(dict_c^)
             dict_ptr = dp
 
         return CArrowArray(
@@ -1120,7 +1120,7 @@ struct CArrowArray(Copyable, Movable):
         ref cpy = py.cpython()
         # Move self onto the heap; the capsule destructor will free it.
         var ptr = alloc[CArrowArray](1)
-        ptr.init_pointee_move(self^)
+        ptr.unsafe_write(self^)
         return PythonObject(
             from_owned=cpy.PyCapsule_New(
                 ptr.bitcast[NoneType](),
@@ -1138,7 +1138,7 @@ struct CArrowArray(Copyable, Movable):
         automatically when the last buffer referencing this import is dropped.
         """
         var heap_c = alloc[CArrowArray](1)
-        heap_c.init_pointee_move(self^)
+        heap_c.unsafe_write(self^)
         var owner = ArcPointer(
             Allocation.foreign(heap_c.bitcast[UInt8](), _release_imported_array)
         )
@@ -1227,7 +1227,7 @@ struct CArrowDeviceArray(Movable):
             ctx.synchronize()
 
         var heap_c = alloc[CArrowDeviceArray](1)
-        heap_c.init_pointee_move(self^)
+        heap_c.unsafe_write(self^)
         var owner = ArcPointer(
             Allocation.foreign(heap_c.bitcast[UInt8](), _release_c_device_array)
         )
@@ -1282,7 +1282,7 @@ def _stream_get_schema(
     """Stream callback: write the schema into `schema_out`."""
     try:
         var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
-        schema_out.init_pointee_move(CArrowSchema.from_schema(data[].schema))
+        schema_out.unsafe_write(CArrowSchema.from_schema(data[].schema))
         return 0
     except:
         return 1
@@ -1302,7 +1302,7 @@ def _stream_get_next(
         var batch = data[].batches[data[].index].copy()
         data[].index += 1
         var struct_arr: AnyArray = batch.to_struct_array()
-        array_out.init_pointee_move(CArrowArray.from_array(struct_arr))
+        array_out.unsafe_write(CArrowArray.from_array(struct_arr))
         return 0
     except:
         return 1
@@ -1320,7 +1320,7 @@ def _stream_release(
 ) abi("C") -> None:
     """Stream callback: free private data and null the release field."""
     var data = stream_ptr[].private_data.bitcast[_StreamPrivateData]()
-    data.destroy_pointee()
+    data.unsafe_deinit_pointee()
     data.free()
     UnsafePointer(to=stream_ptr[].release).bitcast[UInt64]()[0] = 0
 
@@ -1378,7 +1378,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         mutate them after this call.
         """
         var data = alloc[_StreamPrivateData](1)
-        data.init_pointee_move(_StreamPrivateData(schema^, batches^))
+        data.unsafe_write(_StreamPrivateData(schema^, batches^))
         return CArrowArrayStream(
             get_schema=_stream_get_schema,
             get_next=_stream_get_next,
@@ -1406,7 +1406,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         var py = Python()
         ref cpy = py.cpython()
         var ptr = alloc[CArrowArrayStream](1)
-        ptr.init_pointee_copy(self)
+        ptr.unsafe_write(self)
         return PythonObject(
             from_owned=cpy.PyCapsule_New(
                 ptr.bitcast[NoneType](),
@@ -1421,7 +1421,7 @@ struct CArrowArrayStream(Copyable, TrivialRegisterPassable):
         Calls get_schema once, then iterates get_next until end-of-stream.
         """
         var heap = alloc[CArrowArrayStream](1)
-        heap.init_pointee_copy(self)
+        heap.unsafe_write(self)
 
         # Get schema.
         var c_schema = alloc[CArrowSchema](1)

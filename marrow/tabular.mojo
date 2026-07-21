@@ -87,11 +87,11 @@ struct RecordBatch(
             cols.append(array(f.dtype))
         return RecordBatch(schema=schema, columns=cols^)
 
-    def column(self, index: Int) -> ref[self.columns] AnyArray:
+    def column(self, index: Int) -> ref[self.columns[index]] AnyArray:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    def column(self, name: String) raises -> ref[self.columns] AnyArray:
+    def column(self, name: String) raises -> ref[self.columns[0]] AnyArray:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:
@@ -320,11 +320,11 @@ struct Table(ConvertibleFromPython, ConvertibleToPython, Copyable, Writable):
         """Returns the number of columns."""
         return len(self.columns)
 
-    def column(self, index: Int) -> ref[self.columns] ChunkedArray:
+    def column(self, index: Int) -> ref[self.columns[index]] ChunkedArray:
         """Returns the column at the given index."""
         return self.columns[index]
 
-    def column(self, name: String) raises -> ref[self.columns] ChunkedArray:
+    def column(self, name: String) raises -> ref[self.columns[0]] ChunkedArray:
         """Returns the column with the given name."""
         var idx = self.schema.get_field_index(name)
         if idx == -1:

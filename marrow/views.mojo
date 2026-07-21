@@ -22,7 +22,7 @@ from std.bit import count_trailing_zeros, pop_count
 from std.sys import compressed_store as _compressed_store
 import std.math as math
 from std.math import iota
-from std.memory import bitcast, memcpy, memset, Span
+from std.memory import bitcast, unsafe_memcpy, memset
 from std.builtin.device_passable import DevicePassable, DeviceTypeEncoder
 from std.sys.intrinsics import prefetch
 from std.algorithm.backend.vectorize import vectorize
@@ -330,7 +330,7 @@ struct BufferView[
         count: Int,
     ):
         """Copy `count` elements from `src` into `self`."""
-        memcpy(
+        unsafe_memcpy(
             dest=self._data.bitcast[UInt8](),
             src=src._data.bitcast[UInt8](),
             count=count * size_of[Scalar[Self.T]](),
@@ -345,7 +345,7 @@ struct BufferView[
     ) -> Buffer[]:
         """Filter these fixed-width values, keeping elements where `sel` is set.
 
-        Run-merges all-ones selection words (memcpy) and compress-stores mixed
+        Run-merges all-ones selection words (unsafe_memcpy) and compress-stores mixed
         words; a sparse tail only reads set-bit positions. `sel_start`/`sel_end`
         are the 64-bit block bounds and `out_len` the pre-counted set-bit count.
         """
@@ -405,7 +405,7 @@ struct BufferView[
         src: StringSlice[_],
     ):
         """Copy bytes from a StringSlice into this view."""
-        memcpy(
+        unsafe_memcpy(
             dest=self._data.bitcast[Byte](),
             src=src.unsafe_ptr(),
             count=src.byte_length(),
@@ -1194,7 +1194,7 @@ def _apply_dispatch[
         @always_inline
         def task(
             wid: Int,
-        ) {read chunk, read length,}:
+        ) {imm chunk, imm length,}:
             var start = wid * chunk
             var end = min(start + chunk, length)
             if end <= start:
@@ -1203,7 +1203,7 @@ def _apply_dispatch[
             @always_inline
             def lane[
                 W: Int
-            ](i: Int) {read start,}:
+            ](i: Int) {imm start,}:
                 process[W](Coord(start + i))
 
             vectorize[cpu_width](end - start, lane)
@@ -1496,7 +1496,7 @@ def apply[
         @always_inline
         def process_zero[
             W: Int
-        ](i: Int) {read dst, read data, read byte_start,}:
+        ](i: Int) {imm dst, imm data, imm byte_start,}:
             dst.store[DType.uint8, W](
                 i, op[W]((data + byte_start + i).load[width=W]())
             )
@@ -1513,11 +1513,11 @@ def apply[
         def process_shifted[
             W: Int
         ](i: Int) {
-            read dst,
-            read data,
-            read byte_start,
-            read rshift,
-            read lshift,
+            imm dst,
+            imm data,
+            imm byte_start,
+            imm rshift,
+            imm lshift,
         }:
             var lo = (data + byte_start + i).load[width=W]()
             var hi = (data + byte_start + i + 1).load[width=W]()
@@ -1577,11 +1577,11 @@ def apply[
         def process_zero[
             W: Int
         ](i: Int) {
-            read dst,
-            read src_a,
-            read byte_start_a,
-            read src_b,
-            read byte_start_b,
+            imm dst,
+            imm src_a,
+            imm byte_start_a,
+            imm src_b,
+            imm byte_start_b,
         }:
             dst.store[DType.uint8, W](
                 i,
@@ -1604,15 +1604,15 @@ def apply[
         def process_shifted[
             W: Int
         ](i: Int) {
-            read dst,
-            read src_a,
-            read byte_start_a,
-            read src_b,
-            read byte_start_b,
-            read rs_a,
-            read ls_a,
-            read rs_b,
-            read ls_b,
+            imm dst,
+            imm src_a,
+            imm byte_start_a,
+            imm src_b,
+            imm byte_start_b,
+            imm rs_a,
+            imm ls_a,
+            imm rs_b,
+            imm ls_b,
         }:
             var lo_a = (src_a + byte_start_a + i).load[width=W]()
             var hi_a = (src_a + byte_start_a + i + 1).load[width=W]()
@@ -1733,7 +1733,7 @@ def _reduce_dispatch[
         @always_inline
         def task(
             wid: Int,
-        ) {read chunk, read length, read identity, read partials_view,}:
+        ) {imm chunk, imm length, imm identity, imm partials_view,}:
             var start = wid * chunk
             var end = min(start + chunk, length)
             if end <= start:

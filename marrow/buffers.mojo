@@ -94,7 +94,7 @@ and SIMD bulk operations.
 from std.builtin.builtin_slice import ContiguousSlice
 from std.memory import (
     memset_zero,
-    memcpy,
+    unsafe_memcpy,
     memset,
     ArcPointer,
 )
@@ -486,7 +486,7 @@ struct Buffer[*, mut: Bool = False](
         """
         return Buffer[mut=False](
             size=math.align_up(Int(size), 64),
-            ptr=rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](ptr),
+            ptr=rebind[UnsafePointer[UInt8, ImmUntrackedOrigin]](ptr),
             owner=owner,
         )
 
@@ -502,7 +502,7 @@ struct Buffer[*, mut: Bool = False](
         for the lifetime of the Allocation.  `device_type()` is inferred from
         the context API (cuda→CUDA_HOST, hip→ROCM_HOST, otherwise CPU).
         """
-        var ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
+        var ptr = rebind[UnsafePointer[UInt8, ImmUntrackedOrigin]](
             host.unsafe_ptr()
         )
         return Buffer[mut=False](
@@ -525,7 +525,7 @@ struct Buffer[*, mut: Bool = False](
         `device_type()` is inferred from the context API (cuda→CUDA, hip→ROCM,
         metal→METAL).
         """
-        var ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
+        var ptr = rebind[UnsafePointer[UInt8, ImmUntrackedOrigin]](
             dev.unsafe_ptr()
         )
         return Buffer[mut=False](
@@ -545,7 +545,7 @@ struct Buffer[*, mut: Bool = False](
         the device pointer so ``view()`` works without a separate ``device_view``
         call.
         """
-        var imm_ptr = rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](
+        var imm_ptr = rebind[UnsafePointer[UInt8, ImmUntrackedOrigin]](
             self._ptr
         )
         return Buffer[mut=False](
@@ -603,7 +603,7 @@ struct Buffer[*, mut: Bool = False](
             )
         else:
             new = Buffer.alloc_zeroed[T](length)
-        memcpy(dest=new._ptr, src=self._ptr, count=min(new._size, self._size))
+        unsafe_memcpy(dest=new._ptr, src=self._ptr, count=min(new._size, self._size))
         swap(self, new)
 
     def extend[
@@ -617,7 +617,7 @@ struct Buffer[*, mut: Bool = False](
     ):
         """Copy `count` elements of type T from `src` into self at `dst_offset`.
         """
-        memcpy(
+        unsafe_memcpy(
             dest=self._ptr.bitcast[Scalar[T]]() + dst_offset,
             src=src._data,
             count=count,
@@ -705,7 +705,7 @@ struct Buffer[*, mut: Bool = False](
             raise Error("to_device: buffer is already on device")
         var dev = ctx.enqueue_create_buffer[DType.uint8](self._size)
         ctx.enqueue_copy(
-            dev, rebind[UnsafePointer[UInt8, ImmutUntrackedOrigin]](self._ptr)
+            dev, rebind[UnsafePointer[UInt8, ImmUntrackedOrigin]](self._ptr)
         )
         return Buffer.from_device(dev, self._size)
 
@@ -1055,7 +1055,7 @@ struct Bitmap[*, mut: Bool = False](
         """Copy `length` bits from `src` into self at `dst_start`.
 
         Three code paths:
-        1. Same sub-byte alignment → memcpy for middle bytes.
+        1. Same sub-byte alignment → unsafe_memcpy for middle bytes.
         2. Different alignment → shift-and-merge byte-by-byte.
         3. Short runs (< 16 bits) → bit-by-bit fallback.
         """
@@ -1099,7 +1099,7 @@ struct Bitmap[*, mut: Bool = False](
                 dst_byte += 1
 
             if end_byte > dst_byte:
-                memcpy(
+                unsafe_memcpy(
                     dest=dst + dst_byte,
                     src=src_ptr + src_byte,
                     count=end_byte - dst_byte,

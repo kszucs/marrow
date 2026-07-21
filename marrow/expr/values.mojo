@@ -56,9 +56,18 @@ from .. import dtypes as dt
 from ..arrays import AnyArray, BoolArray, PrimitiveArray, StringArray
 from ..buffers import Bitmap, Buffer
 from ..dtypes import AnyDataType, DType, NumericType
+from ..scalars import AnyScalar, PrimitiveScalar
 from ..tabular import RecordBatch
 from ..kernels.cast import NumericCast, NumToBool, BoolToNum
-from ..kernels.arithmetic import BinaryKernel, AddKernel, SubKernel
+from ..kernels.arithmetic import (
+    BinaryKernel,
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
+    MinKernel,
+    MaxKernel,
+)
 from .pruning import PruneStats, PruneBound
 
 
@@ -254,6 +263,55 @@ struct FusedBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
 comptime Add = FusedBinary[AddKernel, _, _]
 comptime Sub = FusedBinary[SubKernel, _, _]
+comptime Mul = FusedBinary[MulKernel, _, _]
+comptime Div = FusedBinary[DivKernel, _, _]
+comptime Min = FusedBinary[MinKernel, _, _]
+comptime Max = FusedBinary[MaxKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# Literal — a broadcast numeric constant leaf
+# ---------------------------------------------------------------------------
+
+
+struct Literal[T: dt.NumericType](NumericValue):
+    """A numeric constant broadcast across every lane — ``lit(2, int64)``.
+
+    A ``NumericValue`` leaf whose ``core[W]`` splats the stored scalar, so a
+    constant composes into a fused pass exactly like a column (``x * 2`` fuses to
+    one loop with no materialized ``2`` array)."""
+
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+
+    var value: Scalar[Self.NativeType]
+
+    def __init__(out self, value: Scalar[Self.NativeType], dtype: Self.T):
+        """``dtype`` only pins the ``T`` parameter, like ``col(name, dtype)``.
+        """
+        self.value = value
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return SIMD[Self.NativeType, W](self.value)
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        var s = AnyScalar(PrimitiveScalar[Self.T](self.value))
+        return PruneBound.interval(s.copy(), s.copy())
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Lit[", self.value, "]")
+
+
+def lit[T: dt.NumericType](value: Int, dtype: T) -> Literal[T]:
+    """Build a broadcast numeric constant — ``lit(2, int64)``.
+
+    ``value`` is a plain ``Int`` (so ``T`` resolves cleanly from ``dtype``) and is
+    converted to the column's native scalar type.
+    """
+    return Literal[T](Scalar[T.native](value), dtype)
 
 
 # ---------------------------------------------------------------------------

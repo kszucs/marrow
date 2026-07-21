@@ -21,7 +21,6 @@ list, fixed_size_list, struct, dictionary.
 """
 
 from std.math import ceildiv
-from std.memory import Span
 from std.pathlib import Path
 from std.sys import size_of
 from .arrays import AnyArray, ArrayData, DictionaryArray, NullArray

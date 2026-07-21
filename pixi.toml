@@ -195,7 +195,7 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=1.0.0b3.dev2026070506,<2"
+mojo = ">=1.0.0b3.dev2026072006,<2"
 pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.

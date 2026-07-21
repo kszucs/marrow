@@ -22,7 +22,7 @@ each introduced by a ULEB128 header. `header & 1` selects the run kind:
 """
 
 from std.sys import size_of
-from std.memory import memcpy
+from std.memory import unsafe_memcpy
 
 from ..arrays import (
     AnyArray,
@@ -1071,7 +1071,7 @@ struct Compression(Equatable, ImplicitlyCopyable, Movable):
         scratch.resize(unsafe_uninit_length=out_size + 8)
         var ptr = scratch.unsafe_ptr()
         if self == Self.UNCOMPRESSED:
-            memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
+            unsafe_memcpy(dest=ptr, src=src.unsafe_ptr(), count=out_size)
         elif self == Self.ZSTD:
             libs.zstd_decompress(src, ptr, out_size)
         elif self == Self.SNAPPY:

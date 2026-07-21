@@ -319,7 +319,7 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     # --- typed downcasts (zero-cost reference borrows) ---
 
-    def _as[T: Builder](ref self) -> ref[self._ptr[]] T:
+    def _as[T: Builder](ref self) -> ref[self._ptr[][T]] T:
         debug_assert(
             self._ptr[].isa[T](), "_as: wrong type, holds ", self.dtype()
         )
@@ -327,123 +327,123 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def as_primitive[
         T: PrimitiveType
-    ](ref self) -> ref[self._ptr[]] PrimitiveBuilder[T]:
+    ](ref self) -> ref[self._ptr[][PrimitiveBuilder[T]]] PrimitiveBuilder[T]:
         return self._as[PrimitiveBuilder[T]]()
 
-    def as_null(ref self) -> ref[self._ptr[]] NullBuilder:
+    def as_null(ref self) -> ref[self._ptr[][NullBuilder]] NullBuilder:
         return self._as[NullBuilder]()
 
-    def as_bool(ref self) -> ref[self._ptr[]] BoolBuilder:
+    def as_bool(ref self) -> ref[self._ptr[][BoolBuilder]] BoolBuilder:
         return self._as[BoolBuilder]()
 
-    def as_int8(ref self) -> ref[self._ptr[]] Int8Builder:
+    def as_int8(ref self) -> ref[self._ptr[][Int8Builder]] Int8Builder:
         return self._as[Int8Builder]()
 
-    def as_int16(ref self) -> ref[self._ptr[]] Int16Builder:
+    def as_int16(ref self) -> ref[self._ptr[][Int16Builder]] Int16Builder:
         return self._as[Int16Builder]()
 
-    def as_int32(ref self) -> ref[self._ptr[]] Int32Builder:
+    def as_int32(ref self) -> ref[self._ptr[][Int32Builder]] Int32Builder:
         return self._as[Int32Builder]()
 
-    def as_int64(ref self) -> ref[self._ptr[]] Int64Builder:
+    def as_int64(ref self) -> ref[self._ptr[][Int64Builder]] Int64Builder:
         return self._as[Int64Builder]()
 
-    def as_uint8(ref self) -> ref[self._ptr[]] UInt8Builder:
+    def as_uint8(ref self) -> ref[self._ptr[][UInt8Builder]] UInt8Builder:
         return self._as[UInt8Builder]()
 
-    def as_uint16(ref self) -> ref[self._ptr[]] UInt16Builder:
+    def as_uint16(ref self) -> ref[self._ptr[][UInt16Builder]] UInt16Builder:
         return self._as[UInt16Builder]()
 
-    def as_uint32(ref self) -> ref[self._ptr[]] UInt32Builder:
+    def as_uint32(ref self) -> ref[self._ptr[][UInt32Builder]] UInt32Builder:
         return self._as[UInt32Builder]()
 
-    def as_uint64(ref self) -> ref[self._ptr[]] UInt64Builder:
+    def as_uint64(ref self) -> ref[self._ptr[][UInt64Builder]] UInt64Builder:
         return self._as[UInt64Builder]()
 
-    def as_float16(ref self) -> ref[self._ptr[]] Float16Builder:
+    def as_float16(ref self) -> ref[self._ptr[][Float16Builder]] Float16Builder:
         return self._as[Float16Builder]()
 
-    def as_float32(ref self) -> ref[self._ptr[]] Float32Builder:
+    def as_float32(ref self) -> ref[self._ptr[][Float32Builder]] Float32Builder:
         return self._as[Float32Builder]()
 
-    def as_float64(ref self) -> ref[self._ptr[]] Float64Builder:
+    def as_float64(ref self) -> ref[self._ptr[][Float64Builder]] Float64Builder:
         return self._as[Float64Builder]()
 
-    def as_string(ref self) -> ref[self._ptr[]] StringBuilder:
+    def as_string(ref self) -> ref[self._ptr[][StringBuilder]] StringBuilder:
         return self._as[StringBuilder]()
 
-    def as_binary(ref self) -> ref[self._ptr[]] BinaryBuilder:
+    def as_binary(ref self) -> ref[self._ptr[][BinaryBuilder]] BinaryBuilder:
         return self._as[BinaryBuilder]()
 
-    def as_large_string(ref self) -> ref[self._ptr[]] LargeStringBuilder:
+    def as_large_string(ref self) -> ref[self._ptr[][LargeStringBuilder]] LargeStringBuilder:
         return self._as[LargeStringBuilder]()
 
-    def as_large_binary(ref self) -> ref[self._ptr[]] LargeBinaryBuilder:
+    def as_large_binary(ref self) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
         return self._as[LargeBinaryBuilder]()
 
-    def as_list(ref self) -> ref[self._ptr[]] ListBuilder:
+    def as_list(ref self) -> ref[self._ptr[][ListBuilder]] ListBuilder:
         return self._as[ListBuilder]()
 
-    def as_large_list(ref self) -> ref[self._ptr[]] LargeListBuilder:
+    def as_large_list(ref self) -> ref[self._ptr[][LargeListBuilder]] LargeListBuilder:
         return self._as[LargeListBuilder]()
 
-    def as_fixed_size_list(ref self) -> ref[self._ptr[]] FixedSizeListBuilder:
+    def as_fixed_size_list(ref self) -> ref[self._ptr[][FixedSizeListBuilder]] FixedSizeListBuilder:
         return self._as[FixedSizeListBuilder]()
 
     def as_fixed_size_binary(
         ref self,
-    ) -> ref[self._ptr[]] FixedSizeBinaryBuilder:
+    ) -> ref[self._ptr[][FixedSizeBinaryBuilder]] FixedSizeBinaryBuilder:
         return self._as[FixedSizeBinaryBuilder]()
 
-    def as_date32(ref self) -> ref[self._ptr[]] Date32Builder:
+    def as_date32(ref self) -> ref[self._ptr[][Date32Builder]] Date32Builder:
         return self._as[Date32Builder]()
 
-    def as_date64(ref self) -> ref[self._ptr[]] Date64Builder:
+    def as_date64(ref self) -> ref[self._ptr[][Date64Builder]] Date64Builder:
         return self._as[Date64Builder]()
 
-    def as_time32(ref self) -> ref[self._ptr[]] Time32Builder:
+    def as_time32(ref self) -> ref[self._ptr[][Time32Builder]] Time32Builder:
         return self._as[Time32Builder]()
 
-    def as_time64(ref self) -> ref[self._ptr[]] Time64Builder:
+    def as_time64(ref self) -> ref[self._ptr[][Time64Builder]] Time64Builder:
         return self._as[Time64Builder]()
 
-    def as_duration(ref self) -> ref[self._ptr[]] DurationBuilder:
+    def as_duration(ref self) -> ref[self._ptr[][DurationBuilder]] DurationBuilder:
         return self._as[DurationBuilder]()
 
-    def as_timestamp(ref self) -> ref[self._ptr[]] TimestampBuilder:
+    def as_timestamp(ref self) -> ref[self._ptr[][TimestampBuilder]] TimestampBuilder:
         return self._as[TimestampBuilder]()
 
     def as_year_month_interval(
         ref self,
-    ) -> ref[self._ptr[]] YearMonthIntervalBuilder:
+    ) -> ref[self._ptr[][YearMonthIntervalBuilder]] YearMonthIntervalBuilder:
         return self._as[YearMonthIntervalBuilder]()
 
     def as_day_time_interval(
         ref self,
-    ) -> ref[self._ptr[]] DayTimeIntervalBuilder:
+    ) -> ref[self._ptr[][DayTimeIntervalBuilder]] DayTimeIntervalBuilder:
         return self._as[DayTimeIntervalBuilder]()
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._ptr[]] MonthDayNanoIntervalBuilder:
+    ) -> ref[self._ptr[][MonthDayNanoIntervalBuilder]] MonthDayNanoIntervalBuilder:
         return self._as[MonthDayNanoIntervalBuilder]()
 
-    def as_decimal32(ref self) -> ref[self._ptr[]] Decimal32Builder:
+    def as_decimal32(ref self) -> ref[self._ptr[][Decimal32Builder]] Decimal32Builder:
         return self._as[Decimal32Builder]()
 
-    def as_decimal64(ref self) -> ref[self._ptr[]] Decimal64Builder:
+    def as_decimal64(ref self) -> ref[self._ptr[][Decimal64Builder]] Decimal64Builder:
         return self._as[Decimal64Builder]()
 
-    def as_decimal128(ref self) -> ref[self._ptr[]] Decimal128Builder:
+    def as_decimal128(ref self) -> ref[self._ptr[][Decimal128Builder]] Decimal128Builder:
         return self._as[Decimal128Builder]()
 
-    def as_decimal256(ref self) -> ref[self._ptr[]] Decimal256Builder:
+    def as_decimal256(ref self) -> ref[self._ptr[][Decimal256Builder]] Decimal256Builder:
         return self._as[Decimal256Builder]()
 
-    def as_struct(ref self) -> ref[self._ptr[]] StructBuilder:
+    def as_struct(ref self) -> ref[self._ptr[][StructBuilder]] StructBuilder:
         return self._as[StructBuilder]()
 
-    def as_dictionary(ref self) -> ref[self._ptr[]] DictionaryBuilder:
+    def as_dictionary(ref self) -> ref[self._ptr[][DictionaryBuilder]] DictionaryBuilder:
         return self._as[DictionaryBuilder]()
 
 
@@ -1212,7 +1212,7 @@ struct StructBuilder(Builder):
     def dtype(self) -> AnyDataType:
         return self._dtype.copy()
 
-    def field_builder(ref self, index: Int) -> ref[self._children] AnyBuilder:
+    def field_builder(ref self, index: Int) -> ref[self._children[index]] AnyBuilder:
         return self._children[index]
 
     def append_null(mut self) raises:
