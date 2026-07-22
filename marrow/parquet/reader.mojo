@@ -542,7 +542,9 @@ struct PrimitiveLeafBuilder[store_dt: DType, phys_dt: DType = store_dt](
         present values through here."""
         var vptr = self.values.view[Self.store_dt]().unsafe_ptr()
         if not mask and page.all_present():
-            unsafe_memcpy(dest=vptr + self.wpos, src=present, count=page.num_present)
+            unsafe_memcpy(
+                dest=vptr + self.wpos, src=present, count=page.num_present
+            )
             if self.has_bitmap:
                 self.bitmap.set_range(self.wpos, page.num_present, True)
             self.wpos += page.num_present

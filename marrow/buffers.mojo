@@ -603,7 +603,9 @@ struct Buffer[*, mut: Bool = False](
             )
         else:
             new = Buffer.alloc_zeroed[T](length)
-        unsafe_memcpy(dest=new._ptr, src=self._ptr, count=min(new._size, self._size))
+        unsafe_memcpy(
+            dest=new._ptr, src=self._ptr, count=min(new._size, self._size)
+        )
         swap(self, new)
 
     def extend[

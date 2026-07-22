@@ -375,19 +375,27 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_binary(ref self) -> ref[self._ptr[][BinaryBuilder]] BinaryBuilder:
         return self._as[BinaryBuilder]()
 
-    def as_large_string(ref self) -> ref[self._ptr[][LargeStringBuilder]] LargeStringBuilder:
+    def as_large_string(
+        ref self,
+    ) -> ref[self._ptr[][LargeStringBuilder]] LargeStringBuilder:
         return self._as[LargeStringBuilder]()
 
-    def as_large_binary(ref self) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
+    def as_large_binary(
+        ref self,
+    ) -> ref[self._ptr[][LargeBinaryBuilder]] LargeBinaryBuilder:
         return self._as[LargeBinaryBuilder]()
 
     def as_list(ref self) -> ref[self._ptr[][ListBuilder]] ListBuilder:
         return self._as[ListBuilder]()
 
-    def as_large_list(ref self) -> ref[self._ptr[][LargeListBuilder]] LargeListBuilder:
+    def as_large_list(
+        ref self,
+    ) -> ref[self._ptr[][LargeListBuilder]] LargeListBuilder:
         return self._as[LargeListBuilder]()
 
-    def as_fixed_size_list(ref self) -> ref[self._ptr[][FixedSizeListBuilder]] FixedSizeListBuilder:
+    def as_fixed_size_list(
+        ref self,
+    ) -> ref[self._ptr[][FixedSizeListBuilder]] FixedSizeListBuilder:
         return self._as[FixedSizeListBuilder]()
 
     def as_fixed_size_binary(
@@ -407,10 +415,14 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
     def as_time64(ref self) -> ref[self._ptr[][Time64Builder]] Time64Builder:
         return self._as[Time64Builder]()
 
-    def as_duration(ref self) -> ref[self._ptr[][DurationBuilder]] DurationBuilder:
+    def as_duration(
+        ref self,
+    ) -> ref[self._ptr[][DurationBuilder]] DurationBuilder:
         return self._as[DurationBuilder]()
 
-    def as_timestamp(ref self) -> ref[self._ptr[][TimestampBuilder]] TimestampBuilder:
+    def as_timestamp(
+        ref self,
+    ) -> ref[self._ptr[][TimestampBuilder]] TimestampBuilder:
         return self._as[TimestampBuilder]()
 
     def as_year_month_interval(
@@ -425,25 +437,37 @@ struct AnyBuilder(ImplicitlyCopyable, Movable):
 
     def as_month_day_nano_interval(
         ref self,
-    ) -> ref[self._ptr[][MonthDayNanoIntervalBuilder]] MonthDayNanoIntervalBuilder:
+    ) -> ref[
+        self._ptr[][MonthDayNanoIntervalBuilder]
+    ] MonthDayNanoIntervalBuilder:
         return self._as[MonthDayNanoIntervalBuilder]()
 
-    def as_decimal32(ref self) -> ref[self._ptr[][Decimal32Builder]] Decimal32Builder:
+    def as_decimal32(
+        ref self,
+    ) -> ref[self._ptr[][Decimal32Builder]] Decimal32Builder:
         return self._as[Decimal32Builder]()
 
-    def as_decimal64(ref self) -> ref[self._ptr[][Decimal64Builder]] Decimal64Builder:
+    def as_decimal64(
+        ref self,
+    ) -> ref[self._ptr[][Decimal64Builder]] Decimal64Builder:
         return self._as[Decimal64Builder]()
 
-    def as_decimal128(ref self) -> ref[self._ptr[][Decimal128Builder]] Decimal128Builder:
+    def as_decimal128(
+        ref self,
+    ) -> ref[self._ptr[][Decimal128Builder]] Decimal128Builder:
         return self._as[Decimal128Builder]()
 
-    def as_decimal256(ref self) -> ref[self._ptr[][Decimal256Builder]] Decimal256Builder:
+    def as_decimal256(
+        ref self,
+    ) -> ref[self._ptr[][Decimal256Builder]] Decimal256Builder:
         return self._as[Decimal256Builder]()
 
     def as_struct(ref self) -> ref[self._ptr[][StructBuilder]] StructBuilder:
         return self._as[StructBuilder]()
 
-    def as_dictionary(ref self) -> ref[self._ptr[][DictionaryBuilder]] DictionaryBuilder:
+    def as_dictionary(
+        ref self,
+    ) -> ref[self._ptr[][DictionaryBuilder]] DictionaryBuilder:
         return self._as[DictionaryBuilder]()
 
 
@@ -1212,7 +1236,9 @@ struct StructBuilder(Builder):
     def dtype(self) -> AnyDataType:
         return self._dtype.copy()
 
-    def field_builder(ref self, index: Int) -> ref[self._children[index]] AnyBuilder:
+    def field_builder(
+        ref self, index: Int
+    ) -> ref[self._children[index]] AnyBuilder:
         return self._children[index]
 
     def append_null(mut self) raises:
