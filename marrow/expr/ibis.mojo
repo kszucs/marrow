@@ -15,7 +15,10 @@ Layers:
     the whole tree — composite nodes call the kernel's `core` on their children's
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
-    Numeric nodes are parameterized by the **real** kernels (`AddKernel`, …).
+    Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
+    compare / boolean / aggregate are implemented; string (`kernels.string`) and
+    list (`kernels.nested`) markers plus `xor`/`is_null` are not-implemented stubs
+    (just `comptime name`) until their compute lands. No kernels are defined here.
   * `BoolValue` / `StringValue` / `ListValue` are the type architecture (execution
     is future work — their `execute` inherits the raising default). Cross-family
     numeric-producing boundaries (`length`, reductions) are non-lane `Value` nodes
@@ -48,6 +51,7 @@ from ..scalars import PrimitiveScalar, StringScalar
 from ..buffers import Buffer
 from ..arrays import PrimitiveArray
 from ..tabular import RecordBatch
+from ..kernels.helpers import Kernel
 from ..kernels.arithmetic import (
     BinaryKernel,
     UnaryKernel,
@@ -67,6 +71,32 @@ from ..kernels.arithmetic import (
     ExpKernel,
     LogKernel,
 )
+from ..kernels.compare import (
+    EqKernel,
+    NeKernel,
+    LtKernel,
+    LeKernel,
+    GtKernel,
+    GeKernel,
+)
+from ..kernels.boolean import (
+    AndKernel,
+    OrKernel,
+    NotKernel,
+    XorKernel,
+    IsNullKernel,
+)
+from ..kernels.aggregate import SumKernel, MeanKernel, MinKernel, MaxKernel
+from ..kernels.string import (
+    StartsWithKernel,
+    EndsWithKernel,
+    ContainsKernel,
+    LengthKernel,
+    UpperKernel,
+    LowerKernel,
+    ReverseKernel,
+)
+from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 
 
 # ---------------------------------------------------------------------------
@@ -127,162 +157,6 @@ def _not_wired[T: DataType]() raises -> T.ArrayType:
     """Raising stub typed as `T.ArrayType` — lets a family/boundary `execute`
     default satisfy the return type before its execution is wired."""
     raise Error("execute: not wired for this node yet")
-
-
-# ---------------------------------------------------------------------------
-# Kernel markers — for the type-only (bool/string/list/reduction) families. The
-# numeric family uses the real `marrow.kernels` (imported above) directly.
-# ---------------------------------------------------------------------------
-
-
-trait Kernel:
-    @staticmethod
-    def name() -> String:
-        ...
-
-
-struct LtKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "less"
-
-
-struct LeKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "less_equal"
-
-
-struct GtKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "greater"
-
-
-struct GeKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "greater_equal"
-
-
-struct EqKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "equal"
-
-
-struct NeKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "not_equal"
-
-
-struct AndKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "and"
-
-
-struct OrKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "or"
-
-
-struct NotKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "not"
-
-
-struct XorKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "xor"
-
-
-struct StartsWithKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "startswith"
-
-
-struct EndsWithKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "endswith"
-
-
-struct ContainsKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "contains"
-
-
-struct LengthKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "length"
-
-
-struct UpperKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "upper"
-
-
-struct LowerKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "lower"
-
-
-struct ReverseKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "reverse"
-
-
-struct IsNullKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "is_null"
-
-
-struct ArrayLengthKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "array_length"
-
-
-struct ArrayContainsKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "array_contains"
-
-
-struct SumKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "sum"
-
-
-struct MeanKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "mean"
-
-
-struct MinKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "min"
-
-
-struct MaxKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "max"
 
 
 # ---------------------------------------------------------------------------

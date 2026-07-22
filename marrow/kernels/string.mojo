@@ -3,6 +3,42 @@
 from ..arrays import AnyArray, StringArray, PrimitiveArray, UInt32Array
 from ..buffers import Buffer
 from ..dtypes import uint32
+from .helpers import Kernel
+
+
+# ---------------------------------------------------------------------------
+# String kernel markers — NOT IMPLEMENTED yet (compute `core`/`apply` are TODO).
+# They exist so the typed expression layer (`marrow.expr.ibis`) can name string
+# operations; execution wires up later (see `string_lengths` below for `length`).
+# ---------------------------------------------------------------------------
+
+
+struct StartsWithKernel(Kernel):
+    comptime name = "startswith"
+
+
+struct EndsWithKernel(Kernel):
+    comptime name = "endswith"
+
+
+struct ContainsKernel(Kernel):
+    comptime name = "contains"
+
+
+struct LengthKernel(Kernel):
+    comptime name = "length"
+
+
+struct UpperKernel(Kernel):
+    comptime name = "upper"
+
+
+struct LowerKernel(Kernel):
+    comptime name = "lower"
+
+
+struct ReverseKernel(Kernel):
+    comptime name = "reverse"
 
 
 # TODO: implement using SIMD
