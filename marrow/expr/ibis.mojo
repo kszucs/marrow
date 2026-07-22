@@ -47,9 +47,11 @@ from ..dtypes import (
     ListLikeType,
     DType,
 )
+from std.memory import ArcPointer
+
 from ..scalars import PrimitiveScalar, StringScalar
 from ..buffers import Buffer
-from ..arrays import PrimitiveArray
+from ..arrays import PrimitiveArray, AnyArray
 from ..tabular import RecordBatch
 from ..kernels.helpers import Kernel
 from ..kernels.arithmetic import (
@@ -184,10 +186,12 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
 
     comptime OutType: DataType
 
-    # `execute` is declared by each family (not here) — declaring it on the base
-    # too makes a generic call ambiguous and the associated-return won't unify
-    # through the base default (same reason `marrow.expr.values` keeps it off
-    # `Value`). Every family below provides `execute -> Self.OutType.ArrayType`.
+    # Abstract — implemented by the numeric family (fused vectorize) and by every
+    # other concrete node (raising `_not_wired` stub) so a boxed `Value` in
+    # `AnyValue` can `.execute(batch).to_any()` generically. Declared here (not
+    # only per-family) so `AnyValue`'s trampoline can call it on any `V: Value`.
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        ...
 
     def name(self) -> String:
         return String()
@@ -374,9 +378,6 @@ trait NumericValue(Value):
 trait BoolValue(Value):
     """Boolean-typed nodes: logical operator surface (type architecture)."""
 
-    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
-
     def __and__[
         Rhs: BoolValue
     ](self, o: Rhs) -> BoolBinary[AndKernel, Self, Rhs]:
@@ -397,9 +398,6 @@ trait BoolValue(Value):
 trait StringValue(Value):
     """String-typed nodes. Cross-family methods follow the *result*: `length()`
     yields a numeric boundary, `startswith()` a `BoolValue`."""
-
-    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
 
     def length(self) -> Counting[LengthKernel, Self]:
         return Counting[LengthKernel, Self](self.copy())
@@ -454,9 +452,6 @@ trait StringValue(Value):
 trait ListValue(Value):
     """List-typed nodes (nested family). `length()` yields a numeric boundary,
     `contains()` a `BoolValue`."""
-
-    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
 
     def length(self) -> Counting[ArrayLengthKernel, Self]:
         return Counting[ArrayLengthKernel, Self](self.copy())
@@ -625,11 +620,17 @@ struct BoolBinary[K: Kernel, L: Value, R: Value](BoolValue):
     var left: Self.L
     var right: Self.R
 
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
+
 
 @fieldwise_init
 struct BoolUnary[K: Kernel, A: Value](BoolValue):
     comptime OutType = dt.BoolType
     var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
 
 @fieldwise_init
@@ -638,11 +639,17 @@ struct StringBinary[K: Kernel, L: Value, R: Value](StringValue):
     var left: Self.L
     var right: Self.R
 
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
+
 
 @fieldwise_init
 struct StringUnary[K: Kernel, A: Value](StringValue):
     comptime OutType = dtype_like[Self.A, Self.A]
     var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
 
 comptime Add = NumericBinary[AddKernel, _, _]
@@ -772,6 +779,9 @@ struct StringColumn[T: StringLikeType](StringValue):
     def name(self) -> String:
         return self._name.copy()
 
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
+
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
 
@@ -785,6 +795,9 @@ struct StringLiteral[T: StringLikeType](StringValue):
 
     def __init__(out self, var value: String):
         self._value = StringScalar(value^)
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")
@@ -802,6 +815,9 @@ struct ListColumn[T: DataType & ListLikeType](ListValue):
 
     def name(self) -> String:
         return self._name.copy()
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -837,3 +853,57 @@ def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
 def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
     """A string constant — `lit("x", string)`."""
     return StringLiteral[T](value^)
+
+
+# ---------------------------------------------------------------------------
+# AnyValue — type-erased handle: box any `Value`, then `.execute(batch)` it
+# ---------------------------------------------------------------------------
+
+
+struct AnyValue(Copyable, Movable, Writable):
+    """Type-erased handle over any expression node — the one box that lets
+    runtime-typed / heterogeneous code hold a value regardless of its family and
+    still `.execute(batch)` it. Erasure is via per-boxed-type trampolines that
+    `rebind` the node back and forward to its `Value` methods; every typed result
+    array converts to `AnyArray` via `.to_any()`."""
+
+    var _boxed: ArcPointer[NoneType]
+    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> AnyArray
+    var _name_fn: def(ArcPointer[NoneType]) thin -> String
+    var _write_fn: def(ArcPointer[NoneType]) thin -> String
+
+    @staticmethod
+    def _execute_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+        return rebind[ArcPointer[V]](ptr)[].execute(batch).to_any()
+
+    @staticmethod
+    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[V]](ptr)[].name()
+
+    @staticmethod
+    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        var s = String()
+        rebind[ArcPointer[V]](ptr)[].write_to(s)
+        return s^
+
+    @implicit
+    def __init__[V: Value](out self, value: V):
+        """Box any `Value` — a column, a fused numeric expression, a boundary.
+        """
+        var ptr = ArcPointer[V](value.copy())
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._execute = Self._execute_tramp[V]
+        self._name_fn = Self._name_tramp[V]
+        self._write_fn = Self._write_tramp[V]
+
+    def execute(self, batch: RecordBatch) raises -> AnyArray:
+        """Evaluate the boxed node against `batch`, erased to `AnyArray`."""
+        return self._execute(self._boxed, batch)
+
+    def name(self) -> String:
+        return self._name_fn(self._boxed)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self._write_fn(self._boxed))

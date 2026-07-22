@@ -16,7 +16,7 @@ from marrow.dtypes import (
     DataType,
 )
 from marrow.tabular import record_batch, RecordBatch
-from marrow.expr.ibis import col, lit, Value, NumericValue
+from marrow.expr.ibis import col, lit, Value, NumericValue, AnyValue
 
 
 def _batch() raises -> RecordBatch:
@@ -92,6 +92,26 @@ def test_fused_math_chain() raises:
     # exp2(a) fused, then a fixed check on a=[1,2,3,4] -> [2,4,8,16]
     assert_true(
         _eq(col("a", int64).exp2(), array([2.0, 4.0, 8.0, 16.0], float64))
+    )
+
+
+def test_anyvalue_erases_and_executes() raises:
+    # box a fused numeric expression, execute it through the erased handle
+    var boxed = AnyValue((col("a", int64) + col("b", int64)) * col("c", int32))
+    assert_true(boxed.execute(_batch()) == array([22, 44, 66, 88], int64))
+
+
+def test_anyvalue_heterogeneous_list() raises:
+    # a heterogeneous list of erased expressions, each executed
+    var batch = _batch()
+    var exprs = List[AnyValue]()
+    exprs.append(col("a", int64) + col("b", int64))
+    exprs.append(-col("a", int64))
+    exprs.append(col("b", int64) / col("a", int64))
+    assert_true(exprs[0].execute(batch) == array([11, 22, 33, 44], int64))
+    assert_true(exprs[1].execute(batch) == array([-1, -2, -3, -4], int64))
+    assert_true(
+        exprs[2].execute(batch) == array([10.0, 10.0, 10.0, 10.0], float64)
     )
 
 
