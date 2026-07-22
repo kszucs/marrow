@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -94,6 +95,107 @@ class MojoRunner:
         return flags
 
     @staticmethod
+    def pkg_include_dir(config):
+        """Return the directory holding the precompiled ``marrow.mojoc``.
+
+        Used as the ``-I`` search path when ``--pkg`` is active (the default)
+        so test files link against the prebuilt package instead of recompiling
+        marrow's source on every build (~5x faster per file, no cross-file
+        cache eviction).  Returns None (callers fall back to ``-I .``) when
+        ``--no-pkg`` is passed, or for ``--benchmark`` runs (marrow must be
+        codegen'd at -O3) and ``--asan`` runs (the package is not
+        ASAN-instrumented, so marrow code must be built from source).
+
+        The package lives directly under ``.test_runners`` and the staging
+        source in a nested subdir, so this include dir never exposes a
+        ``marrow/`` source tree next to ``marrow.mojoc`` (that combination
+        makes the compiler recompile the whole package — pathologically slow).
+        """
+        if (
+            not config.getoption("--pkg")
+            or config.getoption("--no-pkg")
+            or config.getoption("--benchmark")
+            or config.getoption("--asan")
+        ):
+            return None
+        return Path(config.rootpath) / ".test_runners"
+
+    @staticmethod
+    def _library_sources(rootpath):
+        """Yield marrow's library ``.mojo`` files, excluding any ``tests`` dir.
+
+        Test/bench files carry ``def main()`` (they compile to runnable
+        binaries), which ``mojo precompile`` rejects inside a package.  They
+        are consumers of marrow, never part of it, so the precompiled package
+        is built from the library modules only.
+        """
+        src_root = Path(rootpath) / "marrow"
+        for src in src_root.rglob("*.mojo"):
+            if "tests" not in src.relative_to(src_root).parts:
+                yield src
+
+    @staticmethod
+    def _pkg_is_stale(pkg_file, rootpath):
+        """True if ``marrow.mojoc`` is missing or older than any library source.
+
+        Only library modules count (see ``_library_sources``): editing a test
+        file compiles that file from source directly, so it must not trigger a
+        (slow) package rebuild.
+        """
+        if not pkg_file.exists():
+            return True
+        pkg_mtime = pkg_file.stat().st_mtime
+        return any(
+            src.stat().st_mtime > pkg_mtime
+            for src in MojoRunner._library_sources(rootpath)
+        )
+
+    @staticmethod
+    def ensure_pkg(config):
+        """Precompile marrow into ``.test_runners/marrow.mojoc``.
+
+        Stages the library (tests excluded) into a scratch tree, then runs
+        ``mojo precompile`` on it.  Rebuilds only when stale (see
+        ``_pkg_is_stale``), so repeated sessions that only touch test files
+        reuse it.  No-op when ``--pkg`` is inactive.  Returns the include dir,
+        or None.
+        """
+        pkg_dir = MojoRunner.pkg_include_dir(config)
+        if pkg_dir is None:
+            return None
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        pkg_file = pkg_dir / "marrow.mojoc"
+        if not MojoRunner._pkg_is_stale(pkg_file, config.rootpath):
+            return pkg_dir
+
+        print("precompiling marrow.mojoc (--pkg) ...", flush=True)
+        # Stage a tests-free copy of the library so precompile doesn't choke
+        # on the `def main()` in test files (illegal inside a package).  The
+        # staged `marrow/` lives in a nested subdir, never directly under the
+        # include dir alongside marrow.mojoc.
+        staging = pkg_dir / "marrow_pkg_src"
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(
+            Path(config.rootpath) / "marrow",
+            staging / "marrow",
+            ignore=shutil.ignore_patterns("tests"),
+        )
+        result = subprocess.run(
+            ["mojo", "precompile", str(staging / "marrow"), "-o", str(pkg_file)],
+            cwd=config.rootpath,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.exit(
+                f"Failed to precompile marrow.mojoc:\n{result.stderr}",
+                returncode=1,
+            )
+        print("marrow.mojoc built successfully", flush=True)
+        return pkg_dir
+
+    @staticmethod
     def build_cmd(config, fspath, test_names=None):
         """Return the command to run a Mojo source file with optional test filtering.
 
@@ -120,8 +222,12 @@ class MojoRunner:
         # -lm: mojo build on Linux doesn't auto-link libm (needed for
         # log10f etc.); harmless on macOS where libm is part of libSystem.
         lm = [] if sys.platform == "darwin" else ["-Xlinker", "-lm"]
+        # With --pkg, link against the prebuilt marrow.mojoc instead of
+        # recompiling marrow's source (-I .) for every test file.
+        pkg_dir = MojoRunner.pkg_include_dir(config)
+        include = str(pkg_dir) if pkg_dir is not None else "."
         build_cmd = (
-            ["mojo", "build", opt, "-g1", "-I", "."] + assert_flag + asan + lm + [str(src), "-o", str(binary)]
+            ["mojo", "build", opt, "-g1", "-I", include] + assert_flag + asan + lm + [str(src), "-o", str(binary)]
         )
         result = subprocess.run(
             build_cmd, cwd=config.rootpath, capture_output=True, text=True
@@ -436,6 +542,30 @@ def pytest_addoption(parser):
         help="Run Mojo tests under AddressSanitizer (ASAN)",
     )
     parser.addoption(
+        "--pkg",
+        action="store_true",
+        default=False,
+        help=(
+            "Fast build (on by default via pytest.ini): precompile marrow into "
+            "a package once per session and compile test files against it "
+            "(-I <pkgdir>) instead of recompiling the whole library from source "
+            "per file (~5x faster builds, no cross-file cache eviction). "
+            "Trade-off: marrow-internal debug_assert checks are NOT compiled "
+            "with ASSERT=all (mojo precompile ignores -D); test-file asserts "
+            "still run. Ignored for --benchmark and --asan runs."
+        ),
+    )
+    parser.addoption(
+        "--no-pkg",
+        action="store_true",
+        default=False,
+        help=(
+            "Disable the precompiled-marrow fast build (see --pkg) and build "
+            "every test file from source with -I . for full ASSERT=all coverage "
+            "of marrow internals."
+        ),
+    )
+    parser.addoption(
         "--competition",
         action="store_true",
         default=False,
@@ -482,6 +612,21 @@ def _python_excluded(config) -> bool:
     return False
 
 
+def _mojo_excluded(config) -> bool:
+    """Return True if no Mojo test binaries will be built this session.
+
+    Used to skip the (otherwise wasted) marrow precompile on Python-only runs.
+    """
+    if config.getoption("--no-mojo"):
+        return True
+    builds_mojo = (
+        config.getoption("--mojo")
+        or config.getoption("--cpu")
+        or config.getoption("--gpu")
+    )
+    return config.getoption("--python") and not builds_mojo
+
+
 def pytest_ignore_collect(collection_path, config):
     """Skip collecting Python test/bench files when Python tests are not needed."""
     if collection_path.suffix == ".py" and collection_path.name.startswith(
@@ -500,6 +645,12 @@ def pytest_ignore_collect(collection_path, config):
 def pytest_sessionstart(session):
     """Rebuild python/marrow/libmarrow.so before the session when Python tests will run."""
     config = session.config
+
+    # --pkg: precompile marrow.mojoc once on the controller so every Mojo
+    # test file links against it instead of recompiling marrow from source.
+    # Skipped on Python-only sessions, where no Mojo binaries are built.
+    if not hasattr(config, "workerinput") and not _mojo_excluded(config):
+        MojoRunner.ensure_pkg(config)
 
     if _python_excluded(config):
         return

@@ -6,15 +6,13 @@ from std.memory import ArcPointer
 import marrow.dtypes as dt
 
 
-def _field_name(
-    ptr: UnsafePointer[dt.Field, MutAnyOrigin]
-) raises -> PythonObject:
+def _field_name(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[dt.Field]()
     return PythonObject(ptr[].name)
 
 
-def _field_type(
-    ptr: UnsafePointer[dt.Field, MutAnyOrigin]
-) raises -> PythonObject:
+def _field_type(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[dt.Field]()
     return ptr[].dtype.copy().to_python_object()
 
 

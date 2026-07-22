@@ -141,106 +141,108 @@ def pyinit[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     R: ConvertibleToPython,
     //,
     method: def(T) raises thin -> R,
-]() -> def(UnsafePointer[T, MutAnyOrigin]) raises thin -> PythonObject:
+]() -> def(PythonObject) raises thin -> PythonObject:
     """Wrap a zero-arg method returning ConvertibleToPython."""
 
-    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(py_self: PythonObject) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[])
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     //,
     method: def(T) raises thin -> Int,
-]() -> def(UnsafePointer[T, MutAnyOrigin]) raises thin -> PythonObject:
+]() -> def(PythonObject) raises thin -> PythonObject:
     """Wrap a zero-arg method returning Int."""
 
-    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(py_self: PythonObject) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[])
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     //,
     method: def(T) raises thin -> Bool,
-]() -> def(UnsafePointer[T, MutAnyOrigin]) raises thin -> PythonObject:
+]() -> def(PythonObject) raises thin -> PythonObject:
     """Wrap a zero-arg method returning Bool."""
 
-    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(py_self: PythonObject) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[])
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
     method: def(T, A0) raises thin -> R,
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     """Wrap a single-arg method returning ConvertibleToPython."""
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], A0(py=arg))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     //,
     method: def(T, A0) raises thin -> Bool,
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     """Wrap a single-arg method returning Bool."""
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], A0(py=arg))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
     method: def(T, A0, A1) raises thin -> R,
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     """Wrap a two-arg method returning ConvertibleToPython."""
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], A0(py=arg0), A1(py=arg1))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
@@ -248,31 +250,33 @@ def pymethod[
     //,
     method: def(T, A0, A1, A2) raises thin -> R,
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     """Wrap a three-arg method returning ConvertibleToPython."""
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
         arg2: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], A0(py=arg0), A1(py=arg1), A2(py=arg2))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     E: ConvertibleToPython & Copyable,
     //,
     method: def(T) raises thin -> List[E],
-]() -> def(UnsafePointer[T, MutAnyOrigin]) raises thin -> PythonObject:
+]() -> def(PythonObject) raises thin -> PythonObject:
     """Wrap a zero-arg method returning List[ConvertibleToPython] as a Python list.
     """
 
-    def wrapper(ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    def wrapper(py_self: PythonObject) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         var builtins = Python.import_module("builtins")
         var py_list = builtins.list()
         for item in method(ptr[]):
@@ -283,20 +287,19 @@ def pymethod[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
     method: def(T, A0) raises thin -> List[E],
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     """Wrap a single-arg method returning List[ConvertibleToPython] as a Python list.
     """
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         var builtins = Python.import_module("builtins")
         var py_list = builtins.list()
         for item in method(ptr[], A0(py=arg)):
@@ -307,23 +310,24 @@ def pymethod[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     A1: ConvertibleFromPython,
     E: ConvertibleToPython & Copyable,
     //,
     method: def(T, A0, A1) raises thin -> List[E],
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     """Wrap a two-arg method returning List[ConvertibleToPython] as a Python list.
     """
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         var builtins = Python.import_module("builtins")
         var py_list = builtins.list()
         for item in method(ptr[], A0(py=arg0), A1(py=arg1)):
@@ -334,20 +338,19 @@ def pymethod[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
     method: def(T, List[E]) raises thin -> R,
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     """Wrap a single-arg method taking List[ConvertibleFromPython] returning ConvertibleToPython.
     """
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         var n = Int(arg.__len__())
         var items = List[E]()
         for i in range(n):
@@ -358,23 +361,24 @@ def pymethod[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A0: ConvertibleFromPython,
     E: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
     method: def(T, A0, List[E]) raises thin -> R,
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     """Wrap a two-arg method where the second arg is List[ConvertibleFromPython].
     """
 
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         var n = Int(arg1.__len__())
         var items = List[E]()
         for i in range(n):
@@ -449,70 +453,70 @@ def pyfunction[
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     //,
     method: def(T, Int) raises thin -> Bool,
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], Int(py=arg))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     R: ConvertibleToPython,
     //,
     method: def(T, Int) raises thin -> R,
-]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject
-) raises thin -> PythonObject:
+]() -> def(PythonObject, PythonObject) raises thin -> PythonObject:
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin], arg: PythonObject
+        py_self: PythonObject, arg: PythonObject
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], Int(py=arg))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     R: ConvertibleToPython,
     //,
     method: def(T, Int, Int) raises thin -> R,
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], Int(py=arg0), Int(py=arg1))
 
     return wrapper
 
 
 def pymethod[
-    T: AnyType,
+    T: ImplicitlyDeletable,
     A1: ConvertibleFromPython,
     A2: ConvertibleFromPython,
     R: ConvertibleToPython,
     //,
     method: def(T, Int, A1, A2) raises thin -> R,
 ]() -> def(
-    UnsafePointer[T, MutAnyOrigin], PythonObject, PythonObject, PythonObject
+    PythonObject, PythonObject, PythonObject, PythonObject
 ) raises thin -> PythonObject:
     def wrapper(
-        ptr: UnsafePointer[T, MutAnyOrigin],
+        py_self: PythonObject,
         arg0: PythonObject,
         arg1: PythonObject,
         arg2: PythonObject,
     ) raises -> PythonObject:
+        var ptr = py_self.downcast_value_ptr[T]()
         return method(ptr[], Int(py=arg0), A1(py=arg1), A2(py=arg2))
 
     return wrapper

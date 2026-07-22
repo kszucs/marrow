@@ -53,6 +53,9 @@ numpy = ">=2.4.4, <3"
 cffi = "*"
 
 [feature.dev.tasks]
+# Tests build from source by default.  --pkg (precompiled-marrow fast build)
+# is opt-in: it currently crashes the Mojo compiler on some generic-heavy
+# files (filter/join/plan/...), so it is not enabled by default.
 test_mojo = { cmd = "pytest --mojo -v" }
 test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v" }
@@ -195,8 +198,7 @@ docker = { features = ["docker"], no-default-feature = true }
 wheel = { features = ["wheel"], solve-group = "default" }
 
 [dependencies]
-mojo = ">=1.0.0b3.dev2026072006,<2"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
+mojo = ">=1.0.0b3.dev2026072217,<2"
 # Mojo nightly builds are compiled against a specific CPython minor version;
 # update the minor bound together with mojo/pontoneer when upgrading.
 python = ">=3.14,<3.15"

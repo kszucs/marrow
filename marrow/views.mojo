@@ -32,7 +32,6 @@ from std.algorithm.reduction import _reduce_generator_wrapper
 from std.math import ceildiv
 from std.utils.index import IndexList
 from std.utils.coord import Coord
-from std.builtin.simd_size import SIMDSize
 from std.gpu.host import DeviceContext, get_gpu_target
 
 from .buffers import Buffer, Bitmap

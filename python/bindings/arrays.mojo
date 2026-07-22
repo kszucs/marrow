@@ -191,8 +191,13 @@ struct PyHelpers(Copyable, Movable):
         """
         var data_ptr = _CPointer[c_char, ImmutAnyOrigin]()
         var size = c_ssize_t(0)
+        # The CPython FFI signature pins `MutAnyOrigin`; the pointers to these
+        # locals carry a concrete origin, so cast at the C boundary (the stricter
+        # compiler no longer converts implicitly).
         var rc = self._bytes_as_string_and_size_fn(
-            ptr, UnsafePointer(to=data_ptr), UnsafePointer(to=size)
+            ptr,
+            UnsafePointer(to=data_ptr).unsafe_origin_cast[MutAnyOrigin](),
+            UnsafePointer(to=size).unsafe_origin_cast[MutAnyOrigin](),
         )
         if rc != 0:
             self.raise_on_error()
@@ -244,20 +249,21 @@ def _any_dtype(arr: AnyArray) -> dt.AnyDataType:
 
 
 def _any_array_getitem(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    array: AnyArray,
     index: Int,
 ) raises -> PythonObject:
-    var n = ptr[].length()
+    var n = array.length()
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return ptr[][index].to_python_object()
+    return array[index].to_python_object()
 
 
 def _any_array_getitem_py(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    py_self: PythonObject,
     index: PythonObject,
 ) raises -> PythonObject:
-    return _any_array_getitem(ptr, Int(py=index))
+    var ptr = py_self.downcast_value_ptr[AnyArray]()
+    return _any_array_getitem(ptr[], Int(py=index))
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +618,11 @@ struct PyPrimitiveConverter[T: dt.PrimitiveType](PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] PrimitiveBuilder[Self.T]:
+    def builder(
+        ref self,
+    ) -> ref[self._builder._ptr[][PrimitiveBuilder[Self.T]]] PrimitiveBuilder[
+        Self.T
+    ]:
         return self._builder.as_primitive[Self.T]()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -657,7 +667,7 @@ struct PyBoolConverter(PyConverter):
         self._has_nulls = has_nulls
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] BoolBuilder:
+    def builder(ref self) -> ref[self._builder._ptr[][BoolBuilder]] BoolBuilder:
         return self._builder.as_bool()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -706,7 +716,7 @@ struct PyStringConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[]] StringBuilder:
+    ) -> ref[self._builder._ptr[][StringBuilder]] StringBuilder:
         return self._builder.as_string()
 
     @always_inline
@@ -719,11 +729,13 @@ struct PyStringConverter(PyConverter):
         return total
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref b = self.builder()
         var n = self.py.length(values)
-
+        # `_count_bytes` mutably borrows self, so compute it before binding the
+        # interior builder ref (which the call would otherwise invalidate).
+        var nbytes = self._count_bytes(values, n)
+        ref b = self.builder()
         b.reserve(n)
-        b.reserve_bytes(self._count_bytes(values, n))
+        b.reserve_bytes(nbytes)
 
         if self._has_nulls:
             for i in range(n):
@@ -763,7 +775,7 @@ struct PyBinaryConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[]] BinaryBuilder:
+    ) -> ref[self._builder._ptr[][BinaryBuilder]] BinaryBuilder:
         return self._builder.as_binary()
 
     @always_inline
@@ -776,10 +788,11 @@ struct PyBinaryConverter(PyConverter):
         return total
 
     def extend(mut self, values: PyObjectPtr) raises:
-        ref b = self.builder()
         var n = self.py.length(values)
+        var nbytes = self._count_bytes(values, n)
+        ref b = self.builder()
         b.reserve(n)
-        b.reserve_bytes(self._count_bytes(values, n))
+        b.reserve_bytes(nbytes)
         if self._has_nulls:
             for i in range(n):
                 var item = self.py.list_getitem(values, i)
@@ -824,7 +837,7 @@ struct PyListConverter(PyConverter):
 
     def builder(
         ref self,
-    ) -> ref[self._builder._ptr[]] ListBuilder:
+    ) -> ref[self._builder._ptr[][ListBuilder]] ListBuilder:
         return self._builder.as_list()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -938,7 +951,9 @@ struct PyStructConverter(PyConverter):
         self._field_keys = field_keys^
         self.py = PyHelpers()
 
-    def builder(ref self) -> ref[self._builder._ptr[]] StructBuilder:
+    def builder(
+        ref self,
+    ) -> ref[self._builder._ptr[][StructBuilder]] StructBuilder:
         return self._builder.as_struct()
 
     def extend(mut self, values: PyObjectPtr) raises:
@@ -982,10 +997,11 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: ImplicitlyDestructible, //, to_array_fn: def(T) thin -> AnyArray
+    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> AnyArray
 ](
-    ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
+    py_self: PythonObject, requested_schema: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
     var schema_cap = CArrowSchema.from_dtype(arr.dtype()).to_pycapsule()
     var array_cap = CArrowArray.from_array(arr).to_pycapsule()
@@ -993,8 +1009,9 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: ImplicitlyDestructible, //, type_fn: def(T) thin -> dt.AnyDataType
-](ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.AnyDataType
+](py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[T]()
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
@@ -1115,9 +1132,8 @@ def struct_array_from_arrays(
     )
 
 
-def _any_array_str(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin]
-) raises -> PythonObject:
+def _any_array_str(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyArray]()
     return PythonObject(String.write(ptr[]))
 
 

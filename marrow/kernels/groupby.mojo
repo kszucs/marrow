@@ -793,6 +793,10 @@ struct GroupBy(Movable):
 
             for j in range(na):
                 var vchunk = values[j].slice(start, length)
+                # Compute the flat slot in the worker's direct scope; capturing
+                # `t`/`na`/`j` through the doubly-nested `@parameter` closures
+                # below corrupts the runtime index.
+                var slot = t * na + j
 
                 @parameter
                 def run_local[K: AggKernel]() raises:
@@ -801,8 +805,8 @@ struct GroupBy(Movable):
                         var state = AggState[K, V]()
                         state.update(gids, vchunk.as_primitive[V](), ng)
                         var parts = state.into_partials()
-                        part_acc[t * na + j] = parts[0].copy().to_any()
-                        part_cnt[t * na + j] = parts[1].copy()
+                        part_acc[slot] = parts[0].copy().to_any()
+                        part_cnt[slot] = parts[1].copy()
 
                     dispatch_over_numeric[by_value](vchunk.dtype())
 

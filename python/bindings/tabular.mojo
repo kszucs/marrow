@@ -124,14 +124,16 @@ def _build_from_arrays_with_schema(
 
 
 def _record_batch_schema(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return ptr[].schema.to_python_object()
 
 
 def _record_batch_columns(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for i in range(len(ptr[].columns)):
@@ -140,8 +142,9 @@ def _record_batch_columns(
 
 
 def _record_batch_column_names(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for name in ptr[].column_names():
@@ -150,14 +153,16 @@ def _record_batch_column_names(
 
 
 def _record_batch_shape(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
 def _record_batch_column(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], key: PythonObject
+    py_self: PythonObject, key: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     if builtins.isinstance(key, builtins.int):
         return ptr[].columns[Int(py=key)].copy().to_python_object()
@@ -170,22 +175,25 @@ def _record_batch_column(
 
 
 def _record_batch_slice(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     offset: PythonObject,
     length: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return ptr[].slice(Int(py=offset), Int(py=length)).to_python_object()
 
 
 def _record_batch_equals(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], other: PythonObject
+    py_self: PythonObject, other: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return PythonObject(ptr[] == other.downcast_value_ptr[RecordBatch]()[])
 
 
 def _record_batch_select(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin], columns: PythonObject
+    py_self: PythonObject, columns: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var n = Int(columns.__len__())
     var builtins = Python.import_module("builtins")
     if n > 0 and builtins.isinstance(columns[0], builtins.int):
@@ -201,27 +209,31 @@ def _record_batch_select(
 
 
 def _record_batch_to_pydict(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return _to_pydict(ptr[].schema, ptr[].columns)
 
 
 def _record_batch_to_pylist(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return _to_pylist(ptr[].schema, ptr[].columns)
 
 
 def _record_batch_arrow_c_array(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     requested_schema: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return _export_c_array(ptr[].schema, ptr[].columns)
 
 
 def _record_batch_arrow_c_schema(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
@@ -270,14 +282,16 @@ def record_batch(
 
 
 def _table_schema(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     return ptr[].schema.to_python_object()
 
 
 def _table_columns(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
@@ -287,8 +301,9 @@ def _table_columns(
 
 
 def _table_column_names(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
     for name in ptr[].column_names():
@@ -297,14 +312,16 @@ def _table_column_names(
 
 
 def _table_shape(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
 
 def _table_column(
-    ptr: UnsafePointer[Table, MutAnyOrigin], key: PythonObject
+    py_self: PythonObject, key: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var builtins = Python.import_module("builtins")
     var rb = ptr[].combine_chunks()
     # TODO: use try/catch python().int()
@@ -319,29 +336,33 @@ def _table_column(
 
 
 def _table_equals(
-    ptr: UnsafePointer[Table, MutAnyOrigin], other: PythonObject
+    py_self: PythonObject, other: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     return PythonObject(ptr[] == other.downcast_value_ptr[Table]()[])
 
 
 def _table_to_pydict(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     return _to_pydict(rb.schema, rb.columns)
 
 
 def _table_to_pylist(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     return _to_pylist(rb.schema, rb.columns)
 
 
 def _table_arrow_c_stream(
-    ptr: UnsafePointer[Table, MutAnyOrigin],
+    py_self: PythonObject,
     requested_schema: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     var batches = ptr[].to_batches()
     return CArrowArrayStream.from_batches(
         ptr[].schema.copy(), batches^
@@ -349,8 +370,9 @@ def _table_arrow_c_stream(
 
 
 def _table_arrow_c_schema(
-    ptr: UnsafePointer[Table, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
 
@@ -392,13 +414,14 @@ def table(data: PythonObject, names: PythonObject) raises -> PythonObject:
 
 
 def _record_batch_join(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     right: PythonObject,
     keys: PythonObject,
     right_keys: PythonObject,
     join_type: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     """Join two RecordBatches on key column names.
 
     Args:
@@ -488,12 +511,13 @@ def _record_batch_join(
 
 
 def _record_batch_group_by(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     keys: PythonObject,
     values: PythonObject,
     funcs: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     """Grouped aggregation over one or more key columns.
 
     Args:
@@ -553,10 +577,11 @@ def _record_batch_group_by(
 
 
 def _record_batch_aggregate(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     values: PythonObject,
     funcs: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     """Whole-table aggregation (no GROUP BY).
 
     Args:
@@ -593,11 +618,12 @@ def _record_batch_aggregate(
 
 
 def _record_batch_sort_by(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin],
+    py_self: PythonObject,
     by: PythonObject,
     null_placement: PythonObject,
     num_threads: PythonObject,
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     """Sort a RecordBatch by one or more columns.
 
     Args:
@@ -657,12 +683,14 @@ def _record_batch_sort_by(
 
 
 def _record_batch_str(
-    ptr: UnsafePointer[RecordBatch, MutAnyOrigin]
+    py_self: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return PythonObject(String.write(ptr[]))
 
 
-def _table_str(ptr: UnsafePointer[Table, MutAnyOrigin]) raises -> PythonObject:
+def _table_str(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Table]()
     return PythonObject(String.write(ptr[]))
 
 

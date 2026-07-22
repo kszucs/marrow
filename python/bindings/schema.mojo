@@ -5,9 +5,8 @@ from marrow.c_data import CArrowSchema
 from helpers import pyinit
 
 
-def _schema_arrow_c_schema(
-    ptr: UnsafePointer[Schema, MutAnyOrigin]
-) raises -> PythonObject:
+def _schema_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[Schema]()
     return CArrowSchema.from_schema(ptr[]).to_pycapsule()
 
 
