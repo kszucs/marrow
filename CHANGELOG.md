@@ -19,6 +19,18 @@
 
 ### Features
 
+- **Boolean predicate kernels + expr wiring** (`marrow.kernels.boolean`,
+  `marrow.expr.values`): the marker structs `XorKernel`, `IsNullKernel`,
+  `NotNullKernel`, `IsNanKernel`, `IsInfKernel` are now real kernels. `xor`
+  becomes a `BoolBinaryKernel` (bit-packed word op) routed through `BoolLogic`.
+  The four unary predicates implement a new `UnaryPredicateKernel` trait
+  (`dispatch(AnyArray) -> AnyArray`): `is_null`/`not_null` are family-agnostic
+  (read the validity bitmap via the byte-level `views.apply`), `is_nan`/`is_inf`
+  scan floating values via `views.apply` (buffer→bitmap, CPU serial/parallel +
+  GPU dispatch), propagating input nulls. The expr `BoolUnary` node now executes
+  by materializing the operand and applying the kernel's `dispatch`; `.isnull()`,
+  `.notnull()`, `.isnan()`, `.isinf()`, and `^` all run end-to-end.
+
 - **String compute kernels** (`marrow.kernels.string`): real implementations
   replacing the name-only markers. `LengthKernel` (byte length →
   `Int32Array`, vectorized as `offsets[i+1]-offsets[i]`), unary string→string

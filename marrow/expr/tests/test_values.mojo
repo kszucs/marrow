@@ -438,6 +438,62 @@ def test_count_over_string_column() raises:
 
 
 # ===========================================================================
+# Boolean predicate execution — is_null / not_null / is_nan / is_inf / xor
+# ===========================================================================
+
+
+def _pbatch() raises -> RecordBatch:
+    var nan = Float64(0.0) / Float64(0.0)
+    var inf = Float64(1.0) / Float64(0.0)
+    return record_batch(
+        [
+            array([1, None, 3, None], int64).copy(),
+            array([1.0, nan, inf, -1.0], float64).copy(),
+        ],
+        names=["x", "f"],
+    )
+
+
+def test_isnull_executes() raises:
+    var r = col("x", int64).isnull().execute(_pbatch())
+    assert_true(r == array([False, True, False, True]))
+
+
+def test_notnull_executes() raises:
+    var r = col("x", int64).notnull().execute(_pbatch())
+    assert_true(r == array([True, False, True, False]))
+
+
+def test_isnull_over_string_family() raises:
+    # is_null works on any family — a string column here
+    var r = col("s", string).isnull().execute(_sbatch())
+    assert_true(r == array([False, False, False, False]))
+
+
+def test_isnan_executes() raises:
+    var r = col("f", float64).isnan().execute(_pbatch())
+    assert_true(r == array([False, True, False, False]))
+
+
+def test_isinf_executes() raises:
+    var r = col("f", float64).isinf().execute(_pbatch())
+    assert_true(r == array([False, False, True, False]))
+
+
+def test_xor_executes() raises:
+    # (a < 3) xor (a < 2)  over a=[1,2,3,4]
+    var expr = (col("a", int64) < lit(3, int64)) ^ (
+        col("a", int64) < lit(2, int64)
+    )
+    assert_true(expr.execute(_batch()) == array([False, True, False, False]))
+
+
+def test_anyvalue_erases_predicate() raises:
+    var boxed = AnyValue(col("x", int64).isnull())
+    assert_true(boxed.execute(_pbatch()) == array([False, True, False, True]))
+
+
+# ===========================================================================
 # String execution — materialized through the real kernels
 # ===========================================================================
 

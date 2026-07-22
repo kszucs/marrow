@@ -30,10 +30,12 @@ Layers:
     the exception — byte length is `offsets[i+1]-offsets[i]`, which `LengthKernel`
     vectorizes internally.
   * `BoolValue` **executes**: numeric comparisons (`<`, `>`, `==`, …) fuse
-    (`NumericCompare` has a `core[W]` bool lane, bit-packed in one pass), while
-    boolean logic (`&`, `|`, `~`) materializes its `BoolValue` children and
-    combines the masks with the boolean kernels (`BoolLogic` / `BoolNot`). Still
-    unwired: `xor`, string `==`/`!=`, and the `is_null`/`is_nan`/… unary markers.
+    (`NumericCompare` has a `core[W]` bool lane, bit-packed in one pass); boolean
+    logic (`&`, `|`, `^`, `~`) materializes its `BoolValue` children and combines
+    the masks with the boolean kernels (`BoolLogic` / `BoolNot`); and the unary
+    predicates `is_null`/`not_null` (any family) and `is_nan`/`is_inf` (floating)
+    materialize the operand and apply a `UnaryPredicateKernel` (`BoolUnary`).
+    Still unwired: string `==`/`!=` and list `contains` (`BoolBinary`).
   * `ListValue` remains type architecture (list execution is future work — its
     `execute` inherits the raising default). Cross-family numeric-producing
     boundaries (reductions — `sum`/`product`/`mean`/`min`/`max` via one `Reduce`
@@ -121,6 +123,7 @@ from ..kernels.compare import (
 )
 from ..kernels.boolean import (
     BoolBinaryKernel,
+    UnaryPredicateKernel,
     AndKernel,
     OrKernel,
     NotKernel,
@@ -454,8 +457,8 @@ trait BoolValue(Value):
 
     def __xor__[
         Rhs: BoolValue
-    ](self, o: Rhs) -> BoolBinary[XorKernel, Self, Rhs]:
-        return BoolBinary[XorKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> BoolLogic[XorKernel, Self, Rhs]:
+        return BoolLogic[XorKernel, Self, Rhs](self.copy(), o.copy())
 
     def __invert__(self) -> BoolNot[Self]:
         return BoolNot[Self](self.copy())
@@ -812,15 +815,20 @@ struct BoolBinary[K: Kernel, L: Value, R: Value](BoolValue):
 
 
 @fieldwise_init
-struct BoolUnary[K: Kernel, A: Value](BoolValue):
-    """Bool-producing unary node whose compute is not yet wired (`is_null`,
-    `not_null`, `is_nan`, `is_inf`). Type architecture only."""
+struct BoolUnary[K: UnaryPredicateKernel, A: Value](BoolValue):
+    """Bool-producing unary predicate — `is_null`/`not_null` (any family, read
+    validity) and `is_nan`/`is_inf` (floating values). Materializes the operand,
+    then applies the kernel's runtime-typed `dispatch` (which uses the shared
+    `views` helpers under the hood)."""
 
     comptime OutType = dt.BoolType
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return Self.K.apply(self.arg.execute(batch).to_any())
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
 
 
 @fieldwise_init
@@ -917,7 +925,7 @@ comptime Contains = StringPredicate[ContainsKernel, _, _]
 
 comptime And = BoolLogic[AndKernel, _, _]
 comptime Or = BoolLogic[OrKernel, _, _]
-comptime Xor = BoolBinary[XorKernel, _, _]
+comptime Xor = BoolLogic[XorKernel, _, _]
 comptime Not = BoolNot[_]
 comptime IsNull = BoolUnary[IsNullKernel, _]
 comptime NotNull = BoolUnary[NotNullKernel, _]
@@ -963,6 +971,18 @@ struct NumericColumn[T: NumericType](NumericValue):
             .as_primitive[Self.T]()
             .values()
             .load[W](idx)
+        )
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        # Return the resolved column as-is, preserving its validity bitmap. The
+        # fused-lane default (vectorize `core` into a fresh buffer) would drop
+        # nulls; a leaf column needs no recompute anyway. Composite numeric nodes
+        # still fuse through `core`, so this only affects standalone execution
+        # (e.g. a column that is a reduction / predicate operand).
+        return (
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_primitive[Self.T]()
+            .copy()
         )
 
     def name(self) -> String:
