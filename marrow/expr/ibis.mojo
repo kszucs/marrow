@@ -6,10 +6,11 @@ conforms to the family of its *output*. The numeric family additionally
 SIMD functors) and fuses lane-computable chains into a single vectorized pass.
 
 Layers:
-  * `execute(batch) -> Self.OutType.ArrayType` — the verb, declared by each family
-    (not the base `Value`, which would make the associated return unresolvable /
-    ambiguous). It returns the dtype's companion array (the dtype→array associated
-    type on `DataType`). Numeric fuses; other families raise until wired.
+  * `Value.execute(batch) -> Self.OutType.ArrayType` — the uniform verb (abstract
+    on `Value` so `AnyValue` can call it on any boxed node). It returns the dtype's
+    companion array (the dtype→array associated type on `DataType`). The numeric
+    family fuses; every other concrete node stubs it (raises) until wired. `AnyValue`
+    boxes any node and `.execute(batch)`s it to an `AnyArray` (`.to_any()`).
   * `NumericValue` **is** the numeric lane: it refines `OutType` to `NumericType`,
     adds the `core[W]` SIMD primitive, and its `execute` vectorizes `core` across
     the whole tree — composite nodes call the kernel's `core` on their children's
