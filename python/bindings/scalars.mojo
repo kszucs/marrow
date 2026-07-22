@@ -79,29 +79,25 @@ def _as_py(scalar: AnyScalar) raises -> PythonObject:
 # ---------------------------------------------------------------------------
 
 
-def _scalar_as_py(
-    ptr: UnsafePointer[AnyScalar, MutAnyOrigin],
-) raises -> PythonObject:
+def _scalar_as_py(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyScalar]()
     return _as_py(ptr[])
 
 
-def _scalar_str(
-    ptr: UnsafePointer[AnyScalar, MutAnyOrigin],
-) raises -> PythonObject:
+def _scalar_str(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyScalar]()
     return PythonObject(String(ptr[]))
 
 
-def _scalar_repr(
-    ptr: UnsafePointer[AnyScalar, MutAnyOrigin],
-) raises -> PythonObject:
+def _scalar_repr(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyScalar]()
     if ptr[].is_null():
         return PythonObject("<marrow.Scalar: null>")
     return PythonObject("<marrow.Scalar: " + String.write(ptr[]) + ">")
 
 
-def _scalar_bool(
-    ptr: UnsafePointer[AnyScalar, MutAnyOrigin],
-) raises -> PythonObject:
+def _scalar_bool(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyScalar]()
     """Support bool(scalar) — needed for truthiness checks like ``assert arr[0]``.
     """
     var py_val = _as_py(ptr[])

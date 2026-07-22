@@ -14,7 +14,7 @@ from parquet import add_to_module as add_parquet
 
 
 @export
-def PyInit_libmarrow() -> PythonObject:
+def PyInit_libmarrow() abi("C") -> PythonObject:
     try:
         var m = PythonModuleBuilder("libmarrow")
         add_dtypes(m)

@@ -249,20 +249,21 @@ def _any_dtype(arr: AnyArray) -> dt.AnyDataType:
 
 
 def _any_array_getitem(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    array: AnyArray,
     index: Int,
 ) raises -> PythonObject:
-    var n = ptr[].length()
+    var n = array.length()
     if index < 0 or index >= n:
         raise Error(t"index {index} out of bounds for length {n}")
-    return ptr[][index].to_python_object()
+    return array[index].to_python_object()
 
 
 def _any_array_getitem_py(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin],
+    py_self: PythonObject,
     index: PythonObject,
 ) raises -> PythonObject:
-    return _any_array_getitem(ptr, Int(py=index))
+    var ptr = py_self.downcast_value_ptr[AnyArray]()
+    return _any_array_getitem(ptr[], Int(py=index))
 
 
 # ---------------------------------------------------------------------------
@@ -996,10 +997,11 @@ struct PyStructConverter(PyConverter):
 
 
 def arrow_c_array[
-    T: ImplicitlyDestructible, //, to_array_fn: def(T) thin -> AnyArray
+    T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> AnyArray
 ](
-    ptr: UnsafePointer[T, MutAnyOrigin], requested_schema: PythonObject
+    py_self: PythonObject, requested_schema: PythonObject
 ) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
     var schema_cap = CArrowSchema.from_dtype(arr.dtype()).to_pycapsule()
     var array_cap = CArrowArray.from_array(arr).to_pycapsule()
@@ -1007,8 +1009,9 @@ def arrow_c_array[
 
 
 def arrow_c_schema[
-    T: ImplicitlyDestructible, //, type_fn: def(T) thin -> dt.AnyDataType
-](ptr: UnsafePointer[T, MutAnyOrigin]) raises -> PythonObject:
+    T: ImplicitlyDeletable, //, type_fn: def(T) thin -> dt.AnyDataType
+](py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[T]()
     return CArrowSchema.from_dtype(type_fn(ptr[])).to_pycapsule()
 
 
@@ -1129,9 +1132,8 @@ def struct_array_from_arrays(
     )
 
 
-def _any_array_str(
-    ptr: UnsafePointer[AnyArray, MutAnyOrigin]
-) raises -> PythonObject:
+def _any_array_str(py_self: PythonObject) raises -> PythonObject:
+    var ptr = py_self.downcast_value_ptr[AnyArray]()
     return PythonObject(String.write(ptr[]))
 
 
