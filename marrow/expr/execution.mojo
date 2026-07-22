@@ -370,7 +370,7 @@ struct FilterProcessor(Processor):
         # Skip morsels that filter to 0 rows; Exhausted propagates from input.
         while True:
             var batch = self.input.pull()
-            var mask = self.predicate.to_array(batch)
+            var mask = self.predicate.execute(batch)
             var cols = List[AnyArray]()
             for i in range(batch.num_columns()):
                 cols.append(filter(batch.columns[i].copy(), mask.copy()))
@@ -404,7 +404,7 @@ struct ProjectProcessor(Processor):
         var batch = self.input.pull()  # raises Exhausted when done
         var cols = List[AnyArray]()
         for ref v in self.values:
-            cols.append(v.to_array(batch))
+            cols.append(v.execute(batch))
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 
@@ -502,7 +502,7 @@ struct AggregateProcessor(Processor):
                 var batch = self.input.pull()
                 var key_children = List[AnyArray]()
                 for i in range(len(self.keys)):
-                    key_children.append(self.keys[i].to_array(batch))
+                    key_children.append(self.keys[i].execute(batch))
                 var key_struct = StructArray(
                     dtype=dt.struct_(self._key_fields()),
                     length=batch.num_rows(),
@@ -514,7 +514,7 @@ struct AggregateProcessor(Processor):
                 gids_per_batch.append(self._grouper.consume_keys(key_struct))
                 var vals = List[AnyArray]()
                 for i in range(len(self.aggs)):
-                    vals.append(self.aggs[i].to_array(batch))
+                    vals.append(self.aggs[i].execute(batch))
                 values_per_batch.append(vals^)
             except Exhausted:
                 break

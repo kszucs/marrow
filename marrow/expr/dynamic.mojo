@@ -35,7 +35,6 @@ from ..dtypes import AnyDataType, NumericType
 from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import Value
 from .pruning import PruneStats, PruneBound
 from ..kernels.arithmetic import (
     AddKernel,
@@ -95,7 +94,6 @@ struct DynValue(
     ImplicitlyCopyable,
     ImplicitlyDeletable,
     Movable,
-    Value,
     Writable,
 ):
     """Unified expression node using tag-based dispatch.
@@ -156,7 +154,7 @@ struct DynValue(
         """Return the column name for a named LOAD node (empty otherwise)."""
         return self._name
 
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+    def execute(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate against *batch*. This is the ``AnyValue``-box entry point the
         fused/streaming relations call per morsel; ``eval`` resolves named
         ``col(...)`` references inline (a per-column schema lookup, no tree copy),

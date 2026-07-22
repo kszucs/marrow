@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **`marrow.expr.ibis` merged into `marrow.expr.values`**: the ibis-designed
+  comptime expression system is now the canonical `values.mojo` (the old fused
+  algebra is replaced). `AnyValue` and every node evaluate via `.execute()`
+  (`to_array` removed everywhere — `dynamic.DynValue`, `execution.mojo`). The
+  runtime `DynValue` is bridged into the new `AnyValue` via a dedicated
+  constructor (it no longer implements the comptime `Value` trait). `BoolValue`
+  execution is now wired: numeric comparisons fuse (`NumericCompare` — SIMD bool
+  lane, bit-packed) and boolean logic materializes + combines masks (`BoolLogic`
+  / `BoolNot`). Pruning is plumbed through `Value.prune` (conservative default;
+  `DynValue` keeps the real min/max rule); the old per-node comptime pruning is
+  parked as a commented reference. `test_ibis` + `test_ibis_exec` merged into
+  `test_values`.
+
 ### Features
 
 - **String compute kernels** (`marrow.kernels.string`): real implementations

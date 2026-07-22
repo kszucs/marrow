@@ -1,7 +1,7 @@
 """Nested (list/struct) compute kernels.
 
 Markers NOT IMPLEMENTED yet (compute `core`/`apply` are TODO) — they exist so the
-typed expression layer (`marrow.expr.ibis`) can name list operations; execution
+typed expression layer (`marrow.expr.values`) can name list operations; execution
 wires up later.
 """
 

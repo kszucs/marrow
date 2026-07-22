@@ -15,7 +15,7 @@ Three shapes, each following the tier scheme used by the numeric kernels
   `BoolArray`. Concrete kernels only define `predicate`.
 
 Variable-width ops cannot lane-fuse the way numeric kernels do (there is no
-fixed W-wide lane), so the expression layer (`marrow.expr.ibis`) materializes
+fixed W-wide lane), so the expression layer (`marrow.expr.values`) materializes
 them. Only `LengthKernel` exposes a fusable, offset-based fast path there.
 """
 

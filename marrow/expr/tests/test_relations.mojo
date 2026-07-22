@@ -92,8 +92,8 @@ def test_named_column_gt_fuses() raises:
 def test_named_column_write_to() raises:
     """NumericColumn.write_to() displays the compile-time name."""
     var t = Table[_Orders]()
-    assert_equal(String(t.a), "Col[a]")
-    assert_equal(String(t.b), "Col[b]")
+    assert_equal(String(t.a), "col(a)")
+    assert_equal(String(t.b), "col(b)")
 
 
 def test_named_string_column_executes() raises:
@@ -110,7 +110,7 @@ def test_named_string_column_executes() raises:
 def test_named_string_column_write_to() raises:
     """StringColumn.write_to() displays the compile-time name."""
     var t = Table[_Orders]()
-    assert_equal(String(t.name), "StrCol[name]")
+    assert_equal(String(t.name), "col(name)")
 
 
 # ---------------------------------------------------------------------------
