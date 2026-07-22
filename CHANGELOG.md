@@ -21,8 +21,9 @@
   `CountingUnary`, `BoolBinary`/`BoolUnary`, `StringUnary`). `Column` and
   `Literal` are unified leaves via conditional conformance; `Literal` holds the
   dtype's companion `T.ScalarType` and `lit` is an alias for it. Ops include
-  arithmetic (`+ - * / %`, `neg`/`abs`/`sqrt`), comparisons, logical
-  (`& | ~`), `isnull`, and string `length`/`startswith`/`upper`/`lower`/`==`.
+  arithmetic (`+ - * / % **`, `neg`/`abs`/`ceil`/`floor`/`round`/`sign`,
+  `sqrt`/`exp`/`ln`), comparisons, logical (`& | ^ ~`), `isnull`, and string
+  `length`/`startswith`/`endswith`/`contains`/`upper`/`lower`/`reverse`/`==`/`!=`.
 
 - **Columnar selection for all array types** (`filter` / `take` / `drop_null`):
   the selection kernels now support every array type — including nested

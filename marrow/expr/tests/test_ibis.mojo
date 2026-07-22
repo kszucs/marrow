@@ -66,8 +66,50 @@ def test_arithmetic_is_numeric() raises:
     assert_true(_takes_numeric(a - b))
     assert_true(_takes_numeric(a * b))
     assert_true(_takes_numeric(a % b))
+    assert_true(_takes_numeric(a**b))
     assert_true(_takes_numeric(-a))
     assert_true(_takes_numeric(a.abs()))
+    assert_true(_takes_numeric(a.ceil()))
+    assert_true(_takes_numeric(a.floor()))
+    assert_true(_takes_numeric(a.round()))
+    assert_true(_takes_numeric(a.sign()))
+
+
+def test_preserving_unary_dtype() raises:
+    # ceil/floor/round/sign preserve the operand dtype (like neg/abs)
+    assert_true(out_type_is[Int32Type](col("a", int32).ceil()))
+    assert_true(out_type_is[Int32Type](col("a", int32).floor()))
+    assert_true(out_type_is[Int32Type](col("a", int32).sign()))
+    # power widens like the other arithmetic binaries
+    assert_true(out_type_is[Int64Type](col("a", int32) ** col("b", int64)))
+
+
+def test_float_unary_ops() raises:
+    var a = col("a", int64)
+    assert_true(_takes_numeric(a.exp()))
+    assert_true(_takes_numeric(a.ln()))
+    assert_true(out_type_is[Float64Type](a.exp()))
+    assert_true(out_type_is[Float64Type](a.ln()))
+
+
+def test_xor_is_bool() raises:
+    var a = col("a", int64)
+    var b = col("b", int64)
+    assert_true(_takes_bool((a < b) ^ (a > b)))
+
+
+def test_string_predicates() raises:
+    var s = col("s", string)
+    var t = col("t", string)
+    assert_true(_takes_bool(s.endswith(t)))
+    assert_true(_takes_bool(s.contains(t)))
+    assert_true(_takes_bool(s != t))
+
+
+def test_reverse_stays_string() raises:
+    var s = col("s", string)
+    assert_true(_takes_string(s.reverse()))
+    assert_true(out_type_is[StringType](s.reverse()))
 
 
 def test_comparison_is_bool() raises:

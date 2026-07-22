@@ -219,6 +219,72 @@ struct LowerKernel(Kernel):
         return "lower"
 
 
+struct PowKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "power"
+
+
+struct CeilKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "ceil"
+
+
+struct FloorKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "floor"
+
+
+struct RoundKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "round"
+
+
+struct SignKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "sign"
+
+
+struct ExpKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "exp"
+
+
+struct LnKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "ln"
+
+
+struct XorKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "xor"
+
+
+struct EndsWithKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "endswith"
+
+
+struct ContainsKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "contains"
+
+
+struct ReverseKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "reverse"
+
+
 # ---------------------------------------------------------------------------
 # Value — base trait; family sub-traits carry the operator surface
 # ---------------------------------------------------------------------------
@@ -270,14 +336,37 @@ trait NumericValue(Value):
     ](self, o: Rhs) -> NumericBinary[ModKernel, Self, Rhs]:
         return NumericBinary[ModKernel, Self, Rhs](self.copy(), o.copy())
 
+    def __pow__[
+        Rhs: NumericValue
+    ](self, o: Rhs) -> NumericBinary[PowKernel, Self, Rhs]:
+        return NumericBinary[PowKernel, Self, Rhs](self.copy(), o.copy())
+
     def __neg__(self) -> NumericUnary[NegKernel, Self]:
         return NumericUnary[NegKernel, Self](self.copy())
 
     def abs(self) -> NumericUnary[AbsKernel, Self]:
         return NumericUnary[AbsKernel, Self](self.copy())
 
+    def ceil(self) -> NumericUnary[CeilKernel, Self]:
+        return NumericUnary[CeilKernel, Self](self.copy())
+
+    def floor(self) -> NumericUnary[FloorKernel, Self]:
+        return NumericUnary[FloorKernel, Self](self.copy())
+
+    def round(self) -> NumericUnary[RoundKernel, Self]:
+        return NumericUnary[RoundKernel, Self](self.copy())
+
+    def sign(self) -> NumericUnary[SignKernel, Self]:
+        return NumericUnary[SignKernel, Self](self.copy())
+
     def sqrt(self) -> FloatUnary[SqrtKernel, Self]:
         return FloatUnary[SqrtKernel, Self](self.copy())
+
+    def exp(self) -> FloatUnary[ExpKernel, Self]:
+        return FloatUnary[ExpKernel, Self](self.copy())
+
+    def ln(self) -> FloatUnary[LnKernel, Self]:
+        return FloatUnary[LnKernel, Self](self.copy())
 
     def __lt__[
         Rhs: NumericValue
@@ -321,6 +410,11 @@ trait BoolValue(Value):
     def __or__[Rhs: BoolValue](self, o: Rhs) -> BoolBinary[OrKernel, Self, Rhs]:
         return BoolBinary[OrKernel, Self, Rhs](self.copy(), o.copy())
 
+    def __xor__[
+        Rhs: BoolValue
+    ](self, o: Rhs) -> BoolBinary[XorKernel, Self, Rhs]:
+        return BoolBinary[XorKernel, Self, Rhs](self.copy(), o.copy())
+
     def __invert__(self) -> BoolUnary[NotKernel, Self]:
         return BoolUnary[NotKernel, Self](self.copy())
 
@@ -340,15 +434,33 @@ trait StringValue(Value):
     def lower(self) -> StringUnary[LowerKernel, Self]:
         return StringUnary[LowerKernel, Self](self.copy())
 
+    def reverse(self) -> StringUnary[ReverseKernel, Self]:
+        return StringUnary[ReverseKernel, Self](self.copy())
+
     def startswith[
         Rhs: StringValue
     ](self, o: Rhs) -> BoolBinary[StartsWithKernel, Self, Rhs]:
         return BoolBinary[StartsWithKernel, Self, Rhs](self.copy(), o.copy())
 
+    def endswith[
+        Rhs: StringValue
+    ](self, o: Rhs) -> BoolBinary[EndsWithKernel, Self, Rhs]:
+        return BoolBinary[EndsWithKernel, Self, Rhs](self.copy(), o.copy())
+
+    def contains[
+        Rhs: StringValue
+    ](self, o: Rhs) -> BoolBinary[ContainsKernel, Self, Rhs]:
+        return BoolBinary[ContainsKernel, Self, Rhs](self.copy(), o.copy())
+
     def __eq__[
         Rhs: StringValue
     ](self, o: Rhs) -> BoolBinary[EqKernel, Self, Rhs]:
         return BoolBinary[EqKernel, Self, Rhs](self.copy(), o.copy())
+
+    def __ne__[
+        Rhs: StringValue
+    ](self, o: Rhs) -> BoolBinary[NeKernel, Self, Rhs]:
+        return BoolBinary[NeKernel, Self, Rhs](self.copy(), o.copy())
 
 
 # ---------------------------------------------------------------------------
@@ -466,10 +578,17 @@ comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
 comptime Mod = NumericBinary[ModKernel, _, _]
+comptime Pow = NumericBinary[PowKernel, _, _]
 comptime Div = FloatBinary[DivKernel, _, _]
 comptime Neg = NumericUnary[NegKernel, _]
 comptime Abs = NumericUnary[AbsKernel, _]
+comptime Ceil = NumericUnary[CeilKernel, _]
+comptime Floor = NumericUnary[FloorKernel, _]
+comptime Round = NumericUnary[RoundKernel, _]
+comptime Sign = NumericUnary[SignKernel, _]
 comptime Sqrt = FloatUnary[SqrtKernel, _]
+comptime Exp = FloatUnary[ExpKernel, _]
+comptime Ln = FloatUnary[LnKernel, _]
 
 comptime Less = BoolBinary[LtKernel, _, _]
 comptime LessEqual = BoolBinary[LeKernel, _, _]
@@ -478,15 +597,19 @@ comptime GreaterEqual = BoolBinary[GeKernel, _, _]
 comptime Equal = BoolBinary[EqKernel, _, _]
 comptime NotEqual = BoolBinary[NeKernel, _, _]
 comptime StartsWith = BoolBinary[StartsWithKernel, _, _]
+comptime EndsWith = BoolBinary[EndsWithKernel, _, _]
+comptime Contains = BoolBinary[ContainsKernel, _, _]
 
 comptime And = BoolBinary[AndKernel, _, _]
 comptime Or = BoolBinary[OrKernel, _, _]
+comptime Xor = BoolBinary[XorKernel, _, _]
 comptime Not = BoolUnary[NotKernel, _]
 comptime IsNull = BoolUnary[IsNullKernel, _]
 
 comptime Length = CountingUnary[LengthKernel, _]
 comptime Upper = StringUnary[UpperKernel, _]
 comptime Lower = StringUnary[LowerKernel, _]
+comptime Reverse = StringUnary[ReverseKernel, _]
 
 
 # ---------------------------------------------------------------------------
