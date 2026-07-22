@@ -74,5 +74,26 @@ def test_unary_neg() raises:
     assert_true(_eq(-col("a", int64), array([-1, -2, -3, -4], int64)))
 
 
+def test_trunc_preserves_and_executes() raises:
+    # trunc on ints is identity; preserves dtype and fuses
+    var expr = col("a", int64).trunc()
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([1, 2, 3, 4], int64)))
+
+
+def test_log2_executes_to_float() raises:
+    # c is all 2s -> log2 == 1.0; a float64 result via the real Log2Kernel core
+    var expr = col("c", int32).log2()
+    assert_true(out_type_is[Float64Type](expr))
+    assert_true(_eq(expr, array([1.0, 1.0, 1.0, 1.0], float64)))
+
+
+def test_fused_math_chain() raises:
+    # exp2(a) fused, then a fixed check on a=[1,2,3,4] -> [2,4,8,16]
+    assert_true(
+        _eq(col("a", int64).exp2(), array([2.0, 4.0, 8.0, 16.0], float64))
+    )
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

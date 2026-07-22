@@ -67,9 +67,16 @@ from ..kernels.arithmetic import (
     FloorKernel,
     RoundKernel,
     SignKernel,
+    TruncKernel,
     SqrtKernel,
     ExpKernel,
+    Exp2Kernel,
     LogKernel,
+    Log2Kernel,
+    Log10Kernel,
+    Log1pKernel,
+    SinKernel,
+    CosKernel,
 )
 from ..kernels.compare import (
     EqKernel,
@@ -85,6 +92,9 @@ from ..kernels.boolean import (
     NotKernel,
     XorKernel,
     IsNullKernel,
+    NotNullKernel,
+    IsNanKernel,
+    IsInfKernel,
 )
 from ..kernels.aggregate import SumKernel, MeanKernel, MinKernel, MaxKernel
 from ..kernels.string import (
@@ -95,6 +105,10 @@ from ..kernels.string import (
     UpperKernel,
     LowerKernel,
     ReverseKernel,
+    StripKernel,
+    LStripKernel,
+    RStripKernel,
+    CapitalizeKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 
@@ -182,6 +196,10 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
         """Null predicate — any value in any family yields a `BoolValue`."""
         return BoolUnary[IsNullKernel, Self](self.copy())
 
+    def notnull(self) -> BoolUnary[NotNullKernel, Self]:
+        """Non-null predicate — any value in any family yields a `BoolValue`."""
+        return BoolUnary[NotNullKernel, Self](self.copy())
+
 
 trait NumericValue(Value):
     """The numeric lane: refines `OutType` to `NumericType`, carries the `core[W]`
@@ -268,14 +286,43 @@ trait NumericValue(Value):
     def sign(self) -> NumericUnary[SignKernel, Self]:
         return NumericUnary[SignKernel, Self](self.copy())
 
+    def trunc(self) -> NumericUnary[TruncKernel, Self]:
+        return NumericUnary[TruncKernel, Self](self.copy())
+
+    # transcendental unary -> float64 (fused via the real kernels)
     def sqrt(self) -> FloatUnary[SqrtKernel, Self]:
         return FloatUnary[SqrtKernel, Self](self.copy())
 
     def exp(self) -> FloatUnary[ExpKernel, Self]:
         return FloatUnary[ExpKernel, Self](self.copy())
 
+    def exp2(self) -> FloatUnary[Exp2Kernel, Self]:
+        return FloatUnary[Exp2Kernel, Self](self.copy())
+
     def ln(self) -> FloatUnary[LogKernel, Self]:
         return FloatUnary[LogKernel, Self](self.copy())
+
+    def log2(self) -> FloatUnary[Log2Kernel, Self]:
+        return FloatUnary[Log2Kernel, Self](self.copy())
+
+    def log10(self) -> FloatUnary[Log10Kernel, Self]:
+        return FloatUnary[Log10Kernel, Self](self.copy())
+
+    def log1p(self) -> FloatUnary[Log1pKernel, Self]:
+        return FloatUnary[Log1pKernel, Self](self.copy())
+
+    def sin(self) -> FloatUnary[SinKernel, Self]:
+        return FloatUnary[SinKernel, Self](self.copy())
+
+    def cos(self) -> FloatUnary[CosKernel, Self]:
+        return FloatUnary[CosKernel, Self](self.copy())
+
+    # numeric -> bool predicates (type-only until bool execution is wired)
+    def isnan(self) -> BoolUnary[IsNanKernel, Self]:
+        return BoolUnary[IsNanKernel, Self](self.copy())
+
+    def isinf(self) -> BoolUnary[IsInfKernel, Self]:
+        return BoolUnary[IsInfKernel, Self](self.copy())
 
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
@@ -365,6 +412,18 @@ trait StringValue(Value):
 
     def reverse(self) -> StringUnary[ReverseKernel, Self]:
         return StringUnary[ReverseKernel, Self](self.copy())
+
+    def strip(self) -> StringUnary[StripKernel, Self]:
+        return StringUnary[StripKernel, Self](self.copy())
+
+    def lstrip(self) -> StringUnary[LStripKernel, Self]:
+        return StringUnary[LStripKernel, Self](self.copy())
+
+    def rstrip(self) -> StringUnary[RStripKernel, Self]:
+        return StringUnary[RStripKernel, Self](self.copy())
+
+    def capitalize(self) -> StringUnary[CapitalizeKernel, Self]:
+        return StringUnary[CapitalizeKernel, Self](self.copy())
 
     def startswith[
         Rhs: StringValue
@@ -598,9 +657,16 @@ comptime Ceil = NumericUnary[CeilKernel, _]
 comptime Floor = NumericUnary[FloorKernel, _]
 comptime Round = NumericUnary[RoundKernel, _]
 comptime Sign = NumericUnary[SignKernel, _]
+comptime Trunc = NumericUnary[TruncKernel, _]
 comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
+comptime Exp2 = FloatUnary[Exp2Kernel, _]
 comptime Ln = FloatUnary[LogKernel, _]
+comptime Log2 = FloatUnary[Log2Kernel, _]
+comptime Log10 = FloatUnary[Log10Kernel, _]
+comptime Log1p = FloatUnary[Log1pKernel, _]
+comptime Sin = FloatUnary[SinKernel, _]
+comptime Cos = FloatUnary[CosKernel, _]
 
 comptime Min = MinMax[MinKernel, _]
 comptime Max = MinMax[MaxKernel, _]
@@ -620,11 +686,18 @@ comptime Or = BoolBinary[OrKernel, _, _]
 comptime Xor = BoolBinary[XorKernel, _, _]
 comptime Not = BoolUnary[NotKernel, _]
 comptime IsNull = BoolUnary[IsNullKernel, _]
+comptime NotNull = BoolUnary[NotNullKernel, _]
+comptime IsNan = BoolUnary[IsNanKernel, _]
+comptime IsInf = BoolUnary[IsInfKernel, _]
 
 comptime Length = Counting[LengthKernel, _]
 comptime Upper = StringUnary[UpperKernel, _]
 comptime Lower = StringUnary[LowerKernel, _]
 comptime Reverse = StringUnary[ReverseKernel, _]
+comptime Strip = StringUnary[StripKernel, _]
+comptime LStrip = StringUnary[LStripKernel, _]
+comptime RStrip = StringUnary[RStripKernel, _]
+comptime Capitalize = StringUnary[CapitalizeKernel, _]
 
 comptime ArrayLength = Counting[ArrayLengthKernel, _]
 comptime ArrayContains = BoolBinary[ArrayContainsKernel, _, _]

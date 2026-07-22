@@ -199,6 +199,18 @@ struct IsNullKernel(Kernel):
     comptime name = "is_null"
 
 
+struct NotNullKernel(Kernel):
+    comptime name = "not_null"
+
+
+struct IsNanKernel(Kernel):
+    comptime name = "is_nan"
+
+
+struct IsInfKernel(Kernel):
+    comptime name = "is_inf"
+
+
 # ---------------------------------------------------------------------------
 # is_null
 # ---------------------------------------------------------------------------

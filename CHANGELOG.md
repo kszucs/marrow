@@ -23,7 +23,13 @@
   `StringLiteral`) with `col`/`lit` overloaded by dtype family; `execute` returns
   the dtype's companion `Self.OutType.ArrayType`. Bool/string/list are the type
   architecture (execution pending); cross-family numeric-producing boundaries
-  (`length`, reductions) are non-lane nodes that materialize.
+  (`length`, reductions) are non-lane nodes that materialize. More ops: fused
+  transcendental math (`exp2`/`log2`/`log10`/`log1p`/`sin`/`cos`, `trunc` — all
+  executing via the real kernels), numeric predicates (`isnan`/`isinf`/`notnull`),
+  and string transforms (`strip`/`lstrip`/`rstrip`/`capitalize`). Every op node is
+  parameterized by a `marrow.kernels` kernel (real where implemented, else a
+  not-implemented marker in `kernels.string`/`kernels.nested`/…) — none defined in
+  the expression layer.
 
 - **`marrow.expr.ibis` typed expression architecture**: value families are
   traits (`NumericValue` / `BoolValue` / `StringValue`), operations are node

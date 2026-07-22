@@ -41,6 +41,22 @@ struct ReverseKernel(Kernel):
     comptime name = "reverse"
 
 
+struct StripKernel(Kernel):
+    comptime name = "strip"
+
+
+struct LStripKernel(Kernel):
+    comptime name = "lstrip"
+
+
+struct RStripKernel(Kernel):
+    comptime name = "rstrip"
+
+
+struct CapitalizeKernel(Kernel):
+    comptime name = "capitalize"
+
+
 # TODO: implement using SIMD
 def string_lengths(array: StringArray) -> UInt32Array:
     """Compute per-element byte lengths of a StringArray.

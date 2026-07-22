@@ -255,5 +255,30 @@ def test_literal_family_and_dtype() raises:
     assert_true(out_type_is[StringType](lit("x", string)))
 
 
+def test_numeric_predicates_are_bool() raises:
+    var a = col("a", float64)
+    assert_true(_takes_bool(a.isnan()))
+    assert_true(_takes_bool(a.isinf()))
+    assert_true(_takes_bool(a.notnull()))
+
+
+def test_math_unary_is_float() raises:
+    var a = col("a", int64)
+    assert_true(_takes_numeric(a.sin()))
+    assert_true(out_type_is[Float64Type](a.cos()))
+    assert_true(out_type_is[Float64Type](a.log10()))
+    # trunc preserves the operand dtype
+    assert_true(out_type_is[Int32Type](col("a", int32).trunc()))
+
+
+def test_string_transforms_stay_string() raises:
+    var s = col("s", string)
+    assert_true(_takes_string(s.strip()))
+    assert_true(_takes_string(s.lstrip()))
+    assert_true(_takes_string(s.rstrip()))
+    assert_true(_takes_string(s.capitalize()))
+    assert_true(out_type_is[StringType](s.capitalize()))
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()
