@@ -322,6 +322,12 @@ struct PageReader[o: Origin[mut=False]](Movable):
             else:
                 self.scratch.extend(comp[lvl_len:])
 
+            # 8 trailing bytes of slack so the bit-unpackers can do unaligned
+            # 64-bit loads past the last value without overrunning the buffer
+            # (decompress_into pads the same way; the manual v2 assembly above
+            # otherwise ends flush against the last value byte).
+            self.scratch.resize(unsafe_uninit_length=len(self.scratch) + 8)
+
             var body = Self._untracked(Span(self.scratch))
             var reps = List[Int32]()
             var defs = List[Int32]()
