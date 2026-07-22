@@ -405,17 +405,17 @@ trait NumericValue(Value):
 
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
-    def sum(self) -> SumUnary[SumKernel, Self]:
-        return SumUnary[SumKernel, Self](self.copy())
+    def sum(self) -> Sum[SumKernel, Self]:
+        return Sum[SumKernel, Self](self.copy())
 
-    def mean(self) -> MeanUnary[MeanKernel, Self]:
-        return MeanUnary[MeanKernel, Self](self.copy())
+    def mean(self) -> Mean[MeanKernel, Self]:
+        return Mean[MeanKernel, Self](self.copy())
 
-    def min(self) -> MinMaxUnary[MinKernel, Self]:
-        return MinMaxUnary[MinKernel, Self](self.copy())
+    def min(self) -> MinMax[MinKernel, Self]:
+        return MinMax[MinKernel, Self](self.copy())
 
-    def max(self) -> MinMaxUnary[MaxKernel, Self]:
-        return MinMaxUnary[MaxKernel, Self](self.copy())
+    def max(self) -> MinMax[MaxKernel, Self]:
+        return MinMax[MaxKernel, Self](self.copy())
 
     # --- comparisons (-> BoolValue) ----------------------------------------
 
@@ -480,8 +480,8 @@ trait StringValue(Value):
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
         return _not_wired[Self.OutType]()
 
-    def length(self) -> CountingUnary[LengthKernel, Self]:
-        return CountingUnary[LengthKernel, Self](self.copy())
+    def length(self) -> Counting[LengthKernel, Self]:
+        return Counting[LengthKernel, Self](self.copy())
 
     def upper(self) -> StringUnary[UpperKernel, Self]:
         return StringUnary[UpperKernel, Self](self.copy())
@@ -525,8 +525,8 @@ trait ListValue(Value):
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
         return _not_wired[Self.OutType]()
 
-    def length(self) -> CountingUnary[ArrayLengthKernel, Self]:
-        return CountingUnary[ArrayLengthKernel, Self](self.copy())
+    def length(self) -> Counting[ArrayLengthKernel, Self]:
+        return Counting[ArrayLengthKernel, Self](self.copy())
 
     def contains[
         E: Value
@@ -636,7 +636,7 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
 
 @fieldwise_init
-struct CountingUnary[K: Kernel, A: Value](Value):
+struct Counting[K: Kernel, A: Value](Value):
     """Unary op whose result is int32 — `length()` (string/list element count).
     A boundary: its operand is not numeric, so it materializes rather than fuses.
     """
@@ -649,7 +649,7 @@ struct CountingUnary[K: Kernel, A: Value](Value):
 
 
 @fieldwise_init
-struct SumUnary[K: Kernel, A: Value](Value):
+struct Sum[K: Kernel, A: Value](Value):
     """Reduction widening to 64-bit — `sum()`."""
 
     comptime OutType = sum_result[Self.A]
@@ -660,7 +660,7 @@ struct SumUnary[K: Kernel, A: Value](Value):
 
 
 @fieldwise_init
-struct MeanUnary[K: Kernel, A: Value](Value):
+struct Mean[K: Kernel, A: Value](Value):
     """Reduction to float64 — `mean()`."""
 
     comptime OutType = dt.Float64Type
@@ -671,7 +671,7 @@ struct MeanUnary[K: Kernel, A: Value](Value):
 
 
 @fieldwise_init
-struct MinMaxUnary[K: Kernel, A: Value](Value):
+struct MinMax[K: Kernel, A: Value](Value):
     """Reduction preserving the operand dtype — `min()`, `max()`."""
 
     comptime OutType = dtype_like[Self.A, Self.A]
@@ -728,10 +728,8 @@ comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
 comptime Ln = FloatUnary[LogKernel, _]
 
-comptime Sum = SumUnary[SumKernel, _]
-comptime Mean = MeanUnary[MeanKernel, _]
-comptime Min = MinMaxUnary[MinKernel, _]
-comptime Max = MinMaxUnary[MaxKernel, _]
+comptime Min = MinMax[MinKernel, _]
+comptime Max = MinMax[MaxKernel, _]
 
 comptime Less = BoolBinary[LtKernel, _, _]
 comptime LessEqual = BoolBinary[LeKernel, _, _]
@@ -749,12 +747,12 @@ comptime Xor = BoolBinary[XorKernel, _, _]
 comptime Not = BoolUnary[NotKernel, _]
 comptime IsNull = BoolUnary[IsNullKernel, _]
 
-comptime Length = CountingUnary[LengthKernel, _]
+comptime Length = Counting[LengthKernel, _]
 comptime Upper = StringUnary[UpperKernel, _]
 comptime Lower = StringUnary[LowerKernel, _]
 comptime Reverse = StringUnary[ReverseKernel, _]
 
-comptime ArrayLength = CountingUnary[ArrayLengthKernel, _]
+comptime ArrayLength = Counting[ArrayLengthKernel, _]
 comptime ArrayContains = BoolBinary[ArrayContainsKernel, _, _]
 
 
