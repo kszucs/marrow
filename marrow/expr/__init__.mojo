@@ -9,7 +9,7 @@ links (parsed SQL / Python-driven plans). See ``docs/expr-unification-plan.md``.
 named column leaves (``NumericColumn``/``StringColumn``) with the ``Table[Tbl]()``
 and ``col(name, dtype)`` builders, and ``AnyValue`` — the universal value box the
 relational layer holds (wraps a fused node *or* a ``DynValue``, exposing only
-``to_array``).
+``execute``).
 
 ``dynamic.mojo`` — ``DynValue``, the runtime tag-interpreter node the Python
 bindings build, with factory functions (``col()``, ``lit()``, ``if_else()``)

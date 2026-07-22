@@ -189,6 +189,28 @@ struct NotKernel(BoolUnaryKernel):
         )
 
 
+# Bool-result markers NOT IMPLEMENTED yet (compute `core`/`apply` are TODO) —
+# named so the typed expression layer can reference them.
+struct XorKernel(Kernel):
+    comptime name = "xor"
+
+
+struct IsNullKernel(Kernel):
+    comptime name = "is_null"
+
+
+struct NotNullKernel(Kernel):
+    comptime name = "not_null"
+
+
+struct IsNanKernel(Kernel):
+    comptime name = "is_nan"
+
+
+struct IsInfKernel(Kernel):
+    comptime name = "is_inf"
+
+
 # ---------------------------------------------------------------------------
 # is_null
 # ---------------------------------------------------------------------------

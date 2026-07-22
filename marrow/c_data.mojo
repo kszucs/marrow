@@ -87,7 +87,9 @@ def _encode_c_metadata(
             count=4,
         )
         head += 4
-        unsafe_memcpy(dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length())
+        unsafe_memcpy(
+            dest=buf + head, src=k.unsafe_ptr(), count=k.byte_length()
+        )
         head += k.byte_length()
         var v_len = Int32(v.byte_length())
         unsafe_memcpy(
@@ -96,7 +98,9 @@ def _encode_c_metadata(
             count=4,
         )
         head += 4
-        unsafe_memcpy(dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length())
+        unsafe_memcpy(
+            dest=buf + head, src=v.unsafe_ptr(), count=v.byte_length()
+        )
         head += v.byte_length()
     return buf.bitcast[c_char]()
 

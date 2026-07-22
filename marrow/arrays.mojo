@@ -2295,10 +2295,14 @@ struct AnyArray(
     def as_binary(ref self) -> ref[self._v[BinaryArray]] BinaryArray:
         return self._as[BinaryArray]()
 
-    def as_large_string(ref self) -> ref[self._v[LargeStringArray]] LargeStringArray:
+    def as_large_string(
+        ref self,
+    ) -> ref[self._v[LargeStringArray]] LargeStringArray:
         return self._as[LargeStringArray]()
 
-    def as_large_binary(ref self) -> ref[self._v[LargeBinaryArray]] LargeBinaryArray:
+    def as_large_binary(
+        ref self,
+    ) -> ref[self._v[LargeBinaryArray]] LargeBinaryArray:
         return self._as[LargeBinaryArray]()
 
     def as_list(ref self) -> ref[self._v[ListArray]] ListArray:
@@ -2307,10 +2311,14 @@ struct AnyArray(
     def as_large_list(ref self) -> ref[self._v[LargeListArray]] LargeListArray:
         return self._as[LargeListArray]()
 
-    def as_fixed_size_list(ref self) -> ref[self._v[FixedSizeListArray]] FixedSizeListArray:
+    def as_fixed_size_list(
+        ref self,
+    ) -> ref[self._v[FixedSizeListArray]] FixedSizeListArray:
         return self._as[FixedSizeListArray]()
 
-    def as_fixed_size_binary(ref self) -> ref[self._v[FixedSizeBinaryArray]] FixedSizeBinaryArray:
+    def as_fixed_size_binary(
+        ref self,
+    ) -> ref[self._v[FixedSizeBinaryArray]] FixedSizeBinaryArray:
         return self._as[FixedSizeBinaryArray]()
 
     def as_date32(ref self) -> ref[self._v[Date32Array]] Date32Array:
@@ -2325,10 +2333,14 @@ struct AnyArray(
     def as_time64(ref self) -> ref[self._v[Time64Array]] Time64Array:
         return self._as[Time64Array]()
 
-    def as_year_month_interval(ref self) -> ref[self._v[YearMonthIntervalArray]] YearMonthIntervalArray:
+    def as_year_month_interval(
+        ref self,
+    ) -> ref[self._v[YearMonthIntervalArray]] YearMonthIntervalArray:
         return self._as[YearMonthIntervalArray]()
 
-    def as_day_time_interval(ref self) -> ref[self._v[DayTimeIntervalArray]] DayTimeIntervalArray:
+    def as_day_time_interval(
+        ref self,
+    ) -> ref[self._v[DayTimeIntervalArray]] DayTimeIntervalArray:
         return self._as[DayTimeIntervalArray]()
 
     def as_month_day_nano_interval(
@@ -2348,10 +2360,14 @@ struct AnyArray(
     def as_decimal64(ref self) -> ref[self._v[Decimal64Array]] Decimal64Array:
         return self._as[Decimal64Array]()
 
-    def as_decimal128(ref self) -> ref[self._v[Decimal128Array]] Decimal128Array:
+    def as_decimal128(
+        ref self,
+    ) -> ref[self._v[Decimal128Array]] Decimal128Array:
         return self._as[Decimal128Array]()
 
-    def as_decimal256(ref self) -> ref[self._v[Decimal256Array]] Decimal256Array:
+    def as_decimal256(
+        ref self,
+    ) -> ref[self._v[Decimal256Array]] Decimal256Array:
         return self._as[Decimal256Array]()
 
     def as_struct(ref self) -> ref[self._v[StructArray]] StructArray:
@@ -2360,7 +2376,9 @@ struct AnyArray(
     def as_map(ref self) -> ref[self._v[MapArray]] MapArray:
         return self._as[MapArray]()
 
-    def as_dictionary(ref self) -> ref[self._v[DictionaryArray]] DictionaryArray:
+    def as_dictionary(
+        ref self,
+    ) -> ref[self._v[DictionaryArray]] DictionaryArray:
         return self._as[DictionaryArray]()
 
     # --- factory from generic layout ---

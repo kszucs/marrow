@@ -57,6 +57,11 @@
   `Filter`, `Project`, `Aggregate`, `Limit`, `Sort`, `Join` -- chained
   through `.filter()`, `.select()`, `.project()`, `.aggregate()`,
   `.sort_by()`, `.limit()`, `.join()`, and run by `.execute()`.
+- Two expression lanes behind that one API. The **comptime lane** binds
+  every operand on a family trait and resolves the output dtype at
+  compile time, so a subtree fuses into a single SIMD loop with no
+  dispatch. The **runtime lane** resolves operand dtypes at run time and
+  interprets. `col("a", int64)` gives the first, `col("a")` the second.
 
 ### Query optimizer
 

@@ -1,6 +1,6 @@
 """Tests for the universal value box ``AnyValue`` in ``marrow.expr.values``.
 
-``AnyValue`` wraps any ``Value`` node behind a ``to_array(batch)`` trampoline:
+``AnyValue`` wraps any ``Value`` node behind a ``execute(batch)`` trampoline:
 - fused comptime nodes (named columns, ``Greater``/``Less``/``Equal``) — the AOT path;
 - the runtime ``DynValue`` interpreter (built via ``col()`` + operators).
 
@@ -42,7 +42,7 @@ def test_box_fused_column() raises:
     var v = AnyValue(t.a)
     assert_equal(v.name(), "a")
     assert_true(
-        v.to_array(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+        v.execute(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
     )
 
 
@@ -51,7 +51,7 @@ def test_box_dynvalue_arithmetic() raises:
     """
     var v = AnyValue(col("a") + col("b"))
     assert_true(
-        v.to_array(_batch()).as_int64().copy() == array([5, 9, 7, 12, 6], int64)
+        v.execute(_batch()).as_int64().copy() == array([5, 9, 7, 12, 6], int64)
     )
 
 
@@ -59,24 +59,24 @@ def test_box_dynvalue_resolves_by_name() raises:
     """A DynValue col() boxed into AnyValue resolves by name."""
     var v = AnyValue(col("a"))
     assert_true(
-        v.to_array(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
+        v.execute(_batch()).as_int64().copy() == array([1, 5, 3, 8, 2], int64)
     )
 
 
 def test_fused_and_dynvalue_interchange() raises:
     """A heterogeneous list holds a fused *and* an interpreter value; both run
-    through the same to_array — fused-vs-interpreted is which node you boxed."""
+    through the same execute — fused-vs-interpreted is which node you boxed."""
     var t = Table[_Orders]()
     var values = List[AnyValue]()
     values.append(AnyValue(t.a))  # fused
     values.append(AnyValue(col("b")))  # interpreter
     var batch = _batch()
     assert_true(
-        values[0].to_array(batch).as_int64().copy()
+        values[0].execute(batch).as_int64().copy()
         == array([1, 5, 3, 8, 2], int64)
     )
     assert_true(
-        values[1].to_array(batch).as_int64().copy()
+        values[1].execute(batch).as_int64().copy()
         == array([4, 4, 4, 4, 4], int64)
     )
 
@@ -84,7 +84,7 @@ def test_fused_and_dynvalue_interchange() raises:
 def test_write_to_delegates() raises:
     """AnyValue.write_to delegates to the boxed node."""
     var t = Table[_Orders]()
-    assert_equal(String(AnyValue(t.a)), "Col[a]")
+    assert_equal(String(AnyValue(t.a)), "col(a)")
 
 
 def main() raises:

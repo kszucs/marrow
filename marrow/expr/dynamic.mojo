@@ -27,7 +27,7 @@ ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
 NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
-LENGTH - String byte length (dispatches to kernels.string.string_lengths)
+LENGTH - String byte length (dispatches to kernels.string.LengthKernel)
 """
 
 from ..arrays import AnyArray
@@ -35,7 +35,6 @@ from ..dtypes import AnyDataType, NumericType
 from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .values import Value
 from .pruning import PruneStats, PruneBound
 from ..kernels.arithmetic import (
     AddKernel,
@@ -54,7 +53,7 @@ from ..kernels.compare import (
     GtKernel,
     GeKernel,
 )
-from ..kernels.string import string_lengths
+from ..kernels.string import LengthKernel
 from ..kernels.cast import cast as cast_array
 
 
@@ -95,7 +94,6 @@ struct DynValue(
     ImplicitlyCopyable,
     ImplicitlyDeletable,
     Movable,
-    Value,
     Writable,
 ):
     """Unified expression node using tag-based dispatch.
@@ -156,7 +154,7 @@ struct DynValue(
         """Return the column name for a named LOAD node (empty otherwise)."""
         return self._name
 
-    def to_array(self, batch: RecordBatch) raises -> AnyArray:
+    def execute(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate against *batch*. This is the ``AnyValue``-box entry point the
         fused/streaming relations call per morsel; ``eval`` resolves named
         ``col(...)`` references inline (a per-column schema lookup, no tree copy),
@@ -269,7 +267,7 @@ struct DynValue(
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
         elif self._tag == LENGTH:
-            return string_lengths(self._args[0].eval(batch)).to_any()
+            return LengthKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == CAST:
             return cast_array(self._args[0].eval(batch), self._cast_to.value())
         elif self._tag == IF_ELSE:

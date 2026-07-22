@@ -1512,13 +1512,7 @@ def apply[
         @always_inline
         def process_shifted[
             W: Int
-        ](i: Int) {
-            imm dst,
-            imm data,
-            imm byte_start,
-            imm rshift,
-            imm lshift,
-        }:
+        ](i: Int) {imm dst, imm data, imm byte_start, imm rshift, imm lshift,}:
             var lo = (data + byte_start + i).load[width=W]()
             var hi = (data + byte_start + i + 1).load[width=W]()
             dst.store[DType.uint8, W](i, op[W]((lo >> rshift) | (hi << lshift)))

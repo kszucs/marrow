@@ -45,7 +45,7 @@ from std.builtin.simd import Scalar as _Scalar
 # ---------------------------------------------------------------------------
 
 
-trait Scalar(Copyable, Equatable, Movable, Writable):
+trait Scalar(Copyable, Equatable, ImplicitlyDeletable, Movable, Writable):
     """Common interface for all typed Arrow scalars."""
 
     def type(self) -> AnyDataType:
@@ -655,7 +655,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def as_string(ref self) -> ref[self._v[StringScalar]] StringScalar:
         return self._as[StringScalar]()
 
-    def as_fixed_size_binary(ref self) -> ref[self._v[FixedSizeBinaryScalar]] FixedSizeBinaryScalar:
+    def as_fixed_size_binary(
+        ref self,
+    ) -> ref[self._v[FixedSizeBinaryScalar]] FixedSizeBinaryScalar:
         return self._as[FixedSizeBinaryScalar]()
 
     def as_date32(ref self) -> ref[self._v[Date32Scalar]] Date32Scalar:
@@ -681,7 +683,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     ) -> ref[self._v[YearMonthIntervalScalar]] YearMonthIntervalScalar:
         return self._as[YearMonthIntervalScalar]()
 
-    def as_day_time_interval(ref self) -> ref[self._v[DayTimeIntervalScalar]] DayTimeIntervalScalar:
+    def as_day_time_interval(
+        ref self,
+    ) -> ref[self._v[DayTimeIntervalScalar]] DayTimeIntervalScalar:
         return self._as[DayTimeIntervalScalar]()
 
     def as_month_day_nano_interval(
@@ -695,10 +699,14 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def as_decimal64(ref self) -> ref[self._v[Decimal64Scalar]] Decimal64Scalar:
         return self._as[Decimal64Scalar]()
 
-    def as_decimal128(ref self) -> ref[self._v[Decimal128Scalar]] Decimal128Scalar:
+    def as_decimal128(
+        ref self,
+    ) -> ref[self._v[Decimal128Scalar]] Decimal128Scalar:
         return self._as[Decimal128Scalar]()
 
-    def as_decimal256(ref self) -> ref[self._v[Decimal256Scalar]] Decimal256Scalar:
+    def as_decimal256(
+        ref self,
+    ) -> ref[self._v[Decimal256Scalar]] Decimal256Scalar:
         return self._as[Decimal256Scalar]()
 
     def as_list(ref self) -> ref[self._v[ListScalar]] ListScalar:
@@ -710,7 +718,9 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
     def as_struct(ref self) -> ref[self._v[StructScalar]] StructScalar:
         return self._as[StructScalar]()
 
-    def as_dictionary(ref self) -> ref[self._v[DictionaryScalar]] DictionaryScalar:
+    def as_dictionary(
+        ref self,
+    ) -> ref[self._v[DictionaryScalar]] DictionaryScalar:
         return self._as[DictionaryScalar]()
 
     def __eq__(self, other: Self) -> Bool:
