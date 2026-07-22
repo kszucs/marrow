@@ -99,7 +99,7 @@ struct LengthKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-trait StringUnaryKernel(Kernel):
+trait StringMapKernel(Kernel):
     """Element-wise string → string op. Concrete kernels define `transform`;
     `apply` (element-wise build, null-preserving) and `dispatch` are defaulted.
     """
@@ -133,7 +133,7 @@ trait StringUnaryKernel(Kernel):
             )
 
 
-struct UpperKernel(StringUnaryKernel):
+struct UpperKernel(StringMapKernel):
     comptime name = "upper"
 
     @staticmethod
@@ -141,7 +141,7 @@ struct UpperKernel(StringUnaryKernel):
         return s.upper()
 
 
-struct LowerKernel(StringUnaryKernel):
+struct LowerKernel(StringMapKernel):
     comptime name = "lower"
 
     @staticmethod
@@ -149,7 +149,7 @@ struct LowerKernel(StringUnaryKernel):
         return s.lower()
 
 
-struct StripKernel(StringUnaryKernel):
+struct StripKernel(StringMapKernel):
     comptime name = "strip"
 
     @staticmethod
@@ -157,7 +157,7 @@ struct StripKernel(StringUnaryKernel):
         return String(s.strip())
 
 
-struct LStripKernel(StringUnaryKernel):
+struct LStripKernel(StringMapKernel):
     comptime name = "lstrip"
 
     @staticmethod
@@ -165,7 +165,7 @@ struct LStripKernel(StringUnaryKernel):
         return String(s.lstrip())
 
 
-struct RStripKernel(StringUnaryKernel):
+struct RStripKernel(StringMapKernel):
     comptime name = "rstrip"
 
     @staticmethod
@@ -173,7 +173,7 @@ struct RStripKernel(StringUnaryKernel):
         return String(s.rstrip())
 
 
-struct ReverseKernel(StringUnaryKernel):
+struct ReverseKernel(StringMapKernel):
     comptime name = "reverse"
 
     @staticmethod
@@ -185,7 +185,7 @@ struct ReverseKernel(StringUnaryKernel):
         return out
 
 
-struct CapitalizeKernel(StringUnaryKernel):
+struct CapitalizeKernel(StringMapKernel):
     comptime name = "capitalize"
 
     @staticmethod
@@ -207,7 +207,7 @@ struct CapitalizeKernel(StringUnaryKernel):
 # ---------------------------------------------------------------------------
 
 
-trait StringBinaryPredicateKernel(Kernel):
+trait StringPredicateKernel(Kernel):
     """Element-wise `string × string → bool` predicate. Concrete kernels define
     `predicate`; `apply` (bit-packed, null-propagating) and `dispatch` default.
     """
@@ -259,7 +259,7 @@ trait StringBinaryPredicateKernel(Kernel):
             )
 
 
-struct StartsWithKernel(StringBinaryPredicateKernel):
+struct StartsWithKernel(StringPredicateKernel):
     comptime name = "startswith"
 
     @staticmethod
@@ -269,7 +269,7 @@ struct StartsWithKernel(StringBinaryPredicateKernel):
         return s.startswith(pat)
 
 
-struct EndsWithKernel(StringBinaryPredicateKernel):
+struct EndsWithKernel(StringPredicateKernel):
     comptime name = "endswith"
 
     @staticmethod
@@ -279,7 +279,7 @@ struct EndsWithKernel(StringBinaryPredicateKernel):
         return s.endswith(pat)
 
 
-struct ContainsKernel(StringBinaryPredicateKernel):
+struct ContainsKernel(StringPredicateKernel):
     comptime name = "contains"
 
     @staticmethod

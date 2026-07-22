@@ -183,6 +183,18 @@ def test_min_max_preserve_dtype() raises:
     assert_true(out_type_is[Int64Type](col("a", int64).max()))
 
 
+def test_product_widens_to_64bit() raises:
+    assert_true(out_type_is[Int64Type](col("a", int32).product()))
+    assert_true(out_type_is[Int64Type](col("a", int64).product()))
+    assert_true(out_type_is[Float64Type](col("a", float64).product()))
+
+
+def test_count_is_int64_any_family() raises:
+    assert_true(out_type_is[Int64Type](col("a", int32).count()))
+    assert_true(out_type_is[Int64Type](col("s", string).count()))
+    assert_true(out_type_is[Int64Type](col("l", list_(int64)).count()))
+
+
 def test_comparison_is_bool() raises:
     var a = col("a", int64)
     var b = col("b", int64)
@@ -369,6 +381,60 @@ def test_table_reflects_and_executes() raises:
     var expr = (t.a + t.b) * t.c
     assert_true(out_type_is[Int64Type](expr))
     assert_true(_eq(expr, array([22, 44, 66, 88], int64)))
+
+
+# ===========================================================================
+# Reduction execution — N -> 1 (length-1 result array)
+# ===========================================================================
+
+
+# reductions are `Value` (not `NumericValue`), so compare via the erased array
+def _req[V: Value](x: V, expected: AnyArray) raises -> Bool:
+    return x.execute(_batch()).to_any() == expected
+
+
+def test_sum_executes() raises:
+    assert_true(_req(col("a", int64).sum(), array([10], int64)))
+    # narrow input widens to int64 so it can't overflow
+    assert_true(_req(col("c", int32).sum(), array([8], int64)))
+
+
+def test_product_executes() raises:
+    assert_true(_req(col("c", int32).product(), array([16], int64)))
+
+
+def test_mean_executes() raises:
+    assert_true(_req(col("a", int64).mean(), array([2.5], float64)))
+
+
+def test_min_max_execute() raises:
+    assert_true(_req(col("a", int64).min(), array([1], int64)))
+    assert_true(_req(col("a", int64).max(), array([4], int64)))
+    # min/max preserve the operand dtype
+    assert_true(_req(col("c", int32).min(), array([2], int32)))
+
+
+def test_count_executes() raises:
+    assert_true(_req(col("a", int64).count(), array([4], int64)))
+
+
+def test_reduction_over_fused_expr() raises:
+    # (a + b) materializes once, then reduces: sum([11,22,33,44]) == 110
+    assert_true(
+        _req((col("a", int64) + col("b", int64)).sum(), array([110], int64))
+    )
+
+
+def test_anyvalue_erases_reduction() raises:
+    var boxed = AnyValue(col("a", int64).sum())
+    assert_true(boxed.execute(_batch()) == array([10], int64))
+
+
+def test_count_over_string_column() raises:
+    assert_true(
+        col("s", string).count().execute(_sbatch()).to_any()
+        == array([4], int64)
+    )
 
 
 # ===========================================================================

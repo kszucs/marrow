@@ -23,9 +23,9 @@ Layers:
     until their compute lands. No kernels are defined here.
   * `StringValue` **executes** by materializing: leaves (`StringColumn`,
     `StringConst`) resolve/broadcast to a `StringArray`, unary ops (`upper`,
-    `lower`, `strip`, `reverse`, `capitalize`, …) apply a `StringUnaryKernel`, and
+    `lower`, `strip`, `reverse`, `capitalize`, …) apply a `StringMapKernel`, and
     predicates (`startswith`, `endswith`, `contains`) apply a
-    `StringBinaryPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
+    `StringPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
     fixed lane, so string ops do not fuse (unlike the numeric lane); `length` is
     the exception — byte length is `offsets[i+1]-offsets[i]`, which `LengthKernel`
     vectorizes internally.
@@ -36,8 +36,13 @@ Layers:
     unwired: `xor`, string `==`/`!=`, and the `is_null`/`is_nan`/… unary markers.
   * `ListValue` remains type architecture (list execution is future work — its
     `execute` inherits the raising default). Cross-family numeric-producing
-    boundaries (reductions) are non-lane `Value` nodes that materialize (not yet
-    wired) rather than fuse.
+    boundaries (reductions — `sum`/`product`/`mean`/`min`/`max` via one `Reduce`
+    node, plus the family-agnostic `count` via `Count`) are non-lane `Value`
+    nodes: they materialize the operand (the numeric lane fuses up to it), fold it
+    through the real `marrow.kernels.aggregate` kernels, and return the scalar as a
+    length-1 result array rather than fusing. `Reduce`'s output dtype is the
+    kernel's own `AccType[A.OutType]` — each aggregate is the single source of
+    truth for its result type.
 
 `AnyValue` boxes either a comptime node (`[V: Value]`) or the runtime `DynValue`
 interpreter (dedicated constructor) and exposes `execute` / `name` / `prune` /
@@ -125,10 +130,18 @@ from ..kernels.boolean import (
     IsNanKernel,
     IsInfKernel,
 )
-from ..kernels.aggregate import SumKernel, MeanKernel, MinKernel, MaxKernel
+from ..kernels.aggregate import (
+    AggKernel,
+    SumKernel,
+    MeanKernel,
+    MinKernel,
+    MaxKernel,
+    CountKernel,
+    ProductKernel,
+)
 from ..kernels.string import (
-    StringUnaryKernel,
-    StringBinaryPredicateKernel,
+    StringMapKernel,
+    StringPredicateKernel,
     StartsWithKernel,
     EndsWithKernel,
     ContainsKernel,
@@ -159,27 +172,11 @@ def _rank[T: DataType]() -> Int:
         return 0
 
 
-def _is_float[T: DataType]() -> Bool:
-    comptime if conforms_to(T, NumericType):
-        comptime N = downcast[T, NumericType]()
-        return N.native.is_floating_point()
-    else:
-        return False
-
-
-comptime dtype_like[L: Value, R: Value] = L.OutType
-"""Output dtype follows the (left) operand — preserving unary/binary."""
-
 comptime highest_precedence[L: NumericValue, R: NumericValue] = L.OutType if (
     _rank[L.OutType]() >= _rank[R.OutType]()
 ) else R.OutType
 """Output dtype is the wider operand — `Add(int32, int64) → int64`. Bound on
 `NumericValue` so the result is a `NumericType` (has `.native`)."""
-
-comptime sum_result[A: Value] = dt.Float64Type if _is_float[
-    A.OutType
-]() else dt.Int64Type
-"""Reduction widens to 64-bit — floats → float64, ints → int64 (`Sum`)."""
 
 
 def _numeric_array[
@@ -211,6 +208,18 @@ def _not_wired[T: DataType]() raises -> T.ArrayType:
     """Raising stub typed as `T.ArrayType` — lets a family/boundary `execute`
     default satisfy the return type before its execution is wired."""
     raise Error("execute: not wired for this node yet")
+
+
+def _reduce[
+    K: AggKernel, Out: NumericType
+](operand: AnyArray) raises -> Out.ArrayType:
+    """Fold `operand` to one scalar with aggregate `K`, boxed as the reduction's
+    single-row result — a length-1 `Out` array. Reductions are a materialization
+    boundary: the numeric lane fuses up to the operand (computed in full), then
+    reduces (`sum`/`mean`/`min`/`max`/`count`/`product`). The kernel already
+    accumulates in the widened `AccType`, so `Out` matches the node's `OutType`.
+    """
+    return K.reduce(operand).as_primitive[Out]().repeat(1)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +261,11 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
     def notnull(self) -> BoolUnary[NotNullKernel, Self]:
         """Non-null predicate — any value in any family yields a `BoolValue`."""
         return BoolUnary[NotNullKernel, Self](self.copy())
+
+    def count(self) -> Count[CountKernel, Self]:
+        """Count of valid (non-null) values — a reduction available in every
+        family (it reads only the validity bitmap)."""
+        return Count[CountKernel, Self](self.copy())
 
 
 trait NumericValue(Value):
@@ -379,17 +393,20 @@ trait NumericValue(Value):
 
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
-    def sum(self) -> Sum[SumKernel, Self]:
-        return Sum[SumKernel, Self](self.copy())
+    def sum(self) -> Reduce[SumKernel, Self]:
+        return Reduce[SumKernel, Self](self.copy())
 
-    def mean(self) -> Mean[MeanKernel, Self]:
-        return Mean[MeanKernel, Self](self.copy())
+    def product(self) -> Reduce[ProductKernel, Self]:
+        return Reduce[ProductKernel, Self](self.copy())
 
-    def min(self) -> MinMax[MinKernel, Self]:
-        return MinMax[MinKernel, Self](self.copy())
+    def mean(self) -> Reduce[MeanKernel, Self]:
+        return Reduce[MeanKernel, Self](self.copy())
 
-    def max(self) -> MinMax[MaxKernel, Self]:
-        return MinMax[MaxKernel, Self](self.copy())
+    def min(self) -> Reduce[MinKernel, Self]:
+        return Reduce[MinKernel, Self](self.copy())
+
+    def max(self) -> Reduce[MaxKernel, Self]:
+        return Reduce[MaxKernel, Self](self.copy())
 
     # --- comparisons (-> BoolValue) ----------------------------------------
 
@@ -650,36 +667,42 @@ struct Counting[K: Kernel, A: Value](Value):
 
 
 @fieldwise_init
-struct Sum[K: Kernel, A: Value](Value):
-    """Reduction widening to 64-bit — `sum()`."""
+struct Reduce[K: AggKernel, A: NumericValue](Value):
+    """Whole-array numeric reduction — `sum`/`product` (widen to int64/float64),
+    `mean` (float64), and `min`/`max` (operand dtype preserved). The output dtype
+    is the kernel's own accumulator algebra, `K.AccType[A.OutType]`, so each
+    kernel is the single source of truth for its result type (no separate
+    per-node dtype rule).
 
-    comptime OutType = sum_result[Self.A]
+    A materialization boundary: the numeric lane fuses up to the operand (which is
+    computed in full), then folds it to a length-1 result array. `Count` is a
+    separate node because it is family-agnostic (any input dtype → int64)."""
+
+    comptime OutType = Self.K.AccType[Self.A.OutType]
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return _reduce[Self.K, Self.OutType](self.arg.execute(batch).to_any())
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
 
 
 @fieldwise_init
-struct Mean[K: Kernel, A: Value](Value):
-    """Reduction to float64 — `mean()`."""
+struct Count[K: AggKernel, A: Value](Value):
+    """Whole-array valid (non-null) count — `count()`, available on any family.
+    Result is a length-1 int64 array."""
 
-    comptime OutType = dt.Float64Type
+    comptime OutType = dt.Int64Type
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return _reduce[Self.K, downcast[Self.OutType, NumericType]](
+            self.arg.execute(batch).to_any()
+        )
 
-
-@fieldwise_init
-struct MinMax[K: Kernel, A: Value](Value):
-    """Reduction preserving the operand dtype — `min()`, `max()`."""
-
-    comptime OutType = dtype_like[Self.A, Self.A]
-    var arg: Self.A
-
-    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
 
 
 # ---------------------------------------------------------------------------
@@ -811,7 +834,7 @@ struct StringBinary[K: Kernel, L: StringValue, R: StringValue](StringValue):
 
 
 @fieldwise_init
-struct StringUnary[K: StringUnaryKernel, A: StringValue](StringValue):
+struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     comptime OutType = Self.A.OutType
     var arg: Self.A
 
@@ -831,7 +854,7 @@ struct StringUnary[K: StringUnaryKernel, A: StringValue](StringValue):
 
 @fieldwise_init
 struct StringPredicate[
-    K: StringBinaryPredicateKernel, L: StringValue, R: StringValue
+    K: StringPredicateKernel, L: StringValue, R: StringValue
 ](BoolValue):
     """Binary string predicate producing a bool column — `startswith`,
     `endswith`, `contains`. Both operands materialize; the kernel compares
@@ -876,8 +899,11 @@ comptime Log1p = FloatUnary[Log1pKernel, _]
 comptime Sin = FloatUnary[SinKernel, _]
 comptime Cos = FloatUnary[CosKernel, _]
 
-comptime Min = MinMax[MinKernel, _]
-comptime Max = MinMax[MaxKernel, _]
+comptime Sum = Reduce[SumKernel, _]
+comptime Product = Reduce[ProductKernel, _]
+comptime Mean = Reduce[MeanKernel, _]
+comptime Min = Reduce[MinKernel, _]
+comptime Max = Reduce[MaxKernel, _]
 
 comptime Less = NumericCompare[LtKernel, _, _]
 comptime LessEqual = NumericCompare[LeKernel, _, _]

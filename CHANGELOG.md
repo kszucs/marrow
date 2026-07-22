@@ -22,20 +22,32 @@
 - **String compute kernels** (`marrow.kernels.string`): real implementations
   replacing the name-only markers. `LengthKernel` (byte length →
   `Int32Array`, vectorized as `offsets[i+1]-offsets[i]`), unary string→string
-  ops via the `StringUnaryKernel` trait (`UpperKernel`, `LowerKernel`,
+  ops via the `StringMapKernel` trait (`UpperKernel`, `LowerKernel`,
   `ReverseKernel`, `StripKernel`, `LStripKernel`, `RStripKernel`,
   `CapitalizeKernel`), and binary predicates via the
-  `StringBinaryPredicateKernel` trait (`StartsWithKernel`, `EndsWithKernel`,
+  `StringPredicateKernel` trait (`StartsWithKernel`, `EndsWithKernel`,
   `ContainsKernel` → `BoolArray`). Each has a typed `apply` and a runtime
   `dispatch(AnyArray)`. The free-standing `string_lengths` function is removed
   (callers use `LengthKernel`).
 
+- **`marrow.expr.values` reduction execution**: the aggregate boundary nodes now
+  execute (previously `_not_wired` stubs). `sum()`/`product()` (widen to
+  int64/float64), `mean()` (float64), and `min()`/`max()` (operand dtype
+  preserved) share a single `Reduce[K, A]` node whose output dtype is the
+  kernel's own `AccType[A.OutType]` — each aggregate is the single source of truth
+  for its result type. A new family-agnostic `count()` (`Count` → int64, on the
+  base `Value` trait) works on any input dtype. All fold the operand through the
+  real `marrow.kernels.aggregate` kernels and return the scalar as a length-1
+  result array. Reductions are a materialization boundary: the numeric lane fuses
+  up to the operand, which is computed in full, then reduced. `AnyValue` erases
+  and executes them like any other node.
+
 - **`marrow.expr.ibis` string execution**: the `StringValue` family now
   executes by materializing — `StringColumn` resolves from the batch,
-  `StringConst` broadcasts, `StringUnary` applies a `StringUnaryKernel`,
+  `StringConst` broadcasts, `StringUnary` applies a `StringMapKernel`,
   `Counting` (`length`) applies `LengthKernel`, and the new `StringPredicate`
   node (`startswith`/`endswith`/`contains`) applies a
-  `StringBinaryPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
+  `StringPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
   fixed SIMD lane, so string ops materialize rather than fuse; `length` is the
   one op that vectorizes internally (offset subtraction).
 
