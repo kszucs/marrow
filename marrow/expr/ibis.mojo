@@ -38,6 +38,7 @@ from ..dtypes import (
     FloatingType,
     BoolType,
     StringLikeType,
+    ListLikeType,
 )
 from ..scalars import PrimitiveScalar, StringScalar
 
@@ -69,6 +70,21 @@ comptime highest_precedence[L: Value, R: Value] = L.OutType if (
     _rank[L.OutType]() >= _rank[R.OutType]()
 ) else R.OutType
 """Output dtype is the wider operand (bit-width rank) — `Add(int32, int64) → int64`."""
+
+
+def _is_float[T: DataType]() -> Bool:
+    comptime if conforms_to(T, NumericType):
+        comptime N = downcast[T, NumericType]()
+        return N.native.is_floating_point()
+    else:
+        return False
+
+
+comptime sum_result[A: Value] = dt.Float64Type if _is_float[
+    A.OutType
+]() else dt.Int64Type
+"""Reduction that widens to 64-bit to avoid overflow — floats → float64, ints →
+int64 (like ibis `Sum`). (Unsigned is treated as signed int64 for now.)"""
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +301,42 @@ struct ReverseKernel(Kernel):
         return "reverse"
 
 
+struct ArrayLengthKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "array_length"
+
+
+struct ArrayContainsKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "array_contains"
+
+
+struct SumKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "sum"
+
+
+struct MeanKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "mean"
+
+
+struct MinKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "min"
+
+
+struct MaxKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "max"
+
+
 # ---------------------------------------------------------------------------
 # Value — base trait; family sub-traits carry the operator surface
 # ---------------------------------------------------------------------------
@@ -367,6 +419,19 @@ trait NumericValue(Value):
 
     def ln(self) -> FloatUnary[LnKernel, Self]:
         return FloatUnary[LnKernel, Self](self.copy())
+
+    # reductions (N -> 1); the node stays a NumericValue carrying the result dtype
+    def sum(self) -> SumUnary[SumKernel, Self]:
+        return SumUnary[SumKernel, Self](self.copy())
+
+    def mean(self) -> FloatUnary[MeanKernel, Self]:
+        return FloatUnary[MeanKernel, Self](self.copy())
+
+    def min(self) -> NumericUnary[MinKernel, Self]:
+        return NumericUnary[MinKernel, Self](self.copy())
+
+    def max(self) -> NumericUnary[MaxKernel, Self]:
+        return NumericUnary[MaxKernel, Self](self.copy())
 
     def __lt__[
         Rhs: NumericValue
@@ -463,6 +528,23 @@ trait StringValue(Value):
         return BoolBinary[NeKernel, Self, Rhs](self.copy(), o.copy())
 
 
+trait ListValue(Value):
+    """List-typed nodes (the nested family). Like `StringValue`, its methods cross
+    families — `length()` yields a `NumericValue` (element count), `contains()` a
+    `BoolValue` — the node's family follows the *result*, not the list operand.
+    """
+
+    def length(self) -> CountingUnary[ArrayLengthKernel, Self]:
+        return CountingUnary[ArrayLengthKernel, Self](self.copy())
+
+    def contains[
+        E: Value
+    ](self, elem: E) -> BoolBinary[ArrayContainsKernel, Self, E]:
+        return BoolBinary[ArrayContainsKernel, Self, E](
+            self.copy(), elem.copy()
+        )
+
+
 # ---------------------------------------------------------------------------
 # Operation nodes — one struct per (family, output-dtype rule)
 # ---------------------------------------------------------------------------
@@ -524,10 +606,20 @@ struct FloatUnary[K: Kernel, A: Value](NumericValue):
 @fieldwise_init
 struct CountingUnary[K: Kernel, A: Value](NumericValue):
     """Unary op whose result is always int32 — `length()` (ibis
-    `StringLength.dtype = dt.int32`). Its operand is a `StringValue` but the node
-    is a `NumericValue`: family follows the *result*, not the input."""
+    `StringLength.dtype = dt.int32`). Its operand is a `StringValue`/`ListValue`
+    but the node is a `NumericValue`: family follows the *result*, not the input.
+    """
 
     comptime OutType = dt.Int32Type
+
+    var arg: Self.A
+
+
+@fieldwise_init
+struct SumUnary[K: Kernel, A: Value](NumericValue):
+    """Reduction whose result widens to 64-bit (`sum()`, ibis `Sum`)."""
+
+    comptime OutType = sum_result[Self.A]
 
     var arg: Self.A
 
@@ -590,6 +682,11 @@ comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
 comptime Ln = FloatUnary[LnKernel, _]
 
+comptime Sum = SumUnary[SumKernel, _]
+comptime Mean = FloatUnary[MeanKernel, _]
+comptime Min = NumericUnary[MinKernel, _]
+comptime Max = NumericUnary[MaxKernel, _]
+
 comptime Less = BoolBinary[LtKernel, _, _]
 comptime LessEqual = BoolBinary[LeKernel, _, _]
 comptime Greater = BoolBinary[GtKernel, _, _]
@@ -611,6 +708,9 @@ comptime Upper = StringUnary[UpperKernel, _]
 comptime Lower = StringUnary[LowerKernel, _]
 comptime Reverse = StringUnary[ReverseKernel, _]
 
+comptime ArrayLength = CountingUnary[ArrayLengthKernel, _]
+comptime ArrayContains = BoolBinary[ArrayContainsKernel, _, _]
+
 
 # ---------------------------------------------------------------------------
 # Leaves — Column / Literal (conditionally a family by their dtype)
@@ -626,6 +726,7 @@ struct Column[T: DataType](
     Value,
     NumericValue where conforms_to(T, NumericType),
     StringValue where conforms_to(T, StringLikeType),
+    ListValue where conforms_to(T, ListLikeType),
 ):
     # fmt: on
     """Named column reference — conditionally the value family of its dtype:

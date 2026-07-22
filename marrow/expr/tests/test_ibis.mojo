@@ -15,6 +15,7 @@ from marrow.dtypes import (
     int64,
     float64,
     string,
+    list_,
     Int32Type,
     Int64Type,
     Float64Type,
@@ -32,6 +33,7 @@ from marrow.expr.ibis import (
     NumericValue,
     BoolValue,
     StringValue,
+    ListValue,
 )
 
 
@@ -45,6 +47,10 @@ def _takes_bool[B: BoolValue](x: B) -> Bool:
 
 
 def _takes_string[S: StringValue](x: S) -> Bool:
+    return True
+
+
+def _takes_list[L: ListValue](x: L) -> Bool:
     return True
 
 
@@ -110,6 +116,46 @@ def test_reverse_stays_string() raises:
     var s = col("s", string)
     assert_true(_takes_string(s.reverse()))
     assert_true(out_type_is[StringType](s.reverse()))
+
+
+# --- nested ListValue family -------------------------------------------------
+
+
+def test_list_column_is_list() raises:
+    var l = col("l", list_(int64))
+    assert_true(_takes_list(l))
+
+
+def test_list_length_is_numeric() raises:
+    var l = col("l", list_(int64))
+    # length() : ListValue -> NumericValue (int32)
+    assert_true(_takes_numeric(l.length()))
+    assert_true(out_type_is[Int32Type](l.length()))
+
+
+def test_list_contains_is_bool() raises:
+    var l = col("l", list_(int64))
+    # contains(elem) : ListValue -> BoolValue
+    assert_true(_takes_bool(l.contains(col("x", int64))))
+
+
+# --- numeric reductions ------------------------------------------------------
+
+
+def test_sum_widens_to_64bit() raises:
+    assert_true(out_type_is[Int64Type](col("a", int32).sum()))
+    assert_true(out_type_is[Int64Type](col("a", int64).sum()))
+    assert_true(out_type_is[Float64Type](col("a", float64).sum()))
+
+
+def test_mean_is_float() raises:
+    assert_true(out_type_is[Float64Type](col("a", int64).mean()))
+
+
+def test_min_max_preserve_dtype() raises:
+    assert_true(out_type_is[Int32Type](col("a", int32).min()))
+    assert_true(out_type_is[Int32Type](col("a", int32).max()))
+    assert_true(_takes_numeric(col("a", int64).min()))
 
 
 def test_comparison_is_bool() raises:

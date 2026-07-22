@@ -22,8 +22,10 @@
   `Literal` are unified leaves via conditional conformance; `Literal` holds the
   dtype's companion `T.ScalarType` and `lit` is an alias for it. Ops include
   arithmetic (`+ - * / % **`, `neg`/`abs`/`ceil`/`floor`/`round`/`sign`,
-  `sqrt`/`exp`/`ln`), comparisons, logical (`& | ^ ~`), `isnull`, and string
-  `length`/`startswith`/`endswith`/`contains`/`upper`/`lower`/`reverse`/`==`/`!=`.
+  `sqrt`/`exp`/`ln`), reductions (`sum` widening to 64-bit, `mean` → float64,
+  `min`/`max` preserving), comparisons, logical (`& | ^ ~`), `isnull`, string
+  `length`/`startswith`/`endswith`/`contains`/`upper`/`lower`/`reverse`/`==`/`!=`,
+  and a nested **`ListValue`** family (`length` → numeric, `contains` → bool).
 
 - **Columnar selection for all array types** (`filter` / `take` / `drop_null`):
   the selection kernels now support every array type — including nested
