@@ -1074,8 +1074,8 @@ def test_map_array_from_pyarrow() raises:
 
     ref entries = m.values().as_struct()
     assert_equal(len(entries), 3)
-    ref keys = entries.children[0].as_string()
-    ref vals = entries.children[1].as_int64()
+    var keys = entries.children[0].as_string().copy()
+    var vals = entries.children[1].as_int64().copy()
     assert_equal(keys[0].to_string(), "a")
     assert_equal(keys[1].to_string(), "b")
     assert_equal(keys[2].to_string(), "c")
@@ -1117,8 +1117,8 @@ def test_map_array_roundtrip() raises:
     assert_equal(lens[1].value(), 2)
 
     ref entries = m.values().as_struct()
-    ref keys = entries.children[0].as_string()
-    ref vals = entries.children[1].as_int32()
+    var keys = entries.children[0].as_string().copy()
+    var vals = entries.children[1].as_int32().copy()
     assert_equal(keys[0].to_string(), "x")
     assert_equal(keys[2].to_string(), "z")
     assert_equal(vals[0].value(), 10)

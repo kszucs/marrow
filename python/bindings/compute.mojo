@@ -58,6 +58,13 @@ def count_distinct(array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
     return mk.count_distinct(array, ctx)
 
 
+# ``MeanKernel.reduce`` is a trait method with a defaulted ``ctx``; referencing
+# it directly in ``pykernel[...]`` crashes overload inference. Pin the exact
+# ``(AnyArray, ExecutionContext) -> AnyScalar`` shape with a thin wrapper.
+def mean(array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
+    return mk.MeanKernel.reduce(array, ctx)
+
+
 def approx_count_distinct(
     array: AnyArray, ctx: ExecutionContext
 ) raises -> AnyScalar:
@@ -111,7 +118,7 @@ def add_to_module(mut mb: PythonModuleBuilder) raises -> None:
     mb.def_function[pykernel[mk.ProductKernel.dispatch]()]("product")
     mb.def_function[pykernel[mk.MinKernel.dispatch]()]("min")
     mb.def_function[pykernel[mk.MaxKernel.dispatch]()]("max")
-    mb.def_function[pykernel[mk.MeanKernel.reduce]()]("mean")
+    mb.def_function[pykernel[mean]()]("mean")
     mb.def_function[pykernel[mk.any]()]("any")
     mb.def_function[pykernel[mk.all]()]("all")
     mb.def_function[pykernel[mk.drop_null]()]("drop_null")
