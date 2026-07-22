@@ -17,13 +17,22 @@ Layers:
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
-    compare / boolean / aggregate are implemented; string (`kernels.string`) and
-    list (`kernels.nested`) markers plus `xor`/`is_null` are not-implemented stubs
-    (just `comptime name`) until their compute lands. No kernels are defined here.
-  * `BoolValue` / `StringValue` / `ListValue` are the type architecture (execution
-    is future work — their `execute` inherits the raising default). Cross-family
-    numeric-producing boundaries (`length`, reductions) are non-lane `Value` nodes
-    that materialize (not yet wired) rather than fuse.
+    compare / boolean / aggregate / string are implemented; list (`kernels.nested`)
+    markers plus `xor`/`is_null` are not-implemented stubs (just `comptime name`)
+    until their compute lands. No kernels are defined here.
+  * `StringValue` **executes** by materializing: leaves (`StringColumn`,
+    `StringConst`) resolve/broadcast to a `StringArray`, unary ops (`upper`,
+    `lower`, `strip`, `reverse`, `capitalize`, …) apply a `StringUnaryKernel`, and
+    predicates (`startswith`, `endswith`, `contains`) apply a
+    `StringBinaryPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
+    fixed lane, so string ops do not fuse (unlike the numeric lane); `length` is
+    the exception — byte length is `offsets[i+1]-offsets[i]`, which `LengthKernel`
+    vectorizes internally, and which the `expr.values` fused `Length` node folds
+    into a numeric chain when applied directly to a column.
+  * `BoolValue` / `ListValue` remain type architecture (bool logic / numeric
+    comparison / list execution is future work — their `execute` inherits the
+    raising default). Cross-family numeric-producing boundaries (reductions) are
+    non-lane `Value` nodes that materialize (not yet wired) rather than fuse.
 
 Dedicated per-family leaves (`NumericColumn` / `StringColumn` / `ListColumn`,
 `NumericLiteral` / `StringConst`) keep `core`/`NativeType` unconditional and the
@@ -53,7 +62,8 @@ from std.memory import ArcPointer
 
 from ..scalars import PrimitiveScalar, StringScalar
 from ..buffers import Buffer
-from ..arrays import PrimitiveArray, AnyArray
+from ..arrays import PrimitiveArray, BinaryLikeArray, AnyArray
+from ..builders import BinaryLikeBuilder
 from ..tabular import RecordBatch
 from ..kernels.helpers import Kernel
 from ..kernels.arithmetic import (
@@ -102,6 +112,8 @@ from ..kernels.boolean import (
 )
 from ..kernels.aggregate import SumKernel, MeanKernel, MinKernel, MaxKernel
 from ..kernels.string import (
+    StringUnaryKernel,
+    StringBinaryPredicateKernel,
     StartsWithKernel,
     EndsWithKernel,
     ContainsKernel,
@@ -169,6 +181,15 @@ def _numeric_array[
         bitmap=None,
         buffer=buffer^,
     )
+
+
+def _string_array[
+    T: StringLikeType
+](var array: BinaryLikeArray[T]) -> T.ArrayType:
+    """Reduce `BinaryLikeArray[T]` to the dtype's companion `T.ArrayType`. Bound
+    on `StringLikeType` so the array type unifies (it won't through the generic
+    `execute` return otherwise), mirroring `_numeric_array`."""
+    return array^
 
 
 def _not_wired[T: DataType]() raises -> T.ArrayType:
@@ -399,7 +420,11 @@ trait BoolValue(Value):
 
 trait StringValue(Value):
     """String-typed nodes. Cross-family methods follow the *result*: `length()`
-    yields a numeric boundary, `startswith()` a `BoolValue`."""
+    yields a numeric boundary, `startswith()` a `BoolValue`. `OutType` refines to
+    `StringLikeType` so `execute` can rebuild the typed string array from the
+    erased kernel result."""
+
+    comptime OutType: StringLikeType
 
     def length(self) -> Counting[LengthKernel, Self]:
         return Counting[LengthKernel, Self](self.copy())
@@ -427,18 +452,20 @@ trait StringValue(Value):
 
     def startswith[
         Rhs: StringValue
-    ](self, o: Rhs) -> BoolBinary[StartsWithKernel, Self, Rhs]:
-        return BoolBinary[StartsWithKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> StringPredicate[StartsWithKernel, Self, Rhs]:
+        return StringPredicate[StartsWithKernel, Self, Rhs](
+            self.copy(), o.copy()
+        )
 
     def endswith[
         Rhs: StringValue
-    ](self, o: Rhs) -> BoolBinary[EndsWithKernel, Self, Rhs]:
-        return BoolBinary[EndsWithKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> StringPredicate[EndsWithKernel, Self, Rhs]:
+        return StringPredicate[EndsWithKernel, Self, Rhs](self.copy(), o.copy())
 
     def contains[
         Rhs: StringValue
-    ](self, o: Rhs) -> BoolBinary[ContainsKernel, Self, Rhs]:
-        return BoolBinary[ContainsKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> StringPredicate[ContainsKernel, Self, Rhs]:
+        return StringPredicate[ContainsKernel, Self, Rhs](self.copy(), o.copy())
 
     def __eq__[
         Rhs: StringValue
@@ -569,13 +596,19 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 struct Counting[K: Kernel, A: Value](Value):
     """Unary op whose result is int32 — `length()` (string/list element count).
     A boundary: its operand is not numeric, so it materializes rather than fuses.
+    Only string `length` is wired (`LengthKernel`); list length raises until the
+    nested kernels land.
     """
 
     comptime OutType = dt.Int32Type
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return (
+            LengthKernel.dispatch(self.arg.execute(batch).to_any())
+            .as_int32()
+            .copy()
+        )
 
 
 @fieldwise_init
@@ -636,8 +669,8 @@ struct BoolUnary[K: Kernel, A: Value](BoolValue):
 
 
 @fieldwise_init
-struct StringBinary[K: Kernel, L: Value, R: Value](StringValue):
-    comptime OutType = dtype_like[Self.L, Self.R]
+struct StringBinary[K: Kernel, L: StringValue, R: StringValue](StringValue):
+    comptime OutType = Self.L.OutType
     var left: Self.L
     var right: Self.R
 
@@ -646,12 +679,45 @@ struct StringBinary[K: Kernel, L: Value, R: Value](StringValue):
 
 
 @fieldwise_init
-struct StringUnary[K: Kernel, A: Value](StringValue):
-    comptime OutType = dtype_like[Self.A, Self.A]
+struct StringUnary[K: StringUnaryKernel, A: StringValue](StringValue):
+    comptime OutType = Self.A.OutType
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return _string_array[Self.OutType](
+            Self.K.dispatch(self.arg.execute(batch).to_any())
+            .as_binary_like[Self.OutType]()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
+
+
+@fieldwise_init
+struct StringPredicate[
+    K: StringBinaryPredicateKernel, L: StringValue, R: StringValue
+](BoolValue):
+    """Binary string predicate producing a bool column — `startswith`,
+    `endswith`, `contains`. Both operands materialize; the kernel compares
+    element-wise (a constant pattern broadcasts through `StringConst`)."""
+
+    comptime OutType = dt.BoolType
+    var left: Self.L
+    var right: Self.R
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return (
+            Self.K.dispatch(
+                self.left.execute(batch).to_any(),
+                self.right.execute(batch).to_any(),
+            )
+            .as_bool()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
 
 
 comptime Add = NumericBinary[AddKernel, _, _]
@@ -686,9 +752,9 @@ comptime Greater = BoolBinary[GtKernel, _, _]
 comptime GreaterEqual = BoolBinary[GeKernel, _, _]
 comptime Equal = BoolBinary[EqKernel, _, _]
 comptime NotEqual = BoolBinary[NeKernel, _, _]
-comptime StartsWith = BoolBinary[StartsWithKernel, _, _]
-comptime EndsWith = BoolBinary[EndsWithKernel, _, _]
-comptime Contains = BoolBinary[ContainsKernel, _, _]
+comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
+comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
+comptime Contains = StringPredicate[ContainsKernel, _, _]
 
 comptime And = BoolBinary[AndKernel, _, _]
 comptime Or = BoolBinary[OrKernel, _, _]
@@ -782,7 +848,11 @@ struct StringColumn[T: StringLikeType](StringValue):
         return self._name.copy()
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return _string_array[Self.OutType](
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_binary_like[Self.OutType]()
+            .copy()
+        )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")
@@ -799,7 +869,13 @@ struct StringConst[T: StringLikeType](StringValue):
         self._value = StringScalar(value^)
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        # Broadcast the constant to a full-length array (one row per batch row).
+        var n = batch.num_rows()
+        var builder = BinaryLikeBuilder[Self.T](capacity=n)
+        var value = self._value.to_string()
+        for _ in range(n):
+            builder.append(value)
+        return _string_array[Self.T](builder.finish())
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("lit(", self._value, ")")

@@ -197,7 +197,7 @@ def test_fused_length_non_aligned() raises:
 
 
 def test_fused_length_sliced() raises:
-    """Length matches kernels.string.string_lengths on a sliced array."""
+    """Length matches kernels.string.LengthKernel on a sliced array."""
     var full = array(["aa", "b", "ccc", "dddd", "e"])
     var a = full.slice(1, 3)
     var batch = record_batch([a^], names=["c0"])

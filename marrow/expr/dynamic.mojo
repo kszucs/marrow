@@ -27,7 +27,7 @@ ADD/SUB/MUL/DIV/EQ/NE/LT/LE/GT/GE/AND/OR - Binary operations
 NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
-LENGTH - String byte length (dispatches to kernels.string.string_lengths)
+LENGTH - String byte length (dispatches to kernels.string.LengthKernel)
 """
 
 from ..arrays import AnyArray
@@ -54,7 +54,7 @@ from ..kernels.compare import (
     GtKernel,
     GeKernel,
 )
-from ..kernels.string import string_lengths
+from ..kernels.string import LengthKernel
 from ..kernels.cast import cast as cast_array
 
 
@@ -269,7 +269,7 @@ struct DynValue(
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
         elif self._tag == LENGTH:
-            return string_lengths(self._args[0].eval(batch)).to_any()
+            return LengthKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == CAST:
             return cast_array(self._args[0].eval(batch), self._cast_to.value())
         elif self._tag == IF_ELSE:

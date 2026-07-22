@@ -671,7 +671,7 @@ struct Length[S: StringValue](NumericValue):
 
     Wraps any ``StringValue`` child (e.g. ``StringColumn``) and produces a
     ``UInt32Array`` of byte lengths, matching
-    ``marrow.kernels.string.string_lengths``.  Implements ``NumericValue``
+    ``marrow.kernels.string.LengthKernel``.  Implements ``NumericValue``
     (rather than duplicating a whole-array kernel call) so it composes with
     other numeric nodes through the same single fused vectorize loop —
     ``core[W]`` vectorizes the length computation by loading ``W+1``

@@ -11,9 +11,11 @@ from marrow.dtypes import (
     int32,
     int64,
     float64,
+    string,
     Int64Type,
     Int32Type,
     Float64Type,
+    BoolType,
     DataType,
 )
 from marrow.tabular import record_batch, RecordBatch
@@ -128,6 +130,102 @@ def test_table_reflects_and_executes() raises:
     var expr = (t.a + t.b) * t.c
     assert_true(out_type_is[Int64Type](expr))
     assert_true(_eq(expr, array([22, 44, 66, 88], int64)))
+
+
+# ---------------------------------------------------------------------------
+# String execution
+# ---------------------------------------------------------------------------
+
+
+def _sbatch() raises -> RecordBatch:
+    return record_batch(
+        [array(["Hello", "WORLD", " pad ", "abc"]).copy()],
+        names=["s"],
+    )
+
+
+def test_string_column_execute() raises:
+    var r = col("s", string).execute(_sbatch())
+    assert_true(r == array(["Hello", "WORLD", " pad ", "abc"]))
+
+
+def test_string_const_broadcast() raises:
+    var r = lit("x", string).execute(_sbatch())
+    assert_true(r == array(["x", "x", "x", "x"]))
+
+
+def test_string_upper() raises:
+    var r = col("s", string).upper().execute(_sbatch())
+    assert_true(r == array(["HELLO", "WORLD", " PAD ", "ABC"]))
+
+
+def test_string_lower() raises:
+    var r = col("s", string).lower().execute(_sbatch())
+    assert_true(r == array(["hello", "world", " pad ", "abc"]))
+
+
+def test_string_strip() raises:
+    var r = col("s", string).strip().execute(_sbatch())
+    assert_true(r == array(["Hello", "WORLD", "pad", "abc"]))
+
+
+def test_string_reverse() raises:
+    var r = col("s", string).reverse().execute(_sbatch())
+    assert_true(r == array(["olleH", "DLROW", " dap ", "cba"]))
+
+
+def test_string_capitalize() raises:
+    var r = col("s", string).capitalize().execute(_sbatch())
+    assert_true(r == array(["Hello", "World", " pad ", "Abc"]))
+
+
+def test_string_chained_unary() raises:
+    # strip then upper — two materializing passes
+    var r = col("s", string).strip().upper().execute(_sbatch())
+    assert_true(r == array(["HELLO", "WORLD", "PAD", "ABC"]))
+
+
+def test_string_length() raises:
+    var r = col("s", string).length().execute(_sbatch())
+    assert_true(r == array([5, 5, 5, 3], int32))
+
+
+def test_string_length_dtype() raises:
+    assert_true(out_type_is[Int32Type](col("s", string).length()))
+
+
+def test_string_startswith() raises:
+    var r = col("s", string).startswith(lit("W", string)).execute(_sbatch())
+    assert_true(r == array([False, True, False, False]))
+
+
+def test_string_endswith() raises:
+    var r = col("s", string).endswith(lit("D", string)).execute(_sbatch())
+    assert_true(r == array([False, True, False, False]))
+
+
+def test_string_contains() raises:
+    var r = col("s", string).contains(lit("o", string)).execute(_sbatch())
+    # "Hello"->o yes; "WORLD"->lowercase o no; " pad "->no; "abc"->no
+    assert_true(r == array([True, False, False, False]))
+
+
+def test_string_predicate_dtype() raises:
+    assert_true(
+        out_type_is[BoolType](col("s", string).startswith(lit("W", string)))
+    )
+
+
+def test_anyvalue_erases_string_unary() raises:
+    var boxed = AnyValue(col("s", string).upper())
+    assert_true(
+        boxed.execute(_sbatch()) == array(["HELLO", "WORLD", " PAD ", "ABC"])
+    )
+
+
+def test_anyvalue_erases_string_predicate() raises:
+    var boxed = AnyValue(col("s", string).contains(lit("a", string)))
+    assert_true(boxed.execute(_sbatch()) == array([False, False, True, True]))
 
 
 def main() raises:

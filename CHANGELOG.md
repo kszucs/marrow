@@ -4,6 +4,26 @@
 
 ### Features
 
+- **String compute kernels** (`marrow.kernels.string`): real implementations
+  replacing the name-only markers. `LengthKernel` (byte length →
+  `Int32Array`, vectorized as `offsets[i+1]-offsets[i]`), unary string→string
+  ops via the `StringUnaryKernel` trait (`UpperKernel`, `LowerKernel`,
+  `ReverseKernel`, `StripKernel`, `LStripKernel`, `RStripKernel`,
+  `CapitalizeKernel`), and binary predicates via the
+  `StringBinaryPredicateKernel` trait (`StartsWithKernel`, `EndsWithKernel`,
+  `ContainsKernel` → `BoolArray`). Each has a typed `apply` and a runtime
+  `dispatch(AnyArray)`. The free-standing `string_lengths` function is removed
+  (callers use `LengthKernel`).
+
+- **`marrow.expr.ibis` string execution**: the `StringValue` family now
+  executes by materializing — `StringColumn` resolves from the batch,
+  `StringConst` broadcasts, `StringUnary` applies a `StringUnaryKernel`,
+  `Counting` (`length`) applies `LengthKernel`, and the new `StringPredicate`
+  node (`startswith`/`endswith`/`contains`) applies a
+  `StringBinaryPredicateKernel` → `BoolValue`. Variable-width UTF-8 has no
+  fixed SIMD lane, so string ops materialize rather than fuse; `length` is the
+  one op that vectorizes internally (offset subtraction).
+
 - **dtype → scalar/array associated types** (`DataType.ScalarType` /
   `DataType.ArrayType`): every Arrow type now names its companion typed scalar
   and array (the inverse of `Array.ScalarType`), provided at the family traits

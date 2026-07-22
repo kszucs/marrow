@@ -6,17 +6,17 @@ from marrow.arrays import (
     BoolArray,
     AnyArray,
     Int64Array,
-    UInt32Array,
+    Int32Array,
 )
 from marrow.builders import array
-from marrow.dtypes import int64, float64, bool_ as bool_dt, uint32, Int64Type
+from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
 from marrow.kernels.arithmetic import (
     AddKernel,
     SubKernel,
     AbsKernel,
     NegKernel,
 )
-from marrow.kernels.string import string_lengths
+from marrow.kernels.string import LengthKernel
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     DynValue,
@@ -54,10 +54,10 @@ def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:
     return result.copy()
 
 
-def _exec_length(expr: DynValue, batch: RecordBatch) raises -> UInt32Array:
+def _exec_length(expr: DynValue, batch: RecordBatch) raises -> Int32Array:
     """Helper: evaluate a length expression against the batch."""
     var tmp = expr.eval(batch)
-    ref result = tmp.as_uint32()
+    ref result = tmp.as_int32()
     return result.copy()
 
 
@@ -293,11 +293,11 @@ def test_is_null() raises:
 
 
 def test_length_expr() raises:
-    """``.length()`` matches kernels.string.string_lengths."""
+    """``.length()`` matches kernels.string.LengthKernel."""
     var a = array(["ab", "cde", "", "f"])
     var batch = record_batch([a.copy()], names=["c0"])
     var result = _exec_length(col(0).length(), batch)
-    assert_true(result == string_lengths(a))
+    assert_true(result == LengthKernel.apply(a))
 
 
 def test_kind_length() raises:

@@ -71,7 +71,6 @@ from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
-from .string import string_lengths
 
 
 struct Filter(Kernel):
