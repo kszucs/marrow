@@ -47,7 +47,9 @@ from std.sys.compile import codegen_unreachable
 
 from .utils import variant_dispatch, variant_dispatch_raises
 from .scalars import *
-from .scalars import Scalar as ScalarTrait  # `Scalar` alone = builtin `Scalar[_]`
+from .scalars import (
+    Scalar as ScalarTrait,
+)  # `Scalar` alone = builtin `Scalar[_]`
 from .arrays import *
 
 
@@ -314,6 +316,7 @@ struct LargeStringType(StringLikeType):
 
 struct FixedSizeBinaryType(DataType, ImplicitlyCopyable):
     """Fixed-size binary type — every element is exactly `byte_width` bytes."""
+
     comptime ScalarType = FixedSizeBinaryScalar
     comptime ArrayType = FixedSizeBinaryArray
 
@@ -362,6 +365,7 @@ comptime nanosecond = TimeUnit(3)
 
 struct Date32Type(TemporalType):
     """Date32 — days since Unix epoch (int32)."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -376,6 +380,7 @@ struct Date32Type(TemporalType):
 
 struct Date64Type(TemporalType):
     """Date64 — milliseconds since Unix epoch (int64)."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -390,6 +395,7 @@ struct Date64Type(TemporalType):
 
 struct Time32Type(TemporalType):
     """Time32 — seconds or milliseconds since midnight (int32)."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -406,6 +412,7 @@ struct Time32Type(TemporalType):
 
 struct Time64Type(TemporalType):
     """Time64 — microseconds or nanoseconds since midnight (int64)."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -423,6 +430,7 @@ struct Time64Type(TemporalType):
 struct TimestampType(TemporalType):
     """Timestamp — int64 elapsed units since Unix epoch, with optional timezone.
     """
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -447,6 +455,7 @@ struct TimestampType(TemporalType):
 
 struct DurationType(TemporalType):
     """Duration — elapsed int64 units, no epoch reference."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -463,6 +472,7 @@ struct DurationType(TemporalType):
 
 struct YearMonthIntervalType(IntervalType):
     """Year/month interval — number of months as int32."""
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -478,6 +488,7 @@ struct YearMonthIntervalType(IntervalType):
 struct DayTimeIntervalType(IntervalType):
     """Day/time interval — {days: int32, milliseconds: int32} packed into int64.
     """
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -493,6 +504,7 @@ struct DayTimeIntervalType(IntervalType):
 struct MonthDayNanoIntervalType(IntervalType):
     """Month/day/nanosecond interval — {months: int32, days: int32, nanos: int64} in 16 bytes.
     """
+
     comptime ScalarType = PrimitiveScalar[Self]
     comptime ArrayType = PrimitiveArray[Self]
 
@@ -679,6 +691,7 @@ struct MapType(DataType, ListLikeType):
     keys_sorted)``. Accessors return by value so a map-dtype temporary can be
     read safely.
     """
+
     comptime ScalarType = ListScalar
     comptime ArrayType = ListLikeArray[Self]
 
@@ -752,6 +765,7 @@ struct DictionaryType(DataType):
     The index type must be an integer type (int8/16/32/64, uint8/16/32/64).
     The value type (the dictionary) can be any Arrow type.
     """
+
     comptime ScalarType = DictionaryScalar
     comptime ArrayType = DictionaryArray
 
