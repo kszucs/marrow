@@ -4,6 +4,26 @@
 
 ### Features
 
+- **dtype → scalar/array associated types** (`DataType.ScalarType` /
+  `DataType.ArrayType`): every Arrow type now names its companion typed scalar
+  and array (the inverse of `Array.ScalarType`), provided at the family traits
+  (`NumericType` → `PrimitiveScalar[Self]` / `PrimitiveArray[Self]`,
+  `StringLikeType` → `StringScalar` / `BinaryLikeArray[Self]`, …) and on the
+  standalone concrete types. This lets generic code map a dtype to its concrete
+  companion — e.g. a leaf can hold `T.ScalarType` and construct it via a helper
+  bound on the provider trait.
+
+- **`marrow.expr.ibis` typed expression architecture**: value families are
+  traits (`NumericValue` / `BoolValue` / `StringValue`), operations are node
+  structs, and kernels are pure name markers — promotion lives entirely in the
+  value hierarchy (one node struct per `(family, output-dtype rule)`:
+  `NumericBinary` widening, `FloatBinary`, `NumericUnary`/`FloatUnary`,
+  `CountingUnary`, `BoolBinary`/`BoolUnary`, `StringUnary`). `Column` and
+  `Literal` are unified leaves via conditional conformance; `Literal` holds the
+  dtype's companion `T.ScalarType` and `lit` is an alias for it. Ops include
+  arithmetic (`+ - * / %`, `neg`/`abs`/`sqrt`), comparisons, logical
+  (`& | ~`), `isnull`, and string `length`/`startswith`/`upper`/`lower`/`==`.
+
 - **Columnar selection for all array types** (`filter` / `take` / `drop_null`):
   the selection kernels now support every array type — including nested
   `list` / `large_list` / `map` / `fixed_size_list` / `struct`, plus
