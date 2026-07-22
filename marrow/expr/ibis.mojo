@@ -426,8 +426,8 @@ trait StringValue(Value):
 
     comptime OutType: StringLikeType
 
-    def length(self) -> Counting[LengthKernel, Self]:
-        return Counting[LengthKernel, Self](self.copy())
+    def length(self) -> StringLength[Self]:
+        return StringLength[Self](self.copy())
 
     def upper(self) -> StringUnary[UpperKernel, Self]:
         return StringUnary[UpperKernel, Self](self.copy())
@@ -593,22 +593,34 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
 
 @fieldwise_init
-struct Counting[K: Kernel, A: Value](Value):
-    """Unary op whose result is int32 — `length()` (string/list element count).
-    A boundary: its operand is not numeric, so it materializes rather than fuses.
-    Only string `length` is wired (`LengthKernel`); list length raises until the
-    nested kernels land.
+struct StringLength[A: StringValue](Value):
+    """String byte length → int32 boundary (`length()`). Not a numeric lane (its
+    operand is a materialized string, not a fixed-width column), so it evaluates
+    the child and calls `LengthKernel.apply` on the typed string array directly —
+    no type erasure. `LengthKernel` vectorizes the offset subtraction internally.
     """
 
     comptime OutType = dt.Int32Type
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return (
-            LengthKernel.dispatch(self.arg.execute(batch).to_any())
-            .as_int32()
-            .copy()
+        return LengthKernel.apply(
+            rebind[BinaryLikeArray[Self.A.OutType]](self.arg.execute(batch))
         )
+
+
+@fieldwise_init
+struct Counting[K: Kernel, A: Value](Value):
+    """Unary op whose result is int32 — list `length()` (element count). A
+    boundary: its operand is not numeric, so it materializes rather than fuses.
+    List length raises until the nested kernels land.
+    """
+
+    comptime OutType = dt.Int32Type
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
 
 @fieldwise_init
@@ -684,10 +696,13 @@ struct StringUnary[K: StringUnaryKernel, A: StringValue](StringValue):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        # rebind: the child's `A.OutType.ArrayType` *is* `BinaryLikeArray[A.OutType]`
+        # (A: StringValue), but the associated-type spelling won't reduce here —
+        # assert the identity so we call the typed kernel `apply` (no erasure).
         return _string_array[Self.OutType](
-            Self.K.dispatch(self.arg.execute(batch).to_any())
-            .as_binary_like[Self.OutType]()
-            .copy()
+            Self.K.apply(
+                rebind[BinaryLikeArray[Self.A.OutType]](self.arg.execute(batch))
+            )
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -707,13 +722,11 @@ struct StringPredicate[
     var right: Self.R
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return (
-            Self.K.dispatch(
-                self.left.execute(batch).to_any(),
-                self.right.execute(batch).to_any(),
-            )
-            .as_bool()
-            .copy()
+        # Both operands share the string type; rebind their `OutType.ArrayType`
+        # to the concrete `BinaryLikeArray` the predicate kernel's `apply` takes.
+        return Self.K.apply(
+            rebind[BinaryLikeArray[Self.L.OutType]](self.left.execute(batch)),
+            rebind[BinaryLikeArray[Self.L.OutType]](self.right.execute(batch)),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -765,7 +778,7 @@ comptime NotNull = BoolUnary[NotNullKernel, _]
 comptime IsNan = BoolUnary[IsNanKernel, _]
 comptime IsInf = BoolUnary[IsInfKernel, _]
 
-comptime Length = Counting[LengthKernel, _]
+comptime Length = StringLength[_]
 comptime Upper = StringUnary[UpperKernel, _]
 comptime Lower = StringUnary[LowerKernel, _]
 comptime Reverse = StringUnary[ReverseKernel, _]

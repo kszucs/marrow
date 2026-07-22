@@ -26,7 +26,6 @@ from std.utils.index import IndexList
 
 from ..arrays import (
     AnyArray,
-    StringArray,
     BinaryLikeArray,
     BoolArray,
     Int32Array,
@@ -55,18 +54,21 @@ struct LengthKernel(Kernel):
     comptime name = "length"
 
     @staticmethod
-    def apply(array: StringArray) raises -> Int32Array:
+    def apply[
+        T: StringLikeType
+    ](array: BinaryLikeArray[T]) raises -> Int32Array:
+        comptime off = T.offset
         var n = len(array)
         var out = Buffer.alloc_uninit[DType.int32](n)
-        var offs = array.offsets.view[DType.int32](array.offset)
-        comptime width = simd_byte_width() // size_of[Scalar[DType.int32]]()
+        var offs = array.offsets.view[off](array.offset)
+        comptime width = simd_byte_width() // size_of[Scalar[off]]()
 
         @parameter
         @always_inline
         def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
             var i = idx[0]
             out.view[DType.int32](i).store[W](
-                0, offs.load[W](i + 1) - offs.load[W](i)
+                0, (offs.load[W](i + 1) - offs.load[W](i)).cast[DType.int32]()
             )
 
         @always_inline
@@ -86,6 +88,8 @@ struct LengthKernel(Kernel):
     def dispatch(array: AnyArray) raises -> AnyArray:
         if array.dtype().is_string():
             return Self.apply(array.as_string()).to_any()
+        elif array.dtype().is_large_string():
+            return Self.apply(array.as_large_string()).to_any()
         else:
             raise Error(t"length: expected a string array, got {array.dtype()}")
 
