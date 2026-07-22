@@ -86,8 +86,8 @@ def test_preserving_unary_dtype() raises:
     assert_true(out_type_is[Int32Type](col("a", int32).ceil()))
     assert_true(out_type_is[Int32Type](col("a", int32).floor()))
     assert_true(out_type_is[Int32Type](col("a", int32).sign()))
-    # power widens like the other arithmetic binaries
-    assert_true(out_type_is[Int64Type](col("a", int32) ** col("b", int64)))
+    # power always yields float64 (ibis Power / numpy semantics)
+    assert_true(out_type_is[Float64Type](col("a", int32) ** col("b", int64)))
 
 
 def test_float_unary_ops() raises:
@@ -126,10 +126,9 @@ def test_list_column_is_list() raises:
     assert_true(_takes_list(l))
 
 
-def test_list_length_is_numeric() raises:
+def test_list_length_is_int32() raises:
     var l = col("l", list_(int64))
-    # length() : ListValue -> NumericValue (int32)
-    assert_true(_takes_numeric(l.length()))
+    # length() : ListValue -> int32 boundary (materializes, not a numeric lane)
     assert_true(out_type_is[Int32Type](l.length()))
 
 
@@ -155,7 +154,7 @@ def test_mean_is_float() raises:
 def test_min_max_preserve_dtype() raises:
     assert_true(out_type_is[Int32Type](col("a", int32).min()))
     assert_true(out_type_is[Int32Type](col("a", int32).max()))
-    assert_true(_takes_numeric(col("a", int64).min()))
+    assert_true(out_type_is[Int64Type](col("a", int64).max()))
 
 
 def test_comparison_is_bool() raises:
@@ -223,10 +222,9 @@ def test_sqrt_is_float() raises:
 # --- cross-family + string result families -----------------------------------
 
 
-def test_string_length_is_numeric() raises:
+def test_string_length_is_int32() raises:
     var s = col("s", string)  # a StringValue
-    # length() : StringValue -> NumericValue (int32)
-    assert_true(_takes_numeric(s.length()))
+    # length() : StringValue -> int32 boundary (materializes, not a numeric lane)
     assert_true(out_type_is[Int32Type](s.length()))
 
 
@@ -243,8 +241,7 @@ def test_upper_lower_stay_string() raises:
     assert_true(_takes_string(s.upper()))
     assert_true(_takes_string(s.lower()))
     assert_true(out_type_is[StringType](s.upper()))
-    # and a string result re-enters the string surface: upper().length() -> int32
-    assert_true(_takes_numeric(s.upper().length()))
+    # a string result re-enters the string surface: upper().length() -> int32
     assert_true(out_type_is[Int32Type](s.upper().length()))
 
 

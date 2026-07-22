@@ -13,6 +13,18 @@
   companion — e.g. a leaf can hold `T.ScalarType` and construct it via a helper
   bound on the provider trait.
 
+- **`marrow.expr.ibis` fused execution**: the numeric family now *executes*,
+  hooked to the real `marrow.kernels` — `NumericValue` **is** the numeric lane
+  (refines `OutType` to `NumericType`, carries a `core[W]` SIMD primitive, and its
+  `execute` vectorizes `core` across the whole tree in a **single fused pass**).
+  Arithmetic nodes are parameterized by the actual `AddKernel`/`DivKernel`/… (the
+  kernel supplies compute; promotion stays in the node). Dedicated per-family
+  leaves (`NumericColumn`/`StringColumn`/`ListColumn`, `NumericLiteral`/
+  `StringLiteral`) with `col`/`lit` overloaded by dtype family; `execute` returns
+  the dtype's companion `Self.OutType.ArrayType`. Bool/string/list are the type
+  architecture (execution pending); cross-family numeric-producing boundaries
+  (`length`, reductions) are non-lane nodes that materialize.
+
 - **`marrow.expr.ibis` typed expression architecture**: value families are
   traits (`NumericValue` / `BoolValue` / `StringValue`), operations are node
   structs, and kernels are pure name markers — promotion lives entirely in the

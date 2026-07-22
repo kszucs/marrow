@@ -1,34 +1,37 @@
-"""ibis-like typed expression system — TYPE ARCHITECTURE (no execution yet).
+"""ibis-like typed expression system with fused execution.
 
-Value families are traits, operation nodes are structs, and each node statically
-conforms to the family of its *output*. Execution is out of scope: ops are
-mimicked by zero-size markers so we can construct trees and prove family
-conformance / composition purely in the typesystem.
+Value families are traits, operations are node structs, and each node statically
+conforms to the family of its *output*. The numeric family additionally
+*executes*: it is hooked to the real `marrow.kernels` (which supply the `core[T,W]`
+SIMD functors) and fuses lane-computable chains into a single vectorized pass.
 
-Promotion is encoded entirely in the value hierarchy, exactly like ibis: every
-operation node has a SINGLE fixed value family and declares its own output dtype
-(`comptime OutType`), just as each ibis op sets `dtype = rlz.numeric_like` /
-`dt.float64` / `dt.boolean`. A `Kernel` carries no type information at all — it is
-only a name grouping compute methods. There is one node struct per (family,
-output-dtype rule): `NumericBinary` (widening), `FloatBinary` (float64),
-`NumericUnary` (preserving), `CountingUnary` (int32), `BoolBinary`/`BoolUnary`
-(bool). Reusable dtype rules (`highest_precedence`, `dtype_like`) mirror ibis's
-`rlz.*`.
+Layers:
+  * `execute(batch) -> Self.OutType.ArrayType` — the verb, declared by each family
+    (not the base `Value`, which would make the associated return unresolvable /
+    ambiguous). It returns the dtype's companion array (the dtype→array associated
+    type on `DataType`). Numeric fuses; other families raise until wired.
+  * `NumericValue` **is** the numeric lane: it refines `OutType` to `NumericType`,
+    adds the `core[W]` SIMD primitive, and its `execute` vectorizes `core` across
+    the whole tree — composite nodes call the kernel's `core` on their children's
+    `core`, so the compiler inlines the entire chain (zero intermediate arrays).
+  * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
+    Numeric nodes are parameterized by the **real** kernels (`AddKernel`, …).
+  * `BoolValue` / `StringValue` / `ListValue` are the type architecture (execution
+    is future work — their `execute` inherits the raising default). Cross-family
+    numeric-producing boundaries (`length`, reductions) are non-lane `Value` nodes
+    that materialize (not yet wired) rather than fuse.
 
-The family follows the *result*, not the input — a `StringValue` operand can yield
-a `NumericValue` node (`length()`) or a `BoolValue` node (`startswith()`):
-
-    Add(col("a", int32), col("b", int64))    # NumericValue, OutType = int64 (widening)
-    col("a", int64) / col("b", int64)        # NumericValue, OutType = float64
-    Less(a, b)                               # BoolValue
-    (a + b) < a                              # numeric input -> BoolValue
-    (a < b) & (b < c)                        # BoolValue & BoolValue -> BoolValue
-    col("s", string).length()               # StringValue  -> NumericValue (int32)
-    col("s", string).startswith(t)           # StringValue  -> BoolValue
+Dedicated per-family leaves (`NumericColumn` / `StringColumn` / `ListColumn`,
+`NumericLiteral` / `StringLiteral`) keep `core`/`NativeType` unconditional and the
+hierarchy sharp; `col` / `lit` overload by dtype family.
 """
 
-from std.sys import bit_width_of
+from std.sys import bit_width_of, size_of
+from std.sys.info import simd_byte_width
 from std.builtin.rebind import downcast
+from std.builtin.simd import Scalar
+from std.utils.index import IndexList
+from std.algorithm.backend.vectorize import vectorize
 
 from .. import dtypes as dt
 from ..dtypes import (
@@ -39,21 +42,39 @@ from ..dtypes import (
     BoolType,
     StringLikeType,
     ListLikeType,
+    DType,
 )
 from ..scalars import PrimitiveScalar, StringScalar
+from ..buffers import Buffer
+from ..arrays import PrimitiveArray
+from ..tabular import RecordBatch
+from ..kernels.arithmetic import (
+    BinaryKernel,
+    UnaryKernel,
+    AddKernel,
+    SubKernel,
+    MulKernel,
+    DivKernel,
+    ModKernel,
+    PowKernel,
+    NegKernel,
+    AbsKernel,
+    CeilKernel,
+    FloorKernel,
+    RoundKernel,
+    SignKernel,
+    SqrtKernel,
+    ExpKernel,
+    LogKernel,
+)
 
 
 # ---------------------------------------------------------------------------
-# Promotion rules — named, reusable parametric comptime aliases (ibis rlz-style)
+# Promotion rules — reusable parametric comptime aliases (ibis rlz-style)
 # ---------------------------------------------------------------------------
-#
-# A rule maps operand value types to an output dtype *type*. A value node names
-# one of these directly as its `OutType` (like ibis ops: `dtype = rlz.numeric_like`
-# / `rlz.dtype_like`). Kernels are not involved — promotion lives in the node.
 
 
 def _rank[T: DataType]() -> Int:
-    """Promotion rank from bit width; floats outrank same-width ints."""
     comptime if conforms_to(T, NumericType):
         comptime N = downcast[T, NumericType]()
         return bit_width_of[N.native]() + (
@@ -61,15 +82,6 @@ def _rank[T: DataType]() -> Int:
         )
     else:
         return 0
-
-
-comptime dtype_like[L: Value, R: Value] = L.OutType
-"""Output dtype follows the (left) operand — e.g. a unary op preserving type."""
-
-comptime highest_precedence[L: Value, R: Value] = L.OutType if (
-    _rank[L.OutType]() >= _rank[R.OutType]()
-) else R.OutType
-"""Output dtype is the wider operand (bit-width rank) — `Add(int32, int64) → int64`."""
 
 
 def _is_float[T: DataType]() -> Bool:
@@ -80,63 +92,53 @@ def _is_float[T: DataType]() -> Bool:
         return False
 
 
+comptime dtype_like[L: Value, R: Value] = L.OutType
+"""Output dtype follows the (left) operand — preserving unary/binary."""
+
+comptime highest_precedence[L: NumericValue, R: NumericValue] = L.OutType if (
+    _rank[L.OutType]() >= _rank[R.OutType]()
+) else R.OutType
+"""Output dtype is the wider operand — `Add(int32, int64) → int64`. Bound on
+`NumericValue` so the result is a `NumericType` (has `.native`)."""
+
 comptime sum_result[A: Value] = dt.Float64Type if _is_float[
     A.OutType
 ]() else dt.Int64Type
-"""Reduction that widens to 64-bit to avoid overflow — floats → float64, ints →
-int64 (like ibis `Sum`). (Unsigned is treated as signed int64 for now.)"""
+"""Reduction widens to 64-bit — floats → float64, ints → int64 (ibis `Sum`)."""
+
+
+def _numeric_array[
+    T: NumericType
+](var buffer: Buffer[mut=False], length: Int) -> T.ArrayType:
+    """Wrap a filled buffer as the dtype's companion array. Bound on `NumericType`
+    so `PrimitiveArray[T]` reduces to `T.ArrayType` (won't unify in the generic
+    `execute` default otherwise)."""
+    return PrimitiveArray[T](
+        dtype=T(),
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        buffer=buffer^,
+    )
+
+
+def _not_wired[T: DataType]() raises -> T.ArrayType:
+    """Raising stub typed as `T.ArrayType` — lets a family/boundary `execute`
+    default satisfy the return type before its execution is wired."""
+    raise Error("execute: not wired for this node yet")
 
 
 # ---------------------------------------------------------------------------
-# Kernel — the interface the expression expects a "kernel" to conform to
+# Kernel markers — for the type-only (bool/string/list/reduction) families. The
+# numeric family uses the real `marrow.kernels` (imported above) directly.
 # ---------------------------------------------------------------------------
 
 
 trait Kernel:
-    """A mimic kernel — just a named *grouping* of an operation's compute methods
-    (`name()` for now; `core`/`apply` later). It carries NO type information: the
-    output dtype (promotion) is declared entirely by the value node (see the node
-    structs' `OutType`), never by the kernel."""
-
     @staticmethod
     def name() -> String:
         ...
-
-
-struct AddKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "add"
-
-
-struct SubKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "subtract"
-
-
-struct MulKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "multiply"
-
-
-struct DivKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "divide"
-
-
-struct NegKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "negate"
-
-
-struct AbsKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "abs"
 
 
 struct LtKernel(Kernel):
@@ -193,94 +195,16 @@ struct NotKernel(Kernel):
         return "not"
 
 
-struct LengthKernel(Kernel):
+struct XorKernel(Kernel):
     @staticmethod
     def name() -> String:
-        return "length"
+        return "xor"
 
 
 struct StartsWithKernel(Kernel):
     @staticmethod
     def name() -> String:
         return "startswith"
-
-
-struct ModKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "modulo"
-
-
-struct SqrtKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "sqrt"
-
-
-struct IsNullKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "is_null"
-
-
-struct UpperKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "upper"
-
-
-struct LowerKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "lower"
-
-
-struct PowKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "power"
-
-
-struct CeilKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "ceil"
-
-
-struct FloorKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "floor"
-
-
-struct RoundKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "round"
-
-
-struct SignKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "sign"
-
-
-struct ExpKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "exp"
-
-
-struct LnKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "ln"
-
-
-struct XorKernel(Kernel):
-    @staticmethod
-    def name() -> String:
-        return "xor"
 
 
 struct EndsWithKernel(Kernel):
@@ -295,10 +219,34 @@ struct ContainsKernel(Kernel):
         return "contains"
 
 
+struct LengthKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "length"
+
+
+struct UpperKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "upper"
+
+
+struct LowerKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "lower"
+
+
 struct ReverseKernel(Kernel):
     @staticmethod
     def name() -> String:
         return "reverse"
+
+
+struct IsNullKernel(Kernel):
+    @staticmethod
+    def name() -> String:
+        return "is_null"
 
 
 struct ArrayLengthKernel(Kernel):
@@ -338,30 +286,65 @@ struct MaxKernel(Kernel):
 
 
 # ---------------------------------------------------------------------------
-# Value — base trait; family sub-traits carry the operator surface
+# Value — base trait; `execute` is the uniform verb
 # ---------------------------------------------------------------------------
 
 
 trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
-    """Every expression node. Carries the associated output dtype.
-
-    Copies are explicit (`.copy()`) — like arrays/scalars, nodes are not
-    `ImplicitlyCopyable`, so a `Literal` can hold a typed (non-implicitly-copyable)
-    scalar."""
+    """Every expression node. `execute` returns the dtype's companion array.
+    Copies are explicit (`.copy()`); nodes are not `ImplicitlyCopyable`."""
 
     comptime OutType: DataType
+
+    # `execute` is declared by each family (not here) — declaring it on the base
+    # too makes a generic call ambiguous and the associated-return won't unify
+    # through the base default (same reason `marrow.expr.values` keeps it off
+    # `Value`). Every family below provides `execute -> Self.OutType.ArrayType`.
 
     def name(self) -> String:
         return String()
 
     def isnull(self) -> BoolUnary[IsNullKernel, Self]:
-        """Null predicate — any value in any family yields a `BoolValue` (ibis
-        `IsNull`). The result family follows the op, not the operand."""
+        """Null predicate — any value in any family yields a `BoolValue`."""
         return BoolUnary[IsNullKernel, Self](self.copy())
 
 
 trait NumericValue(Value):
-    """Numeric-typed nodes: arithmetic + comparison operator surface."""
+    """The numeric lane: refines `OutType` to `NumericType`, carries the `core[W]`
+    SIMD fusion primitive + a fusing `execute`, and the arithmetic/comparison
+    operator surface. Arithmetic nodes hook to the real kernels."""
+
+    comptime OutType: NumericType
+    comptime NativeType: DType
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        ...
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        comptime native = Self.NativeType
+        comptime width = simd_byte_width() // size_of[Scalar[native]]()
+        var length = batch.num_rows()
+        var buf = Buffer.alloc_uninit[native](length)
+
+        @parameter
+        @always_inline
+        def fill[
+            W: Int, rank: Int, alignment: Int = 1
+        ](idx: IndexList[rank],) -> None:
+            var i = idx[0]
+            buf.view[native](i, length).store[W](0, self.core[W](batch, i))
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            fill[W, rank=1](IndexList[1](i))
+
+        vectorize[width](length, lane)
+        return _numeric_array[Self.OutType](buf.to_immutable(), length)
+
+    # --- arithmetic (fusable, real kernels) --------------------------------
 
     def __add__[
         Rhs: NumericValue
@@ -378,20 +361,20 @@ trait NumericValue(Value):
     ](self, o: Rhs) -> NumericBinary[MulKernel, Self, Rhs]:
         return NumericBinary[MulKernel, Self, Rhs](self.copy(), o.copy())
 
-    def __truediv__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> FloatBinary[DivKernel, Self, Rhs]:
-        return FloatBinary[DivKernel, Self, Rhs](self.copy(), o.copy())
-
     def __mod__[
         Rhs: NumericValue
     ](self, o: Rhs) -> NumericBinary[ModKernel, Self, Rhs]:
         return NumericBinary[ModKernel, Self, Rhs](self.copy(), o.copy())
 
+    def __truediv__[
+        Rhs: NumericValue
+    ](self, o: Rhs) -> FloatBinary[DivKernel, Self, Rhs]:
+        return FloatBinary[DivKernel, Self, Rhs](self.copy(), o.copy())
+
     def __pow__[
         Rhs: NumericValue
-    ](self, o: Rhs) -> NumericBinary[PowKernel, Self, Rhs]:
-        return NumericBinary[PowKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> FloatBinary[PowKernel, Self, Rhs]:
+        return FloatBinary[PowKernel, Self, Rhs](self.copy(), o.copy())
 
     def __neg__(self) -> NumericUnary[NegKernel, Self]:
         return NumericUnary[NegKernel, Self](self.copy())
@@ -417,21 +400,24 @@ trait NumericValue(Value):
     def exp(self) -> FloatUnary[ExpKernel, Self]:
         return FloatUnary[ExpKernel, Self](self.copy())
 
-    def ln(self) -> FloatUnary[LnKernel, Self]:
-        return FloatUnary[LnKernel, Self](self.copy())
+    def ln(self) -> FloatUnary[LogKernel, Self]:
+        return FloatUnary[LogKernel, Self](self.copy())
 
-    # reductions (N -> 1); the node stays a NumericValue carrying the result dtype
+    # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
+
     def sum(self) -> SumUnary[SumKernel, Self]:
         return SumUnary[SumKernel, Self](self.copy())
 
-    def mean(self) -> FloatUnary[MeanKernel, Self]:
-        return FloatUnary[MeanKernel, Self](self.copy())
+    def mean(self) -> MeanUnary[MeanKernel, Self]:
+        return MeanUnary[MeanKernel, Self](self.copy())
 
-    def min(self) -> NumericUnary[MinKernel, Self]:
-        return NumericUnary[MinKernel, Self](self.copy())
+    def min(self) -> MinMaxUnary[MinKernel, Self]:
+        return MinMaxUnary[MinKernel, Self](self.copy())
 
-    def max(self) -> NumericUnary[MaxKernel, Self]:
-        return NumericUnary[MaxKernel, Self](self.copy())
+    def max(self) -> MinMaxUnary[MaxKernel, Self]:
+        return MinMaxUnary[MaxKernel, Self](self.copy())
+
+    # --- comparisons (-> BoolValue) ----------------------------------------
 
     def __lt__[
         Rhs: NumericValue
@@ -465,7 +451,10 @@ trait NumericValue(Value):
 
 
 trait BoolValue(Value):
-    """Boolean-typed nodes: logical operator surface."""
+    """Boolean-typed nodes: logical operator surface (type architecture)."""
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
     def __and__[
         Rhs: BoolValue
@@ -485,10 +474,11 @@ trait BoolValue(Value):
 
 
 trait StringValue(Value):
-    """String-typed nodes. Its methods cross families — `length()` yields a
-    `NumericValue`, `startswith()` a `BoolValue` — because each node declares its
-    own output family, independent of the (string) operand family.
-    """
+    """String-typed nodes. Cross-family methods follow the *result*: `length()`
+    yields a numeric boundary, `startswith()` a `BoolValue`."""
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
     def length(self) -> CountingUnary[LengthKernel, Self]:
         return CountingUnary[LengthKernel, Self](self.copy())
@@ -529,10 +519,11 @@ trait StringValue(Value):
 
 
 trait ListValue(Value):
-    """List-typed nodes (the nested family). Like `StringValue`, its methods cross
-    families — `length()` yields a `NumericValue` (element count), `contains()` a
-    `BoolValue` — the node's family follows the *result*, not the list operand.
-    """
+    """List-typed nodes (nested family). `length()` yields a numeric boundary,
+    `contains()` a `BoolValue`."""
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
     def length(self) -> CountingUnary[ArrayLengthKernel, Self]:
         return CountingUnary[ArrayLengthKernel, Self](self.copy())
@@ -546,123 +537,178 @@ trait ListValue(Value):
 
 
 # ---------------------------------------------------------------------------
-# Operation nodes — one struct per (family, output-dtype rule)
+# Numeric lane nodes — real kernels + fused `core`
 # ---------------------------------------------------------------------------
-#
-# Each node has a SINGLE, fixed value family and declares its own `OutType`
-# directly (mirroring ibis, where every op class sets `dtype = …`). Promotion
-# thus lives entirely in the value hierarchy; the kernel `K` is only a name.
-# Because each node's family is fixed, there is no conditional conformance here —
-# the family sub-trait is listed unconditionally.
-
-
-# Nodes carry no `write_to` — the reflection default (which prints the struct name
-# with its kernel type parameter, e.g. `NumericBinary[…AddKernel…](left=…)`) is a
-# complete, unambiguous repr, so an explicit one would be pure boilerplate.
 
 
 @fieldwise_init
-struct NumericBinary[K: Kernel, L: Value, R: Value](NumericValue):
+struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+    NumericValue
+):
     """Arithmetic binary widening to the higher-precedence operand — `Add`, `Sub`,
-    `Mul` (ibis `rlz.numeric_like`)."""
+    `Mul`, `Mod`. Operands cast to the promoted `NativeType`, then `K.core`."""
 
     comptime OutType = highest_precedence[Self.L, Self.R]
+    comptime NativeType = Self.OutType.native
 
     var left: Self.L
     var right: Self.R
 
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](batch, idx).cast[Self.NativeType]()
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return Self.K.core[Self.NativeType, W](l, r)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
+
 
 @fieldwise_init
-struct FloatBinary[K: Kernel, L: Value, R: Value](NumericValue):
-    """Binary numeric op whose result is always float64 — `Div` (ibis
-    `Divide.dtype = dt.float64`)."""
+struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+    NumericValue
+):
+    """Binary op whose result is always float64 — `Div`, `Pow`."""
 
     comptime OutType = dt.Float64Type
+    comptime NativeType = DType.float64
 
     var left: Self.L
     var right: Self.R
 
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var l = self.left.core[W](batch, idx).cast[Self.NativeType]()
+        var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
+        return Self.K.core[Self.NativeType, W](l, r)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
+
 
 @fieldwise_init
-struct NumericUnary[K: Kernel, A: Value](NumericValue):
-    """Unary numeric op preserving the operand dtype — `Neg`, `Abs` (ibis
-    `rlz.dtype_like`)."""
+struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
+    """Unary numeric op preserving the operand dtype — `Neg`, `Abs`, `Ceil`, ….
+    """
 
-    comptime OutType = dtype_like[Self.A, Self.A]
+    comptime OutType = Self.A.OutType
+    comptime NativeType = Self.A.NativeType
 
     var arg: Self.A
 
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return Self.K.core[Self.NativeType, W](self.arg.core[W](batch, idx))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
+
 
 @fieldwise_init
-struct FloatUnary[K: Kernel, A: Value](NumericValue):
-    """Unary numeric op whose result is always float64 — `sqrt()` (ibis
-    `MathUnary`, roughly `higher_precedence(arg, float64)`)."""
+struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
+    """Unary op whose result is always float64 — `sqrt`, `exp`, `ln`."""
 
     comptime OutType = dt.Float64Type
+    comptime NativeType = DType.float64
 
     var arg: Self.A
 
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        var a = self.arg.core[W](batch, idx).cast[Self.NativeType]()
+        return Self.K.core[Self.NativeType, W](a)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(Self.K.name, "(", self.arg, ")")
+
+
+# ---------------------------------------------------------------------------
+# Boundary nodes — numeric-producing but non-lane (`Value`); materialize (future)
+# ---------------------------------------------------------------------------
+
 
 @fieldwise_init
-struct CountingUnary[K: Kernel, A: Value](NumericValue):
-    """Unary op whose result is always int32 — `length()` (ibis
-    `StringLength.dtype = dt.int32`). Its operand is a `StringValue`/`ListValue`
-    but the node is a `NumericValue`: family follows the *result*, not the input.
+struct CountingUnary[K: Kernel, A: Value](Value):
+    """Unary op whose result is int32 — `length()` (string/list element count).
+    A boundary: its operand is not numeric, so it materializes rather than fuses.
     """
 
     comptime OutType = dt.Int32Type
-
     var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
 
 @fieldwise_init
-struct SumUnary[K: Kernel, A: Value](NumericValue):
-    """Reduction whose result widens to 64-bit (`sum()`, ibis `Sum`)."""
+struct SumUnary[K: Kernel, A: Value](Value):
+    """Reduction widening to 64-bit — `sum()`."""
 
     comptime OutType = sum_result[Self.A]
-
     var arg: Self.A
 
-
-@fieldwise_init
-struct StringBinary[K: Kernel, L: Value, R: Value](StringValue):
-    """Binary op whose result preserves a string operand dtype — e.g. `concat`
-    (ibis strings `dtype = dt.string`)."""
-
-    comptime OutType = dtype_like[Self.L, Self.R]
-
-    var left: Self.L
-    var right: Self.R
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
 
 
 @fieldwise_init
-struct StringUnary[K: Kernel, A: Value](StringValue):
-    """Unary op whose result preserves the string operand dtype — `upper()`,
-    `lower()` (ibis `Uppercase`/`Lowercase`, `dtype = dt.string`)."""
+struct MeanUnary[K: Kernel, A: Value](Value):
+    """Reduction to float64 — `mean()`."""
+
+    comptime OutType = dt.Float64Type
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
+
+
+@fieldwise_init
+struct MinMaxUnary[K: Kernel, A: Value](Value):
+    """Reduction preserving the operand dtype — `min()`, `max()`."""
 
     comptime OutType = dtype_like[Self.A, Self.A]
-
     var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        return _not_wired[Self.OutType]()
+
+
+# ---------------------------------------------------------------------------
+# Type-only nodes — bool / string families (execution is future work)
+# ---------------------------------------------------------------------------
 
 
 @fieldwise_init
 struct BoolBinary[K: Kernel, L: Value, R: Value](BoolValue):
-    """Binary op whose result is always bool — comparisons, `And`/`Or`,
-    `startswith()` (ibis `Comparison`/`LogicalBinary`, `dtype = dt.boolean`)."""
-
     comptime OutType = dt.BoolType
-
     var left: Self.L
     var right: Self.R
 
 
 @fieldwise_init
 struct BoolUnary[K: Kernel, A: Value](BoolValue):
-    """Unary op whose result is always bool — `Not`, `isnull()` (ibis
-    `IsNull`/`Not`, `dtype = dt.boolean`)."""
-
     comptime OutType = dt.BoolType
+    var arg: Self.A
 
+
+@fieldwise_init
+struct StringBinary[K: Kernel, L: Value, R: Value](StringValue):
+    comptime OutType = dtype_like[Self.L, Self.R]
+    var left: Self.L
+    var right: Self.R
+
+
+@fieldwise_init
+struct StringUnary[K: Kernel, A: Value](StringValue):
+    comptime OutType = dtype_like[Self.A, Self.A]
     var arg: Self.A
 
 
@@ -670,8 +716,8 @@ comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
 comptime Mod = NumericBinary[ModKernel, _, _]
-comptime Pow = NumericBinary[PowKernel, _, _]
 comptime Div = FloatBinary[DivKernel, _, _]
+comptime Pow = FloatBinary[PowKernel, _, _]
 comptime Neg = NumericUnary[NegKernel, _]
 comptime Abs = NumericUnary[AbsKernel, _]
 comptime Ceil = NumericUnary[CeilKernel, _]
@@ -680,12 +726,12 @@ comptime Round = NumericUnary[RoundKernel, _]
 comptime Sign = NumericUnary[SignKernel, _]
 comptime Sqrt = FloatUnary[SqrtKernel, _]
 comptime Exp = FloatUnary[ExpKernel, _]
-comptime Ln = FloatUnary[LnKernel, _]
+comptime Ln = FloatUnary[LogKernel, _]
 
 comptime Sum = SumUnary[SumKernel, _]
-comptime Mean = FloatUnary[MeanKernel, _]
-comptime Min = NumericUnary[MinKernel, _]
-comptime Max = NumericUnary[MaxKernel, _]
+comptime Mean = MeanUnary[MeanKernel, _]
+comptime Min = MinMaxUnary[MinKernel, _]
+comptime Max = MinMaxUnary[MaxKernel, _]
 
 comptime Less = BoolBinary[LtKernel, _, _]
 comptime LessEqual = BoolBinary[LeKernel, _, _]
@@ -713,25 +759,63 @@ comptime ArrayContains = BoolBinary[ArrayContainsKernel, _, _]
 
 
 # ---------------------------------------------------------------------------
-# Leaves — Column / Literal (conditionally a family by their dtype)
+# Leaves — dedicated per-family (single-family → unconditional core/NativeType)
 # ---------------------------------------------------------------------------
 
 
-# `Value` must be listed first so the base traits (Copyable/Movable/…) resolve
-# via its unconditional path; the `where`-guarded families would otherwise reach
-# those ancestors with conflicting constraints. `fmt: off` stops the formatter
-# from alphabetically sorting `Value` to the end and reintroducing that error.
-# fmt: off
-struct Column[T: DataType](
-    Value,
-    NumericValue where conforms_to(T, NumericType),
-    StringValue where conforms_to(T, StringLikeType),
-    ListValue where conforms_to(T, ListLikeType),
-):
-    # fmt: on
-    """Named column reference — conditionally the value family of its dtype:
-    `col("a", int64)` is a `NumericValue`, `col("s", string)` a `StringValue`.
+struct NumericColumn[T: NumericType](NumericValue):
+    """A named numeric column, resolved by name against `batch.schema` per pass.
     """
+
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return (
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_primitive[Self.T]()
+            .values()
+            .load[W](idx)
+        )
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
+
+
+struct NumericLiteral[T: NumericType](NumericValue):
+    """A numeric constant, broadcast into every lane."""
+
+    comptime OutType = Self.T
+    comptime NativeType = Self.T.native
+
+    var _value: Scalar[Self.NativeType]
+
+    def __init__(out self, value: Int):
+        self._value = Scalar[Self.NativeType](value)
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return SIMD[Self.NativeType, W](self._value)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
+
+
+struct StringColumn[T: StringLikeType](StringValue):
+    """A named string column (type architecture; execution is future work)."""
 
     comptime OutType = Self.T
 
@@ -743,58 +827,68 @@ struct Column[T: DataType](
     def name(self) -> String:
         return self._name.copy()
 
-
-# The stored scalar is the dtype's companion `T.ScalarType` (declared on
-# `DataType`): `PrimitiveScalar[Int64Type]` for `lit(2, int64)`, `StringScalar`
-# for `lit("x", string)`.
-# Scalar builders bound on the *provider* traits (`NumericType`/`StringLikeType`),
-# where `T.ScalarType` reduces to the concrete companion. Each RETURNS `T.ScalarType`
-# — so its result unifies with `Literal`'s `Self.T.ScalarType` field even though
-# `Literal` is bound on the abstract `DataType`. This is what lets a generic leaf
-# construct `Self.T.ScalarType` without any `rebind`.
-def _numeric_scalar[T: NumericType](value: SIMD[T.native, 1]) -> T.ScalarType:
-    return PrimitiveScalar[T](value)
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
 
 
-def _string_scalar[T: StringLikeType](var value: String) -> T.ScalarType:
-    return StringScalar(value^)
-
-
-# fmt: off  (see `Column` — keep `Value` first for base-trait resolution)
-struct Literal[T: DataType](
-    Value,
-    NumericValue where conforms_to(T, NumericType),
-    StringValue where conforms_to(T, StringLikeType),
-):
-    # fmt: on
-    """A constant leaf holding the dtype's companion typed scalar `T.ScalarType`,
-    built in place from a raw value. `lit` is an alias for it — `lit(2, int64)`,
-    `lit(1.5, float64)`, `lit("x", string)`. The `dtype` argument only pins `T`.
-    """
+struct StringLiteral[T: StringLikeType](StringValue):
+    """A string constant leaf holding a `StringScalar`."""
 
     comptime OutType = Self.T
 
-    var value: Self.T.ScalarType
+    var _value: StringScalar
 
-    def __init__(
-        out self, value: Int, dtype: Self.T
-    ) where conforms_to(Self.T, IntegerType):
-        self.value = _numeric_scalar[Self.T](SIMD[Self.T.native, 1](value))
+    def __init__(out self, var value: String):
+        self._value = StringScalar(value^)
 
-    def __init__(
-        out self, value: Float64, dtype: Self.T
-    ) where conforms_to(Self.T, FloatingType):
-        self.value = _numeric_scalar[Self.T](SIMD[Self.T.native, 1](value))
-
-    def __init__(
-        out self, var value: String, dtype: Self.T
-    ) where conforms_to(Self.T, StringLikeType):
-        self.value = _string_scalar[Self.T](value^)
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("lit(", self._value, ")")
 
 
-def col[T: DataType](var name: String, dtype: T) -> Column[T]:
-    """Reference a column by name — `col("a", int64)` / `col("s", string)`."""
-    return Column[T](name^)
+struct ListColumn[T: DataType & ListLikeType](ListValue):
+    """A named list column (nested family; execution is future work)."""
+
+    comptime OutType = Self.T
+
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    def name(self) -> String:
+        return self._name.copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("col(", self._name, ")")
 
 
-comptime lit = Literal
+# ---------------------------------------------------------------------------
+# col / lit — overload by dtype family
+# ---------------------------------------------------------------------------
+
+
+def col[T: NumericType](var name: String, dtype: T) -> NumericColumn[T]:
+    """Reference a numeric column — `col("a", int64)`."""
+    return NumericColumn[T](name^)
+
+
+def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
+    """Reference a string column — `col("s", string)`."""
+    return StringColumn[T](name^)
+
+
+def col[
+    T: DataType & ListLikeType
+](var name: String, dtype: T) -> ListColumn[T]:
+    """Reference a list column — `col("l", list_(int64))`."""
+    return ListColumn[T](name^)
+
+
+def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
+    """A numeric constant — `lit(2, int64)`."""
+    return NumericLiteral[T](value)
+
+
+def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
+    """A string constant — `lit("x", string)`."""
+    return StringLiteral[T](value^)

@@ -16,7 +16,7 @@ from marrow.dtypes import (
     DataType,
 )
 from marrow.tabular import record_batch, RecordBatch
-from marrow.expr.fused import col, lit, Value, NumericValue
+from marrow.expr.ibis import col, lit, Value, NumericValue
 
 
 def _batch() raises -> RecordBatch:
