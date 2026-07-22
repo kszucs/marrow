@@ -26,7 +26,7 @@ Layers:
     that materialize (not yet wired) rather than fuse.
 
 Dedicated per-family leaves (`NumericColumn` / `StringColumn` / `ListColumn`,
-`NumericLiteral` / `StringLiteral`) keep `core`/`NativeType` unconditional and the
+`NumericLiteral` / `StringConst`) keep `core`/`NativeType` unconditional and the
 hierarchy sharp; `col` / `lit` overload by dtype family.
 """
 
@@ -36,6 +36,7 @@ from std.builtin.rebind import downcast
 from std.builtin.simd import Scalar
 from std.utils.index import IndexList
 from std.algorithm.backend.vectorize import vectorize
+from std.reflection import reflect
 
 from .. import dtypes as dt
 from ..dtypes import (
@@ -787,7 +788,7 @@ struct StringColumn[T: StringLikeType](StringValue):
         writer.write("col(", self._name, ")")
 
 
-struct StringLiteral[T: StringLikeType](StringValue):
+struct StringConst[T: StringLikeType](StringValue):
     """A string constant leaf holding a `StringScalar`."""
 
     comptime OutType = Self.T
@@ -851,9 +852,47 @@ def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
     return NumericLiteral[T](value)
 
 
-def lit[T: StringLikeType](var value: String, dtype: T) -> StringLiteral[T]:
+def lit[T: StringLikeType](var value: String, dtype: T) -> StringConst[T]:
     """A string constant — `lit("x", string)`."""
-    return StringLiteral[T](value^)
+    return StringConst[T](value^)
+
+
+# ---------------------------------------------------------------------------
+# Table[T] — column-access handle over a schema struct
+# ---------------------------------------------------------------------------
+
+
+struct Table[T: AnyType](Copyable, Movable):
+    """Column-access handle over a plain schema struct — `Table[Orders]()`.
+
+    `T` is any struct of plain dtype-tag fields (`var a: Int64Type`). `t.a`
+    reflects field `a`'s dtype on `T` at compile time (`reflect[T].field[name].T`)
+    to pick the column leaf; the position is resolved by name at execution. A
+    companion handle is required because `T`'s own fields shadow
+    `__getattr_param__`; `T` is never instantiated (only reflected). Overloads
+    route numeric/string/list fields to the matching typed column via a `where`
+    clause the constraint solver can prove."""
+
+    comptime _dtype[name: StringLiteral] = reflect[Self.T].field[name].T
+
+    def __init__(out self):
+        pass
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral
+    ](self) -> NumericColumn[Self._dtype[name]] where conforms_to(
+        Self._dtype[name], NumericType
+    ):
+        return NumericColumn[Self._dtype[name]](String(name))
+
+    @always_inline
+    def __getattr_param__[
+        name: StringLiteral
+    ](self) -> StringColumn[Self._dtype[name]] where conforms_to(
+        Self._dtype[name], StringLikeType
+    ):
+        return StringColumn[Self._dtype[name]](String(name))
 
 
 # ---------------------------------------------------------------------------

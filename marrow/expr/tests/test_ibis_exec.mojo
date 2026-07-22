@@ -12,11 +12,18 @@ from marrow.dtypes import (
     int64,
     float64,
     Int64Type,
+    Int32Type,
     Float64Type,
     DataType,
 )
 from marrow.tabular import record_batch, RecordBatch
-from marrow.expr.ibis import col, lit, Value, NumericValue, AnyValue
+from marrow.expr.ibis import col, lit, Value, NumericValue, AnyValue, Table
+
+
+struct Orders:
+    var a: Int64Type
+    var b: Int64Type
+    var c: Int32Type
 
 
 def _batch() raises -> RecordBatch:
@@ -113,6 +120,14 @@ def test_anyvalue_heterogeneous_list() raises:
     assert_true(
         exprs[2].execute(batch) == array([10.0, 10.0, 10.0, 10.0], float64)
     )
+
+
+def test_table_reflects_and_executes() raises:
+    # Table[Orders]().a reflects field `a`'s dtype -> NumericColumn[Int64Type]
+    var t = Table[Orders]()
+    var expr = (t.a + t.b) * t.c
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([22, 44, 66, 88], int64)))
 
 
 def main() raises:
