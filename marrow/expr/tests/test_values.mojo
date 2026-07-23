@@ -21,11 +21,14 @@ from marrow.dtypes import (
     int64,
     float64,
     string,
+    large_string,
+    bool_,
     list_,
     Int64Type,
     Int32Type,
     Float64Type,
     StringType,
+    LargeStringType,
     BoolType,
     DataType,
 )
@@ -89,6 +92,11 @@ def _batch() raises -> RecordBatch:
 # execute() returns PrimitiveArray[symbolic OutType]; compare value-wise via AnyArray
 def _eq[V: NumericValue](x: V, expected: AnyArray) raises -> Bool:
     return x.execute(_batch()).to_any() == expected
+
+
+# same, but evaluated against the numeric-string batch (`_nsbatch`)
+def _seq[V: NumericValue](x: V, expected: AnyArray) raises -> Bool:
+    return x.execute(_nsbatch()).to_any() == expected
 
 
 # ===========================================================================
@@ -634,6 +642,76 @@ def _sbatch() raises -> RecordBatch:
         [array(["Hello", "WORLD", " pad ", "abc"]).copy()],
         names=["s"],
     )
+
+
+def _nsbatch() raises -> RecordBatch:
+    # numeric-looking strings, for parse casts
+    return record_batch(
+        [array(["10", "20", "30", "40"]).copy()],
+        names=["s"],
+    )
+
+
+# ===========================================================================
+# Cross-family casts
+# ===========================================================================
+
+
+def test_cast_num_to_bool() raises:
+    # (a - 1) != 0 over a = [1,2,3,4] -> [0,1,2,3] -> [F,T,T,T]
+    var expr = (col("a", int64) - lit(1, int64)).cast(bool_)
+    assert_true(_takes_bool(expr))
+    assert_true(expr.execute(_batch()) == array([False, True, True, True]))
+
+
+def test_cast_num_to_string() raises:
+    var expr = col("a", int64).cast(string)
+    assert_true(_takes_string(expr))
+    assert_true(expr.execute(_batch()) == array(["1", "2", "3", "4"]))
+
+
+def test_cast_bool_to_num() raises:
+    # (a < 3) -> [T,T,F,F] -> [1,1,0,0]
+    var expr = (col("a", int64) < lit(3, int64)).cast(int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_eq(expr, array([1, 1, 0, 0], int64)))
+
+
+def test_cast_bool_to_string() raises:
+    var expr = (col("a", int64) < lit(3, int64)).cast(string)
+    assert_true(_takes_string(expr))
+    assert_true(
+        expr.execute(_batch()) == array(["true", "true", "false", "false"])
+    )
+
+
+def test_cast_string_to_num() raises:
+    var expr = col("s", string).cast(int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_seq(expr, array([10, 20, 30, 40], int64)))
+
+
+def test_cast_string_to_bool() raises:
+    var expr = lit("true", string).cast(bool_)
+    assert_true(_takes_bool(expr))
+    assert_true(expr.execute(_nsbatch()) == array([True, True, True, True]))
+
+
+def test_cast_string_to_string_container() raises:
+    var expr = col("s", string).cast(large_string)
+    assert_true(_takes_string(expr))
+    assert_true(out_type_is[LargeStringType](expr))
+    # round-trip back to utf8 to compare content (no large_string array builder)
+    assert_true(
+        expr.cast(string).execute(_nsbatch()) == array(["10", "20", "30", "40"])
+    )
+
+
+def test_cast_numeric_boundary_materialize_fallback() raises:
+    # str->int cast has no SIMD lane, so `* 2` takes the materialize fallback
+    var expr = col("s", string).cast(int64) * lit(2, int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_seq(expr, array([20, 40, 60, 80], int64)))
 
 
 def test_string_column_execute() raises:

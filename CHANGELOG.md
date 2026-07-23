@@ -38,6 +38,22 @@
 
 ### Features
 
+- **Cross-family casts in the expr system** (`marrow.expr.values`): `.cast(target)`
+  is overloaded on every value family and dispatches by the target dtype's family,
+  wiring the `marrow.kernels.cast` kernels into expressions — numeric↔string↔bool
+  in every direction (`NumToBool`, `StringToBool`, `NumToString`, `BoolToString`,
+  `StringToString` utf8↔large, `StringToNum`, `BoolToNum`), with numeric→numeric
+  staying the existing fused `Cast`. String parse casts take a comptime `safe`
+  (default null-on-failure). Each cast node conforms to its *target* family and
+  materializes through the kernel.
+- **Materialize fallback for the numeric lane** (`marrow.expr.values`): numeric
+  nodes carry `comptime fusable`; a composite is fusable only if all children are.
+  Non-lane numeric boundary nodes (string/bool→numeric casts) set `fusable = False`,
+  and a numeric op with a non-fusable operand now *materializes* both operands
+  (`.execute()`) and folds them array-level (`K.apply`) instead of fusing — so
+  `col_str.cast(int64) * 2` type-checks and runs. The all-lane fast path is
+  unchanged (still a single fused vectorized pass).
+
 - **Expr floor division and element-wise min/max** (`marrow.expr.values`):
   wire the previously-unexposed `FloordivKernel` and the binary element-wise
   `arithmetic.MinKernel`/`MaxKernel` into the numeric lane — `a // b`

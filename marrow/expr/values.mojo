@@ -24,6 +24,19 @@ Layers:
     adds the `core[W]` SIMD primitive, and its `execute` vectorizes `core` across
     the whole tree — composite nodes call the kernel's `core` on their children's
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
+    `comptime fusable` marks whether a node contributes a real `core`; a composite
+    is fusable only if all its children are. *Boundary* numeric nodes that
+    materialize through a kernel — cross-family casts from strings/bools
+    (`StringToNum`, `BoolToNum`), reductions, length — set `fusable = False` and
+    inherit a stub `core`. A non-fusable operand makes its parent op materialize:
+    it `.execute()`s each operand (the "fallback" — the fused lane runs up to the
+    boundary) and folds them with the array-level `K.apply`, so
+    `col_str.cast(int64) * 2` type-checks and runs even with no string lane.
+  * **Cross-family casts** (`.cast(target)`, overloaded per target dtype family)
+    conform to their *target* family and materialize through the `kernels.cast`
+    kernels: to bool (`NumToBool`, `StringToBool`), to string (`NumToString`,
+    `BoolToString`, `StringToString`), to numeric (`StringToNum`, `BoolToNum`,
+    boundary nodes). Numeric→numeric stays the fused `Cast`.
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
     compare / boolean / aggregate / string / list (`length`, `contains`) are all
@@ -184,6 +197,17 @@ from ..kernels.string import (
     CapitalizeKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
+from ..kernels.cast import (
+    NumericCast,
+    NumToBool as NumToBoolKernel,
+    BoolToNum as BoolToNumKernel,
+    StringToNum as StringToNumKernel,
+    NumToString as NumToStringKernel,
+    StringToBool as StringToBoolKernel,
+    BoolToString as BoolToStringKernel,
+    BinaryLikeCast as BinaryLikeCastKernel,
+)
+from ..kernels.execution import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -264,16 +288,32 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
 trait NumericValue(Value):
     """The numeric lane: refines `OutType` to `NumericType`, carries the `core[W]`
     SIMD fusion primitive + a fusing `execute`, and the arithmetic/comparison
-    operator surface. Arithmetic nodes hook to the real kernels."""
+    operator surface. Arithmetic nodes hook to the real kernels.
+
+    `fusable` marks whether a node contributes a real per-lane `core` (a SIMD
+    read from the batch). Lane nodes (columns, literals, arithmetic, num→num
+    cast) are fusable; *boundary* numeric nodes that materialize through a kernel
+    — cross-family casts from strings/bools (`StringToNum`, `BoolToNum`), string
+    byte-length, list-length, reductions — set `fusable = False` and inherit the
+    stub `core`. A composite is fusable only if all its children are, and its
+    `execute` runs the single-pass fused path then; otherwise it *materializes*
+    each operand (`.execute()`) and folds them with the array-level kernel
+    (`K.apply`). So `col_str.cast(int64) * 2` type-checks and runs even though the
+    string→int cast has no SIMD lane."""
 
     comptime OutType: NumericType
     comptime NativeType: DType
+    comptime fusable: Bool = True
 
     @always_inline
     def core[
         W: Int
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        ...
+        # Default stub for non-lane (`fusable = False`) boundary nodes, which
+        # materialize in `execute` and never take the fused path. Lane nodes
+        # override with a real per-lane SIMD read. Never invoked on a stub because
+        # the fused path runs only over an all-fusable subtree.
+        return SIMD[Self.NativeType, W](0)
 
     # Abstract, NOT a shared default: re-defaulting the base `Value.execute` (which
     # returns `Self.ArrayType`) in this sub-trait recurses when a node's `ArrayType`
@@ -412,6 +452,16 @@ trait NumericValue(Value):
         numeric lane; `target` is only for dtype inference."""
         return Cast[Target, Self](self.copy())
 
+    def cast[
+        Target: StringLikeType
+    ](self, target: Target) -> NumToString[Self, Target]:
+        """Cast this numeric value to a string dtype (`col.cast(string)`)."""
+        return NumToString[Self, Target](self.copy())
+
+    def cast(self, target: BoolType) -> NumToBool[Self]:
+        """Cast this numeric value to bool (`x != 0`)."""
+        return NumToBool[Self](self.copy())
+
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
     def sum(self) -> Sum[Self]:
@@ -482,6 +532,18 @@ trait BoolValue(Value):
         """
         return All(self.copy())
 
+    def cast[
+        Target: NumericType
+    ](self, target: Target) -> BoolToNum[Self, Target]:
+        """Cast this bool value to a numeric dtype (`True→1, False→0`)."""
+        return BoolToNum[Self, Target](self.copy())
+
+    def cast[
+        Target: StringLikeType
+    ](self, target: Target) -> BoolToString[Self, Target]:
+        """Cast this bool value to a string dtype (`"true"`/`"false"`)."""
+        return BoolToString[Self, Target](self.copy())
+
 
 trait StringValue(Value):
     """String-typed nodes. Cross-family methods follow the *result*: `length()`
@@ -542,6 +604,25 @@ trait StringValue(Value):
     def __ne__[Rhs: StringValue](self, o: Rhs) -> StringNotEqual[Self, Rhs]:
         return StringNotEqual(self.copy(), o.copy())
 
+    def cast[
+        Target: NumericType, safe: Bool = False
+    ](self, target: Target) -> StringToNum[Self, Target, safe]:
+        """Parse this string value to a numeric dtype (`col.cast(int64)`).
+        `safe=False` (default) nulls unparseable values; `safe=True` raises."""
+        return StringToNum[Self, Target, safe](self.copy())
+
+    def cast[
+        Target: StringLikeType, safe: Bool = False
+    ](self, target: Target) -> StringToString[Self, Target, safe]:
+        """Cast between string containers (`col.cast(large_string)`)."""
+        return StringToString[Self, Target, safe](self.copy())
+
+    def cast[
+        safe: Bool = False
+    ](self, target: BoolType) -> StringToBool[Self, safe]:
+        """Parse this string value to bool (`"true"`/`"false"`/`"1"`/`"0"`)."""
+        return StringToBool[Self, safe](self.copy())
+
 
 trait ListValue(Value):
     """List-typed nodes (nested family). `length()` yields a numeric boundary,
@@ -583,6 +664,7 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.OutType.native
+    comptime fusable = Self.L.fusable and Self.R.fusable
 
     var left: Self.L
     var right: Self.R
@@ -596,7 +678,18 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         return Self.K.core[Self.NativeType, W](l, r)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return self._fused(batch)
+        comptime if Self.fusable:
+            return self._fused(batch)
+        else:
+            # A boundary operand (e.g. a string→int cast) has no lane, so
+            # materialize both sides, promote to `OutType`, and fold array-level.
+            var l = NumericCast.apply[Self.L.OutType, Self.OutType, False](
+                self.left.execute(batch)
+            )
+            var r = NumericCast.apply[Self.R.OutType, Self.OutType, False](
+                self.right.execute(batch)
+            )
+            return Self.K.apply(l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
@@ -612,6 +705,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
+    comptime fusable = Self.L.fusable and Self.R.fusable
 
     var left: Self.L
     var right: Self.R
@@ -625,7 +719,16 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         return Self.K.core[Self.NativeType, W](l, r)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return self._fused(batch)
+        comptime if Self.fusable:
+            return self._fused(batch)
+        else:
+            var l = NumericCast.apply[Self.L.OutType, Self.OutType, False](
+                self.left.execute(batch)
+            )
+            var r = NumericCast.apply[Self.R.OutType, Self.OutType, False](
+                self.right.execute(batch)
+            )
+            return Self.K.apply(l, r)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
@@ -640,6 +743,7 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.A.NativeType
+    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -650,7 +754,11 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         return Self.K.core[Self.NativeType, W](self.arg.core[W](batch, idx))
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return self._fused(batch)
+        comptime if Self.fusable:
+            return self._fused(batch)
+        else:
+            # OutType == A.OutType, so no promotion — apply array-level directly.
+            return Self.K.apply(self.arg.execute(batch))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -664,6 +772,7 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
+    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -675,7 +784,13 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         return Self.K.core[Self.NativeType, W](a)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return self._fused(batch)
+        comptime if Self.fusable:
+            return self._fused(batch)
+        else:
+            var a = NumericCast.apply[Self.A.OutType, Self.OutType, False](
+                self.arg.execute(batch)
+            )
+            return Self.K.apply(a)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -683,15 +798,16 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
 @fieldwise_init
 struct Cast[To: NumericType, A: NumericValue](NumericValue):
-    """Fused numeric → numeric cast — reinterprets the operand's SIMD lane at the
-    target dtype (`SIMD.cast`, truncating like the unchecked cast kernel), so it
-    composes into the numeric lane like any other op (`col.cast(int64) + other`
-    stays a single vectorized pass)."""
+    """Numeric → numeric cast. When the operand is a lane it reinterprets the
+    SIMD lane at the target dtype (`SIMD.cast`, truncating like the unchecked
+    cast kernel), staying a single fused pass (`col.cast(int64) + other`); when
+    the operand is a boundary node it materializes and casts array-level."""
 
     comptime OutType = Self.To
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.To.native
+    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -702,10 +818,162 @@ struct Cast[To: NumericType, A: NumericValue](NumericValue):
         return self.arg.core[W](batch, idx).cast[Self.NativeType]()
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return self._fused(batch)
+        comptime if Self.fusable:
+            return self._fused(batch)
+        else:
+            return NumericCast.apply[Self.A.OutType, Self.To, False](
+                self.arg.execute(batch)
+            )
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("cast(", self.arg, ")")
+
+
+# ---------------------------------------------------------------------------
+# Cross-family cast nodes — each conforms to its *target* family and
+# materializes through the matching `marrow.kernels.cast` kernel. Numeric→numeric
+# stays the fused `Cast` above; casts to bool/string materialize (those families
+# already do); casts to numeric from a non-lane source are `fusable = False`
+# boundary nodes (inherit the stub `core`, run through the materialize fallback).
+# ---------------------------------------------------------------------------
+
+
+@fieldwise_init
+struct NumToBool[A: NumericValue](BoolValue):
+    """Numeric → bool (`x != 0`, bit-packed; validity preserved)."""
+
+    comptime OutType = dt.BoolType
+    comptime ArrayType = BoolArray
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+        return NumToBoolKernel.apply(
+            self.arg.execute(batch), ExecutionContext.serial()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", bool)")
+
+
+@fieldwise_init
+struct StringToBool[A: StringValue, checked: Bool](BoolValue):
+    """String → bool (`"true"`/`"false"`/`"1"`/`"0"`, case-insensitive). `safe`
+    raises on an unrecognized value; otherwise it becomes null."""
+
+    comptime OutType = dt.BoolType
+    comptime ArrayType = BoolArray
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+        return StringToBoolKernel.apply[Self.A.OutType, Self.checked](
+            self.arg.execute(batch)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", bool)")
+
+
+@fieldwise_init
+struct NumToString[A: NumericValue, To: StringLikeType](StringValue):
+    """Numeric → string (per-element `String(value)`)."""
+
+    comptime OutType = Self.To
+    comptime ArrayType = BinaryLikeArray[Self.To]
+    var arg: Self.A
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> BinaryLikeArray[Self.OutType]:
+        return NumToStringKernel.apply[Self.A.OutType, Self.To](
+            self.arg.execute(batch)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", str)")
+
+
+@fieldwise_init
+struct BoolToString[A: BoolValue, To: StringLikeType](StringValue):
+    """Bool → string (`"true"`/`"false"`)."""
+
+    comptime OutType = Self.To
+    comptime ArrayType = BinaryLikeArray[Self.To]
+    var arg: Self.A
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> BinaryLikeArray[Self.OutType]:
+        return BoolToStringKernel.apply[Self.To](self.arg.execute(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", str)")
+
+
+@fieldwise_init
+struct StringToString[A: StringValue, To: StringLikeType, checked: Bool](
+    StringValue
+):
+    """String → string across the binary-like containers (utf8 ↔ large_utf8).
+    Equal offset width relabels zero-copy; differing width rebuilds."""
+
+    comptime OutType = Self.To
+    comptime ArrayType = BinaryLikeArray[Self.To]
+    var arg: Self.A
+
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> BinaryLikeArray[Self.OutType]:
+        return BinaryLikeCastKernel.apply[
+            Self.A.OutType, Self.To, Self.checked
+        ](self.arg.execute(batch))
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", str)")
+
+
+@fieldwise_init
+struct StringToNum[A: StringValue, To: NumericType, checked: Bool](
+    NumericValue
+):
+    """String → numeric (`atol`/`atof` parse). A boundary node (`fusable = False`):
+    strings have no SIMD lane, so it materializes and parses, then re-enters the
+    numeric surface through the materialize fallback. `safe` raises on an
+    unparseable value; otherwise it becomes null."""
+
+    comptime OutType = Self.To
+    comptime ArrayType = PrimitiveArray[Self.To]
+    comptime NativeType = Self.To.native
+    comptime fusable = False
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+        return StringToNumKernel.apply[Self.A.OutType, Self.To, Self.checked](
+            self.arg.execute(batch)
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", num)")
+
+
+@fieldwise_init
+struct BoolToNum[A: BoolValue, To: NumericType](NumericValue):
+    """Bool → numeric (`True→1, False→0`). A boundary node (`fusable = False`):
+    materializes the mask, then re-enters the numeric surface via the fallback.
+    """
+
+    comptime OutType = Self.To
+    comptime ArrayType = PrimitiveArray[Self.To]
+    comptime NativeType = Self.To.native
+    comptime fusable = False
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+        return BoolToNumKernel.apply[Self.To](
+            self.arg.execute(batch), ExecutionContext.serial()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ", num)")
 
 
 # ---------------------------------------------------------------------------
