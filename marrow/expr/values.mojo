@@ -434,7 +434,13 @@ trait NumericValue(Value):
 
 
 trait BoolValue(Value):
-    """Boolean-typed nodes: logical operator surface (type architecture)."""
+    """Boolean-typed nodes: logical operator surface. Every `BoolValue` outputs a
+    `BoolArray`, so `execute` is refined to that concrete type — a `BoolValue`
+    child's `execute()` then resolves to `BoolArray` directly at the call site (no
+    `rebind` when composing bool nodes)."""
+
+    def execute(self, batch: RecordBatch) raises -> BoolArray:
+        ...
 
     def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
         return And[Self, Rhs](self.copy(), o.copy())
@@ -786,8 +792,8 @@ struct BoolLogic[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
         # rebind: each child's `OutType.ArrayType` is `BoolArray` (BoolValue), but
         # the associated-type spelling won't reduce here — assert the identity.
         return Self.K.apply(
-            rebind[BoolArray](self.left.execute(batch)),
-            rebind[BoolArray](self.right.execute(batch)),
+            self.left.execute(batch),
+            self.right.execute(batch),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -803,7 +809,7 @@ struct BoolNot[A: BoolValue](BoolValue):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return NotKernel.apply(rebind[BoolArray](self.arg.execute(batch)))
+        return NotKernel.apply(self.arg.execute(batch))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("not_(", self.arg, ")")
@@ -822,13 +828,9 @@ struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
         var builder = BoolBuilder(1)
         comptime if Self.all_:
-            builder.append(
-                AllKernel.reduce(rebind[BoolArray](self.arg.execute(batch)))
-            )
+            builder.append(AllKernel.reduce(self.arg.execute(batch)))
         else:
-            builder.append(
-                AnyKernel.reduce(rebind[BoolArray](self.arg.execute(batch)))
-            )
+            builder.append(AnyKernel.reduce(self.arg.execute(batch)))
         return builder.finish()
 
     def write_to[W: Writer](self, mut writer: W):
