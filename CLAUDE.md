@@ -368,3 +368,34 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
 - **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly
+
+### Associated-type & trait gotchas (learned the hard way)
+
+These are non-obvious compiler behaviours; each below is reproduced by a minimal
+example. They mostly bite generic trait hierarchies (e.g. `marrow.expr.values`).
+
+- **A *chained* associated-type projection (`Self.OutType.ArrayType`) does not
+  reduce at a call/return site**, even when the concrete type is statically
+  determined. A *single* projection off a **direct trait-bound parameter**
+  (`T.ArrayType` for `T: SomeTrait`) *does* reduce. So to return / consume a
+  concrete companion type without a `rebind` or a reducer helper, expose it as a
+  **direct associated member** of the trait (e.g. `Value.ArrayType`, which each
+  node fixes concretely), not as `Self.OtherAssoc.Member`.
+- **An associated-type *default* that references a sibling associated type**
+  (`comptime ArrayType = Foo[Self.OutType]` in a trait or sub-trait), together
+  with a method returning it (`def execute -> Self.ArrayType`), errors with
+  **`attempt to resolve a recursive reference to declaration 'execute'`**. A
+  *concrete* default with no `Self.X` reference (e.g. `= BoolArray`) does not
+  recurse. Declare such members **per concrete struct** instead.
+- **Re-defaulting a base trait's abstract method in a sub-trait recurses** if that
+  method returns `Self.ArrayType` and a conforming node's `ArrayType` transitively
+  references another trait-member child (the compiler loops elaborating the child's
+  own copy of that method). The trigger is *the abstract-then-re-defaulted method
+  specifically* — a **differently named** sibling method with the same body and
+  return type does **not** recurse. Fix: keep the base method abstract, have each
+  node override it with a one-liner that delegates to a helper method under a new
+  name (see `NumericValue.execute` abstract → `NumericValue._fused`).
+- **A family-trait-provided associated-type default may not satisfy the base
+  trait's abstract requirement** for conforming structs (you'll see `does not
+  implement all requirements for <BaseTrait>`) — declare the member on each
+  concrete struct even if a parent trait "provides" it.
