@@ -18,8 +18,8 @@ Layers:
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
-    compare / boolean / aggregate / string are implemented; list (`kernels.nested`)
-    markers plus `xor`/`is_null` are not-implemented stubs (just `comptime name`)
+    compare / boolean / aggregate / string are implemented; only the list
+    (`kernels.nested`) markers remain not-implemented stubs (just `comptime name`)
     until their compute lands. No kernels are defined here.
   * `StringValue` **executes** by materializing: leaves (`StringColumn`,
     `StringConst`) resolve/broadcast to a `StringArray`, unary ops (`upper`,
@@ -400,6 +400,13 @@ trait NumericValue(Value):
     def isinf(self) -> BoolUnary[IsInfKernel, Self]:
         return BoolUnary[IsInfKernel, Self](self.copy())
 
+    # --- cast (fused, numeric -> numeric) ----------------------------------
+
+    def cast[Target: NumericType](self, target: Target) -> Cast[Target, Self]:
+        """Cast to another numeric dtype (`col.cast(int64)`). Fuses into the
+        numeric lane; `target` is only for dtype inference."""
+        return Cast[Target, Self](self.copy())
+
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
     def sum(self) -> Reduce[SumKernel, Self]:
@@ -646,6 +653,28 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
+
+
+@fieldwise_init
+struct Cast[To: NumericType, A: NumericValue](NumericValue):
+    """Fused numeric → numeric cast — reinterprets the operand's SIMD lane at the
+    target dtype (`SIMD.cast`, truncating like the unchecked cast kernel), so it
+    composes into the numeric lane like any other op (`col.cast(int64) + other`
+    stays a single vectorized pass)."""
+
+    comptime OutType = Self.To
+    comptime NativeType = Self.To.native
+
+    var arg: Self.A
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return self.arg.core[W](batch, idx).cast[Self.NativeType]()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("cast(", self.arg, ")")
 
 
 # ---------------------------------------------------------------------------

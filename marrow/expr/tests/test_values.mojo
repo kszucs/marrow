@@ -358,6 +358,27 @@ def test_fused_math_chain() raises:
     )
 
 
+def test_cast_out_dtype() raises:
+    assert_true(out_type_is[Int64Type](col("c", int32).cast(int64)))
+    assert_true(out_type_is[Float64Type](col("c", int32).cast(float64)))
+
+
+def test_cast_executes() raises:
+    # c = [2,2,2,2] int32 -> int64
+    assert_true(_eq(col("c", int32).cast(int64), array([2, 2, 2, 2], int64)))
+    # int -> float
+    assert_true(
+        _eq(col("c", int32).cast(float64), array([2.0, 2.0, 2.0, 2.0], float64))
+    )
+
+
+def test_cast_fuses_in_chain() raises:
+    # cast(c)->int64 + a  stays one fused pass: [2,2,2,2] + [1,2,3,4]
+    var expr = col("c", int32).cast(int64) + col("a", int64)
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([3, 4, 5, 6], int64)))
+
+
 def test_anyvalue_erases_and_executes() raises:
     var boxed = AnyValue((col("a", int64) + col("b", int64)) * col("c", int32))
     assert_true(boxed.execute(_batch()) == array([22, 44, 66, 88], int64))

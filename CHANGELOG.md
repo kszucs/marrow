@@ -19,6 +19,11 @@
 
 ### Features
 
+- **Fused numeric `cast`** (`marrow.expr.values`): `NumericValue.cast(target)`
+  adds a `Cast` node that reinterprets the operand's SIMD lane at the target
+  dtype, so `col.cast(int64) + other` stays a single vectorized pass. Truncating
+  (unchecked), matching the fused cast-kernel path.
+
 - **`any`/`all` reductions and string `==`/`!=`** (`marrow.expr.values`,
   `marrow.kernels.string`): `BoolValue` gains `.any()`/`.all()` (new `BoolReduce`
   node folding a bool column to a length-1 result via the optimized
