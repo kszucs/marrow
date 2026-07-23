@@ -263,18 +263,18 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
         match."""
         return PruneBound.unknown()
 
-    def isnull(self) -> BoolUnary[IsNullKernel, Self]:
+    def isnull(self) -> IsNull[Self]:
         """Null predicate — any value in any family yields a `BoolValue`."""
-        return BoolUnary[IsNullKernel, Self](self.copy())
+        return IsNull[Self](self.copy())
 
-    def notnull(self) -> BoolUnary[NotNullKernel, Self]:
+    def notnull(self) -> NotNull[Self]:
         """Non-null predicate — any value in any family yields a `BoolValue`."""
-        return BoolUnary[NotNullKernel, Self](self.copy())
+        return NotNull[Self](self.copy())
 
-    def count(self) -> Count[CountKernel, Self]:
+    def count(self) -> Count[Self]:
         """Count of valid (non-null) values — a reduction available in every
         family (it reads only the validity bitmap)."""
-        return Count[CountKernel, Self](self.copy())
+        return Count[Self](self.copy())
 
 
 trait NumericValue(Value):
@@ -314,91 +314,79 @@ trait NumericValue(Value):
 
     # --- arithmetic (fusable, real kernels) --------------------------------
 
-    def __add__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericBinary[AddKernel, Self, Rhs]:
-        return NumericBinary[AddKernel, Self, Rhs](self.copy(), o.copy())
+    def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
+        return Add[Self, Rhs](self.copy(), o.copy())
 
-    def __sub__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericBinary[SubKernel, Self, Rhs]:
-        return NumericBinary[SubKernel, Self, Rhs](self.copy(), o.copy())
+    def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
+        return Sub[Self, Rhs](self.copy(), o.copy())
 
-    def __mul__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericBinary[MulKernel, Self, Rhs]:
-        return NumericBinary[MulKernel, Self, Rhs](self.copy(), o.copy())
+    def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
+        return Mul[Self, Rhs](self.copy(), o.copy())
 
-    def __mod__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericBinary[ModKernel, Self, Rhs]:
-        return NumericBinary[ModKernel, Self, Rhs](self.copy(), o.copy())
+    def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
+        return Mod[Self, Rhs](self.copy(), o.copy())
 
-    def __truediv__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> FloatBinary[DivKernel, Self, Rhs]:
-        return FloatBinary[DivKernel, Self, Rhs](self.copy(), o.copy())
+    def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
+        return Div[Self, Rhs](self.copy(), o.copy())
 
-    def __pow__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> FloatBinary[PowKernel, Self, Rhs]:
-        return FloatBinary[PowKernel, Self, Rhs](self.copy(), o.copy())
+    def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:
+        return Pow[Self, Rhs](self.copy(), o.copy())
 
-    def __neg__(self) -> NumericUnary[NegKernel, Self]:
-        return NumericUnary[NegKernel, Self](self.copy())
+    def __neg__(self) -> Neg[Self]:
+        return Neg[Self](self.copy())
 
-    def abs(self) -> NumericUnary[AbsKernel, Self]:
-        return NumericUnary[AbsKernel, Self](self.copy())
+    def abs(self) -> Abs[Self]:
+        return Abs[Self](self.copy())
 
-    def ceil(self) -> NumericUnary[CeilKernel, Self]:
-        return NumericUnary[CeilKernel, Self](self.copy())
+    def ceil(self) -> Ceil[Self]:
+        return Ceil[Self](self.copy())
 
-    def floor(self) -> NumericUnary[FloorKernel, Self]:
-        return NumericUnary[FloorKernel, Self](self.copy())
+    def floor(self) -> Floor[Self]:
+        return Floor[Self](self.copy())
 
-    def round(self) -> NumericUnary[RoundKernel, Self]:
-        return NumericUnary[RoundKernel, Self](self.copy())
+    def round(self) -> Round[Self]:
+        return Round[Self](self.copy())
 
-    def sign(self) -> NumericUnary[SignKernel, Self]:
-        return NumericUnary[SignKernel, Self](self.copy())
+    def sign(self) -> Sign[Self]:
+        return Sign[Self](self.copy())
 
-    def trunc(self) -> NumericUnary[TruncKernel, Self]:
-        return NumericUnary[TruncKernel, Self](self.copy())
+    def trunc(self) -> Trunc[Self]:
+        return Trunc[Self](self.copy())
 
     # transcendental unary -> float64 (fused via the real kernels)
-    def sqrt(self) -> FloatUnary[SqrtKernel, Self]:
-        return FloatUnary[SqrtKernel, Self](self.copy())
+    def sqrt(self) -> Sqrt[Self]:
+        return Sqrt[Self](self.copy())
 
-    def exp(self) -> FloatUnary[ExpKernel, Self]:
-        return FloatUnary[ExpKernel, Self](self.copy())
+    def exp(self) -> Exp[Self]:
+        return Exp[Self](self.copy())
 
-    def exp2(self) -> FloatUnary[Exp2Kernel, Self]:
-        return FloatUnary[Exp2Kernel, Self](self.copy())
+    def exp2(self) -> Exp2[Self]:
+        return Exp2[Self](self.copy())
 
-    def ln(self) -> FloatUnary[LogKernel, Self]:
-        return FloatUnary[LogKernel, Self](self.copy())
+    def ln(self) -> Ln[Self]:
+        return Ln[Self](self.copy())
 
-    def log2(self) -> FloatUnary[Log2Kernel, Self]:
-        return FloatUnary[Log2Kernel, Self](self.copy())
+    def log2(self) -> Log2[Self]:
+        return Log2[Self](self.copy())
 
-    def log10(self) -> FloatUnary[Log10Kernel, Self]:
-        return FloatUnary[Log10Kernel, Self](self.copy())
+    def log10(self) -> Log10[Self]:
+        return Log10[Self](self.copy())
 
-    def log1p(self) -> FloatUnary[Log1pKernel, Self]:
-        return FloatUnary[Log1pKernel, Self](self.copy())
+    def log1p(self) -> Log1p[Self]:
+        return Log1p[Self](self.copy())
 
-    def sin(self) -> FloatUnary[SinKernel, Self]:
-        return FloatUnary[SinKernel, Self](self.copy())
+    def sin(self) -> Sin[Self]:
+        return Sin[Self](self.copy())
 
-    def cos(self) -> FloatUnary[CosKernel, Self]:
-        return FloatUnary[CosKernel, Self](self.copy())
+    def cos(self) -> Cos[Self]:
+        return Cos[Self](self.copy())
 
     # numeric -> bool predicates (type-only until bool execution is wired)
-    def isnan(self) -> BoolUnary[IsNanKernel, Self]:
-        return BoolUnary[IsNanKernel, Self](self.copy())
+    def isnan(self) -> IsNan[Self]:
+        return IsNan[Self](self.copy())
 
-    def isinf(self) -> BoolUnary[IsInfKernel, Self]:
-        return BoolUnary[IsInfKernel, Self](self.copy())
+    def isinf(self) -> IsInf[Self]:
+        return IsInf[Self](self.copy())
 
     # --- cast (fused, numeric -> numeric) ----------------------------------
 
@@ -409,81 +397,65 @@ trait NumericValue(Value):
 
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
-    def sum(self) -> Reduce[SumKernel, Self]:
-        return Reduce[SumKernel, Self](self.copy())
+    def sum(self) -> Sum[Self]:
+        return Sum[Self](self.copy())
 
-    def product(self) -> Reduce[ProductKernel, Self]:
-        return Reduce[ProductKernel, Self](self.copy())
+    def product(self) -> Product[Self]:
+        return Product[Self](self.copy())
 
-    def mean(self) -> Reduce[MeanKernel, Self]:
-        return Reduce[MeanKernel, Self](self.copy())
+    def mean(self) -> Mean[Self]:
+        return Mean[Self](self.copy())
 
-    def min(self) -> Reduce[MinKernel, Self]:
-        return Reduce[MinKernel, Self](self.copy())
+    def min(self) -> Min[Self]:
+        return Min[Self](self.copy())
 
-    def max(self) -> Reduce[MaxKernel, Self]:
-        return Reduce[MaxKernel, Self](self.copy())
+    def max(self) -> Max[Self]:
+        return Max[Self](self.copy())
 
     # --- comparisons (-> BoolValue) ----------------------------------------
 
-    def __lt__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[LtKernel, Self, Rhs]:
-        return NumericCompare[LtKernel, Self, Rhs](self.copy(), o.copy())
+    def __lt__[Rhs: NumericValue](self, o: Rhs) -> Less[Self, Rhs]:
+        return Less[Self, Rhs](self.copy(), o.copy())
 
-    def __le__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[LeKernel, Self, Rhs]:
-        return NumericCompare[LeKernel, Self, Rhs](self.copy(), o.copy())
+    def __le__[Rhs: NumericValue](self, o: Rhs) -> LessEqual[Self, Rhs]:
+        return LessEqual[Self, Rhs](self.copy(), o.copy())
 
-    def __gt__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[GtKernel, Self, Rhs]:
-        return NumericCompare[GtKernel, Self, Rhs](self.copy(), o.copy())
+    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Greater[Self, Rhs]:
+        return Greater[Self, Rhs](self.copy(), o.copy())
 
-    def __ge__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[GeKernel, Self, Rhs]:
-        return NumericCompare[GeKernel, Self, Rhs](self.copy(), o.copy())
+    def __ge__[Rhs: NumericValue](self, o: Rhs) -> GreaterEqual[Self, Rhs]:
+        return GreaterEqual[Self, Rhs](self.copy(), o.copy())
 
-    def __eq__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[EqKernel, Self, Rhs]:
-        return NumericCompare[EqKernel, Self, Rhs](self.copy(), o.copy())
+    def __eq__[Rhs: NumericValue](self, o: Rhs) -> Equal[Self, Rhs]:
+        return Equal[Self, Rhs](self.copy(), o.copy())
 
-    def __ne__[
-        Rhs: NumericValue
-    ](self, o: Rhs) -> NumericCompare[NeKernel, Self, Rhs]:
-        return NumericCompare[NeKernel, Self, Rhs](self.copy(), o.copy())
+    def __ne__[Rhs: NumericValue](self, o: Rhs) -> NotEqual[Self, Rhs]:
+        return NotEqual[Self, Rhs](self.copy(), o.copy())
 
 
 trait BoolValue(Value):
     """Boolean-typed nodes: logical operator surface (type architecture)."""
 
-    def __and__[
-        Rhs: BoolValue
-    ](self, o: Rhs) -> BoolLogic[AndKernel, Self, Rhs]:
-        return BoolLogic[AndKernel, Self, Rhs](self.copy(), o.copy())
+    def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
+        return And[Self, Rhs](self.copy(), o.copy())
 
-    def __or__[Rhs: BoolValue](self, o: Rhs) -> BoolLogic[OrKernel, Self, Rhs]:
-        return BoolLogic[OrKernel, Self, Rhs](self.copy(), o.copy())
+    def __or__[Rhs: BoolValue](self, o: Rhs) -> Or[Self, Rhs]:
+        return Or[Self, Rhs](self.copy(), o.copy())
 
-    def __xor__[
-        Rhs: BoolValue
-    ](self, o: Rhs) -> BoolLogic[XorKernel, Self, Rhs]:
-        return BoolLogic[XorKernel, Self, Rhs](self.copy(), o.copy())
+    def __xor__[Rhs: BoolValue](self, o: Rhs) -> Xor[Self, Rhs]:
+        return Xor[Self, Rhs](self.copy(), o.copy())
 
-    def __invert__(self) -> BoolNot[Self]:
-        return BoolNot[Self](self.copy())
+    def __invert__(self) -> Not[Self]:
+        return Not[Self](self.copy())
 
-    def any(self) -> BoolReduce[False, Self]:
+    def any(self) -> Any[Self]:
         """True if any valid element is True (`any`) — a length-1 reduction."""
-        return BoolReduce[False, Self](self.copy())
+        return Any[Self](self.copy())
 
-    def all(self) -> BoolReduce[True, Self]:
+    def all(self) -> All[Self]:
         """True if all valid elements are True (`all`) — a length-1 reduction.
         """
-        return BoolReduce[True, Self](self.copy())
+        return All[Self](self.copy())
 
 
 trait StringValue(Value):
@@ -494,56 +466,44 @@ trait StringValue(Value):
 
     comptime OutType: StringLikeType
 
-    def length(self) -> StringLength[Self]:
-        return StringLength[Self](self.copy())
+    def length(self) -> Length[Self]:
+        return Length[Self](self.copy())
 
-    def upper(self) -> StringUnary[UpperKernel, Self]:
-        return StringUnary[UpperKernel, Self](self.copy())
+    def upper(self) -> Upper[Self]:
+        return Upper[Self](self.copy())
 
-    def lower(self) -> StringUnary[LowerKernel, Self]:
-        return StringUnary[LowerKernel, Self](self.copy())
+    def lower(self) -> Lower[Self]:
+        return Lower[Self](self.copy())
 
-    def reverse(self) -> StringUnary[ReverseKernel, Self]:
-        return StringUnary[ReverseKernel, Self](self.copy())
+    def reverse(self) -> Reverse[Self]:
+        return Reverse[Self](self.copy())
 
-    def strip(self) -> StringUnary[StripKernel, Self]:
-        return StringUnary[StripKernel, Self](self.copy())
+    def strip(self) -> Strip[Self]:
+        return Strip[Self](self.copy())
 
-    def lstrip(self) -> StringUnary[LStripKernel, Self]:
-        return StringUnary[LStripKernel, Self](self.copy())
+    def lstrip(self) -> LStrip[Self]:
+        return LStrip[Self](self.copy())
 
-    def rstrip(self) -> StringUnary[RStripKernel, Self]:
-        return StringUnary[RStripKernel, Self](self.copy())
+    def rstrip(self) -> RStrip[Self]:
+        return RStrip[Self](self.copy())
 
-    def capitalize(self) -> StringUnary[CapitalizeKernel, Self]:
-        return StringUnary[CapitalizeKernel, Self](self.copy())
+    def capitalize(self) -> Capitalize[Self]:
+        return Capitalize[Self](self.copy())
 
-    def startswith[
-        Rhs: StringValue
-    ](self, o: Rhs) -> StringPredicate[StartsWithKernel, Self, Rhs]:
-        return StringPredicate[StartsWithKernel, Self, Rhs](
-            self.copy(), o.copy()
-        )
+    def startswith[Rhs: StringValue](self, o: Rhs) -> StartsWith[Self, Rhs]:
+        return StartsWith[Self, Rhs](self.copy(), o.copy())
 
-    def endswith[
-        Rhs: StringValue
-    ](self, o: Rhs) -> StringPredicate[EndsWithKernel, Self, Rhs]:
-        return StringPredicate[EndsWithKernel, Self, Rhs](self.copy(), o.copy())
+    def endswith[Rhs: StringValue](self, o: Rhs) -> EndsWith[Self, Rhs]:
+        return EndsWith[Self, Rhs](self.copy(), o.copy())
 
-    def contains[
-        Rhs: StringValue
-    ](self, o: Rhs) -> StringPredicate[ContainsKernel, Self, Rhs]:
-        return StringPredicate[ContainsKernel, Self, Rhs](self.copy(), o.copy())
+    def contains[Rhs: StringValue](self, o: Rhs) -> Contains[Self, Rhs]:
+        return Contains[Self, Rhs](self.copy(), o.copy())
 
-    def __eq__[
-        Rhs: StringValue
-    ](self, o: Rhs) -> StringPredicate[StringEqKernel, Self, Rhs]:
-        return StringPredicate[StringEqKernel, Self, Rhs](self.copy(), o.copy())
+    def __eq__[Rhs: StringValue](self, o: Rhs) -> StringEqual[Self, Rhs]:
+        return StringEqual[Self, Rhs](self.copy(), o.copy())
 
-    def __ne__[
-        Rhs: StringValue
-    ](self, o: Rhs) -> StringPredicate[StringNeKernel, Self, Rhs]:
-        return StringPredicate[StringNeKernel, Self, Rhs](self.copy(), o.copy())
+    def __ne__[Rhs: StringValue](self, o: Rhs) -> StringNotEqual[Self, Rhs]:
+        return StringNotEqual[Self, Rhs](self.copy(), o.copy())
 
 
 trait ListValue(Value):
@@ -554,13 +514,13 @@ trait ListValue(Value):
 
     comptime OutType: DataType & ListLikeType
 
-    def length(self) -> Counting[ArrayLengthKernel, Self]:
-        return Counting[ArrayLengthKernel, Self](self.copy())
+    def length(self) -> ArrayLength[Self]:
+        return ArrayLength[Self](self.copy())
 
-    def contains[E: NumericValue](self, elem: E) -> ListContains[Self, E]:
+    def contains[E: NumericValue](self, elem: E) -> ArrayContains[Self, E]:
         """Element-wise membership: `elem[i] ∈ list[i]` → a `BoolValue` (a literal
         element broadcasts). Numeric element types only."""
-        return ListContains[Self, E](self.copy(), elem.copy())
+        return ArrayContains[Self, E](self.copy(), elem.copy())
 
 
 # ---------------------------------------------------------------------------
@@ -740,20 +700,21 @@ struct Reduce[K: AggKernel, A: NumericValue](Value):
 
 
 @fieldwise_init
-struct Count[K: AggKernel, A: Value](Value):
+struct Count[A: Value](Value):
     """Whole-array valid (non-null) count — `count()`, available on any family.
-    Result is a length-1 int64 array."""
+    Result is a length-1 int64 array. Always `CountKernel` (family-agnostic), so
+    unlike `Reduce` it carries no kernel parameter."""
 
     comptime OutType = dt.Int64Type
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _reduce[Self.K, downcast[Self.OutType, NumericType]](
+        return _reduce[CountKernel, downcast[Self.OutType, NumericType]](
             self.arg.execute(batch).to_any()
         )
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(Self.K.name, "(", self.arg, ")")
+        writer.write(CountKernel.name, "(", self.arg, ")")
 
 
 # ---------------------------------------------------------------------------
