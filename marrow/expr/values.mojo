@@ -220,12 +220,6 @@ def _string_array[
     return array^
 
 
-def _not_wired[T: DataType]() raises -> T.ArrayType:
-    """Raising stub typed as `T.ArrayType` — lets a family/boundary `execute`
-    default satisfy the return type before its execution is wired."""
-    raise Error("execute: not wired for this node yet")
-
-
 def _reduce[
     K: AggKernel, Out: NumericType
 ](operand: AnyArray) raises -> Out.ArrayType:
@@ -249,10 +243,9 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
 
     comptime OutType: DataType
 
-    # Abstract — implemented by the numeric family (fused vectorize) and by every
-    # other concrete node (raising `_not_wired` stub) so a boxed `Value` in
-    # `AnyValue` can `.execute(batch).to_any()` generically. Declared here (not
-    # only per-family) so `AnyValue`'s trampoline can call it on any `V: Value`.
+    # Abstract — the numeric family fuses (vectorized), every other concrete node
+    # materializes through its real kernel. Declared here (not only per-family) so
+    # `AnyValue`'s trampoline can `.execute(batch).to_any()` on any `V: Value`.
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
         ...
 
