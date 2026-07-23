@@ -69,12 +69,9 @@ Dedicated per-family leaves (`NumericColumn` / `StringColumn` / `ListColumn`,
 hierarchy sharp; `col` / `lit` overload by dtype family.
 """
 
-from std.sys import bit_width_of, size_of
-from std.sys.info import simd_byte_width
+from std.sys import bit_width_of
 from std.builtin.rebind import downcast
 from std.builtin.simd import Scalar
-from std.utils.index import IndexList
-from std.algorithm.backend.vectorize import vectorize
 from std.reflection import reflect
 
 from .. import dtypes as dt
@@ -805,22 +802,19 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
         return Self.K.core[Self.NativeType, W](l, r)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+        # Bit-pack the fused comparison lane in one pass through `views.apply`'s
+        # source-less bitmap producer — no intermediate operand arrays, the same
+        # dispatch the bool kernels use.
         comptime native = Self.NativeType
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
         var length = batch.num_rows()
         var bm = Bitmap.alloc_uninit(length)
 
         @parameter
         @always_inline
-        def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
-            var i = idx[0]
-            bm.view().store[W](i, self.core[W](batch, i))
+        def producer[W: Int](i: Int) -> SIMD[DType.bool, W]:
+            return self.core[W](batch, i)
 
-        @always_inline
-        def lane[W: Int](i: Int):
-            fill[W, rank=1](IndexList[1](i))
-
-        vectorize[width](length, lane)
+        apply[native, producer](bm.view())
         return BoolArray(
             length=length,
             nulls=0,
