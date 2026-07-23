@@ -18,9 +18,9 @@ Layers:
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
-    compare / boolean / aggregate / string are implemented; only the list
-    (`kernels.nested`) markers remain not-implemented stubs (just `comptime name`)
-    until their compute lands. No kernels are defined here.
+    compare / boolean / aggregate / string / list `length` are implemented; only
+    list `contains` (`kernels.nested.ArrayContainsKernel`) remains a name-only stub
+    until its compute lands. No kernels are defined here.
   * `StringValue` **executes** by materializing: leaves (`StringColumn`,
     `StringConst`) resolve/broadcast to a `StringArray`, unary ops (`upper`,
     `lower`, `strip`, `reverse`, `capitalize`, …) apply a `StringMapKernel`, and
@@ -38,8 +38,10 @@ Layers:
     string `==`/`!=` materialize and compare element-wise (`StringPredicate`);
     and `any`/`all` fold a bool column to a length-1 result (`BoolReduce`). Still
     unwired: list `contains` (`BoolBinary`).
-  * `ListValue` remains type architecture (list execution is future work — its
-    `execute` inherits the raising default). Cross-family numeric-producing
+  * `ListValue` executes: `ListColumn` resolves the list column from the batch
+    and `length()` counts elements per list (`ArrayLengthKernel`, offset
+    subtraction) → an int32 boundary; `contains` stays type-only. Cross-family
+    numeric-producing
     boundaries (reductions — `sum`/`product`/`mean`/`min`/`max` via one `Reduce`
     node, plus the family-agnostic `count` via `Count`) are non-lane `Value`
     nodes: they materialize the operand (the numeric lane fuses up to it), fold it
@@ -82,7 +84,13 @@ from std.memory import ArcPointer
 
 from ..scalars import PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
-from ..arrays import PrimitiveArray, BinaryLikeArray, BoolArray, AnyArray
+from ..arrays import (
+    PrimitiveArray,
+    BinaryLikeArray,
+    ListLikeArray,
+    BoolArray,
+    AnyArray,
+)
 from ..builders import BinaryLikeBuilder, BoolBuilder
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
@@ -548,7 +556,11 @@ trait StringValue(Value):
 
 trait ListValue(Value):
     """List-typed nodes (nested family). `length()` yields a numeric boundary,
-    `contains()` a `BoolValue`."""
+    `contains()` a `BoolValue`. `OutType` refines to a list dtype so `execute` can
+    rebuild the typed list array from the erased child (`ListLikeType` is not a
+    `DataType` subtrait, so the bound is the intersection)."""
+
+    comptime OutType: DataType & ListLikeType
 
     def length(self) -> Counting[ArrayLengthKernel, Self]:
         return Counting[ArrayLengthKernel, Self](self.copy())
@@ -700,17 +712,19 @@ struct StringLength[A: StringValue](Value):
 
 
 @fieldwise_init
-struct Counting[K: Kernel, A: Value](Value):
+struct Counting[K: Kernel, A: ListValue](Value):
     """Unary op whose result is int32 — list `length()` (element count). A
-    boundary: its operand is not numeric, so it materializes rather than fuses.
-    List length raises until the nested kernels land.
-    """
+    boundary: its operand is a materialized list, not a fixed-width column, so it
+    evaluates the child and calls `ArrayLengthKernel.apply` on the typed list
+    array directly (offset subtraction, vectorized internally)."""
 
     comptime OutType = dt.Int32Type
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return ArrayLengthKernel.apply(
+            rebind[ListLikeArray[Self.A.OutType]](self.arg.execute(batch))
+        )
 
 
 @fieldwise_init
@@ -1134,7 +1148,7 @@ struct StringConst[T: StringLikeType](StringValue):
 
 
 struct ListColumn[T: DataType & ListLikeType](ListValue):
-    """A named list column (nested family; execution is future work)."""
+    """A named list column, resolved by name against `batch.schema` per pass."""
 
     comptime OutType = Self.T
 
@@ -1147,7 +1161,14 @@ struct ListColumn[T: DataType & ListLikeType](ListValue):
         return self._name.copy()
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        # `ListLikeType` is not a `DataType` subtrait, so `Self.OutType.ArrayType`
+        # won't reduce to `ListLikeArray[OutType]` in a helper (unlike the string
+        # path). Rebind the resolved list column to assert the identity.
+        return rebind[Self.OutType.ArrayType](
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_list_like[Self.OutType]()
+            .copy()
+        ).copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("col(", self._name, ")")

@@ -19,6 +19,13 @@
 
 ### Features
 
+- **List `length()`** (`marrow.kernels.nested`, `marrow.expr.values`):
+  `ArrayLengthKernel` counts elements per list → `Int32Array` (offset subtraction,
+  vectorized — the list analogue of `string.LengthKernel`). `ListColumn.execute`
+  now resolves the list column from the batch (via a new `AnyArray.as_list_like`),
+  and the `Counting` node folds `.length()` over it, so `col("l", list_(t)).length()`
+  runs end-to-end.
+
 - **Fused numeric `cast`** (`marrow.expr.values`): `NumericValue.cast(target)`
   adds a `Cast` node that reinterprets the operand's SIMD lane at the target
   dtype, so `col.cast(int64) + other` stays a single vectorized pass. Truncating

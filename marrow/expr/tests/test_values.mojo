@@ -14,7 +14,7 @@ Two halves:
 from std.testing import assert_equal, assert_true
 
 from marrow.testing import TestSuite
-from marrow.builders import array
+from marrow.builders import array, ListBuilder, Int32Builder
 from marrow.arrays import AnyArray
 from marrow.dtypes import (
     int32,
@@ -563,6 +563,26 @@ def test_string_equal_executes() raises:
 def test_string_not_equal_executes() raises:
     var r = (col("s", string) != col("t", string)).execute(_s2batch())
     assert_true(r == array([False, True, False]))
+
+
+def test_list_length_executes() raises:
+    # build [[1, 2], [3], [], [4, 5, 6]] and count elements per list
+    var lb = ListBuilder(Int32Builder(), capacity=4)
+    var child = lb.values()
+    ref c = child.as_int32()
+    c.append(1)
+    c.append(2)
+    lb.append_valid()
+    c.append(3)
+    lb.append_valid()
+    lb.append_valid()
+    c.append(4)
+    c.append(5)
+    c.append(6)
+    lb.append_valid()
+    var batch = record_batch([lb.finish().copy()], names=["l"])
+    var r = col("l", list_(int32)).length().execute(batch)
+    assert_true(r == array([2, 1, 0, 3], int32))
 
 
 # ===========================================================================
