@@ -287,3 +287,23 @@ struct ContainsKernel(StringPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return pat in s
+
+
+struct StringEqKernel(StringPredicateKernel):
+    comptime name = "equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s == pat
+
+
+struct StringNeKernel(StringPredicateKernel):
+    comptime name = "not_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s != pat

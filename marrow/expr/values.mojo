@@ -34,8 +34,10 @@ Layers:
     logic (`&`, `|`, `^`, `~`) materializes its `BoolValue` children and combines
     the masks with the boolean kernels (`BoolLogic` / `BoolNot`); and the unary
     predicates `is_null`/`not_null` (any family) and `is_nan`/`is_inf` (floating)
-    materialize the operand and apply a `UnaryPredicateKernel` (`BoolUnary`).
-    Still unwired: string `==`/`!=` and list `contains` (`BoolBinary`).
+    materialize the operand and apply a `UnaryPredicateKernel` (`BoolUnary`);
+    string `==`/`!=` materialize and compare element-wise (`StringPredicate`);
+    and `any`/`all` fold a bool column to a length-1 result (`BoolReduce`). Still
+    unwired: list `contains` (`BoolBinary`).
   * `ListValue` remains type architecture (list execution is future work — its
     `execute` inherits the raising default). Cross-family numeric-producing
     boundaries (reductions — `sum`/`product`/`mean`/`min`/`max` via one `Reduce`
@@ -81,7 +83,7 @@ from std.memory import ArcPointer
 from ..scalars import PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
 from ..arrays import PrimitiveArray, BinaryLikeArray, BoolArray, AnyArray
-from ..builders import BinaryLikeBuilder
+from ..builders import BinaryLikeBuilder, BoolBuilder
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
 from .dynamic import DynValue
@@ -141,6 +143,8 @@ from ..kernels.aggregate import (
     MaxKernel,
     CountKernel,
     ProductKernel,
+    any as _reduce_any,
+    all as _reduce_all,
 )
 from ..kernels.string import (
     StringMapKernel,
@@ -148,6 +152,8 @@ from ..kernels.string import (
     StartsWithKernel,
     EndsWithKernel,
     ContainsKernel,
+    StringEqKernel,
+    StringNeKernel,
     LengthKernel,
     UpperKernel,
     LowerKernel,
@@ -463,6 +469,15 @@ trait BoolValue(Value):
     def __invert__(self) -> BoolNot[Self]:
         return BoolNot[Self](self.copy())
 
+    def any(self) -> BoolReduce[False, Self]:
+        """True if any valid element is True (`any`) — a length-1 reduction."""
+        return BoolReduce[False, Self](self.copy())
+
+    def all(self) -> BoolReduce[True, Self]:
+        """True if all valid elements are True (`all`) — a length-1 reduction.
+        """
+        return BoolReduce[True, Self](self.copy())
+
 
 trait StringValue(Value):
     """String-typed nodes. Cross-family methods follow the *result*: `length()`
@@ -515,13 +530,13 @@ trait StringValue(Value):
 
     def __eq__[
         Rhs: StringValue
-    ](self, o: Rhs) -> BoolBinary[EqKernel, Self, Rhs]:
-        return BoolBinary[EqKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> StringPredicate[StringEqKernel, Self, Rhs]:
+        return StringPredicate[StringEqKernel, Self, Rhs](self.copy(), o.copy())
 
     def __ne__[
         Rhs: StringValue
-    ](self, o: Rhs) -> BoolBinary[NeKernel, Self, Rhs]:
-        return BoolBinary[NeKernel, Self, Rhs](self.copy(), o.copy())
+    ](self, o: Rhs) -> StringPredicate[StringNeKernel, Self, Rhs]:
+        return StringPredicate[StringNeKernel, Self, Rhs](self.copy(), o.copy())
 
 
 trait ListValue(Value):
@@ -801,10 +816,35 @@ struct BoolNot[A: BoolValue](BoolValue):
 
 
 @fieldwise_init
+struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
+    """`any()` (`all_=False`) / `all()` (`all_=True`) over a boolean column → a
+    length-1 bool result. Materializes the child mask, then folds it with the
+    optimized bitmap reduction in `kernels.aggregate` (`any`/`all`)."""
+
+    comptime OutType = dt.BoolType
+    var arg: Self.A
+
+    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
+        var builder = BoolBuilder(1)
+        comptime if Self.all_:
+            builder.append(
+                _reduce_all(rebind[BoolArray](self.arg.execute(batch)))
+            )
+        else:
+            builder.append(
+                _reduce_any(rebind[BoolArray](self.arg.execute(batch)))
+            )
+        return builder.finish()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("all_(" if Self.all_ else "any_(", self.arg, ")")
+
+
+@fieldwise_init
 struct BoolBinary[K: Kernel, L: Value, R: Value](BoolValue):
-    """Bool-producing binary node whose compute is not yet wired (`xor`, string
-    `==`/`!=`). Type architecture only — `execute` raises until the kernel
-    lands."""
+    """Bool-producing binary node whose compute is not yet wired (list
+    `contains`). Type architecture only — `execute` raises until the nested
+    kernels land."""
 
     comptime OutType = dt.BoolType
     var left: Self.L
@@ -922,11 +962,15 @@ comptime NotEqual = NumericCompare[NeKernel, _, _]
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
 comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
 comptime Contains = StringPredicate[ContainsKernel, _, _]
+comptime StringEqual = StringPredicate[StringEqKernel, _, _]
+comptime StringNotEqual = StringPredicate[StringNeKernel, _, _]
 
 comptime And = BoolLogic[AndKernel, _, _]
 comptime Or = BoolLogic[OrKernel, _, _]
 comptime Xor = BoolLogic[XorKernel, _, _]
 comptime Not = BoolNot[_]
+comptime Any = BoolReduce[False, _]
+comptime All = BoolReduce[True, _]
 comptime IsNull = BoolUnary[IsNullKernel, _]
 comptime NotNull = BoolUnary[NotNullKernel, _]
 comptime IsNan = BoolUnary[IsNanKernel, _]

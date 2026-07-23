@@ -19,6 +19,16 @@
 
 ### Features
 
+- **`any`/`all` reductions and string `==`/`!=`** (`marrow.expr.values`,
+  `marrow.kernels.string`): `BoolValue` gains `.any()`/`.all()` (new `BoolReduce`
+  node folding a bool column to a length-1 result via the optimized
+  `kernels.aggregate` bitmap reductions). String `==`/`!=` now execute through the
+  existing `StringPredicate` node via two new `StringPredicateKernel`s
+  (`StringEqKernel`, `StringNeKernel`), null-propagating and working for
+  `string`/`large_string`. `NumericColumn.execute` returns the resolved column
+  as-is so standalone column execution (reduction/predicate operands) preserves
+  the validity bitmap.
+
 - **Boolean predicate kernels + expr wiring** (`marrow.kernels.boolean`,
   `marrow.expr.values`): the marker structs `XorKernel`, `IsNullKernel`,
   `NotNullKernel`, `IsNanKernel`, `IsInfKernel` are now real kernels. `xor`

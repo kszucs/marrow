@@ -494,6 +494,57 @@ def test_anyvalue_erases_predicate() raises:
 
 
 # ===========================================================================
+# Boolean reductions (any / all) and string equality
+# ===========================================================================
+
+
+def _s2batch() raises -> RecordBatch:
+    return record_batch(
+        [array(["a", "b", "c"]).copy(), array(["a", "x", "c"]).copy()],
+        names=["s", "t"],
+    )
+
+
+def test_any_all_are_bool() raises:
+    var p = col("a", int64) < lit(3, int64)
+    assert_true(_takes_bool(p.any()))
+    assert_true(_takes_bool(p.all()))
+
+
+def test_all_executes() raises:
+    # all(a < 5) == True ; all(a < 3) == False   over a=[1,2,3,4]
+    assert_true(
+        (col("a", int64) < lit(5, int64)).all().execute(_batch())
+        == array([True])
+    )
+    assert_true(
+        (col("a", int64) < lit(3, int64)).all().execute(_batch())
+        == array([False])
+    )
+
+
+def test_any_executes() raises:
+    assert_true(
+        (col("a", int64) < lit(2, int64)).any().execute(_batch())
+        == array([True])
+    )
+    assert_true(
+        (col("a", int64) > lit(9, int64)).any().execute(_batch())
+        == array([False])
+    )
+
+
+def test_string_equal_executes() raises:
+    var r = (col("s", string) == col("t", string)).execute(_s2batch())
+    assert_true(r == array([True, False, True]))
+
+
+def test_string_not_equal_executes() raises:
+    var r = (col("s", string) != col("t", string)).execute(_s2batch())
+    assert_true(r == array([False, True, False]))
+
+
+# ===========================================================================
 # String execution — materialized through the real kernels
 # ===========================================================================
 
