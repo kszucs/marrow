@@ -26,6 +26,8 @@ from marrow.expr.lane import (
     IsNull,
     NotNull,
     IsNan,
+    NumToBool,
+    BoolToNum,
     RowNumber,
     WindowSpec,
     FrameBound,
@@ -202,6 +204,22 @@ def test_isnan_fuses_over_float() raises:
     assert_true(
         into_array(cv, 4) == array([False, False, False, False]).to_any()
     )
+
+
+def test_num_to_bool_fuses() raises:
+    # a*0 = 0 → false ; a (nonzero) → true — fused per-lane num->bool
+    var z = run(NumToBool(Mul(col(0, int64), lit(0, int64))), _batch())
+    assert_true(
+        into_array(z, 4) == array([False, False, False, False]).to_any()
+    )
+    var nz = run(NumToBool(col(0, int64)), _batch())
+    assert_true(into_array(nz, 4) == array([True, True, True, True]).to_any())
+
+
+def test_bool_to_num_fuses() raises:
+    # (a < 3) -> int64 = [1,1,0,0] — fused bool->num, composes in the numeric lane
+    var cv = run(BoolToNum[Int64Type](Lt(col(0, int64), lit(3, int64))), _batch())
+    assert_true(into_array(cv, 4) == array([1, 1, 0, 0], int64).to_any())
 
 
 def test_anyvalue_erases_to_datum() raises:

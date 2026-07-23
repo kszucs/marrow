@@ -7,7 +7,7 @@ from std.testing import assert_true
 
 from marrow.testing import TestSuite
 from marrow.builders import array
-from marrow.dtypes import string, int32
+from marrow.dtypes import string, int32, int64, Int64Type
 from marrow.tabular import record_batch, RecordBatch
 from marrow.expr.lane import (
     scol,
@@ -18,6 +18,8 @@ from marrow.expr.lane import (
     Upper,
     StringLength,
     StartsWith,
+    StringToNum,
+    StringToBool,
     Add,
     And,
     Gt,
@@ -92,6 +94,20 @@ def test_predicate_and_strlen_compose_under_bool_logic() raises:
         ),
         _batch2(),
     )
+    assert_true(into_array(cv, 2) == array([True, False]).to_any())
+
+
+def test_string_to_num_parses() raises:
+    # parse ["10","20"] -> int64 [10,20] (a string->numeric breaker)
+    var b = record_batch([array(["10", "20"]).copy()], names=["s"])
+    var cv = run(StringToNum[Int64Type](scol(0, string)), b)
+    assert_true(into_array(cv, 2) == array([10, 20], int64).to_any())
+
+
+def test_string_to_bool_parses() raises:
+    # parse ["true","false"] -> [T,F] (a string->bool breaker)
+    var b = record_batch([array(["true", "false"]).copy()], names=["s"])
+    var cv = run(StringToBool(scol(0, string)), b)
     assert_true(into_array(cv, 2) == array([True, False]).to_any())
 
 

@@ -120,6 +120,13 @@ from ..kernels.boolean import (
     IsNanKernel,
     IsInfKernel,
 )
+from ..kernels.cast import (
+    NumericCast as NumericCastKernel,
+    NumToBool as NumToBoolKernel,
+    BoolToNum as BoolToNumKernel,
+    StringToNum as StringToNumKernel,
+    StringToBool as StringToBoolKernel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +390,9 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> SIMD[Self.NativeType, W]:
-        return self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
+        return NumericCastKernel.core[Self.A.NativeType, Self.NativeType, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx)
+        )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.materialize(batch, ctx)
@@ -588,6 +597,118 @@ comptime IsNan = NumericPredicate[IsNanKernel, _]
 comptime IsInf = NumericPredicate[IsInfKernel, _]
 comptime IsNull = NullPredicate[IsNullKernel, _]
 comptime NotNull = NullPredicate[NotNullKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# Cross-family casts. Fixed-width -> fixed-width fuses (num <-> bool via a per-lane
+# kernel `core`) — values.mojo caches these. String parses (string -> num/bool) have
+# no value lane, so they're breakers. All compute lives in `kernels.cast`.
+# (Casts *to* string need the string lane to thread a slot for a materialized
+# result — a follow-up. Currently only `string` operands, not `large_string`.)
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct NumToBool[A: NumericValue](BoolValue):
+    """Fused numeric -> bool (`x != 0`)."""
+
+    comptime OutType = BoolType
+    comptime Shape = Self.A.Shape
+    comptime NativeType = Self.A.NativeType
+    var a: Self.A
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        return NumToBoolKernel.core[Self.NativeType, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx)
+        )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
+    """Fused bool -> numeric (`True->1, False->0`)."""
+
+    comptime OutType = Self.To
+    comptime Shape = Self.A.Shape
+    comptime NativeType = Self.To.native
+    var a: Self.A
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[Self.NativeType, W]:
+        return BoolToNumKernel.core[Self.NativeType, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx)
+        )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct StringToNum[To: NumericType, A: StringValue](NumericValue):
+    """Parse string -> numeric (nulling on unparseable). No value lane, so a breaker:
+    parse the whole column once via the kernel, then load per lane."""
+
+    comptime OutType = Self.To
+    comptime Shape = 1
+    comptime NativeType = Self.To.native
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var s = into_array(run(self.a, batch), batch.num_rows()).as_string().copy()
+        ctx.append(
+            Datum(StringToNumKernel.apply[StringType, Self.To, False](s).to_any())
+        )
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[Self.NativeType, W]:
+        var i = slot
+        slot += 1
+        return ctx.get[PrimitiveArray[Self.To]](i).values().load[W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+@fieldwise_init
+struct StringToBool[A: StringValue](BoolValue):
+    """Parse string -> bool (`"true"`/`"false"`/`"1"`/`"0"`). A bool breaker."""
+
+    comptime OutType = BoolType
+    comptime Shape = 1
+    comptime NativeType = DType.int32
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var s = into_array(run(self.a, batch), batch.num_rows()).as_string().copy()
+        ctx.append(
+            Datum(StringToBoolKernel.apply[StringType, False](s).to_any())
+        )
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var i = slot
+        slot += 1
+        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
 
 
 # ---------------------------------------------------------------------------
