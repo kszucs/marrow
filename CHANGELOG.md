@@ -4,6 +4,25 @@
 
 ### Refactors
 
+- **`marrow.expr.values`: family-refined `execute` eliminates all consumption
+  `rebind`s.** Each value family now refines `execute`'s return to its concrete
+  array — `NumericValue` → `PrimitiveArray[Self.OutType]`, `StringValue` →
+  `BinaryLikeArray[Self.OutType]`, `ListValue` → `ListLikeArray[Self.OutType]`
+  (matching `BoolValue` → `BoolArray`). A child's `execute()` therefore yields a
+  fully typed array at every call site, so `StringLength` / `StringUnary` /
+  `StringPredicate` / `Counting` / `ListContains` pass operands straight to the
+  typed kernels with no `rebind`, and the fused numeric `_fused` returns its
+  `PrimitiveArray` directly. `StringPredicateKernel.apply` now takes two
+  independent string type params so mixed string/large_string predicates need no
+  pun. `BoolReduce` is parameterized by the reduce kernel type
+  (`BoolReduceKernel` — `AnyKernel`/`AllKernel`) instead of a bool flag.
+- **`AggKernel` gains a fully-typed `reduce[V]`** returning
+  `PrimitiveScalar[Self.AccType[V]]` (no erased `AnyScalar`, no downcast) with a
+  SIMD widened fast path for `sum`/`product`, same-type SIMD for `min`/`max`, and
+  metadata `count`. The expr `Reduce` node folds through it, and `Count` reads
+  `len - null_count` off the typed operand directly — both drop the erase →
+  dispatch → downcast round-trip.
+
 - **`marrow.expr.ibis` merged into `marrow.expr.values`**: the ibis-designed
   comptime expression system is now the canonical `values.mojo` (the old fused
   algebra is replaced). `AnyValue` and every node evaluate via `.execute()`

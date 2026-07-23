@@ -13,7 +13,12 @@ Layers:
     projection that always reduces — so a node returns / a parent consumes the
     concrete array with neither a `rebind` nor a reducer helper. (Spelling it as
     the dtype's `OutType.ArrayType` would be a double projection Mojo won't reduce
-    at the call site.) `AnyValue` boxes any node and `.execute(batch)`s it to an
+    at the call site.) Each family *refines* `execute`'s return to its concrete
+    array — `NumericValue` to `PrimitiveArray[Self.OutType]`, `StringValue` to
+    `BinaryLikeArray[Self.OutType]`, `ListValue` to `ListLikeArray[Self.OutType]`,
+    `BoolValue` to `BoolArray` — so a child's `execute()` yields a fully typed
+    array at the call site and consumers pass it straight to the typed kernels with
+    no `rebind` anywhere. `AnyValue` boxes any node and `.execute(batch)`s it to an
     `AnyArray` (`.to_any()`).
   * `NumericValue` **is** the numeric lane: it refines `OutType` to `NumericType`,
     adds the `core[W]` SIMD primitive, and its `execute` vectorizes `core` across
@@ -85,8 +90,9 @@ from ..dtypes import (
 )
 from std.memory import ArcPointer
 
-from ..scalars import PrimitiveScalar, StringScalar
+from ..scalars import PrimitiveScalar, StringScalar, Int64Scalar
 from ..buffers import Buffer, Bitmap
+from ..views import apply
 from ..arrays import (
     Array,
     PrimitiveArray,
@@ -156,6 +162,7 @@ from ..kernels.aggregate import (
     MaxKernel,
     CountKernel,
     ProductKernel,
+    BoolReduceKernel,
     AnyKernel,
     AllKernel,
 )
@@ -242,16 +249,16 @@ trait Value(Copyable, ImplicitlyDeletable, Movable, Writable):
 
     def isnull(self) -> IsNull[Self]:
         """Null predicate — any value in any family yields a `BoolValue`."""
-        return IsNull[Self](self.copy())
+        return IsNull(self.copy())
 
     def notnull(self) -> NotNull[Self]:
         """Non-null predicate — any value in any family yields a `BoolValue`."""
-        return NotNull[Self](self.copy())
+        return NotNull(self.copy())
 
     def count(self) -> Count[Self]:
         """Count of valid (non-null) values — a reduction available in every
         family (it reads only the validity bitmap)."""
-        return Count[Self](self.copy())
+        return Count(self.copy())
 
 
 trait NumericValue(Value):
@@ -274,118 +281,112 @@ trait NumericValue(Value):
     # the child's own `execute`). Each numeric node overrides `execute` with a
     # one-liner delegating to `_fused` — a *differently named* method default, which
     # does not trip the recursion.
-    def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> PrimitiveArray[Self.OutType]:
         ...
 
-    def _fused(self, batch: RecordBatch) raises -> Self.ArrayType:
-        """The shared fused body: vectorize `core` into one pass (no intermediate
-        arrays), then wrap the buffer. Result is `PrimitiveArray[Self.OutType]`,
-        rebound to the node's declared `Self.ArrayType` (identical — the composite
-        spelling just isn't inferrable here)."""
+    def _fused(self, batch: RecordBatch) raises -> PrimitiveArray[Self.OutType]:
+        """The shared fused body: fill a buffer with `core` in one pass (no
+        intermediate arrays) through `views.apply`'s producer overload — the same
+        CPU serial/parallel dispatch the kernels use. Returns the concrete
+        `PrimitiveArray[Self.OutType]` directly (the family refines `execute` to
+        that type, so every numeric node's `ArrayType` is `PrimitiveArray[Self.OutType]`
+        and no rebind is needed)."""
         comptime native = Self.NativeType
-        comptime width = simd_byte_width() // size_of[Scalar[native]]()
         var length = batch.num_rows()
         var buf = Buffer.alloc_uninit[native](length)
 
         @parameter
         @always_inline
-        def fill[
-            W: Int, rank: Int, alignment: Int = 1
-        ](idx: IndexList[rank]) -> None:
-            var i = idx[0]
-            buf.view[native](i, length).store[W](0, self.core[W](batch, i))
+        def producer[W: Int](i: Int) -> SIMD[native, W]:
+            return self.core[W](batch, i)
 
-        @always_inline
-        def lane[W: Int](i: Int):
-            fill[W, rank=1](IndexList[1](i))
-
-        vectorize[width](length, lane)
-        return rebind[Self.ArrayType](
-            PrimitiveArray[Self.OutType](
-                dtype=Self.OutType(),
-                length=length,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=buf.to_immutable(),
-            )
-        ).copy()
+        apply[native, producer](buf.view[native](0, length))
+        return PrimitiveArray[Self.OutType](
+            dtype=Self.OutType(),
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=buf.to_immutable(),
+        )
 
     # --- arithmetic (fusable, real kernels) --------------------------------
 
     def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
-        return Add[Self, Rhs](self.copy(), o.copy())
+        return Add(self.copy(), o.copy())
 
     def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
-        return Sub[Self, Rhs](self.copy(), o.copy())
+        return Sub(self.copy(), o.copy())
 
     def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
-        return Mul[Self, Rhs](self.copy(), o.copy())
+        return Mul(self.copy(), o.copy())
 
     def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
-        return Mod[Self, Rhs](self.copy(), o.copy())
+        return Mod(self.copy(), o.copy())
 
     def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
-        return Div[Self, Rhs](self.copy(), o.copy())
+        return Div(self.copy(), o.copy())
 
     def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:
-        return Pow[Self, Rhs](self.copy(), o.copy())
+        return Pow(self.copy(), o.copy())
 
     def __neg__(self) -> Neg[Self]:
-        return Neg[Self](self.copy())
+        return Neg(self.copy())
 
     def abs(self) -> Abs[Self]:
-        return Abs[Self](self.copy())
+        return Abs(self.copy())
 
     def ceil(self) -> Ceil[Self]:
-        return Ceil[Self](self.copy())
+        return Ceil(self.copy())
 
     def floor(self) -> Floor[Self]:
-        return Floor[Self](self.copy())
+        return Floor(self.copy())
 
     def round(self) -> Round[Self]:
-        return Round[Self](self.copy())
+        return Round(self.copy())
 
     def sign(self) -> Sign[Self]:
-        return Sign[Self](self.copy())
+        return Sign(self.copy())
 
     def trunc(self) -> Trunc[Self]:
-        return Trunc[Self](self.copy())
+        return Trunc(self.copy())
 
     # transcendental unary -> float64 (fused via the real kernels)
     def sqrt(self) -> Sqrt[Self]:
-        return Sqrt[Self](self.copy())
+        return Sqrt(self.copy())
 
     def exp(self) -> Exp[Self]:
-        return Exp[Self](self.copy())
+        return Exp(self.copy())
 
     def exp2(self) -> Exp2[Self]:
-        return Exp2[Self](self.copy())
+        return Exp2(self.copy())
 
     def ln(self) -> Ln[Self]:
-        return Ln[Self](self.copy())
+        return Ln(self.copy())
 
     def log2(self) -> Log2[Self]:
-        return Log2[Self](self.copy())
+        return Log2(self.copy())
 
     def log10(self) -> Log10[Self]:
-        return Log10[Self](self.copy())
+        return Log10(self.copy())
 
     def log1p(self) -> Log1p[Self]:
-        return Log1p[Self](self.copy())
+        return Log1p(self.copy())
 
     def sin(self) -> Sin[Self]:
-        return Sin[Self](self.copy())
+        return Sin(self.copy())
 
     def cos(self) -> Cos[Self]:
-        return Cos[Self](self.copy())
+        return Cos(self.copy())
 
     # numeric -> bool predicates (type-only until bool execution is wired)
     def isnan(self) -> IsNan[Self]:
-        return IsNan[Self](self.copy())
+        return IsNan(self.copy())
 
     def isinf(self) -> IsInf[Self]:
-        return IsInf[Self](self.copy())
+        return IsInf(self.copy())
 
     # --- cast (fused, numeric -> numeric) ----------------------------------
 
@@ -397,39 +398,39 @@ trait NumericValue(Value):
     # --- reductions (N -> 1, boundary; non-lane `Value` result nodes) -------
 
     def sum(self) -> Sum[Self]:
-        return Sum[Self](self.copy())
+        return Sum(self.copy())
 
     def product(self) -> Product[Self]:
-        return Product[Self](self.copy())
+        return Product(self.copy())
 
     def mean(self) -> Mean[Self]:
-        return Mean[Self](self.copy())
+        return Mean(self.copy())
 
     def min(self) -> Min[Self]:
-        return Min[Self](self.copy())
+        return Min(self.copy())
 
     def max(self) -> Max[Self]:
-        return Max[Self](self.copy())
+        return Max(self.copy())
 
     # --- comparisons (-> BoolValue) ----------------------------------------
 
     def __lt__[Rhs: NumericValue](self, o: Rhs) -> Less[Self, Rhs]:
-        return Less[Self, Rhs](self.copy(), o.copy())
+        return Less(self.copy(), o.copy())
 
     def __le__[Rhs: NumericValue](self, o: Rhs) -> LessEqual[Self, Rhs]:
-        return LessEqual[Self, Rhs](self.copy(), o.copy())
+        return LessEqual(self.copy(), o.copy())
 
     def __gt__[Rhs: NumericValue](self, o: Rhs) -> Greater[Self, Rhs]:
-        return Greater[Self, Rhs](self.copy(), o.copy())
+        return Greater(self.copy(), o.copy())
 
     def __ge__[Rhs: NumericValue](self, o: Rhs) -> GreaterEqual[Self, Rhs]:
-        return GreaterEqual[Self, Rhs](self.copy(), o.copy())
+        return GreaterEqual(self.copy(), o.copy())
 
     def __eq__[Rhs: NumericValue](self, o: Rhs) -> Equal[Self, Rhs]:
-        return Equal[Self, Rhs](self.copy(), o.copy())
+        return Equal(self.copy(), o.copy())
 
     def __ne__[Rhs: NumericValue](self, o: Rhs) -> NotEqual[Self, Rhs]:
-        return NotEqual[Self, Rhs](self.copy(), o.copy())
+        return NotEqual(self.copy(), o.copy())
 
 
 trait BoolValue(Value):
@@ -444,25 +445,25 @@ trait BoolValue(Value):
         ...
 
     def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
-        return And[Self, Rhs](self.copy(), o.copy())
+        return And(self.copy(), o.copy())
 
     def __or__[Rhs: BoolValue](self, o: Rhs) -> Or[Self, Rhs]:
-        return Or[Self, Rhs](self.copy(), o.copy())
+        return Or(self.copy(), o.copy())
 
     def __xor__[Rhs: BoolValue](self, o: Rhs) -> Xor[Self, Rhs]:
-        return Xor[Self, Rhs](self.copy(), o.copy())
+        return Xor(self.copy(), o.copy())
 
     def __invert__(self) -> Not[Self]:
-        return Not[Self](self.copy())
+        return Not(self.copy())
 
     def any(self) -> Any[Self]:
         """True if any valid element is True (`any`) — a length-1 reduction."""
-        return Any[Self](self.copy())
+        return Any(self.copy())
 
     def all(self) -> All[Self]:
         """True if all valid elements are True (`all`) — a length-1 reduction.
         """
-        return All[Self](self.copy())
+        return All(self.copy())
 
 
 trait StringValue(Value):
@@ -473,44 +474,56 @@ trait StringValue(Value):
 
     comptime OutType: StringLikeType
 
+    # Refined to the concrete `BinaryLikeArray[Self.OutType]` (a type application of
+    # the sibling `OutType`, not a `.ArrayType` projection — so it reduces at every
+    # call site, exactly like `BoolValue.execute -> BoolArray`). A `StringValue`
+    # child's `execute()` therefore yields the concrete string array directly, so
+    # consumers (`Length`, `StringUnary`, `StringPredicate`) call the typed kernels
+    # with no `rebind`. Each string node still declares
+    # `comptime ArrayType = BinaryLikeArray[Self.OutType]` to satisfy `Value`.
+    def execute(
+        self, batch: RecordBatch
+    ) raises -> BinaryLikeArray[Self.OutType]:
+        ...
+
     def length(self) -> Length[Self]:
-        return Length[Self](self.copy())
+        return Length(self.copy())
 
     def upper(self) -> Upper[Self]:
-        return Upper[Self](self.copy())
+        return Upper(self.copy())
 
     def lower(self) -> Lower[Self]:
-        return Lower[Self](self.copy())
+        return Lower(self.copy())
 
     def reverse(self) -> Reverse[Self]:
-        return Reverse[Self](self.copy())
+        return Reverse(self.copy())
 
     def strip(self) -> Strip[Self]:
-        return Strip[Self](self.copy())
+        return Strip(self.copy())
 
     def lstrip(self) -> LStrip[Self]:
-        return LStrip[Self](self.copy())
+        return LStrip(self.copy())
 
     def rstrip(self) -> RStrip[Self]:
-        return RStrip[Self](self.copy())
+        return RStrip(self.copy())
 
     def capitalize(self) -> Capitalize[Self]:
-        return Capitalize[Self](self.copy())
+        return Capitalize(self.copy())
 
     def startswith[Rhs: StringValue](self, o: Rhs) -> StartsWith[Self, Rhs]:
-        return StartsWith[Self, Rhs](self.copy(), o.copy())
+        return StartsWith(self.copy(), o.copy())
 
     def endswith[Rhs: StringValue](self, o: Rhs) -> EndsWith[Self, Rhs]:
-        return EndsWith[Self, Rhs](self.copy(), o.copy())
+        return EndsWith(self.copy(), o.copy())
 
     def contains[Rhs: StringValue](self, o: Rhs) -> Contains[Self, Rhs]:
-        return Contains[Self, Rhs](self.copy(), o.copy())
+        return Contains(self.copy(), o.copy())
 
     def __eq__[Rhs: StringValue](self, o: Rhs) -> StringEqual[Self, Rhs]:
-        return StringEqual[Self, Rhs](self.copy(), o.copy())
+        return StringEqual(self.copy(), o.copy())
 
     def __ne__[Rhs: StringValue](self, o: Rhs) -> StringNotEqual[Self, Rhs]:
-        return StringNotEqual[Self, Rhs](self.copy(), o.copy())
+        return StringNotEqual(self.copy(), o.copy())
 
 
 trait ListValue(Value):
@@ -521,13 +534,20 @@ trait ListValue(Value):
 
     comptime OutType: DataType & ListLikeType
 
+    # Refined to the concrete `ListLikeArray[Self.OutType]` (same reasoning as
+    # `StringValue.execute`): a `ListValue` child's `execute()` yields the concrete
+    # list array directly, so `ArrayLength` / `ListContains` consume it with no
+    # `rebind`. Each list node declares `comptime ArrayType = ListLikeArray[Self.OutType]`.
+    def execute(self, batch: RecordBatch) raises -> ListLikeArray[Self.OutType]:
+        ...
+
     def length(self) -> ArrayLength[Self]:
-        return ArrayLength[Self](self.copy())
+        return ArrayLength(self.copy())
 
     def contains[E: NumericValue](self, elem: E) -> ArrayContains[Self, E]:
         """Element-wise membership: `elem[i] ∈ list[i]` → a `BoolValue` (a literal
         element broadcasts). Numeric element types only."""
-        return ArrayContains[Self, E](self.copy(), elem.copy())
+        return ArrayContains(self.copy(), elem.copy())
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +564,7 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = highest_precedence[Self.L, Self.R]
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.OutType.native
 
     var left: Self.L
@@ -573,7 +593,7 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = dt.Float64Type
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
 
     var left: Self.L
@@ -601,7 +621,7 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime OutType = Self.A.OutType
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.A.NativeType
 
     var arg: Self.A
@@ -625,7 +645,7 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime OutType = dt.Float64Type
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
 
     var arg: Self.A
@@ -653,7 +673,7 @@ struct Cast[To: NumericType, A: NumericValue](NumericValue):
 
     comptime OutType = Self.To
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.To.native
 
     var arg: Self.A
@@ -690,9 +710,7 @@ struct StringLength[A: StringValue](Value):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return LengthKernel.apply(
-            rebind[BinaryLikeArray[Self.A.OutType]](self.arg.execute(batch))
-        )
+        return LengthKernel.apply(self.arg.execute(batch))
 
 
 @fieldwise_init
@@ -708,9 +726,7 @@ struct Counting[K: Kernel, A: ListValue](Value):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return ArrayLengthKernel.apply(
-            rebind[ListLikeArray[Self.A.OutType]](self.arg.execute(batch))
-        )
+        return ArrayLengthKernel.apply(self.arg.execute(batch))
 
 
 @fieldwise_init
@@ -731,12 +747,10 @@ struct Reduce[K: AggKernel, A: NumericValue](Value):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        # Fold the operand to one scalar, boxed as a length-1 `OutType` array.
-        return (
-            Self.K.reduce(self.arg.execute(batch).to_any())
-            .as_primitive[Self.K.AccType[Self.A.OutType]]()
-            .repeat(1)
-        )
+        # The operand `execute()`s to a concrete `PrimitiveArray[A.OutType]`, so the
+        # typed `K.reduce[V]` folds it to a `PrimitiveScalar[K.AccType[A.OutType]]`
+        # with no erasure/downcast; broadcast the scalar to a length-1 result.
+        return Self.K.reduce(self.arg.execute(batch)).repeat(1)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -754,11 +768,11 @@ struct Count[A: Value](Value):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return (
-            CountKernel.reduce(self.arg.execute(batch).to_any())
-            .as_primitive[dt.Int64Type]()
-            .repeat(1)
-        )
+        # Valid count is validity metadata (`len - null_count`) available on every
+        # `Array`, so `Count` reads it off the typed operand array directly — no
+        # erasure, no dispatch, no downcast — and broadcasts to a length-1 result.
+        var arr = self.arg.execute(batch)
+        return Int64Scalar(Int64(len(arr) - arr.null_count())).repeat(1)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(CountKernel.name, "(", self.arg, ")")
@@ -859,11 +873,11 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
-    """`any()` (`all_=False`) / `all()` (`all_=True`) over a boolean column → a
-    length-1 bool result. Materializes the child mask, then folds it with the
-    optimized bitmap reduction in `kernels.aggregate` (`AnyKernel`/`AllKernel`).
-    """
+struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
+    """`any()` / `all()` over a boolean column → a length-1 bool result. The
+    aggregate is chosen by the kernel type param `K` (`AnyKernel`/`AllKernel`).
+    Materializes the child mask, then folds it with the optimized bitmap
+    reduction in `kernels.aggregate`."""
 
     comptime OutType = dt.BoolType
     comptime ArrayType = BoolArray
@@ -871,14 +885,11 @@ struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
         var builder = BoolBuilder(1)
-        comptime if Self.all_:
-            builder.append(AllKernel.reduce(self.arg.execute(batch)))
-        else:
-            builder.append(AnyKernel.reduce(self.arg.execute(batch)))
+        builder.append(Self.K.reduce(self.arg.execute(batch)))
         return builder.finish()
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("all_(" if Self.all_ else "any_(", self.arg, ")")
+        writer.write(Self.K.name, "(", self.arg, ")")
 
 
 @fieldwise_init
@@ -894,12 +905,12 @@ struct ListContains[L: ListValue, E: NumericValue](BoolValue):
     var elem: Self.E
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        # Both operand types are known at comptime — call the typed kernel `apply`
-        # directly (no erase-then-recover through `dispatch`). rebind asserts the
-        # child associated-type identities (`ListLikeType` won't reduce on its own).
+        # Both children `execute()` to concrete typed arrays (ListValue refines to
+        # `ListLikeArray[L.OutType]`, NumericValue to `PrimitiveArray[E.OutType]`),
+        # consumed directly by the typed kernel `apply` — no erase, no rebind.
         return ArrayContainsKernel.apply(
-            rebind[ListLikeArray[Self.L.OutType]](self.arg.execute(batch)),
-            rebind[PrimitiveArray[Self.E.OutType]](self.elem.execute(batch)),
+            self.arg.execute(batch),
+            self.elem.execute(batch),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -931,14 +942,9 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        # `K.apply` returns `BinaryLikeArray[A.OutType]` == `Self.ArrayType`, so the
-        # result is returned directly. The child is a `StringValue` whose family
-        # `ArrayType` stays abstract (a `BinaryLikeArray[Self.OutType]` default
-        # would be self-referential), so the operand is rebound to its concrete
-        # array before the typed kernel call.
-        return Self.K.apply(
-            rebind[BinaryLikeArray[Self.A.OutType]](self.arg.execute(batch))
-        )
+        # The child's `execute()` yields `BinaryLikeArray[A.OutType]` (StringValue
+        # refines the return type), which `K.apply` consumes directly — no rebind.
+        return Self.K.apply(self.arg.execute(batch))
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -958,11 +964,11 @@ struct StringPredicate[
     var right: Self.R
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        # Both operands share the string type; rebind their `OutType.ArrayType`
-        # to the concrete `BinaryLikeArray` the predicate kernel's `apply` takes.
+        # Both operands' `execute()` yield concrete `BinaryLikeArray` (StringValue
+        # refines the return type), consumed directly by the predicate kernel.
         return Self.K.apply(
-            rebind[BinaryLikeArray[Self.L.OutType]](self.left.execute(batch)),
-            rebind[BinaryLikeArray[Self.L.OutType]](self.right.execute(batch)),
+            self.left.execute(batch),
+            self.right.execute(batch),
         )
 
     def write_to[W: Writer](self, mut writer: W):
@@ -1014,8 +1020,8 @@ comptime And = BoolBinary[AndKernel, _, _]
 comptime Or = BoolBinary[OrKernel, _, _]
 comptime Xor = BoolBinary[XorKernel, _, _]
 comptime Not = BoolUnary[NotKernel, _]
-comptime Any = BoolReduce[False, _]
-comptime All = BoolReduce[True, _]
+comptime Any = BoolReduce[AnyKernel, _]
+comptime All = BoolReduce[AllKernel, _]
 comptime IsNull = Predicate[IsNullKernel, _]
 comptime NotNull = Predicate[NotNullKernel, _]
 comptime IsNan = Predicate[IsNanKernel, _]
@@ -1088,7 +1094,7 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
 
-    comptime ArrayType = Self.OutType.ArrayType
+    comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.T.native
 
     var _value: Scalar[Self.NativeType]

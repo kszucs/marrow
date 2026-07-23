@@ -4,7 +4,12 @@ from marrow.testing import TestSuite
 from marrow.arrays import AnyArray, PrimitiveArray
 from marrow.builders import array, nulls, PrimitiveBuilder, Int32Builder
 from marrow.dtypes import int32, int64, float64, Int32Type, Int64Type
-from marrow.kernels.aggregate import SumKernel, MeanKernel
+from marrow.kernels.aggregate import (
+    SumKernel,
+    MeanKernel,
+    MinKernel,
+    CountKernel,
+)
 
 
 def test_sumtyped() raises:
@@ -41,6 +46,37 @@ def test_sumuntyped() raises:
     assert_equal(result.as_int64().value(), 6)
 
 
+def test_reduce_typed_sum_widens() raises:
+    """Typed `reduce[V]` on a narrow int returns a widened int64 scalar directly
+    (no erased `AnyScalar`)."""
+    var result = SumKernel.reduce(array([1, 2, 3, 4, 5], int32))
+    assert_true(result.type() == int64)
+    assert_equal(result.value(), 15)
+
+
+def test_reduce_typed_min_keeps_type() raises:
+    """`min`/`max` keep the operand dtype through the typed path."""
+    var result = MinKernel.reduce(array([4, 1, 3, 2], int32))
+    assert_true(result.type() == int32)
+    assert_equal(result.value(), 1)
+
+
+def test_reduce_typed_mean_float() raises:
+    var result = MeanKernel.reduce(array([1, 2, 3, 4], int32))
+    assert_true(result.type() == float64)
+    assert_equal(result.value(), 2.5)
+
+
+def test_reduce_typed_count() raises:
+    var b = Int32Builder(3)
+    b.append(1)
+    b.append_null()
+    b.append(3)
+    var result = CountKernel.reduce(b.finish())
+    assert_true(result.type() == int64)
+    assert_equal(result.value(), 2)
+
+
 def test_mean_int() raises:
     """Mean of integers is a float64 scalar."""
     var a: AnyArray = array([1, 2, 3, 4], int32)
@@ -62,7 +98,8 @@ def test_mean_skips_nulls() raises:
     a.append(20)
     a.append_null()
     a.append(30)
-    var result = MeanKernel.reduce(a.finish())
+    var arr: AnyArray = a.finish()
+    var result = MeanKernel.reduce(arr)
     assert_equal(result.as_float64().value(), 20.0)  # (10+20+30)/3
 
 

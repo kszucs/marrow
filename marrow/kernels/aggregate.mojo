@@ -59,6 +59,27 @@ def _reduce_widened[
     return dispatch_over_numeric[run](array.dtype())
 
 
+def _reduce_widened_typed[
+    K: AggKernel, V: NumericType
+](
+    array: PrimitiveArray[V], ctx: ExecutionContext = ExecutionContext.serial()
+) raises -> PrimitiveScalar[K.AccType[V]]:
+    """Fully-typed counterpart of `_reduce_widened` — the input dtype `V` is known
+    at comptime, so there is no `dispatch_over_numeric` and no erased scalar. The
+    lane cast to the `K.AccType[V]` accumulator is fused into the SIMD `reduce`.
+    """
+    comptime Acc = K.AccType[V].native
+    var identity = K.identity[Acc]()
+    var value: Scalar[Acc]
+    if array.bitmap:
+        value = reduce[V.native, K.combine, Acc](
+            array.values(), array.validity().value(), identity, ctx
+        )
+    else:
+        value = reduce[V.native, K.combine, Acc](array.values(), identity, ctx)
+    return PrimitiveScalar[K.AccType[V]](value)
+
+
 # ---------------------------------------------------------------------------
 # AggKernel — one trait for every aggregate.
 #
@@ -134,6 +155,27 @@ trait AggKernel(Kernel):
         return dispatch_over_numeric[job](array.dtype())
 
     @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        """Fully-typed whole-array reduce — the input dtype is known at comptime,
+        so the result is `PrimitiveScalar[Self.AccType[V]]` directly (no erased
+        `AnyScalar`, no downcast). This general default drives one `AggState` over
+        a single group (as the erased overload does); `sum`/`min`/`max`/`product`
+        override it with the SIMD widened fast path."""
+        var n = len(array)
+        var gb = Int32Builder(n)
+        for _ in range(n):
+            gb.append(Scalar[int32.native](0))
+        var gids = gb.finish()
+        var state = AggState[Self, V]()
+        state.update(gids, array, 1)
+        return state.finish(1)[0]
+
+    @staticmethod
     def apply[
         T: PrimitiveType
     ](
@@ -202,6 +244,15 @@ struct SumKernel(AggKernel):
         # Widen to the int64/float64 accumulator so narrow ints don't overflow.
         return _reduce_widened[Self](array, ctx)
 
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        return _reduce_widened_typed[Self](array, ctx)
+
 
 struct ProductKernel(AggKernel):
     comptime name = "product"
@@ -230,6 +281,15 @@ struct ProductKernel(AggKernel):
         # Widen to the int64/float64 accumulator so narrow ints don't overflow.
         return _reduce_widened[Self](array, ctx)
 
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        return _reduce_widened_typed[Self](array, ctx)
+
 
 struct MinKernel(AggKernel):
     comptime name = "min"
@@ -255,6 +315,15 @@ struct MinKernel(AggKernel):
     ) raises -> AnyScalar:
         return Self.dispatch(array, ctx)  # SIMD whole-array fast path
 
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
+
 
 struct MaxKernel(AggKernel):
     comptime name = "max"
@@ -279,6 +348,15 @@ struct MaxKernel(AggKernel):
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
         return Self.dispatch(array, ctx)  # SIMD whole-array fast path
+
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        return Self.apply(array, ctx)  # AccType == V → same-type SIMD reduce
 
 
 struct CountKernel(AggKernel):
@@ -309,6 +387,16 @@ struct CountKernel(AggKernel):
     ) raises -> AnyScalar:
         # Valid count is metadata — no scan.
         return Int64Scalar(Int64(len(array) - array.null_count())).to_any()
+
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        # Valid count is metadata — no scan. `AccType` is always int64.
+        return Int64Scalar(Int64(len(array) - array.null_count()))
 
 
 struct MeanKernel(AggKernel):
@@ -345,6 +433,20 @@ struct MeanKernel(AggKernel):
             == float64 else Float64(total.as_int64().value())
         )
         return Float64Scalar(s / Float64(cnt)).to_any()
+
+    @staticmethod
+    def reduce[
+        V: NumericType
+    ](
+        array: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> PrimitiveScalar[Self.AccType[V]]:
+        # Vectorized widened sum divided by the valid count; null on empty.
+        var cnt = len(array) - array.null_count()
+        if cnt == 0:
+            return Float64Scalar(None, float64)
+        var total = _reduce_widened_typed[SumKernel](array, ctx)
+        return Float64Scalar(total.value().cast[DType.float64]() / Float64(cnt))
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +525,20 @@ def for_agg_tag[
 # ---------------------------------------------------------------------------
 
 
-struct AnyKernel(Kernel):
+trait BoolReduceKernel(Kernel):
+    """A boolean whole-column fold to a single `Bool` — `any`/`all`. Not an
+    `AggKernel` (it folds bit-packed masks, not the numeric accumulator algebra),
+    so it exposes just `reduce(BoolArray) -> Bool`; the expression layer selects
+    between the two by kernel type."""
+
+    @staticmethod
+    def reduce(
+        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        ...
+
+
+struct AnyKernel(BoolReduceKernel):
     """True if any valid element is True. False if empty or all null."""
 
     comptime name = "any"
@@ -461,7 +576,7 @@ struct AnyKernel(Kernel):
         return Self.reduce(array.as_bool(), ctx)
 
 
-struct AllKernel(Kernel):
+struct AllKernel(BoolReduceKernel):
     """True if all valid elements are True. True if empty or all null."""
 
     comptime name = "all"

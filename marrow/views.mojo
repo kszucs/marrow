@@ -1218,6 +1218,30 @@ def _apply_dispatch[
 
 
 def apply[
+    Out: DType,
+    op: def[W: Int](Int) capturing[_] -> SIMD[Out, W],
+](
+    dst: BufferView[mut=True, Out, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Fill ``dst[i] = op(i)`` element-wise via the shared CPU serial/parallel
+    dispatch — a *source-less* producer variant for fused expression lanes that
+    compute each value from its index (evaluating a whole sub-tree) rather than
+    reading an input buffer. GPU is not offered: the producer typically closes
+    over a host `RecordBatch`, so only the CPU paths of ``_apply_dispatch`` apply.
+    """
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](i))
+
+    _apply_dispatch[Out, False, process](length, ctx)
+
+
+def apply[
     In: DType,
     Out: DType,
     op: UnaryFn[In, Out],

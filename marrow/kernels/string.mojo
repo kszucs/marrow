@@ -220,8 +220,8 @@ trait StringPredicateKernel(Kernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType
-    ](left: BinaryLikeArray[T], right: BinaryLikeArray[T]) raises -> BoolArray:
+        L: StringLikeType, R: StringLikeType
+    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
         var n = len(left)
         if len(right) != n:
             raise Error(
