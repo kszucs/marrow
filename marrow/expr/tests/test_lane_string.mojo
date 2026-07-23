@@ -15,8 +15,12 @@ from marrow.expr.lane import (
     lit,
     run,
     Concat,
+    Upper,
     StringLength,
+    StartsWith,
     Add,
+    And,
+    Gt,
     into_array,
 )
 from marrow.scalars import AnyScalar
@@ -24,6 +28,15 @@ from marrow.scalars import AnyScalar
 
 def _batch() raises -> RecordBatch:
     return record_batch([array(["ab", "cd"]).copy()], names=["s"])
+
+
+def _batch2() raises -> RecordBatch:
+    # two string columns, for binary predicates (a literal pattern would need the
+    # unsupported string-scalar broadcast — a noted follow-up)
+    return record_batch(
+        [array(["abc", "xyz"]).copy(), array(["ab", "yy"]).copy()],
+        names=["s", "p"],
+    )
 
 
 def test_string_literal_is_scalar() raises:
@@ -49,6 +62,37 @@ def test_strlen_fuses_into_numeric() raises:
     var expr = Add(StringLength(scol(0, string)), lit(1, int32))
     var cv = run(expr, _batch())
     assert_true(into_array(cv, 2) == array([3, 3], int32).to_any())
+
+
+def test_upper_map_fuses() raises:
+    # upper(s) over ["ab","cd"] → ["AB","CD"] (elementwise map, delegates to kernel)
+    var cv = run(Upper(scol(0, string)), _batch())
+    assert_true(into_array(cv, 2) == array(["AB", "CD"]).to_any())
+
+
+def test_map_and_concat_fuse_together() raises:
+    # upper(s) || "!" → ["AB!","CD!"] — map + concat in one builder pass
+    var cv = run(Concat(Upper(scol(0, string)), slit("!")), _batch())
+    assert_true(into_array(cv, 2) == array(["AB!", "CD!"]).to_any())
+
+
+def test_startswith_predicate() raises:
+    # startswith(s, p): "abc".sw("ab")=T, "xyz".sw("yy")=F → [T,F]
+    var cv = run(StartsWith(scol(0, string), scol(1, string)), _batch2())
+    assert_true(into_array(cv, 2) == array([True, False]).to_any())
+
+
+def test_predicate_and_strlen_compose_under_bool_logic() raises:
+    # startswith(s,p) & (length(s) > 2) → [T,F] & [T,T] = [T,F]
+    # a string-predicate breaker AND a strlen breaker, both fused under one `And`.
+    var cv = run(
+        And(
+            StartsWith(scol(0, string), scol(1, string)),
+            Gt(StringLength(scol(0, string)), lit(2, int32)),
+        ),
+        _batch2(),
+    )
+    assert_true(into_array(cv, 2) == array([True, False]).to_any())
 
 
 def main() raises:

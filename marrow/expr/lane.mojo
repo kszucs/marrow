@@ -16,13 +16,13 @@ Model
       row at a time — no intermediate `StringArray`).
 - **Pipeline breakers** — cross-row ops (`Reduction`, `WindowFunction`) that can't
   fuse in any strategy — cut the tree into a forest of fused stages. A breaker
-  materializes its stage once in `prepare` into a shared `Context`, then behaves as
+  materializes its stage once in `materialize` into a shared `Context`, then behaves as
   an ordinary fused leaf: a scalar reduction reads the context and **splats** (like
   a literal), a columnar window reads it and **loads** (like a column). So the stage
   above still fuses through the single `NumericBinary` — there is no separate
   "materialized" binary.
 - Expressions are **immutable**: all per-execute state lives in the `Context`.
-  Breaker results are stored positionally; `prepare` (which fills them) and `core`
+  Breaker results are stored positionally; `materialize` (which fills them) and `core`
   (which reads them) visit breakers in the same DFS order, so a plain integer
   `slot` matches reads to writes — no per-lane keying in the hot loop. A breaker
   materializes its operand through a *fresh* sub-context (`run`), so nested breakers
@@ -36,9 +36,11 @@ from std.memory import ArcPointer
 
 from ..tabular import RecordBatch
 from ..arrays import (
+    Array,
     AnyArray,
     PrimitiveArray,
     Int64Array,
+    Int32Array,
     BoolArray,
     BinaryLikeArray,
     StringArray,
@@ -86,7 +88,32 @@ from ..kernels.aggregate import (
     ProductKernel,
     CountKernel,
 )
-from ..kernels.string import LengthKernel, ConcatKernel
+from ..kernels.string import (
+    LengthKernel,
+    ConcatKernel,
+    StringMapKernel,
+    UpperKernel,
+    LowerKernel,
+    StripKernel,
+    LStripKernel,
+    RStripKernel,
+    ReverseKernel,
+    CapitalizeKernel,
+    StringPredicateKernel,
+    StartsWithKernel,
+    EndsWithKernel,
+    ContainsKernel,
+    StringEqKernel,
+    StringNeKernel,
+)
+from ..kernels.boolean import (
+    BoolBinaryKernel,
+    BoolUnaryKernel,
+    AndKernel,
+    OrKernel,
+    XorKernel,
+    NotKernel,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +131,7 @@ def into_array(d: Datum, n: Int) raises -> AnyArray:
 
 # ---------------------------------------------------------------------------
 # Context — per-execute shared scratch. Pipeline-breaker stage results live here,
-# positionally: `prepare` appends them in DFS order and `core` reads them back in
+# positionally: `materialize` appends them in DFS order and `core` reads them back in
 # the same order via a `slot`. Keeping results here (not on the nodes) is what
 # makes expressions immutable.
 # ---------------------------------------------------------------------------
@@ -121,13 +148,19 @@ struct Context(Copyable, Movable):
         # a `Datum` copy is a ref-count bump (no heap); cheap enough per lane.
         return self._slots[i].copy()
 
+    def get[A: Array](self, i: Int) -> A:
+        """Typed slot read — `ctx.get[BoolArray](i)`. Pulls the typed array straight
+        out of the slot's `Datum` (a ref-count bump), skipping the `as_xxx().copy()`
+        dance at every breaker read."""
+        return self._slots[i][AnyArray]._v[A].copy()
+
 
 # Known follow-ups (flagged during design; not yet addressed):
 #  - PERF: `Context.get` copies a `Datum` per lane for a fused breaker. A pass could
 #    hoist scalar splats out of the loop or intern slots to plain scalars/pointers.
 #  - CSE: positional slots forgo dedup — identical breakers (`sum(a)` used twice)
-#    recompute. A keyed dedup in `prepare` (map subtree-key -> slot) can restore it.
-#  - SCHEDULER: independent breakers run sequentially in `prepare`; they are
+#    recompute. A keyed dedup in `materialize` (map subtree-key -> slot) can restore it.
+#  - SCHEDULER: independent breakers run sequentially in `materialize`; they are
 #    independent stages and can be scheduled to run concurrently.
 #  - `AnyScalar.repeat` has no string support, so a string *scalar* cannot broadcast
 #    to a column yet (core-array machinery, orthogonal to fusion).
@@ -152,7 +185,7 @@ comptime promote[L: NumericType, R: NumericType] = L if (
 
 
 # ---------------------------------------------------------------------------
-# Value — every node. `execute` is abstract; `prepare` defaults to a no-op (only
+# Value — every node. `execute` is abstract; `materialize` defaults to a no-op (only
 # composites recurse and breakers materialize).
 # ---------------------------------------------------------------------------
 trait Value(Copyable, ImplicitlyDeletable, Movable):
@@ -162,7 +195,7 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         ...
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
         """Pre-pass before a fused loop: run pipeline-breaker stages into `ctx` in
         DFS order. No-op for leaves (this default); composites recurse; breakers
         override to materialize their stage and append it."""
@@ -192,7 +225,7 @@ trait NumericValue(Value):
         ...
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        self.prepare(batch, ctx)
+        self.materialize(batch, ctx)
         comptime native = Self.NativeType
         comptime if Self.Shape == 0:  # scalar → evaluate the lane once, then splat
             var slot = 0
@@ -284,9 +317,9 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
         return Self.K.core[Self.NativeType, W](a, b)
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        self.l.prepare(batch, ctx)
-        self.r.prepare(batch, ctx)
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.l.materialize(batch, ctx)
+        self.r.materialize(batch, ctx)
 
 
 @fieldwise_init
@@ -308,8 +341,8 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        self.a.prepare(batch, ctx)
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
 
 
 @fieldwise_init
@@ -330,8 +363,8 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
     ) -> SIMD[Self.NativeType, W]:
         return self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        self.a.prepare(batch, ctx)
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
 
 
 comptime Add = NumericBinary[AddKernel, _, _]
@@ -359,7 +392,7 @@ trait BoolValue(Value):
         ...
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        self.prepare(batch, ctx)
+        self.materialize(batch, ctx)
         var length = batch.num_rows()
         var bm = Bitmap.alloc_uninit(length)
 
@@ -403,9 +436,9 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
         var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
         return Self.K.core[Self.NativeType, W](a, b)
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        self.l.prepare(batch, ctx)
-        self.r.prepare(batch, ctx)
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.l.materialize(batch, ctx)
+        self.r.materialize(batch, ctx)
 
 
 comptime Lt = NumericCompare[LtKernel, _, _]
@@ -414,6 +447,63 @@ comptime Gt = NumericCompare[GtKernel, _, _]
 comptime Ge = NumericCompare[GeKernel, _, _]
 comptime Eq = NumericCompare[EqKernel, _, _]
 comptime Ne = NumericCompare[NeKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# Boolean logic — fused vectorwise over bit-packed masks (bitwise SIMD). Unlike
+# `values.mojo` (which materializes bool children), these stay in the bool lane:
+# `(a < 3) & (b > 15)` is one fused pass. Compute lives in the boolean kernels.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
+    """Fused `and`/`or`/`xor` over two bool masks."""
+
+    comptime OutType = BoolType
+    comptime Shape = max(Self.L.Shape, Self.R.Shape)
+    comptime NativeType = Self.L.NativeType
+    var l: Self.L
+    var r: Self.R
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var a = self.l.vectorwise[W](batch, ctx, slot, idx)
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx)
+        return Self.K.core[W](a, b)
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.l.materialize(batch, ctx)
+        self.r.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
+    """Fused `not` over a bool mask."""
+
+    comptime OutType = BoolType
+    comptime Shape = Self.A.Shape
+    comptime NativeType = Self.A.NativeType
+    var a: Self.A
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        return Self.K.core[W](self.a.vectorwise[W](batch, ctx, slot, idx))
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
+comptime And = BoolBinary[AndKernel, _, _]
+comptime Or = BoolBinary[OrKernel, _, _]
+comptime Xor = BoolBinary[XorKernel, _, _]
+comptime Not = BoolUnary[NotKernel, _]
 
 
 # ---------------------------------------------------------------------------
@@ -429,7 +519,7 @@ trait StringValue(Value):
         ...
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        self.prepare(batch, ctx)
+        self.materialize(batch, ctx)
         comptime if Self.Shape == 0:
             return Datum(StringScalar(self.elementwise(batch, ctx, 0)).to_any())
         else:
@@ -483,32 +573,107 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
             self.r.elementwise(batch, ctx, idx),
         )
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        self.l.prepare(batch, ctx)
-        self.r.prepare(batch, ctx)
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.l.materialize(batch, ctx)
+        self.r.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
+    """Fused elementwise `string -> string` (`upper`/`lower`/`strip`/…). Composes in
+    one builder pass with concat: `upper(col) || "!"` never materializes `upper(col)`.
+    The transform lives in the kernel."""
+
+    comptime OutType = Self.A.OutType
+    comptime Shape = Self.A.Shape
+    var a: Self.A
+
+    @always_inline
+    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
+        var s = self.a.elementwise(batch, ctx, idx)
+        return Self.K.transform(StringSlice(s))
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
+comptime Upper = StringUnary[UpperKernel, _]
+comptime Lower = StringUnary[LowerKernel, _]
+comptime Strip = StringUnary[StripKernel, _]
+comptime LStrip = StringUnary[LStripKernel, _]
+comptime RStrip = StringUnary[RStripKernel, _]
+comptime Reverse = StringUnary[ReverseKernel, _]
+comptime Capitalize = StringUnary[CapitalizeKernel, _]
 
 
 # ---------------------------------------------------------------------------
-# Strategy transition — a string operand crossing into the numeric lane. The two
+# String predicates — `string × string -> bool`. Variable-width comparison has no
+# vectorwise lane, so this is a bool *breaker*: `materialize` materializes both string
+# stages and runs the kernel into a `BoolArray`; `vectorwise` reads that mask, so a
+# predicate still fuses under boolean logic. The comparison lives in the kernel.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct StringPredicate[
+    K: StringPredicateKernel, L: StringValue, R: StringValue
+](BoolValue):
+    comptime OutType = BoolType
+    comptime Shape = max(Self.L.Shape, Self.R.Shape)
+    comptime NativeType = DType.int32  # lane width for the bit-pack driver
+    var l: Self.L
+    var r: Self.R
+
+    def _eval(self, batch: RecordBatch) raises -> Datum:
+        var n = batch.num_rows()
+        var la = into_array(run(self.l, batch), n).as_string().copy()
+        var ra = into_array(run(self.r, batch), n).as_string().copy()
+        return Datum(Self.K.apply(la, ra).to_any())
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        ctx.append(self._eval(batch))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var s = slot
+        slot += 1
+        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return self._eval(batch)
+
+
+comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
+comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
+comptime StrContains = StringPredicate[ContainsKernel, _, _]
+comptime StrEq = StringPredicate[StringEqKernel, _, _]
+comptime StrNe = StringPredicate[StringNeKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# Strategy transition (string -> numeric) — modelled as a plain breaker. The two
 # strategies don't compose, so the string (elementwise) stage materializes; the
-# numeric consumer then reads that array. `StringLength` reads *offsets* — a
-# fixed-width buffer — so byte length is a genuine *vectorwise* leaf: `length(s) + 1`
-# fuses into one numeric pass over the materialized offsets.
+# `LengthKernel` folds it to the int32 length column (vectorized offset subtraction,
+# handling string / large_string). `vectorwise` then just loads that column, so the
+# arithmetic above fuses — exactly like a window: `length(s) + 1` is one numeric pass
+# over the materialized lengths. Same shape as every other breaker.
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct StringLength[A: StringValue](NumericValue):
-    """Byte length of a string value → int32. `prepare` materializes the elementwise
-    string stage once into `ctx`; `vectorwise` computes `offsets[i+1]-offsets[i]`
-    per lane, so the arithmetic above fuses. (Handles `string`; `large_string`
-    offsets are a follow-up.)"""
+    """Byte length of a string value → int32. `materialize` materializes the string
+    stage and folds it to the length column via `LengthKernel`; `vectorwise` loads
+    that column per lane."""
 
     comptime OutType = Int32Type
     comptime Shape = 1
     comptime NativeType = DType.int32
     var a: Self.A
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(run(self.a, batch))
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var s = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(LengthKernel.dispatch(s)))
 
     @always_inline
     def vectorwise[
@@ -516,19 +681,16 @@ struct StringLength[A: StringValue](NumericValue):
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> SIMD[Self.NativeType, W]:
-        var d = ctx.get(slot)
+        var s = slot
         slot += 1
-        ref arr = d[AnyArray].as_string()
-        comptime off = Self.A.OutType.offset
-        var offs = arr.offsets.view[off](arr.offset)
-        return LengthKernel.core(offs.load[W](idx + 1), offs.load[W](idx))
+        return ctx.get[Int32Array](s).values().load[W](idx)
 
 
 # ---------------------------------------------------------------------------
 # Pipeline breakers — cross-row `Value`s that cut the tree into stages. They
 # materialize their operand through a *fresh* sub-context (`run`, so nested
 # breakers don't perturb the outer slot order), then act as fused leaves: a scalar
-# reduction splats, a columnar window loads. `prepare` appends the result; `core`
+# reduction splats, a columnar window loads. `materialize` appends the result; `core`
 # reads it back positionally via `slot`.
 # ---------------------------------------------------------------------------
 @fieldwise_init
@@ -545,7 +707,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         var arg = into_array(run(self.a, batch), batch.num_rows())
         return Datum(Self.K.reduce(arg))
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._reduce(batch))
 
     @always_inline
@@ -610,7 +772,7 @@ struct RowNumberKernel(WindowKernel):
 
 @fieldwise_init
 struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
-    """`func.over(spec)` → a columnar breaker. `prepare` materializes the whole
+    """`func.over(spec)` → a columnar breaker. `materialize` materializes the whole
     output column into `ctx`; `core` then loads it per lane like a column."""
 
     comptime OutType = Self.Func.OutType
@@ -623,7 +785,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
         var v = into_array(run(self.a, batch), batch.num_rows())
         return Datum(Self.Func.evaluate_all(v))
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
         ctx.append(self._evaluate(batch))
 
     @always_inline
@@ -632,9 +794,9 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> SIMD[Self.NativeType, W]:
-        var d = ctx.get(slot)
+        var s = slot
         slot += 1
-        return d[AnyArray].as_primitive[Self.OutType]().values().load[W](idx)
+        return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         return self._evaluate(batch)

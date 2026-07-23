@@ -18,6 +18,10 @@ from marrow.expr.lane import (
     Sum,
     Max,
     Lt,
+    Gt,
+    And,
+    Or,
+    Not,
     RowNumber,
     WindowSpec,
     FrameBound,
@@ -136,6 +140,36 @@ def test_comparison_fuses_to_bool() raises:
     # a < 3 over [1,2,3,4] → bit-packed [T,T,F,F] (the bool fused strategy)
     var cv = run(Lt(col(0, int64), lit(3, int64)), _batch())
     assert_true(into_array(cv, 4) == array([True, True, False, False]).to_any())
+
+
+def test_bool_and_fuses() raises:
+    # (a < 3) & (b > 15) → [T,T,F,F] & [F,T,T,T] = [F,T,F,F], one fused bitwise pass
+    var cv = run(
+        And(Lt(col(0, int64), lit(3, int64)), Gt(col(1, int64), lit(15, int64))),
+        _batch(),
+    )
+    assert_true(
+        into_array(cv, 4) == array([False, True, False, False]).to_any()
+    )
+
+
+def test_bool_not_fuses() raises:
+    # not (a < 3) → not [T,T,F,F] = [F,F,T,T]
+    var cv = run(Not(Lt(col(0, int64), lit(3, int64))), _batch())
+    assert_true(
+        into_array(cv, 4) == array([False, False, True, True]).to_any()
+    )
+
+
+def test_bool_or_fuses() raises:
+    # (a < 2) | (a > 3) → [T,F,F,F] | [F,F,F,T] = [T,F,F,T]
+    var cv = run(
+        Or(Lt(col(0, int64), lit(2, int64)), Gt(col(0, int64), lit(3, int64))),
+        _batch(),
+    )
+    assert_true(
+        into_array(cv, 4) == array([True, False, False, True]).to_any()
+    )
 
 
 def test_anyvalue_erases_to_datum() raises:
