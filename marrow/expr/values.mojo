@@ -885,13 +885,12 @@ struct ListContains[L: ListValue, E: NumericValue](BoolValue):
     var elem: Self.E
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return (
-            ArrayContainsKernel.dispatch(
-                self.arg.execute(batch).to_any(),
-                self.elem.execute(batch).to_any(),
-            )
-            .as_bool()
-            .copy()
+        # Both operand types are known at comptime — call the typed kernel `apply`
+        # directly (no erase-then-recover through `dispatch`). rebind asserts the
+        # child associated-type identities (`ListLikeType` won't reduce on its own).
+        return ArrayContainsKernel.apply(
+            rebind[ListLikeArray[Self.L.OutType]](self.arg.execute(batch)),
+            rebind[PrimitiveArray[Self.E.OutType]](self.elem.execute(batch)),
         )
 
     def write_to[W: Writer](self, mut writer: W):
