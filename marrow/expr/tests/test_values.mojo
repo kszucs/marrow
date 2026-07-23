@@ -714,6 +714,36 @@ def test_cast_numeric_boundary_materialize_fallback() raises:
     assert_true(_seq(expr, array([20, 40, 60, 80], int64)))
 
 
+def test_length_is_numeric_operand() raises:
+    # length() is now a NumericValue, so it composes with arithmetic
+    var expr = col("s", string).length() + lit(1, int32)
+    assert_true(_takes_numeric(expr))
+    assert_true(
+        expr.execute(_sbatch()).to_any() == array([6, 6, 6, 4], int32).to_any()
+    )
+
+
+def test_fuse_above_length_boundary() raises:
+    # (len(s) + len(s)) + 1 — the two length() boundaries prepare once, then the
+    # whole arithmetic region fuses into a single pass over the cached arrays
+    var s = col("s", string)
+    var expr = (s.length() + s.length()) + lit(1, int32)
+    assert_true(
+        expr.execute(_sbatch()).to_any()
+        == array([11, 11, 11, 7], int32).to_any()
+    )
+
+
+def test_boundary_recomputes_per_batch() raises:
+    # an expression is reused across batches — a boundary node must recompute its
+    # cache each execute, not serve stale results from the first batch
+    var expr = col("s", string).length() + lit(1, int32)
+    var b1 = record_batch([array(["ab", "cde"]).copy()], names=["s"])
+    var b2 = record_batch([array(["wxyz", "z"]).copy()], names=["s"])
+    assert_true(expr.execute(b1).to_any() == array([3, 4], int32).to_any())
+    assert_true(expr.execute(b2).to_any() == array([5, 2], int32).to_any())
+
+
 def test_string_column_execute() raises:
     var r = col("s", string).execute(_sbatch())
     assert_true(r == array(["Hello", "WORLD", " pad ", "abc"]))

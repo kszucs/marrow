@@ -46,13 +46,17 @@
   staying the existing fused `Cast`. String parse casts take a comptime `safe`
   (default null-on-failure). Each cast node conforms to its *target* family and
   materializes through the kernel.
-- **Materialize fallback for the numeric lane** (`marrow.expr.values`): numeric
-  nodes carry `comptime fusable`; a composite is fusable only if all children are.
-  Non-lane numeric boundary nodes (string/bool→numeric casts) set `fusable = False`,
-  and a numeric op with a non-fusable operand now *materializes* both operands
-  (`.execute()`) and folds them array-level (`K.apply`) instead of fusing — so
-  `col_str.cast(int64) * 2` type-checks and runs. The all-lane fast path is
-  unchanged (still a single fused vectorized pass).
+- **Prepare-then-fuse: boundary nodes re-enter the numeric lane** (`marrow.expr.values`):
+  numeric execution is two phases — a one-time `prepare(batch)` where *boundary*
+  nodes with no SIMD lane (string/bool→numeric casts, string/list byte-length)
+  materialize their column once into a per-node cache, then the usual fused `core`
+  pass where those nodes read the cache per lane like a column. So the arithmetic
+  *above* a boundary fuses into a single pass: `(a.length() + b.length()) + 1`
+  prepares two length arrays, then one fused loop. `StringLength` / list `Counting`
+  are promoted from `Value` to `NumericValue`, so `col.length()` composes with
+  arithmetic / comparisons / `.cast()` / reductions. No fusability flag — every
+  numeric node fuses; the family/value type carries the whole story. Reductions
+  stay non-lane `Value` (length-1 can't fuse element-wise).
 
 - **Expr floor division and element-wise min/max** (`marrow.expr.values`):
   wire the previously-unexposed `FloordivKernel` and the binary element-wise

@@ -24,19 +24,20 @@ Layers:
     adds the `core[W]` SIMD primitive, and its `execute` vectorizes `core` across
     the whole tree — composite nodes call the kernel's `core` on their children's
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
-    `comptime fusable` marks whether a node contributes a real `core`; a composite
-    is fusable only if all its children are. *Boundary* numeric nodes that
-    materialize through a kernel — cross-family casts from strings/bools
-    (`StringToNum`, `BoolToNum`), reductions, length — set `fusable = False` and
-    inherit a stub `core`. A non-fusable operand makes its parent op materialize:
-    it `.execute()`s each operand (the "fallback" — the fused lane runs up to the
-    boundary) and folds them with the array-level `K.apply`, so
-    `col_str.cast(int64) * 2` type-checks and runs even with no string lane.
+    Execution is two phases (`_fused` runs both, there is no fusable/non-fusable
+    split): `prepare(batch)` is a one-time pre-pass where *boundary* nodes whose
+    result has no SIMD lane — string/bool→numeric casts (`StringToNum`,
+    `BoolToNum`), string/list byte-length (`StringLength`, `Counting`) —
+    materialize their column once into a per-node cache; then `core[W]` reads that
+    cache per lane, exactly like a column reads the batch. So the arithmetic
+    *above* a boundary still fuses: `(a.length() + b.length()) + 1` prepares two
+    length arrays, then computes the rest in a single fused pass. (Reductions stay
+    non-lane `Value` nodes — a length-1 result can't fuse element-wise.)
   * **Cross-family casts** (`.cast(target)`, overloaded per target dtype family)
     conform to their *target* family and materialize through the `kernels.cast`
     kernels: to bool (`NumToBool`, `StringToBool`), to string (`NumToString`,
     `BoolToString`, `StringToString`), to numeric (`StringToNum`, `BoolToNum`,
-    boundary nodes). Numeric→numeric stays the fused `Cast`.
+    cache-backed boundary nodes). Numeric→numeric stays the fused `Cast`.
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
     compare / boolean / aggregate / string / list (`length`, `contains`) are all
@@ -115,7 +116,6 @@ from ..builders import BinaryLikeBuilder, BoolBuilder
 from ..tabular import RecordBatch
 from .pruning import PruneStats, PruneBound
 from .dynamic import DynValue
-from ..kernels.helpers import Kernel
 from ..kernels.arithmetic import (
     BinaryKernel,
     UnaryKernel,
@@ -198,7 +198,6 @@ from ..kernels.string import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from ..kernels.cast import (
-    NumericCast,
     NumToBool as NumToBoolKernel,
     BoolToNum as BoolToNumKernel,
     StringToNum as StringToNumKernel,
@@ -290,30 +289,34 @@ trait NumericValue(Value):
     SIMD fusion primitive + a fusing `execute`, and the arithmetic/comparison
     operator surface. Arithmetic nodes hook to the real kernels.
 
-    `fusable` marks whether a node contributes a real per-lane `core` (a SIMD
-    read from the batch). Lane nodes (columns, literals, arithmetic, num→num
-    cast) are fusable; *boundary* numeric nodes that materialize through a kernel
-    — cross-family casts from strings/bools (`StringToNum`, `BoolToNum`), string
-    byte-length, list-length, reductions — set `fusable = False` and inherit the
-    stub `core`. A composite is fusable only if all its children are, and its
-    `execute` runs the single-pass fused path then; otherwise it *materializes*
-    each operand (`.execute()`) and folds them with the array-level kernel
-    (`K.apply`). So `col_str.cast(int64) * 2` type-checks and runs even though the
-    string→int cast has no SIMD lane."""
+    Every numeric node fuses — there is no fusable/non-fusable split. Execution
+    is two phases (`_fused` runs both):
+      * `prepare(batch)` — a one-time pre-pass. *Lane* nodes (columns, literals,
+        arithmetic, casts) do nothing; *boundary* nodes whose result has no SIMD
+        lane (string→num / bool→num casts, string/list byte-length) materialize
+        their array once into a per-node cache here.
+      * `core[W](batch, idx)` — the per-lane SIMD read the fused loop calls. Lane
+        nodes read the batch / recurse into children; boundary nodes read
+        `cache[idx]`. Because a prepared boundary reads like a column, the whole
+        arithmetic region *above* it still fuses into one pass —
+        `(a.length() + b.length()) + 1` prepares two length arrays, then fuses.
+    """
 
     comptime OutType: NumericType
     comptime NativeType: DType
-    comptime fusable: Bool = True
 
     @always_inline
     def core[
         W: Int
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
-        # Default stub for non-lane (`fusable = False`) boundary nodes, which
-        # materialize in `execute` and never take the fused path. Lane nodes
-        # override with a real per-lane SIMD read. Never invoked on a stub because
-        # the fused path runs only over an all-fusable subtree.
-        return SIMD[Self.NativeType, W](0)
+        ...
+
+    def prepare(self, batch: RecordBatch) raises:
+        """One-time pre-pass before the fused loop. No-op for lane nodes (the
+        default); composites recurse into their children; boundary nodes
+        materialize their result into a per-node cache that `core` then reads.
+        """
+        pass
 
     # Abstract, NOT a shared default: re-defaulting the base `Value.execute` (which
     # returns `Self.ArrayType`) in this sub-trait recurses when a node's `ArrayType`
@@ -327,12 +330,11 @@ trait NumericValue(Value):
         ...
 
     def _fused(self, batch: RecordBatch) raises -> PrimitiveArray[Self.OutType]:
-        """The shared fused body: fill a buffer with `core` in one pass (no
-        intermediate arrays) through `views.apply`'s producer overload — the same
-        CPU serial/parallel dispatch the kernels use. Returns the concrete
-        `PrimitiveArray[Self.OutType]` directly (the family refines `execute` to
-        that type, so every numeric node's `ArrayType` is `PrimitiveArray[Self.OutType]`
-        and no rebind is needed)."""
+        """The shared fused body: `prepare` all boundary subtrees once, then fill a
+        buffer with `core` in one pass (no intermediate arrays) through
+        `views.apply`'s producer overload — the same CPU serial/parallel dispatch
+        the kernels use. Returns the concrete `PrimitiveArray[Self.OutType]`."""
+        self.prepare(batch)
         comptime native = Self.NativeType
         var length = batch.num_rows()
         var buf = Buffer.alloc_uninit[native](length)
@@ -664,7 +666,6 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.OutType.native
-    comptime fusable = Self.L.fusable and Self.R.fusable
 
     var left: Self.L
     var right: Self.R
@@ -677,19 +678,12 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return Self.K.core[Self.NativeType, W](l, r)
 
+    def prepare(self, batch: RecordBatch) raises:
+        self.left.prepare(batch)
+        self.right.prepare(batch)
+
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        comptime if Self.fusable:
-            return self._fused(batch)
-        else:
-            # A boundary operand (e.g. a string→int cast) has no lane, so
-            # materialize both sides, promote to `OutType`, and fold array-level.
-            var l = NumericCast.apply[Self.L.OutType, Self.OutType, False](
-                self.left.execute(batch)
-            )
-            var r = NumericCast.apply[Self.R.OutType, Self.OutType, False](
-                self.right.execute(batch)
-            )
-            return Self.K.apply(l, r)
+        return self._fused(batch)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
@@ -705,7 +699,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
-    comptime fusable = Self.L.fusable and Self.R.fusable
 
     var left: Self.L
     var right: Self.R
@@ -718,17 +711,12 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         var r = self.right.core[W](batch, idx).cast[Self.NativeType]()
         return Self.K.core[Self.NativeType, W](l, r)
 
+    def prepare(self, batch: RecordBatch) raises:
+        self.left.prepare(batch)
+        self.right.prepare(batch)
+
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        comptime if Self.fusable:
-            return self._fused(batch)
-        else:
-            var l = NumericCast.apply[Self.L.OutType, Self.OutType, False](
-                self.left.execute(batch)
-            )
-            var r = NumericCast.apply[Self.R.OutType, Self.OutType, False](
-                self.right.execute(batch)
-            )
-            return Self.K.apply(l, r)
+        return self._fused(batch)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.left, ", ", self.right, ")")
@@ -743,7 +731,6 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.A.NativeType
-    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -753,12 +740,11 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
         return Self.K.core[Self.NativeType, W](self.arg.core[W](batch, idx))
 
+    def prepare(self, batch: RecordBatch) raises:
+        self.arg.prepare(batch)
+
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        comptime if Self.fusable:
-            return self._fused(batch)
-        else:
-            # OutType == A.OutType, so no promotion — apply array-level directly.
-            return Self.K.apply(self.arg.execute(batch))
+        return self._fused(batch)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -772,7 +758,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = DType.float64
-    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -783,14 +768,11 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         var a = self.arg.core[W](batch, idx).cast[Self.NativeType]()
         return Self.K.core[Self.NativeType, W](a)
 
+    def prepare(self, batch: RecordBatch) raises:
+        self.arg.prepare(batch)
+
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        comptime if Self.fusable:
-            return self._fused(batch)
-        else:
-            var a = NumericCast.apply[Self.A.OutType, Self.OutType, False](
-                self.arg.execute(batch)
-            )
-            return Self.K.apply(a)
+        return self._fused(batch)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
@@ -807,7 +789,6 @@ struct Cast[To: NumericType, A: NumericValue](NumericValue):
 
     comptime ArrayType = PrimitiveArray[Self.OutType]
     comptime NativeType = Self.To.native
-    comptime fusable = Self.A.fusable
 
     var arg: Self.A
 
@@ -817,13 +798,11 @@ struct Cast[To: NumericType, A: NumericValue](NumericValue):
     ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
         return self.arg.core[W](batch, idx).cast[Self.NativeType]()
 
+    def prepare(self, batch: RecordBatch) raises:
+        self.arg.prepare(batch)
+
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        comptime if Self.fusable:
-            return self._fused(batch)
-        else:
-            return NumericCast.apply[Self.A.OutType, Self.To, False](
-                self.arg.execute(batch)
-            )
+        return self._fused(batch)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("cast(", self.arg, ")")
@@ -931,87 +910,158 @@ struct StringToString[A: StringValue, To: StringLikeType, checked: Bool](
         writer.write("cast(", self.arg, ", str)")
 
 
-@fieldwise_init
 struct StringToNum[A: StringValue, To: NumericType, checked: Bool](
     NumericValue
 ):
-    """String → numeric (`atol`/`atof` parse). A boundary node (`fusable = False`):
-    strings have no SIMD lane, so it materializes and parses, then re-enters the
-    numeric surface through the materialize fallback. `safe` raises on an
-    unparseable value; otherwise it becomes null."""
+    """String → numeric (`atol`/`atof` parse). A *boundary* node: strings have no
+    SIMD lane, so `prepare` parses the whole column once into `_cache` and `core`
+    then reads it per lane — so the arithmetic above still fuses. `checked` raises
+    on an unparseable value; otherwise it becomes null."""
 
     comptime OutType = Self.To
     comptime ArrayType = PrimitiveArray[Self.To]
     comptime NativeType = Self.To.native
-    comptime fusable = False
     var arg: Self.A
+    var _cache: ArcPointer[List[PrimitiveArray[Self.To]]]
+
+    def __init__(out self, var arg: Self.A):
+        self.arg = arg^
+        self._cache = ArcPointer(List[PrimitiveArray[Self.To]]())
+
+    def prepare(self, batch: RecordBatch) raises:
+        # Recompute each call — an expression is reused across batches.
+        self._cache[].clear()
+        self._cache[].append(
+            StringToNumKernel.apply[Self.A.OutType, Self.To, Self.checked](
+                self.arg.execute(batch)
+            )
+        )
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return self._cache[][0].values().load[W](idx)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return StringToNumKernel.apply[Self.A.OutType, Self.To, Self.checked](
-            self.arg.execute(batch)
-        )
+        self.prepare(batch)
+        return self._cache[][0].copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("cast(", self.arg, ", num)")
 
 
-@fieldwise_init
 struct BoolToNum[A: BoolValue, To: NumericType](NumericValue):
-    """Bool → numeric (`True→1, False→0`). A boundary node (`fusable = False`):
-    materializes the mask, then re-enters the numeric surface via the fallback.
+    """Bool → numeric (`True→1, False→0`). A *boundary* node: `prepare` unpacks the
+    mask once into `_cache`, `core` reads it per lane, so arithmetic above fuses.
     """
 
     comptime OutType = Self.To
     comptime ArrayType = PrimitiveArray[Self.To]
     comptime NativeType = Self.To.native
-    comptime fusable = False
     var arg: Self.A
+    var _cache: ArcPointer[List[PrimitiveArray[Self.To]]]
+
+    def __init__(out self, var arg: Self.A):
+        self.arg = arg^
+        self._cache = ArcPointer(List[PrimitiveArray[Self.To]]())
+
+    def prepare(self, batch: RecordBatch) raises:
+        # Recompute each call — an expression is reused across batches.
+        self._cache[].clear()
+        self._cache[].append(
+            BoolToNumKernel.apply[Self.To](
+                self.arg.execute(batch), ExecutionContext.serial()
+            )
+        )
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return self._cache[][0].values().load[W](idx)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return BoolToNumKernel.apply[Self.To](
-            self.arg.execute(batch), ExecutionContext.serial()
-        )
+        self.prepare(batch)
+        return self._cache[][0].copy()
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write("cast(", self.arg, ", num)")
 
 
 # ---------------------------------------------------------------------------
-# Boundary nodes — numeric-producing but non-lane (`Value`); materialize (future)
+# Length boundary nodes — int32-producing `NumericValue`s. Their operand is a
+# materialized string/list (no fixed-width lane), so `prepare` computes the whole
+# length column once into `_cache` and `core` reads it per lane — so arithmetic
+# above still fuses (`a.length() + b.length() + 1` is one fused pass over the two
+# prepared length arrays).
 # ---------------------------------------------------------------------------
 
 
-@fieldwise_init
-struct StringLength[A: StringValue](Value):
-    """String byte length → int32 boundary (`length()`). Not a numeric lane (its
-    operand is a materialized string, not a fixed-width column), so it evaluates
-    the child and calls `LengthKernel.apply` on the typed string array directly —
-    no type erasure. `LengthKernel` vectorizes the offset subtraction internally.
-    """
+struct StringLength[A: StringValue](NumericValue):
+    """String byte length → int32 (`length()`). `prepare` runs `LengthKernel.apply`
+    (offset subtraction, vectorized) once; `core` reads the cached column."""
 
     comptime OutType = dt.Int32Type
-
     comptime ArrayType = PrimitiveArray[dt.Int32Type]
+    comptime NativeType = DType.int32
     var arg: Self.A
+    var _cache: ArcPointer[List[PrimitiveArray[dt.Int32Type]]]
+
+    def __init__(out self, var arg: Self.A):
+        self.arg = arg^
+        self._cache = ArcPointer(List[PrimitiveArray[dt.Int32Type]]())
+
+    def prepare(self, batch: RecordBatch) raises:
+        # Recompute each call — an expression is reused across batches.
+        self._cache[].clear()
+        self._cache[].append(LengthKernel.apply(self.arg.execute(batch)))
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return self._cache[][0].values().load[W](idx)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return LengthKernel.apply(self.arg.execute(batch))
+        self.prepare(batch)
+        return self._cache[][0].copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("length(", self.arg, ")")
 
 
-@fieldwise_init
-struct Counting[K: Kernel, A: ListValue](Value):
-    """Unary op whose result is int32 — list `length()` (element count). A
-    boundary: its operand is a materialized list, not a fixed-width column, so it
-    evaluates the child and calls `ArrayLengthKernel.apply` on the typed list
-    array directly (offset subtraction, vectorized internally)."""
+struct Counting[A: ListValue](NumericValue):
+    """List element count → int32 (`length()`). `prepare` runs `ArrayLengthKernel.apply`
+    (offset subtraction, vectorized) once; `core` reads the cached column."""
 
     comptime OutType = dt.Int32Type
-
     comptime ArrayType = PrimitiveArray[dt.Int32Type]
+    comptime NativeType = DType.int32
     var arg: Self.A
+    var _cache: ArcPointer[List[PrimitiveArray[dt.Int32Type]]]
+
+    def __init__(out self, var arg: Self.A):
+        self.arg = arg^
+        self._cache = ArcPointer(List[PrimitiveArray[dt.Int32Type]]())
+
+    def prepare(self, batch: RecordBatch) raises:
+        # Recompute each call — an expression is reused across batches.
+        self._cache[].clear()
+        self._cache[].append(ArrayLengthKernel.apply(self.arg.execute(batch)))
+
+    @always_inline
+    def core[
+        W: Int
+    ](self, batch: RecordBatch, idx: Int) -> SIMD[Self.NativeType, W]:
+        return self._cache[][0].values().load[W](idx)
 
     def execute(self, batch: RecordBatch) raises -> Self.ArrayType:
-        return ArrayLengthKernel.apply(self.arg.execute(batch))
+        self.prepare(batch)
+        return self._cache[][0].copy()
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("length(", self.arg, ")")
 
 
 @fieldwise_init
@@ -1321,7 +1371,7 @@ comptime LStrip = StringUnary[LStripKernel, _]
 comptime RStrip = StringUnary[RStripKernel, _]
 comptime Capitalize = StringUnary[CapitalizeKernel, _]
 
-comptime ArrayLength = Counting[ArrayLengthKernel, _]
+comptime ArrayLength = Counting[_]
 comptime ArrayContains = ListContains[_, _]
 
 
