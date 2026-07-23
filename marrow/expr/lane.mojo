@@ -154,6 +154,9 @@ struct Context(Copyable, Movable):
         dance at every breaker read."""
         return self._slots[i][AnyArray]._v[A].copy()
 
+    def size(self) -> Int:
+        return len(self._slots)
+
 
 # Known follow-ups (flagged during design; not yet addressed):
 #  - PERF: `Context.get` copies a `Datum` per lane for a fused breaker. A pass could
@@ -207,6 +210,19 @@ def run[V: Value](value: V, batch: RecordBatch) raises -> Datum:
     (and the fresh sub-context each breaker uses to materialize its operand)."""
     var ctx = Context()
     return value.execute(batch, ctx)
+
+
+def materialized[V: Value](
+    value: V, batch: RecordBatch, mut ctx: Context
+) raises -> Datum:
+    """A pipeline breaker's `execute`: run its `materialize` (which appends exactly
+    one slot — its stage result) and read that slot straight back. Compute lives in
+    `materialize` alone; `execute` and the fused path (`materialize` + `vectorwise`)
+    share it. Not on the fusion hot path — a fused parent calls a breaker's
+    `materialize`/`vectorwise`, never its `execute`."""
+    var i = ctx.size()
+    value.materialize(batch, ctx)
+    return ctx.get(i)
 
 
 # ---------------------------------------------------------------------------
@@ -622,14 +638,11 @@ struct StringPredicate[
     var l: Self.L
     var r: Self.R
 
-    def _eval(self, batch: RecordBatch) raises -> Datum:
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(run(self.l, batch), n).as_string().copy()
         var ra = into_array(run(self.r, batch), n).as_string().copy()
-        return Datum(Self.K.apply(la, ra).to_any())
-
-    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._eval(batch))
+        ctx.append(Datum(Self.K.apply(la, ra).to_any()))
 
     @always_inline
     def vectorwise[
@@ -642,7 +655,7 @@ struct StringPredicate[
         return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._eval(batch)
+        return materialized(self, batch, ctx)
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -685,6 +698,9 @@ struct StringLength[A: StringValue](NumericValue):
         slot += 1
         return ctx.get[Int32Array](s).values().load[W](idx)
 
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
 
 # ---------------------------------------------------------------------------
 # Pipeline breakers — cross-row `Value`s that cut the tree into stages. They
@@ -703,12 +719,9 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     comptime NativeType = Self.OutType.native
     var a: Self.A
 
-    def _reduce(self, batch: RecordBatch) raises -> Datum:
-        var arg = into_array(run(self.a, batch), batch.num_rows())
-        return Datum(Self.K.reduce(arg))
-
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._reduce(batch))
+        var arg = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(Self.K.reduce(arg)))
 
     @always_inline
     def vectorwise[
@@ -723,7 +736,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         )
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._reduce(batch)
+        return materialized(self, batch, ctx)
 
 
 comptime Sum = Reduction[SumKernel, _]
@@ -781,12 +794,9 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     var a: Self.A
     var spec: WindowSpec
 
-    def _evaluate(self, batch: RecordBatch) raises -> Datum:
-        var v = into_array(run(self.a, batch), batch.num_rows())
-        return Datum(Self.Func.evaluate_all(v))
-
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._evaluate(batch))
+        var v = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(Self.Func.evaluate_all(v)))
 
     @always_inline
     def vectorwise[
@@ -799,7 +809,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
         return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._evaluate(batch)
+        return materialized(self, batch, ctx)
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
