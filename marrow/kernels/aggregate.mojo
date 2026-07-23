@@ -414,70 +414,85 @@ def for_agg_tag[
 
 
 # ---------------------------------------------------------------------------
-# any / all  (bool arrays) — implemented via SIMD bitmap operations
+# any / all — boolean reductions via SIMD bitmap operations.
+#
+# Not `AggKernel`s: they fold bit-packed masks (not the numeric
+# accumulator/identity/combine/finalize algebra), so each is its own struct
+# exposing a `reduce(BoolArray) -> Bool` (plus an `AnyArray` overload), matching
+# the struct-per-kernel shape of the rest of the module.
 # ---------------------------------------------------------------------------
 
 
-def any(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> Bool:
-    return any(array.as_bool(), ctx)
-
-
-def any(
-    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> Bool:
+struct AnyKernel(Kernel):
     """True if any valid element is True. False if empty or all null."""
-    var n = len(array)
-    var data_bv = array.values()
-    if not array.bitmap:
-        return Bool(data_bv)
-    var validity_bv = array.validity().value()
-    var i = 0
-    while i + 64 <= n:
-        if (
-            data_bv.load_bits[DType.uint64](i)
-            & validity_bv.load_bits[DType.uint64](i)
-        ) != 0:
-            return True
-        i += 64
-    if i < n:
-        var mask = (UInt64(1) << UInt64(n - i)) - 1
-        if (
-            data_bv.load_bits[DType.uint64](i)
-            & validity_bv.load_bits[DType.uint64](i)
-        ) & mask != 0:
-            return True
-    return False
+
+    comptime name = "any"
+
+    @staticmethod
+    def reduce(
+        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        var n = len(array)
+        var data_bv = array.values()
+        if not array.bitmap:
+            return Bool(data_bv)
+        var validity_bv = array.validity().value()
+        var i = 0
+        while i + 64 <= n:
+            if (
+                data_bv.load_bits[DType.uint64](i)
+                & validity_bv.load_bits[DType.uint64](i)
+            ) != 0:
+                return True
+            i += 64
+        if i < n:
+            var mask = (UInt64(1) << UInt64(n - i)) - 1
+            if (
+                data_bv.load_bits[DType.uint64](i)
+                & validity_bv.load_bits[DType.uint64](i)
+            ) & mask != 0:
+                return True
+        return False
+
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        return Self.reduce(array.as_bool(), ctx)
 
 
-def all(
-    array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> Bool:
-    return all(array.as_bool(), ctx)
-
-
-def all(
-    array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
-) raises -> Bool:
+struct AllKernel(Kernel):
     """True if all valid elements are True. True if empty or all null."""
-    var n = len(array)
-    var data_bv = array.values()
-    if not array.bitmap:
-        return data_bv.all_set()
-    var validity_bv = array.validity().value()
-    var i = 0
-    while i + 64 <= n:
-        var v = validity_bv.load_bits[DType.uint64](i)
-        if (data_bv.load_bits[DType.uint64](i) & v) != v:
-            return False
-        i += 64
-    if i < n:
-        var mask = (UInt64(1) << UInt64(n - i)) - 1
-        var v = validity_bv.load_bits[DType.uint64](i) & mask
-        if (data_bv.load_bits[DType.uint64](i) & v) != v:
-            return False
-    return True
+
+    comptime name = "all"
+
+    @staticmethod
+    def reduce(
+        array: BoolArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        var n = len(array)
+        var data_bv = array.values()
+        if not array.bitmap:
+            return data_bv.all_set()
+        var validity_bv = array.validity().value()
+        var i = 0
+        while i + 64 <= n:
+            var v = validity_bv.load_bits[DType.uint64](i)
+            if (data_bv.load_bits[DType.uint64](i) & v) != v:
+                return False
+            i += 64
+        if i < n:
+            var mask = (UInt64(1) << UInt64(n - i)) - 1
+            var v = validity_bv.load_bits[DType.uint64](i) & mask
+            if (data_bv.load_bits[DType.uint64](i) & v) != v:
+                return False
+        return True
+
+    @staticmethod
+    def reduce(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        return Self.reduce(array.as_bool(), ctx)
 
 
 # ---------------------------------------------------------------------------

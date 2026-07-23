@@ -50,8 +50,8 @@ from .aggregate import (
     MinKernel,
     MaxKernel,
     MeanKernel,
-    any,
-    all,
+    AnyKernel,
+    AllKernel,
 )
 from .arithmetic import AddKernel, SubKernel, MulKernel, DivKernel
 from .compare import (

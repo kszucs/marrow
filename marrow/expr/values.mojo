@@ -150,8 +150,8 @@ from ..kernels.aggregate import (
     MaxKernel,
     CountKernel,
     ProductKernel,
-    any as _reduce_any,
-    all as _reduce_all,
+    AnyKernel,
+    AllKernel,
 )
 from ..kernels.string import (
     StringMapKernel,
@@ -813,7 +813,8 @@ struct BoolNot[A: BoolValue](BoolValue):
 struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
     """`any()` (`all_=False`) / `all()` (`all_=True`) over a boolean column → a
     length-1 bool result. Materializes the child mask, then folds it with the
-    optimized bitmap reduction in `kernels.aggregate` (`any`/`all`)."""
+    optimized bitmap reduction in `kernels.aggregate` (`AnyKernel`/`AllKernel`).
+    """
 
     comptime OutType = dt.BoolType
     var arg: Self.A
@@ -822,11 +823,11 @@ struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
         var builder = BoolBuilder(1)
         comptime if Self.all_:
             builder.append(
-                _reduce_all(rebind[BoolArray](self.arg.execute(batch)))
+                AllKernel.reduce(rebind[BoolArray](self.arg.execute(batch)))
             )
         else:
             builder.append(
-                _reduce_any(rebind[BoolArray](self.arg.execute(batch)))
+                AnyKernel.reduce(rebind[BoolArray](self.arg.execute(batch)))
             )
         return builder.finish()
 
