@@ -31,9 +31,10 @@ Layers:
   * `BoolValue` **executes**: numeric comparisons (`<`, `>`, `==`, …) fuse
     (`NumericCompare` has a `core[W]` bool lane, bit-packed in one pass); boolean
     logic (`&`, `|`, `^`, `~`) materializes its `BoolValue` children and combines
-    the masks with the boolean kernels (`BoolLogic` / `BoolNot`); and the unary
-    predicates `is_null`/`not_null` (any family) and `is_nan`/`is_inf` (floating)
-    materialize the operand and apply a `UnaryPredicateKernel` (`BoolUnary`);
+    the masks with the boolean kernels (`BoolBinary` and/or/xor, `BoolUnary` not);
+    and the unary predicates `is_null`/`not_null` (any family) and `is_nan`/`is_inf`
+    (floating) materialize the operand and apply a `UnaryPredicateKernel`
+    (`Predicate`);
     string `==`/`!=` materialize and compare element-wise (`StringPredicate`);
     `any`/`all` fold a bool column to a length-1 result (`BoolReduce`); and list
     `contains` scans each sublist for the search element (`ListContains`).
@@ -132,6 +133,7 @@ from ..kernels.compare import (
 )
 from ..kernels.boolean import (
     BoolBinaryKernel,
+    BoolUnaryKernel,
     UnaryPredicateKernel,
     AndKernel,
     OrKernel,
@@ -778,10 +780,10 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
 
 
 @fieldwise_init
-struct BoolLogic[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
-    """Binary boolean logic (`and`/`or`) over two `BoolValue` children. Each
-    child materializes to a `BoolArray` (they may be heterogeneous predicates —
-    a fused numeric compare, a string predicate, …), then `K.apply` combines the
+struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
+    """Binary bool → bool logic (`and`/`or`/`xor`) over two `BoolValue` children.
+    Each child materializes to a `BoolArray` (they may be heterogeneous predicates
+    — a fused numeric compare, a string predicate, …), then `K.apply` combines the
     two bit-packed masks with 64-bit word ops."""
 
     comptime OutType = dt.BoolType
@@ -789,8 +791,6 @@ struct BoolLogic[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var right: Self.R
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        # rebind: each child's `OutType.ArrayType` is `BoolArray` (BoolValue), but
-        # the associated-type spelling won't reduce here — assert the identity.
         return Self.K.apply(
             self.left.execute(batch),
             self.right.execute(batch),
@@ -801,18 +801,19 @@ struct BoolLogic[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolNot[A: BoolValue](BoolValue):
-    """Logical negation of a `BoolValue` — materializes the child mask and
-    inverts it (`NotKernel`)."""
+struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
+    """Unary bool → bool op over a `BoolValue` child — currently negation
+    (`not_`). Materializes the child mask and applies `K` (a `BoolUnaryKernel`).
+    """
 
     comptime OutType = dt.BoolType
     var arg: Self.A
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return NotKernel.apply(self.arg.execute(batch))
+        return Self.K.apply(self.arg.execute(batch))
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write("not_(", self.arg, ")")
+        writer.write(Self.K.name, "(", self.arg, ")")
 
 
 @fieldwise_init
@@ -862,10 +863,10 @@ struct ListContains[L: ListValue, E: NumericValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolUnary[K: UnaryPredicateKernel, A: Value](BoolValue):
-    """Bool-producing unary predicate — `is_null`/`not_null` (any family, read
-    validity) and `is_nan`/`is_inf` (floating values). Materializes the operand,
-    then applies the kernel's runtime-typed `dispatch` (which uses the shared
+struct Predicate[K: UnaryPredicateKernel, A: Value](BoolValue):
+    """Unary predicate `any family -> bool` — `is_null`/`not_null` (read validity)
+    and `is_nan`/`is_inf` (floating values). Unlike `BoolUnary` (bool -> bool) the
+    operand is any `Value`; materializes it and applies `K` (which uses the shared
     `views` helpers under the hood)."""
 
     comptime OutType = dt.BoolType
@@ -962,16 +963,16 @@ comptime Contains = StringPredicate[ContainsKernel, _, _]
 comptime StringEqual = StringPredicate[StringEqKernel, _, _]
 comptime StringNotEqual = StringPredicate[StringNeKernel, _, _]
 
-comptime And = BoolLogic[AndKernel, _, _]
-comptime Or = BoolLogic[OrKernel, _, _]
-comptime Xor = BoolLogic[XorKernel, _, _]
-comptime Not = BoolNot[_]
+comptime And = BoolBinary[AndKernel, _, _]
+comptime Or = BoolBinary[OrKernel, _, _]
+comptime Xor = BoolBinary[XorKernel, _, _]
+comptime Not = BoolUnary[NotKernel, _]
 comptime Any = BoolReduce[False, _]
 comptime All = BoolReduce[True, _]
-comptime IsNull = BoolUnary[IsNullKernel, _]
-comptime NotNull = BoolUnary[NotNullKernel, _]
-comptime IsNan = BoolUnary[IsNanKernel, _]
-comptime IsInf = BoolUnary[IsInfKernel, _]
+comptime IsNull = Predicate[IsNullKernel, _]
+comptime NotNull = Predicate[NotNullKernel, _]
+comptime IsNan = Predicate[IsNanKernel, _]
+comptime IsInf = Predicate[IsInfKernel, _]
 
 comptime Length = StringLength[_]
 comptime Upper = StringUnary[UpperKernel, _]
