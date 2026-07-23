@@ -38,6 +38,14 @@
 
 ### Features
 
+- **Expr floor division and element-wise min/max** (`marrow.expr.values`):
+  wire the previously-unexposed `FloordivKernel` and the binary element-wise
+  `arithmetic.MinKernel`/`MaxKernel` into the numeric lane — `a // b`
+  (`__floordiv__`, integer floor keeping the wider operand dtype) and
+  `a.min_element_wise(b)` / `a.max_element_wise(b)` (PyArrow naming; distinct
+  from the whole-column `min()`/`max()` reductions). All three fuse as
+  `NumericBinary` nodes (single vectorized pass).
+
 - **List `contains()`** (`marrow.kernels.nested`, `marrow.expr.values`):
   `ArrayContainsKernel` implements element-wise membership `elem[i] ∈ list[i]` →
   `BoolArray` (each row scans its sublist; null list rows propagate to null;

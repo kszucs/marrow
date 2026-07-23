@@ -110,8 +110,11 @@ from ..kernels.arithmetic import (
     SubKernel,
     MulKernel,
     DivKernel,
+    FloordivKernel,
     ModKernel,
     PowKernel,
+    MinKernel as MinElementwiseKernel,
+    MaxKernel as MaxElementwiseKernel,
     NegKernel,
     AbsKernel,
     CeilKernel,
@@ -326,8 +329,25 @@ trait NumericValue(Value):
     def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
         return Div(self.copy(), o.copy())
 
+    def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
+        return Floordiv(self.copy(), o.copy())
+
     def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:
         return Pow(self.copy(), o.copy())
+
+    def min_element_wise[
+        Rhs: NumericValue
+    ](self, o: Rhs) -> MinElementwise[Self, Rhs]:
+        """Element-wise minimum of two columns (PyArrow `min_element_wise`) —
+        distinct from the whole-column `min()` reduction."""
+        return MinElementwise(self.copy(), o.copy())
+
+    def max_element_wise[
+        Rhs: NumericValue
+    ](self, o: Rhs) -> MaxElementwise[Self, Rhs]:
+        """Element-wise maximum of two columns (PyArrow `max_element_wise`) —
+        distinct from the whole-column `max()` reduction."""
+        return MaxElementwise(self.copy(), o.copy())
 
     def __neg__(self) -> Neg[Self]:
         return Neg(self.copy())
@@ -973,6 +993,9 @@ comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
 comptime Mod = NumericBinary[ModKernel, _, _]
+comptime Floordiv = NumericBinary[FloordivKernel, _, _]
+comptime MinElementwise = NumericBinary[MinElementwiseKernel, _, _]
+comptime MaxElementwise = NumericBinary[MaxElementwiseKernel, _, _]
 comptime Div = FloatBinary[DivKernel, _, _]
 comptime Pow = FloatBinary[PowKernel, _, _]
 comptime Neg = NumericUnary[NegKernel, _]

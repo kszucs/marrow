@@ -336,6 +336,25 @@ def test_divide_is_float() raises:
     assert_true(_eq(expr, array([10.0, 10.0, 10.0, 10.0], float64)))
 
 
+def test_floordiv_is_integer() raises:
+    # a // c  = [1,2,3,4] // [2,2,2,2] = [0,1,1,2] (integer floor, keeps int64)
+    var expr = col("a", int64) // col("c", int32)
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([0, 1, 1, 2], int64)))
+
+
+def test_min_element_wise() raises:
+    # element-wise min(a, c) = min([1,2,3,4], [2,2,2,2]) = [1,2,2,2]
+    var expr = col("a", int64).min_element_wise(col("c", int32))
+    assert_true(_eq(expr, array([1, 2, 2, 2], int64)))
+
+
+def test_max_element_wise() raises:
+    # element-wise max(a, c) = max([1,2,3,4], [2,2,2,2]) = [2,2,3,4]
+    var expr = col("a", int64).max_element_wise(col("c", int32))
+    assert_true(_eq(expr, array([2, 2, 3, 4], int64)))
+
+
 def test_unary_neg() raises:
     assert_true(_eq(-col("a", int64), array([-1, -2, -3, -4], int64)))
 
