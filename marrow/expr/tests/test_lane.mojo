@@ -5,7 +5,7 @@ from std.testing import assert_true, assert_equal
 from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.arrays import AnyArray
-from marrow.dtypes import int64, int32, Int64Type
+from marrow.dtypes import int64, int32, float64, Int64Type
 from marrow.tabular import record_batch, RecordBatch
 from marrow.expr.lane import (
     col,
@@ -22,6 +22,10 @@ from marrow.expr.lane import (
     And,
     Or,
     Not,
+    Count,
+    IsNull,
+    NotNull,
+    IsNan,
     RowNumber,
     WindowSpec,
     FrameBound,
@@ -169,6 +173,34 @@ def test_bool_or_fuses() raises:
     )
     assert_true(
         into_array(cv, 4) == array([True, False, False, True]).to_any()
+    )
+
+
+def test_count_reduction() raises:
+    # count(a) over [1,2,3,4] = 4 (int64 scalar)
+    var cv = run(Count(col(0, int64)), _batch())
+    assert_true(cv.isa[AnyScalar]())
+    assert_true(into_array(cv, 4) == array([4, 4, 4, 4], int64).to_any())
+
+
+def test_notnull_and_isnull() raises:
+    # no nulls in a=[1,2,3,4] → not_null all true, is_null all false
+    var nn = run(NotNull(col(0, int64)), _batch())
+    assert_true(into_array(nn, 4) == array([True, True, True, True]).to_any())
+    var isn = run(IsNull(col(0, int64)), _batch())
+    assert_true(
+        into_array(isn, 4) == array([False, False, False, False]).to_any()
+    )
+
+
+def test_isnan_fuses_over_float() raises:
+    # is_nan over finite floats → all false, computed in a fused SIMD pass
+    var b = record_batch(
+        [array([1.0, 2.0, 3.0, 4.0], float64).copy()], names=["f"]
+    )
+    var cv = run(IsNan(col(0, float64)), b)
+    assert_true(
+        into_array(cv, 4) == array([False, False, False, False]).to_any()
     )
 
 

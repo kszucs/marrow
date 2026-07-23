@@ -113,6 +113,12 @@ from ..kernels.boolean import (
     OrKernel,
     XorKernel,
     NotKernel,
+    UnaryPredicateKernel,
+    ValuePredicateKernel,
+    IsNullKernel,
+    NotNullKernel,
+    IsNanKernel,
+    IsInfKernel,
 )
 
 
@@ -523,6 +529,68 @@ comptime Not = BoolUnary[NotKernel, _]
 
 
 # ---------------------------------------------------------------------------
+# Unary predicates. `is_nan`/`is_inf` fuse — a per-lane SIMD predicate over a float
+# operand (values.mojo materializes them). `is_null`/`not_null` read only validity
+# (no value lane), so they're bool breakers over any family. Compute in the kernels.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
+    """Fused `is_nan`/`is_inf` — a per-lane SIMD predicate over a numeric operand."""
+
+    comptime OutType = BoolType
+    comptime Shape = Self.A.Shape
+    comptime NativeType = Self.A.NativeType
+    var a: Self.A
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        return Self.K.core[Self.NativeType, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx)
+        )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
+    """`is_null`/`not_null` — reads the operand's validity (any family), so a bool
+    breaker: materialize the operand, run the kernel into a `BoolArray`, read it."""
+
+    comptime OutType = BoolType
+    comptime Shape = Self.A.Shape
+    comptime NativeType = DType.int32  # lane width for the bit-pack driver
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(Self.K.apply(arr).to_any()))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var s = slot
+        slot += 1
+        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+comptime IsNan = NumericPredicate[IsNanKernel, _]
+comptime IsInf = NumericPredicate[IsInfKernel, _]
+comptime IsNull = NullPredicate[IsNullKernel, _]
+comptime NotNull = NullPredicate[NotNullKernel, _]
+
+
+# ---------------------------------------------------------------------------
 # StringValue — the elementwise string strategy. No W-wide lane: `core(idx)`
 # yields one row's `String`, and the driver appends them into a builder, so a
 # concat chain fuses without materializing intermediate string arrays.
@@ -744,6 +812,7 @@ comptime Mean = Reduction[MeanKernel, _]
 comptime Min = Reduction[MinKernel, _]
 comptime Max = Reduction[MaxKernel, _]
 comptime Product = Reduction[ProductKernel, _]
+comptime Count = Reduction[CountKernel, _]
 
 
 @fieldwise_init
