@@ -54,6 +54,16 @@ struct LengthKernel(Kernel):
     comptime name = "length"
 
     @staticmethod
+    @always_inline
+    def core[
+        T: DType, W: Int
+    ](hi: SIMD[T, W], lo: SIMD[T, W]) -> SIMD[DType.int32, W]:
+        """The fusable per-lane primitive: byte length from two loaded offset
+        vectors (`offsets[i+1] - offsets[i]`). Both `apply` and the expression
+        layer's `StringLength` build on it, so the compute lives here only."""
+        return (hi - lo).cast[DType.int32]()
+
+    @staticmethod
     def apply[
         T: StringLikeType
     ](array: BinaryLikeArray[T]) raises -> Int32Array:
@@ -68,7 +78,7 @@ struct LengthKernel(Kernel):
         def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
             var i = idx[0]
             out.view[DType.int32](i).store[W](
-                0, (offs.load[W](i + 1) - offs.load[W](i)).cast[DType.int32]()
+                0, Self.core(offs.load[W](i + 1), offs.load[W](i))
             )
 
         @always_inline
@@ -200,6 +210,44 @@ struct CapitalizeKernel(StringMapKernel):
             else:
                 out += String(g).lower()
         return out
+
+
+# ---------------------------------------------------------------------------
+# Binary string → string (element-wise concatenation)
+# ---------------------------------------------------------------------------
+
+
+struct ConcatKernel(Kernel):
+    """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
+    per-element primitive (the expression layer's `Concat` builds on it); `apply`
+    materializes the whole array, null-propagating."""
+
+    comptime name = "binary_join_element_wise"
+
+    @staticmethod
+    @always_inline
+    def combine(a: String, b: String) -> String:
+        return a + b
+
+    @staticmethod
+    def apply[
+        T: StringLikeType
+    ](
+        left: BinaryLikeArray[T], right: BinaryLikeArray[T]
+    ) raises -> BinaryLikeArray[T]:
+        var n = len(left)
+        var builder = BinaryLikeBuilder[T](capacity=n)
+        for i in range(n):
+            if left.is_valid(i) and right.is_valid(i):
+                builder.append(
+                    Self.combine(
+                        String(left.unsafe_get(UInt(i))),
+                        String(right.unsafe_get(UInt(i))),
+                    )
+                )
+            else:
+                builder.append_null()
+        return builder.finish()
 
 
 # ---------------------------------------------------------------------------
