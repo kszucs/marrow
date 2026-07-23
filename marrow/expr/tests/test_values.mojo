@@ -585,6 +585,26 @@ def test_list_length_executes() raises:
     assert_true(r == array([2, 1, 0, 3], int32))
 
 
+def test_list_contains_executes() raises:
+    # build [[1, 2], [3], [], [2]] and test membership of a literal element
+    var lb = ListBuilder(Int32Builder(), capacity=4)
+    var child = lb.values()
+    ref c = child.as_int32()
+    c.append(1)
+    c.append(2)
+    lb.append_valid()
+    c.append(3)
+    lb.append_valid()
+    lb.append_valid()
+    c.append(2)
+    lb.append_valid()
+    var batch = record_batch([lb.finish().copy()], names=["l"])
+    var has2 = col("l", list_(int32)).contains(lit(2, int32)).execute(batch)
+    assert_true(has2 == array([True, False, False, True]))
+    var has3 = col("l", list_(int32)).contains(lit(3, int32)).execute(batch)
+    assert_true(has3 == array([False, True, False, False]))
+
+
 # ===========================================================================
 # String execution — materialized through the real kernels
 # ===========================================================================

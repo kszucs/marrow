@@ -18,9 +18,8 @@ Layers:
     `core`, so the compiler inlines the entire chain (zero intermediate arrays).
   * Promotion lives in the value nodes (`OutType`); compute lives in the kernel.
     Every op node is parameterized by a real `marrow.kernels` kernel — arithmetic /
-    compare / boolean / aggregate / string / list `length` are implemented; only
-    list `contains` (`kernels.nested.ArrayContainsKernel`) remains a name-only stub
-    until its compute lands. No kernels are defined here.
+    compare / boolean / aggregate / string / list (`length`, `contains`) are all
+    implemented. No kernels are defined here.
   * `StringValue` **executes** by materializing: leaves (`StringColumn`,
     `StringConst`) resolve/broadcast to a `StringArray`, unary ops (`upper`,
     `lower`, `strip`, `reverse`, `capitalize`, …) apply a `StringMapKernel`, and
@@ -36,12 +35,12 @@ Layers:
     predicates `is_null`/`not_null` (any family) and `is_nan`/`is_inf` (floating)
     materialize the operand and apply a `UnaryPredicateKernel` (`BoolUnary`);
     string `==`/`!=` materialize and compare element-wise (`StringPredicate`);
-    and `any`/`all` fold a bool column to a length-1 result (`BoolReduce`). Still
-    unwired: list `contains` (`BoolBinary`).
-  * `ListValue` executes: `ListColumn` resolves the list column from the batch
-    and `length()` counts elements per list (`ArrayLengthKernel`, offset
-    subtraction) → an int32 boundary; `contains` stays type-only. Cross-family
-    numeric-producing
+    `any`/`all` fold a bool column to a length-1 result (`BoolReduce`); and list
+    `contains` scans each sublist for the search element (`ListContains`).
+  * `ListValue` executes: `ListColumn` resolves the list column from the batch,
+    `length()` counts elements per list (`ArrayLengthKernel`, offset subtraction)
+    → an int32 boundary, and `contains(elem)` scans each sublist for membership
+    (`ArrayContainsKernel`) → a `BoolValue`. Cross-family numeric-producing
     boundaries (reductions — `sum`/`product`/`mean`/`min`/`max` via one `Reduce`
     node, plus the family-agnostic `count` via `Count`) are non-lane `Value`
     nodes: they materialize the operand (the numeric lane fuses up to it), fold it
@@ -565,12 +564,10 @@ trait ListValue(Value):
     def length(self) -> Counting[ArrayLengthKernel, Self]:
         return Counting[ArrayLengthKernel, Self](self.copy())
 
-    def contains[
-        E: Value
-    ](self, elem: E) -> BoolBinary[ArrayContainsKernel, Self, E]:
-        return BoolBinary[ArrayContainsKernel, Self, E](
-            self.copy(), elem.copy()
-        )
+    def contains[E: NumericValue](self, elem: E) -> ListContains[Self, E]:
+        """Element-wise membership: `elem[i] ∈ list[i]` → a `BoolValue` (a literal
+        element broadcasts). Numeric element types only."""
+        return ListContains[Self, E](self.copy(), elem.copy())
 
 
 # ---------------------------------------------------------------------------
@@ -884,17 +881,28 @@ struct BoolReduce[all_: Bool, A: BoolValue](BoolValue):
 
 
 @fieldwise_init
-struct BoolBinary[K: Kernel, L: Value, R: Value](BoolValue):
-    """Bool-producing binary node whose compute is not yet wired (list
-    `contains`). Type architecture only — `execute` raises until the nested
-    kernels land."""
+struct ListContains[L: ListValue, E: NumericValue](BoolValue):
+    """Element-wise list membership → bool: `elem[i] ∈ list[i]`. Both operands
+    materialize (a literal element broadcasts to every row), then
+    `ArrayContainsKernel` scans each sublist. Null list rows propagate to null.
+    """
 
     comptime OutType = dt.BoolType
-    var left: Self.L
-    var right: Self.R
+    var arg: Self.L
+    var elem: Self.E
 
     def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
+        return (
+            ArrayContainsKernel.dispatch(
+                self.arg.execute(batch).to_any(),
+                self.elem.execute(batch).to_any(),
+            )
+            .as_bool()
+            .copy()
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("array_contains(", self.arg, ", ", self.elem, ")")
 
 
 @fieldwise_init
@@ -912,16 +920,6 @@ struct BoolUnary[K: UnaryPredicateKernel, A: Value](BoolValue):
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(Self.K.name, "(", self.arg, ")")
-
-
-@fieldwise_init
-struct StringBinary[K: Kernel, L: StringValue, R: StringValue](StringValue):
-    comptime OutType = Self.L.OutType
-    var left: Self.L
-    var right: Self.R
-
-    def execute(self, batch: RecordBatch) raises -> Self.OutType.ArrayType:
-        return _not_wired[Self.OutType]()
 
 
 @fieldwise_init
@@ -1029,7 +1027,7 @@ comptime RStrip = StringUnary[RStripKernel, _]
 comptime Capitalize = StringUnary[CapitalizeKernel, _]
 
 comptime ArrayLength = Counting[ArrayLengthKernel, _]
-comptime ArrayContains = BoolBinary[ArrayContainsKernel, _, _]
+comptime ArrayContains = ListContains[_, _]
 
 
 # ---------------------------------------------------------------------------

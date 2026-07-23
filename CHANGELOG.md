@@ -19,6 +19,13 @@
 
 ### Features
 
+- **List `contains()`** (`marrow.kernels.nested`, `marrow.expr.values`):
+  `ArrayContainsKernel` implements element-wise membership `elem[i] ∈ list[i]` →
+  `BoolArray` (each row scans its sublist; null list rows propagate to null;
+  numeric element types). The expr `ListContains` node materializes both operands
+  (a literal element broadcasts) and applies it, so `col("l", list_(t)).contains(x)`
+  runs end-to-end. Removes the now-dead generic `BoolBinary`/`StringBinary` nodes.
+
 - **List `length()`** (`marrow.kernels.nested`, `marrow.expr.values`):
   `ArrayLengthKernel` counts elements per list → `Int32Array` (offset subtraction,
   vectorized — the list analogue of `string.LengthKernel`). `ListColumn.execute`
