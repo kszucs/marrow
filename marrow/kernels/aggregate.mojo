@@ -597,6 +597,29 @@ def min_max_string_grouped(
     return dispatch_over_stringlike[leaf](value.dtype())
 
 
+def count_valid_grouped(
+    gids: Int32Array, value: AnyArray, num_groups: Int
+) raises -> Int64Array:
+    """Per-group count of valid (non-null) rows over precomputed `gids`.
+
+    `count` reads only validity, so — unlike the other folds — it is defined for
+    *every* dtype. This is the non-numeric counterpart of
+    `AggState[CountKernel, V]`, keeping `COUNT(col)` / `COUNT(*)` available over
+    string, binary and nested columns that the typed numeric scatter can't
+    resolve. An empty group counts 0 (never null), matching SQL."""
+    var counts = List[Int64](length=num_groups, fill=0)
+    var gv = gids.values()
+    var has_null = value.null_count() > 0
+    for i in range(len(gids)):
+        if has_null and not value.is_valid(i):
+            continue
+        counts[Int(gv[i])] += 1
+    var out = Int64Builder(num_groups)
+    for g in range(num_groups):
+        out.append(Scalar[int64.native](counts[g]))
+    return out.finish()
+
+
 # ---------------------------------------------------------------------------
 # Runtime aggregate tags — the one place a runtime function *name* resolves to
 # a comptime `AggKernel`. Used by any runtime, multi-aggregate driver (the
@@ -661,6 +684,40 @@ def for_agg_tag[
         job[ProductKernel]()
     else:
         raise Error("unknown aggregate tag ", Int(tag))
+
+
+def agg_out_dtype(tag: UInt8, value_dtype: AnyDataType) raises -> AnyDataType:
+    """The output dtype of aggregate `tag` over a `value_dtype` column.
+
+    The single home of the rule — shared by the group-by drivers (which produce
+    the column) and by any planner that needs the aggregate's output schema
+    before the data exists:
+
+    - `count` / `count_distinct` / `approx_count_distinct` → `int64`;
+    - `mean` → `float64`;
+    - `min` / `max` are order-preserving, so they keep the *input* dtype —
+      numeric, string, or temporal (unit/tz included);
+    - the remaining folds (`sum` / `product`) widen to their accumulator dtype
+      (`AggKernel.AccType`), so narrow integers don't overflow."""
+    if tag == AGG_COUNT or agg_is_distinct(tag):
+        return AnyDataType(int64)
+    elif tag == AGG_MEAN:
+        return AnyDataType(float64)
+    elif tag == AGG_MIN or tag == AGG_MAX:
+        return value_dtype.copy()
+    else:
+        var box = List[AnyDataType]()
+
+        @parameter
+        def by_kind[K: AggKernel]() raises:
+            @parameter
+            def by_value[V: NumericType](d: V) raises:
+                box.append(AnyDataType(K.AccType[V]()))
+
+            dispatch_over_numeric[by_value](value_dtype)
+
+        for_agg_tag[by_kind](tag)
+        return box[0].copy()
 
 
 # ---------------------------------------------------------------------------

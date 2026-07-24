@@ -4,6 +4,19 @@
 
 ### Features
 
+- **Relational `Aggregate` completeness + `HAVING`.** `AnyRelation.aggregate`
+  now accepts **computed group keys** (arithmetic, `CASE`/`if_else`,
+  `year()`/`date_trunc()`, literals) and **computed aggregate inputs**
+  (`SUM(x + 1)`, `AVG(length(s))`) — key and value dtypes are inferred by probing
+  the expression against a 0-row batch, the same trick `project` uses.
+  `count_distinct` / `approx_count_distinct` are wired through as aggregate
+  functions, `min`/`max` work over string and date/timestamp value columns,
+  `count` works over any dtype, and an optional `names=` argument aliases the
+  aggregate output fields (so `mean(a), mean(b)` no longer collide). A temporal
+  group key is grouped through its integer backing and relabelled on emit
+  (`rapidhash` has no temporal case). `HAVING` needs no node of its own —
+  `rel.aggregate(...).filter(pred)` resolves `pred` against the aggregate output
+  schema.
 - **Relational operators: `Sort`, `Limit`/`Offset`/`TopK`, computed `Project`.**
   `Sort` (pipeline breaker) reuses the sort kernel over a key+data struct; `Limit`
   slices exactly across morsels; a `Limit`-over-`Sort` folds into the kernel's
@@ -95,6 +108,17 @@
 
 ### Refactors
 
+- **One home for grouped aggregate dispatch and for the aggregate output-dtype
+  rule.** `GroupBy.aggregate_column(gids, value, num_groups, tag)` is now the
+  public per-column entry point for every runtime-tagged aggregate (distinct
+  kernels, string/temporal min/max, non-numeric `count`, typed `AggState`
+  folds), used by both the kernel-level multi-aggregate drivers and the
+  expression layer's `AggregateProcessor` — which drops its numeric-only
+  `AggState` copy and instead `concat`s each aggregate's buffered morsels once
+  and calls it. The output-dtype rule moves next to the tag helpers as
+  `agg_out_dtype(tag, value_dtype)` in `kernels/aggregate.mojo`, replacing
+  `AggregateProcessor.out_dtype`, so plan-time schemas and the kernels can never
+  disagree.
 - **The staged, strategy-pluggable fusion engine is now `marrow.expr.values`
   and drives the relational engine.** The from-scratch engine (previously
   prototyped as `lane.mojo`) replaces the old `values.mojo`: `execution.mojo`
