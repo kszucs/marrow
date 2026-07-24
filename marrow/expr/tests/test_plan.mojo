@@ -1,6 +1,6 @@
 from std.testing import assert_equal, assert_true
 from marrow.testing import TestSuite
-from marrow.expr.lane import AnyValue
+from marrow.expr.values import AnyValue
 
 from marrow.arrays import AnyArray
 from marrow.builders import array

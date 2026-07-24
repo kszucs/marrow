@@ -38,7 +38,7 @@ from std.memory import ArcPointer
 from ..dtypes import AnyDataType, Field, int64, float64
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .lane import AnyValue
+from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
 from ..kernels.aggregate import agg_tag_from_name

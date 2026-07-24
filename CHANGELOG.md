@@ -4,6 +4,16 @@
 
 ### Refactors
 
+- **The staged, strategy-pluggable fusion engine is now `marrow.expr.values`
+  and drives the relational engine.** The from-scratch engine (previously
+  prototyped as `lane.mojo`) replaces the old `values.mojo`: `execution.mojo`
+  and `relations.mojo` execute plans over its `AnyValue`, which dual-boxes
+  either a comptime `Value` node or a runtime `DynValue`. `AnyValue.write_to`
+  renders a boxed `DynValue`'s full expression form so plan printing is
+  unchanged. The four family tests (`test_lane*`) are consolidated into a single
+  `test_values`; the redundant `test_erased` / `test_relations` (old comptime
+  `Table`/`AnyValue` surface) are removed, their unique `AnyValue`
+  interchange/`write_to` coverage folded into `test_values`.
 - **`marrow.expr.values`: family-refined `execute` eliminates all consumption
   `rebind`s.** Each value family now refines `execute`'s return to its concrete
   array — `NumericValue` → `PrimitiveArray[Self.OutType]`, `StringValue` →
