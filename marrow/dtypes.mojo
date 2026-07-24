@@ -127,7 +127,7 @@ trait StringLikeType(BinaryLikeType):
     comptime ArrayType = BinaryLikeArray[Self]
 
 
-trait ListLikeType:
+trait ListLikeType(DataType):
     """Variable-length list types (list, large_list).
 
     Provides `comptime offset: DType` — the physical integer type of the

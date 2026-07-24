@@ -1212,12 +1212,11 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # `contains` (-> bool). Both delegate to kernels.nested.
 # ---------------------------------------------------------------------------
 trait ListValue(Value):
-    # `ListLikeType` is not a `DataType` subtrait, so the intersection is required.
-    comptime OutType: DataType & ListLikeType
+    comptime OutType: ListLikeType
 
 
 @fieldwise_init
-struct ListColumn[T: DataType & ListLikeType](ListValue):
+struct ListColumn[T: ListLikeType](ListValue):
     """A list column, read from the batch by position. No fused lane — its
     `materialize` just hands back the column."""
 
