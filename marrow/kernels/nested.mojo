@@ -1,16 +1,156 @@
 """Nested (list/struct) compute kernels.
 
-Markers NOT IMPLEMENTED yet (compute `core`/`apply` are TODO) — they exist so the
-typed expression layer (`marrow.expr.values`) can name list operations; execution
-wires up later.
+`ArrayLengthKernel` — element count per list → `Int32Array`, the list analogue of
+`string.LengthKernel`: the count is `offsets[i+1] - offsets[i]`, a SIMD subtract
+over the (fixed-width) offsets buffer, so `apply` runs a single vectorized pass.
+
+`ArrayContainsKernel` — element-wise membership `elem[i] ∈ list[i]` → `BoolArray`.
+The list is variable-width so it can't lane-fuse; each row scans its sublist for a
+value equal to that row's search element (a constant broadcasts through the
+expression layer). Null list rows propagate to null results.
 """
 
+from std.sys import size_of
+from std.sys.info import simd_byte_width
+from std.algorithm.backend.vectorize import vectorize
+from std.utils.index import IndexList
+
+from ..arrays import (
+    AnyArray,
+    ListLikeArray,
+    Int32Array,
+    BoolArray,
+    PrimitiveArray,
+)
+from ..buffers import Buffer, Bitmap
+from ..dtypes import ListLikeType, NumericType, DType
+from ..utils import dispatch_over_numeric
 from .helpers import Kernel
+from .execution import ExecutionContext
 
 
 struct ArrayLengthKernel(Kernel):
+    """Per-element element count of a list array → `Int32Array` (matches
+    pyarrow's `list_value_length`).
+
+    Vectorized: loads `W` contiguous offsets at `i` and at `i+1` and subtracts,
+    so each SIMD step computes `W` lengths at once. Null positions yield length 0
+    with an all-valid result bitmap (matches `string.LengthKernel`); full null
+    propagation is a follow-up.
+    """
+
     comptime name = "array_length"
+
+    @staticmethod
+    def apply[T: ListLikeType](array: ListLikeArray[T]) raises -> Int32Array:
+        comptime off = T.offset
+        var n = len(array)
+        var out = Buffer.alloc_uninit[DType.int32](n)
+        var offs = array.offsets.view[off](array.offset)
+        comptime width = simd_byte_width() // size_of[Scalar[off]]()
+
+        @parameter
+        @always_inline
+        def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
+            var i = idx[0]
+            out.view[DType.int32](i).store[W](
+                0, (offs.load[W](i + 1) - offs.load[W](i)).cast[DType.int32]()
+            )
+
+        @always_inline
+        def lane[W: Int](i: Int):
+            fill[W, rank=1](IndexList[1](i))
+
+        vectorize[width](n, lane)
+        return Int32Array(
+            length=n,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=out.to_immutable(),
+        )
+
+    @staticmethod
+    def dispatch(array: AnyArray) raises -> AnyArray:
+        if array.dtype().is_list():
+            return Self.apply(array.as_list()).to_any()
+        elif array.dtype().is_large_list():
+            return Self.apply(array.as_large_list()).to_any()
+        else:
+            raise Error(
+                t"array_length: expected a list array, got {array.dtype()}"
+            )
 
 
 struct ArrayContainsKernel(Kernel):
+    """Element-wise list membership: `result[i]` is True iff the search value
+    `elem[i]` appears among the (valid) elements of the sublist `list[i]`. Result
+    is null exactly where the list row is null; a null / absent search value gives
+    False. Numeric element types only."""
+
     comptime name = "array_contains"
+
+    @staticmethod
+    def apply[
+        T: ListLikeType, V: NumericType
+    ](
+        list: ListLikeArray[T],
+        elem: PrimitiveArray[V],
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> BoolArray:
+        comptime off = T.offset
+        var n = len(list)
+        if len(elem) != n:
+            raise Error(
+                t"array_contains: list and element arrays must have equal"
+                t" length, got {n} and {len(elem)}"
+            )
+        ref child = list.values().as_primitive[V]()
+        var offs = list.offsets.view[off](list.offset)
+        var data = Bitmap.alloc_zeroed(n)
+        var valid = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if list.is_valid(i):
+                valid.set(i)
+                if elem.is_valid(i):
+                    var lo = Int(offs.load[1](i))
+                    var hi = Int(offs.load[1](i + 1))
+                    var target = elem.unsafe_get(i)
+                    for j in range(lo, hi):
+                        if child.is_valid(j) and child.unsafe_get(j) == target:
+                            data.set(i)
+                            break
+        var nulls = list.null_count()
+        var bm: Optional[Bitmap[]] = None
+        if nulls > 0:
+            bm = valid.to_immutable()
+        return BoolArray(
+            length=n,
+            nulls=nulls,
+            offset=0,
+            bitmap=bm^,
+            buffer=data.to_immutable(),
+        )
+
+    @staticmethod
+    def dispatch(
+        list: AnyArray,
+        elem: AnyArray,
+        ctx: ExecutionContext = ExecutionContext.serial(),
+    ) raises -> AnyArray:
+        @parameter
+        def leaf[V: NumericType](d: V) raises -> AnyArray:
+            if list.dtype().is_list():
+                return Self.apply(
+                    list.as_list(), elem.as_primitive[V](), ctx
+                ).to_any()
+            elif list.dtype().is_large_list():
+                return Self.apply(
+                    list.as_large_list(), elem.as_primitive[V](), ctx
+                ).to_any()
+            else:
+                raise Error(
+                    t"array_contains: expected a list array, got {list.dtype()}"
+                )
+
+        return dispatch_over_numeric[leaf](elem.dtype())

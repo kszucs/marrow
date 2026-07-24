@@ -47,7 +47,7 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import AnyScalar
-from .values import AnyValue
+from .lane import AnyValue
 from .pruning import PruneStats
 
 

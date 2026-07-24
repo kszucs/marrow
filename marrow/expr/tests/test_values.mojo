@@ -14,18 +14,21 @@ Two halves:
 from std.testing import assert_equal, assert_true
 
 from marrow.testing import TestSuite
-from marrow.builders import array
+from marrow.builders import array, ListBuilder, Int32Builder
 from marrow.arrays import AnyArray
 from marrow.dtypes import (
     int32,
     int64,
     float64,
     string,
+    large_string,
+    bool_,
     list_,
     Int64Type,
     Int32Type,
     Float64Type,
     StringType,
+    LargeStringType,
     BoolType,
     DataType,
 )
@@ -89,6 +92,11 @@ def _batch() raises -> RecordBatch:
 # execute() returns PrimitiveArray[symbolic OutType]; compare value-wise via AnyArray
 def _eq[V: NumericValue](x: V, expected: AnyArray) raises -> Bool:
     return x.execute(_batch()).to_any() == expected
+
+
+# same, but evaluated against the numeric-string batch (`_nsbatch`)
+def _seq[V: NumericValue](x: V, expected: AnyArray) raises -> Bool:
+    return x.execute(_nsbatch()).to_any() == expected
 
 
 # ===========================================================================
@@ -181,6 +189,18 @@ def test_min_max_preserve_dtype() raises:
     assert_true(out_type_is[Int32Type](col("a", int32).min()))
     assert_true(out_type_is[Int32Type](col("a", int32).max()))
     assert_true(out_type_is[Int64Type](col("a", int64).max()))
+
+
+def test_product_widens_to_64bit() raises:
+    assert_true(out_type_is[Int64Type](col("a", int32).product()))
+    assert_true(out_type_is[Int64Type](col("a", int64).product()))
+    assert_true(out_type_is[Float64Type](col("a", float64).product()))
+
+
+def test_count_is_int64_any_family() raises:
+    assert_true(out_type_is[Int64Type](col("a", int32).count()))
+    assert_true(out_type_is[Int64Type](col("s", string).count()))
+    assert_true(out_type_is[Int64Type](col("l", list_(int64)).count()))
 
 
 def test_comparison_is_bool() raises:
@@ -324,6 +344,25 @@ def test_divide_is_float() raises:
     assert_true(_eq(expr, array([10.0, 10.0, 10.0, 10.0], float64)))
 
 
+def test_floordiv_is_integer() raises:
+    # a // c  = [1,2,3,4] // [2,2,2,2] = [0,1,1,2] (integer floor, keeps int64)
+    var expr = col("a", int64) // col("c", int32)
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([0, 1, 1, 2], int64)))
+
+
+def test_min_element_wise() raises:
+    # element-wise min(a, c) = min([1,2,3,4], [2,2,2,2]) = [1,2,2,2]
+    var expr = col("a", int64).min_element_wise(col("c", int32))
+    assert_true(_eq(expr, array([1, 2, 2, 2], int64)))
+
+
+def test_max_element_wise() raises:
+    # element-wise max(a, c) = max([1,2,3,4], [2,2,2,2]) = [2,2,3,4]
+    var expr = col("a", int64).max_element_wise(col("c", int32))
+    assert_true(_eq(expr, array([2, 2, 3, 4], int64)))
+
+
 def test_unary_neg() raises:
     assert_true(_eq(-col("a", int64), array([-1, -2, -3, -4], int64)))
 
@@ -344,6 +383,27 @@ def test_fused_math_chain() raises:
     assert_true(
         _eq(col("a", int64).exp2(), array([2.0, 4.0, 8.0, 16.0], float64))
     )
+
+
+def test_cast_out_dtype() raises:
+    assert_true(out_type_is[Int64Type](col("c", int32).cast(int64)))
+    assert_true(out_type_is[Float64Type](col("c", int32).cast(float64)))
+
+
+def test_cast_executes() raises:
+    # c = [2,2,2,2] int32 -> int64
+    assert_true(_eq(col("c", int32).cast(int64), array([2, 2, 2, 2], int64)))
+    # int -> float
+    assert_true(
+        _eq(col("c", int32).cast(float64), array([2.0, 2.0, 2.0, 2.0], float64))
+    )
+
+
+def test_cast_fuses_in_chain() raises:
+    # cast(c)->int64 + a  stays one fused pass: [2,2,2,2] + [1,2,3,4]
+    var expr = col("c", int32).cast(int64) + col("a", int64)
+    assert_true(out_type_is[Int64Type](expr))
+    assert_true(_eq(expr, array([3, 4, 5, 6], int64)))
 
 
 def test_anyvalue_erases_and_executes() raises:
@@ -372,6 +432,207 @@ def test_table_reflects_and_executes() raises:
 
 
 # ===========================================================================
+# Reduction execution — N -> 1 (length-1 result array)
+# ===========================================================================
+
+
+# reductions are `Value` (not `NumericValue`), so compare via the erased array
+def _req[V: Value](x: V, expected: AnyArray) raises -> Bool:
+    return x.execute(_batch()).to_any() == expected
+
+
+def test_sum_executes() raises:
+    assert_true(_req(col("a", int64).sum(), array([10], int64)))
+    # narrow input widens to int64 so it can't overflow
+    assert_true(_req(col("c", int32).sum(), array([8], int64)))
+
+
+def test_product_executes() raises:
+    assert_true(_req(col("c", int32).product(), array([16], int64)))
+
+
+def test_mean_executes() raises:
+    assert_true(_req(col("a", int64).mean(), array([2.5], float64)))
+
+
+def test_min_max_execute() raises:
+    assert_true(_req(col("a", int64).min(), array([1], int64)))
+    assert_true(_req(col("a", int64).max(), array([4], int64)))
+    # min/max preserve the operand dtype
+    assert_true(_req(col("c", int32).min(), array([2], int32)))
+
+
+def test_count_executes() raises:
+    assert_true(_req(col("a", int64).count(), array([4], int64)))
+
+
+def test_reduction_over_fused_expr() raises:
+    # (a + b) materializes once, then reduces: sum([11,22,33,44]) == 110
+    assert_true(
+        _req((col("a", int64) + col("b", int64)).sum(), array([110], int64))
+    )
+
+
+def test_anyvalue_erases_reduction() raises:
+    var boxed = AnyValue(col("a", int64).sum())
+    assert_true(boxed.execute(_batch()) == array([10], int64))
+
+
+def test_count_over_string_column() raises:
+    assert_true(
+        col("s", string).count().execute(_sbatch()).to_any()
+        == array([4], int64)
+    )
+
+
+# ===========================================================================
+# Boolean predicate execution — is_null / not_null / is_nan / is_inf / xor
+# ===========================================================================
+
+
+def _pbatch() raises -> RecordBatch:
+    var nan = Float64(0.0) / Float64(0.0)
+    var inf = Float64(1.0) / Float64(0.0)
+    return record_batch(
+        [
+            array([1, None, 3, None], int64).copy(),
+            array([1.0, nan, inf, -1.0], float64).copy(),
+        ],
+        names=["x", "f"],
+    )
+
+
+def test_isnull_executes() raises:
+    var r = col("x", int64).isnull().execute(_pbatch())
+    assert_true(r == array([False, True, False, True]))
+
+
+def test_notnull_executes() raises:
+    var r = col("x", int64).notnull().execute(_pbatch())
+    assert_true(r == array([True, False, True, False]))
+
+
+def test_isnull_over_string_family() raises:
+    # is_null works on any family — a string column here
+    var r = col("s", string).isnull().execute(_sbatch())
+    assert_true(r == array([False, False, False, False]))
+
+
+def test_isnan_executes() raises:
+    var r = col("f", float64).isnan().execute(_pbatch())
+    assert_true(r == array([False, True, False, False]))
+
+
+def test_isinf_executes() raises:
+    var r = col("f", float64).isinf().execute(_pbatch())
+    assert_true(r == array([False, False, True, False]))
+
+
+def test_xor_executes() raises:
+    # (a < 3) xor (a < 2)  over a=[1,2,3,4]
+    var expr = (col("a", int64) < lit(3, int64)) ^ (
+        col("a", int64) < lit(2, int64)
+    )
+    assert_true(expr.execute(_batch()) == array([False, True, False, False]))
+
+
+def test_anyvalue_erases_predicate() raises:
+    var boxed = AnyValue(col("x", int64).isnull())
+    assert_true(boxed.execute(_pbatch()) == array([False, True, False, True]))
+
+
+# ===========================================================================
+# Boolean reductions (any / all) and string equality
+# ===========================================================================
+
+
+def _s2batch() raises -> RecordBatch:
+    return record_batch(
+        [array(["a", "b", "c"]).copy(), array(["a", "x", "c"]).copy()],
+        names=["s", "t"],
+    )
+
+
+def test_any_all_are_bool() raises:
+    var p = col("a", int64) < lit(3, int64)
+    assert_true(_takes_bool(p.any()))
+    assert_true(_takes_bool(p.all()))
+
+
+def test_all_executes() raises:
+    # all(a < 5) == True ; all(a < 3) == False   over a=[1,2,3,4]
+    assert_true(
+        (col("a", int64) < lit(5, int64)).all().execute(_batch())
+        == array([True])
+    )
+    assert_true(
+        (col("a", int64) < lit(3, int64)).all().execute(_batch())
+        == array([False])
+    )
+
+
+def test_any_executes() raises:
+    assert_true(
+        (col("a", int64) < lit(2, int64)).any().execute(_batch())
+        == array([True])
+    )
+    assert_true(
+        (col("a", int64) > lit(9, int64)).any().execute(_batch())
+        == array([False])
+    )
+
+
+def test_string_equal_executes() raises:
+    var r = (col("s", string) == col("t", string)).execute(_s2batch())
+    assert_true(r == array([True, False, True]))
+
+
+def test_string_not_equal_executes() raises:
+    var r = (col("s", string) != col("t", string)).execute(_s2batch())
+    assert_true(r == array([False, True, False]))
+
+
+def test_list_length_executes() raises:
+    # build [[1, 2], [3], [], [4, 5, 6]] and count elements per list
+    var lb = ListBuilder(Int32Builder(), capacity=4)
+    var child = lb.values()
+    ref c = child.as_int32()
+    c.append(1)
+    c.append(2)
+    lb.append_valid()
+    c.append(3)
+    lb.append_valid()
+    lb.append_valid()
+    c.append(4)
+    c.append(5)
+    c.append(6)
+    lb.append_valid()
+    var batch = record_batch([lb.finish().copy()], names=["l"])
+    var r = col("l", list_(int32)).length().execute(batch)
+    assert_true(r == array([2, 1, 0, 3], int32))
+
+
+def test_list_contains_executes() raises:
+    # build [[1, 2], [3], [], [2]] and test membership of a literal element
+    var lb = ListBuilder(Int32Builder(), capacity=4)
+    var child = lb.values()
+    ref c = child.as_int32()
+    c.append(1)
+    c.append(2)
+    lb.append_valid()
+    c.append(3)
+    lb.append_valid()
+    lb.append_valid()
+    c.append(2)
+    lb.append_valid()
+    var batch = record_batch([lb.finish().copy()], names=["l"])
+    var has2 = col("l", list_(int32)).contains(lit(2, int32)).execute(batch)
+    assert_true(has2 == array([True, False, False, True]))
+    var has3 = col("l", list_(int32)).contains(lit(3, int32)).execute(batch)
+    assert_true(has3 == array([False, True, False, False]))
+
+
+# ===========================================================================
 # String execution — materialized through the real kernels
 # ===========================================================================
 
@@ -381,6 +642,106 @@ def _sbatch() raises -> RecordBatch:
         [array(["Hello", "WORLD", " pad ", "abc"]).copy()],
         names=["s"],
     )
+
+
+def _nsbatch() raises -> RecordBatch:
+    # numeric-looking strings, for parse casts
+    return record_batch(
+        [array(["10", "20", "30", "40"]).copy()],
+        names=["s"],
+    )
+
+
+# ===========================================================================
+# Cross-family casts
+# ===========================================================================
+
+
+def test_cast_num_to_bool() raises:
+    # (a - 1) != 0 over a = [1,2,3,4] -> [0,1,2,3] -> [F,T,T,T]
+    var expr = (col("a", int64) - lit(1, int64)).cast(bool_)
+    assert_true(_takes_bool(expr))
+    assert_true(expr.execute(_batch()) == array([False, True, True, True]))
+
+
+def test_cast_num_to_string() raises:
+    var expr = col("a", int64).cast(string)
+    assert_true(_takes_string(expr))
+    assert_true(expr.execute(_batch()) == array(["1", "2", "3", "4"]))
+
+
+def test_cast_bool_to_num() raises:
+    # (a < 3) -> [T,T,F,F] -> [1,1,0,0]
+    var expr = (col("a", int64) < lit(3, int64)).cast(int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_eq(expr, array([1, 1, 0, 0], int64)))
+
+
+def test_cast_bool_to_string() raises:
+    var expr = (col("a", int64) < lit(3, int64)).cast(string)
+    assert_true(_takes_string(expr))
+    assert_true(
+        expr.execute(_batch()) == array(["true", "true", "false", "false"])
+    )
+
+
+def test_cast_string_to_num() raises:
+    var expr = col("s", string).cast(int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_seq(expr, array([10, 20, 30, 40], int64)))
+
+
+def test_cast_string_to_bool() raises:
+    var expr = lit("true", string).cast(bool_)
+    assert_true(_takes_bool(expr))
+    assert_true(expr.execute(_nsbatch()) == array([True, True, True, True]))
+
+
+def test_cast_string_to_string_container() raises:
+    var expr = col("s", string).cast(large_string)
+    assert_true(_takes_string(expr))
+    assert_true(out_type_is[LargeStringType](expr))
+    # round-trip back to utf8 to compare content (no large_string array builder)
+    assert_true(
+        expr.cast(string).execute(_nsbatch()) == array(["10", "20", "30", "40"])
+    )
+
+
+def test_cast_numeric_boundary_materialize_fallback() raises:
+    # str->int cast has no SIMD lane, so `* 2` takes the materialize fallback
+    var expr = col("s", string).cast(int64) * lit(2, int64)
+    assert_true(_takes_numeric(expr))
+    assert_true(_seq(expr, array([20, 40, 60, 80], int64)))
+
+
+def test_length_is_numeric_operand() raises:
+    # length() is now a NumericValue, so it composes with arithmetic
+    var expr = col("s", string).length() + lit(1, int32)
+    assert_true(_takes_numeric(expr))
+    assert_true(
+        expr.execute(_sbatch()).to_any() == array([6, 6, 6, 4], int32).to_any()
+    )
+
+
+def test_fuse_above_length_boundary() raises:
+    # (len(s) + len(s)) + 1 — the two length() boundaries prepare once, then the
+    # whole arithmetic region fuses into a single pass over the cached arrays
+    var s = col("s", string)
+    var expr = (s.length() + s.length()) + lit(1, int32)
+    assert_true(
+        expr.execute(_sbatch()).to_any()
+        == array([11, 11, 11, 7], int32).to_any()
+    )
+
+
+def test_boundary_recomputes_per_batch() raises:
+    # an expression is reused across batches — a boundary node must recompute its
+    # cache each execute, not serve stale results from the first batch
+    var expr = col("s", string).length() + lit(1, int32)
+    var b1 = record_batch([array(["ab", "cde"]).copy()], names=["s"])
+    var b2 = record_batch([array(["wxyz", "z"]).copy()], names=["s"])
+    assert_true(expr.execute(b1).to_any() == array([3, 4], int32).to_any())
+    assert_true(expr.execute(b2).to_any() == array([5, 2], int32).to_any())
 
 
 def test_string_column_execute() raises:

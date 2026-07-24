@@ -2308,6 +2308,11 @@ struct AnyArray(
     def as_list(ref self) -> ref[self._v[ListArray]] ListArray:
         return self._as[ListArray]()
 
+    def as_list_like[
+        T: ListLikeType
+    ](ref self) -> ref[self._v[ListLikeArray[T]]] ListLikeArray[T]:
+        return self._as[ListLikeArray[T]]()
+
     def as_large_list(ref self) -> ref[self._v[LargeListArray]] LargeListArray:
         return self._as[LargeListArray]()
 

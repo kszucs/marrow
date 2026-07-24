@@ -54,6 +54,16 @@ struct LengthKernel(Kernel):
     comptime name = "length"
 
     @staticmethod
+    @always_inline
+    def core[
+        T: DType, W: Int
+    ](hi: SIMD[T, W], lo: SIMD[T, W]) -> SIMD[DType.int32, W]:
+        """The fusable per-lane primitive: byte length from two loaded offset
+        vectors (`offsets[i+1] - offsets[i]`). Both `apply` and the expression
+        layer's `StringLength` build on it, so the compute lives here only."""
+        return (hi - lo).cast[DType.int32]()
+
+    @staticmethod
     def apply[
         T: StringLikeType
     ](array: BinaryLikeArray[T]) raises -> Int32Array:
@@ -68,7 +78,7 @@ struct LengthKernel(Kernel):
         def fill[W: Int, rank: Int, alignment: Int = 1](idx: IndexList[rank]):
             var i = idx[0]
             out.view[DType.int32](i).store[W](
-                0, (offs.load[W](i + 1) - offs.load[W](i)).cast[DType.int32]()
+                0, Self.core(offs.load[W](i + 1), offs.load[W](i))
             )
 
         @always_inline
@@ -99,7 +109,7 @@ struct LengthKernel(Kernel):
 # ---------------------------------------------------------------------------
 
 
-trait StringUnaryKernel(Kernel):
+trait StringMapKernel(Kernel):
     """Element-wise string → string op. Concrete kernels define `transform`;
     `apply` (element-wise build, null-preserving) and `dispatch` are defaulted.
     """
@@ -133,7 +143,7 @@ trait StringUnaryKernel(Kernel):
             )
 
 
-struct UpperKernel(StringUnaryKernel):
+struct UpperKernel(StringMapKernel):
     comptime name = "upper"
 
     @staticmethod
@@ -141,7 +151,7 @@ struct UpperKernel(StringUnaryKernel):
         return s.upper()
 
 
-struct LowerKernel(StringUnaryKernel):
+struct LowerKernel(StringMapKernel):
     comptime name = "lower"
 
     @staticmethod
@@ -149,7 +159,7 @@ struct LowerKernel(StringUnaryKernel):
         return s.lower()
 
 
-struct StripKernel(StringUnaryKernel):
+struct StripKernel(StringMapKernel):
     comptime name = "strip"
 
     @staticmethod
@@ -157,7 +167,7 @@ struct StripKernel(StringUnaryKernel):
         return String(s.strip())
 
 
-struct LStripKernel(StringUnaryKernel):
+struct LStripKernel(StringMapKernel):
     comptime name = "lstrip"
 
     @staticmethod
@@ -165,7 +175,7 @@ struct LStripKernel(StringUnaryKernel):
         return String(s.lstrip())
 
 
-struct RStripKernel(StringUnaryKernel):
+struct RStripKernel(StringMapKernel):
     comptime name = "rstrip"
 
     @staticmethod
@@ -173,7 +183,7 @@ struct RStripKernel(StringUnaryKernel):
         return String(s.rstrip())
 
 
-struct ReverseKernel(StringUnaryKernel):
+struct ReverseKernel(StringMapKernel):
     comptime name = "reverse"
 
     @staticmethod
@@ -185,7 +195,7 @@ struct ReverseKernel(StringUnaryKernel):
         return out
 
 
-struct CapitalizeKernel(StringUnaryKernel):
+struct CapitalizeKernel(StringMapKernel):
     comptime name = "capitalize"
 
     @staticmethod
@@ -203,11 +213,49 @@ struct CapitalizeKernel(StringUnaryKernel):
 
 
 # ---------------------------------------------------------------------------
+# Binary string → string (element-wise concatenation)
+# ---------------------------------------------------------------------------
+
+
+struct ConcatKernel(Kernel):
+    """Element-wise binary string concatenation (`a || b`). `combine` is the fusable
+    per-element primitive (the expression layer's `Concat` builds on it); `apply`
+    materializes the whole array, null-propagating."""
+
+    comptime name = "binary_join_element_wise"
+
+    @staticmethod
+    @always_inline
+    def combine(a: String, b: String) -> String:
+        return a + b
+
+    @staticmethod
+    def apply[
+        T: StringLikeType
+    ](
+        left: BinaryLikeArray[T], right: BinaryLikeArray[T]
+    ) raises -> BinaryLikeArray[T]:
+        var n = len(left)
+        var builder = BinaryLikeBuilder[T](capacity=n)
+        for i in range(n):
+            if left.is_valid(i) and right.is_valid(i):
+                builder.append(
+                    Self.combine(
+                        String(left.unsafe_get(UInt(i))),
+                        String(right.unsafe_get(UInt(i))),
+                    )
+                )
+            else:
+                builder.append_null()
+        return builder.finish()
+
+
+# ---------------------------------------------------------------------------
 # Binary string predicate → BoolArray
 # ---------------------------------------------------------------------------
 
 
-trait StringBinaryPredicateKernel(Kernel):
+trait StringPredicateKernel(Kernel):
     """Element-wise `string × string → bool` predicate. Concrete kernels define
     `predicate`; `apply` (bit-packed, null-propagating) and `dispatch` default.
     """
@@ -220,8 +268,8 @@ trait StringBinaryPredicateKernel(Kernel):
 
     @staticmethod
     def apply[
-        T: StringLikeType
-    ](left: BinaryLikeArray[T], right: BinaryLikeArray[T]) raises -> BoolArray:
+        L: StringLikeType, R: StringLikeType
+    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
         var n = len(left)
         if len(right) != n:
             raise Error(
@@ -259,7 +307,7 @@ trait StringBinaryPredicateKernel(Kernel):
             )
 
 
-struct StartsWithKernel(StringBinaryPredicateKernel):
+struct StartsWithKernel(StringPredicateKernel):
     comptime name = "startswith"
 
     @staticmethod
@@ -269,7 +317,7 @@ struct StartsWithKernel(StringBinaryPredicateKernel):
         return s.startswith(pat)
 
 
-struct EndsWithKernel(StringBinaryPredicateKernel):
+struct EndsWithKernel(StringPredicateKernel):
     comptime name = "endswith"
 
     @staticmethod
@@ -279,7 +327,7 @@ struct EndsWithKernel(StringBinaryPredicateKernel):
         return s.endswith(pat)
 
 
-struct ContainsKernel(StringBinaryPredicateKernel):
+struct ContainsKernel(StringPredicateKernel):
     comptime name = "contains"
 
     @staticmethod
@@ -287,3 +335,23 @@ struct ContainsKernel(StringBinaryPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return pat in s
+
+
+struct StringEqKernel(StringPredicateKernel):
+    comptime name = "equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s == pat
+
+
+struct StringNeKernel(StringPredicateKernel):
+    comptime name = "not_equal"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return s != pat

@@ -1218,6 +1218,61 @@ def _apply_dispatch[
 
 
 def apply[
+    Out: DType,
+    op: def[W: Int](Int) capturing[_] -> SIMD[Out, W],
+](
+    dst: BufferView[mut=True, Out, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Fill ``dst[i] = op(i)`` element-wise via the shared CPU serial/parallel
+    dispatch — a *source-less* producer variant for fused expression lanes that
+    compute each value from its index (evaluating a whole sub-tree) rather than
+    reading an input buffer. GPU is not offered: the producer typically closes
+    over a host `RecordBatch`, so only the CPU paths of ``_apply_dispatch`` apply.
+    """
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](i))
+
+    _apply_dispatch[Out, False, process](length, ctx)
+
+
+def apply[
+    In: DType,
+    op: def[W: Int](Int) capturing[_] -> SIMD[DType.bool, W],
+](
+    dst: BitmapView[mut=True, _],
+    ctx: ExecutionContext = ExecutionContext.serial(),
+) raises:
+    """Bit-pack ``dst[i] = op(i)`` from the index — the bitmap counterpart of the
+    source-less producer above, for fused predicate/comparison lanes that produce
+    a `SIMD[bool, W]` per index (evaluating a whole sub-tree) with no input
+    buffer. ``In`` sizes the SIMD lane to the operand's native type. Serial CPU
+    only: bit-packed output needs whole-byte-aligned stride, so parallel workers
+    would race on the read-modify-write (matching the other bitmap `apply`s).
+    """
+    var length = len(dst)
+
+    @parameter
+    @always_inline
+    def process[W: Int, alignment: Int = 1](coord: Coord) -> None:
+        var i = Int(coord[0].value())
+        dst.store[W](i, op[W](i))
+
+    comptime cpu_width = max(8, simd_byte_width() // size_of[Scalar[In]]())
+
+    @always_inline
+    def lane[W: Int](i: Int):
+        process[W](Coord(i))
+
+    vectorize[cpu_width](length, lane)
+
+
+def apply[
     In: DType,
     Out: DType,
     op: UnaryFn[In, Out],

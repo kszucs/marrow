@@ -50,6 +50,9 @@
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and
   fixed-size-list arrays.
+- Float unaries and binaries: `sqrt`, `exp`, `exp2`, `log`, `log2`,
+  `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sign`, `sin`,
+  `cos`, `pow_`, and row-wise `minimum`/`maximum`.
 
 ### Expressions and the query engine
 
@@ -62,6 +65,9 @@
   compile time, so a subtree fuses into a single SIMD loop with no
   dispatch. The **runtime lane** resolves operand dtypes at run time and
   interprets. `col("a", int64)` gives the first, `col("a")` the second.
+- The numeric, boolean, string, temporal, conditional, cast and list
+  families, each with a fluent operator and method API, reaching both
+  lanes.
 
 ### Query optimizer
 
