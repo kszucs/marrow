@@ -55,6 +55,7 @@ from ..dtypes import (
     DType,
     Int32Type,
     Int64Type,
+    Float64Type,
     BoolType,
     StringLikeType,
     StringType,
@@ -76,9 +77,18 @@ from ..kernels.arithmetic import (
     SubKernel,
     MulKernel,
     DivKernel,
+    FloordivKernel,
     ModKernel,
     NegKernel,
     AbsKernel,
+    SignKernel,
+    FloorKernel,
+    CeilKernel,
+    RoundKernel,
+    PowKernel,
+    SqrtKernel,
+    ExpKernel,
+    LogKernel,
 )
 from ..kernels.aggregate import (
     AggKernel,
@@ -406,13 +416,77 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
         self.a.materialize(batch, ctx)
 
 
+@fieldwise_init
+struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
+    NumericValue
+):
+    """Binary op whose result is always float64 — `Div` (true division), `Pow`.
+    Operands cast up to float64 before the kernel, so `5 / 2 == 2.5`."""
+
+    comptime OutType = Float64Type
+    comptime Shape = max(Self.L.Shape, Self.R.Shape)
+    comptime NativeType = DType.float64
+    var l: Self.L
+    var r: Self.R
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[Self.NativeType, W]:
+        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.NativeType
+        ]()
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.NativeType
+        ]()
+        return Self.K.core[Self.NativeType, W](a, b)
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.l.materialize(batch, ctx)
+        self.r.materialize(batch, ctx)
+
+
+@fieldwise_init
+struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
+    """Unary op whose result is always float64 — `sqrt`, `exp`, `log`."""
+
+    comptime OutType = Float64Type
+    comptime Shape = Self.A.Shape
+    comptime NativeType = DType.float64
+    var a: Self.A
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[Self.NativeType, W]:
+        return Self.K.core[Self.NativeType, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
+        )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        self.a.materialize(batch, ctx)
+
+
 comptime Add = NumericBinary[AddKernel, _, _]
 comptime Sub = NumericBinary[SubKernel, _, _]
 comptime Mul = NumericBinary[MulKernel, _, _]
-comptime Div = NumericBinary[DivKernel, _, _]
 comptime Mod = NumericBinary[ModKernel, _, _]
+comptime Floordiv = NumericBinary[FloordivKernel, _, _]
+comptime Div = FloatBinary[DivKernel, _, _]
+comptime Pow = FloatBinary[PowKernel, _, _]
 comptime Neg = NumericUnary[NegKernel, _]
 comptime Abs = NumericUnary[AbsKernel, _]
+comptime Sign = NumericUnary[SignKernel, _]
+comptime Floor = NumericUnary[FloorKernel, _]
+comptime Ceil = NumericUnary[CeilKernel, _]
+comptime Round = NumericUnary[RoundKernel, _]
+comptime Sqrt = FloatUnary[SqrtKernel, _]
+comptime Exp = FloatUnary[ExpKernel, _]
+comptime Ln = FloatUnary[LogKernel, _]
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from marrow.expr.lane import (
     Add,
     Mul,
     Neg,
+    Div,
     NumericCast,
     Sum,
     Max,
@@ -114,6 +115,14 @@ def test_fused_node_is_fusable() raises:
     # `Add` over fusable operands is itself `NumericValue`; `_takes_fusable`
     # compiling is the compile-time proof.
     assert_true(_takes_fusable(Add(col(0, int64), col(1, int64))))
+
+
+def test_div_is_true_division() raises:
+    # 1/2,2/2,3/2,4/2 = [0.5,1.0,1.5,2.0] float64 — true division, not integer
+    var cv = run(Div(col(0, int64), lit(2, int64)), _batch())
+    assert_true(
+        into_array(cv, 4) == array([0.5, 1.0, 1.5, 2.0], float64).to_any()
+    )
 
 
 def test_unary_neg_fuses() raises:
