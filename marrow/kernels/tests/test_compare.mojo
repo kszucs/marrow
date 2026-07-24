@@ -7,8 +7,10 @@ from marrow.builders import (
     PrimitiveBuilder,
     Int64Builder,
     Float64Builder,
+    StringBuilder,
 )
-from marrow.dtypes import int64, float64, Int64Type, Float64Type
+from marrow.dtypes import int64, float64, Int64Type, Float64Type, large_string
+from marrow.kernels.cast import cast
 
 from marrow.kernels.compare import (
     equal,
@@ -226,6 +228,99 @@ def test_equal_large_array() raises:
     assert_equal(len(result), n)
     for i in range(n):
         assert_true(result[i].value())
+
+
+# ---------------------------------------------------------------------------
+# String ordering comparisons (lexicographic byte order, matches pyarrow)
+# ---------------------------------------------------------------------------
+
+
+def test_string_less() raises:
+    var a = array(["apple", "banana", "cherry", "apple", ""])
+    var b = array(["apricot", "banana", "cherry", "ab", "a"])
+    assert_true(
+        LtKernel.apply_string(a, b) == array([True, False, False, False, True])
+    )
+
+
+def test_string_less_equal() raises:
+    var a = array(["apple", "banana", "cherry", "apple", ""])
+    var b = array(["apricot", "banana", "cherry", "ab", "a"])
+    assert_true(
+        LeKernel.apply_string(a, b) == array([True, True, True, False, True])
+    )
+
+
+def test_string_greater() raises:
+    var a = array(["apple", "banana", "cherry", "apple", ""])
+    var b = array(["apricot", "banana", "cherry", "ab", "a"])
+    assert_true(
+        GtKernel.apply_string(a, b) == array([False, False, False, True, False])
+    )
+
+
+def test_string_greater_equal() raises:
+    var a = array(["apple", "banana", "cherry", "apple", ""])
+    var b = array(["apricot", "banana", "cherry", "ab", "a"])
+    assert_true(
+        GeKernel.apply_string(a, b) == array([False, True, True, True, False])
+    )
+
+
+def test_string_equal_via_kernel() raises:
+    var a = array(["x", "yy", "z"])
+    var b = array(["x", "yz", "z"])
+    assert_true(EqKernel.apply_string(a, b) == array([True, False, True]))
+    assert_true(NeKernel.apply_string(a, b) == array([False, True, False]))
+
+
+def test_string_prefix_ordering() raises:
+    # a shorter string that is a prefix compares less than the longer one
+    var a = array(["ab", "abc", "abc"])
+    var b = array(["abc", "ab", "abc"])
+    assert_true(LtKernel.apply_string(a, b) == array([True, False, False]))
+    assert_true(GtKernel.apply_string(a, b) == array([False, True, False]))
+
+
+def test_string_compare_nulls() raises:
+    # validity = AND of operands; null positions are invalid in the output
+    var lb = StringBuilder(capacity=3)
+    lb.append("x")
+    lb.append_null()
+    lb.append("y")
+    var rb = StringBuilder(capacity=3)
+    rb.append("x")
+    rb.append("z")
+    rb.append_null()
+    var left = lb.finish()
+    var right = rb.finish()
+    var r = LtKernel.apply_string(left, right)
+    assert_equal(r.null_count(), 2)
+    assert_true(r.is_valid(0))
+    assert_false(r.is_valid(1))
+    assert_false(r.is_valid(2))
+    assert_false(r[0].value())  # 'x' < 'x' is False
+
+
+def test_string_dispatch_anyarray() raises:
+    var a: AnyArray = array(["a", "bb", "c"])
+    var b: AnyArray = array(["b", "bb", "a"])
+    var r = LtKernel.dispatch(a, b)
+    assert_equal(r.length(), 3)
+    ref rb = r.as_bool()
+    assert_true(rb[0].value())  # 'a' < 'b'
+    assert_false(rb[1].value())  # 'bb' == 'bb'
+    assert_false(rb[2].value())  # 'c' > 'a'
+
+
+def test_large_string_ordering() raises:
+    var a = cast(array(["apple", "banana", "cherry"]), large_string)
+    var b = cast(array(["apricot", "banana", "berry"]), large_string)
+    var r = LtKernel.dispatch(a, b)
+    ref rb = r.as_bool()
+    assert_true(rb[0].value())  # apple < apricot
+    assert_false(rb[1].value())  # banana == banana
+    assert_false(rb[2].value())  # cherry > berry
 
 
 def main() raises:
