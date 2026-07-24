@@ -3,26 +3,19 @@
 Same query as the other variants (`SELECT a, name FROM orders WHERE a > b`),
 built with `marrow.expr.relations` — the self-executing fat nodes (`InMemoryTable`
 /`Filter`/`Project`, `pull()`-based, no `Planner`) over fused `AnyValue` values.
-`collect()` uses the closed flat concat, so the fused path never links the open
-`AnyBuilder`. This should land near `query_erased_aot`, not the runtime path.
+Only fused comptime nodes (`col`/`>`) are boxed, so the `DynValue` interpreter and
+its per-dtype kernel fanout are dead-code-eliminated — this should land near the
+fused path, far below the runtime path. That delta is the unification's DCE proof.
 
     pixi run binary_size
 """
 
 from marrow.builders import array
-from marrow.dtypes import Int64Type, StringType, int64, string, field
+from marrow.dtypes import int64, string, field
 from marrow.schema import schema
 from marrow.tabular import record_batch
-from marrow.expr.values import Table
-from marrow.expr.values import Greater
-from marrow.expr.values import AnyValue
+from marrow.expr.values import col, AnyValue
 from marrow.expr.relations import InMemoryTable, Project, AnyRelation, execute
-
-
-struct Orders:
-    var a: Int64Type
-    var b: Int64Type
-    var name: StringType
 
 
 def main() raises:
@@ -33,13 +26,12 @@ def main() raises:
         [a.copy(), b.copy(), nm.copy()], names=["a", "b", "name"]
     )
 
-    var t = Table[Orders]()
     var filtered = AnyRelation(InMemoryTable(batch=batch)).filter(
-        AnyValue(Greater(t.a, t.b))
+        AnyValue(col("a", int64) > col("b", int64))
     )
     var values = List[AnyValue]()
-    values.append(AnyValue(t.a))
-    values.append(AnyValue(t.name))
+    values.append(AnyValue(col("a", int64)))
+    values.append(AnyValue(col("name", string)))
     var proj = Project(
         input=filtered,
         names=["a", "name"],
