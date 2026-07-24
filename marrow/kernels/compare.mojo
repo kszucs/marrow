@@ -22,15 +22,19 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 - **Tier 1 (apply)** — ``KernelStruct.apply[T]``: typed array API.
 - **Tier 2 (dispatch)** — ``KernelStruct.dispatch(AnyArray)``: type-erased entry.
 
-``equal`` additionally keeps free-function overloads for ``StringArray`` /
-``StructArray`` / ``AnyArray`` (string and nested equality not yet folded into
-``EqKernel``).
+All six kernels also implement ``str_predicate`` / ``apply_string``: ``dispatch``
+routes ``string`` / ``large_string`` inputs to a lexicographic byte comparison
+(UTF-8 byte order equals codepoint order), so ``<`` ``<=`` ``>`` ``>=`` ``==``
+``!=`` all work on strings. ``equal`` additionally keeps free-function overloads
+for ``StringArray`` / ``StructArray`` / ``AnyArray`` (nested struct equality is
+not folded into ``EqKernel``).
 """
 
 from ..arrays import (
     BoolArray,
     PrimitiveArray,
     StringArray,
+    BinaryLikeArray,
     AnyArray,
     StructArray,
 )
@@ -39,6 +43,7 @@ from ..views import apply
 from ..dtypes import (
     NumericType,
     PrimitiveType,
+    StringLikeType,
     bool_ as bool_dt,
 )
 from ..utils import dispatch_over_numeric
@@ -107,6 +112,14 @@ trait BinaryCompareKernel(Kernel):
         ...
 
     @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        """Scalar per-element string comparison (lexicographic byte ordering).
+        """
+        ...
+
+    @staticmethod
     def apply[
         T: PrimitiveType
     ](
@@ -116,6 +129,37 @@ trait BinaryCompareKernel(Kernel):
     ) raises -> BoolArray:
         return _binary_cmp[T, func=Self.core[T.native, _], name=Self.name](
             left, right, ctx
+        )
+
+    @staticmethod
+    def apply_string[
+        L: StringLikeType, R: StringLikeType
+    ](left: BinaryLikeArray[L], right: BinaryLikeArray[R]) raises -> BoolArray:
+        """Element-wise string comparison producing a bit-packed BoolArray.
+
+        Lexicographic byte ordering (UTF-8 byte order equals codepoint order).
+        Validity is the AND of the operand bitmaps, matching the numeric path.
+        """
+        var n = len(left)
+        if len(right) != n:
+            raise Error(
+                t"{Self.name}: arrays must have the same length, got {n} and"
+                t" {len(right)}"
+            )
+        var bm = bitmap_and(left.bitmap, right.bitmap)
+        var data = Bitmap.alloc_zeroed(n)
+        for i in range(n):
+            if left.is_valid(i) and right.is_valid(i):
+                if Self.str_predicate(
+                    left.unsafe_get(UInt(i)), right.unsafe_get(UInt(i))
+                ):
+                    data.set(i)
+        return BoolArray(
+            length=n,
+            nulls=n - bm.value().view().count_set_bits() if bm else 0,
+            offset=0,
+            bitmap=bm,
+            buffer=data.to_immutable(),
         )
 
     @staticmethod
@@ -136,7 +180,16 @@ trait BinaryCompareKernel(Kernel):
                 left.as_primitive[T](), right.as_primitive[T](), ctx
             ).to_any()
 
-        return dispatch_over_numeric[leaf](left.dtype())
+        if left.dtype().is_string():
+            return Self.apply_string(
+                left.as_string(), right.as_string()
+            ).to_any()
+        elif left.dtype().is_large_string():
+            return Self.apply_string(
+                left.as_large_string(), right.as_large_string()
+            ).to_any()
+        else:
+            return dispatch_over_numeric[leaf](left.dtype())
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +207,13 @@ struct EqKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.eq(b)
 
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return a == b
+
 
 struct NeKernel(BinaryCompareKernel):
     comptime name = "not_equal"
@@ -164,6 +224,13 @@ struct NeKernel(BinaryCompareKernel):
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ne(b)
+
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return a != b
 
 
 struct LtKernel(BinaryCompareKernel):
@@ -176,6 +243,13 @@ struct LtKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.lt(b)
 
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return a < b
+
 
 struct LeKernel(BinaryCompareKernel):
     comptime name = "less_equal"
@@ -186,6 +260,13 @@ struct LeKernel(BinaryCompareKernel):
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.le(b)
+
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return a <= b
 
 
 struct GtKernel(BinaryCompareKernel):
@@ -198,6 +279,13 @@ struct GtKernel(BinaryCompareKernel):
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.gt(b)
 
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return a > b
+
 
 struct GeKernel(BinaryCompareKernel):
     comptime name = "greater_equal"
@@ -208,6 +296,13 @@ struct GeKernel(BinaryCompareKernel):
         T: DType, W: Int
     ](a: SIMD[T, W], b: SIMD[T, W]) -> SIMD[DType.bool, W]:
         return a.ge(b)
+
+    @always_inline
+    @staticmethod
+    def str_predicate[
+        o1: Origin, o2: Origin
+    ](a: StringSlice[o1], b: StringSlice[o2]) -> Bool:
+        return not (a < b)  # StringSlice has no __ge__(StringSlice) overload
 
 
 # ---------------------------------------------------------------------------

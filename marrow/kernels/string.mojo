@@ -360,3 +360,119 @@ struct StringNeKernel(StringPredicateKernel):
         o1: Origin, o2: Origin
     ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
         return s != pat
+
+
+# ---------------------------------------------------------------------------
+# SQL LIKE / ILIKE pattern matching
+# ---------------------------------------------------------------------------
+
+
+# Token sentinels for a compiled LIKE pattern. Literal code points are stored
+# as their (non-negative) value; the two wildcards use negative sentinels.
+comptime _LIKE_ANY = -1  # '%' — any run of characters (incl. empty)
+comptime _LIKE_ONE = -2  # '_' — exactly one character
+
+
+def _codepoints[o: Origin](s: StringSlice[o]) -> List[Int]:
+    var out = List[Int]()
+    for cp in s.codepoints():
+        out.append(Int(cp))
+    return out^
+
+
+def _compile_like[o: Origin](pat: StringSlice[o]) -> List[Int]:
+    """Compile a SQL ``LIKE`` pattern into a token list.
+
+    ``%`` → ``_LIKE_ANY``, ``_`` → ``_LIKE_ONE``, and ``\\`` escapes the next
+    character to a literal (``\\%`` → literal ``%``, ``\\\\`` → literal ``\\``);
+    a trailing ``\\`` is dropped. This matches pyarrow's ``match_like``.
+    """
+    comptime BSL = 0x5C  # ord('\\')
+    comptime PCT = 0x25  # ord('%')
+    comptime UND = 0x5F  # ord('_')
+    var cps = _codepoints(pat)
+    var m = len(cps)
+    var out = List[Int]()
+    var k = 0
+    while k < m:
+        var c = cps[k]
+        if c == BSL:
+            if k + 1 < m:
+                out.append(cps[k + 1])  # escaped literal
+                k += 2
+            else:
+                k += 1  # trailing backslash: drop
+        elif c == PCT:
+            out.append(_LIKE_ANY)
+            k += 1
+        elif c == UND:
+            out.append(_LIKE_ONE)
+            k += 1
+        else:
+            out.append(c)
+            k += 1
+    return out^
+
+
+def _wildcard_match(text: List[Int], toks: List[Int]) -> Bool:
+    """Greedy SQL ``LIKE`` matcher over a text codepoint list and a compiled
+    token list (see ``_compile_like``).
+
+    O(len(text) * len(toks)) worst case, O(1) extra space via the classic
+    backtracking-on-star algorithm.
+    """
+    var n = len(text)
+    var m = len(toks)
+    var i = 0  # cursor in text
+    var j = 0  # cursor in tokens
+    var star_j = -1  # token index of the last '%' seen, or -1
+    var star_i = 0  # text index matched against that '%'
+    while i < n:
+        if j < m and (toks[j] == _LIKE_ONE or toks[j] == text[i]):
+            i += 1
+            j += 1
+        elif j < m and toks[j] == _LIKE_ANY:
+            star_j = j
+            star_i = i
+            j += 1
+        elif star_j != -1:
+            # backtrack: let the last '%' absorb one more character
+            j = star_j + 1
+            star_i += 1
+            i = star_i
+        else:
+            return False
+    # trailing '%' tokens can match the empty remainder
+    while j < m and toks[j] == _LIKE_ANY:
+        j += 1
+    return j == m
+
+
+struct LikeKernel(StringPredicateKernel):
+    """SQL ``LIKE`` (``pc.match_like``): ``%`` = any run, ``_`` = any single
+    character, ``\\`` escapes, everything else literal, case-sensitive."""
+
+    comptime name = "match_like"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        return _wildcard_match(_codepoints(s), _compile_like(pat))
+
+
+struct ILikeKernel(StringPredicateKernel):
+    """Case-insensitive SQL ``LIKE`` (``pc.match_like`` with
+    ``ignore_case=True``): both operands are lower-cased before matching."""
+
+    comptime name = "match_like_ci"
+
+    @staticmethod
+    def predicate[
+        o1: Origin, o2: Origin
+    ](s: StringSlice[o1], pat: StringSlice[o2]) -> Bool:
+        var sl = s.lower()
+        var pl = pat.lower()
+        return _wildcard_match(
+            _codepoints(StringSlice(sl)), _compile_like(StringSlice(pl))
+        )
