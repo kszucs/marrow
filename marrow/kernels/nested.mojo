@@ -34,9 +34,9 @@ struct ArrayLengthKernel(Kernel):
     pyarrow's `list_value_length`).
 
     Vectorized: loads `W` contiguous offsets at `i` and at `i+1` and subtracts,
-    so each SIMD step computes `W` lengths at once. Null positions yield length 0
-    with an all-valid result bitmap (matches `string.LengthKernel`); full null
-    propagation is a follow-up.
+    so each SIMD step computes `W` lengths at once. Null input elements yield a
+    null output element (the input's validity bitmap is propagated unchanged),
+    matching `string.LengthKernel`.
     """
 
     comptime name = "array_length"
@@ -62,11 +62,17 @@ struct ArrayLengthKernel(Kernel):
             fill[W, rank=1](IndexList[1](i))
 
         vectorize[width](n, lane)
+
+        # Propagate the input's validity: a null list yields a null length.
+        var vbm: Optional[Bitmap[mut=False]] = None
+        var validity = array.validity()
+        if validity:
+            vbm = validity.value().union(validity.value()).to_immutable()
         return Int32Array(
             length=n,
-            nulls=0,
+            nulls=array.null_count(),
             offset=0,
-            bitmap=None,
+            bitmap=vbm^,
             buffer=out.to_immutable(),
         )
 

@@ -142,7 +142,9 @@ def test_arithmetic_above_reduction() raises:
     var cv = (
         Mul(Add(col("a", int64), col("b", int64)), Sum(col("a", int64)))
     ).execute(_batch())
-    assert_true(into_array(cv, 4) == array([110, 220, 330, 440], int64).to_any())
+    assert_true(
+        into_array(cv, 4) == array([110, 220, 330, 440], int64).to_any()
+    )
 
 
 def test_mean_centering_via_single_binary() raises:
@@ -414,15 +416,17 @@ def test_num_to_string() raises:
 def test_num_to_string_fuses_with_concat() raises:
     # cast(n, string) || "!" -> ["1!","2!"] — string breaker read fuses into concat
     var b = record_batch([array([1, 2], int64).copy()], names=["n"])
-    var cv = (Concat(NumToString[StringType](col("n", int64)), slit("!"))).execute(
-        b
-    )
+    var cv = (
+        Concat(NumToString[StringType](col("n", int64)), slit("!"))
+    ).execute(b)
     assert_true(into_array(cv, 2) == array(["1!", "2!"]).to_any())
 
 
 def test_string_to_string_container_cast() raises:
     # string -> string container cast, values preserved
-    var cv = (StringToString[StringType](col("s", string))).execute(_str_batch())
+    var cv = (StringToString[StringType](col("s", string))).execute(
+        _str_batch()
+    )
     assert_true(into_array(cv, 2) == array(["ab", "cd"]).to_any())
 
 
@@ -462,9 +466,9 @@ def test_list_length() raises:
 
 def test_list_length_fuses_above() raises:
     # length(l) + 1 = [4, 3] — the breaker feeds the fused numeric lane
-    var cv = (Add(ListLength(ListColumn[ListType]("l")), lit(1, int32))).execute(
-        _list_batch()
-    )
+    var cv = (
+        Add(ListLength(ListColumn[ListType]("l")), lit(1, int32))
+    ).execute(_list_batch())
     assert_true(into_array(cv, 2) == array([4, 3], int32).to_any())
 
 
@@ -516,6 +520,66 @@ def test_anyvalue_write_to_delegates() raises:
     # form (not just its column name)
     var boxed: AnyValue = dyn_col("a") + dyn_col("b")
     assert_true(String(boxed).find("add") != -1)
+
+
+# ===========================================================================
+# Plan analysis — referenced_columns / is_deterministic
+# ===========================================================================
+
+
+def _assert_columns(got: List[String], expected: List[String]) raises:
+    assert_equal(len(got), len(expected))
+    for i in range(len(expected)):
+        assert_true(got[i] == expected[i])
+
+
+def test_referenced_columns_bare_column() raises:
+    # a bare column reads exactly its own name
+    _assert_columns(col("a", int64).referenced_columns(), ["a"])
+
+
+def test_referenced_columns_literal_is_empty() raises:
+    # a literal reads no columns
+    _assert_columns(lit(1, int64).referenced_columns(), List[String]())
+    _assert_columns(slit("x").referenced_columns(), List[String]())
+
+
+def test_referenced_columns_binary_union() raises:
+    # col(a) + col(b) reads both, in encounter order
+    var e = Add(col("a", int64), col("b", int64))
+    _assert_columns(e.referenced_columns(), ["a", "b"])
+
+
+def test_referenced_columns_nested_dedup() raises:
+    # (col(a) + lit(1)) > col(b) — a literal contributes nothing, a and b once each
+    var e = Gt(Add(col("a", int64), lit(1, int64)), col("b", int64))
+    _assert_columns(e.referenced_columns(), ["a", "b"])
+
+
+def test_referenced_columns_repeated_column_deduped() raises:
+    # col(a) + col(a) collapses to a single "a" (order-preserving dedup)
+    var e = Add(col("a", int64), col("a", int64))
+    _assert_columns(e.referenced_columns(), ["a"])
+
+
+def test_referenced_columns_reduction() raises:
+    # a reduction reads its operand's columns; sum(a + b) -> [a, b]
+    var e = Sum(Add(col("a", int64), col("b", int64)))
+    _assert_columns(e.referenced_columns(), ["a", "b"])
+
+
+def test_referenced_columns_via_anyvalue_box() raises:
+    # the erased box threads referenced_columns through the trampoline
+    var boxed: AnyValue = Add(col("a", int64), col("b", int64))
+    _assert_columns(boxed.referenced_columns(), ["a", "b"])
+
+
+def test_is_deterministic_default_true() raises:
+    # every current node is deterministic — on a node and through the box
+    assert_true(Add(col("a", int64), col("b", int64)).is_deterministic())
+    assert_true(lit(1, int64).is_deterministic())
+    var boxed: AnyValue = col("a", int64)
+    assert_true(boxed.is_deterministic())
 
 
 def main() raises:

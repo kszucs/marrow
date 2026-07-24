@@ -156,7 +156,8 @@ comptime Datum = Variant[AnyScalar, AnyArray]
 
 
 def into_array(d: Datum, n: Int) raises -> AnyArray:
-    """Force `d` to an array of length `n` — broadcasting a scalar (lazy until here)."""
+    """Force `d` to an array of length `n` — broadcasting a scalar (lazy until here).
+    """
     if d.isa[AnyScalar]():
         return d[AnyScalar].repeat(n)
     return d[AnyArray].copy()
@@ -221,6 +222,22 @@ comptime promote[L: NumericType, R: NumericType] = L if (
 
 
 # ---------------------------------------------------------------------------
+# Plan analysis — order-preserving dedup union of column-name lists, so a
+# composite node can fold its children's `referenced_columns()` without repeats.
+# ---------------------------------------------------------------------------
+def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
+    for i in range(len(names)):
+        var seen = False
+        for j in range(len(acc)):
+            if acc[j] == names[i]:
+                seen = True
+                break
+        if not seen:
+            acc.append(names[i].copy())
+    return acc^
+
+
+# ---------------------------------------------------------------------------
 # Value — every node. `execute` is abstract; `prepare` defaults to a no-op (only
 # composites recurse and breakers prepare).
 # ---------------------------------------------------------------------------
@@ -234,12 +251,14 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """Produce this node's result `Datum` — the family driver: a numeric `Buffer`,
         a bool `Bitmap`, a string builder, or (for a leaf like `ListColumn`) just its
-        column. Abstract; a breaker never runs it (the `else` below elides it)."""
+        column. Abstract; a breaker never runs it (the `else` below elides it).
+        """
         ...
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         """The one dispatch, shared by every family: a breaker `prepare`s its stage
-        and reads the slot straight back; everything else `materialize`s the result."""
+        and reads the slot straight back; everything else `materialize`s the result.
+        """
         comptime if Self.IsBreaker:
             var i = ctx.size()
             self.prepare(batch, ctx)
@@ -261,8 +280,24 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
 
     def name(self) -> String:
         """Best-effort output name — a column returns its name; most nodes are
-        anonymous (`""`). Used by the relational engine for output schema fields."""
+        anonymous (`""`). Used by the relational engine for output schema fields.
+        """
         return String()
+
+    # --- plan analysis (projection / predicate pushdown) --------------------
+    def referenced_columns(self) -> List[String]:
+        """The column names this node reads. A column-ref returns its own name; a
+        literal returns `[]`; a composite returns the order-preserving deduped
+        union of its children. Abstract — every node fixes it concretely so an
+        optimizer can push projections/predicates through the fused subtree."""
+        ...
+
+    def is_deterministic(self) -> Bool:
+        """Whether the node yields the same result for the same input on every
+        evaluation. `True` for every node today; a future `now()`/`random()`
+        overrides to `False` so an optimizer knows not to reorder or cache it.
+        """
+        return True
 
     # --- fluent surface available in every family (reads only validity) ------
     def isnull(self) -> IsNull[Self]:
@@ -281,9 +316,9 @@ trait NumericValue(Value):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         ...
 
     # --- fluent surface: arithmetic, comparison, unary, reductions -----------
@@ -416,15 +451,18 @@ struct NumericColumn[T: NumericType](NumericValue):
     comptime OutShape = 1
     var _name: String
 
+    def referenced_columns(self) -> List[String]:
+        return [self._name.copy()]
+
     def __init__(out self, var name: String):
         self._name = name^
 
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         return (
             batch.columns[batch.schema.get_field_index(self._name)]
             .as_primitive[Self.T]()
@@ -448,12 +486,15 @@ struct NumericLiteral[T: NumericType](NumericValue):
     comptime OutShape = 0
     var _value: Scalar[Self.OutType.native]
 
+    def referenced_columns(self) -> List[String]:
+        return List[String]()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         return SIMD[Self.OutType.native, W](self._value)
 
 
@@ -463,21 +504,31 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 ):
     """Fused arithmetic over two operands, widening to the wider dtype. There is no
     "materialized" counterpart: a breaker operand is itself a fused leaf (it reads
-    its stage result from `ctx`), so it composes here like any column/literal."""
+    its stage result from `ctx`), so it composes here like any column/literal.
+    """
 
     comptime OutType = promote[Self.L.OutType, Self.R.OutType]
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
-        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
-        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.OutType.native
+        ]()
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.OutType.native
+        ]()
         return Self.K.core[Self.OutType.native, W](a, b)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -493,12 +544,15 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     comptime OutShape = Self.A.OutShape
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         return Self.K.core[Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
@@ -516,15 +570,18 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
     comptime OutShape = Self.A.OutShape
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
-        return NumericCastKernel.core[Self.A.OutType.native, Self.OutType.native, W](
-            self.a.vectorwise[W](batch, ctx, slot, idx)
-        )
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        return NumericCastKernel.core[
+            Self.A.OutType.native, Self.OutType.native, W
+        ](self.a.vectorwise[W](batch, ctx, slot, idx))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -542,12 +599,17 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
     var l: Self.L
     var r: Self.R
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[
             Self.OutType.native
         ]()
@@ -569,14 +631,19 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
     comptime OutShape = Self.A.OutShape
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         return Self.K.core[Self.OutType.native, W](
-            self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
+            self.a.vectorwise[W](batch, ctx, slot, idx).cast[
+                Self.OutType.native
+            ]()
         )
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -611,9 +678,9 @@ trait BoolValue(Value):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         ...
 
     # --- fluent surface: boolean logic + reductions --------------------------
@@ -668,14 +735,21 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
     var l: Self.L
     var r: Self.R
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var a = self.l.vectorwise[W](batch, ctx, slot, idx)
-        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
+            Self.NativeType
+        ]()
         return Self.K.core[Self.NativeType, W](a, b)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -711,12 +785,17 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
     var l: Self.L
     var r: Self.R
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var a = self.l.vectorwise[W](batch, ctx, slot, idx)
         var b = self.r.vectorwise[W](batch, ctx, slot, idx)
         return Self.K.core[W](a, b)
@@ -735,12 +814,15 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
     comptime NativeType = Self.A.NativeType
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         return Self.K.core[W](self.a.vectorwise[W](batch, ctx, slot, idx))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -761,7 +843,8 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
     KNOWN LIMITATION: fusing this splat directly under bool logic *beside a wider
     numeric load* (e.g. `all(mask) & (int64_col > 0)`) currently trips a Mojo
     backend codegen crash ("failed to run the pass manager"). Standalone `any`/`all`
-    and same-width compositions are fine. Follow-up when the backend is fixed."""
+    and same-width compositions are fine. Follow-up when the backend is fixed.
+    """
 
     comptime OutType = BoolType
     comptime OutShape = 0
@@ -769,20 +852,24 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
     comptime NativeType = DType.int32
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        var arr = into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
+        var arr = (
+            into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
+        )
         ctx.append(Self.K.reduce(arr))
 
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var d = ctx.get(slot)
         slot += 1
         return SIMD[DType.bool, W](d[AnyScalar].as_bool().value())
-
 
 
 comptime Any = BoolReduce[AnyKernel, _]
@@ -796,19 +883,23 @@ comptime All = BoolReduce[AllKernel, _]
 # ---------------------------------------------------------------------------
 @fieldwise_init
 struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
-    """Fused `is_nan`/`is_inf` — a per-lane SIMD predicate over a numeric operand."""
+    """Fused `is_nan`/`is_inf` — a per-lane SIMD predicate over a numeric operand.
+    """
 
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         return Self.K.core[Self.NativeType, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
@@ -828,6 +919,9 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     comptime NativeType = DType.int32  # lane width for the bit-pack driver
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(Self.K.apply(arr).to_any())
@@ -835,13 +929,12 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var s = slot
         slot += 1
         return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
-
 
 
 comptime IsNan = NumericPredicate[IsNanKernel, _]
@@ -866,12 +959,15 @@ struct NumToBool[A: NumericValue](BoolValue):
     comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         return NumToBoolKernel.core[Self.NativeType, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
@@ -888,12 +984,15 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
     comptime OutShape = Self.A.OutShape
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         return BoolToNumKernel.core[Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
@@ -912,8 +1011,15 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        var s = into_array(self.a.execute(batch), batch.num_rows()).as_string().copy()
+        var s = (
+            into_array(self.a.execute(batch), batch.num_rows())
+            .as_string()
+            .copy()
+        )
         ctx.append(
             StringToNumKernel.apply[StringType, Self.To, False](s).to_any()
         )
@@ -921,13 +1027,12 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var i = slot
         slot += 1
         return ctx.get[PrimitiveArray[Self.To]](i).values().load[W](idx)
-
 
 
 @fieldwise_init
@@ -940,22 +1045,26 @@ struct StringToBool[A: StringValue](BoolValue):
     comptime NativeType = DType.int32
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        var s = into_array(self.a.execute(batch), batch.num_rows()).as_string().copy()
-        ctx.append(
-            StringToBoolKernel.apply[StringType, False](s).to_any()
+        var s = (
+            into_array(self.a.execute(batch), batch.num_rows())
+            .as_string()
+            .copy()
         )
+        ctx.append(StringToBoolKernel.apply[StringType, False](s).to_any())
 
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var i = slot
         slot += 1
         return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
-
 
 
 # ---------------------------------------------------------------------------
@@ -1019,9 +1128,7 @@ trait StringValue(Value):
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
-            return StringScalar(
-                self.elementwise(batch, ctx, slot, 0)
-            ).to_any()
+            return StringScalar(self.elementwise(batch, ctx, slot, 0)).to_any()
         else:
             var n = batch.num_rows()
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
@@ -1037,6 +1144,9 @@ struct StringColumn[T: StringLikeType](StringValue):
     comptime OutType = Self.T
     comptime OutShape = 1
     var _name: String
+
+    def referenced_columns(self) -> List[String]:
+        return [self._name.copy()]
 
     def __init__(out self, var name: String):
         self._name = name^
@@ -1066,6 +1176,9 @@ struct StringLiteral[T: StringLikeType](StringValue):
     comptime OutShape = 0
     var _value: String
 
+    def referenced_columns(self) -> List[String]:
+        return List[String]()
+
     @always_inline
     def elementwise(
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
@@ -1082,6 +1195,11 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
     var l: Self.L
     var r: Self.R
+
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
 
     @always_inline
     def elementwise(
@@ -1106,6 +1224,9 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
     var a: Self.A
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
 
     @always_inline
     def elementwise(
@@ -1142,6 +1263,9 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(NumToStringKernel.dispatch(arr, Self.To()))
@@ -1157,7 +1281,6 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
         )
 
 
-
 @fieldwise_init
 struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
     """`True`/`False` -> string."""
@@ -1166,6 +1289,9 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
@@ -1182,7 +1308,6 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
         )
 
 
-
 @fieldwise_init
 struct StringToString[To: StringLikeType, A: StringValue](StringValue):
     """Cast between string containers (`string` <-> `large_string`)."""
@@ -1191,6 +1316,9 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
     comptime OutShape = 1
     comptime IsBreaker = True
     var a: Self.A
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
@@ -1205,7 +1333,6 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
         return String(
             ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
         )
-
 
 
 # ---------------------------------------------------------------------------
@@ -1225,6 +1352,11 @@ struct StringPredicate[
     var l: Self.L
     var r: Self.R
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
@@ -1234,13 +1366,12 @@ struct StringPredicate[
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var s = slot
         slot += 1
         return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
-
 
 
 comptime StartsWith = StringPredicate[StartsWithKernel, _, _]
@@ -1269,6 +1400,9 @@ struct StringLength[A: StringValue](NumericValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var s = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(LengthKernel.dispatch(s))
@@ -1276,13 +1410,12 @@ struct StringLength[A: StringValue](NumericValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var s = slot
         slot += 1
         return ctx.get[Int32Array](s).values().load[W](idx)
-
 
 
 # ---------------------------------------------------------------------------
@@ -1295,12 +1428,16 @@ struct StringLength[A: StringValue](NumericValue):
 @fieldwise_init
 struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     """Whole-array reduction → a scalar. Output dtype is the kernel's accumulator
-    algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it)."""
+    algebra `K.AccType[A.OutType]` (sum widens, mean → float64, min/max keep it).
+    """
 
     comptime OutType = Self.K.AccType[Self.A.OutType]
     comptime OutShape = 0
     comptime IsBreaker = True
     var a: Self.A
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arg = into_array(self.a.execute(batch), batch.num_rows())
@@ -1309,15 +1446,14 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var d = ctx.get(slot)
         slot += 1
         return SIMD[Self.OutType.native, W](
             d[AnyScalar].as_primitive[Self.OutType]().value()
         )
-
 
 
 comptime Sum = Reduction[SumKernel, _]
@@ -1376,6 +1512,9 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     var a: Self.A
     var spec: WindowSpec
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var v = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(Self.Func.evaluate_all(v))
@@ -1383,13 +1522,12 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var s = slot
         slot += 1
         return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
-
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
@@ -1419,6 +1557,9 @@ struct ListColumn[T: ListLikeType](ListValue):
     comptime OutShape = 1
     var _name: String
 
+    def referenced_columns(self) -> List[String]:
+        return [self._name.copy()]
+
     def __init__(out self, var name: String):
         self._name = name^
 
@@ -1438,6 +1579,9 @@ struct ListLength[A: ListValue](NumericValue):
     comptime IsBreaker = True
     var a: Self.A
 
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(ArrayLengthKernel.dispatch(arr))
@@ -1445,13 +1589,12 @@ struct ListLength[A: ListValue](NumericValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.OutType.native, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
         var i = slot
         slot += 1
         return ctx.get[Int32Array](i).values().load[W](idx)
-
 
 
 @fieldwise_init
@@ -1466,6 +1609,11 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
     var a: Self.A
     var elem: Self.E
 
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.a.referenced_columns(), self.elem.referenced_columns()
+        )
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var n = batch.num_rows()
         var la = into_array(self.a.execute(batch), n)
@@ -1475,13 +1623,12 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
     @always_inline
     def vectorwise[
         W: Int
-    ](
-        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[DType.bool, W]:
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
         var i = slot
         slot += 1
         return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
-
 
 
 # ---------------------------------------------------------------------------
@@ -1500,17 +1647,18 @@ struct AnyValue(Copyable, Movable, Writable):
         already an `AnyArray`, and `prune` carries the *real* min/max rule.
 
     This is the same dual-box design as `values.AnyValue`, so the relational plan
-    (built from untyped `DynValue`) runs unchanged, while typed subtrees fuse."""
+    (built from untyped `DynValue`) runs unchanged, while typed subtrees fuse.
+    """
 
     var _boxed: ArcPointer[NoneType]
-    var _execute: def (
-        ArcPointer[NoneType], RecordBatch
-    ) thin raises -> AnyArray
-    var _prune_fn: def (
+    var _execute: def(ArcPointer[NoneType], RecordBatch) thin raises -> AnyArray
+    var _prune_fn: def(
         ArcPointer[NoneType], PruneStats
     ) thin raises -> PruneBound
-    var _name_fn: def (ArcPointer[NoneType]) thin -> String
-    var _write_fn: def (ArcPointer[NoneType]) thin -> String
+    var _name_fn: def(ArcPointer[NoneType]) thin -> String
+    var _write_fn: def(ArcPointer[NoneType]) thin -> String
+    var _referenced_columns_fn: def(ArcPointer[NoneType]) thin -> List[String]
+    var _is_deterministic_fn: def(ArcPointer[NoneType]) thin -> Bool
 
     # --- comptime fused `Value` box ----------------------------------------
     @staticmethod
@@ -1538,6 +1686,16 @@ struct AnyValue(Copyable, Movable, Writable):
         # never the one printed in a plan.
         return rebind[ArcPointer[V]](ptr)[].name()
 
+    @staticmethod
+    def _referenced_columns_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType]) -> List[String]:
+        return rebind[ArcPointer[V]](ptr)[].referenced_columns()
+
+    @staticmethod
+    def _is_deterministic_tramp[V: Value](ptr: ArcPointer[NoneType]) -> Bool:
+        return rebind[ArcPointer[V]](ptr)[].is_deterministic()
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
@@ -1546,6 +1704,8 @@ struct AnyValue(Copyable, Movable, Writable):
         self._prune_fn = Self._prune_tramp[V]
         self._name_fn = Self._name_tramp[V]
         self._write_fn = Self._write_tramp[V]
+        self._referenced_columns_fn = Self._referenced_columns_tramp[V]
+        self._is_deterministic_fn = Self._is_deterministic_tramp[V]
 
     # --- runtime `DynValue` box --------------------------------------------
     @staticmethod
@@ -1570,6 +1730,16 @@ struct AnyValue(Copyable, Movable, Writable):
         rebind[ArcPointer[DynValue]](ptr)[].write_to(s)
         return s^
 
+    @staticmethod
+    def _referenced_columns_tramp_dyn(
+        ptr: ArcPointer[NoneType],
+    ) -> List[String]:
+        return rebind[ArcPointer[DynValue]](ptr)[].referenced_columns()
+
+    @staticmethod
+    def _is_deterministic_tramp_dyn(ptr: ArcPointer[NoneType]) -> Bool:
+        return rebind[ArcPointer[DynValue]](ptr)[].is_deterministic()
+
     @implicit
     def __init__(out self, var dyn: DynValue):
         var ptr = ArcPointer[DynValue](dyn^)
@@ -1578,6 +1748,8 @@ struct AnyValue(Copyable, Movable, Writable):
         self._prune_fn = Self._prune_tramp_dyn
         self._name_fn = Self._name_tramp_dyn
         self._write_fn = Self._write_tramp_dyn
+        self._referenced_columns_fn = Self._referenced_columns_tramp_dyn
+        self._is_deterministic_fn = Self._is_deterministic_tramp_dyn
 
     def execute(self, batch: RecordBatch) raises -> AnyArray:
         return self._execute(self._boxed, batch)
@@ -1587,6 +1759,12 @@ struct AnyValue(Copyable, Movable, Writable):
 
     def name(self) -> String:
         return self._name_fn(self._boxed)
+
+    def referenced_columns(self) -> List[String]:
+        return self._referenced_columns_fn(self._boxed)
+
+    def is_deterministic(self) -> Bool:
+        return self._is_deterministic_fn(self._boxed)
 
     def write_to[W: Writer](self, mut writer: W):
         writer.write(self._write_fn(self._boxed))

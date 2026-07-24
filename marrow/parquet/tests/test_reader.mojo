@@ -11,6 +11,7 @@ from std.python import Python, PythonObject
 from std.os import remove
 from marrow.testing import TestSuite
 from marrow.parquet import read_table, ParquetFile
+from marrow.parquet.source import MappedFile
 from marrow.tabular import Table
 
 
@@ -930,6 +931,45 @@ def test_read_float16() raises:
     assert_true(col[1].value() == Float16(-2.0))
     assert_false(col.is_valid(2))  # masked
     assert_true(col[4].value() == Float16(100.0))
+    remove(path)
+
+
+def test_read_from_byte_source() raises:
+    """`ParquetFile` reads through the `ByteSource` seam: constructing it from a
+    `MappedFile` (a `ByteSource`) directly decodes identically to the
+    path-convenience constructor."""
+    var pa = Python.import_module("pyarrow")
+    var pq = Python.import_module("pyarrow.parquet")
+    var tbl = pa.table(
+        Python.dict(
+            i=pa.array(Python.list(1, 2, 3, 4, 5), type=pa.int64()),
+            s=pa.array(
+                Python.list("apple", "banana", "cherry", "date", "elder")
+            ),
+        )
+    )
+    var path = String("/tmp/marrow_rd_byte_source.parquet")
+    pq.write_table(tbl, path, compression="snappy")
+
+    # Build the file from an explicit ByteSource instead of a path.
+    var pf = ParquetFile(MappedFile(path))
+    assert_equal(pf.num_rows(), 5)
+    assert_equal(pf.num_row_groups(), 1)
+
+    var t = pf.read()
+    assert_equal(t.num_rows(), 5)
+    assert_equal(t.num_columns(), 2)
+    var b = t.to_batches()[0].copy()
+
+    var ci = b.columns[0].copy()
+    ref col_i = ci.as_int64()
+    assert_equal(col_i[0].value(), 1)
+    assert_equal(col_i[4].value(), 5)
+
+    var cs = b.columns[1].copy()
+    ref col_s = cs.as_string()
+    assert_equal(String(col_s[0]), "apple")
+    assert_equal(String(col_s[4]), "elder")
     remove(path)
 
 

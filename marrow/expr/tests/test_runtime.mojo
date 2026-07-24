@@ -15,7 +15,10 @@ from marrow.kernels.arithmetic import (
     SubKernel,
     AbsKernel,
     NegKernel,
+    ModKernel,
+    FloordivKernel,
 )
+from marrow.kernels.boolean import XorKernel
 from marrow.kernels.string import LengthKernel
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
@@ -45,6 +48,10 @@ from marrow.expr import (
     LENGTH,
     CAST,
 )
+
+# The op tags added in this task are not re-exported from ``marrow.expr`` yet
+# (that's a sibling packaging task), so import them from the module directly.
+from marrow.expr.dynamic import MOD, FLOORDIV, XOR, NOT_NULL
 
 
 def _exec(expr: DynValue, batch: RecordBatch) raises -> Int64Array:
@@ -348,6 +355,107 @@ def test_dyn_cast_dtype_and_kind() raises:
     var expr = col(0).cast(float64)
     assert_equal(expr.kind(), CAST)
     assert_true(expr.dtype().value() == float64)
+
+
+# ---------------------------------------------------------------------------
+# New op tags: mod / floordiv / xor / not_null
+# ---------------------------------------------------------------------------
+
+
+def test_mod_expr() raises:
+    """Operator % matches kernels.mod."""
+    var a = array([10, 21, 33, 47, 5], int64)
+    var b = array([3, 5, 4, 10, 5], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec(col(0) % col(1), batch)
+    assert_true(result == ModKernel.apply[Int64Type](a, b))
+
+
+def test_floordiv_expr() raises:
+    """Operator // matches kernels.floordiv."""
+    var a = array([10, 21, 33, 47, 5], int64)
+    var b = array([3, 5, 4, 10, 5], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec(col(0) // col(1), batch)
+    assert_true(result == FloordivKernel.apply[Int64Type](a, b))
+
+
+def test_xor_pred() raises:
+    """Operator ^ matches kernels.boolean.xor over two bool masks."""
+    var a = array([True, True, False, False])
+    var b = array([True, False, True, False])
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec_pred(col(0) ^ col(1), batch)
+    assert_true(result == XorKernel.apply(a, b))
+
+
+def test_not_null_pred() raises:
+    """``not_null()`` is True for valid elements (all-valid input -> all True).
+    """
+    var a = array([1, 2, 3], int64)
+    var result = _exec_pred(col(0).not_null(), record_batch([a^], names=["c0"]))
+    assert_true(result == array([True, True, True]))
+
+
+def test_kind_mod() raises:
+    """``%`` node reports MOD kind and prints as mod(...)."""
+    var expr = col(0) % col(1)
+    assert_equal(expr.kind(), MOD)
+    assert_equal(String(expr), "mod(input(0), input(1))")
+
+
+def test_kind_floordiv() raises:
+    var expr = col(0) // col(1)
+    assert_equal(expr.kind(), FLOORDIV)
+    assert_equal(String(expr), "floordiv(input(0), input(1))")
+
+
+def test_kind_xor() raises:
+    var expr = col(0) ^ col(1)
+    assert_equal(expr.kind(), XOR)
+    assert_equal(String(expr), "xor(input(0), input(1))")
+
+
+def test_kind_not_null() raises:
+    var expr = col(0).not_null()
+    assert_equal(expr.kind(), NOT_NULL)
+    assert_equal(String(expr), "not_null(input(0))")
+
+
+# ---------------------------------------------------------------------------
+# Plan-analysis metadata
+# ---------------------------------------------------------------------------
+
+
+def test_referenced_columns_named() raises:
+    """Named LOAD leaves are collected in first-seen order, deduped."""
+    var expr = (col("a") + col("b")) * col("a")
+    var cols = expr.referenced_columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "a")
+    assert_equal(cols[1], "b")
+
+
+def test_referenced_columns_positional() raises:
+    """Positional LOAD leaves render their index as a string, deduped."""
+    var expr = (col(0) + col(2)) - col(0)
+    var cols = expr.referenced_columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "0")
+    assert_equal(cols[1], "2")
+
+
+def test_referenced_columns_literal_only() raises:
+    """An expression over only literals references no columns."""
+    var expr = lit[Int64Type](1) + lit[Int64Type](2)
+    assert_equal(len(expr.referenced_columns()), 0)
+
+
+def test_is_deterministic() raises:
+    """All currently supported tags are deterministic."""
+    assert_true((col(0) % col(1)).is_deterministic())
+    assert_true(if_else(col(0) > col(1), col(0), col(1)).is_deterministic())
+    assert_true(col(0).cast(float64).is_deterministic())
 
 
 def main() raises:

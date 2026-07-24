@@ -10,8 +10,6 @@ this module is the entire deserialization layer; the metadata / statistics /
 page-index readers reuse the same footer decode without touching column data.
 """
 
-from std.ffi import external_call
-from std.io.file import FileHandle
 from std.algorithm.functional import sync_parallelize
 from std.sys import size_of
 from std.sys.info import num_physical_cores
@@ -34,6 +32,7 @@ from .utils import CompressionLibs
 from .codecs import Encoding, Rle, Plain, Dictionary, Compression
 from ..utils import LittleEndian, Crc32
 from .bloom import SplitBlockBloomFilter, BloomFilterHeader
+from .source import ByteSource, MappedFile
 from .schema import SchemaMapping, Projection, DecodedLeaf, LeafColumn
 from .statistics import Statistics
 from .format import (
@@ -46,45 +45,6 @@ from .format import (
     PageType,
     PhysicalType,
 )
-
-
-# ---------------------------------------------------------------------------
-# Memory-mapped file — read zero-copy instead of copying the file in
-# ---------------------------------------------------------------------------
-
-
-struct MappedFile(Movable):
-    """A read-only mmap of the whole file, unmapped when the value drops.
-    Decoded values are copied into owned Arrow buffers, so the map only needs to
-    outlive the decode."""
-
-    var ptr: UnsafePointer[UInt8, ImmUntrackedOrigin]
-    var size: Int
-
-    def __init__(out self, path: String) raises:
-        # Mojo's file open (the libc variadic `open` cannot be external_call'd in
-        # an archive build); mmap/lseek are plain syscalls and are fine.
-        var f = FileHandle(path, "r")
-        var size = Int(
-            external_call["lseek", Int64](
-                f.handle, Int64(0), Int(2)
-            )  # SEEK_END
-        )
-        # PROT_READ=1, MAP_PRIVATE=2; the mapping outlives the fd.
-        var ptr = external_call[
-            "mmap", UnsafePointer[UInt8, ImmUntrackedOrigin]
-        ](UInt(0), size, Int32(1), Int32(2), Int32(f.handle), Int64(0))
-        _ = f^  # close the fd; mmap stays valid
-        if Int(ptr) == 0 or Int(ptr) == -1:
-            raise Error("parquet: mmap failed for " + path)
-        self.ptr = ptr
-        self.size = size
-
-    def span(self) -> Span[UInt8, ImmUntrackedOrigin]:
-        return Span[UInt8, ImmUntrackedOrigin](ptr=self.ptr, length=self.size)
-
-    def __del__(deinit self):
-        _ = external_call["munmap", Int32](self.ptr, self.size)
 
 
 # ---------------------------------------------------------------------------
@@ -1736,22 +1696,37 @@ struct ColumnReader[o: Origin[mut=False]](Movable):
 comptime _PARALLEL_MIN_ROWS = 4096
 
 
-struct ParquetFile(Movable):
+struct ParquetFile[S: ByteSource = MappedFile](Movable):
     """A Parquet file opened for reading — mirrors PyArrow's `ParquetFile`.
 
-    Owns the read-only mmap, the footer metadata, and the Parquet->Arrow schema
-    mapping, all read once at construction. `read()` decodes columns into a
-    `Table`; the mmap is unmapped when the `ParquetFile` drops. Decoded values
-    are copied into owned Arrow buffers, so a returned `Table` outlives the
-    file."""
+    Owns a `ByteSource` (the file's bytes), the footer metadata, and the
+    Parquet->Arrow schema mapping, all read once at construction. `read()`
+    decodes columns into a `Table`; the source is released when the
+    `ParquetFile` drops. Decoded values are copied into owned Arrow buffers, so
+    a returned `Table` outlives the file.
 
-    var _mapped: MappedFile
+    The source defaults to a local `MappedFile` — `ParquetFile(path)` opens a
+    memory map — but any `ByteSource` (streaming, remote object store, …) can be
+    passed instead; the whole decode path reads only through `S.read_at`."""
+
+    var _source: Self.S
     var _meta: FileMetaData
     var _mapping: SchemaMapping
 
-    def __init__(out self, path: String) raises:
-        self._mapped = MappedFile(path)
-        self._meta = FileMetaData.read_footer(self._mapped.span())
+    def __init__(out self: ParquetFile[MappedFile], path: String) raises:
+        # Convenience: open the local file as a memory map (S == MappedFile).
+        self._source = MappedFile(path)
+        self._meta = FileMetaData.read_footer(
+            self._source.read_at(0, self._source.size())
+        )
+        self._mapping = SchemaMapping.from_parquet(self._meta)
+
+    def __init__(out self, var source: Self.S) raises:
+        # Read from any byte source; everything downstream goes through it.
+        self._source = source^
+        self._meta = FileMetaData.read_footer(
+            self._source.read_at(0, self._source.size())
+        )
         self._mapping = SchemaMapping.from_parquet(self._meta)
 
     def metadata(self) -> FileMetaData:
@@ -1791,7 +1766,7 @@ struct ParquetFile(Movable):
         workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
         and reused size cell are not shareable across threads); the mmap and
         metadata are read-only."""
-        var data = self._mapped.span()
+        var data = self._source.read_at(0, self._source.size())
 
         # the read plan: which column chunks to decode and how to reassemble them
         var plan = self._mapping.project(
@@ -1906,7 +1881,7 @@ struct ParquetFile(Movable):
         """The raw page index (OffsetIndex + ColumnIndex) for every (row group,
         leaf column), indexed `result[row_group][leaf]`. A chunk without a page
         index yields empty optionals."""
-        var data = self._mapped.span()
+        var data = self._source.read_at(0, self._source.size())
         var out = List[List[PageIndex]]()
         for ref rg in self._meta.row_groups:
             var row = List[PageIndex]()
@@ -1933,7 +1908,7 @@ struct ParquetFile(Movable):
         ref cc = self._meta.row_groups[row_group].columns[column]
         if cc.meta_data.bloom_filter_offset < 0:
             return None
-        var data = self._mapped.span()
+        var data = self._source.read_at(0, self._source.size())
         var r = ThriftCompactReader(data, cc.meta_data.bloom_filter_offset)
         var hdr = BloomFilterHeader.read(r)
         return SplitBlockBloomFilter.from_bytes(
@@ -1945,7 +1920,7 @@ struct ParquetFile(Movable):
         index — indexed `result[rg][leaf][page]`. A column with no page index
         yields an empty page list. Predicate pushdown prunes pages with these.
         """
-        var data = self._mapped.span()
+        var data = self._source.read_at(0, self._source.size())
         var out = List[List[List[PageBounds]]]()
         for ref rg in self._meta.row_groups:
             var per_col = List[List[PageBounds]]()

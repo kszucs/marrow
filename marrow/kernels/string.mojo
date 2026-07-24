@@ -46,9 +46,8 @@ struct LengthKernel(Kernel):
     pyarrow's `utf8_length`).
 
     Vectorized: loads `W` contiguous offsets at `i` and at `i+1` and subtracts,
-    so each SIMD step computes `W` lengths at once. Null positions currently
-    yield length 0 with an all-valid result bitmap (matches the prior
-    `string_lengths` behaviour); full null propagation is a follow-up.
+    so each SIMD step computes `W` lengths at once. Null input elements yield a
+    null output element (the input's validity bitmap is propagated unchanged).
     """
 
     comptime name = "length"
@@ -86,11 +85,17 @@ struct LengthKernel(Kernel):
             fill[W, rank=1](IndexList[1](i))
 
         vectorize[width](n, lane)
+
+        # Propagate the input's validity: a null string yields a null length.
+        var vbm: Optional[Bitmap[mut=False]] = None
+        if array.bitmap:
+            var v = array.bitmap.value().view(array.offset, n)
+            vbm = v.union(v).to_immutable()
         return Int32Array(
             length=n,
-            nulls=0,
+            nulls=array.null_count(),
             offset=0,
-            bitmap=None,
+            bitmap=vbm^,
             buffer=out.to_immutable(),
         )
 
