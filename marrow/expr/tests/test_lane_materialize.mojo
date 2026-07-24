@@ -22,7 +22,7 @@ def _batch() raises -> RecordBatch:
 
 def test_mean_centering_via_single_binary() raises:
     # avg([1,2,3,4]) = 2.5 ; x - avg(x) = [-1.5, -0.5, 0.5, 1.5]  (int - float -> float)
-    var cv = (Sub(col(0, int64), Mean(col(0, int64)))).execute(_batch())
+    var cv = (Sub(col("a", int64), Mean(col("a", int64)))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([-1.5, -0.5, 0.5, 1.5], float64).to_any()
     )

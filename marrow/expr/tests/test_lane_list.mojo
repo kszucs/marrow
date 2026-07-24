@@ -37,19 +37,19 @@ def _list_batch() raises -> RecordBatch:
 
 def test_list_length() raises:
     # length([[10,20,30],[40,50]]) = [3, 2]
-    var cv = (ListLength(ListColumn[ListType](0))).execute(_list_batch())
+    var cv = (ListLength(ListColumn[ListType]("l"))).execute(_list_batch())
     assert_true(into_array(cv, 2) == array([3, 2], int32).to_any())
 
 
 def test_list_length_fuses_above() raises:
     # length(l) + 1 = [4, 3] — the breaker feeds the fused numeric lane
-    var cv = (Add(ListLength(ListColumn[ListType](0)), lit(1, int32))).execute(_list_batch())
+    var cv = (Add(ListLength(ListColumn[ListType]("l")), lit(1, int32))).execute(_list_batch())
     assert_true(into_array(cv, 2) == array([4, 3], int32).to_any())
 
 
 def test_list_contains() raises:
     # 20 in [10,20,30] = T ; 20 in [40,50] = F  ->  [T, F]
-    var cv = (ListContains(ListColumn[ListType](0), lit(20, int64))).execute(_list_batch())
+    var cv = (ListContains(ListColumn[ListType]("l"), lit(20, int64))).execute(_list_batch())
     assert_true(into_array(cv, 2) == array([True, False]).to_any())
 
 

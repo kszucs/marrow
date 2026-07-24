@@ -259,6 +259,11 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         override to prepare their stage and append it."""
         pass
 
+    def name(self) -> String:
+        """Best-effort output name — a column returns its name; most nodes are
+        anonymous (`""`). Used by the relational engine for output schema fields."""
+        return String()
+
     # --- fluent surface available in every family (reads only validity) ------
     def isnull(self) -> IsNull[Self]:
         return IsNull(self.copy())
@@ -403,13 +408,17 @@ trait NumericValue(Value):
             return arr^.to_any()
 
 
-@fieldwise_init
 struct NumericColumn[T: NumericType](NumericValue):
-    """A numeric column, read from the batch by position."""
+    """A numeric column, resolved by name against `batch.schema` each pass.
+    PERF: `get_field_index` runs per lane (matches values.mojo); resolve-once is a
+    follow-up."""
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    var col: Int
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
 
     @always_inline
     def vectorwise[
@@ -418,8 +427,18 @@ struct NumericColumn[T: NumericType](NumericValue):
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> SIMD[Self.OutType.native, W]:
         return (
-            batch.columns[self.col].as_primitive[Self.T]().values().load[W](idx)
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_primitive[Self.T]()
+            .values()
+            .load[W](idx)
         )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        # a leaf column returns as-is (keeps validity; the fused loop drops nulls)
+        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def name(self) -> String:
+        return self._name.copy()
 
 
 @fieldwise_init
@@ -1013,19 +1032,31 @@ trait StringValue(Value):
             return builder.finish().to_any()
 
 
-@fieldwise_init
 struct StringColumn[T: StringLikeType](StringValue):
-    """A string column, read from the batch by position."""
+    """A string column, resolved by name against `batch.schema` each pass."""
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    var col: Int
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
 
     @always_inline
     def elementwise(
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> String:
-        return String(batch.columns[self.col].as_string().unsafe_get(UInt(idx)))
+        return String(
+            batch.columns[batch.schema.get_field_index(self._name)]
+            .as_string()
+            .unsafe_get(UInt(idx))
+        )
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def name(self) -> String:
+        return self._name.copy()
 
 
 @fieldwise_init
@@ -1381,17 +1412,22 @@ trait ListValue(Value):
         return ListContains(self.copy(), elem.copy())
 
 
-@fieldwise_init
 struct ListColumn[T: ListLikeType](ListValue):
-    """A list column, read from the batch by position. No fused lane — its
-    `materialize` just hands back the column."""
+    """A list column, resolved by name. No fused lane — `materialize` hands back
+    the column."""
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    var col: Int
+    var _name: String
+
+    def __init__(out self, var name: String):
+        self._name = name^
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return batch.columns[self.col].copy()
+        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def name(self) -> String:
+        return self._name.copy()
 
 
 @fieldwise_init
@@ -1493,7 +1529,7 @@ struct AnyValue(Copyable, Movable, Writable):
 
     @staticmethod
     def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
-        return String()  # fused nodes are anonymous
+        return rebind[ArcPointer[V]](ptr)[].name()
 
     @implicit
     def __init__[V: Value](out self, value: V):
@@ -1544,19 +1580,24 @@ struct AnyValue(Copyable, Movable, Writable):
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
-def col[T: NumericType](i: Int, dtype: T) -> NumericColumn[T]:
-    """Reference a numeric column by position — `col(0, int64)`."""
-    return NumericColumn[T](i)
+def col[T: NumericType](var name: String, dtype: T) -> NumericColumn[T]:
+    """Reference a numeric column by name — `col("a", int64)`."""
+    return NumericColumn[T](name^)
+
+
+def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
+    """Reference a string column by name — `col("s", string)`."""
+    return StringColumn[T](name^)
+
+
+def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
+    """Reference a list column by name — `col("l", list_(int64))`."""
+    return ListColumn[T](name^)
 
 
 def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
     """A numeric constant — `lit(10, int64)`."""
     return NumericLiteral[T](Scalar[T.native](value))
-
-
-def scol[T: StringLikeType](i: Int, dtype: T) -> StringColumn[T]:
-    """Reference a string column by position — `scol(0, string)`."""
-    return StringColumn[T](i)
 
 
 def slit(value: String) -> StringLiteral[StringType]:
