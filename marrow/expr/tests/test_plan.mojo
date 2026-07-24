@@ -18,9 +18,12 @@ from marrow.expr.relations import (
     AnyRelation,
     Filter,
     Project,
+    Sort,
+    Limit,
     InMemoryTable,
     ParquetScan,
 )
+from marrow.expr.dynamic import col as dyn_col
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +249,85 @@ def test_parquet_scan_downcast() raises:
         )
     )
     assert_equal(node.downcast[ParquetScan]()[].path, "/tmp/x.parquet")
+
+
+# ---------------------------------------------------------------------------
+# Sort / Limit — structural
+# ---------------------------------------------------------------------------
+
+
+def test_sort_schema_passthrough() raises:
+    """Sort leaves the schema unchanged."""
+    var src = AnyRelation(
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
+    )
+    var plan = src.sort(keys=[dyn_col("x")], ascending=[True])
+    var s = plan.schema()
+    assert_equal(len(s), 2)
+    assert_equal(s.fields[0].name, "x")
+    assert_equal(s.fields[1].name, "y")
+    assert_equal(plan.kind(), 2)  # RELATION_SORT
+
+
+def test_sort_write_to() raises:
+    var src = AnyRelation(
+        ParquetScan(path="t", schema=schema([field("x", int64)]))
+    )
+    var plan = src.sort(keys=[dyn_col("x")], ascending=[True])
+    assert_true(String(plan).find("Sort(keys=[") != -1)
+
+
+def test_limit_write_to() raises:
+    var src = AnyRelation(
+        ParquetScan(path="t", schema=schema([field("x", int64)]))
+    )
+    var plan = src.limit(5, offset=2)
+    assert_equal(String(plan), "Limit(length=5, offset=2)")
+
+
+def test_limit_schema_passthrough() raises:
+    var src = AnyRelation(
+        ParquetScan(
+            path="t", schema=schema([field("x", int64), field("y", float64)])
+        )
+    )
+    var plan = src.limit(5)
+    assert_equal(len(plan.schema()), 2)
+
+
+def test_sort_limit_folds_to_topk() raises:
+    """.sort().limit(k) with offset=0 folds into a single Sort(limit=k) node."""
+    var src = AnyRelation(
+        ParquetScan(path="t", schema=schema([field("x", int64)]))
+    )
+    var plan = src.sort(keys=[dyn_col("x")], ascending=[True]).limit(3)
+    assert_equal(plan.kind(), 2)  # still a Sort, not a Limit
+    assert_true(plan.downcast[Sort]()[].limit.__bool__())
+
+
+def test_sort_limit_offset_does_not_fold() raises:
+    """A non-zero offset keeps a distinct Limit node above the Sort."""
+    var src = AnyRelation(
+        ParquetScan(path="t", schema=schema([field("x", int64)]))
+    )
+    var plan = src.sort(keys=[dyn_col("x")], ascending=[True]).limit(
+        3, offset=1
+    )
+    assert_equal(plan.kind(), 0)  # RELATION_GENERIC (Limit)
+
+
+def test_computed_project_schema() raises:
+    """.project() infers each computed column's output dtype into the schema."""
+    var src = AnyRelation(
+        ParquetScan(path="t", schema=schema([field("x", int64)]))
+    )
+    var plan = src.project(names=["x2"], values=[dyn_col("x") + dyn_col("x")])
+    var s = plan.schema()
+    assert_equal(len(s), 1)
+    assert_equal(s.fields[0].name, "x2")
+    assert_equal(s.fields[0].dtype, int64)
 
 
 def main() raises:

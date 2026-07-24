@@ -51,6 +51,8 @@ from .execution import (
     ProjectProcessor,
     AggregateProcessor,
     JoinProcessor,
+    SortProcessor,
+    LimitProcessor,
 )
 from ..kernels.join import (
     JOIN_INNER,
@@ -87,6 +89,7 @@ def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
 # `AnyRelation` (e.g. to push a filter into a `ParquetScan`) without a full RTTI.
 comptime RELATION_GENERIC: Int = 0
 comptime RELATION_PARQUET_SCAN: Int = 1
+comptime RELATION_SORT: Int = 2
 
 
 trait Relation(ImplicitlyDeletable, Movable):
@@ -387,6 +390,96 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
             )
         )
 
+    def project(
+        self, names: List[String], values: List[DynValue]
+    ) raises -> AnyRelation:
+        """Project arbitrary named expressions (computed columns).
+
+        Unlike ``select`` (column pass-through), each value is an expression
+        evaluated per morsel — e.g. ``col("x") + lit(1)``, a literal, or a
+        renamed column. Column references resolve by name against the input
+        schema; the output dtype of each column is the expression's static dtype
+        (or the referenced column's dtype for a bare column reference)."""
+        if len(names) != len(values):
+            raise Error("project: len(names) != len(values)")
+
+        var input_schema = self.schema()
+        # Probe each expression's output dtype by evaluating it against a 0-row
+        # batch of the input schema — general for computed columns (``x + 1``,
+        # literals, CASE) where a purely static dtype rule would be incomplete.
+        var probe = RecordBatch.empty(input_schema)
+        var fields = List[Field]()
+        var exprs = List[AnyValue]()
+        for i in range(len(values)):
+            var resolved = values[i].resolve_names(input_schema)
+            var out = resolved.execute(probe)
+            fields.append(Field(names[i], out.dtype()))
+            exprs.append(AnyValue(resolved^))
+        return AnyRelation(
+            Project(
+                input=self,
+                names=names.copy(),
+                values=exprs^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
+    def sort(
+        self,
+        keys: List[DynValue],
+        ascending: List[Bool],
+        nulls_first: Bool = True,
+        stable: Bool = True,
+    ) raises -> AnyRelation:
+        """Sort by one or more key expressions (a pipeline breaker).
+
+        Each key has its own ascending/descending direction; ``nulls_first`` and
+        ``stable`` apply to all keys. Keys resolve by name against the input
+        schema. The output schema is unchanged from the input."""
+        if len(keys) == 0:
+            raise Error("sort: keys must not be empty")
+        if len(keys) != len(ascending):
+            raise Error("sort: len(keys) != len(ascending)")
+
+        var input_schema = self.schema()
+        var key_exprs = List[AnyValue]()
+        for ref k in keys:
+            key_exprs.append(AnyValue(k.resolve_names(input_schema)))
+        return AnyRelation(
+            Sort(
+                input=self,
+                keys=key_exprs^,
+                ascending=ascending.copy(),
+                nulls_first=nulls_first,
+                stable=stable,
+                limit=None,
+                schema=input_schema,
+            )
+        )
+
+    def limit(self, length: Int, offset: Int = 0) raises -> AnyRelation:
+        """Keep at most ``length`` rows after skipping ``offset`` rows.
+
+        Top-K fast path: when this limits a ``Sort`` with no existing limit and
+        ``offset == 0``, the limit is folded into the sort (``Sort(limit=…)``),
+        driving the sort kernel's top-K path instead of a full sort. Otherwise a
+        streaming ``Limit`` operator is layered on top."""
+        if offset == 0 and self.kind() == RELATION_SORT:
+            ref s = self.downcast[Sort]()[]
+            if not s.limit:
+                return AnyRelation(
+                    Sort(
+                        input=s.input.copy(),
+                        keys=s.keys.copy(),
+                        ascending=s.ascending.copy(),
+                        nulls_first=s.nulls_first,
+                        stable=s.stable,
+                        limit=Optional(length),
+                        schema=s.schema(),
+                    )
+                )
+        return AnyRelation(Limit(input=self, offset=offset, length=length))
+
 
 # ---------------------------------------------------------------------------
 # Leaf nodes
@@ -547,9 +640,100 @@ struct Project(Relation):
         writer.write(t"])")
 
 
+struct Limit(Relation):
+    """Row limit/offset — streaming: skip ``offset`` rows, keep ``length``."""
+
+    var input: AnyRelation
+    var offset: Int
+    var length: Int
+
+    def __init__(out self, *, var input: AnyRelation, offset: Int, length: Int):
+        self.input = input^
+        self.offset = offset
+        self.length = length
+
+    def schema(self) -> Schema:
+        return self.input.schema()
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return LimitProcessor(
+            input=self.input.to_processor(ctx),
+            offset=self.offset,
+            length=self.length,
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Limit(length={self.length}, offset={self.offset})")
+
+
 # ---------------------------------------------------------------------------
 # Blocking operators
 # ---------------------------------------------------------------------------
+
+
+struct Sort(Relation):
+    """Sort by key expressions — the descriptive node (keys, order, limit).
+
+    A pipeline breaker; schema is unchanged from the input. An optional ``limit``
+    turns it into a top-K (the sort kernel returns only the first ``limit``
+    rows), which the plan builder folds in when a ``Limit`` immediately follows a
+    ``Sort``."""
+
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var stable: Bool
+    var limit: Optional[Int]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var keys: List[AnyValue],
+        var ascending: List[Bool],
+        nulls_first: Bool,
+        stable: Bool,
+        var limit: Optional[Int],
+        var schema: Schema,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.stable = stable
+        self.limit = limit^
+        self._schema = schema^
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def kind(self) -> Int:
+        return RELATION_SORT
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return SortProcessor(
+            input=self.input.to_processor(ctx),
+            keys=self.keys.copy(),
+            ascending=self.ascending.copy(),
+            nulls_first=self.nulls_first,
+            stable=self.stable,
+            limit=self.limit.copy(),
+            schema=Schema(copy=self._schema),
+            ctx=ctx.copy(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Sort(keys=[")
+        for i in range(len(self.keys)):
+            if i > 0:
+                writer.write(", ")
+            self.keys[i].write_to(writer)
+        writer.write("]")
+        if self.limit:
+            writer.write(t", limit={self.limit.value()}")
+        writer.write(")")
 
 
 struct Aggregate(Relation):

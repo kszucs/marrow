@@ -26,6 +26,7 @@ from ..schema import Schema
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
+from ..kernels.sort import sort as sort_by_keys
 from ..kernels.groupby import HashGrouper
 from ..kernels.aggregate import (
     AggKernel,
@@ -408,9 +409,155 @@ struct ProjectProcessor(Processor):
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 
+struct LimitProcessor(Processor):
+    """Streaming row limit/offset: skip ``offset`` rows, then pass through at
+    most ``length`` rows and stop.
+
+    Slices morsels at the input boundary — a morsel that straddles the offset or
+    the length boundary is sliced, so the total emitted row count is exactly
+    ``min(length, available - offset)`` regardless of morsel size."""
+
+    var input: AnyProcessor
+    var _schema: Schema
+    var _skip: Int
+    var _remaining: Int
+
+    def __init__(
+        out self, *, var input: AnyProcessor, offset: Int, length: Int
+    ):
+        self.input = input^
+        self._schema = self.input.schema()
+        self._skip = offset
+        self._remaining = length
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def pull(mut self) raises -> RecordBatch:
+        # Loop over input morsels, dropping those fully inside the offset window;
+        # Exhausted from the input propagates out.
+        while True:
+            if self._remaining <= 0:
+                raise Exhausted()
+            var batch = self.input.pull()
+            var nrows = batch.num_rows()
+            if self._skip >= nrows:
+                self._skip -= nrows
+            else:
+                var start = self._skip
+                self._skip = 0
+                var avail = nrows - start
+                var length = (
+                    avail if avail < self._remaining else self._remaining
+                )
+                self._remaining -= length
+                return batch.slice(start, length)
+
+
 # ---------------------------------------------------------------------------
 # Blocking processors
 # ---------------------------------------------------------------------------
+
+
+struct SortProcessor(Processor):
+    """Blocking: buffer all input, sort by the key expressions, emit once.
+
+    A pipeline breaker. It drains the child fully (``collect``), evaluates each
+    key expression over the whole input, and prepends the resulting key columns
+    to the data columns in a single ``StructArray``. ``kernels.sort.sort`` then
+    orders that struct by the key field indices, gathering *every* field (keys
+    and data) with ``take`` — so the trailing data fields come back permuted into
+    sorted order. When ``limit`` is set the kernel's top-K path (a truncated
+    permutation) runs instead of a full sort followed by a slice."""
+
+    var input: AnyProcessor
+    var keys: List[AnyValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var stable: Bool
+    var limit: Optional[Int]
+    var _schema: Schema
+    var _ctx: ExecutionContext
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyProcessor,
+        var keys: List[AnyValue],
+        var ascending: List[Bool],
+        nulls_first: Bool,
+        stable: Bool,
+        var limit: Optional[Int],
+        var schema: Schema,
+        var ctx: ExecutionContext,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.stable = stable
+        self.limit = limit^
+        self._schema = schema^
+        self._ctx = ctx^
+        self._emitted = False
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._emitted:
+            raise Exhausted()
+        self._emitted = True
+
+        var full = self.input.collect()
+        var nrows = full.num_rows()
+        if nrows == 0:
+            # Nothing to order; return the (already schema-correct) empty batch.
+            return full^
+
+        # Build [key0, key1, ..., data0, data1, ...] in one StructArray. The key
+        # columns are evaluated over the fully-drained input; the data columns
+        # are the input columns unchanged.
+        var num_keys = len(self.keys)
+        var fields = List[dt.Field]()
+        var children = List[AnyArray]()
+        for i in range(num_keys):
+            var kcol = self.keys[i].execute(full)
+            fields.append(dt.Field("__sort_key" + String(i), kcol.dtype()))
+            children.append(kcol^)
+        for i in range(full.num_columns()):
+            fields.append(self._schema.fields[i].copy())
+            children.append(full.columns[i].copy())
+
+        var key_struct = StructArray(
+            dtype=dt.struct_(fields^),
+            length=nrows,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=children^,
+        )
+
+        var key_indices = List[Int]()
+        for i in range(num_keys):
+            key_indices.append(i)
+
+        var ordered = sort_by_keys(
+            key_struct,
+            key_indices=key_indices^,
+            ascending=self.ascending.copy(),
+            nulls_first=self.nulls_first,
+            stable=self.stable,
+            limit=self.limit.copy(),
+            ctx=self._ctx,
+        )
+
+        # The trailing fields are the sorted data columns.
+        var out_cols = List[AnyArray]()
+        for i in range(full.num_columns()):
+            out_cols.append(ordered.field(num_keys + i))
+        return RecordBatch(schema=self._schema.copy(), columns=out_cols^)
 
 
 struct AggregateProcessor(Processor):
