@@ -11,7 +11,7 @@ Covers the four value families and the universal `AnyValue` box:
 from std.testing import assert_true, assert_equal
 
 from marrow.testing import TestSuite
-from marrow.builders import array, ListBuilder, Int64Builder
+from marrow.builders import array, ListBuilder, Int64Builder, PrimitiveBuilder
 from marrow.dtypes import (
     int64,
     int32,
@@ -21,6 +21,9 @@ from marrow.dtypes import (
     Float64Type,
     StringType,
     ListType,
+    TimestampType,
+    timestamp,
+    second,
 )
 from marrow.tabular import record_batch, RecordBatch
 from marrow.scalars import AnyScalar
@@ -67,6 +70,27 @@ from marrow.expr.values import (
     ListColumn,
     ListLength,
     ListContains,
+    StrLt,
+    StrLe,
+    StrGt,
+    StrGe,
+    Like,
+    ILike,
+    IsIn,
+    Coalesce,
+    Nullif,
+    CaseWhen,
+    TemporalColumn,
+    DateTrunc,
+    Year,
+    Month,
+    Day,
+    Hour,
+    Minute,
+    Second,
+    Quarter,
+    DayOfWeek,
+    DayOfYear,
 )
 from marrow.expr.dynamic import col as dyn_col
 
@@ -668,6 +692,269 @@ def test_or_kleene_true_dominates_null() raises:
         (col("a", int64) > lit(3, int64)) | (col("b", int64) > lit(3, int64))
     ).execute(_kleene_batch())
     assert_true(into_array(cv, 3) == array([True, None, True]).to_any())
+
+
+# ===========================================================================
+# Wave 1 wiring (T2.1) — string compares, like/ilike, is_in, conditional, temporal
+# ===========================================================================
+
+
+def _sp_batch() raises -> RecordBatch:
+    # two string columns for binary string ops (no string-scalar broadcast yet)
+    return record_batch(
+        [
+            array(["apple", "banana", "cherry"]).copy(),
+            array(["apple", "apricot", "date"]).copy(),
+        ],
+        names=["s", "p"],
+    )
+
+
+def test_string_lt_gt() raises:
+    # "apple"<"apple"=F, "banana"<"apricot"=F, "cherry"<"date"=T -> [F,F,T]
+    var lt = (StrLt(col("s", string), col("p", string))).execute(_sp_batch())
+    assert_true(into_array(lt, 3) == array([False, False, True]).to_any())
+    # greater: [F, T, F]
+    var gt = (StrGt(col("s", string), col("p", string))).execute(_sp_batch())
+    assert_true(into_array(gt, 3) == array([False, True, False]).to_any())
+
+
+def test_string_le_ge() raises:
+    # <=: "apple"<="apple"=T, "banana"<="apricot"=F, "cherry"<="date"=T
+    var le = (StrLe(col("s", string), col("p", string))).execute(_sp_batch())
+    assert_true(into_array(le, 3) == array([True, False, True]).to_any())
+    # >=: [T, T, F]
+    var ge = (StrGe(col("s", string), col("p", string))).execute(_sp_batch())
+    assert_true(into_array(ge, 3) == array([True, True, False]).to_any())
+
+
+def test_string_compare_fluent() raises:
+    # method surface builds the same node
+    var lt = (col("s", string) < col("p", string)).execute(_sp_batch())
+    assert_true(into_array(lt, 3) == array([False, False, True]).to_any())
+
+
+def test_string_compare_composes_under_bool_logic() raises:
+    # (s < p) & (s > p) is always false — two string-compare breakers under one And
+    var cv = (
+        And(
+            StrLt(col("s", string), col("p", string)),
+            StrGt(col("s", string), col("p", string)),
+        )
+    ).execute(_sp_batch())
+    assert_true(into_array(cv, 3) == array([False, False, False]).to_any())
+
+
+def _like_batch() raises -> RecordBatch:
+    return record_batch(
+        [
+            array(["apple", "banana", "cherry"]).copy(),
+            array(["a%", "b%", "x%"]).copy(),
+        ],
+        names=["s", "pat"],
+    )
+
+
+def test_like_predicate() raises:
+    # "apple" LIKE "a%" = T, "banana" LIKE "b%" = T, "cherry" LIKE "x%" = F
+    var cv = (Like(col("s", string), col("pat", string))).execute(_like_batch())
+    assert_true(into_array(cv, 3) == array([True, True, False]).to_any())
+
+
+def test_ilike_predicate() raises:
+    # case-insensitive: "APPLE" ILIKE "a%" = T, "Banana" ILIKE "b%" = T
+    var b = record_batch(
+        [array(["APPLE", "Banana"]).copy(), array(["a%", "b%"]).copy()],
+        names=["s", "pat"],
+    )
+    var cv = (ILike(col("s", string), col("pat", string))).execute(b)
+    assert_true(into_array(cv, 2) == array([True, True]).to_any())
+
+
+def test_like_fluent_and_under_logic() raises:
+    # s.like(pat) & (s > slit-less compare) — fluent surface + composition
+    var cv = (col("s", string).like(col("pat", string))).execute(_like_batch())
+    assert_true(into_array(cv, 3) == array([True, True, False]).to_any())
+
+
+def test_is_in_numeric() raises:
+    # a=[1,2,3,4] IN {2,3} -> [F,T,T,F]
+    var cv = (IsIn(col("a", int64), array([2, 3], int64))).execute(_batch())
+    assert_true(
+        into_array(cv, 4) == array([False, True, True, False]).to_any()
+    )
+
+
+def test_is_in_string() raises:
+    # s IN {"apple","cherry"} -> [T,F,T]
+    var cv = (IsIn(col("s", string), array(["apple", "cherry"]))).execute(
+        _sp_batch()
+    )
+    assert_true(into_array(cv, 3) == array([True, False, True]).to_any())
+
+
+def test_is_in_fuses_under_bool_logic() raises:
+    # (a IN {2,3}) & (a < 3) -> [F,T,T,F] & [T,T,F,F] = [F,T,F,F]
+    var cv = (
+        And(
+            IsIn(col("a", int64), array([2, 3], int64)),
+            Lt(col("a", int64), lit(3, int64)),
+        )
+    ).execute(_batch())
+    assert_true(
+        into_array(cv, 4) == array([False, True, False, False]).to_any()
+    )
+
+
+def _cond_batch() raises -> RecordBatch:
+    # a and b with nulls in different rows
+    return record_batch(
+        [
+            array([1, None, None, 4], int64).copy(),
+            array([10, 20, None, 40], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+
+
+def test_coalesce() raises:
+    # coalesce(a,b): [1, 20, null, 4]  (row 2 both null)
+    var cv = (Coalesce(col("a", int64), col("b", int64))).execute(_cond_batch())
+    assert_true(into_array(cv, 4) == array([1, 20, None, 4], int64).to_any())
+
+
+def test_coalesce_fuses_above() raises:
+    # coalesce(a,b) + 1 = [2, 21, null, 5] — the breaker feeds the numeric lane
+    var cv = (
+        Add(Coalesce(col("a", int64), col("b", int64)), lit(1, int64))
+    ).execute(_cond_batch())
+    assert_true(into_array(cv, 4) == array([2, 21, None, 5], int64).to_any())
+
+
+def test_nullif() raises:
+    # nullif(a,b): a where a==b set null. a=[1,2,3,4], b=[9,2,3,9] -> [1,null,null,4]
+    var b = record_batch(
+        [
+            array([1, 2, 3, 4], int64).copy(),
+            array([9, 2, 3, 9], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    var cv = (Nullif(col("a", int64), col("b", int64))).execute(b)
+    assert_true(into_array(cv, 4) == array([1, None, None, 4], int64).to_any())
+
+
+def test_case_when() raises:
+    # CASE WHEN a>2 THEN a ELSE b:  a=[1,2,3,4], b=[10,20,30,40] -> [10,20,3,4]
+    var cv = (
+        CaseWhen(
+            Gt(col("a", int64), lit(2, int64)),
+            col("a", int64),
+            col("b", int64),
+        )
+    ).execute(_batch())
+    assert_true(into_array(cv, 4) == array([10, 20, 3, 4], int64).to_any())
+
+
+def test_case_when_fuses_above() raises:
+    # (CASE WHEN a>2 THEN a ELSE b) * 2 = [20,40,6,8]
+    var cv = (
+        Mul(
+            CaseWhen(
+                Gt(col("a", int64), lit(2, int64)),
+                col("a", int64),
+                col("b", int64),
+            ),
+            lit(2, int64),
+        )
+    ).execute(_batch())
+    assert_true(into_array(cv, 4) == array([20, 40, 6, 8], int64).to_any())
+
+
+# --- temporal ---------------------------------------------------------------
+
+
+def _ts_batch() raises -> RecordBatch:
+    # 2019-06-15 12:30:45 UTC ; 2020-02-29 00:00:00 UTC
+    var bldr = PrimitiveBuilder[TimestampType](timestamp(second), capacity=2)
+    bldr.append(Int64(1_560_601_845))
+    bldr.append(Int64(1_582_934_400))
+    return record_batch([bldr.finish()], names=["ts"])
+
+
+def _ts_null_batch() raises -> RecordBatch:
+    var bldr = PrimitiveBuilder[TimestampType](timestamp(second), capacity=3)
+    bldr.append(Int64(1_560_601_845))
+    bldr.append_null()
+    bldr.append(Int64(1_582_934_400))
+    return record_batch([bldr.finish()], names=["ts"])
+
+
+def test_temporal_year_month_day() raises:
+    var y = (Year(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(y, 2) == array([2019, 2020], int32).to_any())
+    var mo = (Month(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(mo, 2) == array([6, 2], int32).to_any())
+    var d = (Day(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(d, 2) == array([15, 29], int32).to_any())
+
+
+def test_temporal_clock_fields() raises:
+    var h = (Hour(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(h, 2) == array([12, 0], int32).to_any())
+    var mi = (Minute(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(mi, 2) == array([30, 0], int32).to_any())
+    var se = (Second(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(se, 2) == array([45, 0], int32).to_any())
+
+
+def test_temporal_quarter_dow_doy() raises:
+    var q = (Quarter(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(q, 2) == array([2, 1], int32).to_any())
+    # 2019-06-15 is a Saturday (ISO Mon=0 -> 5); 2020-02-29 is a Saturday -> 5
+    var w = (DayOfWeek(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(w, 2) == array([5, 5], int32).to_any())
+    var doy = (DayOfYear(col("ts", timestamp(second)))).execute(_ts_batch())
+    assert_true(into_array(doy, 2) == array([166, 60], int32).to_any())
+
+
+def test_temporal_extract_fuses_above() raises:
+    # year(ts) - 2000 = [19, 20] — the extraction breaker feeds the numeric lane
+    var cv = (
+        Sub(Year(col("ts", timestamp(second))), lit(2000, int32))
+    ).execute(_ts_batch())
+    assert_true(into_array(cv, 2) == array([19, 20], int32).to_any())
+
+
+def test_temporal_extract_fluent() raises:
+    var y = col("ts", timestamp(second)).year().execute(_ts_batch())
+    assert_true(into_array(y, 2) == array([2019, 2020], int32).to_any())
+
+
+def test_temporal_null_propagates() raises:
+    # a null timestamp yields a null year
+    var y = (Year(col("ts", timestamp(second)))).execute(_ts_null_batch())
+    assert_true(into_array(y, 3) == array([2019, None, 2020], int32).to_any())
+
+
+def test_date_trunc_then_extract() raises:
+    # date_trunc(ts, "day") zeroes the time-of-day; hour of the truncated ts = 0
+    var expr = Hour(DateTrunc(col("ts", timestamp(second)), "day"))
+    var h = (expr).execute(_ts_batch())
+    assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
+    # the calendar day is preserved by truncation
+    var d = (Day(DateTrunc(col("ts", timestamp(second)), "day"))).execute(
+        _ts_batch()
+    )
+    assert_true(into_array(d, 2) == array([15, 29], int32).to_any())
+
+
+def test_date_trunc_fluent() raises:
+    var h = (
+        col("ts", timestamp(second)).date_trunc("hour").minute()
+    ).execute(_ts_batch())
+    # truncating to the hour zeroes minutes/seconds
+    assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
 
 
 def main() raises:
