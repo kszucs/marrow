@@ -263,19 +263,18 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
 # ---------------------------------------------------------------------------
 trait NumericValue(Value):
     comptime OutType: NumericType
-    comptime NativeType: DType
 
     @always_inline
     def vectorwise[
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         ...
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
-        comptime native = Self.NativeType
+        comptime native = Self.OutType.native
         comptime if Self.OutShape == 0:  # scalar → evaluate the lane once, then splat
             var slot = 0
             var v = self.vectorwise[1](batch, ctx, slot, 0)[0].cast[
@@ -310,7 +309,6 @@ struct NumericColumn[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
     comptime OutShape = 1
-    comptime NativeType = Self.T.native
     var col: Int
 
     @always_inline
@@ -318,7 +316,7 @@ struct NumericColumn[T: NumericType](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         return (
             batch.columns[self.col].as_primitive[Self.T]().values().load[W](idx)
         )
@@ -330,16 +328,15 @@ struct NumericLiteral[T: NumericType](NumericValue):
 
     comptime OutType = Self.T
     comptime OutShape = 0
-    comptime NativeType = Self.T.native
-    var _value: Scalar[Self.NativeType]
+    var _value: Scalar[Self.OutType.native]
 
     @always_inline
     def vectorwise[
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        return SIMD[Self.NativeType, W](self._value)
+    ) -> SIMD[Self.OutType.native, W]:
+        return SIMD[Self.OutType.native, W](self._value)
 
 
 @fieldwise_init
@@ -352,7 +349,6 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = promote[Self.L.OutType, Self.R.OutType]
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime NativeType = Self.OutType.native
     var l: Self.L
     var r: Self.R
 
@@ -361,10 +357,10 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
-        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
-        return Self.K.core[Self.NativeType, W](a, b)
+    ) -> SIMD[Self.OutType.native, W]:
+        var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
+        var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
+        return Self.K.core[Self.OutType.native, W](a, b)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -377,7 +373,6 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime OutType = Self.A.OutType
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = Self.A.NativeType
     var a: Self.A
 
     @always_inline
@@ -385,8 +380,8 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        return Self.K.core[Self.NativeType, W](
+    ) -> SIMD[Self.OutType.native, W]:
+        return Self.K.core[Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
@@ -401,7 +396,6 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
 
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = Self.To.native
     var a: Self.A
 
     @always_inline
@@ -409,8 +403,8 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        return NumericCastKernel.core[Self.A.NativeType, Self.NativeType, W](
+    ) -> SIMD[Self.OutType.native, W]:
+        return NumericCastKernel.core[Self.A.OutType.native, Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
@@ -427,7 +421,6 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = Float64Type
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime NativeType = DType.float64
     var l: Self.L
     var r: Self.R
 
@@ -436,14 +429,14 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var a = self.l.vectorwise[W](batch, ctx, slot, idx).cast[
-            Self.NativeType
+            Self.OutType.native
         ]()
         var b = self.r.vectorwise[W](batch, ctx, slot, idx).cast[
-            Self.NativeType
+            Self.OutType.native
         ]()
-        return Self.K.core[Self.NativeType, W](a, b)
+        return Self.K.core[Self.OutType.native, W](a, b)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -456,7 +449,6 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
 
     comptime OutType = Float64Type
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = DType.float64
     var a: Self.A
 
     @always_inline
@@ -464,9 +456,9 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        return Self.K.core[Self.NativeType, W](
-            self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.NativeType]()
+    ) -> SIMD[Self.OutType.native, W]:
+        return Self.K.core[Self.OutType.native, W](
+            self.a.vectorwise[W](batch, ctx, slot, idx).cast[Self.OutType.native]()
         )
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -537,7 +529,7 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
 
     comptime OutType = BoolType
     comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
-    comptime NativeType = Self.L.NativeType
+    comptime NativeType = Self.L.OutType.native
     var l: Self.L
     var r: Self.R
 
@@ -673,7 +665,7 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
 
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = Self.A.NativeType
+    comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
     @always_inline
@@ -736,7 +728,7 @@ struct NumToBool[A: NumericValue](BoolValue):
 
     comptime OutType = BoolType
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = Self.A.NativeType
+    comptime NativeType = Self.A.OutType.native
     var a: Self.A
 
     @always_inline
@@ -759,7 +751,6 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
 
     comptime OutType = Self.To
     comptime OutShape = Self.A.OutShape
-    comptime NativeType = Self.To.native
     var a: Self.A
 
     @always_inline
@@ -767,8 +758,8 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
-        return BoolToNumKernel.core[Self.NativeType, W](
+    ) -> SIMD[Self.OutType.native, W]:
+        return BoolToNumKernel.core[Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
@@ -784,7 +775,6 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
     comptime OutType = Self.To
     comptime OutShape = 1
     comptime IsBreaker = True
-    comptime NativeType = Self.To.native
     var a: Self.A
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -798,7 +788,7 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var i = slot
         slot += 1
         return ctx.get[PrimitiveArray[Self.To]](i).values().load[W](idx)
@@ -1087,7 +1077,6 @@ struct StringLength[A: StringValue](NumericValue):
     comptime OutType = Int32Type
     comptime OutShape = 1
     comptime IsBreaker = True
-    comptime NativeType = DType.int32
     var a: Self.A
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -1099,7 +1088,7 @@ struct StringLength[A: StringValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var s = slot
         slot += 1
         return ctx.get[Int32Array](s).values().load[W](idx)
@@ -1121,7 +1110,6 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
     comptime OutType = Self.K.AccType[Self.A.OutType]
     comptime OutShape = 0
     comptime IsBreaker = True
-    comptime NativeType = Self.OutType.native
     var a: Self.A
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -1133,10 +1121,10 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var d = ctx.get(slot)
         slot += 1
-        return SIMD[Self.NativeType, W](
+        return SIMD[Self.OutType.native, W](
             d[AnyScalar].as_primitive[Self.OutType]().value()
         )
 
@@ -1195,7 +1183,6 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
     comptime OutType = Self.Func.OutType
     comptime OutShape = 1
     comptime IsBreaker = True
-    comptime NativeType = Self.Func.OutType.native
     var a: Self.A
     var spec: WindowSpec
 
@@ -1208,7 +1195,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var s = slot
         slot += 1
         return ctx.get[PrimitiveArray[Self.OutType]](s).values().load[W](idx)
@@ -1249,7 +1236,6 @@ struct ListLength[A: ListValue](NumericValue):
     comptime OutType = Int32Type
     comptime OutShape = 1
     comptime IsBreaker = True
-    comptime NativeType = DType.int32
     var a: Self.A
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -1261,7 +1247,7 @@ struct ListLength[A: ListValue](NumericValue):
         W: Int
     ](
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
-    ) -> SIMD[Self.NativeType, W]:
+    ) -> SIMD[Self.OutType.native, W]:
         var i = slot
         slot += 1
         return ctx.get[Int32Array](i).values().load[W](idx)
