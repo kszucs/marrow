@@ -45,6 +45,28 @@ def test_length_sliced() raises:
     assert_true(LengthKernel.apply(a) == array([1, 3, 4], int32))
 
 
+def test_length_propagates_nulls() raises:
+    # matches pc.utf8_length: null input -> null length (not 0)
+    var r = LengthKernel.apply(_with_null())  # ['ab', null, 'cde']
+    assert_equal(r.null_count(), 1)
+    assert_true(r.is_valid(0))
+    assert_false(r.is_valid(1))
+    assert_true(r.is_valid(2))
+    assert_equal(r[0].value(), 2)
+    assert_equal(r[2].value(), 3)
+
+
+def test_length_sliced_with_nulls() raises:
+    # slicing past the null keeps the validity offset correct
+    var full = _with_null()  # ['ab', null, 'cde']
+    var a = full.slice(1, 2)  # [null, 'cde']
+    var r = LengthKernel.apply(a)
+    assert_equal(r.null_count(), 1)
+    assert_false(r.is_valid(0))
+    assert_true(r.is_valid(1))
+    assert_equal(r[1].value(), 3)
+
+
 # --- unary string -> string ------------------------------------------------
 
 
