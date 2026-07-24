@@ -230,6 +230,24 @@ def test_bool_to_num_fuses() raises:
     assert_true(into_array(cv, 4) == array([1, 1, 0, 0], int64).to_any())
 
 
+def test_fluent_numeric_and_bool() raises:
+    # operators/methods build the same nodes as the explicit builders
+    var s = (col(0, int64) + col(1, int64)).execute(_batch())
+    assert_true(into_array(s, 4) == array([11, 22, 33, 44], int64).to_any())
+    # mean-centering via `x - x.mean()`
+    var mc = (col(0, int64) - col(0, int64).mean()).execute(_batch())
+    assert_true(
+        into_array(mc, 4) == array([-1.5, -0.5, 0.5, 1.5], float64).to_any()
+    )
+    # (a < 3) & (b > 15) via `<`, `>`, `&`
+    var mask = (
+        (col(0, int64) < lit(3, int64)) & (col(1, int64) > lit(15, int64))
+    ).execute(_batch())
+    assert_true(
+        into_array(mask, 4) == array([False, True, False, False]).to_any()
+    )
+
+
 def test_anyvalue_erases_to_datum() raises:
     # box a comptime node; its erased execute still yields the same Datum
     var boxed: AnyValue = Add(col(0, int64), lit(10, int64))

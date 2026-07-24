@@ -130,5 +130,13 @@ def test_string_to_string_container_cast() raises:
     assert_true(into_array(cv, 2) == array(["ab", "cd"]).to_any())
 
 
+def test_fluent_string() raises:
+    # method + operator surface: `s.upper()` and `s || "!"`
+    var u = scol(0, string).upper().execute(_batch())
+    assert_true(into_array(u, 2) == array(["AB", "CD"]).to_any())
+    var c = (scol(0, string) + slit("!")).execute(_batch())
+    assert_true(into_array(c, 2) == array(["ab!", "cd!"]).to_any())
+
+
 def main() raises:
     TestSuite.run[__functions_in_module()]()

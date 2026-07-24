@@ -257,6 +257,13 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         override to prepare their stage and append it."""
         pass
 
+    # --- fluent surface available in every family (reads only validity) ------
+    def isnull(self) -> IsNull[Self]:
+        return IsNull(self.copy())
+
+    def notnull(self) -> NotNull[Self]:
+        return NotNull(self.copy())
+
 
 # ---------------------------------------------------------------------------
 # NumericValue — the vectorized numeric strategy.
@@ -271,6 +278,79 @@ trait NumericValue(Value):
         self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
     ) -> SIMD[Self.OutType.native, W]:
         ...
+
+    # --- fluent surface: arithmetic, comparison, unary, reductions -----------
+    def __add__[Rhs: NumericValue](self, o: Rhs) -> Add[Self, Rhs]:
+        return Add(self.copy(), o.copy())
+
+    def __sub__[Rhs: NumericValue](self, o: Rhs) -> Sub[Self, Rhs]:
+        return Sub(self.copy(), o.copy())
+
+    def __mul__[Rhs: NumericValue](self, o: Rhs) -> Mul[Self, Rhs]:
+        return Mul(self.copy(), o.copy())
+
+    def __truediv__[Rhs: NumericValue](self, o: Rhs) -> Div[Self, Rhs]:
+        return Div(self.copy(), o.copy())
+
+    def __mod__[Rhs: NumericValue](self, o: Rhs) -> Mod[Self, Rhs]:
+        return Mod(self.copy(), o.copy())
+
+    def __floordiv__[Rhs: NumericValue](self, o: Rhs) -> Floordiv[Self, Rhs]:
+        return Floordiv(self.copy(), o.copy())
+
+    def __pow__[Rhs: NumericValue](self, o: Rhs) -> Pow[Self, Rhs]:
+        return Pow(self.copy(), o.copy())
+
+    def __neg__(self) -> Neg[Self]:
+        return Neg(self.copy())
+
+    def __lt__[Rhs: NumericValue](self, o: Rhs) -> Lt[Self, Rhs]:
+        return Lt(self.copy(), o.copy())
+
+    def __le__[Rhs: NumericValue](self, o: Rhs) -> Le[Self, Rhs]:
+        return Le(self.copy(), o.copy())
+
+    def __gt__[Rhs: NumericValue](self, o: Rhs) -> Gt[Self, Rhs]:
+        return Gt(self.copy(), o.copy())
+
+    def __ge__[Rhs: NumericValue](self, o: Rhs) -> Ge[Self, Rhs]:
+        return Ge(self.copy(), o.copy())
+
+    def __eq__[Rhs: NumericValue](self, o: Rhs) -> Eq[Self, Rhs]:
+        return Eq(self.copy(), o.copy())
+
+    def __ne__[Rhs: NumericValue](self, o: Rhs) -> Ne[Self, Rhs]:
+        return Ne(self.copy(), o.copy())
+
+    def abs(self) -> Abs[Self]:
+        return Abs(self.copy())
+
+    def sqrt(self) -> Sqrt[Self]:
+        return Sqrt(self.copy())
+
+    def exp(self) -> Exp[Self]:
+        return Exp(self.copy())
+
+    def ln(self) -> Ln[Self]:
+        return Ln(self.copy())
+
+    def sum(self) -> Sum[Self]:
+        return Sum(self.copy())
+
+    def mean(self) -> Mean[Self]:
+        return Mean(self.copy())
+
+    def min(self) -> Min[Self]:
+        return Min(self.copy())
+
+    def max(self) -> Max[Self]:
+        return Max(self.copy())
+
+    def product(self) -> Product[Self]:
+        return Product(self.copy())
+
+    def count(self) -> Count[Self]:
+        return Count(self.copy())
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
@@ -498,6 +578,25 @@ trait BoolValue(Value):
     ) -> SIMD[DType.bool, W]:
         ...
 
+    # --- fluent surface: boolean logic + reductions --------------------------
+    def __and__[Rhs: BoolValue](self, o: Rhs) -> And[Self, Rhs]:
+        return And(self.copy(), o.copy())
+
+    def __or__[Rhs: BoolValue](self, o: Rhs) -> Or[Self, Rhs]:
+        return Or(self.copy(), o.copy())
+
+    def __xor__[Rhs: BoolValue](self, o: Rhs) -> Xor[Self, Rhs]:
+        return Xor(self.copy(), o.copy())
+
+    def __invert__(self) -> Not[Self]:
+        return Not(self.copy())
+
+    def any(self) -> Any[Self]:
+        return Any(self.copy())
+
+    def all(self) -> All[Self]:
+        return All(self.copy())
+
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
         var length = batch.num_rows()
@@ -510,15 +609,13 @@ trait BoolValue(Value):
             return self.vectorwise[W](batch, ctx, slot, i)
 
         apply[Self.NativeType, producer](bm.view())  # bit-packing overload
-        return 
-            BoolArray(
-                length=length,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                buffer=bm.to_immutable(),
-            ).to_any()
-        
+        return BoolArray(
+            length=length,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            buffer=bm.to_immutable(),
+        ).to_any()
 
 
 @fieldwise_init
@@ -837,13 +934,56 @@ trait StringValue(Value):
     ) -> String:
         ...
 
+    # --- fluent surface: maps, predicates, length, concat -------------------
+    def length(self) -> StringLength[Self]:
+        return StringLength(self.copy())
+
+    def upper(self) -> Upper[Self]:
+        return Upper(self.copy())
+
+    def lower(self) -> Lower[Self]:
+        return Lower(self.copy())
+
+    def strip(self) -> Strip[Self]:
+        return Strip(self.copy())
+
+    def lstrip(self) -> LStrip[Self]:
+        return LStrip(self.copy())
+
+    def rstrip(self) -> RStrip[Self]:
+        return RStrip(self.copy())
+
+    def reverse(self) -> Reverse[Self]:
+        return Reverse(self.copy())
+
+    def capitalize(self) -> Capitalize[Self]:
+        return Capitalize(self.copy())
+
+    def __add__[Rhs: StringValue](self, o: Rhs) -> Concat[Self, Rhs]:
+        return Concat(self.copy(), o.copy())
+
+    def startswith[Rhs: StringValue](self, o: Rhs) -> StartsWith[Self, Rhs]:
+        return StartsWith(self.copy(), o.copy())
+
+    def endswith[Rhs: StringValue](self, o: Rhs) -> EndsWith[Self, Rhs]:
+        return EndsWith(self.copy(), o.copy())
+
+    def contains[Rhs: StringValue](self, o: Rhs) -> StrContains[Self, Rhs]:
+        return StrContains(self.copy(), o.copy())
+
+    def __eq__[Rhs: StringValue](self, o: Rhs) -> StrEq[Self, Rhs]:
+        return StrEq(self.copy(), o.copy())
+
+    def __ne__[Rhs: StringValue](self, o: Rhs) -> StrNe[Self, Rhs]:
+        return StrNe(self.copy(), o.copy())
+
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
-            return 
-                StringScalar(self.elementwise(batch, ctx, slot, 0)).to_any()
-            
+            return StringScalar(
+                self.elementwise(batch, ctx, slot, 0)
+            ).to_any()
         else:
             var n = batch.num_rows()
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
@@ -1213,6 +1353,12 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 # ---------------------------------------------------------------------------
 trait ListValue(Value):
     comptime OutType: ListLikeType
+
+    def length(self) -> ListLength[Self]:
+        return ListLength(self.copy())
+
+    def contains[E: NumericValue](self, elem: E) -> ListContains[Self, E]:
+        return ListContains(self.copy(), elem.copy())
 
 
 @fieldwise_init
