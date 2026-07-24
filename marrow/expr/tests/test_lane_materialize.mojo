@@ -13,7 +13,7 @@ from marrow.testing import TestSuite
 from marrow.builders import array
 from marrow.dtypes import int64, float64
 from marrow.tabular import record_batch, RecordBatch
-from marrow.expr.lane import col, run, Sub, Mean, into_array
+from marrow.expr.lane import col, Sub, Mean, into_array
 
 
 def _batch() raises -> RecordBatch:
@@ -22,7 +22,7 @@ def _batch() raises -> RecordBatch:
 
 def test_mean_centering_via_single_binary() raises:
     # avg([1,2,3,4]) = 2.5 ; x - avg(x) = [-1.5, -0.5, 0.5, 1.5]  (int - float -> float)
-    var cv = run(Sub(col(0, int64), Mean(col(0, int64))), _batch())
+    var cv = (Sub(col(0, int64), Mean(col(0, int64)))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([-1.5, -0.5, 0.5, 1.5], float64).to_any()
     )

@@ -10,7 +10,6 @@ from marrow.tabular import record_batch, RecordBatch
 from marrow.expr.lane import (
     col,
     lit,
-    run,
     Add,
     Mul,
     Neg,
@@ -59,31 +58,31 @@ def _batch() raises -> RecordBatch:
 
 
 def test_column_add_fuses() raises:
-    var cv = run(Add(col(0, int64), col(1, int64)), _batch())
+    var cv = (Add(col(0, int64), col(1, int64))).execute(_batch())
     assert_true(not cv.isa[AnyScalar]())
     assert_true(into_array(cv, 4) == array([11, 22, 33, 44], int64).to_any())
 
 
 def test_literal_broadcast() raises:
-    var cv = run(Mul(col(0, int64), lit(10, int64)), _batch())
+    var cv = (Mul(col(0, int64), lit(10, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([10, 20, 30, 40], int64).to_any())
 
 
 def test_scalar_literal_evaluates_once() raises:
-    var cv = run(lit(7, int64), _batch())
+    var cv = (lit(7, int64)).execute(_batch())
     assert_true(cv.isa[AnyScalar]())
     assert_true(into_array(cv, 3) == array([7, 7, 7], int64).to_any())
 
 
 def test_fused_chain() raises:
     # (a + b) * a  over a=[1,2,3,4], b=[10,20,30,40]
-    var cv = run(Mul(Add(col(0, int64), col(1, int64)), col(0, int64)), _batch())
+    var cv = (Mul(Add(col(0, int64), col(1, int64)), col(0, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([11, 44, 99, 176], int64).to_any())
 
 
 def test_reduction_is_scalar() raises:
     # sum(a) over [1,2,3,4] = 10, a scalar
-    var cv = run(Sum(col(0, int64)), _batch())
+    var cv = (Sum(col(0, int64))).execute(_batch())
     assert_true(cv.isa[AnyScalar]())
     assert_true(into_array(cv, 4) == array([10, 10, 10, 10], int64).to_any())
 
@@ -91,23 +90,21 @@ def test_reduction_is_scalar() raises:
 def test_reduction_broadcasts_into_columnar() raises:
     # a + sum(a) = [1,2,3,4] + 10 = [11,12,13,14] — the SINGLE Add, sum(a) is a
     # fused leaf reading its stage result from the context and splatting.
-    var cv = run(Add(col(0, int64), Sum(col(0, int64))), _batch())
+    var cv = (Add(col(0, int64), Sum(col(0, int64)))).execute(_batch())
     assert_true(not cv.isa[AnyScalar]())
     assert_true(into_array(cv, 4) == array([11, 12, 13, 14], int64).to_any())
 
 
 def test_scalar_plus_scalar_stays_scalar() raises:
     # sum(a) + max(a) = 10 + 4 = 14, still scalar
-    var cv = run(Add(Sum(col(0, int64)), Max(col(0, int64))), _batch())
+    var cv = (Add(Sum(col(0, int64)), Max(col(0, int64)))).execute(_batch())
     assert_true(cv.isa[AnyScalar]())
     assert_true(into_array(cv, 2) == array([14, 14], int64).to_any())
 
 
 def test_arithmetic_above_reduction() raises:
     # (a + b) fuses, then * sum(a) broadcasts:  [11,22,33,44] * 10
-    var cv = run(
-        Mul(Add(col(0, int64), col(1, int64)), Sum(col(0, int64))), _batch()
-    )
+    var cv = (Mul(Add(col(0, int64), col(1, int64)), Sum(col(0, int64)))).execute(_batch())
     assert_true(into_array(cv, 4) == array([110, 220, 330, 440], int64).to_any())
 
 
@@ -119,22 +116,20 @@ def test_fused_node_is_fusable() raises:
 
 def test_div_is_true_division() raises:
     # 1/2,2/2,3/2,4/2 = [0.5,1.0,1.5,2.0] float64 — true division, not integer
-    var cv = run(Div(col(0, int64), lit(2, int64)), _batch())
+    var cv = (Div(col(0, int64), lit(2, int64))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([0.5, 1.0, 1.5, 2.0], float64).to_any()
     )
 
 
 def test_unary_neg_fuses() raises:
-    var cv = run(Neg(col(0, int64)), _batch())
+    var cv = (Neg(col(0, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([-1, -2, -3, -4], int64).to_any())
 
 
 def test_cast_fuses_in_chain() raises:
     # a fused cast composes with arithmetic in the same pass (identity cast here)
-    var cv = run(
-        Add(NumericCast[Int64Type](col(0, int64)), col(1, int64)), _batch()
-    )
+    var cv = (Add(NumericCast[Int64Type](col(0, int64)), col(1, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([11, 22, 33, 44], int64).to_any())
 
 
@@ -143,28 +138,25 @@ def _spec() -> WindowSpec:
 
 
 def test_window_row_number() raises:
-    var cv = run(RowNumber(col(0, int64), _spec()), _batch())
+    var cv = (RowNumber(col(0, int64), _spec())).execute(_batch())
     assert_true(into_array(cv, 4) == array([1, 2, 3, 4], int64).to_any())
 
 
 def test_arithmetic_above_window_materializes() raises:
     # row_number() + 1 → [2,3,4,5]  (Add above a columnar window breaker)
-    var cv = run(Add(RowNumber(col(0, int64), _spec()), lit(1, int64)), _batch())
+    var cv = (Add(RowNumber(col(0, int64), _spec()), lit(1, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([2, 3, 4, 5], int64).to_any())
 
 
 def test_comparison_fuses_to_bool() raises:
     # a < 3 over [1,2,3,4] → bit-packed [T,T,F,F] (the bool fused strategy)
-    var cv = run(Lt(col(0, int64), lit(3, int64)), _batch())
+    var cv = (Lt(col(0, int64), lit(3, int64))).execute(_batch())
     assert_true(into_array(cv, 4) == array([True, True, False, False]).to_any())
 
 
 def test_bool_and_fuses() raises:
     # (a < 3) & (b > 15) → [T,T,F,F] & [F,T,T,T] = [F,T,F,F], one fused bitwise pass
-    var cv = run(
-        And(Lt(col(0, int64), lit(3, int64)), Gt(col(1, int64), lit(15, int64))),
-        _batch(),
-    )
+    var cv = (And(Lt(col(0, int64), lit(3, int64)), Gt(col(1, int64), lit(15, int64)))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([False, True, False, False]).to_any()
     )
@@ -172,7 +164,7 @@ def test_bool_and_fuses() raises:
 
 def test_bool_not_fuses() raises:
     # not (a < 3) → not [T,T,F,F] = [F,F,T,T]
-    var cv = run(Not(Lt(col(0, int64), lit(3, int64))), _batch())
+    var cv = (Not(Lt(col(0, int64), lit(3, int64)))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([False, False, True, True]).to_any()
     )
@@ -180,10 +172,7 @@ def test_bool_not_fuses() raises:
 
 def test_bool_or_fuses() raises:
     # (a < 2) | (a > 3) → [T,F,F,F] | [F,F,F,T] = [T,F,F,T]
-    var cv = run(
-        Or(Lt(col(0, int64), lit(2, int64)), Gt(col(0, int64), lit(3, int64))),
-        _batch(),
-    )
+    var cv = (Or(Lt(col(0, int64), lit(2, int64)), Gt(col(0, int64), lit(3, int64)))).execute(_batch())
     assert_true(
         into_array(cv, 4) == array([True, False, False, True]).to_any()
     )
@@ -191,24 +180,24 @@ def test_bool_or_fuses() raises:
 
 def test_any_all_reductions() raises:
     # any(a < 3) = True, all(a < 3) = False over [1,2,3,4]
-    var an = run(Any(Lt(col(0, int64), lit(3, int64))), _batch())
+    var an = (Any(Lt(col(0, int64), lit(3, int64)))).execute(_batch())
     assert_true(an.isa[AnyScalar]() and an[AnyScalar].as_bool().value())
-    var al = run(All(Lt(col(0, int64), lit(3, int64))), _batch())
+    var al = (All(Lt(col(0, int64), lit(3, int64)))).execute(_batch())
     assert_true(al.isa[AnyScalar]() and not al[AnyScalar].as_bool().value())
 
 
 def test_count_reduction() raises:
     # count(a) over [1,2,3,4] = 4 (int64 scalar)
-    var cv = run(Count(col(0, int64)), _batch())
+    var cv = (Count(col(0, int64))).execute(_batch())
     assert_true(cv.isa[AnyScalar]())
     assert_true(into_array(cv, 4) == array([4, 4, 4, 4], int64).to_any())
 
 
 def test_notnull_and_isnull() raises:
     # no nulls in a=[1,2,3,4] → not_null all true, is_null all false
-    var nn = run(NotNull(col(0, int64)), _batch())
+    var nn = (NotNull(col(0, int64))).execute(_batch())
     assert_true(into_array(nn, 4) == array([True, True, True, True]).to_any())
-    var isn = run(IsNull(col(0, int64)), _batch())
+    var isn = (IsNull(col(0, int64))).execute(_batch())
     assert_true(
         into_array(isn, 4) == array([False, False, False, False]).to_any()
     )
@@ -219,7 +208,7 @@ def test_isnan_fuses_over_float() raises:
     var b = record_batch(
         [array([1.0, 2.0, 3.0, 4.0], float64).copy()], names=["f"]
     )
-    var cv = run(IsNan(col(0, float64)), b)
+    var cv = (IsNan(col(0, float64))).execute(b)
     assert_true(
         into_array(cv, 4) == array([False, False, False, False]).to_any()
     )
@@ -227,17 +216,17 @@ def test_isnan_fuses_over_float() raises:
 
 def test_num_to_bool_fuses() raises:
     # a*0 = 0 → false ; a (nonzero) → true — fused per-lane num->bool
-    var z = run(NumToBool(Mul(col(0, int64), lit(0, int64))), _batch())
+    var z = (NumToBool(Mul(col(0, int64), lit(0, int64)))).execute(_batch())
     assert_true(
         into_array(z, 4) == array([False, False, False, False]).to_any()
     )
-    var nz = run(NumToBool(col(0, int64)), _batch())
+    var nz = (NumToBool(col(0, int64))).execute(_batch())
     assert_true(into_array(nz, 4) == array([True, True, True, True]).to_any())
 
 
 def test_bool_to_num_fuses() raises:
     # (a < 3) -> int64 = [1,1,0,0] — fused bool->num, composes in the numeric lane
-    var cv = run(BoolToNum[Int64Type](Lt(col(0, int64), lit(3, int64))), _batch())
+    var cv = (BoolToNum[Int64Type](Lt(col(0, int64), lit(3, int64)))).execute(_batch())
     assert_true(into_array(cv, 4) == array([1, 1, 0, 0], int64).to_any())
 
 
