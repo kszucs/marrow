@@ -72,6 +72,7 @@ from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
+from .aggregate import reinterpret_array, temporal_backing_dtype
 
 
 # ---------------------------------------------------------------------------
@@ -83,23 +84,6 @@ from .helpers import Kernel
 # numeric filter/take path (no per-temporal-dtype loops). Validity and offset
 # ride through unchanged; the relabel is O(1) ArcPointer metadata, no data copy.
 # ---------------------------------------------------------------------------
-
-
-def _temporal_backing(dt: AnyDataType) -> AnyDataType:
-    """Integer dtype backing a temporal value — 32-bit for date32/time32,
-    64-bit otherwise (date64/time64/timestamp/duration)."""
-    return AnyDataType(int32) if (
-        dt.is_date32() or dt.is_time32()
-    ) else AnyDataType(int64)
-
-
-def _reinterpret(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
-    """View `array`'s buffers under a new (same-width) `dt` — reads a temporal
-    column as its integer backing and relabels the integer result back to the
-    temporal dtype. O(1) metadata swap, no data copy."""
-    var data = array.to_data()
-    data.dtype = dt.copy()
-    return AnyArray.from_data(data)
 
 
 struct Filter(Kernel):
@@ -169,11 +153,11 @@ struct Filter(Kernel):
         elif dt.is_temporal():
             # Reinterpret to the integer backing, filter via the numeric path,
             # then relabel the output back to the temporal dtype.
-            var backing = _temporal_backing(dt)
+            var backing = temporal_backing_dtype(dt)
             var filtered = Filter.dispatch(
-                _reinterpret(array, backing), mask, ctx
+                reinterpret_array(array, backing), mask, ctx
             )
-            return _reinterpret(filtered, dt)
+            return reinterpret_array(filtered, dt)
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -682,11 +666,11 @@ struct Take(Kernel):
         elif dt.is_temporal():
             # Reinterpret to the integer backing, gather via the numeric path,
             # then relabel the output back to the temporal dtype.
-            var backing = _temporal_backing(dt)
+            var backing = temporal_backing_dtype(dt)
             var gathered = Take.dispatch(
-                _reinterpret(array, backing), indices, ctx
+                reinterpret_array(array, backing), indices, ctx
             )
-            return _reinterpret(gathered, dt)
+            return reinterpret_array(gathered, dt)
         else:
             raise Error("take: unsupported dtype ", dt)
 

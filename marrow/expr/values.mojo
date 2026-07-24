@@ -1816,50 +1816,37 @@ def _result_validity(r: AnyArray) raises -> Optional[Bitmap[mut=False]]:
         return None
 
 
-@fieldwise_init
-struct Coalesce[L: NumericValue, R: NumericValue](NumericValue):
-    """`coalesce(l, r)` — the first non-null of two same-dtype numeric operands."""
+# Conditional binary breakers — `coalesce(l, r)` and `nullif(l, r)` differ only
+# in the kernel they call, so one generic node parameterized by a tiny op struct
+# covers both (mirrors `Reduction[K]` / `TemporalExtract[K]`). Both are
+# data-dependent-validity breakers over two same-dtype numeric operands.
+trait ConditionalBinaryKernel:
+    @staticmethod
+    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
+        ...
 
-    comptime OutType = Self.L.OutType
-    comptime OutShape = 1
-    comptime IsBreaker = True
-    var l: Self.L
-    var r: Self.R
 
-    def referenced_columns(self) -> List[String]:
-        return _union_columns(
-            self.l.referenced_columns(), self.r.referenced_columns()
-        )
-
-    def _result(self, batch: RecordBatch) raises -> AnyArray:
-        var n = batch.num_rows()
+struct CoalesceOp(ConditionalBinaryKernel):
+    @staticmethod
+    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
         var candidates = List[AnyArray]()
-        candidates.append(into_array(self.l.execute(batch), n))
-        candidates.append(into_array(self.r.execute(batch), n))
+        candidates.append(la.copy())
+        candidates.append(ra.copy())
         return coalesce(candidates)
 
-    def validity(
-        self, batch: RecordBatch
-    ) raises -> Optional[Bitmap[mut=False]]:
-        return _result_validity(self._result(batch))
 
-    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
-        ctx.append(self._result(batch))
-
-    @always_inline
-    def vectorwise[
-        W: Int
-    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
-        Self.OutType.native, W
-    ]:
-        var i = slot
-        slot += 1
-        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+struct NullifOp(ConditionalBinaryKernel):
+    @staticmethod
+    def combine(la: AnyArray, ra: AnyArray) raises -> AnyArray:
+        return nullif(la, ra)
 
 
 @fieldwise_init
-struct Nullif[L: NumericValue, R: NumericValue](NumericValue):
-    """`nullif(l, r)` — `l` with the rows where `l == r` set to null."""
+struct ConditionalBinary[
+    K: ConditionalBinaryKernel, L: NumericValue, R: NumericValue
+](NumericValue):
+    """`coalesce`/`nullif` over two same-dtype numeric operands; `K` picks the
+    kernel. `prepare` materializes the result once; `vectorwise` loads it."""
 
     comptime OutType = Self.L.OutType
     comptime OutShape = 1
@@ -1876,7 +1863,7 @@ struct Nullif[L: NumericValue, R: NumericValue](NumericValue):
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n)
         var ra = into_array(self.r.execute(batch), n)
-        return nullif(la, ra)
+        return Self.K.combine(la, ra)
 
     def validity(
         self, batch: RecordBatch
@@ -1895,6 +1882,10 @@ struct Nullif[L: NumericValue, R: NumericValue](NumericValue):
         var i = slot
         slot += 1
         return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+
+
+comptime Coalesce = ConditionalBinary[CoalesceOp, _, _]
+comptime Nullif = ConditionalBinary[NullifOp, _, _]
 
 
 @fieldwise_init

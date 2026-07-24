@@ -493,6 +493,15 @@ def reinterpret_array(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
     return AnyArray.from_data(data)
 
 
+def temporal_backing_dtype(dt: AnyDataType) -> AnyDataType:
+    """The integer dtype backing a temporal value — 32-bit for date32/time32,
+    64-bit otherwise (date64/time64/timestamp/duration). Paired with
+    `reinterpret_array` to route temporal columns through the numeric path."""
+    return AnyDataType(int32) if (
+        dt.is_date32() or dt.is_time32()
+    ) else AnyDataType(int64)
+
+
 def _mm_temporal_typed[
     K: AggKernel, T: TemporalType
 ](arr: PrimitiveArray[T], ctx: ExecutionContext) raises -> AnyScalar:
