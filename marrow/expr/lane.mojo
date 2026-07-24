@@ -58,6 +58,7 @@ from ..dtypes import (
     BoolType,
     StringLikeType,
     StringType,
+    ListLikeType,
 )
 from ..kernels.compare import (
     BinaryCompareKernel,
@@ -120,6 +121,7 @@ from ..kernels.boolean import (
     IsNanKernel,
     IsInfKernel,
 )
+from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
     NumToBool as NumToBoolKernel,
@@ -1104,6 +1106,86 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# List family — nested, variable-length. Lists don't fuse, so a list column is a
+# materialize-only `Value` (execute -> the list array). The useful ops produce
+# fixed-width results and are breakers: `length` (-> int32, like StringLength) and
+# `contains` (-> bool). Both delegate to kernels.nested.
+# ---------------------------------------------------------------------------
+trait ListValue(Value):
+    comptime OutType: DataType & ListLikeType
+
+
+@fieldwise_init
+struct ListColumn[T: DataType & ListLikeType](ListValue):
+    """A list column, read from the batch by position. Materialize-only (no lane)."""
+
+    comptime OutType = Self.T
+    comptime Shape = 1
+    var col: Int
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return Datum(batch.columns[self.col].copy())
+
+
+@fieldwise_init
+struct ListLength[A: ListValue](NumericValue):
+    """List element count -> int32. A breaker, same shape as `StringLength`."""
+
+    comptime OutType = Int32Type
+    comptime Shape = 1
+    comptime NativeType = DType.int32
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(ArrayLengthKernel.dispatch(arr)))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[Self.NativeType, W]:
+        var i = slot
+        slot += 1
+        return ctx.get[Int32Array](i).values().load[W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+@fieldwise_init
+struct ListContains[A: ListValue, E: NumericValue](BoolValue):
+    """Element-wise membership: `elem[i] in list[i]` -> bool. A breaker (a literal
+    element broadcasts). Numeric element types."""
+
+    comptime OutType = BoolType
+    comptime Shape = 1
+    comptime NativeType = DType.int32
+    var a: Self.A
+    var elem: Self.E
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var n = batch.num_rows()
+        var la = into_array(run(self.a, batch), n)
+        var ea = into_array(run(self.elem, batch), n)
+        ctx.append(Datum(ArrayContainsKernel.dispatch(la, ea)))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var i = slot
+        slot += 1
+        return ctx.get[BoolArray](i).values().load[DType.bool, W](idx)
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
 
 
 # ---------------------------------------------------------------------------
