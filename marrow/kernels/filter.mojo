@@ -36,6 +36,7 @@ from ..builders import (
     BinaryLikeBuilder,
 )
 from ..dtypes import (
+    AnyDataType,
     PrimitiveType,
     NumericType,
     BinaryLikeType,
@@ -71,6 +72,34 @@ from ..utils import dispatch_over_numeric, dispatch_over_binarylike
 from ..views import BitmapView, BufferView
 from .execution import ExecutionContext
 from .helpers import Kernel
+
+
+# ---------------------------------------------------------------------------
+# Temporal reinterpret helpers
+#
+# filter/take are order- and value-agnostic byte moves, so a temporal column
+# (date/time/timestamp/duration) is selected through its signed-integer backing
+# and the result relabelled back to the temporal dtype — reusing the whole
+# numeric filter/take path (no per-temporal-dtype loops). Validity and offset
+# ride through unchanged; the relabel is O(1) ArcPointer metadata, no data copy.
+# ---------------------------------------------------------------------------
+
+
+def _temporal_backing(dt: AnyDataType) -> AnyDataType:
+    """Integer dtype backing a temporal value — 32-bit for date32/time32,
+    64-bit otherwise (date64/time64/timestamp/duration)."""
+    return AnyDataType(int32) if (
+        dt.is_date32() or dt.is_time32()
+    ) else AnyDataType(int64)
+
+
+def _reinterpret(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
+    """View `array`'s buffers under a new (same-width) `dt` — reads a temporal
+    column as its integer backing and relabels the integer result back to the
+    temporal dtype. O(1) metadata swap, no data copy."""
+    var data = array.to_data()
+    data.dtype = dt.copy()
+    return AnyArray.from_data(data)
 
 
 struct Filter(Kernel):
@@ -137,6 +166,14 @@ struct Filter(Kernel):
             return Filter.apply(array.as_fixed_size_list(), mask, ctx).to_any()
         elif dt.is_dictionary():
             return Filter.apply(array.as_dictionary(), mask, ctx).to_any()
+        elif dt.is_temporal():
+            # Reinterpret to the integer backing, filter via the numeric path,
+            # then relabel the output back to the temporal dtype.
+            var backing = _temporal_backing(dt)
+            var filtered = Filter.dispatch(
+                _reinterpret(array, backing), mask, ctx
+            )
+            return _reinterpret(filtered, dt)
         else:
             raise Error("filter: unsupported dtype ", dt)
 
@@ -642,6 +679,14 @@ struct Take(Kernel):
             return Take.apply(array.as_fixed_size_list(), indices, ctx).to_any()
         elif dt.is_dictionary():
             return Take.apply(array.as_dictionary(), indices, ctx).to_any()
+        elif dt.is_temporal():
+            # Reinterpret to the integer backing, gather via the numeric path,
+            # then relabel the output back to the temporal dtype.
+            var backing = _temporal_backing(dt)
+            var gathered = Take.dispatch(
+                _reinterpret(array, backing), indices, ctx
+            )
+            return _reinterpret(gathered, dt)
         else:
             raise Error("take: unsupported dtype ", dt)
 
