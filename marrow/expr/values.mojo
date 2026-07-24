@@ -1809,7 +1809,7 @@ comptime RowNumber = WindowFunction[RowNumberKernel, _]
 def _result_validity(r: AnyArray) raises -> Optional[Bitmap[mut=False]]:
     """The materialized result's validity as an offset-0 owned bitmap (None =
     all valid) — shared by the conditional breakers' `validity`."""
-    var v = r.validity()
+    var v = r.to_data().validity()
     if v:
         return _view_to_owned(v.value())
     else:

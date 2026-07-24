@@ -326,7 +326,7 @@ def _like_batch() raises -> RecordBatch:
     return record_batch([s^, pat^], names=["s", "pat"])
 
 
-def test_parity_like_pending_t22() raises:
+def test_parity_like() raises:
     assert_fused(
         Like(fcol("s", string), fcol("pat", string)),
         array([True, True, False]).to_any(),
@@ -334,7 +334,7 @@ def test_parity_like_pending_t22() raises:
     )
 
 
-def test_parity_ilike_pending_t22() raises:
+def test_parity_ilike() raises:
     var s = array(["APPLE", "Banana", "x"])
     var pat = array(["a%", "b%", "y%"])
     var b = record_batch([s^, pat^], names=["s", "pat"])
@@ -345,7 +345,7 @@ def test_parity_ilike_pending_t22() raises:
     )
 
 
-def test_parity_is_in_pending_t22() raises:
+def test_parity_is_in() raises:
     # a=[1,5,3,10,7,2] IN {3,7} -> [F,F,T,F,T,F]
     assert_fused(
         IsIn(fcol("a", int64), array([3, 7], int64)),
@@ -354,7 +354,7 @@ def test_parity_is_in_pending_t22() raises:
     )
 
 
-def test_parity_coalesce_pending_t22() raises:
+def test_parity_coalesce() raises:
     var a = array([1, None, None, 4], int64)
     var b = array([10, 20, None, 40], int64)
     var batch = record_batch([a^, b^], names=["a", "b"])
@@ -365,7 +365,7 @@ def test_parity_coalesce_pending_t22() raises:
     )
 
 
-def test_parity_nullif_pending_t22() raises:
+def test_parity_nullif() raises:
     var a = array([1, 2, 3, 4], int64)
     var b = array([9, 2, 3, 9], int64)
     var batch = record_batch([a^, b^], names=["a", "b"])
@@ -376,7 +376,7 @@ def test_parity_nullif_pending_t22() raises:
     )
 
 
-def test_parity_case_when_pending_t22() raises:
+def test_parity_case_when() raises:
     # CASE WHEN a>b THEN a ELSE b == max(a,b), over the shared _ab_batch
     assert_fused(
         CaseWhen(
@@ -397,7 +397,7 @@ def _ts_batch() raises -> RecordBatch:
     return record_batch([b.finish()], names=["ts"])
 
 
-def test_parity_year_pending_t22() raises:
+def test_parity_year() raises:
     assert_fused(
         Year(fcol("ts", timestamp(second))),
         array([2019, 2020], int32).to_any(),
@@ -405,7 +405,7 @@ def test_parity_year_pending_t22() raises:
     )
 
 
-def test_parity_date_trunc_pending_t22() raises:
+def test_parity_date_trunc() raises:
     # hour(date_trunc(ts, "day")) == 0 for every row
     assert_fused(
         Hour(DateTrunc(fcol("ts", timestamp(second)), "day")),
