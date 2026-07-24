@@ -56,6 +56,16 @@ wall-clock vs polars/duckdb on the same box, **and** (for F2) a binary whose
    path (F2) and the interpreted `DynValue` path (F1). No feature may live in only
    one driver. (Current code violates this — see §3.)
 3. **PyArrow-shaped naming** everywhere the surface is user-facing.
+4. **Code quality is an acceptance criterion, not a follow-up.** The codebase must stay
+   in great shape: **sound abstractions, minimal boilerplate, minimal free-standing
+   functions** (behaviour belongs on the type/trait it operates on — reach for a free
+   function only when it genuinely spans types). Every task's Definition of Done includes
+   a quality pass; every wave/milestone ends with a dedicated review (`/simplify` over the
+   diff, plus an abstraction/duplication audit). A feature that lands as a pile of
+   free functions or copy-pasted per-dtype boilerplate is **not done** — it is refactored
+   before merge. Prefer reusing existing building blocks (e.g. bitmap bitwise ops, view
+   abstractions, kernel `core`/`apply` tiers) over new one-offs. This invariant outranks
+   schedule: a wave does not open until the prior wave's quality gate is green.
 
 ---
 
@@ -329,6 +339,7 @@ node (F2). Closing the `DynValue`/fused asymmetry (G2) is a running theme.
 | Item | MoSCoW | Notes |
 |---|---|---|
 | Keep `benchmarks/binary_size/` green at every gate; add a relational-plan size bench | **Must** | Invariant #1. |
+| End-of-wave **quality review** (`/simplify` + abstraction/duplication/free-function audit) gating the next wave | **Must** | Invariant #4. Not cleanup-later — an acceptance gate. |
 | Both-driver parity tests (fused `Value` result == `DynValue` result) per op | **Must** | Invariant #2. Extend `test_values`/`test_runtime`. |
 | ClickBench-subset harness runs *through the lazy plan* (not eager one-batch) | **Must** | Currently eager single-batch (`clickbench.py`). |
 | PyArrow/DuckDB cross-check in the test suite for new kernels/ops | **Should** | Existing pattern. |

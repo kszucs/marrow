@@ -39,11 +39,35 @@ file but may only *write* the files its card lists under **Owns**. The wave sche
 
 - Merge order within a wave: **new-file tasks first, hotspot-owner tasks second,
   registration-file union last.** Then run `pixi run -e dev test` + `pixi run
-  binary_size` on the integrated branch before opening the next wave.
+  binary_size` **and the quality gate** (below) on the integrated branch before opening
+  the next wave.
 - Every task's Definition of Done includes: its own tests green, the full suite green,
-  and `binary_size` within budget (the DCE gate — invariant #1).
+  `binary_size` within budget (the DCE gate — invariant #1), **and a quality pass**
+  (invariant #4 — sound abstractions, no boilerplate, no gratuitous free functions).
 - A task that must touch a hotspot it doesn't own is a **scheduling bug** — split it or
   move it to a later wave, don't edit across ownership.
+
+### Quality gate (runs per task + per wave — invariant #4)
+
+Code quality is an **acceptance criterion**, not cleanup-later. A task is not done, and a
+wave does not close, until:
+
+- `/simplify` has been run over the diff and its findings applied (reuse, dedup,
+  simplification, efficiency).
+- **Behaviour lives on the type/trait it belongs to**, not in free-standing functions.
+  New free functions are justified only when they genuinely span types (e.g. a recursive
+  struct-equality helper) — flag any others for folding onto a method/trait.
+- **No per-dtype copy-paste**: new kernels/nodes reuse the `core`/`apply`/`dispatch`
+  tiers and existing building blocks (bitmap bitwise ops, `views.mojo` primitives,
+  visitor dispatch) rather than hand-rolled loops or duplicated switches.
+- Boilerplate is minimal: shared machinery sits on traits/generics, not repeated per
+  node. (The fused `FusedBinary[K,…]` pattern and the kernel trait defaults are the
+  model — see `docs/kernel-fusion-architecture.md`.)
+- Public surface matches PyArrow/ibis naming where user-facing.
+
+A dedicated end-of-wave review task (owns nothing; read + `/simplify` + short written
+findings) gates the next wave. Treat a wave that added lots of free functions or
+duplicated dispatch as **incomplete** — refactor before proceeding.
 
 ### Worktree hygiene
 
@@ -340,6 +364,9 @@ Wave 2 (M1)   T2.1 fused-wiring(values) ∥ T2.2 dyn-wiring(dynamic) ∥
 Wave 3 (M1)   T3.1 optimizer(new) ∥ [T3.2 bind → T3.3 py-frontend → T3.5 ClickBench] ∥ T3.4 docs
               └ T3.5 is the M1 gate
 
+  ⟂ quality gate between every wave: /simplify + abstraction/dedup audit must pass
+    (invariant #4) before the next wave opens
+
 ── ship M1 ──
 
 Wave 4+ (M2/M3)  see §5 epics
@@ -461,4 +488,7 @@ Before spawning an agent for a card, confirm:
 - [ ] The agent gets: this card, the roadmap section, prior-art pointers, and the
       invariants (`binary_size` gate + cross-driver parity).
 - [ ] Isolation is `worktree`.
-- [ ] Definition of Done = own tests + full suite + `binary_size` all green.
+- [ ] Definition of Done = own tests + full suite + `binary_size` + **quality gate**
+      (invariant #4: sound abstractions, minimal boilerplate, minimal free functions;
+      `/simplify` applied) all green.
+- [ ] Each wave ends with the end-of-wave review task before the next wave opens.
