@@ -60,6 +60,7 @@ from ..dtypes import (
     StringLikeType,
     StringType,
     ListLikeType,
+    TemporalType,
 )
 from ..kernels.compare import (
     BinaryCompareKernel,
@@ -116,6 +117,23 @@ from ..kernels.string import (
     ContainsKernel,
     StringEqKernel,
     StringNeKernel,
+    LikeKernel,
+    ILikeKernel,
+)
+from ..kernels.membership import is_in
+from ..kernels.conditional import coalesce, nullif, case_when
+from ..kernels.temporal import (
+    TemporalExtractKernel,
+    YearKernel,
+    MonthKernel,
+    DayKernel,
+    HourKernel,
+    MinuteKernel,
+    SecondKernel,
+    DayOfWeekKernel,
+    QuarterKernel,
+    DayOfYearKernel,
+    date_trunc,
 )
 from ..kernels.boolean import (
     BoolBinaryKernel,
@@ -1253,6 +1271,24 @@ trait StringValue(Value):
     def __ne__[Rhs: StringValue](self, o: Rhs) -> StrNe[Self, Rhs]:
         return StrNe(self.copy(), o.copy())
 
+    def __lt__[Rhs: StringValue](self, o: Rhs) -> StrLt[Self, Rhs]:
+        return StrLt(self.copy(), o.copy())
+
+    def __le__[Rhs: StringValue](self, o: Rhs) -> StrLe[Self, Rhs]:
+        return StrLe(self.copy(), o.copy())
+
+    def __gt__[Rhs: StringValue](self, o: Rhs) -> StrGt[Self, Rhs]:
+        return StrGt(self.copy(), o.copy())
+
+    def __ge__[Rhs: StringValue](self, o: Rhs) -> StrGe[Self, Rhs]:
+        return StrGe(self.copy(), o.copy())
+
+    def like[Rhs: StringValue](self, o: Rhs) -> Like[Self, Rhs]:
+        return Like(self.copy(), o.copy())
+
+    def ilike[Rhs: StringValue](self, o: Rhs) -> ILike[Self, Rhs]:
+        return ILike(self.copy(), o.copy())
+
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
@@ -1513,6 +1549,94 @@ comptime EndsWith = StringPredicate[EndsWithKernel, _, _]
 comptime StrContains = StringPredicate[ContainsKernel, _, _]
 comptime StrEq = StringPredicate[StringEqKernel, _, _]
 comptime StrNe = StringPredicate[StringNeKernel, _, _]
+# SQL LIKE / ILIKE — same breaker shape (`LikeKernel`/`ILikeKernel` are
+# `StringPredicateKernel`s), so they slot straight into `StringPredicate`.
+comptime Like = StringPredicate[LikeKernel, _, _]
+comptime ILike = StringPredicate[ILikeKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# String ordering comparisons — `string < <= > >=` -> bool. Same materialize-once
+# breaker shape as `StringPredicate`, but backed by the `compare.mojo` string
+# kernels (`apply_string`, lexicographic UTF-8 byte order). Validity is the AND of
+# the operand validities (both must be valid), exactly like `NumericCompare` — no
+# kernel re-run needed since string-compare nulls are purely operand-driven.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct StringCompare[K: BinaryCompareKernel, L: StringValue, R: StringValue](
+    BoolValue
+):
+    comptime OutType = BoolType
+    comptime OutShape = max(Self.L.OutShape, Self.R.OutShape)
+    comptime IsBreaker = True
+    comptime NativeType = DType.int32  # lane width for the bit-pack driver
+    var l: Self.L
+    var r: Self.R
+
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        var n = batch.num_rows()
+        var la = into_array(self.l.execute(batch), n).as_string().copy()
+        var ra = into_array(self.r.execute(batch), n).as_string().copy()
+        ctx.append(Self.K.apply_string(la, ra).to_any())
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
+        var s = slot
+        slot += 1
+        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
+
+
+comptime StrLt = StringCompare[LtKernel, _, _]
+comptime StrLe = StringCompare[LeKernel, _, _]
+comptime StrGt = StringCompare[GtKernel, _, _]
+comptime StrGe = StringCompare[GeKernel, _, _]
+
+
+# ---------------------------------------------------------------------------
+# is_in — SQL `x IN (...)`. A bool breaker over any value family: `prepare`
+# hashes the captured value-set once and probes the operand column (reusing
+# `kernels.membership.is_in`), then `vectorwise` loads the mask. The output is
+# always valid (PyArrow `is_in` never nulls), so validity defaults to `None`.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct IsIn[A: Value](BoolValue):
+    comptime OutType = BoolType
+    comptime OutShape = 1
+    comptime IsBreaker = True
+    comptime NativeType = DType.int32
+    var a: Self.A
+    var _value_set: AnyArray
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(self.a.execute(batch), batch.num_rows())
+        ctx.append(is_in(arr, self._value_set.copy()).to_any())
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        DType.bool, W
+    ]:
+        var s = slot
+        slot += 1
+        return ctx.get[BoolArray](s).values().load[DType.bool, W](idx)
 
 
 # ---------------------------------------------------------------------------
@@ -1671,6 +1795,294 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
 
 
 comptime RowNumber = WindowFunction[RowNumberKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# Conditional / null-handling — `coalesce`, `nullif`, `case_when` over the numeric
+# family. Value selection is data-dependent (which candidate per row), so these are
+# numeric breakers: `prepare` runs the selection kernel once into a column, then
+# `vectorwise` loads it. Their result validity is data-dependent too (coalesce nulls
+# only where every operand is null; nullif adds nulls on equality; case_when depends
+# on the branch), so `validity` re-runs the kernel and reads the materialized
+# bitmap — the one case where operand validities alone can't reconstruct the result.
+# ---------------------------------------------------------------------------
+def _result_validity(r: AnyArray) raises -> Optional[Bitmap[mut=False]]:
+    """The materialized result's validity as an offset-0 owned bitmap (None =
+    all valid) — shared by the conditional breakers' `validity`."""
+    var v = r.validity()
+    if v:
+        return _view_to_owned(v.value())
+    else:
+        return None
+
+
+@fieldwise_init
+struct Coalesce[L: NumericValue, R: NumericValue](NumericValue):
+    """`coalesce(l, r)` — the first non-null of two same-dtype numeric operands."""
+
+    comptime OutType = Self.L.OutType
+    comptime OutShape = 1
+    comptime IsBreaker = True
+    var l: Self.L
+    var r: Self.R
+
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
+    def _result(self, batch: RecordBatch) raises -> AnyArray:
+        var n = batch.num_rows()
+        var candidates = List[AnyArray]()
+        candidates.append(into_array(self.l.execute(batch), n))
+        candidates.append(into_array(self.r.execute(batch), n))
+        return coalesce(candidates)
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _result_validity(self._result(batch))
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        ctx.append(self._result(batch))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        var i = slot
+        slot += 1
+        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+
+
+@fieldwise_init
+struct Nullif[L: NumericValue, R: NumericValue](NumericValue):
+    """`nullif(l, r)` — `l` with the rows where `l == r` set to null."""
+
+    comptime OutType = Self.L.OutType
+    comptime OutShape = 1
+    comptime IsBreaker = True
+    var l: Self.L
+    var r: Self.R
+
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            self.l.referenced_columns(), self.r.referenced_columns()
+        )
+
+    def _result(self, batch: RecordBatch) raises -> AnyArray:
+        var n = batch.num_rows()
+        var la = into_array(self.l.execute(batch), n)
+        var ra = into_array(self.r.execute(batch), n)
+        return nullif(la, ra)
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _result_validity(self._result(batch))
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        ctx.append(self._result(batch))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        var i = slot
+        slot += 1
+        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+
+
+@fieldwise_init
+struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
+    """Single-branch `CASE WHEN cond THEN then ELSE otherwise` over numeric
+    values — `then`/`otherwise` share a dtype. A null condition counts as false
+    (Arrow semantics), so `otherwise` is chosen there."""
+
+    comptime OutType = Self.T.OutType
+    comptime OutShape = 1
+    comptime IsBreaker = True
+    var cond: Self.C
+    var then: Self.T
+    var otherwise: Self.E
+
+    def referenced_columns(self) -> List[String]:
+        return _union_columns(
+            _union_columns(
+                self.cond.referenced_columns(),
+                self.then.referenced_columns(),
+            ),
+            self.otherwise.referenced_columns(),
+        )
+
+    def _result(self, batch: RecordBatch) raises -> AnyArray:
+        var n = batch.num_rows()
+        var ca = into_array(self.cond.execute(batch), n).as_bool().copy()
+        var conditions = List[BoolArray]()
+        conditions.append(ca^)
+        var values = List[AnyArray]()
+        values.append(into_array(self.then.execute(batch), n))
+        var else_ = Optional[AnyArray](into_array(self.otherwise.execute(batch), n))
+        return case_when(conditions, values, else_^)
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _result_validity(self._result(batch))
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        ctx.append(self._result(batch))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        var i = slot
+        slot += 1
+        return ctx.get[PrimitiveArray[Self.OutType]](i).values().load[W](idx)
+
+
+# ---------------------------------------------------------------------------
+# Temporal family — a temporal column is materialize-only (like a list column):
+# no fused lane, `materialize` hands back the array. Component extraction
+# (`year`/`month`/…/`day_of_year`) is a breaker → int32 `NumericValue` (same shape
+# as `StringLength`); `date_trunc` floors to a unit boundary, staying temporal.
+# All compute lives in `kernels.temporal`.
+# ---------------------------------------------------------------------------
+trait TemporalValue(Value):
+    comptime OutType: TemporalType
+
+    def year(self) -> TemporalExtract[YearKernel, Self]:
+        return TemporalExtract[YearKernel](self.copy())
+
+    def month(self) -> TemporalExtract[MonthKernel, Self]:
+        return TemporalExtract[MonthKernel](self.copy())
+
+    def day(self) -> TemporalExtract[DayKernel, Self]:
+        return TemporalExtract[DayKernel](self.copy())
+
+    def hour(self) -> TemporalExtract[HourKernel, Self]:
+        return TemporalExtract[HourKernel](self.copy())
+
+    def minute(self) -> TemporalExtract[MinuteKernel, Self]:
+        return TemporalExtract[MinuteKernel](self.copy())
+
+    def second(self) -> TemporalExtract[SecondKernel, Self]:
+        return TemporalExtract[SecondKernel](self.copy())
+
+    def day_of_week(self) -> TemporalExtract[DayOfWeekKernel, Self]:
+        return TemporalExtract[DayOfWeekKernel](self.copy())
+
+    def quarter(self) -> TemporalExtract[QuarterKernel, Self]:
+        return TemporalExtract[QuarterKernel](self.copy())
+
+    def day_of_year(self) -> TemporalExtract[DayOfYearKernel, Self]:
+        return TemporalExtract[DayOfYearKernel](self.copy())
+
+    def date_trunc(self, var unit: String) -> DateTrunc[Self]:
+        return DateTrunc(self.copy(), unit^)
+
+
+struct TemporalColumn[T: TemporalType](TemporalValue):
+    """A temporal column, resolved by name. No fused lane — `materialize` hands
+    back the column."""
+
+    comptime OutType = Self.T
+    comptime OutShape = 1
+    var _name: String
+
+    def referenced_columns(self) -> List[String]:
+        return [self._name.copy()]
+
+    def __init__(out self, var name: String):
+        self._name = name^
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _column_validity(batch, self._name)
+
+    def name(self) -> String:
+        return self._name.copy()
+
+
+@fieldwise_init
+struct TemporalExtract[K: TemporalExtractKernel, A: TemporalValue](
+    NumericValue
+):
+    """Extract a calendar/clock field from a temporal value → int32. A breaker,
+    same shape as `StringLength`."""
+
+    comptime OutType = Int32Type
+    comptime OutShape = 1
+    comptime IsBreaker = True
+    var a: Self.A
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a null temporal value has a null field — validity passes through.
+        return self.a.validity(batch)
+
+    def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(self.a.execute(batch), batch.num_rows())
+        ctx.append(Self.K.dispatch(arr))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int) -> SIMD[
+        Self.OutType.native, W
+    ]:
+        var i = slot
+        slot += 1
+        return ctx.get[Int32Array](i).values().load[W](idx)
+
+
+@fieldwise_init
+struct DateTrunc[A: TemporalValue](TemporalValue):
+    """Floor a temporal value to a unit boundary (`second`/`minute`/`hour`/
+    `day`), keeping the same temporal type. Materialize-only, like a column."""
+
+    comptime OutType = Self.A.OutType
+    comptime OutShape = 1
+    var a: Self.A
+    var _unit: String
+
+    def referenced_columns(self) -> List[String]:
+        return self.a.referenced_columns()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        var arr = into_array(self.a.execute(batch), batch.num_rows())
+        return date_trunc(arr, self._unit)
+
+
+comptime Year = TemporalExtract[YearKernel, _]
+comptime Month = TemporalExtract[MonthKernel, _]
+comptime Day = TemporalExtract[DayKernel, _]
+comptime Hour = TemporalExtract[HourKernel, _]
+comptime Minute = TemporalExtract[MinuteKernel, _]
+comptime Second = TemporalExtract[SecondKernel, _]
+comptime DayOfWeek = TemporalExtract[DayOfWeekKernel, _]
+comptime Quarter = TemporalExtract[QuarterKernel, _]
+comptime DayOfYear = TemporalExtract[DayOfYearKernel, _]
 
 
 # ---------------------------------------------------------------------------
@@ -1944,6 +2356,11 @@ def col[T: StringLikeType](var name: String, dtype: T) -> StringColumn[T]:
 def col[T: ListLikeType](var name: String, dtype: T) -> ListColumn[T]:
     """Reference a list column by name — `col("l", list_(int64))`."""
     return ListColumn[T](name^)
+
+
+def col[T: TemporalType](var name: String, dtype: T) -> TemporalColumn[T]:
+    """Reference a temporal column by name — `col("ts", timestamp(second))`."""
+    return TemporalColumn[T](name^)
 
 
 def lit[T: NumericType](value: Int, dtype: T) -> NumericLiteral[T]:
