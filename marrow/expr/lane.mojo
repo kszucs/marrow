@@ -120,6 +120,9 @@ from ..kernels.boolean import (
     NotNullKernel,
     IsNanKernel,
     IsInfKernel,
+    BoolReduceKernel,
+    AnyKernel,
+    AllKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from ..kernels.cast import (
@@ -496,7 +499,12 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
 
     comptime OutType = BoolType
     comptime Shape = max(Self.L.Shape, Self.R.Shape)
-    comptime NativeType = Self.L.NativeType
+    # size the SIMD width by the WIDER operand — a narrow one (e.g. an int32 bool
+    # breaker) must not shrink W below what a wider sibling's load (int64) needs, or
+    # `SIMD[int64, W]` overflows the register.
+    comptime NativeType = Self.L.NativeType if bit_width_of[
+        Self.L.NativeType
+    ]() >= bit_width_of[Self.R.NativeType]() else Self.R.NativeType
     var l: Self.L
     var r: Self.R
 
@@ -540,6 +548,43 @@ comptime And = BoolBinary[AndKernel, _, _]
 comptime Or = BoolBinary[OrKernel, _, _]
 comptime Xor = BoolBinary[XorKernel, _, _]
 comptime Not = BoolUnary[NotKernel, _]
+
+
+@fieldwise_init
+struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
+    """Fold a bool column to a scalar bool (`any`/`all`) — a scalar bool breaker;
+    once folded it splats.
+
+    KNOWN LIMITATION: fusing this splat directly under bool logic *beside a wider
+    numeric load* (e.g. `all(mask) & (int64_col > 0)`) currently trips a Mojo
+    backend codegen crash ("failed to run the pass manager"). Standalone `any`/`all`
+    and same-width compositions are fine. Follow-up when the backend is fixed."""
+
+    comptime OutType = BoolType
+    comptime Shape = 0
+    comptime NativeType = DType.int32
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows()).as_bool().copy()
+        ctx.append(Datum(Self.K.reduce(arr)))
+
+    @always_inline
+    def vectorwise[
+        W: Int
+    ](
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> SIMD[DType.bool, W]:
+        var d = ctx.get(slot)
+        slot += 1
+        return SIMD[DType.bool, W](d[AnyScalar].as_bool().value())
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+comptime Any = BoolReduce[AnyKernel, _]
+comptime All = BoolReduce[AllKernel, _]
 
 
 # ---------------------------------------------------------------------------

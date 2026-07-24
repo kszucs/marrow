@@ -22,6 +22,8 @@ from marrow.expr.lane import (
     And,
     Or,
     Not,
+    Any,
+    All,
     Count,
     IsNull,
     NotNull,
@@ -176,6 +178,14 @@ def test_bool_or_fuses() raises:
     assert_true(
         into_array(cv, 4) == array([True, False, False, True]).to_any()
     )
+
+
+def test_any_all_reductions() raises:
+    # any(a < 3) = True, all(a < 3) = False over [1,2,3,4]
+    var an = run(Any(Lt(col(0, int64), lit(3, int64))), _batch())
+    assert_true(an.isa[AnyScalar]() and an[AnyScalar].as_bool().value())
+    var al = run(All(Lt(col(0, int64), lit(3, int64))), _batch())
+    assert_true(al.isa[AnyScalar]() and not al[AnyScalar].as_bool().value())
 
 
 def test_count_reduction() raises:

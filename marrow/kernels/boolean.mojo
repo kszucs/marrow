@@ -17,6 +17,7 @@ Three tiers per kernel (same scheme as ``arithmetic.mojo``):
 from std.math import isnan, isinf
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray
+from ..scalars import AnyScalar, BoolScalar
 from ..buffers import Bitmap
 from ..builders import PrimitiveBuilder
 from ..dtypes import (
@@ -107,6 +108,15 @@ trait BoolUnaryKernel(Kernel):
         if arr.dtype() != bool_dt:
             raise Error(t"{Self.name}: input must be a bool array")
         return Self.apply(arr.as_bool().copy(), ctx).to_any()
+
+
+trait BoolReduceKernel(Kernel):
+    """Fold a `BoolArray` to a scalar bool (`any`/`all`). Concrete structs define
+    ``reduce``."""
+
+    @staticmethod
+    def reduce(array: BoolArray) raises -> AnyScalar:
+        ...
 
 
 trait UnaryPredicateKernel(Kernel):
@@ -216,6 +226,24 @@ struct NotKernel(BoolUnaryKernel):
             bitmap=None,
             buffer=(~arr.values()).to_immutable(),
         )
+
+
+struct AnyKernel(BoolReduceKernel):
+    comptime name = "any"
+
+    @staticmethod
+    def reduce(array: BoolArray) raises -> AnyScalar:
+        return BoolScalar(array.values().count_set_bits() > 0).to_any()
+
+
+struct AllKernel(BoolReduceKernel):
+    comptime name = "all"
+
+    @staticmethod
+    def reduce(array: BoolArray) raises -> AnyScalar:
+        # all valid values true (nulls ignored; full null handling is a follow-up)
+        var valid = len(array) - array.null_count()
+        return BoolScalar(array.values().count_set_bits() == valid).to_any()
 
 
 struct XorKernel(BoolBinaryKernel):
