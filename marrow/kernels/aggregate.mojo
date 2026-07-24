@@ -537,6 +537,13 @@ trait BoolReduceKernel(Kernel):
     ) raises -> Bool:
         ...
 
+    @staticmethod
+    def dispatch(
+        array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
+    ) raises -> Bool:
+        """Runtime-dtype entry: fold a boolean `AnyArray` to a `Bool`."""
+        return Self.reduce(array.as_bool(), ctx)
+
 
 struct AnyKernel(BoolReduceKernel):
     """True if any valid element is True. False if empty or all null."""
