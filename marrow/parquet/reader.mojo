@@ -1729,6 +1729,12 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         )
         self._mapping = SchemaMapping.from_parquet(self._meta)
 
+    def _span(self) -> Span[UInt8, ImmUntrackedOrigin]:
+        """The whole file as one contiguous span. The absolute offsets in the
+        footer/page metadata index into this. (A future non-whole-file
+        `ByteSource` would drive per-region `read_at` calls instead.)"""
+        return self._source.read_at(0, self._source.size())
+
     def metadata(self) -> FileMetaData:
         """The file's footer metadata (row groups, column chunks, statistics).
         """
@@ -1766,7 +1772,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         workers. Each worker owns a `CompressionLibs` (the lazy `dlopen` handles
         and reused size cell are not shareable across threads); the mmap and
         metadata are read-only."""
-        var data = self._source.read_at(0, self._source.size())
+        var data = self._span()
 
         # the read plan: which column chunks to decode and how to reassemble them
         var plan = self._mapping.project(
@@ -1881,7 +1887,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         """The raw page index (OffsetIndex + ColumnIndex) for every (row group,
         leaf column), indexed `result[row_group][leaf]`. A chunk without a page
         index yields empty optionals."""
-        var data = self._source.read_at(0, self._source.size())
+        var data = self._span()
         var out = List[List[PageIndex]]()
         for ref rg in self._meta.row_groups:
             var row = List[PageIndex]()
@@ -1908,7 +1914,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         ref cc = self._meta.row_groups[row_group].columns[column]
         if cc.meta_data.bloom_filter_offset < 0:
             return None
-        var data = self._source.read_at(0, self._source.size())
+        var data = self._span()
         var r = ThriftCompactReader(data, cc.meta_data.bloom_filter_offset)
         var hdr = BloomFilterHeader.read(r)
         return SplitBlockBloomFilter.from_bytes(
@@ -1920,7 +1926,7 @@ struct ParquetFile[S: ByteSource = MappedFile](Movable):
         index — indexed `result[rg][leaf][page]`. A column with no page index
         yields an empty page list. Predicate pushdown prunes pages with these.
         """
-        var data = self._source.read_at(0, self._source.size())
+        var data = self._span()
         var out = List[List[List[PageBounds]]]()
         for ref rg in self._meta.row_groups:
             var per_col = List[List[PageBounds]]()

@@ -235,6 +235,7 @@ struct DynValue(
             for i in range(len(out)):
                 if out[i] == ref_name:
                     seen = True
+                    break
             if not seen:
                 out.append(ref_name^)
         else:

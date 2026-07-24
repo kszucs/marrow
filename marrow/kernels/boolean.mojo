@@ -199,10 +199,9 @@ def _kleene[
     var term_a: Bitmap[mut=True]
     var term_b: Bitmap[mut=True]
     comptime if is_and:
-        var not_a = ~a_data
-        var not_b = ~b_data
-        term_a = av & not_a.view()
-        term_b = bv & not_b.view()
+        # term = valid AND NOT data, in one fused pass (no ~data temporaries).
+        term_a = av.difference(a_data)
+        term_b = bv.difference(b_data)
     else:
         term_a = av & a_data
         term_b = bv & b_data
