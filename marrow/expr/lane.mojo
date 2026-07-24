@@ -136,6 +136,7 @@ from ..kernels.boolean import (
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
 from .pruning import PruneStats, PruneBound
+from .dynamic import DynValue
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
     NumToBool as NumToBoolKernel,
@@ -1452,21 +1453,30 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # AnyValue — erase any node to a boxed handle. Because `execute` already returns
 # a concrete `Datum`, erasure is a plain fn-pointer trampoline.
 # ---------------------------------------------------------------------------
-struct AnyValue(Copyable, Movable):
+struct AnyValue(Copyable, Movable, Writable):
     """Type-erased expression handle — the boundary the relational engine
-    (`marrow.expr.execution`) holds. `execute(batch)` runs the node against a fresh
-    context and returns an `AnyArray` (a column), matching `values.AnyValue`.
+    (`marrow.expr.execution`) holds. Boxes either:
 
-    `prune` is deliberately trivial: the comptime lane has no statistics-based
-    pruning, so it always returns `PruneBound.unknown()` (never proves a predicate
-    false), which is always sound — a caller only ever *skips* data it has proven
-    cannot match, so unknown just means "read it and let the exact filter decide"."""
+      * a comptime fused `Value` node — `execute` runs the fused engine against a
+        fresh context and returns a column (`AnyArray`); `prune` is the conservative
+        `unknown()` (the comptime lane has no statistics pruning — always sound,
+        since a caller only skips data it has proven cannot match).
+      * a runtime `DynValue` interpreter (`marrow.expr.dynamic`) — `execute` is
+        already an `AnyArray`, and `prune` carries the *real* min/max rule.
+
+    This is the same dual-box design as `values.AnyValue`, so the relational plan
+    (built from untyped `DynValue`) runs unchanged, while typed subtrees fuse."""
 
     var _boxed: ArcPointer[NoneType]
     var _execute: def (
         ArcPointer[NoneType], RecordBatch
     ) thin raises -> AnyArray
+    var _prune_fn: def (
+        ArcPointer[NoneType], PruneStats
+    ) thin raises -> PruneBound
+    var _name_fn: def (ArcPointer[NoneType]) thin -> String
 
+    # --- comptime fused `Value` box ----------------------------------------
     @staticmethod
     def _exec_tramp[
         V: Value
@@ -1475,17 +1485,60 @@ struct AnyValue(Copyable, Movable):
         var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
         return into_array(d, batch.num_rows())
 
+    @staticmethod
+    def _prune_tramp[
+        V: Value
+    ](ptr: ArcPointer[NoneType], stats: PruneStats) raises -> PruneBound:
+        return PruneBound.unknown()  # comptime lane: conservative, always sound
+
+    @staticmethod
+    def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        return String()  # fused nodes are anonymous
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._execute = Self._exec_tramp[V]
+        self._prune_fn = Self._prune_tramp[V]
+        self._name_fn = Self._name_tramp[V]
+
+    # --- runtime `DynValue` box --------------------------------------------
+    @staticmethod
+    def _exec_tramp_dyn(
+        ptr: ArcPointer[NoneType], batch: RecordBatch
+    ) raises -> AnyArray:
+        return rebind[ArcPointer[DynValue]](ptr)[].execute(batch)
+
+    @staticmethod
+    def _prune_tramp_dyn(
+        ptr: ArcPointer[NoneType], stats: PruneStats
+    ) raises -> PruneBound:
+        return rebind[ArcPointer[DynValue]](ptr)[].prune(stats)
+
+    @staticmethod
+    def _name_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
+        return rebind[ArcPointer[DynValue]](ptr)[].name()
+
+    @implicit
+    def __init__(out self, var dyn: DynValue):
+        var ptr = ArcPointer[DynValue](dyn^)
+        self._boxed = rebind[ArcPointer[NoneType]](ptr^)
+        self._execute = Self._exec_tramp_dyn
+        self._prune_fn = Self._prune_tramp_dyn
+        self._name_fn = Self._name_tramp_dyn
 
     def execute(self, batch: RecordBatch) raises -> AnyArray:
         return self._execute(self._boxed, batch)
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
-        return PruneBound.unknown()
+        return self._prune_fn(self._boxed, stats)
+
+    def name(self) -> String:
+        return self._name_fn(self._boxed)
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(self.name())
 
 
 # ---------------------------------------------------------------------------

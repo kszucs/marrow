@@ -40,6 +40,7 @@ from marrow.expr.lane import (
     into_array,
 )
 from marrow.scalars import AnyScalar
+from marrow.expr.dynamic import col as dyn_col
 
 
 # instantiation is a COMPILE-TIME proof the operand is a fused `NumericValue` node
@@ -246,6 +247,14 @@ def test_fluent_numeric_and_bool() raises:
     assert_true(
         into_array(mask, 4) == array([False, True, False, False]).to_any()
     )
+
+
+def test_anyvalue_wraps_dynvalue() raises:
+    # the untyped runtime interpreter (DynValue), boxed in lane.AnyValue, runs via
+    # the tag dispatch — this is what the relational engine builds plans from
+    var boxed: AnyValue = dyn_col(0) + dyn_col(1)
+    var cv = boxed.execute(_batch())
+    assert_true(cv == array([11, 22, 33, 44], int64).to_any())
 
 
 def test_anyvalue_erases_to_array() raises:
