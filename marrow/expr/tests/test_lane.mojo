@@ -248,12 +248,12 @@ def test_fluent_numeric_and_bool() raises:
     )
 
 
-def test_anyvalue_erases_to_datum() raises:
-    # box a comptime node; its erased execute still yields the same Datum
+def test_anyvalue_erases_to_array() raises:
+    # box a comptime node; its erased execute yields a column (AnyArray), the
+    # interface the relational engine consumes
     var boxed: AnyValue = Add(col(0, int64), lit(10, int64))
-    var ctx = Context()
-    var cv = boxed.execute(_batch(), ctx)
-    assert_true(into_array(cv, 4) == array([11, 12, 13, 14], int64).to_any())
+    var cv = boxed.execute(_batch())
+    assert_true(cv == array([11, 12, 13, 14], int64).to_any())
 
 
 def main() raises:

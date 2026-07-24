@@ -135,6 +135,7 @@ from ..kernels.boolean import (
     AllKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
+from .pruning import PruneStats, PruneBound
 from ..kernels.cast import (
     NumericCast as NumericCastKernel,
     NumToBool as NumToBoolKernel,
@@ -1452,18 +1453,27 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
 # a concrete `Datum`, erasure is a plain fn-pointer trampoline.
 # ---------------------------------------------------------------------------
 struct AnyValue(Copyable, Movable):
+    """Type-erased expression handle — the boundary the relational engine
+    (`marrow.expr.execution`) holds. `execute(batch)` runs the node against a fresh
+    context and returns an `AnyArray` (a column), matching `values.AnyValue`.
+
+    `prune` is deliberately trivial: the comptime lane has no statistics-based
+    pruning, so it always returns `PruneBound.unknown()` (never proves a predicate
+    false), which is always sound — a caller only ever *skips* data it has proven
+    cannot match, so unknown just means "read it and let the exact filter decide"."""
+
     var _boxed: ArcPointer[NoneType]
     var _execute: def (
-        ArcPointer[NoneType], RecordBatch, mut Context
-    ) thin raises -> Datum
+        ArcPointer[NoneType], RecordBatch
+    ) thin raises -> AnyArray
 
     @staticmethod
     def _exec_tramp[
         V: Value
-    ](
-        ptr: ArcPointer[NoneType], batch: RecordBatch, mut ctx: Context
-    ) raises -> Datum:
-        return rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
+    ](ptr: ArcPointer[NoneType], batch: RecordBatch) raises -> AnyArray:
+        var ctx = Context()
+        var d = rebind[ArcPointer[V]](ptr)[].execute(batch, ctx)
+        return into_array(d, batch.num_rows())
 
     @implicit
     def __init__[V: Value](out self, value: V):
@@ -1471,8 +1481,11 @@ struct AnyValue(Copyable, Movable):
         self._boxed = rebind[ArcPointer[NoneType]](ptr^)
         self._execute = Self._exec_tramp[V]
 
-    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return self._execute(self._boxed, batch, ctx)
+    def execute(self, batch: RecordBatch) raises -> AnyArray:
+        return self._execute(self._boxed, batch)
+
+    def prune(self, stats: PruneStats) raises -> PruneBound:
+        return PruneBound.unknown()
 
 
 # ---------------------------------------------------------------------------
