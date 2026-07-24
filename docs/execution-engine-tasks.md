@@ -225,6 +225,23 @@ first/last stay M2.)
 / `temporal.mojo` / `aggregate.mojo`+`groupby.mojo` — **disjoint. Run all five in
 parallel.** Safe to start alongside Wave 0 (no Wave-0 task owns any of these).
 
+**FU-1 — `rapidhash(AnyArray)` large_string branch** · *M2/Should* · Depends: — · Owns:
+`marrow/kernels/hashing.mojo` (+ re-enable the dropped large_string cases in
+`test_membership.mojo` etc.) · **Discovered during Wave 1 (T1.2).** `rapidhash`'s
+type-erased dispatch handles `is_string()` (int32 offsets) but not `is_large_string()`, so
+`is_in` / `count_distinct` / group-by / join over `large_string` raise "unsupported
+dtype". One-branch fix mirroring the `is_string` path. Not a ClickBench blocker (`hits`
+uses `string`).
+
+**FU-2 — `filter`/`take` temporal support** · *M1/Should (Wave-2 prereq)* · Depends: — ·
+Owns: `marrow/kernels/filter.mojo` (+ tests) · **Discovered during Wave 1 (T1.5).**
+`Filter`/`Take` route via `dispatch_over_numeric`, and temporal types aren't `is_numeric()`,
+so gather/filter on date/time/timestamp/duration columns hits the `raise`. T1.5 worked
+around it for min/max by reinterpreting to the integer backing; do the same generically in
+the filter/take dispatch (reinterpret temporal → int backing, filter/take, relabel). Needed
+before the relational `Filter`/`Sort`/`Join` (T2.3) can operate over temporal columns —
+ClickBench Q37–43 filter on `EventDate`.
+
 ### Wave 2 — M1 wiring + operators + scan (mixed parallel/serial)
 
 Two parallel lanes plus a serialized `execution.mojo` sub-chain.

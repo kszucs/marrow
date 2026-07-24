@@ -4,6 +4,19 @@
 
 ### Features
 
+- **New compute kernels for analytical queries (ClickBench-driven):**
+  - `marrow/kernels/conditional.mojo` — `case_when` (multi-branch, all types),
+    `coalesce`, `nullif`, `fill_null`, all via a shared `concat`+`take`
+    multiplexer (type-agnostic, null-correct).
+  - `marrow/kernels/membership.mojo` — `is_in` over numeric/bool/string, reusing
+    `SwissHashTable`/`rapidhash` (the join/distinct basis).
+  - `marrow/kernels/temporal.mojo` — `year/month/day/hour/minute/second/`
+    `day_of_week/quarter/day_of_year` extraction (Hinnant civil-date) +
+    `date_trunc(unit)`, over date/time/timestamp (UTC).
+  - `compare.mojo` — string/large_string ordering comparisons (`< <= > >=`);
+    `string.mojo` — `like`/`ilike` (SQL `%`/`_`, PyArrow `match_like` semantics).
+  - `aggregate.mojo`/`groupby.mojo` — `min`/`max` over string and temporal
+    (whole-table and grouped); grouped `count_distinct` as a first-class agg.
 - **The fused comptime `Value` lane tracks validity (nulls).** Previously the
   fused numeric/bool lane computed data only and emitted
   `BoolArray`/`PrimitiveArray` with `nulls=0, bitmap=None`, diverging from the
