@@ -2,12 +2,31 @@ from std.testing import assert_equal, assert_true, assert_false
 from marrow.testing import TestSuite
 
 from marrow.arrays import AnyArray, PrimitiveArray
-from marrow.builders import array, nulls, PrimitiveBuilder, Int32Builder
-from marrow.dtypes import int32, int64, float64, Int32Type, Int64Type
+from marrow.builders import (
+    array,
+    nulls,
+    PrimitiveBuilder,
+    Int32Builder,
+    StringBuilder,
+    Date32Builder,
+    TimestampBuilder,
+)
+from marrow.dtypes import (
+    int32,
+    int64,
+    float64,
+    string,
+    date32,
+    timestamp,
+    second,
+    Int32Type,
+    Int64Type,
+)
 from marrow.kernels.aggregate import (
     SumKernel,
     MeanKernel,
     MinKernel,
+    MaxKernel,
     CountKernel,
 )
 
@@ -113,6 +132,111 @@ def test_mean_empty_is_null() raises:
     var a: AnyArray = array(int32)
     var result = MeanKernel.reduce(a)
     assert_false(result.is_valid())
+
+
+# ---------------------------------------------------------------------------
+# whole-table min / max over strings (lexicographic / bytewise)
+# ---------------------------------------------------------------------------
+
+
+def _strings(var items: List[String]) raises -> AnyArray:
+    var b = StringBuilder(len(items))
+    for it in items:
+        b.append(it)
+    return b.finish()
+
+
+def test_min_string() raises:
+    var a = _strings(["banana", "apple", "cherry"])
+    var r = MinKernel.reduce(a)
+    assert_true(r.type() == string)
+    assert_equal(r.as_string().to_string(), "apple")
+
+
+def test_max_string() raises:
+    var a = _strings(["banana", "apple", "cherry"])
+    var r = MaxKernel.reduce(a)
+    assert_true(r.type() == string)
+    assert_equal(r.as_string().to_string(), "cherry")
+
+
+def test_min_string_skips_nulls() raises:
+    var b = StringBuilder(4)
+    b.append("m")
+    b.append_null()
+    b.append("a")
+    b.append_null()
+    var a: AnyArray = b.finish()
+    assert_equal(MinKernel.reduce(a).as_string().to_string(), "a")
+    assert_equal(MaxKernel.reduce(a).as_string().to_string(), "m")
+
+
+def test_min_string_all_null_is_null() raises:
+    var b = StringBuilder(2)
+    b.append_null()
+    b.append_null()
+    var a: AnyArray = b.finish()
+    assert_false(MinKernel.reduce(a).is_valid())
+    assert_false(MaxKernel.reduce(a).is_valid())
+
+
+def test_min_string_empty_is_null() raises:
+    var b = StringBuilder(0)
+    var a: AnyArray = b.finish()
+    assert_false(MinKernel.reduce(a).is_valid())
+
+
+# ---------------------------------------------------------------------------
+# whole-table min / max over temporal (integer backing, dtype preserved)
+# ---------------------------------------------------------------------------
+
+
+def _date32(var days: List[Int]) raises -> AnyArray:
+    var b = Date32Builder(date32(), len(days))
+    for d in days:
+        b.append(Scalar[int32.native](d))
+    return b.finish()
+
+
+def test_min_max_date32() raises:
+    var a = _date32([19000, 18500, 19000, 18800])
+    var mn = MinKernel.reduce(a)
+    var mx = MaxKernel.reduce(a)
+    assert_true(mn.type() == date32().to_any())  # dtype preserved
+    assert_true(mx.type() == date32().to_any())
+    assert_equal(mn.as_date32().value(), 18500)
+    assert_equal(mx.as_date32().value(), 19000)
+
+
+def test_min_max_date32_skips_nulls() raises:
+    var b = Date32Builder(date32(), 3)
+    b.append(Scalar[int32.native](19000))
+    b.append_null()
+    b.append(Scalar[int32.native](18500))
+    var a: AnyArray = b.finish()
+    assert_equal(MinKernel.reduce(a).as_date32().value(), 18500)
+    assert_equal(MaxKernel.reduce(a).as_date32().value(), 19000)
+
+
+def test_min_max_date32_all_null_is_null() raises:
+    var b = Date32Builder(date32(), 2)
+    b.append_null()
+    b.append_null()
+    var a: AnyArray = b.finish()
+    assert_false(MinKernel.reduce(a).is_valid())
+    assert_false(MaxKernel.reduce(a).is_valid())
+
+
+def test_min_max_timestamp_preserves_unit_tz() raises:
+    var b = TimestampBuilder(timestamp(second, "UTC"), 3)
+    b.append(Scalar[int64.native](3000))
+    b.append(Scalar[int64.native](1000))
+    b.append(Scalar[int64.native](2000))
+    var a: AnyArray = b.finish()
+    var mn = MinKernel.reduce(a)
+    assert_true(mn.type() == timestamp(second, "UTC").to_any())
+    assert_equal(mn.as_timestamp().value(), 1000)
+    assert_equal(MaxKernel.reduce(a).as_timestamp().value(), 3000)
 
 
 def main() raises:
