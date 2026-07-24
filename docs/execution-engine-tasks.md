@@ -135,28 +135,27 @@ This unblocks streaming (T2.x) and OpenDAL (M2).
 List[String]` and `is_deterministic() -> Bool`; correct for column/literal/binary/unary/
 cast/reduce nodes. Prerequisite for projection & predicate pushdown.
 
-**T0.4 — Grow `DynValue` op parity + metadata** · *M0/Must* · Depends: (soft) T0.1 ·
-Owns: `marrow/expr/dynamic.mojo`, `marrow/expr/tests/test_runtime.mojo` · Reads:
-`marrow/kernels/*` · Done when: `DynValue` reaches parity with the fused algebra on the
-ops M1 needs whose kernels already exist — arithmetic (incl. mod/floordiv), numeric
-compares, Kleene and/or/xor, is_null/notnull, cast, if_else; plus
-`referenced_columns()`/`is_deterministic()` on `DynValue`. (String/temporal/is_in
-dynamic wiring is T2.2, after their kernels land.)
+**T0.4 — Grow `DynValue` op parity + metadata + parity harness** · *M0/Must* · Depends:
+(soft) T0.1 · Owns: `marrow/expr/dynamic.mojo`, `marrow/expr/tests/test_runtime.mojo`,
+`marrow/expr/tests/test_parity.mojo` (new) · Reads: `marrow/kernels/*`, `values.mojo` ·
+Done when: (a) `DynValue` reaches parity with the fused algebra on the ops M1 needs whose
+kernels already exist — arithmetic (incl. mod/floordiv), numeric compares, xor,
+is_null/notnull, cast, if_else (and/or already route through the boolean kernel, so they
+inherit T0.1's Kleene fix automatically); plus `referenced_columns()`/`is_deterministic()`
+on `DynValue`. (String/temporal/is_in dynamic wiring is T2.2, after their kernels land.)
+(b) A reusable **cross-driver parity harness** (`test_parity.mojo`) asserts `fused Value
+result == DynValue result` for an expression over a batch, seeded with the stable M0 ops
+(arithmetic/compare/cast/if_else); every later op-adding task appends a case. The and/or
+Kleene parity case is added at wave integration once T0.1 is merged.
 
-**T0.5 — Doc hygiene** · *M0/Must* · Depends: — · Owns: `CLAUDE.md` (the stale
-"Table not implemented" / type-coverage / `similarity.mojo`+`sum.mojo` claims) · Reads:
-audit findings · Done when: `CLAUDE.md` reflects reality (Table exists; temporal/decimal/
-map/dictionary present; those two kernel files gone).
+> **Doc hygiene (was T0.5)** is handled by the orchestrator up-front, not a subagent —
+> `CLAUDE.md`'s stale "Table not implemented" / type-coverage / `similarity.mojo`+
+> `sum.mojo` claims are corrected *before* the agents launch so they don't read stale
+> guidance.
 
-**T0.6 — Cross-driver parity harness** · *M0/Must* · Depends: (soft) T0.3, T0.4 · Owns:
-`marrow/expr/tests/test_parity.mojo` (new) · Reads: `values.mojo`, `dynamic.mojo` · Done
-when: a reusable helper asserts `fused Value result == DynValue result` for a given
-expression over a batch; seeded with the M0 ops. Every later op-adding task appends a
-parity case here (append-only; single owner per wave).
-
-*Wave-0 write-sets:* `boolean.mojo` / `source.mojo`+`reader.mojo` / `values.mojo` /
-`dynamic.mojo` / `CLAUDE.md` / `test_parity.mojo` — **all disjoint. Run all six in
-parallel.** (Merge T0.1 before asserting T0.4's Kleene parity cases.)
+*Wave-0 write-sets:* `boolean.mojo`(+`string.mojo`/`nested.mojo`) / `source.mojo`+
+`reader.mojo` / `values.mojo` / `dynamic.mojo`(+`test_parity.mojo`) — **all disjoint. Run
+all four in parallel.** (Merge T0.1 before asserting T0.4's Kleene parity case.)
 
 ### Wave 1 — M1 kernels (fully parallel; all new/disjoint files)
 
@@ -348,10 +347,10 @@ aligned across the two where cheap, but do not contort either to force identical
 ## 4. Wave schedule (at a glance)
 
 ```
-Wave 0 (M0)   T0.1 boolean   ∥ T0.2 reader/source ∥ T0.3 values-meta ∥
-              T0.4 dynamic    ∥ T0.5 CLAUDE.md     ∥ T0.6 parity-harness
-              └ all disjoint files → 6-wide parallel
-                 (merge T0.1 before T0.4 parity assertions)
+Wave 0 (M0)   T0.1 boolean ∥ T0.2 reader/source ∥ T0.3 values-meta ∥
+              T0.4 dynamic+parity-harness
+              └ 4-wide parallel, all disjoint files (CLAUDE.md hygiene done up-front by
+                orchestrator; merge T0.1 before T0.4's Kleene parity case)
 
 Wave 1 (M1)   T1.1 conditional ∥ T1.2 membership ∥ T1.3 compare+string ∥
               T1.4 temporal+date_trunc ∥ T1.5 aggregate(min/max str+date, count_distinct)
