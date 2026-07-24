@@ -157,7 +157,10 @@ Kleene parity case is added at wave integration once T0.1 is merged.
 `reader.mojo` / `values.mojo` / `dynamic.mojo`(+`test_parity.mojo`) — **all disjoint. Run
 all four in parallel.** (Merge T0.1 before asserting T0.4's Kleene parity case.)
 
-**T0.7 — Fused `BoolValue` validity/Kleene tracking** · *M1/Should* · Depends: T0.1 ·
+**T0.7 — Fused `BoolValue` validity/Kleene tracking** · ✅ **DONE** (merged `8f833e6`; the
+fix landed as validity tracking across the *whole* fused lane — numeric + bool — not just
+bool; `validity(batch)` per node reusing `bitmap_and` + the Kleene `and_`/`or_`; parity
+cases enabled; DCE gate holds ~11.7×). · *M1/Should* · Depends: T0.1 ·
 Owns: `marrow/expr/values.mojo` (the `BoolValue` lane), `test_parity.mojo` (enable the
 deferred Kleene cases) · **Discovered during Wave 0 integration by the parity harness.**
 The fused bool lane (`BoolValue.materialize`, values.mojo) emits

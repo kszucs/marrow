@@ -4,6 +4,16 @@
 
 ### Features
 
+- **The fused comptime `Value` lane tracks validity (nulls).** Previously the
+  fused numeric/bool lane computed data only and emitted
+  `BoolArray`/`PrimitiveArray` with `nulls=0, bitmap=None`, diverging from the
+  null-correct dynamic path. Each node now exposes `validity(batch)`: propagating
+  ops (arithmetic/compare/unary/cast/length) AND-combine children validity via
+  the same `bitmap_and` helper the eager kernels use; Kleene `and_`/`or_` reuse
+  the null-correct `AndKernel`/`OrKernel` apply; `is_null`/`not_null`/literals are
+  never-null. The fused and dynamic drivers now agree element-for-element on
+  nullable input (enforced by the parity harness), and the small-binary DCE
+  property is preserved.
 - **`referenced_columns()` / `is_deterministic()` on the expression layer.**
   Both the fused comptime `Value` tower (every concrete node) and the runtime
   `DynValue`, surfaced through `AnyValue` via the existing fn-pointer
@@ -27,10 +37,8 @@
 - **Cross-driver parity harness** (`marrow/expr/tests/test_parity.mojo`):
   `assert_parity` runs a fused `Value` and an equivalent `DynValue` against one
   batch and asserts equal results, so the runtime interpreter can never silently
-  diverge from the fused algebra. Covers arithmetic, comparisons, cast, and
-  if_else. (It also surfaced a real gap: the fused `BoolValue` lane does not
-  track validity, so Kleene `and_`/`or_` parity over nullable masks is deferred
-  until the fused bool lane carries nulls — tracked as T0.7.)
+  diverge from the fused algebra. Covers arithmetic, comparisons, cast, if_else,
+  null propagation, and Kleene `and_`/`or_` over nullable masks.
 
 ### Fixes
 
