@@ -4,6 +4,20 @@
 
 ### Features
 
+- **Relational operators: `Sort`, `Limit`/`Offset`/`TopK`, computed `Project`.**
+  `Sort` (pipeline breaker) reuses the sort kernel over a key+data struct; `Limit`
+  slices exactly across morsels; a `Limit`-over-`Sort` folds into the kernel's
+  top-K `limit`; `Project` now evaluates arbitrary expressions with output names.
+  Plan builders `.sort/.limit/.project` on `AnyRelation`.
+- **Wave 1 kernels wired into both expression drivers.** The fused comptime
+  `Value` layer (F2) and the runtime `DynValue` interpreter (F1) both expose
+  string ordering compares, `like`/`ilike`, `is_in`, `coalesce`/`nullif`/
+  `case_when`, and temporal extraction/`date_trunc` — the two drivers agree
+  element-for-element (parity harness). (Known gap FU-5: fused `is_in` composed
+  under boolean logic; the dynamic path is correct.)
+- **Temporal `filter`/`take`.** `Filter`/`Take`/`drop_null` now handle
+  date/time/timestamp/duration columns by reinterpreting to the integer backing
+  around the numeric path — unblocking filter/sort/join over temporal columns.
 - **New compute kernels for analytical queries (ClickBench-driven):**
   - `marrow/kernels/conditional.mojo` — `case_when` (multi-branch, all types),
     `coalesce`, `nullif`, `fill_null`, all via a shared `concat`+`take`

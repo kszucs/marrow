@@ -268,6 +268,14 @@ waste on 100M-row ClickBench filters (Q21–23). Fix: a scalar-pattern overload 
 pattern, matching PyArrow `match_like`) that compiles the token list once and streams each
 row's codepoints. Deferred from the gate as an API-shape change, not a pure cleanup.
 
+**FU-5 — Fused `IsIn` under boolean logic** · *M2/Should* · Depends: — · Owns:
+`marrow/expr/values.mojo` (+ re-enable `test_is_in_fuses_under_bool_logic`) · **Discovered
+during Wave 2 (T2.1 integration).** The fused (F2) `IsIn` breaker composed under `And`/`Or`
+(`is_in(...) & cmp`) produces a wrong mask — a breaker slot/composition issue in the fused
+bool lane. Standalone fused `IsIn` is correct, and the dynamic (F1) path handles
+`And(IsIn, cmp)` correctly (eager `and_`), so ClickBench Q41 (`IN(...) AND …`) works via F1.
+Test disabled (`_fu5_…` prefix) pending the fused-composition fix.
+
 ### Wave 2 — M1 wiring + operators + scan (mixed parallel/serial)
 
 Two parallel lanes plus a serialized `execution.mojo` sub-chain.
