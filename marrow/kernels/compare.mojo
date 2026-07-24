@@ -76,7 +76,7 @@ def _binary_cmp[
 
     comptime native = T.native
     var length = len(left)
-    var bm = bitmap_and(left.bitmap, right.bitmap) if (
+    var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy()) if (
         left.bitmap or right.bitmap
     ) else Optional[Bitmap[]]()
 
@@ -146,7 +146,7 @@ trait BinaryCompareKernel(Kernel):
                 t"{Self.name}: arrays must have the same length, got {n} and"
                 t" {len(right)}"
             )
-        var bm = bitmap_and(left.bitmap, right.bitmap)
+        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
         var data = Bitmap.alloc_zeroed(n)
         for i in range(n):
             if left.is_valid(i) and right.is_valid(i):
@@ -319,7 +319,7 @@ def equal(
     var n = len(left)
     if len(right) != n:
         raise Error("equal: string arrays must have the same length")
-    var bm = bitmap_and(left.bitmap, right.bitmap)
+    var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
     var bm_builder = Bitmap.alloc_zeroed(n)
     for i in range(n):
         var eq = String(left.unsafe_get(UInt(i))) == String(

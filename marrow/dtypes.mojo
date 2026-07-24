@@ -793,6 +793,12 @@ struct DictionaryType(DataType):
         self._value_type = OwnedPointer(copy._value_type[].copy())
         self.ordered = copy.ordered
 
+    # Explicit (empty) destructor: `OwnedPointer[AnyDataType]` is not implicitly
+    # deletable, so the compiler cannot synthesize one. Fields are still
+    # destroyed automatically after the body runs.
+    def __del__(deinit self):
+        pass
+
     def index_type(ref self) -> ref[self._index_type[]] AnyDataType:
         return self._index_type[]
 

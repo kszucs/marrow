@@ -73,7 +73,9 @@ from marrow.expr.dynamic import (
 )
 
 
-def assert_fused(var fused: AnyValue, expected: AnyArray, batch: RecordBatch) raises:
+def assert_fused(
+    var fused: AnyValue, expected: AnyArray, batch: RecordBatch
+) raises:
     """Assert a fused node matches an expected array. Used for ops the runtime
     ``DynValue`` interpreter does not yet expose — their cross-driver parity case
     is PENDING T2.2 (which wires the same ops into ``dynamic.mojo``); until then

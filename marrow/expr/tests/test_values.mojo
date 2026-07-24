@@ -662,7 +662,9 @@ def test_compare_propagates_nulls() raises:
 
 def test_cast_propagates_nulls() raises:
     # int64 -> float64 cast preserves the operand's validity
-    var cv = NumericCast[Float64Type](col("a", int64)).execute(_nullable_batch())
+    var cv = NumericCast[Float64Type](col("a", int64)).execute(
+        _nullable_batch()
+    )
     assert_true(
         into_array(cv, 6)
         == array([1.0, None, 3.0, None, 7.0, 2.0], float64).to_any()
@@ -780,9 +782,7 @@ def test_like_fluent_and_under_logic() raises:
 def test_is_in_numeric() raises:
     # a=[1,2,3,4] IN {2,3} -> [F,T,T,F]
     var cv = (IsIn(col("a", int64), array([2, 3], int64))).execute(_batch())
-    assert_true(
-        into_array(cv, 4) == array([False, True, True, False]).to_any()
-    )
+    assert_true(into_array(cv, 4) == array([False, True, True, False]).to_any())
 
 
 def test_is_in_string() raises:
@@ -956,9 +956,9 @@ def test_date_trunc_then_extract() raises:
 
 
 def test_date_trunc_fluent() raises:
-    var h = (
-        col("ts", timestamp(second)).date_trunc("hour").minute()
-    ).execute(_ts_batch())
+    var h = (col("ts", timestamp(second)).date_trunc("hour").minute()).execute(
+        _ts_batch()
+    )
     # truncating to the hour zeroes minutes/seconds
     assert_true(into_array(h, 2) == array([0, 0], int32).to_any())
 

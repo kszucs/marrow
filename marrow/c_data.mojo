@@ -126,14 +126,18 @@ def _decode_c_metadata(
             dest=UnsafePointer(to=k_len).bitcast[UInt8](), src=p + head, count=4
         )
         head += 4
-        var k = String(from_utf8=Span[Byte](ptr=p + head, length=Int(k_len)))
+        var k = String(
+            from_utf8=Span[Byte](unsafe_ptr=p + head, length=Int(k_len))
+        )
         head += Int(k_len)
         var v_len = Int32(0)
         unsafe_memcpy(
             dest=UnsafePointer(to=v_len).bitcast[UInt8](), src=p + head, count=4
         )
         head += 4
-        var v = String(from_utf8=Span[Byte](ptr=p + head, length=Int(v_len)))
+        var v = String(
+            from_utf8=Span[Byte](unsafe_ptr=p + head, length=Int(v_len))
+        )
         head += Int(v_len)
         result[k^] = v^
     return result^

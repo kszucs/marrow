@@ -1917,7 +1917,9 @@ struct CaseWhen[C: BoolValue, T: NumericValue, E: NumericValue](NumericValue):
         conditions.append(ca^)
         var values = List[AnyArray]()
         values.append(into_array(self.then.execute(batch), n))
-        var else_ = Optional[AnyArray](into_array(self.otherwise.execute(batch), n))
+        var else_ = Optional[AnyArray](
+            into_array(self.otherwise.execute(batch), n)
+        )
         return case_when(conditions, values, else_^)
 
     def validity(

@@ -32,6 +32,27 @@ pixi run -e dev fmt
 pixi run package
 ```
 
+### Fast build-error checking (use this while a build is broken)
+
+When the tree does not compile — e.g. after a Mojo upgrade — do **not** iterate
+with `pytest`. It builds one runner per selected test, so a single file costs
+minutes and reports each build error once per test. Use the build-only tasks:
+
+```bash
+pixi run -e dev check_lib                              # whole library, ~10 s
+pixi run -e dev check marrow/tests/test_views.mojo     # one file + imports, ~4 s
+```
+
+`check_lib` compiles every module under `marrow/`, so it catches errors in code
+that no selected test happens to import; `check <file>` then narrows to one
+test and its transitive imports. Both surface **all** errors and warnings in a
+single pass. A `pytest` run of the same file takes ~2.5 min.
+
+Note `check_lib` also compiles `*/tests/*`, so `'main()' is not supported
+within packages` lines are expected noise — every *other* error is real.
+
+Switch back to `pytest` once it compiles: building is not passing.
+
 ### Running Individual Tests
 
 Always use `pytest` to run tests — never `mojo test` or `mojo run` directly.
@@ -372,6 +393,7 @@ Mojo is a moving target with very frequent breaking changes. On confusing compil
 - ArcPointer is used for shared ownership of buffers/bitmaps
 - Many methods use `raises` for error propagation
 - **Mojo resolves circular imports between modules in the same package** — do not reorganize code or move types between files to avoid circular imports; Mojo handles them correctly
+- **Open bug (`docs/code-quality-tasks.md` Q0.0):** `ArcPointer[DynValue]` (`expr/values.mojo:2299`) writes its trailing `Variant` discriminant one byte past the allocation (`size_of` 416 vs ≥417 needed), silently corrupting the heap and causing every full-suite failure — note that ASAN *hides* it (`test_reader` passes 35/35 under ASAN, fails without) and that a Mojo build failure emits no ASAN output at all, so verify fixes without ASAN and confirm tests actually ran.
 
 ### Associated-type & trait gotchas (learned the hard way)
 

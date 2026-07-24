@@ -271,7 +271,11 @@ struct RadixPartitioner(Partitioner):
         return result^
 
     def map_partitions[
-        R: Copyable & Movable,
+        # `ImplicitlyDeletable` is required since mojo 1.0.0b3.dev2026072406:
+        # `Optional[R]` (used for the per-worker result slots below) only
+        # conditionally conforms to it, so an unconstrained `R` makes the
+        # slot list linear and unable to be dropped.
+        R: Copyable & ImplicitlyDeletable & Movable,
         op: def(Int, Int32Array, UInt64Array) raises capturing[_] -> R,
     ](self, var hashes: UInt64Array) raises -> List[R]:
         """Run ``op`` on every partition in parallel and collect the results.

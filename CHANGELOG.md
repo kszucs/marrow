@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Build
+
+- **Upgraded Mojo to `1.0.0b3.dev2026072406`** (pinned exactly in all three
+  places in `pixi.toml`). This **fixes a long-standing heap corruption**: boxing
+  a `DynValue` into an `AnyValue` wrote a `Variant` discriminant one byte past
+  its `ArcPointer` allocation, silently corrupting the heap until it hit live
+  allocator metadata. It accounted for *every* failure in the full test suite
+  (`parquet/tests/test_reader.mojo`, `expr/tests/test_streaming.mojo`, 59 in
+  total); both files now pass, and ASAN reports 0 `heap-buffer-overflow` hits
+  where it previously reported 86.
+
+  API migrations required by the upgrade (all per the upstream changelog):
+  `Span(ptr=)` → `Span(unsafe_ptr=)`; `memset`/`memset_zero` →
+  `unsafe_memset`/`unsafe_memset_zero`; `SIMDSize` → `SIMDLength`;
+  `OwnedPointer[T]` and `Optional[T]` now conform to `ImplicitlyDeletable` only
+  conditionally (explicit `__del__` on `DictionaryType`, and an
+  `ImplicitlyDeletable` bound on `RadixPartitioner.map_partitions`'s result
+  type); and `Variant` adopted *interior origins*, so `bitmap_and` call sites
+  pass `.copy()`. Dropped the `_accelerator_arch()` GPU-arch validation.
+
+  Adds a `max` dependency, which **should not be required** — GPU kernels
+  compiled without it before this release. Tracked as a toolchain regression in
+  `pixi.toml`; retry dropping it on the next upgrade.
+
+- **New build-only tasks `check` and `check_lib`** for fast compile-error
+  iteration (~4 s for one file, ~10 s for the whole library, versus minutes for
+  the equivalent `pytest` run). Documented in `CLAUDE.md`.
+
 ### Features
 
 - **Relational `Aggregate` completeness + `HAVING`.** `AnyRelation.aggregate`

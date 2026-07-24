@@ -47,6 +47,7 @@ from ..parquet import (
 from ..scalars import AnyScalar
 from .values import AnyValue
 from .pruning import PruneStats
+from ..kernels.execution import ExecutionContext
 
 
 comptime DEFAULT_MORSEL_SIZE: Int = 65_536

@@ -61,7 +61,7 @@ trait BinaryKernel(Kernel):
             )
         comptime native = T.native
         var length = len(left)
-        var bm = bitmap_and(left.bitmap, right.bitmap)
+        var bm = bitmap_and(left.bitmap.copy(), right.bitmap.copy())
         var buf: Buffer[mut=True]
         if ctx.is_gpu():
             buf = Buffer.alloc_device[native](ctx.device.value(), length)

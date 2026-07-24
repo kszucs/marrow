@@ -21,7 +21,6 @@ from std.utils import Variant
 from std.builtin.rebind import downcast
 from std.os import abort
 from std.sys import has_accelerator, CompilationTarget, size_of
-from std.sys.info import _accelerator_arch
 
 from .dtypes import (
     AnyDataType,
@@ -179,27 +178,23 @@ def has_accelerator_support[*dtypes: DType]() -> Bool:
 
     For example Metal doesn't support float64 as of April 2026.
 
-    Also guards against Mojo toolchain regressions where the GPU architecture
-    string is malformed (e.g. 'metal:2-metal4' on an M2 with Metal 4 API).
-    The valid Metal targets are 'metal:1'–'metal:4'; anything else indicates
-    the toolchain cannot compile GPU kernels for this device and we fall back
-    to CPU.
+    Must use `comptime if`, not runtime `if`: these guards have to eliminate
+    the accelerator branches at elaboration time, not at runtime.
+
+    Note `has_accelerator()` is itself `is_gpu() or _accelerator_arch() != ""`,
+    so on a machine reporting an accelerator this enables GPU codegen — which
+    since 1.0.0b3.dev2026072406 requires a MAX runtime (`lib/libmax.dylib`),
+    hence the `max` dependency pinned alongside `mojo` in `pixi.toml`.
+
+    A previous `_accelerator_arch()` check here validated the GPU architecture
+    string, working around a toolchain regression that reported a malformed
+    target (e.g. 'metal:2-metal4' on an M2 with the Metal 4 API). It has been
+    removed; reinstate it if that regression reappears.
     """
-    if not has_accelerator():
+    comptime if not has_accelerator():
         return False
-    if not CompilationTarget.is_apple_silicon():
+    comptime if not CompilationTarget.is_apple_silicon():
         return True
-    # Validate the GPU architecture string before attempting to compile any
-    # GPU kernel.  A malformed target (e.g. 'metal:2-metal4') causes a hard
-    # constraint failure deep inside simd_width_of, so we gate it out here.
-    comptime arch = _accelerator_arch()
-    comptime if (
-        arch != "metal:1"
-        and arch != "metal:2"
-        and arch != "metal:3"
-        and arch != "metal:4"
-    ):
-        return False
     comptime for dtype in dtypes:
         if dtype == DType.float64:
             return False
