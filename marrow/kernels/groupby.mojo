@@ -184,6 +184,15 @@ comptime _CARD_SAMPLE_ROWS = 4096
 """Rows sampled (strided) to estimate cardinality on the dispatch boundary."""
 
 
+def _temporal_backing_dtype(dt: AnyDataType) -> AnyDataType:
+    """The integer dtype backing a temporal value — 32-bit for date32/time32,
+    64-bit otherwise (date64/timestamp/time64/duration). Used to reinterpret a
+    temporal min/max column onto the numeric aggregate path."""
+    return AnyDataType(int32) if (
+        dt.is_date32() or dt.is_time32()
+    ) else AnyDataType(int64)
+
+
 struct GroupBy(Movable):
     """Grouped aggregation over a fixed set of key columns.
 
@@ -637,9 +646,7 @@ struct GroupBy(Movable):
         for j in range(len(tags)):
             var vdt = values[j].dtype()
             if (tags[j] == AGG_MIN or tags[j] == AGG_MAX) and vdt.is_temporal():
-                var native_dt = AnyDataType(int32) if (
-                    vdt.is_date32() or vdt.is_time32()
-                ) else AnyDataType(int64)
+                var native_dt = _temporal_backing_dtype(vdt)
                 work.append(reinterpret_array(values[j], native_dt))
                 relabel.append(vdt.copy())
             else:
@@ -774,9 +781,7 @@ struct GroupBy(Movable):
             elif vdt.is_temporal():
                 # Reduce over the integer backing, then relabel to the temporal
                 # dtype (the whole-array reduce already handles all-null → null).
-                var native_dt = AnyDataType(int32) if (
-                    vdt.is_date32() or vdt.is_time32()
-                ) else AnyDataType(int64)
+                var native_dt = _temporal_backing_dtype(vdt)
                 var iv = reinterpret_array(value, native_dt)
                 var tbox = List[AnyScalar]()
 

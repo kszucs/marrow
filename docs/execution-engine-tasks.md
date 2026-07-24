@@ -240,7 +240,33 @@ so gather/filter on date/time/timestamp/duration columns hits the `raise`. T1.5 
 around it for min/max by reinterpreting to the integer backing; do the same generically in
 the filter/take dispatch (reinterpret temporal → int backing, filter/take, relabel). Needed
 before the relational `Filter`/`Sort`/`Join` (T2.3) can operate over temporal columns —
-ClickBench Q37–43 filter on `EventDate`.
+ClickBench Q37–43 filter on `EventDate`. **The Wave 1 quality review confirmed this is the
+right seam:** doing it here deletes ~90 lines of temporal-relabel bookkeeping T1.5 added to
+`groupby.mojo`'s multi-aggregate driver *and* makes `conditional.mojo`'s kernels work on
+temporal columns for free (today they raise "take: unsupported dtype"). Consider also
+`dispatch_over_temporal` in `utils.mojo` (mirroring `dispatch_over_numeric`) to retire the
+hand-rolled temporal cascades in `temporal.mojo`/`aggregate.mojo`.
+
+**FU-3 — Consolidate string comparison onto one predicate family** · *M2/Should* · Depends: — ·
+Owns: `marrow/kernels/compare.mojo`, `marrow/kernels/string.mojo` (+ tests) · **From the
+Wave 1 quality review (T1.3).** `compare.mojo`'s `BinaryCompareKernel.apply_string` + per-kernel
+`str_predicate` duplicate `string.mojo`'s `StringPredicateKernel.apply` byte-for-byte, and
+`Eq`/`Ne` duplicate the existing `StringEqKernel`/`StringNeKernel` — string `==`/`!=` now has
+three implementations (incl. the legacy `equal(StringArray)` free fn). Fix: add
+`StringLt/Le/Gt/Ge` as `StringPredicateKernel` structs in `string.mojo`, give
+`BinaryCompareKernel` a `comptime StringKernel: StringPredicateKernel` associated type
+(`EqKernel.StringKernel = StringEqKernel`, …), route `dispatch`'s string branch to
+`Self.StringKernel.apply`, and delete `apply_string`/`str_predicate`. Deferred from the Wave 1
+gate as a cross-file trait-associated-type refactor (Mojo gotcha risk) touching the string
+compares the expr layer depends on.
+
+**FU-4 — LIKE/ILIKE scalar-pattern compile-once** · *M2/Should* · Depends: — · Owns:
+`marrow/kernels/string.mojo` (+ tests) · **From the Wave 1 quality review (T1.3).** `LikeKernel`
+sits in the array×array `StringPredicateKernel`, so for the dominant `col LIKE '%const%'` case
+it recompiles the pattern (and heap-allocates codepoint lists) *per row* — O(rows × pattern)
+waste on 100M-row ClickBench filters (Q21–23). Fix: a scalar-pattern overload (array × scalar
+pattern, matching PyArrow `match_like`) that compiles the token list once and streams each
+row's codepoints. Deferred from the gate as an API-shape change, not a pure cleanup.
 
 ### Wave 2 — M1 wiring + operators + scan (mixed parallel/serial)
 
