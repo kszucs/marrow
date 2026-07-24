@@ -25,16 +25,12 @@ from marrow.kernels.boolean import (
 
 def _a() raises -> BoolArray:
     """Left operand covering the full 3-valued cross product."""
-    return array(
-        [True, True, True, False, False, False, None, None, None]
-    )
+    return array([True, True, True, False, False, False, None, None, None])
 
 
 def _b() raises -> BoolArray:
     """Right operand covering the full 3-valued cross product."""
-    return array(
-        [True, False, None, True, False, None, True, False, None]
-    )
+    return array([True, False, None, True, False, None, True, False, None])
 
 
 # --- Kleene AND ------------------------------------------------------------
@@ -50,10 +46,7 @@ def test_and_kleene() raises:
     # pc.and_kleene: TRUE&NULL=NULL, FALSE&NULL=FALSE, NULL&NULL=NULL
     var r = AndKernel.apply(_a(), _b())
     assert_true(
-        r
-        == array(
-            [True, False, None, False, False, False, None, False, None]
-        )
+        r == array([True, False, None, False, False, False, None, False, None])
     )
     assert_equal(r.null_count(), 3)
 
@@ -117,17 +110,17 @@ def test_xor_nulls() raises:
 
 
 def test_not_no_nulls() raises:
-    assert_true(NotKernel.apply(array([True, False, True])) == array([False, True, False]))
+    assert_true(
+        NotKernel.apply(array([True, False, True]))
+        == array([False, True, False])
+    )
 
 
 def test_not_propagates_nulls() raises:
     # pc.invert: NOT NULL = NULL; validity is unchanged.
     var r = NotKernel.apply(_a())
     assert_true(
-        r
-        == array(
-            [False, False, False, True, True, True, None, None, None]
-        )
+        r == array([False, False, False, True, True, True, None, None, None])
     )
     assert_equal(r.null_count(), 3)
 

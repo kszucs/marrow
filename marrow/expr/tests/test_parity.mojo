@@ -147,7 +147,18 @@ def test_parity_if_else() raises:
     assert_parity(fused_ref, dyn_expr, _ab_batch())
 
 
-# TODO(wave-integration): add and_/or_ Kleene parity once T0.1 lands
+# ---------------------------------------------------------------------------
+# Kleene 3-valued and_/or_ over nullable masks — DEFERRED (see task T0.7).
+#
+# The runtime `DynValue` path is null-correct (its and_/or_ route through the
+# Kleene `AndKernel`/`OrKernel`, fixed in T0.1). The fused `BoolValue` lane,
+# however, is currently null-oblivious: `BoolValue.materialize` (values.mojo)
+# emits `BoolArray(nulls=0, bitmap=None)`, so fused bool/compare results carry no
+# validity at all and cannot match the dynamic Kleene result on nullable input.
+# The parity assertion is ready (build a nullable batch, `(col > 0)` masks,
+# fused `&`/`|` vs dynamic `AND`/`OR`) and should be enabled once the fused bool
+# lane tracks validity — an invariant-#2 correctness gap tracked as T0.7.
+# ---------------------------------------------------------------------------
 
 
 def main() raises:

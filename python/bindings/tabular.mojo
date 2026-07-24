@@ -123,16 +123,12 @@ def _build_from_arrays_with_schema(
 # ---------------------------------------------------------------------------
 
 
-def _record_batch_schema(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return ptr[].schema.to_python_object()
 
 
-def _record_batch_columns(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_columns(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
@@ -141,9 +137,7 @@ def _record_batch_columns(
     return result
 
 
-def _record_batch_column_names(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_column_names(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
@@ -152,9 +146,7 @@ def _record_batch_column_names(
     return result
 
 
-def _record_batch_shape(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_shape(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
@@ -208,16 +200,12 @@ def _record_batch_select(
         return ptr[].select(names).to_python_object()
 
 
-def _record_batch_to_pydict(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_to_pydict(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return _to_pydict(ptr[].schema, ptr[].columns)
 
 
-def _record_batch_to_pylist(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_to_pylist(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return _to_pylist(ptr[].schema, ptr[].columns)
 
@@ -230,9 +218,7 @@ def _record_batch_arrow_c_array(
     return _export_c_array(ptr[].schema, ptr[].columns)
 
 
-def _record_batch_arrow_c_schema(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
@@ -281,16 +267,12 @@ def record_batch(
 # ---------------------------------------------------------------------------
 
 
-def _table_schema(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     return ptr[].schema.to_python_object()
 
 
-def _table_columns(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_columns(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     var builtins = Python.import_module("builtins")
@@ -300,9 +282,7 @@ def _table_columns(
     return result
 
 
-def _table_column_names(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_column_names(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     var builtins = Python.import_module("builtins")
     var result = builtins.list()
@@ -311,9 +291,7 @@ def _table_column_names(
     return result
 
 
-def _table_shape(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_shape(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     return Python.tuple(ptr[].num_rows(), ptr[].num_columns())
 
@@ -342,17 +320,13 @@ def _table_equals(
     return PythonObject(ptr[] == other.downcast_value_ptr[Table]()[])
 
 
-def _table_to_pydict(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_to_pydict(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     return _to_pydict(rb.schema, rb.columns)
 
 
-def _table_to_pylist(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_to_pylist(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     var rb = ptr[].combine_chunks()
     return _to_pylist(rb.schema, rb.columns)
@@ -369,9 +343,7 @@ def _table_arrow_c_stream(
     ).to_pycapsule()
 
 
-def _table_arrow_c_schema(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _table_arrow_c_schema(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[Table]()
     return CArrowSchema.from_schema(ptr[].schema).to_pycapsule()
 
@@ -682,9 +654,7 @@ def _record_batch_sort_by(
     ).to_python_object()
 
 
-def _record_batch_str(
-    py_self: PythonObject
-) raises -> PythonObject:
+def _record_batch_str(py_self: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[RecordBatch]()
     return PythonObject(String.write(ptr[]))
 

@@ -998,9 +998,7 @@ struct PyStructConverter(PyConverter):
 
 def arrow_c_array[
     T: ImplicitlyDeletable, //, to_array_fn: def(T) thin -> AnyArray
-](
-    py_self: PythonObject, requested_schema: PythonObject
-) raises -> PythonObject:
+](py_self: PythonObject, requested_schema: PythonObject) raises -> PythonObject:
     var ptr = py_self.downcast_value_ptr[T]()
     var arr = to_array_fn(ptr[])
     var schema_cap = CArrowSchema.from_dtype(arr.dtype()).to_pycapsule()

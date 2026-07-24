@@ -157,6 +157,32 @@ Kleene parity case is added at wave integration once T0.1 is merged.
 `reader.mojo` / `values.mojo` / `dynamic.mojo`(+`test_parity.mojo`) — **all disjoint. Run
 all four in parallel.** (Merge T0.1 before asserting T0.4's Kleene parity case.)
 
+**T0.7 — Fused `BoolValue` validity/Kleene tracking** · *M1/Should* · Depends: T0.1 ·
+Owns: `marrow/expr/values.mojo` (the `BoolValue` lane), `test_parity.mojo` (enable the
+deferred Kleene cases) · **Discovered during Wave 0 integration by the parity harness.**
+The fused bool lane (`BoolValue.materialize`, values.mojo) emits
+`BoolArray(nulls=0, bitmap=None)` — it does not track validity, so fused
+comparison/boolean results are null-oblivious and **diverge from the null-correct dynamic
+path** (invariant #2). Done when: the fused bool lane carries a validity bitmap
+(comparisons propagate operand nulls; `and_`/`or_` apply Kleene, matching
+`AndKernel`/`OrKernel`), and the deferred `test_parity_and_kleene`/`or_kleene` cases pass.
+Not a ClickBench blocker (the `hits` table is all `NOT NULL`), but required for correct
+predicates over nullable data in the F2 path — schedule within M1. Touches the core fused
+execution model, so it owns `values.mojo` for its wave (serialize vs other `values.mojo`
+tasks).
+
+**T0.8 — Repair the `binary_size` DCE gate** · *M0/Must (infra)* · Depends: — · Owns:
+`benchmarks/binary_size/*` · **Discovered during Wave 0 integration.** `pixi run
+binary_size` is currently broken *independently of Wave 0*: `query_streaming.mojo` (and
+possibly siblings) import `Table`/`Greater` from `marrow.expr.values`, names removed by
+the expr refactor (`Table[T]` is the deferred typed-relational layer; `Greater` is now
+`Gt`). Invariant #1 (the small-binary DCE gate CLAUDE.md mandates) is therefore
+non-runnable. Done when: the benchmarks build against the current `values.mojo`/`dynamic`
+API and `pixi run binary_size` reports the fused-vs-runtime `__TEXT` split again. **This
+must be fixed before the Wave 0 quality gate can certify no size regression** — until
+then the DCE property is only argued architecturally (Wave 0 did not touch the erasure
+boundary).
+
 ### Wave 1 — M1 kernels (fully parallel; all new/disjoint files)
 
 **T1.1 — Conditional kernels** · *M1/Must* · Depends: — · Owns:

@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+### Features
+
+- **`referenced_columns()` / `is_deterministic()` on the expression layer.**
+  Both the fused comptime `Value` tower (every concrete node) and the runtime
+  `DynValue`, surfaced through `AnyValue` via the existing fn-pointer
+  trampolines. `referenced_columns()` returns the deduped set of column names an
+  expression reads; `is_deterministic()` is an overridable predicate (`True` for
+  all current nodes). These are the prerequisite metadata for projection and
+  predicate pushdown.
+- **`DynValue` gains `mod`/`floordiv`/`xor`/`not_null`** (tags `MOD`,
+  `FLOORDIV`, `XOR`, `NOT_NULL`), each wired to its existing kernel, with `%`,
+  `//`, `^`, and `.not_null()` builders — narrowing the runtime interpreter's
+  gap to the fused algebra.
+- **Parquet reader `ByteSource` seam.** A `ByteSource` trait (`size()` +
+  zero-copy `read_at(offset, length)`) in `marrow/parquet/source.mojo`;
+  `MappedFile` implements it (all mmap syscalls now live there) and
+  `ParquetFile[S: ByteSource = MappedFile]` reads through it while keeping the
+  `ParquetFile(path)` convenience. Pure refactor toward streaming and remote
+  (OpenDAL) scans.
+
+### Tests
+
+- **Cross-driver parity harness** (`marrow/expr/tests/test_parity.mojo`):
+  `assert_parity` runs a fused `Value` and an equivalent `DynValue` against one
+  batch and asserts equal results, so the runtime interpreter can never silently
+  diverge from the fused algebra. Covers arithmetic, comparisons, cast, and
+  if_else. (It also surfaced a real gap: the fused `BoolValue` lane does not
+  track validity, so Kleene `and_`/`or_` parity over nullable masks is deferred
+  until the fused bool lane carries nulls — tracked as T0.7.)
+
+### Fixes
+
+- **Kleene 3-valued logic in the boolean kernels.** `and_`/`or_`/`xor`/`not_`
+  no longer drop the validity bitmap: `TRUE OR NULL = TRUE`,
+  `FALSE AND NULL = FALSE`, etc., matching `pc.and_kleene`/`pc.or_kleene`. All
+  bitmap combination goes through the idiomatic `Bitmap` bitwise API.
+- **`LengthKernel` / `ArrayLengthKernel` propagate nulls** — a null input
+  element now yields a null output element, matching `pc.utf8_length` /
+  `pc.list_value_length`.
+
 ### Refactors
 
 - **The staged, strategy-pluggable fusion engine is now `marrow.expr.values`
