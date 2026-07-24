@@ -7,9 +7,10 @@ from std.testing import assert_true
 
 from marrow.testing import TestSuite
 from marrow.builders import array
-from marrow.dtypes import string, int32, int64, Int64Type
+from marrow.dtypes import string, int32, int64, Int64Type, StringType
 from marrow.tabular import record_batch, RecordBatch
 from marrow.expr.lane import (
+    col,
     scol,
     slit,
     lit,
@@ -20,6 +21,8 @@ from marrow.expr.lane import (
     StartsWith,
     StringToNum,
     StringToBool,
+    NumToString,
+    StringToString,
     Add,
     And,
     Gt,
@@ -109,6 +112,26 @@ def test_string_to_bool_parses() raises:
     var b = record_batch([array(["true", "false"]).copy()], names=["s"])
     var cv = run(StringToBool(scol(0, string)), b)
     assert_true(into_array(cv, 2) == array([True, False]).to_any())
+
+
+def test_num_to_string() raises:
+    # format int64 [1,2,3,4] -> ["1","2","3","4"] (a string breaker)
+    var b = record_batch([array([1, 2, 3, 4], int64).copy()], names=["n"])
+    var cv = run(NumToString[StringType](col(0, int64)), b)
+    assert_true(into_array(cv, 4) == array(["1", "2", "3", "4"]).to_any())
+
+
+def test_num_to_string_fuses_with_concat() raises:
+    # cast(n, string) || "!" -> ["1!","2!"] — string breaker read fuses into concat
+    var b = record_batch([array([1, 2], int64).copy()], names=["n"])
+    var cv = run(Concat(NumToString[StringType](col(0, int64)), slit("!")), b)
+    assert_true(into_array(cv, 2) == array(["1!", "2!"]).to_any())
+
+
+def test_string_to_string_container_cast() raises:
+    # string -> string container cast, values preserved
+    var cv = run(StringToString[StringType](scol(0, string)), _batch())
+    assert_true(into_array(cv, 2) == array(["ab", "cd"]).to_any())
 
 
 def main() raises:

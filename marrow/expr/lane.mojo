@@ -126,6 +126,9 @@ from ..kernels.cast import (
     BoolToNum as BoolToNumKernel,
     StringToNum as StringToNumKernel,
     StringToBool as StringToBoolKernel,
+    NumToString as NumToStringKernel,
+    BoolToString as BoolToStringKernel,
+    BinaryLikeCast as StringToStringKernel,
 )
 
 
@@ -720,18 +723,24 @@ trait StringValue(Value):
     comptime OutType: StringLikeType
 
     @always_inline
-    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
         ...
 
     def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         self.materialize(batch, ctx)
         comptime if Self.Shape == 0:
-            return Datum(StringScalar(self.elementwise(batch, ctx, 0)).to_any())
+            var slot = 0
+            return Datum(
+                StringScalar(self.elementwise(batch, ctx, slot, 0)).to_any()
+            )
         else:
             var n = batch.num_rows()
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
             for i in range(n):
-                builder.append(self.elementwise(batch, ctx, i))
+                var slot = 0
+                builder.append(self.elementwise(batch, ctx, slot, i))
             return Datum(builder.finish().to_any())
 
 
@@ -744,7 +753,9 @@ struct StringColumn[T: StringLikeType](StringValue):
     var col: Int
 
     @always_inline
-    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
         return String(batch.columns[self.col].as_string().unsafe_get(UInt(idx)))
 
 
@@ -757,7 +768,9 @@ struct StringLiteral[T: StringLikeType](StringValue):
     var _value: String
 
     @always_inline
-    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
         return self._value.copy()
 
 
@@ -772,10 +785,12 @@ struct Concat[L: StringValue, R: StringValue](StringValue):
     var r: Self.R
 
     @always_inline
-    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
         return ConcatKernel.combine(
-            self.l.elementwise(batch, ctx, idx),
-            self.r.elementwise(batch, ctx, idx),
+            self.l.elementwise(batch, ctx, slot, idx),
+            self.r.elementwise(batch, ctx, slot, idx),
         )
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -794,8 +809,10 @@ struct StringUnary[K: StringMapKernel, A: StringValue](StringValue):
     var a: Self.A
 
     @always_inline
-    def elementwise(self, batch: RecordBatch, ctx: Context, idx: Int) -> String:
-        var s = self.a.elementwise(batch, ctx, idx)
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
+        var s = self.a.elementwise(batch, ctx, slot, idx)
         return Self.K.transform(StringSlice(s))
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
@@ -809,6 +826,90 @@ comptime LStrip = StringUnary[LStripKernel, _]
 comptime RStrip = StringUnary[RStripKernel, _]
 comptime Reverse = StringUnary[ReverseKernel, _]
 comptime Capitalize = StringUnary[CapitalizeKernel, _]
+
+
+# ---------------------------------------------------------------------------
+# Casts *to* string — a materialized string result, so a string breaker: `materialize`
+# folds the operand to a string column via `kernels.cast`; `elementwise` reads that
+# column per row (threading `slot`), so `cast(x, string) || "!"` still fuses in the
+# elementwise builder pass. Compute lives in the cast kernels.
+# ---------------------------------------------------------------------------
+@fieldwise_init
+struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
+    """Format numeric -> string."""
+
+    comptime OutType = Self.To
+    comptime Shape = 1
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(NumToStringKernel.dispatch(arr, Self.To())))
+
+    @always_inline
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
+        var i = slot
+        slot += 1
+        return String(
+            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+        )
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+@fieldwise_init
+struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
+    """`True`/`False` -> string."""
+
+    comptime OutType = Self.To
+    comptime Shape = 1
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(BoolToStringKernel.dispatch(arr, Self.To())))
+
+    @always_inline
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
+        var i = slot
+        slot += 1
+        return String(
+            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+        )
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
+
+
+@fieldwise_init
+struct StringToString[To: StringLikeType, A: StringValue](StringValue):
+    """Cast between string containers (`string` <-> `large_string`)."""
+
+    comptime OutType = Self.To
+    comptime Shape = 1
+    var a: Self.A
+
+    def materialize(self, batch: RecordBatch, mut ctx: Context) raises:
+        var arr = into_array(run(self.a, batch), batch.num_rows())
+        ctx.append(Datum(StringToStringKernel.dispatch(arr, Self.To(), False)))
+
+    @always_inline
+    def elementwise(
+        self, batch: RecordBatch, ctx: Context, mut slot: Int, idx: Int
+    ) -> String:
+        var i = slot
+        slot += 1
+        return String(
+            ctx.get[BinaryLikeArray[Self.To]](i).unsafe_get(UInt(idx))
+        )
+
+    def execute(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
+        return materialized(self, batch, ctx)
 
 
 # ---------------------------------------------------------------------------
