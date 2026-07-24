@@ -15,10 +15,7 @@ from marrow.builders import array
 from marrow.dtypes import Int64Type, StringType, int64, string, field
 from marrow.schema import Schema, schema
 from marrow.tabular import RecordBatch, record_batch
-from marrow.expr.values import Table
-from marrow.expr.values import Greater
-from marrow.expr.dynamic import col
-from marrow.expr.values import AnyValue
+from marrow.expr.lane import Gt, AnyValue, col
 from marrow.expr.relations import (
     InMemoryTable,
     Project,
@@ -27,12 +24,6 @@ from marrow.expr.relations import (
     in_memory_table,
 )
 from marrow.expr.dynamic import col as dyn_col, lit
-
-
-struct _Orders:
-    var a: Int64Type
-    var b: Int64Type
-    var name: StringType
 
 
 def _batch() raises -> RecordBatch:
@@ -50,13 +41,12 @@ def _out_schema() raises -> Schema:
 
 def _fused_plan(morsel: Int) raises -> AnyRelation:
     """SELECT a, name WHERE a > b, fused values, given a morsel size."""
-    var t = Table[_Orders]()
     var filtered = AnyRelation(
         InMemoryTable(batch=_batch(), morsel_size=morsel)
-    ).filter(AnyValue(Greater(t.a, t.b)))
+    ).filter(AnyValue(Gt(col("a", int64), col("b", int64))))
     var values = List[AnyValue]()
-    values.append(AnyValue(t.a))
-    values.append(AnyValue(t.name))
+    values.append(AnyValue(col("a", int64)))
+    values.append(AnyValue(col("name", string)))
     return AnyRelation(
         Project(
             input=filtered,
@@ -107,10 +97,10 @@ def test_streaming_interpreter_values() raises:
     produces the same result — fused and interpreted interchange."""
     var filtered = AnyRelation(
         InMemoryTable(batch=_batch(), morsel_size=2)
-    ).filter(AnyValue(col("a") > col("b")))
+    ).filter(AnyValue(dyn_col("a") > dyn_col("b")))
     var values = List[AnyValue]()
-    values.append(AnyValue(col("a")))
-    values.append(AnyValue(col("name")))
+    values.append(AnyValue(dyn_col("a")))
+    values.append(AnyValue(dyn_col("name")))
     var plan = AnyRelation(
         Project(
             input=filtered,

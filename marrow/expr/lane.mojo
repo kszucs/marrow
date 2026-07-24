@@ -1511,6 +1511,7 @@ struct AnyValue(Copyable, Movable, Writable):
         ArcPointer[NoneType], PruneStats
     ) thin raises -> PruneBound
     var _name_fn: def (ArcPointer[NoneType]) thin -> String
+    var _write_fn: def (ArcPointer[NoneType]) thin -> String
 
     # --- comptime fused `Value` box ----------------------------------------
     @staticmethod
@@ -1531,6 +1532,13 @@ struct AnyValue(Copyable, Movable, Writable):
     def _name_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
         return rebind[ArcPointer[V]](ptr)[].name()
 
+    @staticmethod
+    def _write_tramp[V: Value](ptr: ArcPointer[NoneType]) -> String:
+        # comptime nodes are not `Writable`; fall back to the column name. The
+        # relational engine only boxes `DynValue` for display, so this branch is
+        # never the one printed in a plan.
+        return rebind[ArcPointer[V]](ptr)[].name()
+
     @implicit
     def __init__[V: Value](out self, value: V):
         var ptr = ArcPointer[V](value.copy())
@@ -1538,6 +1546,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._execute = Self._exec_tramp[V]
         self._prune_fn = Self._prune_tramp[V]
         self._name_fn = Self._name_tramp[V]
+        self._write_fn = Self._write_tramp[V]
 
     # --- runtime `DynValue` box --------------------------------------------
     @staticmethod
@@ -1556,6 +1565,12 @@ struct AnyValue(Copyable, Movable, Writable):
     def _name_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
         return rebind[ArcPointer[DynValue]](ptr)[].name()
 
+    @staticmethod
+    def _write_tramp_dyn(ptr: ArcPointer[NoneType]) -> String:
+        var s = String()
+        rebind[ArcPointer[DynValue]](ptr)[].write_to(s)
+        return s^
+
     @implicit
     def __init__(out self, var dyn: DynValue):
         var ptr = ArcPointer[DynValue](dyn^)
@@ -1563,6 +1578,7 @@ struct AnyValue(Copyable, Movable, Writable):
         self._execute = Self._exec_tramp_dyn
         self._prune_fn = Self._prune_tramp_dyn
         self._name_fn = Self._name_tramp_dyn
+        self._write_fn = Self._write_tramp_dyn
 
     def execute(self, batch: RecordBatch) raises -> AnyArray:
         return self._execute(self._boxed, batch)
@@ -1574,7 +1590,7 @@ struct AnyValue(Copyable, Movable, Writable):
         return self._name_fn(self._boxed)
 
     def write_to[W: Writer](self, mut writer: W):
-        writer.write(self.name())
+        writer.write(self._write_fn(self._boxed))
 
 
 # NOTE: `Table[T]` (values.mojo's `t.a` schema-struct sugar) is deferred — the
