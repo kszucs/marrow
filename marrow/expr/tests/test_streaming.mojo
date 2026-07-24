@@ -19,6 +19,8 @@ from marrow.expr.values import Gt, AnyValue, col
 from marrow.expr.relations import (
     InMemoryTable,
     Project,
+    Sort,
+    Limit,
     AnyRelation,
     execute,
     in_memory_table,
@@ -178,6 +180,247 @@ def test_aggregate_multi_key_schema() raises:
     assert_equal(result.schema.fields[0].name, "region")
     assert_equal(result.schema.fields[1].name, "dept")
     assert_equal(result.schema.fields[2].name, "sum")
+
+
+# ---------------------------------------------------------------------------
+# Sort
+# ---------------------------------------------------------------------------
+
+
+def test_sort_by_column_ascending() raises:
+    """Sort by a single column, ascending — all columns are reordered."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([10, 50, 30, 80, 20], int64)
+    var batch = record_batch([a^, b^], names=["a", "b"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a")], ascending=[True]
+    )
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 5)
+    assert_true(
+        result.columns[0].as_int64().copy() == array([1, 2, 3, 5, 8], int64)
+    )
+    # The companion column follows the same permutation.
+    assert_true(
+        result.columns[1].as_int64().copy()
+        == array([10, 20, 30, 50, 80], int64)
+    )
+
+
+def test_sort_by_column_descending() raises:
+    """Sort by a single column, descending."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a")], ascending=[False]
+    )
+    var result = execute(plan)
+    assert_true(
+        result.columns[0].as_int64().copy() == array([8, 5, 3, 2, 1], int64)
+    )
+
+
+def test_sort_nulls_first() raises:
+    """Nulls sort first when nulls_first=True (default)."""
+    var a = array([3, None, 1, None, 2], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a")], ascending=[True], nulls_first=True
+    )
+    var col = execute(plan).columns[0].as_int64().copy()
+    assert_true(col == array([None, None, 1, 2, 3], int64))
+
+
+def test_sort_nulls_last() raises:
+    """Nulls sort last when nulls_first=False."""
+    var a = array([3, None, 1, None, 2], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a")], ascending=[True], nulls_first=False
+    )
+    var col = execute(plan).columns[0].as_int64().copy()
+    assert_true(col == array([1, 2, 3, None, None], int64))
+
+
+def test_sort_multi_key() raises:
+    """Two keys: primary ascending, secondary ascending — LSD stable."""
+    var a = array([1, 1, 2, 2], int64)
+    var b = array([2, 1, 1, 2], int64)
+    var batch = record_batch([a^, b^], names=["a", "b"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a"), dyn_col("b")], ascending=[True, True]
+    )
+    var result = execute(plan)
+    assert_true(
+        result.columns[0].as_int64().copy() == array([1, 1, 2, 2], int64)
+    )
+    assert_true(
+        result.columns[1].as_int64().copy() == array([1, 2, 1, 2], int64)
+    )
+
+
+def test_sort_multi_key_mixed_direction() raises:
+    """Primary ascending, secondary descending."""
+    var a = array([1, 1, 2, 2], int64)
+    var b = array([2, 1, 1, 2], int64)
+    var batch = record_batch([a^, b^], names=["a", "b"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("a"), dyn_col("b")], ascending=[True, False]
+    )
+    var result = execute(plan)
+    assert_true(
+        result.columns[0].as_int64().copy() == array([1, 1, 2, 2], int64)
+    )
+    assert_true(
+        result.columns[1].as_int64().copy() == array([2, 1, 2, 1], int64)
+    )
+
+
+def test_sort_by_string_column() raises:
+    """Sort by a string column (type-agnostic via the sort kernel)."""
+    var s = array(["pear", "apple", "cherry", "banana"])
+    var batch = record_batch([s^], names=["s"])
+    var plan = in_memory_table(batch).sort(
+        keys=[dyn_col("s")], ascending=[True]
+    )
+    var col = execute(plan).columns[0].as_string().copy()
+    assert_true(col == array(["apple", "banana", "cherry", "pear"]))
+
+
+# ---------------------------------------------------------------------------
+# Limit / Offset
+# ---------------------------------------------------------------------------
+
+
+def test_limit() raises:
+    """Keep the first n rows."""
+    var a = array([1, 2, 3, 4, 5, 6], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).limit(3)
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 3)
+    assert_true(result.columns[0].as_int64().copy() == array([1, 2, 3], int64))
+
+
+def test_limit_offset() raises:
+    """Skip offset rows, then keep n."""
+    var a = array([1, 2, 3, 4, 5, 6], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).limit(2, offset=2)
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2)
+    assert_true(result.columns[0].as_int64().copy() == array([3, 4], int64))
+
+
+def test_limit_offset_across_morsels() raises:
+    """Offset/limit boundaries that straddle small morsels are sliced correctly.
+    """
+    for morsel in [1, 2, 3, 4, 7]:
+        var a = array([1, 2, 3, 4, 5, 6], int64)
+        var batch = record_batch([a^], names=["a"])
+        var plan = AnyRelation(
+            InMemoryTable(batch=batch, morsel_size=morsel)
+        ).limit(3, offset=1)
+        var result = execute(plan)
+        assert_equal(result.num_rows(), 3)
+        assert_true(
+            result.columns[0].as_int64().copy() == array([2, 3, 4], int64)
+        )
+
+
+def test_limit_beyond_end() raises:
+    """A limit larger than the available rows returns all rows."""
+    var a = array([1, 2, 3], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).limit(10, offset=1)
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2)
+    assert_true(result.columns[0].as_int64().copy() == array([2, 3], int64))
+
+
+# ---------------------------------------------------------------------------
+# Top-K (Sort followed by Limit → folded into Sort(limit=…))
+# ---------------------------------------------------------------------------
+
+
+def test_topk_fold_into_sort() raises:
+    """`.sort(...).limit(k)` folds into a Sort node carrying the limit."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = (
+        in_memory_table(batch)
+        .sort(keys=[dyn_col("a")], ascending=[False])
+        .limit(2)
+    )
+    assert_true(String(plan).find("limit=2") != -1)
+    assert_true(plan.downcast[Sort]()[].limit.__bool__())
+
+
+def test_topk_values() raises:
+    """Top-2 descending yields the two largest, in order."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var b = array([10, 50, 30, 80, 20], int64)
+    var batch = record_batch([a^, b^], names=["a", "b"])
+    var plan = (
+        in_memory_table(batch)
+        .sort(keys=[dyn_col("a")], ascending=[False])
+        .limit(2)
+    )
+    var result = execute(plan)
+    assert_equal(result.num_rows(), 2)
+    assert_true(result.columns[0].as_int64().copy() == array([8, 5], int64))
+    assert_true(result.columns[1].as_int64().copy() == array([80, 50], int64))
+
+
+def test_limit_over_sort_with_offset_not_folded() raises:
+    """A non-zero offset can't fold into the sort; a Limit wraps the Sort."""
+    var a = array([1, 5, 3, 8, 2], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = (
+        in_memory_table(batch)
+        .sort(keys=[dyn_col("a")], ascending=[True])
+        .limit(2, offset=1)
+    )
+    var result = execute(plan)
+    # Ascending [1,2,3,5,8], skip 1, take 2 -> [2,3].
+    assert_true(result.columns[0].as_int64().copy() == array([2, 3], int64))
+
+
+# ---------------------------------------------------------------------------
+# Computed Project
+# ---------------------------------------------------------------------------
+
+
+def test_computed_project() raises:
+    """Project computed columns: x+1, a literal, and a renamed passthrough."""
+    var a = array([1, 2, 3], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).project(
+        names=["a_plus", "one", "renamed"],
+        values=[
+            dyn_col("a") + lit[Int64Type](1),
+            lit[Int64Type](1),
+            dyn_col("a"),
+        ],
+    )
+    var result = execute(plan)
+    assert_equal(result.num_columns(), 3)
+    assert_equal(result.schema.fields[0].name, "a_plus")
+    assert_equal(result.schema.fields[1].name, "one")
+    assert_equal(result.schema.fields[2].name, "renamed")
+    assert_true(result.columns[0].as_int64().copy() == array([2, 3, 4], int64))
+    assert_true(result.columns[1].as_int64().copy() == array([1, 1, 1], int64))
+    assert_true(result.columns[2].as_int64().copy() == array([1, 2, 3], int64))
+
+
+def test_computed_project_dtype_inferred() raises:
+    """The projected schema carries each expression's inferred output dtype."""
+    var a = array([1, 2, 3], int64)
+    var batch = record_batch([a^], names=["a"])
+    var plan = in_memory_table(batch).project(
+        names=["a_plus"], values=[dyn_col("a") + lit[Int64Type](1)]
+    )
+    assert_equal(plan.schema().fields[0].dtype, int64)
 
 
 def main() raises:
