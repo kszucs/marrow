@@ -18,6 +18,7 @@ from marrow.dtypes import (
     float64,
     string,
     Int64Type,
+    Float64Type,
     StringType,
     ListType,
 )
@@ -580,6 +581,93 @@ def test_is_deterministic_default_true() raises:
     assert_true(lit(1, int64).is_deterministic())
     var boxed: AnyValue = col("a", int64)
     assert_true(boxed.is_deterministic())
+
+
+# ===========================================================================
+# Validity — the fused lane tracks nulls (T0.7)
+# ===========================================================================
+
+
+def _nullable_batch() raises -> RecordBatch:
+    # a and b each carry nulls in different rows
+    return record_batch(
+        [
+            array([1, None, 3, None, 7, 2], int64).copy(),
+            array([9, 2, None, 1, None, 8], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+
+
+def _kleene_batch() raises -> RecordBatch:
+    # after `> 3`: a → [T, F, null], b → [T, null, T]
+    return record_batch(
+        [
+            array([5, 1, None], int64).copy(),
+            array([10, None, 20], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+
+
+def test_add_propagates_nulls() raises:
+    # a + b is null wherever either operand is null; valid rows sum normally
+    var cv = (col("a", int64) + col("b", int64)).execute(_nullable_batch())
+    assert_true(
+        into_array(cv, 6)
+        == array([10, None, None, None, None, 10], int64).to_any()
+    )
+
+
+def test_mul_propagates_nulls() raises:
+    var cv = (col("a", int64) * col("b", int64)).execute(_nullable_batch())
+    assert_true(
+        into_array(cv, 6)
+        == array([9, None, None, None, None, 16], int64).to_any()
+    )
+
+
+def test_compare_propagates_nulls() raises:
+    # (a > b) is valid only where both operands are valid: rows 0 and 5 (both F)
+    var cv = (col("a", int64) > col("b", int64)).execute(_nullable_batch())
+    assert_true(
+        into_array(cv, 6)
+        == array([False, None, None, None, None, False]).to_any()
+    )
+
+
+def test_cast_propagates_nulls() raises:
+    # int64 -> float64 cast preserves the operand's validity
+    var cv = NumericCast[Float64Type](col("a", int64)).execute(_nullable_batch())
+    assert_true(
+        into_array(cv, 6)
+        == array([1.0, None, 3.0, None, 7.0, 2.0], float64).to_any()
+    )
+
+
+def test_isnull_over_nullable_is_never_null() raises:
+    # is_null reads validity and is itself always valid (no null bit set)
+    var cv = IsNull(col("a", int64)).execute(_nullable_batch())
+    assert_true(
+        into_array(cv, 6)
+        == array([False, True, False, True, False, False]).to_any()
+    )
+
+
+def test_and_kleene_false_dominates_null() raises:
+    # (a>3) & (b>3): T&T=T ; F&null=F (known-false forces valid) ; null&T=null
+    var cv = (
+        (col("a", int64) > lit(3, int64)) & (col("b", int64) > lit(3, int64))
+    ).execute(_kleene_batch())
+    assert_true(into_array(cv, 3) == array([True, False, None]).to_any())
+
+
+def test_or_kleene_true_dominates_null() raises:
+    # (a>3) | (b>3): T|T=T ; F|null=null ; null|T=T (known-true forces valid)
+    var cv = (
+        (col("a", int64) > lit(3, int64)) | (col("b", int64) > lit(3, int64))
+    ).execute(_kleene_batch())
+    assert_true(into_array(cv, 3) == array([True, None, True]).to_any())
 
 
 def main() raises:

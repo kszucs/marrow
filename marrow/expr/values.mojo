@@ -48,7 +48,7 @@ from ..arrays import (
 from ..scalars import AnyScalar, PrimitiveScalar, StringScalar
 from ..buffers import Buffer, Bitmap
 from ..builders import Int64Builder, BinaryLikeBuilder
-from ..views import apply
+from ..views import apply, BitmapView
 from ..dtypes import (
     DataType,
     NumericType,
@@ -135,6 +135,7 @@ from ..kernels.boolean import (
     AllKernel,
 )
 from ..kernels.nested import ArrayLengthKernel, ArrayContainsKernel
+from ..kernels.helpers import bitmap_and
 from .pruning import PruneStats, PruneBound
 from .dynamic import DynValue
 from ..kernels.cast import (
@@ -238,6 +239,44 @@ def _union_columns(var acc: List[String], names: List[String]) -> List[String]:
 
 
 # ---------------------------------------------------------------------------
+# Validity — the fused lane threads result nulls alongside the data buffer. Each
+# node exposes `validity(batch)` returning an offset-0 owned bitmap (`None` = all
+# valid); the numeric/bool drivers combine it into the finished array. Propagating
+# ops AND-combine children validities via the same `bitmap_and` helper the kernels
+# use; Kleene `And`/`Or` reuse the null-correct `and_`/`or_` kernels; column leaves
+# read their own validity; literals / `is_null` results are always valid.
+# ---------------------------------------------------------------------------
+def _view_to_owned(v: BitmapView) raises -> Bitmap[mut=False]:
+    """An offset-0 owned copy of a bitmap view. Uses `difference` against an
+    all-zero scratch (`v AND NOT 0 == v`) rather than `union(v, v)`, which would
+    alias the same origin mutably through both call arguments."""
+    var zeroed = Bitmap.alloc_zeroed(len(v))
+    return v.difference(zeroed.view()).to_immutable()
+
+
+def _column_validity(
+    batch: RecordBatch, name: String
+) raises -> Optional[Bitmap[mut=False]]:
+    """The named column's validity as an offset-0 owned bitmap (None = all valid).
+    Materialises a fresh offset-0 copy so the fused driver can bake it into the
+    result independent of the source array's own offset."""
+    var data = batch.columns[batch.schema.get_field_index(name)].to_data()
+    var v = data.validity()
+    if v:
+        return _view_to_owned(v.value())
+    else:
+        return None
+
+
+def _nulls_of(length: Int, v: Optional[Bitmap[mut=False]]) -> Int:
+    """Unset-bit count of a validity bitmap (0 when all-valid)."""
+    if v:
+        return length - v.value().view().count_set_bits()
+    else:
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Value — every node. `execute` is abstract; `prepare` defaults to a no-op (only
 # composites recurse and breakers prepare).
 # ---------------------------------------------------------------------------
@@ -298,6 +337,16 @@ trait Value(Copyable, ImplicitlyDeletable, Movable):
         overrides to `False` so an optimizer knows not to reorder or cache it.
         """
         return True
+
+    # --- validity (null tracking) -------------------------------------------
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """This node's result validity as an offset-0 owned bitmap, or `None`
+        when every element is valid. Default `None` (all-valid) covers literals,
+        `is_null`/`not_null` results, windows, and reductions; column leaves read
+        their own validity and propagating ops AND-combine their children's."""
+        return None
 
     # --- fluent surface available in every family (reads only validity) ------
     def isnull(self) -> IsNull[Self]:
@@ -432,12 +481,13 @@ trait NumericValue(Value):
                 return self.vectorwise[W](batch, ctx, slot, i)
 
             apply[native, producer](buf.view[native](0, length))
+            var v = self.validity(batch)
             var arr = PrimitiveArray[Self.OutType](
                 dtype=Self.OutType(),
                 length=length,
-                nulls=0,
+                nulls=_nulls_of(length, v),
                 offset=0,
-                bitmap=None,
+                bitmap=v^,
                 buffer=buf.to_immutable(),
             )
             return arr^.to_any()
@@ -473,6 +523,11 @@ struct NumericColumn[T: NumericType](NumericValue):
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         # a leaf column returns as-is (keeps validity; the fused loop drops nulls)
         return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _column_validity(batch, self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -531,6 +586,11 @@ struct NumericBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         ]()
         return Self.K.core[Self.OutType.native, W](a, b)
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
         self.r.prepare(batch, ctx)
@@ -557,6 +617,11 @@ struct NumericUnary[K: UnaryKernel, A: NumericValue](NumericValue):
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
 
@@ -582,6 +647,11 @@ struct NumericCast[To: NumericType, A: NumericValue](NumericValue):
         return NumericCastKernel.core[
             Self.A.OutType.native, Self.OutType.native, W
         ](self.a.vectorwise[W](batch, ctx, slot, idx))
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -618,6 +688,11 @@ struct FloatBinary[K: BinaryKernel, L: NumericValue, R: NumericValue](
         ]()
         return Self.K.core[Self.OutType.native, W](a, b)
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
         self.r.prepare(batch, ctx)
@@ -645,6 +720,11 @@ struct FloatUnary[K: UnaryKernel, A: NumericValue](NumericValue):
                 Self.OutType.native
             ]()
         )
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -714,11 +794,12 @@ trait BoolValue(Value):
             return self.vectorwise[W](batch, ctx, slot, i)
 
         apply[Self.NativeType, producer](bm.view())  # bit-packing overload
+        var v = self.validity(batch)
         return BoolArray(
             length=length,
-            nulls=0,
+            nulls=_nulls_of(length, v),
             offset=0,
-            bitmap=None,
+            bitmap=v^,
             buffer=bm.to_immutable(),
         ).to_any()
 
@@ -751,6 +832,11 @@ struct NumericCompare[K: BinaryCompareKernel, L: NumericValue, R: NumericValue](
             Self.NativeType
         ]()
         return Self.K.core[Self.NativeType, W](a, b)
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return bitmap_and(self.l.validity(batch), self.r.validity(batch))
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
@@ -800,6 +886,29 @@ struct BoolBinary[K: BoolBinaryKernel, L: BoolValue, R: BoolValue](BoolValue):
         var b = self.r.vectorwise[W](batch, ctx, slot, idx)
         return Self.K.core[W](a, b)
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # The fused `vectorwise` above already produces the correct DATA (plain
+        # bitwise `a & b` / `a | b` / `a ^ b`, matching the kernels). Only the
+        # 3-valued *validity* is data-dependent, so reuse the null-correct kernel
+        # `apply` (`and_`/`or_` Kleene, `xor` two-valued) to derive it — but only
+        # when an operand can carry nulls; when both are fully valid the result is
+        # fully valid, keeping the all-valid fast path allocation-free.
+        var lv = self.l.validity(batch)
+        var rv = self.r.validity(batch)
+        if not lv and not rv:
+            return None
+        else:
+            var n = batch.num_rows()
+            var la = into_array(self.l.execute(batch), n).as_bool().copy()
+            var ra = into_array(self.r.execute(batch), n).as_bool().copy()
+            var res = Self.K.apply(la, ra)
+            if res.bitmap:
+                return res.bitmap.value().copy()
+            else:
+                return None
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.l.prepare(batch, ctx)
         self.r.prepare(batch, ctx)
@@ -824,6 +933,11 @@ struct BoolUnary[K: BoolUnaryKernel, A: BoolValue](BoolValue):
         DType.bool, W
     ]:
         return Self.K.core[W](self.a.vectorwise[W](batch, ctx, slot, idx))
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -904,6 +1018,11 @@ struct NumericPredicate[K: ValuePredicateKernel, A: NumericValue](BoolValue):
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
 
@@ -972,6 +1091,11 @@ struct NumToBool[A: NumericValue](BoolValue):
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
 
@@ -996,6 +1120,11 @@ struct BoolToNum[To: NumericType, A: BoolValue](NumericValue):
         return BoolToNumKernel.core[Self.OutType.native, W](
             self.a.vectorwise[W](batch, ctx, slot, idx)
         )
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         self.a.prepare(batch, ctx)
@@ -1163,6 +1292,11 @@ struct StringColumn[T: StringLikeType](StringValue):
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         return batch.columns[batch.schema.get_field_index(self._name)].copy()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _column_validity(batch, self._name)
 
     def name(self) -> String:
         return self._name.copy()
@@ -1403,6 +1537,12 @@ struct StringLength[A: StringValue](NumericValue):
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a null string has a null length — validity passes through unchanged.
+        return self.a.validity(batch)
+
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var s = into_array(self.a.execute(batch), batch.num_rows())
         ctx.append(LengthKernel.dispatch(s))
@@ -1566,6 +1706,11 @@ struct ListColumn[T: ListLikeType](ListValue):
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
         return batch.columns[batch.schema.get_field_index(self._name)].copy()
 
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        return _column_validity(batch, self._name)
+
     def name(self) -> String:
         return self._name.copy()
 
@@ -1581,6 +1726,12 @@ struct ListLength[A: ListValue](NumericValue):
 
     def referenced_columns(self) -> List[String]:
         return self.a.referenced_columns()
+
+    def validity(
+        self, batch: RecordBatch
+    ) raises -> Optional[Bitmap[mut=False]]:
+        # a null list has a null length — validity passes through unchanged.
+        return self.a.validity(batch)
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())

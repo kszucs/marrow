@@ -37,10 +37,16 @@ from marrow.expr.values import (
     lit as flit,
     NumericCast,
     BoolToNum,
+    IsNull,
 )
 
 # Runtime tag interpreter (dynamic.mojo)
-from marrow.expr.dynamic import DynValue, col as dcol, if_else
+from marrow.expr.dynamic import (
+    DynValue,
+    col as dcol,
+    lit as dlit,
+    if_else,
+)
 
 
 def assert_parity(
@@ -148,17 +154,83 @@ def test_parity_if_else() raises:
 
 
 # ---------------------------------------------------------------------------
-# Kleene 3-valued and_/or_ over nullable masks — DEFERRED (see task T0.7).
-#
-# The runtime `DynValue` path is null-correct (its and_/or_ route through the
-# Kleene `AndKernel`/`OrKernel`, fixed in T0.1). The fused `BoolValue` lane,
-# however, is currently null-oblivious: `BoolValue.materialize` (values.mojo)
-# emits `BoolArray(nulls=0, bitmap=None)`, so fused bool/compare results carry no
-# validity at all and cannot match the dynamic Kleene result on nullable input.
-# The parity assertion is ready (build a nullable batch, `(col > 0)` masks,
-# fused `&`/`|` vs dynamic `AND`/`OR`) and should be enabled once the fused bool
-# lane tracks validity — an invariant-#2 correctness gap tracked as T0.7.
+# Null propagation through the fused lane (T0.7). A shared nullable batch: `a`
+# and `b` each carry nulls in different rows, so an AND-combine of their
+# validities is a non-trivial pattern the fused lane must reproduce.
 # ---------------------------------------------------------------------------
+
+
+def _nullable_ab_batch() raises -> RecordBatch:
+    var a = array([1, None, 3, None, 7, 2], int64)
+    var b = array([9, 2, None, 1, None, 8], int64)
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def test_parity_add_nulls() raises:
+    # a + b nulls where either operand is null — fused AND-combine == dynamic.
+    assert_parity(
+        fcol("a", int64) + fcol("b", int64),
+        dcol(0) + dcol(1),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_mul_nulls() raises:
+    assert_parity(
+        fcol("a", int64) * fcol("b", int64),
+        dcol(0) * dcol(1),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_gt_nulls() raises:
+    # (a > b) is valid only where both operands are valid.
+    assert_parity(
+        fcol("a", int64) > fcol("b", int64),
+        dcol(0) > dcol(1),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_cast_nulls() raises:
+    # cast preserves the operand's validity.
+    assert_parity(
+        NumericCast[Float64Type](fcol("a", int64)),
+        dcol(0).cast(float64),
+        _nullable_ab_batch(),
+    )
+
+
+def test_parity_isnull_never_null() raises:
+    # an IS NULL result is itself always valid (no null bit set).
+    assert_parity(
+        IsNull(fcol("a", int64)), dcol(0).is_null(), _nullable_ab_batch()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Kleene 3-valued and_/or_ over nullable masks (T0.7). The fused `BoolValue` lane
+# now tracks validity, reusing the null-correct `AndKernel`/`OrKernel` (Kleene,
+# fixed in T0.1) that the runtime `DynValue` path already routes through, so the
+# two drivers agree element-for-element — including where a known-false operand
+# forces a valid AND result and a known-true operand forces a valid OR result.
+# ---------------------------------------------------------------------------
+
+
+def test_parity_and_kleene() raises:
+    var fused = (fcol("a", int64) > flit(0, int64)) & (
+        fcol("b", int64) > flit(0, int64)
+    )
+    var dyn = (dcol(0) > dlit[Int64Type](0)) & (dcol(1) > dlit[Int64Type](0))
+    assert_parity(fused, dyn, _nullable_ab_batch())
+
+
+def test_parity_or_kleene() raises:
+    var fused = (fcol("a", int64) > flit(0, int64)) | (
+        fcol("b", int64) > flit(0, int64)
+    )
+    var dyn = (dcol(0) > dlit[Int64Type](0)) | (dcol(1) > dlit[Int64Type](0))
+    assert_parity(fused, dyn, _nullable_ab_batch())
 
 
 def main() raises:
