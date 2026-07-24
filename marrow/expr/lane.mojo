@@ -280,7 +280,7 @@ trait NumericValue(Value):
             var v = self.vectorwise[1](batch, ctx, slot, 0)[0].cast[
                 Self.OutType.native
             ]()
-            return Datum(PrimitiveScalar[Self.OutType](v).to_any())
+            return PrimitiveScalar[Self.OutType](v).to_any()
         else:  # columnar → one fused vectorized pass
             var length = batch.num_rows()
             var buf = Buffer.alloc_uninit[native](length)
@@ -300,7 +300,7 @@ trait NumericValue(Value):
                 bitmap=None,
                 buffer=buf.to_immutable(),
             )
-            return Datum(arr^.to_any())
+            return arr^.to_any()
 
 
 @fieldwise_init
@@ -510,7 +510,7 @@ trait BoolValue(Value):
             return self.vectorwise[W](batch, ctx, slot, i)
 
         apply[Self.NativeType, producer](bm.view())  # bit-packing overload
-        return Datum(
+        return 
             BoolArray(
                 length=length,
                 nulls=0,
@@ -518,7 +518,7 @@ trait BoolValue(Value):
                 bitmap=None,
                 buffer=bm.to_immutable(),
             ).to_any()
-        )
+        
 
 
 @fieldwise_init
@@ -636,7 +636,7 @@ struct BoolReduce[K: BoolReduceKernel, A: BoolValue](BoolValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows()).as_bool().copy()
-        ctx.append(Datum(Self.K.reduce(arr)))
+        ctx.append(Self.K.reduce(arr))
 
     @always_inline
     def vectorwise[
@@ -695,7 +695,7 @@ struct NullPredicate[K: UnaryPredicateKernel, A: Value](BoolValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(Self.K.apply(arr).to_any()))
+        ctx.append(Self.K.apply(arr).to_any())
 
     @always_inline
     def vectorwise[
@@ -780,7 +780,7 @@ struct StringToNum[To: NumericType, A: StringValue](NumericValue):
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var s = into_array(self.a.execute(batch), batch.num_rows()).as_string().copy()
         ctx.append(
-            Datum(StringToNumKernel.apply[StringType, Self.To, False](s).to_any())
+            StringToNumKernel.apply[StringType, Self.To, False](s).to_any()
         )
 
     @always_inline
@@ -808,7 +808,7 @@ struct StringToBool[A: StringValue](BoolValue):
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var s = into_array(self.a.execute(batch), batch.num_rows()).as_string().copy()
         ctx.append(
-            Datum(StringToBoolKernel.apply[StringType, False](s).to_any())
+            StringToBoolKernel.apply[StringType, False](s).to_any()
         )
 
     @always_inline
@@ -841,16 +841,16 @@ trait StringValue(Value):
         self.prepare(batch, ctx)
         comptime if Self.OutShape == 0:
             var slot = 0
-            return Datum(
+            return 
                 StringScalar(self.elementwise(batch, ctx, slot, 0)).to_any()
-            )
+            
         else:
             var n = batch.num_rows()
             var builder = BinaryLikeBuilder[Self.OutType](capacity=n)
             for i in range(n):
                 var slot = 0
                 builder.append(self.elementwise(batch, ctx, slot, i))
-            return Datum(builder.finish().to_any())
+            return builder.finish().to_any()
 
 
 @fieldwise_init
@@ -954,7 +954,7 @@ struct NumToString[To: StringLikeType, A: NumericValue](StringValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(NumToStringKernel.dispatch(arr, Self.To())))
+        ctx.append(NumToStringKernel.dispatch(arr, Self.To()))
 
     @always_inline
     def elementwise(
@@ -979,7 +979,7 @@ struct BoolToString[To: StringLikeType, A: BoolValue](StringValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(BoolToStringKernel.dispatch(arr, Self.To())))
+        ctx.append(BoolToStringKernel.dispatch(arr, Self.To()))
 
     @always_inline
     def elementwise(
@@ -1004,7 +1004,7 @@ struct StringToString[To: StringLikeType, A: StringValue](StringValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(StringToStringKernel.dispatch(arr, Self.To(), False)))
+        ctx.append(StringToStringKernel.dispatch(arr, Self.To(), False))
 
     @always_inline
     def elementwise(
@@ -1039,7 +1039,7 @@ struct StringPredicate[
         var n = batch.num_rows()
         var la = into_array(self.l.execute(batch), n).as_string().copy()
         var ra = into_array(self.r.execute(batch), n).as_string().copy()
-        ctx.append(Datum(Self.K.apply(la, ra).to_any()))
+        ctx.append(Self.K.apply(la, ra).to_any())
 
     @always_inline
     def vectorwise[
@@ -1081,7 +1081,7 @@ struct StringLength[A: StringValue](NumericValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var s = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(LengthKernel.dispatch(s)))
+        ctx.append(LengthKernel.dispatch(s))
 
     @always_inline
     def vectorwise[
@@ -1114,7 +1114,7 @@ struct Reduction[K: AggKernel, A: NumericValue](NumericValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arg = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(Self.K.reduce(arg)))
+        ctx.append(Self.K.reduce(arg))
 
     @always_inline
     def vectorwise[
@@ -1188,7 +1188,7 @@ struct WindowFunction[Func: WindowKernel, A: Value](NumericValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var v = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(Self.Func.evaluate_all(v)))
+        ctx.append(Self.Func.evaluate_all(v))
 
     @always_inline
     def vectorwise[
@@ -1226,7 +1226,7 @@ struct ListColumn[T: DataType & ListLikeType](ListValue):
     var col: Int
 
     def materialize(self, batch: RecordBatch, mut ctx: Context) raises -> Datum:
-        return Datum(batch.columns[self.col].copy())
+        return batch.columns[self.col].copy()
 
 
 @fieldwise_init
@@ -1240,7 +1240,7 @@ struct ListLength[A: ListValue](NumericValue):
 
     def prepare(self, batch: RecordBatch, mut ctx: Context) raises:
         var arr = into_array(self.a.execute(batch), batch.num_rows())
-        ctx.append(Datum(ArrayLengthKernel.dispatch(arr)))
+        ctx.append(ArrayLengthKernel.dispatch(arr))
 
     @always_inline
     def vectorwise[
@@ -1270,7 +1270,7 @@ struct ListContains[A: ListValue, E: NumericValue](BoolValue):
         var n = batch.num_rows()
         var la = into_array(self.a.execute(batch), n)
         var ea = into_array(self.elem.execute(batch), n)
-        ctx.append(Datum(ArrayContainsKernel.dispatch(la, ea)))
+        ctx.append(ArrayContainsKernel.dispatch(la, ea))
 
     @always_inline
     def vectorwise[
