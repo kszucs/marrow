@@ -276,6 +276,27 @@ bool lane. Standalone fused `IsIn` is correct, and the dynamic (F1) path handles
 `And(IsIn, cmp)` correctly (eager `and_`), so ClickBench Q41 (`IN(...) AND …`) works via F1.
 Test disabled (`_fu5_…` prefix) pending the fused-composition fix.
 
+**FU-6 — `sort_indices` to avoid key re-gather** · *M2/Should* · Owns: `marrow/kernels/sort.mojo`,
+`marrow/expr/execution.mojo` · **From the Wave 2 quality review.** `SortProcessor` packs
+`[keys…, data…]` into one struct and sorts, but the kernel's final `take` gathers *every*
+field including the key columns, which are then discarded — K redundant column gathers per
+sort. Expose a multi-key `sort_indices(StructArray, key_indices, …) -> perm` and have the
+processor `take` only the data columns.
+
+**FU-7 — Fused conditional/expr node-model cleanup** · *M2/Could* · Owns: `marrow/expr/values.mojo`,
+`marrow/expr/dynamic.mojo` · **From the Wave 2 quality review.** Several node-model warts in the
+Wave 1→expr wiring: (a) `Coalesce`/`Nullif`/`CaseWhen` breakers re-run their kernel in
+`validity()` (the T0.7 `validity(batch)` contract has no `ctx`, so it can't read the bitmap
+`prepare()` already materialized — 2× compute when nested under a fused parent); (b) the IN
+value-set is a raw `_value_set: AnyArray` field on *every* `DynValue` and on the fused `IsIn`
+rather than a literal-set `Value` operand (leaky node model); (c) `_name` is overloaded to
+carry the LIKE pattern / `date_trunc` unit; (d) the fused `Coalesce`/`CaseWhen` hard-code
+2-operand/1-branch arity while the kernels + dynamic frontend are variadic (N-ary `CASE`
+unrepresentable in the fused DSL). Also decide whether string predicates (`like`, `startswith`)
+should AND operand validity like `StringCompare` does (today they return all-valid on null
+input). Related: **FU-4** (scalar-pattern LIKE kernel removes the per-morsel `_pattern_array`
+broadcast).
+
 ### Wave 2 — M1 wiring + operators + scan (mixed parallel/serial)
 
 Two parallel lanes plus a serialized `execution.mojo` sub-chain.
