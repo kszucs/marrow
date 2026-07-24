@@ -403,11 +403,12 @@ struct SchemaNode(Copyable, Movable):
         (original flat index -> compact index), so a projected node assembles
         from a decoded list that holds only the selected columns."""
         var new_children = List[SchemaNode]()
-        for ref c in self.children:
-            new_children.append(c.with_remapped_leaves(mapping))
         var new_leaf = self.leaf_index
         if self.kind == NODE_LEAF:
             new_leaf = mapping[self.leaf_index]
+        else:
+            for ref c in self.children:
+                new_children.append(c.with_remapped_leaves(mapping))
         return SchemaNode(
             self.kind,
             self.field.copy(),

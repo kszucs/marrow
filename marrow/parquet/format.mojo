@@ -512,7 +512,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
             last = w.write_field_begin(TC_I32, 8, last)
             w.write_i32(Int32(self.precision))
         if self.logical_type != LogicalType.NONE:
-            last = w.write_field_begin(TC_STRUCT, 10, last)
+            _ = w.write_field_begin(TC_STRUCT, 10, last)
             self._write_logical_type(w)
         w.write_field_stop()
 
@@ -536,7 +536,7 @@ struct SchemaElement(Copyable, Movable, ThriftWritable):
         elif self.logical_type == LogicalType.DECIMAL:
             var last = w.write_field_begin(TC_I32, 1, 0)
             w.write_i32(Int32(self.scale))
-            last = w.write_field_begin(TC_I32, 2, last)
+            _ = w.write_field_begin(TC_I32, 2, last)
             w.write_i32(Int32(self.precision))
             w.write_field_stop()  # close the DecimalType struct
         else:
@@ -588,7 +588,7 @@ struct DataPageHeader(Copyable, Movable):
         w.write_i32(Int32(self.encoding.code))
         last = w.write_field_begin(TC_I32, 3, last)
         w.write_i32(Int32(self.definition_level_encoding.code))
-        last = w.write_field_begin(TC_I32, 4, last)
+        _ = w.write_field_begin(TC_I32, 4, last)
         w.write_i32(Int32(self.repetition_level_encoding.code))
         w.write_field_stop()
 
@@ -650,7 +650,7 @@ struct DataPageHeaderV2(Copyable, Movable):
         w.write_i32(Int32(self.definition_levels_byte_length))
         last = w.write_field_begin(TC_I32, 6, last)
         w.write_i32(Int32(self.repetition_levels_byte_length))
-        last = w.write_bool_field(self.is_compressed, 7, last)
+        _ = w.write_bool_field(self.is_compressed, 7, last)
         w.write_field_stop()
 
 
@@ -681,7 +681,7 @@ struct DictionaryPageHeader(Copyable, Movable):
         var last = 0
         last = w.write_field_begin(TC_I32, 1, last)
         w.write_i32(Int32(self.num_values))
-        last = w.write_field_begin(TC_I32, 2, last)
+        _ = w.write_field_begin(TC_I32, 2, last)
         w.write_i32(Int32(self.encoding.code))
         w.write_field_stop()
 
@@ -879,7 +879,7 @@ struct ColumnMetaData(Copyable, Movable):
         var f = FieldHeader()
         while r.next_field(f):
             if f.id == 3:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.path_in_schema.append(r.read_string())
             elif f.id == 1:
@@ -979,12 +979,12 @@ struct ColumnMetaData(Copyable, Movable):
                 slast = w.write_field_begin(TC_BINARY, 6, slast)
                 w.write_bytes(Span(self.min_value))
                 slast = w.write_bool_field(True, 7, slast)  # is_max_value_exact
-                slast = w.write_bool_field(True, 8, slast)  # is_min_value_exact
+                _ = w.write_bool_field(True, 8, slast)  # is_min_value_exact
             w.write_field_stop()
         if self.bloom_filter_offset >= 0:
             last = w.write_field_begin(TC_I64, 14, last)
             w.write_i64(Int64(self.bloom_filter_offset))
-            last = w.write_field_begin(TC_I32, 15, last)
+            _ = w.write_field_begin(TC_I32, 15, last)
             w.write_i32(Int32(self.bloom_filter_length))
         w.write_field_stop()
 
@@ -1033,7 +1033,7 @@ struct PageLocation(Copyable, Movable, ThriftWritable):
         w.write_i64(Int64(self.offset))
         last = w.write_field_begin(TC_I32, 2, last)
         w.write_i32(Int32(self.compressed_page_size))
-        last = w.write_field_begin(TC_I64, 3, last)
+        _ = w.write_field_begin(TC_I64, 3, last)
         w.write_i64(Int64(self.first_row_index))
         w.write_field_stop()
 
@@ -1055,7 +1055,7 @@ struct OffsetIndex(Copyable, Movable, ThriftWritable):
         var f = FieldHeader()
         while r.next_field(f):
             if f.id == 1:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.page_locations.append(PageLocation.read(r))
             else:
@@ -1094,22 +1094,22 @@ struct ColumnIndex(Copyable, Movable, ThriftWritable):
         var f = FieldHeader()
         while r.next_field(f):
             if f.id == 1:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     # list bool elements: 1 = true, 2 = false (compact protocol)
                     out.null_pages.append(Int(r.read_byte()) == 1)
             elif f.id == 2:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.min_values.append(List[UInt8](Span(r.read_bytes())))
             elif f.id == 3:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.max_values.append(List[UInt8](Span(r.read_bytes())))
             elif f.id == 4:
                 out.boundary_order = Int(r.read_i32())
             elif f.id == 5:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.null_counts.append(Int(r.read_i64()))
             else:
@@ -1135,7 +1135,7 @@ struct ColumnIndex(Copyable, Movable, ThriftWritable):
         last = w.write_field_begin(TC_I32, 4, last)
         w.write_i32(Int32(self.boundary_order))
         if len(self.null_counts) > 0:
-            last = w.write_field_begin(TC_LIST, 5, last)
+            _ = w.write_field_begin(TC_LIST, 5, last)
             w.write_list_begin(TC_I64, len(self.null_counts))
             for i in range(len(self.null_counts)):
                 w.write_i64(Int64(self.null_counts[i]))
@@ -1204,7 +1204,7 @@ struct ColumnChunk(Copyable, Movable, ThriftWritable):
         if self.column_index_offset >= 0:
             last = w.write_field_begin(TC_I64, 6, last)
             w.write_i64(Int64(self.column_index_offset))
-            last = w.write_field_begin(TC_I32, 7, last)
+            _ = w.write_field_begin(TC_I32, 7, last)
             w.write_i32(Int32(self.column_index_length))
         w.write_field_stop()
 
@@ -1227,7 +1227,7 @@ struct RowGroup(Copyable, Movable, ThriftWritable):
         var f = FieldHeader()
         while r.next_field(f):
             if f.id == 1:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.columns.append(ColumnChunk.read(r))
             elif f.id == 2:
@@ -1242,7 +1242,7 @@ struct RowGroup(Copyable, Movable, ThriftWritable):
         var last = w.write_struct_list(1, 0, self.columns)
         last = w.write_field_begin(TC_I64, 2, last)
         w.write_i64(Int64(self.total_byte_size))
-        last = w.write_field_begin(TC_I64, 3, last)
+        _ = w.write_field_begin(TC_I64, 3, last)
         w.write_i64(Int64(self.num_rows))
         w.write_field_stop()
 
@@ -1276,7 +1276,7 @@ struct KeyValue(Copyable, Movable, ThriftWritable):
         var last = 0
         last = w.write_field_begin(TC_BINARY, 1, last)
         w.write_string(self.key)
-        last = w.write_field_begin(TC_BINARY, 2, last)
+        _ = w.write_field_begin(TC_BINARY, 2, last)
         w.write_string(self.value)
         w.write_field_stop()
 
@@ -1307,17 +1307,17 @@ struct FileMetaData(Copyable, Movable):
             if f.id == 1:
                 out.version = Int(r.read_i32())
             elif f.id == 2:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.schema.append(SchemaElement.read(r))
             elif f.id == 3:
                 out.num_rows = Int(r.read_i64())
             elif f.id == 4:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.row_groups.append(RowGroup.read(r))
             elif f.id == 5:
-                var et, n = r.read_list_header()
+                var _, n = r.read_list_header()
                 for _ in range(n):
                     out.key_value_metadata.append(KeyValue.read(r))
             elif f.id == 6:
