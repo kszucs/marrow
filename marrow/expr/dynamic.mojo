@@ -41,10 +41,20 @@ from ..kernels.arithmetic import (
     SubKernel,
     MulKernel,
     DivKernel,
+    ModKernel,
+    FloordivKernel,
     NegKernel,
     AbsKernel,
 )
-from ..kernels.boolean import AndKernel, OrKernel, NotKernel, is_null, select
+from ..kernels.boolean import (
+    AndKernel,
+    OrKernel,
+    NotKernel,
+    XorKernel,
+    NotNullKernel,
+    is_null,
+    select,
+)
 from ..kernels.compare import (
     equal,
     NeKernel,
@@ -82,6 +92,10 @@ comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime LENGTH: UInt8 = 20
 comptime CAST: UInt8 = 21
+comptime MOD: UInt8 = 22
+comptime FLOORDIV: UInt8 = 23
+comptime XOR: UInt8 = 24
+comptime NOT_NULL: UInt8 = 25
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +212,46 @@ struct DynValue(
             return self._cast_to.copy()
         return None
 
+    def referenced_columns(self) -> List[String]:
+        """Every distinct column this expression reads, in first-seen order.
+
+        Walks the tree collecting each ``LOAD`` leaf: named ``col("x")`` leaves
+        contribute their name; positional ``col(i)`` leaves contribute the index
+        rendered as a string. Deduped so a column referenced twice
+        (``col("a") + col("a")``) appears once. Plan analysis (projection pushdown,
+        column pruning) uses this to know which inputs a projection/filter needs.
+        """
+        var out = List[String]()
+        self._collect_columns(out)
+        return out^
+
+    def _collect_columns(self, mut out: List[String]):
+        if self._tag == LOAD:
+            var ref_name = (
+                self._name.copy() if self._name.byte_length()
+                > 0 else String(Int(self._kind_data))
+            )
+            var seen = False
+            for i in range(len(out)):
+                if out[i] == ref_name:
+                    seen = True
+            if not seen:
+                out.append(ref_name^)
+        else:
+            for i in range(len(self._args)):
+                self._args[i]._collect_columns(out)
+
+    def is_deterministic(self) -> Bool:
+        """Whether repeated evaluation on identical input yields identical output.
+
+        Every tag currently supported (columns, literals, arithmetic, compares,
+        boolean logic, casts, conditionals, validity predicates) is a pure
+        function of its inputs, so this is always ``True``. Non-deterministic tags
+        (``random``, ``now``, ...) would return ``False`` here and gate CSE /
+        subtree-caching once they exist.
+        """
+        return True
+
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
@@ -226,6 +280,14 @@ struct DynValue(
             )
         elif self._tag == DIV:
             return DivKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
+        elif self._tag == MOD:
+            return ModKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
+        elif self._tag == FLOORDIV:
+            return FloordivKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == EQ:
@@ -258,6 +320,10 @@ struct DynValue(
             return OrKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
+        elif self._tag == XOR:
+            return XorKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == NEG:
             return NegKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == ABS:
@@ -266,6 +332,8 @@ struct DynValue(
             return NotKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
+        elif self._tag == NOT_NULL:
+            return NotNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == LENGTH:
             return LengthKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == CAST:
@@ -341,6 +409,10 @@ struct DynValue(
             return "mul"
         elif self._tag == DIV:
             return "div"
+        elif self._tag == MOD:
+            return "mod"
+        elif self._tag == FLOORDIV:
+            return "floordiv"
         elif self._tag == EQ:
             return "equal"
         elif self._tag == NE:
@@ -357,6 +429,8 @@ struct DynValue(
             return "and"
         elif self._tag == OR:
             return "or"
+        elif self._tag == XOR:
+            return "xor"
         elif self._tag == NEG:
             return "neg"
         elif self._tag == ABS:
@@ -365,6 +439,8 @@ struct DynValue(
             return "not"
         elif self._tag == IS_NULL:
             return "is_null"
+        elif self._tag == NOT_NULL:
+            return "not_null"
         elif self._tag == LENGTH:
             return "length"
         elif self._tag == CAST:
@@ -435,6 +511,15 @@ struct DynValue(
     def __truediv__(self, rhs: DynValue) -> DynValue:
         return self._binary(DIV, rhs)
 
+    def __mod__(self, rhs: DynValue) -> DynValue:
+        return self._binary(MOD, rhs)
+
+    def __floordiv__(self, rhs: DynValue) -> DynValue:
+        return self._binary(FLOORDIV, rhs)
+
+    def __xor__(self, rhs: DynValue) -> DynValue:
+        return self._binary(XOR, rhs)
+
     def __gt__(self, rhs: DynValue) -> DynValue:
         return self._binary(GT, rhs)
 
@@ -467,6 +552,9 @@ struct DynValue(
 
     def is_null(self) -> DynValue:
         return self._unary(IS_NULL)
+
+    def not_null(self) -> DynValue:
+        return self._unary(NOT_NULL)
 
     def abs(self) -> DynValue:
         return self._unary(ABS)
