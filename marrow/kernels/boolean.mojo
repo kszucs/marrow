@@ -146,6 +146,77 @@ trait UnaryPredicateKernel(Kernel):
 
 
 # ---------------------------------------------------------------------------
+# Kleene 3-valued logic helpers
+# ---------------------------------------------------------------------------
+
+
+def _validity_ones(arr: BoolArray) raises -> Bitmap[mut=False]:
+    """The array's offset-adjusted validity as an owned, offset-0 bitmap, or an
+    all-ones bitmap when the array carries no validity buffer (every value
+    valid). Lets the Kleene formulas treat both operands uniformly."""
+    var v = arr.validity()
+    if v:
+        # OR the view with itself to materialize a fresh offset-0 copy.
+        return v.value().union(v.value()).to_immutable()
+    else:
+        return (~Bitmap.alloc_zeroed(len(arr)).view()).to_immutable()
+
+
+def _kleene[
+    is_and: Bool
+](left: BoolArray, right: BoolArray, name: String) raises -> BoolArray:
+    """SQL Kleene 3-valued AND (`is_and=True`) / OR (`is_and=False`).
+
+    Data is the plain bitwise `a & b` / `a | b`. Validity matches Arrow C++'s
+    `KleeneAnd` / `KleeneOr`:
+
+    - AND valid iff `(a_valid & ~a) | (b_valid & ~b) | (a_valid & b_valid)`
+      — a known-false operand forces a valid (false) result.
+    - OR  valid iff `(a_valid &  a) | (b_valid &  b) | (a_valid & b_valid)`
+      — a known-true operand forces a valid (true) result.
+    """
+    var n = len(left)
+    if len(right) != n:
+        raise Error(t"{name}: input arrays must have equal length")
+    var a_data = left.values()
+    var b_data = right.values()
+    var data: Bitmap[mut=False]
+    comptime if is_and:
+        data = (a_data & b_data).to_immutable()
+    else:
+        data = (a_data | b_data).to_immutable()
+
+    # Both operands fully valid → result fully valid (keeps the None convention).
+    if not left.bitmap and not right.bitmap:
+        return BoolArray(length=n, nulls=0, offset=0, bitmap=None, buffer=data^)
+
+    var a_valid = _validity_ones(left)
+    var b_valid = _validity_ones(right)
+    var av = a_valid.view()
+    var bv = b_valid.view()
+
+    # term_a / term_b: positions each operand alone can decide (valid & deciding).
+    var term_a: Bitmap[mut=True]
+    var term_b: Bitmap[mut=True]
+    comptime if is_and:
+        # term = valid AND NOT data, in one fused pass (no ~data temporaries).
+        term_a = av.difference(a_data)
+        term_b = bv.difference(b_data)
+    else:
+        term_a = av & a_data
+        term_b = bv & b_data
+    var both_valid = av & bv
+    var partial = term_a.view() | term_b.view()
+    var valid = partial.view() | both_valid.view()
+
+    var valid_bm = valid.to_immutable()
+    var nulls = n - valid_bm.view().count_set_bits()
+    return BoolArray(
+        length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
+    )
+
+
+# ---------------------------------------------------------------------------
 # Kernel structs
 # ---------------------------------------------------------------------------
 
@@ -166,16 +237,7 @@ struct AndKernel(BoolBinaryKernel):
         right: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
-        var length = len(left)
-        if len(right) != length:
-            raise Error("and_: input arrays must have equal length")
-        return BoolArray(
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=(left.values() & right.values()).to_immutable(),
-        )
+        return _kleene[is_and=True](left, right, "and_")
 
 
 struct OrKernel(BoolBinaryKernel):
@@ -194,16 +256,7 @@ struct OrKernel(BoolBinaryKernel):
         right: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
-        var length = len(left)
-        if len(right) != length:
-            raise Error("or_: input arrays must have equal length")
-        return BoolArray(
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=(left.values() | right.values()).to_immutable(),
-        )
+        return _kleene[is_and=False](left, right, "or_")
 
 
 struct NotKernel(BoolUnaryKernel):
@@ -219,11 +272,15 @@ struct NotKernel(BoolUnaryKernel):
         arr: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
+        # NOT flips the data; nulls propagate unchanged (NOT NULL = NULL).
+        var bm: Optional[Bitmap[mut=False]] = None
+        if arr.bitmap:
+            bm = _validity_ones(arr)
         return BoolArray(
             length=len(arr),
-            nulls=0,
+            nulls=arr.null_count(),
             offset=0,
-            bitmap=None,
+            bitmap=bm^,
             buffer=(~arr.values()).to_immutable(),
         )
 
@@ -262,15 +319,22 @@ struct XorKernel(BoolBinaryKernel):
         right: BoolArray,
         ctx: ExecutionContext = ExecutionContext.serial(),
     ) raises -> BoolArray:
-        var length = len(left)
-        if len(right) != length:
+        var n = len(left)
+        if len(right) != n:
             raise Error("xor: input arrays must have equal length")
+        var data = (left.values() ^ right.values()).to_immutable()
+        # XOR is fully determined only when both operands are valid.
+        if not left.bitmap and not right.bitmap:
+            return BoolArray(
+                length=n, nulls=0, offset=0, bitmap=None, buffer=data^
+            )
+        var a_valid = _validity_ones(left)
+        var b_valid = _validity_ones(right)
+        var valid = a_valid.view() & b_valid.view()
+        var valid_bm = valid.to_immutable()
+        var nulls = n - valid_bm.view().count_set_bits()
         return BoolArray(
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            buffer=(left.values() ^ right.values()).to_immutable(),
+            length=n, nulls=nulls, offset=0, bitmap=valid_bm^, buffer=data^
         )
 
 

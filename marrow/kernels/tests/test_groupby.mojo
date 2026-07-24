@@ -7,7 +7,13 @@ from marrow.arrays import (
     StringArray,
     StructArray,
 )
-from marrow.builders import array, PrimitiveBuilder, StringBuilder, Int32Builder
+from marrow.builders import (
+    array,
+    PrimitiveBuilder,
+    StringBuilder,
+    Int32Builder,
+    Date32Builder,
+)
 from marrow.tabular import RecordBatch
 from marrow.dtypes import (
     int8,
@@ -17,6 +23,8 @@ from marrow.dtypes import (
     uint32,
     float64,
     bool_,
+    string,
+    date32,
     Field,
     struct_,
     Int8Type,
@@ -533,6 +541,107 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
 
     _assert_all_distinct_10(GroupBy._serial_multi(sa, values, tags))
     _assert_all_distinct_10(GroupBy._radix_multi(sa, values, tags, 4))
+
+
+# ---------------------------------------------------------------------------
+# group_by — min / max over strings (bytewise) and temporal (dtype preserved)
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_min_max_string() raises:
+    # group 1: {"b", "c"} -> min "b", max "c"; group 2: {"a", "z"} -> "a"/"z".
+    var keys: AnyArray = array([1, 2, 1, 2], int32)
+    var sb = StringBuilder(4)
+    sb.append("b")
+    sb.append("a")
+    sb.append("c")
+    sb.append("z")
+    var vals: AnyArray = sb.finish()
+
+    var mn = GroupBy(keys).min(vals)
+    assert_equal(mn.num_rows(), 2)
+    assert_true(mn.schema.fields[1].dtype == string.to_any())
+    ref smn = mn.columns[1].as_string()
+    assert_equal(smn[0].to_string(), "b")
+    assert_equal(smn[1].to_string(), "a")
+
+    var mx = GroupBy(keys).max(vals)
+    assert_true(mx.schema.fields[1].dtype == string.to_any())
+    ref smx = mx.columns[1].as_string()
+    assert_equal(smx[0].to_string(), "c")
+    assert_equal(smx[1].to_string(), "z")
+
+
+def test_groupby_min_string_skips_nulls() raises:
+    var keys: AnyArray = array([1, 1, 1], int32)
+    var sb = StringBuilder(3)
+    sb.append("m")
+    sb.append_null()
+    sb.append("a")
+    var result = GroupBy(keys).min(sb.finish())
+    ref s = result.columns[1].as_string()
+    assert_equal(s[0].to_string(), "a")
+
+
+def test_groupby_min_string_all_null_group() raises:
+    var keys: AnyArray = array([9, 9], int32)
+    var sb = StringBuilder(2)
+    sb.append_null()
+    sb.append_null()
+    var result = GroupBy(keys).min(sb.finish())
+    assert_false(result.columns[1].as_string().is_valid(0))
+
+
+def test_groupby_min_max_date32() raises:
+    # group 1: {19000, 18500} -> min 18500 / max 19000; group 2: {18800}.
+    var keys: AnyArray = array([1, 1, 2], int32)
+    var b = Date32Builder(date32(), 3)
+    b.append(Scalar[int32.native](19000))
+    b.append(Scalar[int32.native](18500))
+    b.append(Scalar[int32.native](18800))
+    var vals: AnyArray = b.finish()
+
+    var mn = GroupBy(keys).min(vals)
+    assert_true(mn.schema.fields[1].dtype == date32().to_any())  # preserved
+    ref dmn = mn.columns[1].as_date32()
+    assert_equal(dmn[0].value(), 18500)
+    assert_equal(dmn[1].value(), 18800)
+
+    var mx = GroupBy(keys).max(vals)
+    assert_true(mx.schema.fields[1].dtype == date32().to_any())
+    ref dmx = mx.columns[1].as_date32()
+    assert_equal(dmx[0].value(), 19000)
+    assert_equal(dmx[1].value(), 18800)
+
+
+def test_groupby_min_date32_all_null_group() raises:
+    var keys: AnyArray = array([1, 1], int32)
+    var b = Date32Builder(date32(), 2)
+    b.append_null()
+    b.append_null()
+    var result = GroupBy(keys).min(b.finish())
+    assert_false(result.columns[1].as_date32().is_valid(0))
+
+
+# ---------------------------------------------------------------------------
+# group_by — count_distinct over strings (first-class grouped aggregate)
+# ---------------------------------------------------------------------------
+
+
+def test_groupby_count_distinct_string() raises:
+    # group 1: {"x"} -> 1 distinct; group 2: {"y", "z"} -> 2 distinct.
+    var keys: AnyArray = array([1, 1, 2, 2], int32)
+    var sb = StringBuilder(4)
+    sb.append("x")
+    sb.append("x")
+    sb.append("y")
+    sb.append("z")
+    var result = GroupBy(keys).count_distinct(sb.finish())
+    assert_equal(result.num_rows(), 2)
+    assert_true(result.schema.fields[1].name == "count_distinct")
+    ref c = result.columns[1].as_int64()
+    assert_equal(c[0].value(), 1)
+    assert_equal(c[1].value(), 2)
 
 
 def main() raises:

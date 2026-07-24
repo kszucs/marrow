@@ -18,6 +18,9 @@ from marrow.builders import (
     PrimitiveBuilder,
     StringBuilder,
     Int32Builder,
+    Date32Builder,
+    TimestampBuilder,
+    DurationBuilder,
 )
 from marrow.dtypes import (
     int32,
@@ -25,12 +28,16 @@ from marrow.dtypes import (
     uint8,
     float32,
     bool_,
+    date32,
+    timestamp,
+    duration,
+    second,
     Int32Type,
     Int64Type,
     UInt8Type,
     Float32Type,
 )
-from marrow.kernels.filter import filter, drop_null
+from marrow.kernels.filter import filter, drop_null, take
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +497,163 @@ def test_drop_null_sliced() raises:
     assert_equal(len(result), 2)
     assert_equal(result[0].value(), 30)
     assert_equal(result[1].value(), 50)
+
+
+# ---------------------------------------------------------------------------
+# filter / take / drop_null — temporal columns (routed through int backing)
+# ---------------------------------------------------------------------------
+
+
+def _date32(var days: List[Int]) raises -> AnyArray:
+    var b = Date32Builder(date32(), len(days))
+    for d in days:
+        b.append(Scalar[int32.native](d))
+    return b.finish()
+
+
+def _timestamp(var vals: List[Int]) raises -> AnyArray:
+    var b = TimestampBuilder(timestamp(second, "UTC"), len(vals))
+    for v in vals:
+        b.append(Scalar[int64.native](v))
+    return b.finish()
+
+
+def _duration(var vals: List[Int]) raises -> AnyArray:
+    var b = DurationBuilder(duration(second), len(vals))
+    for v in vals:
+        b.append(Scalar[int64.native](v))
+    return b.finish()
+
+
+def test_filter_date32() raises:
+    """Filter a date32 column — dtype preserved, values selected."""
+    var a = _date32([19000, 18500, 19100, 18800])
+    var result = filter(a, array([True, False, True, True]))
+    assert_true(result.dtype() == date32().to_any())  # dtype preserved
+    assert_equal(len(result), 3)
+    ref r = result.as_date32()
+    assert_equal(r[0].value(), Scalar[int32.native](19000))
+    assert_equal(r[1].value(), Scalar[int32.native](19100))
+    assert_equal(r[2].value(), Scalar[int32.native](18800))
+
+
+def test_filter_timestamp_preserves_unit_tz() raises:
+    """Filter a timestamp column — unit/tz preserved through the reinterpret."""
+    var a = _timestamp([1000, 2000, 3000, 4000, 5000])
+    var result = filter(a, array([False, True, False, True, True]))
+    assert_true(result.dtype() == timestamp(second, "UTC").to_any())
+    assert_equal(len(result), 3)
+    ref r = result.as_timestamp()
+    assert_equal(r[0].value(), Scalar[int64.native](2000))
+    assert_equal(r[1].value(), Scalar[int64.native](4000))
+    assert_equal(r[2].value(), Scalar[int64.native](5000))
+
+
+def test_filter_temporal_with_nulls() raises:
+    """Filter a timestamp column with nulls — validity rides through unchanged.
+    """
+    var b = TimestampBuilder(timestamp(second, "UTC"), 4)
+    b.append(Scalar[int64.native](1000))
+    b.append_null()
+    b.append(Scalar[int64.native](3000))
+    b.append_null()
+    var a: AnyArray = b.finish()
+    var result = filter(a, array([True, True, False, True]))
+    assert_equal(len(result), 3)
+    assert_equal(result.null_count(), 2)
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_false(result.is_valid(2))
+    assert_equal(result.as_timestamp()[0].value(), Scalar[int64.native](1000))
+
+
+def test_take_date32() raises:
+    """Gather rows from a date32 column at arbitrary indices."""
+    var a = _date32([19000, 18500, 19100, 18800])
+    var result = take(a, array([2, 0, 3, 1], int32))
+    assert_true(result.dtype() == date32().to_any())
+    assert_equal(len(result), 4)
+    ref r = result.as_date32()
+    assert_equal(r[0].value(), Scalar[int32.native](19100))
+    assert_equal(r[1].value(), Scalar[int32.native](19000))
+    assert_equal(r[2].value(), Scalar[int32.native](18800))
+    assert_equal(r[3].value(), Scalar[int32.native](18500))
+
+
+def test_take_duration_null_index() raises:
+    """Take on a duration column — a null index produces a null output row."""
+    var a = _duration([10, 20, 30])
+    var idx = Int32Builder(capacity=3)
+    idx.append(Scalar[int32.native](2))
+    idx.append_null()
+    idx.append(Scalar[int32.native](0))
+    var result = take(a, idx.finish())
+    assert_true(result.dtype() == duration(second).to_any())
+    assert_equal(result.null_count(), 1)
+    assert_true(result.is_valid(0))
+    assert_false(result.is_valid(1))
+    assert_true(result.is_valid(2))
+    ref r = result.as_duration()
+    assert_equal(r[0].value(), Scalar[int64.native](30))
+    assert_equal(r[2].value(), Scalar[int64.native](10))
+
+
+def test_drop_null_temporal() raises:
+    """``drop_null`` on a timestamp column removes the null rows."""
+    var b = TimestampBuilder(timestamp(second, "UTC"), 5)
+    b.append(Scalar[int64.native](1000))
+    b.append_null()
+    b.append(Scalar[int64.native](3000))
+    b.append_null()
+    b.append(Scalar[int64.native](5000))
+    var a: AnyArray = b.finish()
+    var result = drop_null(a)
+    assert_true(result.dtype() == timestamp(second, "UTC").to_any())
+    assert_equal(len(result), 3)
+    assert_equal(result.null_count(), 0)
+    ref r = result.as_timestamp()
+    assert_equal(r[0].value(), Scalar[int64.native](1000))
+    assert_equal(r[1].value(), Scalar[int64.native](3000))
+    assert_equal(r[2].value(), Scalar[int64.native](5000))
+
+
+def test_cross_check_temporal_pyarrow() raises:
+    """Cross-check temporal filter/take against pyarrow ``pc.filter``/``pc.take``.
+    """
+    from std.python import Python
+
+    var pa = Python.import_module("pyarrow")
+    var pc = Python.import_module("pyarrow.compute")
+
+    var raw = [0, 1_560_601_845, 1_582_934_400, 1_609_459_200, -1, 915_148_800]
+    var pylist = Python.list()
+    for v in raw:
+        pylist.append(v)
+    var pa_arr = pa.array(pylist, type=pa.timestamp("s", "UTC"))
+    var a = _timestamp(raw^)
+
+    # filter
+    var mask: List[Optional[Bool]] = [True, False, True, True, False, True]
+    var pa_mask = Python.list()
+    for m in mask:
+        pa_mask.append(m.value())
+    var got_f = filter(a, array(mask^))
+    var pa_f = pc.filter(pa_arr, pa.array(pa_mask)).cast(pa.int64())
+    ref rf = got_f.as_timestamp()
+    assert_equal(len(got_f), Int(py=pa_f.__len__()))
+    for i in range(len(got_f)):
+        assert_equal(Int(rf[i].value()), Int(py=pa_f[i].as_py()))
+
+    # take
+    var idx: List[Optional[Int]] = [4, 0, 5, 2, 1]
+    var pa_idx = Python.list()
+    for k in idx:
+        pa_idx.append(k.value())
+    var got_t = take(a, array(idx^, int32))
+    var pa_t = pc.take(pa_arr, pa.array(pa_idx)).cast(pa.int64())
+    ref rt = got_t.as_timestamp()
+    for i in range(len(got_t)):
+        assert_equal(Int(rt[i].value()), Int(py=pa_t[i].as_py()))
 
 
 def main() raises:

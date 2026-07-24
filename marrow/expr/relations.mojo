@@ -22,7 +22,8 @@ Plan-building API
 -----------------
 ``AnyRelation.select(*names)``                   — project columns by name.
 ``AnyRelation.filter(pred)``                     — filter rows by predicate.
-``AnyRelation.aggregate(keys, values, funcs)``   — grouped aggregation.
+``AnyRelation.aggregate(keys, values, funcs, names)`` — grouped aggregation
+(computed keys/inputs; ``HAVING`` is a ``.filter(...)`` on top of it).
 ``AnyRelation.join(right, left_on, right_on)``   — hash join.
 ``in_memory_table(batch)`` / ``parquet_scan(path)`` — leaf sources.
 ``execute(plan)``                                — drain to a single RecordBatch.
@@ -35,13 +36,13 @@ Example
 
 from std.memory import ArcPointer
 
-from ..dtypes import AnyDataType, Field, int64, float64
+from ..dtypes import Field
 from ..schema import Schema
 from ..tabular import RecordBatch
-from .lane import AnyValue
+from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from ..kernels.aggregate import agg_tag_from_name
+from ..kernels.aggregate import agg_tag_from_name, agg_out_dtype
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,
@@ -51,6 +52,8 @@ from .execution import (
     ProjectProcessor,
     AggregateProcessor,
     JoinProcessor,
+    SortProcessor,
+    LimitProcessor,
 )
 from ..kernels.join import (
     JOIN_INNER,
@@ -64,20 +67,6 @@ from ..kernels.join import (
 )
 
 
-def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
-    """Best-effort dtype of an aggregated value expression: its static dtype, or
-    the input column's dtype when it is a (bound) column reference; else None.
-    """
-    var dt = expr.dtype()
-    if dt:
-        return dt^
-    if expr.kind() == LOAD:
-        return Optional[AnyDataType](
-            input_schema.fields[Int(expr.kind_data())].dtype.copy()
-        )
-    return None
-
-
 # ---------------------------------------------------------------------------
 # Relation trait — the descriptive IR node (pure data; no execution state)
 # ---------------------------------------------------------------------------
@@ -87,6 +76,7 @@ def _value_dtype(expr: DynValue, input_schema: Schema) -> Optional[AnyDataType]:
 # `AnyRelation` (e.g. to push a filter into a `ParquetScan`) without a full RTTI.
 comptime RELATION_GENERIC: Int = 0
 comptime RELATION_PARQUET_SCAN: Int = 1
+comptime RELATION_SORT: Int = 2
 
 
 trait Relation(ImplicitlyDeletable, Movable):
@@ -257,69 +247,63 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
         keys: List[DynValue],
         values: List[DynValue],
         funcs: List[String],
+        names: List[String] = List[String](),
     ) raises -> AnyRelation:
-        """Grouped aggregation: key columns + aggregated value columns."""
-        from marrow.dtypes import int64
+        """Grouped aggregation: key columns + aggregated value columns.
+
+        Keys and aggregate inputs are arbitrary expressions — a bare column, or a
+        computed one (``col("x") + lit(1)``, ``col("ts").year()``,
+        ``col("ts").date_trunc("month")``, ``case_when(...)``, a literal).
+        ``funcs[i]`` is the aggregate applied to ``values[i]``: ``sum``, ``min``,
+        ``max``, ``count``, ``mean``, ``product``, ``count_distinct`` or
+        ``approx_count_distinct``.
+
+        Output schema: one field per key — named after its source column, or
+        ``key<i>`` for a computed key — then one field per aggregate, named
+        ``names[i]`` when given and after the function otherwise. Pass ``names``
+        to alias aggregates that would otherwise collide (``mean(a), mean(b)``).
+
+        ``HAVING`` needs no dedicated node: ``rel.aggregate(...).filter(pred)``
+        evaluates ``pred`` against the aggregate's output batch, so it resolves
+        column references against the *aggregate output* schema —
+        ``...filter(col("n") > lit(100))`` is exactly ``HAVING n > 100``.
+        """
+        if len(values) != len(funcs):
+            raise Error("aggregate: len(values) != len(funcs)")
+        if len(names) != 0 and len(names) != len(funcs):
+            raise Error("aggregate: len(names) != len(funcs)")
 
         var input_schema = self.schema()
-
         # Bind key/value expressions to positional form once (names -> indices),
-        # so per-morsel eval and the dtype lookups below use positions directly.
-        var resolved_keys = List[DynValue]()
-        for ref k in keys:
-            resolved_keys.append(k.resolve_names(input_schema))
-        var resolved_values = List[DynValue]()
-        for ref v in values:
-            resolved_values.append(v.resolve_names(input_schema))
+        # so per-morsel eval uses positions directly, and probe each one's output
+        # dtype by evaluating it against a 0-row batch of the input schema (the
+        # same trick ``project`` uses) — general for computed expressions, where
+        # a purely static dtype rule would be incomplete.
+        var probe = RecordBatch.empty(input_schema)
 
-        # Output schema: one field per key (named after its source column, with
-        # that column's dtype) then one field per aggregate (named after its
-        # function).
         var fields = List[Field]()
-        for i in range(len(resolved_keys)):
-            ref k = resolved_keys[i]
-            if k.kind() == LOAD:
-                ref src = input_schema.fields[Int(k.kind_data())]
-                fields.append(Field(src.name, src.dtype.copy()))
-            else:
-                var kdt = k.dtype()
-                if not kdt:
-                    raise Error(
-                        "aggregate: cannot infer dtype for computed key "
-                        + String(i)
-                    )
-                fields.append(Field("key" + String(i), kdt.value().copy()))
-        # Output dtype comes from the kernel's accumulator algebra (`acc_dtype`):
-        # sum widens integers to int64; min/max preserve the input dtype;
-        # count is int64; mean is float64.
-        for i in range(len(funcs)):
-            var tag = agg_tag_from_name(funcs[i])
-            var maybe_dt = _value_dtype(resolved_values[i], input_schema)
-            var vdt = maybe_dt.value().copy() if maybe_dt else AnyDataType(
-                float64
-            )
-            fields.append(
-                Field(funcs[i], AggregateProcessor.out_dtype(tag, vdt))
-            )
-        var out_schema = Schema(fields=fields^)
-
-        # Value accumulator dtypes (the input dtype of each aggregated value
-        # expression). The key fields are the first len(keys) output fields —
-        # the processor derives them from the schema, so we don't store them.
-        var value_dtypes = List[AnyDataType]()
-        for i in range(len(resolved_values)):
-            var dt = _value_dtype(resolved_values[i], input_schema)
-            if dt:
-                value_dtypes.append(dt.value().copy())
-            else:
-                value_dtypes.append(AnyDataType(float64))
-
         var key_exprs = List[AnyValue]()
-        for ref k in resolved_keys:
-            key_exprs.append(AnyValue(k.copy()))
+        for i in range(len(keys)):
+            var k = keys[i].resolve_names(input_schema)
+            var name = input_schema.fields[
+                Int(k.kind_data())
+            ].name if k.kind() == LOAD else "key" + String(i)
+            fields.append(Field(name, k.execute(probe).dtype()))
+            key_exprs.append(AnyValue(k^))
+
+        # Aggregate output dtype comes from the kernel's accumulator algebra —
+        # `agg_out_dtype` is the single home of that rule (sum widens integers to
+        # int64; min/max preserve the input dtype, including string/temporal;
+        # count and the distinct counts are int64; mean is float64).
         var val_exprs = List[AnyValue]()
-        for ref v in resolved_values:
-            val_exprs.append(AnyValue(v.copy()))
+        for i in range(len(values)):
+            var v = values[i].resolve_names(input_schema)
+            var tag = agg_tag_from_name(funcs[i])
+            var out_name = names[i] if len(names) != 0 else funcs[i]
+            fields.append(
+                Field(out_name, agg_out_dtype(tag, v.execute(probe).dtype()))
+            )
+            val_exprs.append(AnyValue(v^))
 
         return AnyRelation(
             Aggregate(
@@ -327,8 +311,7 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 keys=key_exprs^,
                 aggs=val_exprs^,
                 funcs=funcs.copy(),
-                value_dtypes=value_dtypes^,
-                schema=out_schema,
+                schema=Schema(fields=fields^),
             )
         )
 
@@ -386,6 +369,96 @@ struct AnyRelation(ImplicitlyCopyable, Movable, Writable):
                 schema=Schema(fields=fields^),
             )
         )
+
+    def project(
+        self, names: List[String], values: List[DynValue]
+    ) raises -> AnyRelation:
+        """Project arbitrary named expressions (computed columns).
+
+        Unlike ``select`` (column pass-through), each value is an expression
+        evaluated per morsel — e.g. ``col("x") + lit(1)``, a literal, or a
+        renamed column. Column references resolve by name against the input
+        schema; the output dtype of each column is the expression's static dtype
+        (or the referenced column's dtype for a bare column reference)."""
+        if len(names) != len(values):
+            raise Error("project: len(names) != len(values)")
+
+        var input_schema = self.schema()
+        # Probe each expression's output dtype by evaluating it against a 0-row
+        # batch of the input schema — general for computed columns (``x + 1``,
+        # literals, CASE) where a purely static dtype rule would be incomplete.
+        var probe = RecordBatch.empty(input_schema)
+        var fields = List[Field]()
+        var exprs = List[AnyValue]()
+        for i in range(len(values)):
+            var resolved = values[i].resolve_names(input_schema)
+            var out = resolved.execute(probe)
+            fields.append(Field(names[i], out.dtype()))
+            exprs.append(AnyValue(resolved^))
+        return AnyRelation(
+            Project(
+                input=self,
+                names=names.copy(),
+                values=exprs^,
+                schema=Schema(fields=fields^),
+            )
+        )
+
+    def sort(
+        self,
+        keys: List[DynValue],
+        ascending: List[Bool],
+        nulls_first: Bool = True,
+        stable: Bool = True,
+    ) raises -> AnyRelation:
+        """Sort by one or more key expressions (a pipeline breaker).
+
+        Each key has its own ascending/descending direction; ``nulls_first`` and
+        ``stable`` apply to all keys. Keys resolve by name against the input
+        schema. The output schema is unchanged from the input."""
+        if len(keys) == 0:
+            raise Error("sort: keys must not be empty")
+        if len(keys) != len(ascending):
+            raise Error("sort: len(keys) != len(ascending)")
+
+        var input_schema = self.schema()
+        var key_exprs = List[AnyValue]()
+        for ref k in keys:
+            key_exprs.append(AnyValue(k.resolve_names(input_schema)))
+        return AnyRelation(
+            Sort(
+                input=self,
+                keys=key_exprs^,
+                ascending=ascending.copy(),
+                nulls_first=nulls_first,
+                stable=stable,
+                limit=None,
+                schema=input_schema,
+            )
+        )
+
+    def limit(self, length: Int, offset: Int = 0) raises -> AnyRelation:
+        """Keep at most ``length`` rows after skipping ``offset`` rows.
+
+        Top-K fast path: when this limits a ``Sort`` with no existing limit and
+        ``offset == 0``, the limit is folded into the sort (``Sort(limit=…)``),
+        driving the sort kernel's top-K path instead of a full sort. Otherwise a
+        streaming ``Limit`` operator is layered on top."""
+        if offset == 0 and self.kind() == RELATION_SORT:
+            ref s = self.downcast[Sort]()[]
+            if not s.limit:
+                return AnyRelation(
+                    Sort(
+                        input=s.input.copy(),
+                        keys=s.keys.copy(),
+                        ascending=s.ascending.copy(),
+                        nulls_first=s.nulls_first,
+                        stable=s.stable,
+                        limit=Optional(length),
+                        schema=s.schema(),
+                    )
+                )
+        return AnyRelation(Limit(input=self, offset=offset, length=length))
 
 
 # ---------------------------------------------------------------------------
@@ -547,9 +620,100 @@ struct Project(Relation):
         writer.write(t"])")
 
 
+struct Limit(Relation):
+    """Row limit/offset — streaming: skip ``offset`` rows, keep ``length``."""
+
+    var input: AnyRelation
+    var offset: Int
+    var length: Int
+
+    def __init__(out self, *, var input: AnyRelation, offset: Int, length: Int):
+        self.input = input^
+        self.offset = offset
+        self.length = length
+
+    def schema(self) -> Schema:
+        return self.input.schema()
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return LimitProcessor(
+            input=self.input.to_processor(ctx),
+            offset=self.offset,
+            length=self.length,
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write(t"Limit(length={self.length}, offset={self.offset})")
+
+
 # ---------------------------------------------------------------------------
 # Blocking operators
 # ---------------------------------------------------------------------------
+
+
+struct Sort(Relation):
+    """Sort by key expressions — the descriptive node (keys, order, limit).
+
+    A pipeline breaker; schema is unchanged from the input. An optional ``limit``
+    turns it into a top-K (the sort kernel returns only the first ``limit``
+    rows), which the plan builder folds in when a ``Limit`` immediately follows a
+    ``Sort``."""
+
+    var input: AnyRelation
+    var keys: List[AnyValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var stable: Bool
+    var limit: Optional[Int]
+    var _schema: Schema
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyRelation,
+        var keys: List[AnyValue],
+        var ascending: List[Bool],
+        nulls_first: Bool,
+        stable: Bool,
+        var limit: Optional[Int],
+        var schema: Schema,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.stable = stable
+        self.limit = limit^
+        self._schema = schema^
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def kind(self) -> Int:
+        return RELATION_SORT
+
+    def to_processor(self, ctx: ExecutionContext) raises -> AnyProcessor:
+        return SortProcessor(
+            input=self.input.to_processor(ctx),
+            keys=self.keys.copy(),
+            ascending=self.ascending.copy(),
+            nulls_first=self.nulls_first,
+            stable=self.stable,
+            limit=self.limit.copy(),
+            schema=Schema(copy=self._schema),
+            ctx=ctx.copy(),
+        )
+
+    def write_to[W: Writer](self, mut writer: W):
+        writer.write("Sort(keys=[")
+        for i in range(len(self.keys)):
+            if i > 0:
+                writer.write(", ")
+            self.keys[i].write_to(writer)
+        writer.write("]")
+        if self.limit:
+            writer.write(t", limit={self.limit.value()}")
+        writer.write(")")
 
 
 struct Aggregate(Relation):
@@ -559,7 +723,6 @@ struct Aggregate(Relation):
     var keys: List[AnyValue]
     var aggs: List[AnyValue]
     var funcs: List[String]
-    var value_dtypes: List[AnyDataType]
     var _schema: Schema
 
     def __init__(
@@ -569,14 +732,12 @@ struct Aggregate(Relation):
         var keys: List[AnyValue],
         var aggs: List[AnyValue],
         var funcs: List[String],
-        var value_dtypes: List[AnyDataType],
         var schema: Schema,
     ):
         self.input = input^
         self.keys = keys^
         self.aggs = aggs^
         self.funcs = funcs^
-        self.value_dtypes = value_dtypes^
         self._schema = schema^
 
     def schema(self) -> Schema:
@@ -588,8 +749,8 @@ struct Aggregate(Relation):
             keys=self.keys.copy(),
             aggs=self.aggs.copy(),
             funcs=self.funcs.copy(),
-            value_dtypes=self.value_dtypes.copy(),
             schema=Schema(copy=self._schema),
+            ctx=ctx.copy(),
         )
 
     def write_to[W: Writer](self, mut writer: W):

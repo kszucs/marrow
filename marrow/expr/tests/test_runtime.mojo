@@ -7,16 +7,44 @@ from marrow.arrays import (
     AnyArray,
     Int64Array,
     Int32Array,
+    TimestampArray,
 )
-from marrow.builders import array
-from marrow.dtypes import int64, float64, bool_ as bool_dt, Int64Type
+from marrow.builders import array, PrimitiveBuilder
+from marrow.dtypes import (
+    int64,
+    float64,
+    bool_ as bool_dt,
+    Int64Type,
+    int32,
+    string,
+    timestamp,
+    second,
+    TimestampType,
+)
 from marrow.kernels.arithmetic import (
     AddKernel,
     SubKernel,
     AbsKernel,
     NegKernel,
+    ModKernel,
+    FloordivKernel,
 )
-from marrow.kernels.string import LengthKernel
+from marrow.kernels.boolean import XorKernel
+from marrow.kernels.string import LengthKernel, LikeKernel, ILikeKernel
+from marrow.kernels.compare import LtKernel, LeKernel, GtKernel, GeKernel
+from marrow.kernels.membership import is_in
+from marrow.kernels.temporal import (
+    YearKernel,
+    MonthKernel,
+    DayKernel,
+    HourKernel,
+    MinuteKernel,
+    SecondKernel,
+    DayOfWeekKernel,
+    QuarterKernel,
+    DayOfYearKernel,
+    date_trunc,
+)
 from marrow.tabular import RecordBatch, record_batch
 from marrow.expr import (
     DynValue,
@@ -44,6 +72,33 @@ from marrow.expr import (
     IF_ELSE,
     LENGTH,
     CAST,
+)
+
+# The op tags added in this task are not re-exported from ``marrow.expr`` yet
+# (that's a sibling packaging task), so import them from the module directly.
+from marrow.expr.dynamic import (
+    MOD,
+    FLOORDIV,
+    XOR,
+    NOT_NULL,
+    LIKE,
+    ILIKE,
+    IS_IN,
+    COALESCE,
+    NULLIF,
+    CASE_WHEN,
+    YEAR,
+    MONTH,
+    DAY,
+    HOUR,
+    MINUTE,
+    SECOND,
+    DAY_OF_WEEK,
+    QUARTER,
+    DAY_OF_YEAR,
+    DATE_TRUNC,
+    coalesce,
+    case_when,
 )
 
 
@@ -348,6 +403,389 @@ def test_dyn_cast_dtype_and_kind() raises:
     var expr = col(0).cast(float64)
     assert_equal(expr.kind(), CAST)
     assert_true(expr.dtype().value() == float64)
+
+
+# ---------------------------------------------------------------------------
+# New op tags: mod / floordiv / xor / not_null
+# ---------------------------------------------------------------------------
+
+
+def test_mod_expr() raises:
+    """Operator % matches kernels.mod."""
+    var a = array([10, 21, 33, 47, 5], int64)
+    var b = array([3, 5, 4, 10, 5], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec(col(0) % col(1), batch)
+    assert_true(result == ModKernel.apply[Int64Type](a, b))
+
+
+def test_floordiv_expr() raises:
+    """Operator // matches kernels.floordiv."""
+    var a = array([10, 21, 33, 47, 5], int64)
+    var b = array([3, 5, 4, 10, 5], int64)
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec(col(0) // col(1), batch)
+    assert_true(result == FloordivKernel.apply[Int64Type](a, b))
+
+
+def test_xor_pred() raises:
+    """Operator ^ matches kernels.boolean.xor over two bool masks."""
+    var a = array([True, True, False, False])
+    var b = array([True, False, True, False])
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec_pred(col(0) ^ col(1), batch)
+    assert_true(result == XorKernel.apply(a, b))
+
+
+def test_not_null_pred() raises:
+    """``not_null()`` is True for valid elements (all-valid input -> all True).
+    """
+    var a = array([1, 2, 3], int64)
+    var result = _exec_pred(col(0).not_null(), record_batch([a^], names=["c0"]))
+    assert_true(result == array([True, True, True]))
+
+
+def test_kind_mod() raises:
+    """``%`` node reports MOD kind and prints as mod(...)."""
+    var expr = col(0) % col(1)
+    assert_equal(expr.kind(), MOD)
+    assert_equal(String(expr), "mod(input(0), input(1))")
+
+
+def test_kind_floordiv() raises:
+    var expr = col(0) // col(1)
+    assert_equal(expr.kind(), FLOORDIV)
+    assert_equal(String(expr), "floordiv(input(0), input(1))")
+
+
+def test_kind_xor() raises:
+    var expr = col(0) ^ col(1)
+    assert_equal(expr.kind(), XOR)
+    assert_equal(String(expr), "xor(input(0), input(1))")
+
+
+def test_kind_not_null() raises:
+    var expr = col(0).not_null()
+    assert_equal(expr.kind(), NOT_NULL)
+    assert_equal(String(expr), "not_null(input(0))")
+
+
+# ---------------------------------------------------------------------------
+# Plan-analysis metadata
+# ---------------------------------------------------------------------------
+
+
+def test_referenced_columns_named() raises:
+    """Named LOAD leaves are collected in first-seen order, deduped."""
+    var expr = (col("a") + col("b")) * col("a")
+    var cols = expr.referenced_columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "a")
+    assert_equal(cols[1], "b")
+
+
+def test_referenced_columns_positional() raises:
+    """Positional LOAD leaves render their index as a string, deduped."""
+    var expr = (col(0) + col(2)) - col(0)
+    var cols = expr.referenced_columns()
+    assert_equal(len(cols), 2)
+    assert_equal(cols[0], "0")
+    assert_equal(cols[1], "2")
+
+
+def test_referenced_columns_literal_only() raises:
+    """An expression over only literals references no columns."""
+    var expr = lit[Int64Type](1) + lit[Int64Type](2)
+    assert_equal(len(expr.referenced_columns()), 0)
+
+
+def test_is_deterministic() raises:
+    """All currently supported tags are deterministic."""
+    assert_true((col(0) % col(1)).is_deterministic())
+    assert_true(if_else(col(0) > col(1), col(0), col(1)).is_deterministic())
+    assert_true(col(0).cast(float64).is_deterministic())
+
+
+# ---------------------------------------------------------------------------
+# String ordering comparisons (< <= > >= route to compare.mojo string dispatch)
+# ---------------------------------------------------------------------------
+
+
+def test_string_less_pred() raises:
+    """LT on string columns compares lexicographically via compare dispatch."""
+    var a = array(["apple", "banana", "cherry", "date"])
+    var b = array(["apricot", "banana", "blueberry", "durian"])
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    var result = _exec_pred(col(0) < col(1), batch)
+    assert_true(result == LtKernel.apply_string(a, b))
+    assert_true(result == array([True, False, False, True]))
+
+
+def test_string_all_compares() raises:
+    """<=, >, >= all evaluate on strings and match the compare kernels."""
+    var a = array(["a", "bb", "c"])
+    var b = array(["a", "b", "cc"])
+    var batch = record_batch([a.copy(), b.copy()], names=["c0", "c1"])
+    assert_true(
+        _exec_pred(col(0) <= col(1), batch) == LeKernel.apply_string(a, b)
+    )
+    assert_true(
+        _exec_pred(col(0) > col(1), batch) == GtKernel.apply_string(a, b)
+    )
+    assert_true(
+        _exec_pred(col(0) >= col(1), batch) == GeKernel.apply_string(a, b)
+    )
+
+
+def test_string_equal_pred() raises:
+    """EQ on strings routes through the string equality free function."""
+    var a = array(["x", "y", "z"])
+    var b = array(["x", "Y", "z"])
+    var batch = record_batch([a^, b^], names=["c0", "c1"])
+    var result = _exec_pred(col(0) == col(1), batch)
+    assert_true(result == array([True, False, True]))
+
+
+# ---------------------------------------------------------------------------
+# like / ilike  (kernels.string.LikeKernel / ILikeKernel)
+# ---------------------------------------------------------------------------
+
+
+def test_like_expr() raises:
+    """``.like`` matches SQL LIKE semantics (case-sensitive)."""
+    var a = array(["apple", "banana", "apricot", "cherry"])
+    var batch = record_batch([a^], names=["c0"])
+    var result = _exec_pred(col(0).like("a%"), batch)
+    assert_true(result == array([True, False, True, False]))
+
+
+def test_like_underscore() raises:
+    """``_`` matches exactly one character."""
+    var a = array(["cat", "cot", "cart", "ct"])
+    var batch = record_batch([a^], names=["c0"])
+    var result = _exec_pred(col(0).like("c_t"), batch)
+    assert_true(result == array([True, True, False, False]))
+
+
+def test_ilike_expr() raises:
+    """``.ilike`` is case-insensitive."""
+    var a = array(["Apple", "BANANA", "apricot", "Cherry"])
+    var batch = record_batch([a^], names=["c0"])
+    var result = _exec_pred(col(0).ilike("a%"), batch)
+    assert_true(result == array([True, False, True, False]))
+
+
+def test_like_kind_and_write_to() raises:
+    var expr = col(0).like("a%")
+    assert_equal(expr.kind(), LIKE)
+    assert_equal(String(expr), "match_like(input(0), a%)")
+    var iexpr = col(0).ilike("a%")
+    assert_equal(iexpr.kind(), ILIKE)
+    assert_equal(String(iexpr), "match_like_ci(input(0), a%)")
+
+
+def test_like_referenced_columns() raises:
+    """The pattern is a literal, so only the operand column is referenced."""
+    var cols = col("s").like("a%").referenced_columns()
+    assert_equal(len(cols), 1)
+    assert_equal(cols[0], "s")
+
+
+# ---------------------------------------------------------------------------
+# is_in  (kernels.membership.is_in)
+# ---------------------------------------------------------------------------
+
+
+def test_isin_int_expr() raises:
+    """ClickBench ``x IN (-1, 6)`` shape via ``.isin``."""
+    var a = array([-1, 0, 6, 3, 6], int64)
+    var value_set: AnyArray = array([-1, 6], int64)
+    var batch = record_batch([a.copy()], names=["c0"])
+    var result = _exec_pred(col(0).isin(value_set), batch)
+    assert_true(result == array([True, False, True, False, True]))
+    assert_true(result == is_in(a, array([-1, 6], int64)))
+
+
+def test_isin_string_expr() raises:
+    var a = array(["apple", "banana", "cherry", "apple"])
+    var value_set: AnyArray = array(["apple", "cherry"])
+    var batch = record_batch([a^], names=["c0"])
+    var result = _exec_pred(col(0).isin(value_set), batch)
+    assert_true(result == array([True, False, True, True]))
+
+
+def test_isin_kind_and_metadata() raises:
+    var value_set: AnyArray = array([1, 2], int64)
+    var expr = col(0).isin(value_set)
+    assert_equal(expr.kind(), IS_IN)
+    assert_equal(String(expr), "is_in(input(0), value_set)")
+    # referenced_columns resolves named LOADs (write_to renders the position).
+    var cols = col("k").isin(value_set).referenced_columns()
+    assert_equal(len(cols), 1)
+    assert_equal(cols[0], "k")
+
+
+# ---------------------------------------------------------------------------
+# coalesce / nullif / case_when  (kernels.conditional)
+# ---------------------------------------------------------------------------
+
+
+def _with_nulls(values: List[Int], valid: List[Bool]) raises -> Int64Array:
+    var b = PrimitiveBuilder[Int64Type](int64, capacity=len(values))
+    for i in range(len(values)):
+        if valid[i]:
+            b.append(Int64(values[i]))
+        else:
+            b.append_null()
+    return b.finish()
+
+
+def test_coalesce_expr() raises:
+    """First non-null across columns."""
+    var a = _with_nulls([1, 0, 0, 4], [True, False, False, True])
+    var b = _with_nulls([0, 2, 0, 5], [False, True, False, True])
+    var c = _with_nulls([0, 0, 3, 6], [False, False, True, True])
+    var batch = record_batch([a^, b^, c^], names=["c0", "c1", "c2"])
+    var result = _exec(coalesce([col(0), col(1), col(2)]), batch)
+    assert_true(result == array([1, 2, 3, 4], int64))
+
+
+def test_nullif_expr() raises:
+    """``a.nullif(b)`` nulls elements where a == b."""
+    var a = array([1, 2, 3, 4], int64)
+    var b = array([9, 2, 9, 4], int64)
+    var batch = record_batch([a^, b^], names=["c0", "c1"])
+    var tmp = col(0).nullif(col(1)).eval(batch)
+    ref result = tmp.as_int64()
+    assert_true(result[0].value() == 1)
+    assert_false(result[1].is_valid())
+    assert_true(result[2].value() == 3)
+    assert_false(result[3].is_valid())
+
+
+def test_case_when_expr() raises:
+    """Two-branch CASE WHEN with an else fallback."""
+    var x = array([1, 5, 10, 15], int64)
+    var lo = array([100, 100, 100, 100], int64)
+    var hi = array([200, 200, 200, 200], int64)
+    var els = array([300, 300, 300, 300], int64)
+    var batch = record_batch(
+        [x^, lo^, hi^, els^], names=["x", "lo", "hi", "els"]
+    )
+    # x < 5 -> lo ; x < 12 -> hi ; else -> els
+    var conds = [col(0) < lit[Int64Type](5), col(0) < lit[Int64Type](12)]
+    var vals = [col(1), col(2)]
+    var result = _exec(case_when(conds, vals, col(3)), batch)
+    assert_true(result == array([100, 200, 200, 300], int64))
+
+
+def test_case_when_no_else_nulls() raises:
+    """Rows matching no branch and no else become null."""
+    var x = array([1, 9], int64)
+    var v = array([100, 100], int64)
+    var batch = record_batch([x^, v^], names=["x", "v"])
+    var conds = [col(0) < lit[Int64Type](5)]
+    var vals = [col(1)]
+    var tmp = case_when(conds, vals).eval(batch)
+    ref result = tmp.as_int64()
+    assert_true(result[0].value() == 100)
+    assert_false(result[1].is_valid())
+
+
+def test_conditional_kinds_and_columns() raises:
+    var coa = coalesce([col("a"), col("b")])
+    assert_equal(coa.kind(), COALESCE)
+    var ccols = coa.referenced_columns()
+    assert_equal(len(ccols), 2)
+    assert_equal(ccols[0], "a")
+    assert_equal(ccols[1], "b")
+
+    var nif = col(0).nullif(col(1))
+    assert_equal(nif.kind(), NULLIF)
+    assert_equal(String(nif), "nullif(input(0), input(1))")
+
+    var cw = case_when([col("p") > col("q")], [col("r")], col("s"))
+    assert_equal(cw.kind(), CASE_WHEN)
+    var cwcols = cw.referenced_columns()
+    assert_equal(len(cwcols), 4)  # p, q, r, s
+
+
+# ---------------------------------------------------------------------------
+# Temporal extraction + date_trunc  (kernels.temporal)
+# ---------------------------------------------------------------------------
+
+
+def _ts(values: List[Int]) raises -> TimestampArray:
+    var b = PrimitiveBuilder[TimestampType](
+        timestamp(second), capacity=len(values)
+    )
+    for v in values:
+        b.append(Int64(v))
+    return b.finish()
+
+
+def test_year_month_day_expr() raises:
+    # 2019-06-15 12:30:45, 2020-02-29 00:00:00, 1970-01-01 00:00:00
+    var a = _ts([1_560_601_845, 1_582_934_400, 0])
+    var batch = record_batch([a.copy()], names=["c0"])
+    assert_true(
+        _exec_length(col(0).year(), batch) == array([2019, 2020, 1970], int32)
+    )
+    assert_true(_exec_length(col(0).month(), batch) == array([6, 2, 1], int32))
+    assert_true(_exec_length(col(0).day(), batch) == array([15, 29, 1], int32))
+    # wiring cross-check against the kernel directly
+    assert_true(_exec_length(col(0).year(), batch) == YearKernel.apply(a))
+
+
+def test_hour_minute_second_expr() raises:
+    var a = _ts([1_560_601_845])  # 12:30:45 UTC
+    var batch = record_batch([a^], names=["c0"])
+    assert_true(_exec_length(col(0).hour(), batch) == array([12], int32))
+    assert_true(_exec_length(col(0).minute(), batch) == array([30], int32))
+    assert_true(_exec_length(col(0).second(), batch) == array([45], int32))
+
+
+def test_quarter_dow_doy_expr() raises:
+    # 2019-01-01 (Tue), day-of-year 1, quarter 1
+    var a = _ts([1_546_300_800])
+    var batch = record_batch([a^], names=["c0"])
+    assert_true(_exec_length(col(0).quarter(), batch) == array([1], int32))
+    assert_true(_exec_length(col(0).day_of_week(), batch) == array([1], int32))
+    assert_true(_exec_length(col(0).day_of_year(), batch) == array([1], int32))
+
+
+def test_date_trunc_expr() raises:
+    var a = _ts([1_560_601_845])  # 2019-06-15 12:30:45
+    var batch = record_batch([a.copy()], names=["c0"])
+    var tmp = col(0).date_trunc("hour").eval(batch)
+    assert_true(tmp.dtype() == timestamp(second))
+    # 12:30:45 floored to the hour -> 12:00:00 == 1_560_600_000
+    assert_true(tmp.as_timestamp() == _ts([1_560_600_000]))
+    assert_true(
+        tmp.as_timestamp() == date_trunc(a.copy(), "hour").as_timestamp()
+    )
+
+
+def test_temporal_kinds_and_write_to() raises:
+    assert_equal(col(0).year().kind(), YEAR)
+    assert_equal(col(0).month().kind(), MONTH)
+    assert_equal(col(0).day().kind(), DAY)
+    assert_equal(col(0).hour().kind(), HOUR)
+    assert_equal(col(0).minute().kind(), MINUTE)
+    assert_equal(col(0).second().kind(), SECOND)
+    assert_equal(col(0).day_of_week().kind(), DAY_OF_WEEK)
+    assert_equal(col(0).quarter().kind(), QUARTER)
+    assert_equal(col(0).day_of_year().kind(), DAY_OF_YEAR)
+    assert_equal(String(col(0).year()), "year(input(0))")
+    var dt = col(0).date_trunc("day")
+    assert_equal(dt.kind(), DATE_TRUNC)
+    assert_equal(String(dt), "date_trunc(input(0), day)")
+
+
+def test_temporal_referenced_columns() raises:
+    var cols = col("ts").year().referenced_columns()
+    assert_equal(len(cols), 1)
+    assert_equal(cols[0], "ts")
 
 
 def main() raises:

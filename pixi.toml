@@ -19,11 +19,10 @@ backend = { name = "pixi-build-mojo", version = "0.1.*" }
 [package.build-dependencies]
 mojo-compiler = "==1.0.0b2.dev2026051306"
 mojo = "==1.0.0b2.dev2026051306"
-pontoneer = { git = "https://github.com/winding-lines/pontoneer", rev = "4001fdc44dc78424803d952395fcae0fb8562a3b" }
 
 [package.run-dependencies]
 # Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo/pontoneer when upgrading.
+# update the minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"
 
 [tasks]
@@ -200,7 +199,7 @@ wheel = { features = ["wheel"], solve-group = "default" }
 [dependencies]
 mojo = ">=1.0.0b3.dev2026072217,<2"
 # Mojo nightly builds are compiled against a specific CPython minor version;
-# update the minor bound together with mojo/pontoneer when upgrading.
+# update the minor bound together with mojo when upgrading.
 python = ">=3.14,<3.15"
 # The mojo-community channel ships a zlib 0.1.0 stub that satisfies no real
 # version constraint; pin to the real conda-forge zlib so that pyarrow's

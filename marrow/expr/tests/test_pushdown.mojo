@@ -22,7 +22,7 @@ from marrow.expr.relations import (
     RELATION_PARQUET_SCAN,
 )
 from marrow.expr.dynamic import col, lit
-from marrow.expr.lane import AnyValue
+from marrow.expr.values import AnyValue
 from marrow.expr.pruning import PruneStats
 
 

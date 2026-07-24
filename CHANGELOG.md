@@ -50,6 +50,13 @@
   `SwissHashTable` with a CSR index, partition-parallel.
 - rapidhash over primitive, string, struct, list, large-list, map and
   fixed-size-list arrays.
+- Strings: length, case conversion, strip, reverse, capitalize, concat,
+  `starts_with`/`ends_with`/`contains`, the six ordering comparisons, and
+  `LIKE`/`ILIKE` whose pattern compiles once per array.
+- Temporal extraction -- year, month, day, quarter, day-of-year,
+  day-of-week, hour, minute, second -- and `date_trunc` down to year.
+- Conditional kernels: `case_when`, `coalesce`, `nullif`, `fill_null`;
+  membership: `is_in`; nested: `array_length`, `array_contains`.
 - Float unaries and binaries: `sqrt`, `exp`, `exp2`, `log`, `log2`,
   `log10`, `log1p`, `floor`, `ceil`, `trunc`, `round`, `sign`, `sin`,
   `cos`, `pow_`, and row-wise `minimum`/`maximum`.
@@ -68,6 +75,9 @@
 - The numeric, boolean, string, temporal, conditional, cast and list
   families, each with a fluent operator and method API, reaching both
   lanes.
+- Aggregates written on the expression they aggregate --
+  `col("amount", int64).sum().alias("total")` -- with GROUP BY,
+  HAVING, computed keys and computed inputs.
 
 ### Query optimizer
 

@@ -20,21 +20,19 @@ This layer depends only on the value box (``AnyValue``) and the kernels; it does
 
 from std.memory import ArcPointer
 
-from ..arrays import AnyArray, StructArray, Int32Array
+from ..arrays import AnyArray, StructArray
 from .. import dtypes as dt
 from ..schema import Schema
 from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
-from ..kernels.groupby import HashGrouper
+from ..kernels.sort import sort as sort_by_keys
+from ..kernels.groupby import HashGrouper, GroupBy
 from ..kernels.aggregate import (
-    AggKernel,
-    AggState,
-    for_agg_tag,
     agg_tag_from_name,
+    reinterpret_array,
+    temporal_backing_dtype,
 )
-from ..dtypes import NumericType
-from ..utils import dispatch_over_numeric
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -47,7 +45,7 @@ from ..parquet import (
     PageBounds,
 )
 from ..scalars import AnyScalar
-from .lane import AnyValue
+from .values import AnyValue
 from .pruning import PruneStats
 
 
@@ -408,45 +406,173 @@ struct ProjectProcessor(Processor):
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 
 
+struct LimitProcessor(Processor):
+    """Streaming row limit/offset: skip ``offset`` rows, then pass through at
+    most ``length`` rows and stop.
+
+    Slices morsels at the input boundary — a morsel that straddles the offset or
+    the length boundary is sliced, so the total emitted row count is exactly
+    ``min(length, available - offset)`` regardless of morsel size."""
+
+    var input: AnyProcessor
+    var _schema: Schema
+    var _skip: Int
+    var _remaining: Int
+
+    def __init__(
+        out self, *, var input: AnyProcessor, offset: Int, length: Int
+    ):
+        self.input = input^
+        self._schema = self.input.schema()
+        self._skip = offset
+        self._remaining = length
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def pull(mut self) raises -> RecordBatch:
+        # Loop over input morsels, dropping those fully inside the offset window;
+        # Exhausted from the input propagates out.
+        while True:
+            if self._remaining <= 0:
+                raise Exhausted()
+            var batch = self.input.pull()
+            var nrows = batch.num_rows()
+            if self._skip >= nrows:
+                self._skip -= nrows
+            else:
+                var start = self._skip
+                self._skip = 0
+                var avail = nrows - start
+                var length = (
+                    avail if avail < self._remaining else self._remaining
+                )
+                self._remaining -= length
+                return batch.slice(start, length)
+
+
 # ---------------------------------------------------------------------------
 # Blocking processors
 # ---------------------------------------------------------------------------
 
 
+struct SortProcessor(Processor):
+    """Blocking: buffer all input, sort by the key expressions, emit once.
+
+    A pipeline breaker. It drains the child fully (``collect``), evaluates each
+    key expression over the whole input, and prepends the resulting key columns
+    to the data columns in a single ``StructArray``. ``kernels.sort.sort`` then
+    orders that struct by the key field indices, gathering *every* field (keys
+    and data) with ``take`` — so the trailing data fields come back permuted into
+    sorted order. When ``limit`` is set the kernel's top-K path (a truncated
+    permutation) runs instead of a full sort followed by a slice."""
+
+    var input: AnyProcessor
+    var keys: List[AnyValue]
+    var ascending: List[Bool]
+    var nulls_first: Bool
+    var stable: Bool
+    var limit: Optional[Int]
+    var _schema: Schema
+    var _ctx: ExecutionContext
+    var _emitted: Bool
+
+    def __init__(
+        out self,
+        *,
+        var input: AnyProcessor,
+        var keys: List[AnyValue],
+        var ascending: List[Bool],
+        nulls_first: Bool,
+        stable: Bool,
+        var limit: Optional[Int],
+        var schema: Schema,
+        var ctx: ExecutionContext,
+    ):
+        self.input = input^
+        self.keys = keys^
+        self.ascending = ascending^
+        self.nulls_first = nulls_first
+        self.stable = stable
+        self.limit = limit^
+        self._schema = schema^
+        self._ctx = ctx^
+        self._emitted = False
+
+    def schema(self) -> Schema:
+        return Schema(copy=self._schema)
+
+    def pull(mut self) raises -> RecordBatch:
+        if self._emitted:
+            raise Exhausted()
+        self._emitted = True
+
+        var full = self.input.collect()
+        var nrows = full.num_rows()
+        if nrows == 0:
+            # Nothing to order; return the (already schema-correct) empty batch.
+            return full^
+
+        # Build [key0, key1, ..., data0, data1, ...] in one StructArray. The key
+        # columns are evaluated over the fully-drained input; the data columns
+        # are the input columns unchanged.
+        var num_keys = len(self.keys)
+        var fields = List[dt.Field]()
+        var children = List[AnyArray]()
+        for i in range(num_keys):
+            var kcol = self.keys[i].execute(full)
+            fields.append(dt.Field("__sort_key" + String(i), kcol.dtype()))
+            children.append(kcol^)
+        for i in range(full.num_columns()):
+            fields.append(self._schema.fields[i].copy())
+            children.append(full.columns[i].copy())
+
+        var key_struct = StructArray(
+            dtype=dt.struct_(fields^),
+            length=nrows,
+            nulls=0,
+            offset=0,
+            bitmap=None,
+            children=children^,
+        )
+
+        var key_indices = List[Int]()
+        for i in range(num_keys):
+            key_indices.append(i)
+
+        var ordered = sort_by_keys(
+            key_struct,
+            key_indices=key_indices^,
+            ascending=self.ascending.copy(),
+            nulls_first=self.nulls_first,
+            stable=self.stable,
+            limit=self.limit.copy(),
+            ctx=self._ctx,
+        )
+
+        # The trailing fields are the sorted data columns.
+        var out_cols = List[AnyArray]()
+        for i in range(full.num_columns()):
+            out_cols.append(ordered.field(num_keys + i))
+        return RecordBatch(schema=self._schema.copy(), columns=out_cols^)
+
+
 struct AggregateProcessor(Processor):
-    """Blocking: drain all input, then aggregate each column once.
+    """Blocking: drain all input, then compute each aggregate column once.
 
-    Keys are grouped by a keys-only ``HashGrouper``. Because ``AggState[K, V]``
-    is fully typed (no ``AnyBuilder``), it can't be stored across the runtime,
-    heterogeneous aggregate set — so this blocking node buffers the per-batch
-    group ids and value columns, then for each aggregate resolves ``(K, V)`` via
-    the tag + input dtype and drives one typed ``AggState[K, V]`` over all
-    batches. The typed hot loop is the trade for buffering the (already fully
-    consumed) input.
+    Keys are grouped by a keys-only ``HashGrouper`` *as morsels arrive*, so the
+    grouping is incremental; only the per-batch group ids and the evaluated value
+    columns are buffered. On emit, each aggregate's chunks are ``concat``-ed once
+    and handed to ``GroupBy.aggregate_column`` — the same per-column entry point
+    the kernel-level multi-aggregate driver uses — so the whole routing (distinct
+    kernels, string/temporal min/max, non-numeric ``count``, typed ``AggState``
+    folds) is shared rather than duplicated here. Keys and aggregate inputs are
+    arbitrary ``AnyValue`` expressions, evaluated per morsel.
 
-    Runtime aggregate dispatch (the dynamic plan's ``name -> kernel`` selection)
-    uses the shared ``agg_tag_from_name`` + ``for_agg_tag`` tag switch from
-    ``marrow.kernels.aggregate`` — mirroring ``DynValue`` — so the typed
-    ``AggState[K, V]`` hot loop carries no dispatch."""
-
-    @staticmethod
-    def out_dtype(
-        tag: UInt8, value_dtype: dt.AnyDataType
-    ) raises -> dt.AnyDataType:
-        """Output/accumulator dtype for an aggregate tag on a given input dtype.
-        """
-        var box = List[dt.AnyDataType]()
-
-        @parameter
-        def by_kind[K: AggKernel]() raises:
-            @parameter
-            def by_value[V: NumericType](d: V) raises:
-                box.append(dt.AnyDataType(K.AccType[V]()))
-
-            dispatch_over_numeric[by_value](value_dtype)
-
-        for_agg_tag[by_kind](tag)
-        return box[0].copy()
+    ``HAVING`` needs no node of its own: a ``Filter`` on top of the ``Aggregate``
+    relation evaluates its predicate against the aggregate's *output* batch, so
+    ``rel.aggregate(...).filter(col("total") > lit(10))`` is exactly a
+    post-aggregate filter over the aggregate output schema."""
 
     var input: AnyProcessor
     var keys: List[AnyValue]
@@ -454,7 +580,7 @@ struct AggregateProcessor(Processor):
     var _schema: Schema
     var _grouper: HashGrouper
     var _tags: List[UInt8]
-    var _value_dtypes: List[dt.AnyDataType]
+    var _ctx: ExecutionContext
     var _emitted: Bool
 
     def __init__(
@@ -464,8 +590,8 @@ struct AggregateProcessor(Processor):
         var keys: List[AnyValue],
         var aggs: List[AnyValue],
         var funcs: List[String],
-        var value_dtypes: List[dt.AnyDataType],
         var schema: Schema,
+        var ctx: ExecutionContext,
     ) raises:
         self.input = input^
         self.keys = keys^
@@ -473,36 +599,69 @@ struct AggregateProcessor(Processor):
         self._schema = schema^
         self._grouper = HashGrouper()
         self._tags = List[UInt8]()
-        self._value_dtypes = List[dt.AnyDataType]()
         for i in range(len(funcs)):
             self._tags.append(agg_tag_from_name(funcs[i]))
-            self._value_dtypes.append(value_dtypes[i].copy())
+        self._ctx = ctx^
         self._emitted = False
 
     def schema(self) -> Schema:
         return Schema(copy=self._schema)
 
-    def _key_fields(self) -> List[dt.Field]:
-        # Output schema is key fields then aggregate fields; the first
-        # len(keys) fields are the group keys.
+    def _key_fields(self) raises -> List[dt.Field]:
+        """The group-key fields *as grouped*.
+
+        Output schema is key fields then aggregate fields, so the first
+        ``len(keys)`` fields are the group keys. A temporal key is grouped
+        through its signed-integer backing (the same reinterpret idiom the
+        aggregate kernels use for temporal min/max): key values are only ever
+        compared for equality, the reinterpretation is exact and free, and the
+        hash/scatter path is then fully numeric. ``_as_declared`` relabels the
+        unique key column back to the schema's temporal dtype on emit."""
         var fields = List[dt.Field]()
         for i in range(len(self.keys)):
-            fields.append(self._schema.fields[i].copy())
+            ref f = self._schema.fields[i]
+            if f.dtype.is_temporal():
+                fields.append(dt.Field(f.name, temporal_backing_dtype(f.dtype)))
+            else:
+                fields.append(f.copy())
         return fields^
+
+    @staticmethod
+    def _as_grouped(var value: AnyArray) raises -> AnyArray:
+        """An evaluated key column in the dtype it is grouped under — temporal
+        reinterpreted to its integer backing, everything else unchanged."""
+        var vdt = value.dtype()
+        if vdt.is_temporal():
+            return reinterpret_array(value, temporal_backing_dtype(vdt))
+        return value^
+
+    def _as_declared(self, i: Int, var value: AnyArray) raises -> AnyArray:
+        """Inverse of ``_as_grouped`` — the unique key column ``i`` relabelled
+        back to the output schema's dtype."""
+        ref target = self._schema.fields[i].dtype
+        if target.is_temporal():
+            return reinterpret_array(value, target)
+        return value^
 
     def pull(mut self) raises -> RecordBatch:
         if self._emitted:
             raise Exhausted()
+        self._emitted = True
 
-        # Phase 1 — drain input, buffering per-batch group ids + value columns.
-        var gids_per_batch = List[Int32Array]()
-        var values_per_batch = List[List[AnyArray]]()
+        # Phase 1 — drain the input, grouping the keys morsel by morsel and
+        # buffering the group ids + the evaluated value columns.
+        var gid_chunks = List[AnyArray]()
+        var value_chunks = List[List[AnyArray]]()
+        for _ in range(len(self.aggs)):
+            value_chunks.append(List[AnyArray]())
         while True:
             try:
                 var batch = self.input.pull()
                 var key_children = List[AnyArray]()
                 for i in range(len(self.keys)):
-                    key_children.append(self.keys[i].execute(batch))
+                    key_children.append(
+                        Self._as_grouped(self.keys[i].execute(batch))
+                    )
                 var key_struct = StructArray(
                     dtype=dt.struct_(self._key_fields()),
                     length=batch.num_rows(),
@@ -511,53 +670,32 @@ struct AggregateProcessor(Processor):
                     bitmap=None,
                     children=key_children^,
                 )
-                gids_per_batch.append(self._grouper.consume_keys(key_struct))
-                var vals = List[AnyArray]()
+                gid_chunks.append(self._grouper.consume_keys(key_struct))
                 for i in range(len(self.aggs)):
-                    vals.append(self.aggs[i].execute(batch))
-                values_per_batch.append(vals^)
+                    value_chunks[i].append(self.aggs[i].execute(batch))
             except Exhausted:
                 break
-        self._emitted = True
 
-        # Phase 2 — key columns + one typed AggState per aggregate.
-        var kfields = self._key_fields()
-        var cols = self._grouper.key_columns(kfields)
+        if len(gid_chunks) == 0:
+            return RecordBatch.empty(self._schema)
+
+        # Phase 2 — the unique key columns, then one shared per-column aggregate
+        # each. An aggregate's buffered chunks are released as soon as they are
+        # concatenated, so only one aggregate's contiguous copy is ever live.
+        var gids_any = concat(gid_chunks, self._ctx)
+        var gids = gids_any.as_int32().copy()
         var num_groups = self._grouper.num_groups()
+        var grouped_keys = self._grouper.key_columns(self._key_fields())
+        var cols = List[AnyArray]()
+        for i in range(len(grouped_keys)):
+            cols.append(self._as_declared(i, grouped_keys[i].copy()))
         for i in range(len(self._tags)):
+            var value = concat(value_chunks[i], self._ctx)
+            value_chunks[i].clear()
             cols.append(
-                self._aggregate(i, gids_per_batch, values_per_batch, num_groups)
+                GroupBy.aggregate_column(gids, value, num_groups, self._tags[i])
             )
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
-
-    def _aggregate(
-        self,
-        i: Int,
-        gids_per_batch: List[Int32Array],
-        values_per_batch: List[List[AnyArray]],
-        num_groups: Int,
-    ) raises -> AnyArray:
-        """Drive one typed `AggState[K, V]` over all buffered batches for
-        aggregate `i`, resolving `(K, V)` from its tag + input dtype."""
-        var box = List[AnyArray]()
-
-        @parameter
-        def by_kind[K: AggKernel]() raises:
-            @parameter
-            def by_value[V: NumericType](d: V) raises:
-                var state = AggState[K, V]()
-                for b in range(len(gids_per_batch)):
-                    state.update(
-                        gids_per_batch[b],
-                        values_per_batch[b][i].as_primitive[V](),
-                        num_groups,
-                    )
-                box.append(state.finish(num_groups).to_any())
-
-            dispatch_over_numeric[by_value](self._value_dtypes[i])
-
-        for_agg_tag[by_kind](self._tags[i])
-        return box[0].copy()
 
 
 struct JoinProcessor(Processor):

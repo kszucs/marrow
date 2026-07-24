@@ -28,9 +28,15 @@ NEG/ABS/NOT - Unary operations
 IS_NULL - Null check
 IF_ELSE - Conditional
 LENGTH - String byte length (dispatches to kernels.string.LengthKernel)
+LIKE/ILIKE - SQL LIKE pattern match (kernels.string.LikeKernel/ILikeKernel)
+IS_IN - Set membership (kernels.membership.is_in)
+COALESCE/NULLIF/CASE_WHEN - Conditional / null handling (kernels.conditional)
+YEAR/MONTH/DAY/HOUR/MINUTE/SECOND/DAY_OF_WEEK/QUARTER/DAY_OF_YEAR - Temporal
+  field extraction (kernels.temporal); DATE_TRUNC - floor to a unit boundary
 """
 
-from ..arrays import AnyArray
+from ..arrays import AnyArray, BoolArray
+from ..builders import StringBuilder
 from ..dtypes import AnyDataType, NumericType
 from ..scalars import AnyScalar, PrimitiveScalar
 from ..schema import Schema
@@ -41,10 +47,20 @@ from ..kernels.arithmetic import (
     SubKernel,
     MulKernel,
     DivKernel,
+    ModKernel,
+    FloordivKernel,
     NegKernel,
     AbsKernel,
 )
-from ..kernels.boolean import AndKernel, OrKernel, NotKernel, is_null, select
+from ..kernels.boolean import (
+    AndKernel,
+    OrKernel,
+    NotKernel,
+    XorKernel,
+    NotNullKernel,
+    is_null,
+    select,
+)
 from ..kernels.compare import (
     equal,
     NeKernel,
@@ -53,7 +69,25 @@ from ..kernels.compare import (
     GtKernel,
     GeKernel,
 )
-from ..kernels.string import LengthKernel
+from ..kernels.string import LengthKernel, LikeKernel, ILikeKernel
+from ..kernels.membership import is_in as is_in_kernel
+from ..kernels.conditional import (
+    coalesce as coalesce_kernel,
+    nullif as nullif_kernel,
+    case_when as case_when_kernel,
+)
+from ..kernels.temporal import (
+    YearKernel,
+    MonthKernel,
+    DayKernel,
+    HourKernel,
+    MinuteKernel,
+    SecondKernel,
+    DayOfWeekKernel,
+    QuarterKernel,
+    DayOfYearKernel,
+    date_trunc as date_trunc_kernel,
+)
 from ..kernels.cast import cast as cast_array
 
 
@@ -82,6 +116,27 @@ comptime IS_NULL: UInt8 = 17
 comptime IF_ELSE: UInt8 = 18
 comptime LENGTH: UInt8 = 20
 comptime CAST: UInt8 = 21
+comptime MOD: UInt8 = 22
+comptime FLOORDIV: UInt8 = 23
+comptime XOR: UInt8 = 24
+comptime NOT_NULL: UInt8 = 25
+# Wave 1 kernels wired into the runtime interpreter (T2.2).
+comptime LIKE: UInt8 = 26
+comptime ILIKE: UInt8 = 27
+comptime IS_IN: UInt8 = 28
+comptime COALESCE: UInt8 = 29
+comptime NULLIF: UInt8 = 30
+comptime CASE_WHEN: UInt8 = 31
+comptime YEAR: UInt8 = 32
+comptime MONTH: UInt8 = 33
+comptime DAY: UInt8 = 34
+comptime HOUR: UInt8 = 35
+comptime MINUTE: UInt8 = 36
+comptime SECOND: UInt8 = 37
+comptime DAY_OF_WEEK: UInt8 = 38
+comptime QUARTER: UInt8 = 39
+comptime DAY_OF_YEAR: UInt8 = 40
+comptime DATE_TRUNC: UInt8 = 41
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +165,8 @@ struct DynValue(
     var _name: String
     var _cast_to: Optional[AnyDataType]
     """Target dtype for a CAST node (None for every other tag)."""
+    var _value_set: Optional[AnyArray]
+    """Captured value-set array for an IS_IN node (None for every other tag)."""
 
     def __init__(
         out self,
@@ -119,6 +176,7 @@ struct DynValue(
         var value: Optional[AnyScalar],
         var name: String,
         var cast_to: Optional[AnyDataType] = None,
+        var value_set: Optional[AnyArray] = None,
     ):
         self._tag = tag
         self._args = args^
@@ -126,6 +184,7 @@ struct DynValue(
         self._value = value.copy()
         self._name = name^
         self._cast_to = cast_to^
+        self._value_set = value_set^
 
     def __init__(out self, *, copy: Self):
         self._tag = copy._tag
@@ -136,6 +195,7 @@ struct DynValue(
         self._value = copy._value.copy()
         self._name = copy._name.copy()
         self._cast_to = copy._cast_to.copy()
+        self._value_set = copy._value_set.copy()
 
     # Explicit (empty) destructor so this self-referential struct
     # (`_args: List[DynValue]`) is ImplicitlyDeletable; fields are still destroyed
@@ -198,6 +258,47 @@ struct DynValue(
             return self._cast_to.copy()
         return None
 
+    def referenced_columns(self) -> List[String]:
+        """Every distinct column this expression reads, in first-seen order.
+
+        Walks the tree collecting each ``LOAD`` leaf: named ``col("x")`` leaves
+        contribute their name; positional ``col(i)`` leaves contribute the index
+        rendered as a string. Deduped so a column referenced twice
+        (``col("a") + col("a")``) appears once. Plan analysis (projection pushdown,
+        column pruning) uses this to know which inputs a projection/filter needs.
+        """
+        var out = List[String]()
+        self._collect_columns(out)
+        return out^
+
+    def _collect_columns(self, mut out: List[String]):
+        if self._tag == LOAD:
+            var ref_name = (
+                self._name.copy() if self._name.byte_length()
+                > 0 else String(Int(self._kind_data))
+            )
+            var seen = False
+            for i in range(len(out)):
+                if out[i] == ref_name:
+                    seen = True
+                    break
+            if not seen:
+                out.append(ref_name^)
+        else:
+            for i in range(len(self._args)):
+                self._args[i]._collect_columns(out)
+
+    def is_deterministic(self) -> Bool:
+        """Whether repeated evaluation on identical input yields identical output.
+
+        Every tag currently supported (columns, literals, arithmetic, compares,
+        boolean logic, casts, conditionals, validity predicates) is a pure
+        function of its inputs, so this is always ``True``. Non-deterministic tags
+        (``random``, ``now``, ...) would return ``False`` here and gate CSE /
+        subtree-caching once they exist.
+        """
+        return True
+
     def eval(self, batch: RecordBatch) raises -> AnyArray:
         """Evaluate this expression tree against *batch*, dispatching on tag."""
         if self._tag == LOAD:
@@ -226,6 +327,14 @@ struct DynValue(
             )
         elif self._tag == DIV:
             return DivKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
+        elif self._tag == MOD:
+            return ModKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
+        elif self._tag == FLOORDIV:
+            return FloordivKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
         elif self._tag == EQ:
@@ -258,6 +367,10 @@ struct DynValue(
             return OrKernel.dispatch(
                 self._args[0].eval(batch), self._args[1].eval(batch)
             )
+        elif self._tag == XOR:
+            return XorKernel.dispatch(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
         elif self._tag == NEG:
             return NegKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == ABS:
@@ -266,6 +379,8 @@ struct DynValue(
             return NotKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == IS_NULL:
             return is_null(self._args[0].eval(batch))
+        elif self._tag == NOT_NULL:
+            return NotNullKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == LENGTH:
             return LengthKernel.dispatch(self._args[0].eval(batch))
         elif self._tag == CAST:
@@ -276,8 +391,72 @@ struct DynValue(
                 self._args[1].eval(batch),
                 self._args[2].eval(batch),
             )
+        elif self._tag == LIKE:
+            var left = self._args[0].eval(batch)
+            return LikeKernel.dispatch(left, self._pattern_array(left.length()))
+        elif self._tag == ILIKE:
+            var left = self._args[0].eval(batch)
+            return ILikeKernel.dispatch(
+                left, self._pattern_array(left.length())
+            )
+        elif self._tag == IS_IN:
+            return is_in_kernel(
+                self._args[0].eval(batch), self._value_set.value()
+            ).to_any()
+        elif self._tag == COALESCE:
+            var arrays = List[AnyArray]()
+            for i in range(len(self._args)):
+                arrays.append(self._args[i].eval(batch))
+            return coalesce_kernel(arrays)
+        elif self._tag == NULLIF:
+            return nullif_kernel(
+                self._args[0].eval(batch), self._args[1].eval(batch)
+            )
+        elif self._tag == CASE_WHEN:
+            var has_else = Int(self._kind_data)
+            var m = (len(self._args) - has_else) // 2
+            var conditions = List[BoolArray]()
+            var values = List[AnyArray]()
+            for k in range(m):
+                conditions.append(
+                    self._args[2 * k].eval(batch).as_bool().copy()
+                )
+                values.append(self._args[2 * k + 1].eval(batch))
+            var else_ = Optional[AnyArray](None)
+            if has_else == 1:
+                else_ = self._args[len(self._args) - 1].eval(batch)
+            return case_when_kernel(conditions, values, else_^)
+        elif self._tag == YEAR:
+            return YearKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == MONTH:
+            return MonthKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == DAY:
+            return DayKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == HOUR:
+            return HourKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == MINUTE:
+            return MinuteKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == SECOND:
+            return SecondKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == DAY_OF_WEEK:
+            return DayOfWeekKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == QUARTER:
+            return QuarterKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == DAY_OF_YEAR:
+            return DayOfYearKernel.dispatch(self._args[0].eval(batch))
+        elif self._tag == DATE_TRUNC:
+            return date_trunc_kernel(self._args[0].eval(batch), self._name)
         else:
             raise Error("DynValue.eval: unknown expression kind ", self._tag)
+
+    def _pattern_array(self, n: Int) raises -> AnyArray:
+        """Broadcast a LIKE/ILIKE pattern (stored in ``_name``) into an ``n``-row
+        ``StringArray`` — the string-predicate kernels compare element-wise, so
+        the constant pattern is materialised once per morsel here."""
+        var b = StringBuilder(capacity=n)
+        for _ in range(n):
+            b.append(self._name)
+        return b.finish()
 
     def prune(self, stats: PruneStats) raises -> PruneBound:
         """Pruning evaluation by tag (the runtime counterpart of the fused
@@ -341,6 +520,10 @@ struct DynValue(
             return "mul"
         elif self._tag == DIV:
             return "div"
+        elif self._tag == MOD:
+            return "mod"
+        elif self._tag == FLOORDIV:
+            return "floordiv"
         elif self._tag == EQ:
             return "equal"
         elif self._tag == NE:
@@ -357,6 +540,8 @@ struct DynValue(
             return "and"
         elif self._tag == OR:
             return "or"
+        elif self._tag == XOR:
+            return "xor"
         elif self._tag == NEG:
             return "neg"
         elif self._tag == ABS:
@@ -365,12 +550,46 @@ struct DynValue(
             return "not"
         elif self._tag == IS_NULL:
             return "is_null"
+        elif self._tag == NOT_NULL:
+            return "not_null"
         elif self._tag == LENGTH:
             return "length"
         elif self._tag == CAST:
             return "cast"
         elif self._tag == IF_ELSE:
             return "if_else"
+        elif self._tag == LIKE:
+            return "match_like"
+        elif self._tag == ILIKE:
+            return "match_like_ci"
+        elif self._tag == IS_IN:
+            return "is_in"
+        elif self._tag == COALESCE:
+            return "coalesce"
+        elif self._tag == NULLIF:
+            return "nullif"
+        elif self._tag == CASE_WHEN:
+            return "case_when"
+        elif self._tag == YEAR:
+            return "year"
+        elif self._tag == MONTH:
+            return "month"
+        elif self._tag == DAY:
+            return "day"
+        elif self._tag == HOUR:
+            return "hour"
+        elif self._tag == MINUTE:
+            return "minute"
+        elif self._tag == SECOND:
+            return "second"
+        elif self._tag == DAY_OF_WEEK:
+            return "day_of_week"
+        elif self._tag == QUARTER:
+            return "quarter"
+        elif self._tag == DAY_OF_YEAR:
+            return "day_of_year"
+        elif self._tag == DATE_TRUNC:
+            return "date_trunc"
         else:
             return String()
 
@@ -389,6 +608,16 @@ struct DynValue(
                     if i > 0:
                         writer.write(t", ")
                     self._args[i].write_to(writer)
+                # LIKE/ILIKE carry their pattern and DATE_TRUNC its unit in
+                # ``_name`` (not an arg node) — surface it in the rendering.
+                if (
+                    self._tag == LIKE
+                    or self._tag == ILIKE
+                    or self._tag == DATE_TRUNC
+                ):
+                    writer.write(t", {self._name}")
+                elif self._tag == IS_IN:
+                    writer.write(t", value_set")
                 writer.write(t")")
 
     # Node builders shared by the operator overloads below
@@ -435,6 +664,15 @@ struct DynValue(
     def __truediv__(self, rhs: DynValue) -> DynValue:
         return self._binary(DIV, rhs)
 
+    def __mod__(self, rhs: DynValue) -> DynValue:
+        return self._binary(MOD, rhs)
+
+    def __floordiv__(self, rhs: DynValue) -> DynValue:
+        return self._binary(FLOORDIV, rhs)
+
+    def __xor__(self, rhs: DynValue) -> DynValue:
+        return self._binary(XOR, rhs)
+
     def __gt__(self, rhs: DynValue) -> DynValue:
         return self._binary(GT, rhs)
 
@@ -468,11 +706,93 @@ struct DynValue(
     def is_null(self) -> DynValue:
         return self._unary(IS_NULL)
 
+    def not_null(self) -> DynValue:
+        return self._unary(NOT_NULL)
+
     def abs(self) -> DynValue:
         return self._unary(ABS)
 
     def length(self) -> DynValue:
         return self._unary(LENGTH)
+
+    # --- string pattern matching (kernels.string) --------------------------
+    def like(self, var pattern: String) -> DynValue:
+        """SQL ``LIKE`` against a constant *pattern* (``%``/``_`` wildcards,
+        case-sensitive) — dispatches to ``kernels.string.LikeKernel``."""
+        return DynValue(
+            tag=LIKE,
+            args=[self.copy()],
+            kind_data=0,
+            value=None,
+            name=pattern^,
+        )
+
+    def ilike(self, var pattern: String) -> DynValue:
+        """Case-insensitive SQL ``LIKE`` — ``kernels.string.ILikeKernel``."""
+        return DynValue(
+            tag=ILIKE,
+            args=[self.copy()],
+            kind_data=0,
+            value=None,
+            name=pattern^,
+        )
+
+    # --- set membership (kernels.membership) -------------------------------
+    def isin(self, value_set: AnyArray) -> DynValue:
+        """``self IN value_set`` — the value set is captured in the node and
+        probed by ``kernels.membership.is_in``."""
+        return DynValue(
+            tag=IS_IN,
+            args=[self.copy()],
+            kind_data=0,
+            value=None,
+            name=String(),
+            value_set=value_set.copy(),
+        )
+
+    # --- conditional / null handling (kernels.conditional) -----------------
+    def nullif(self, other: DynValue) -> DynValue:
+        """``NULLIF(self, other)`` — ``kernels.conditional.nullif``."""
+        return self._binary(NULLIF, other)
+
+    # --- temporal extraction (kernels.temporal) ----------------------------
+    def year(self) -> DynValue:
+        return self._unary(YEAR)
+
+    def month(self) -> DynValue:
+        return self._unary(MONTH)
+
+    def day(self) -> DynValue:
+        return self._unary(DAY)
+
+    def hour(self) -> DynValue:
+        return self._unary(HOUR)
+
+    def minute(self) -> DynValue:
+        return self._unary(MINUTE)
+
+    def second(self) -> DynValue:
+        return self._unary(SECOND)
+
+    def day_of_week(self) -> DynValue:
+        return self._unary(DAY_OF_WEEK)
+
+    def quarter(self) -> DynValue:
+        return self._unary(QUARTER)
+
+    def day_of_year(self) -> DynValue:
+        return self._unary(DAY_OF_YEAR)
+
+    def date_trunc(self, var unit: String) -> DynValue:
+        """Floor a temporal column to *unit* (``second``/``minute``/``hour``/
+        ``day``) — ``kernels.temporal.date_trunc``."""
+        return DynValue(
+            tag=DATE_TRUNC,
+            args=[self.copy()],
+            kind_data=0,
+            value=None,
+            name=unit^,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +835,48 @@ def if_else(cond: DynValue, then_: DynValue, else_: DynValue) -> DynValue:
         tag=IF_ELSE,
         args=[cond.copy(), then_.copy(), else_.copy()],
         kind_data=0,
+        value=None,
+        name=String(),
+    )
+
+
+def coalesce(var args: List[DynValue]) -> DynValue:
+    """First non-null value across *args*, elementwise
+    (``kernels.conditional.coalesce``)."""
+    return DynValue(
+        tag=COALESCE,
+        args=args^,
+        kind_data=0,
+        value=None,
+        name=String(),
+    )
+
+
+def case_when(
+    conditions: List[DynValue],
+    values: List[DynValue],
+    else_: Optional[DynValue] = None,
+) -> DynValue:
+    """Multi-branch ``CASE WHEN`` (``kernels.conditional.case_when``).
+
+    ``conditions[k]`` selects ``values[k]`` for the first branch that is
+    valid-and-true; ``else_`` (or null) is used when none match. Conditions and
+    values are stored interleaved in ``_args`` so ``referenced_columns`` /
+    ``resolve_names`` recurse over every branch; ``kind_data`` flags whether an
+    ``else_`` is present.
+    """
+    var args = List[DynValue]()
+    for k in range(len(conditions)):
+        args.append(conditions[k].copy())
+        args.append(values[k].copy())
+    var has_else: UInt8 = 0
+    if else_:
+        args.append(else_.value().copy())
+        has_else = 1
+    return DynValue(
+        tag=CASE_WHEN,
+        args=args^,
+        kind_data=has_else,
         value=None,
         name=String(),
     )

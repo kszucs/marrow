@@ -19,10 +19,22 @@ is resolved to the comptime ``V`` at the boundary via ``dispatch_over_numeric``
 import std.math as math
 
 from ..arrays import BoolArray, PrimitiveArray, AnyArray, Int32Array, Int64Array
-from ..builders import PrimitiveBuilder, AnyBuilder, Int64Builder, Int32Builder
+from ..builders import (
+    PrimitiveBuilder,
+    AnyBuilder,
+    Int64Builder,
+    Int32Builder,
+    BinaryLikeBuilder,
+)
 from ..dtypes import *
-from ..scalars import PrimitiveScalar, AnyScalar, Int64Scalar, Float64Scalar
-from ..utils import dispatch_over_numeric
+from ..scalars import (
+    PrimitiveScalar,
+    AnyScalar,
+    Int64Scalar,
+    Float64Scalar,
+    StringScalar,
+)
+from ..utils import dispatch_over_numeric, dispatch_over_stringlike
 from ..views import reduce
 from .helpers import Kernel
 from .execution import ExecutionContext
@@ -313,6 +325,11 @@ struct MinKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
+        var dt = array.dtype()
+        if dt.is_temporal():
+            return _minmax_temporal_scalar[Self](array, ctx)
+        elif dt.is_string() or dt.is_large_string():
+            return _minmax_string_scalar(array, is_min=True)
         return Self.dispatch(array, ctx)  # SIMD whole-array fast path
 
     @staticmethod
@@ -347,6 +364,11 @@ struct MaxKernel(AggKernel):
     def reduce(
         array: AnyArray, ctx: ExecutionContext = ExecutionContext.serial()
     ) raises -> AnyScalar:
+        var dt = array.dtype()
+        if dt.is_temporal():
+            return _minmax_temporal_scalar[Self](array, ctx)
+        elif dt.is_string() or dt.is_large_string():
+            return _minmax_string_scalar(array, is_min=False)
         return Self.dispatch(array, ctx)  # SIMD whole-array fast path
 
     @staticmethod
@@ -450,6 +472,155 @@ struct MeanKernel(AggKernel):
 
 
 # ---------------------------------------------------------------------------
+# min / max over string and temporal columns.
+#
+# `min`/`max` are order-preserving, so temporal types (date/time/timestamp/
+# duration) reduce over their signed-integer backing and the result is
+# reinterpreted back to the temporal dtype — reusing the whole numeric path
+# (SIMD whole-array reduce + typed `AggState` scatter). Strings compare
+# bytewise (lexicographic), matching Arrow's `hash_min`/`hash_max`; nulls are
+# excluded (SQL semantics) and an empty / all-null group yields null.
+# ---------------------------------------------------------------------------
+
+
+def reinterpret_array(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
+    """View `array`'s buffers under a new (same-width) `dt` — used to read a
+    temporal column as its integer backing and to relabel the integer result
+    back to the temporal dtype, so min/max reuse the numeric aggregation path.
+    """
+    var data = array.to_data()
+    data.dtype = dt.copy()
+    return AnyArray.from_data(data)
+
+
+def temporal_backing_dtype(dt: AnyDataType) -> AnyDataType:
+    """The integer dtype backing a temporal value — 32-bit for date32/time32,
+    64-bit otherwise (date64/time64/timestamp/duration). Paired with
+    `reinterpret_array` to route temporal columns through the numeric path."""
+    return AnyDataType(int32) if (
+        dt.is_date32() or dt.is_time32()
+    ) else AnyDataType(int64)
+
+
+def _mm_temporal_typed[
+    K: AggKernel, T: TemporalType
+](arr: PrimitiveArray[T], ctx: ExecutionContext) raises -> AnyScalar:
+    """Whole-array min/max over one temporal array — the SIMD same-type reduce
+    over the integer backing, preserving the runtime dtype (unit/tz). All-null /
+    empty → null."""
+    if len(arr) == arr.null_count():
+        return PrimitiveScalar[T](None, arr.dtype.copy()).to_any()
+    return K.apply(arr, ctx).to_any()
+
+
+def _minmax_temporal_scalar[
+    K: AggKernel
+](array: AnyArray, ctx: ExecutionContext) raises -> AnyScalar:
+    """Whole-array min/max over a temporal `AnyArray` → temporal `AnyScalar`."""
+    var dt = array.dtype()
+    if dt.is_date32():
+        return _mm_temporal_typed[K](array.as_date32(), ctx)
+    elif dt.is_date64():
+        return _mm_temporal_typed[K](array.as_date64(), ctx)
+    elif dt.is_time32():
+        return _mm_temporal_typed[K](array.as_time32(), ctx)
+    elif dt.is_time64():
+        return _mm_temporal_typed[K](array.as_time64(), ctx)
+    elif dt.is_timestamp():
+        return _mm_temporal_typed[K](array.as_timestamp(), ctx)
+    else:
+        return _mm_temporal_typed[K](array.as_duration(), ctx)
+
+
+def _minmax_string_scalar(array: AnyArray, is_min: Bool) raises -> AnyScalar:
+    """Whole-array lexicographic (bytewise) min/max over a string/large_string
+    array. Nulls excluded; empty / all-null → null `StringScalar`."""
+
+    @parameter
+    def leaf[T: StringLikeType](d: T) raises -> AnyScalar:
+        ref sa = array.as_binary_like[T]()
+        var n = len(sa)
+        var has_null = sa.null_count() > 0
+        var best = -1
+        for i in range(n):
+            if has_null and not sa.is_valid(i):
+                continue
+            if best == -1:
+                best = i
+            else:
+                var a = sa.unsafe_get(UInt(i))
+                var b = sa.unsafe_get(UInt(best))
+                var take = (a < b) if is_min else (b < a)
+                if take:
+                    best = i
+        if best == -1:
+            return StringScalar.null().to_any()
+        return StringScalar(String(sa.unsafe_get(UInt(best)))).to_any()
+
+    return dispatch_over_stringlike[leaf](array.dtype())
+
+
+def min_max_string_grouped(
+    gids: Int32Array, value: AnyArray, num_groups: Int, is_min: Bool
+) raises -> AnyArray:
+    """Per-group lexicographic (bytewise) min/max over a string/large_string
+    column, over precomputed `gids`. Nulls excluded; an empty / all-null group
+    yields null. Matches Arrow's bytewise ordering for `hash_min`/`hash_max`."""
+
+    @parameter
+    def leaf[T: StringLikeType](d: T) raises -> AnyArray:
+        ref sa = value.as_binary_like[T]()
+        var best = List[Int](length=num_groups, fill=-1)
+        var gv = gids.values()
+        var n = len(gids)
+        var has_null = sa.null_count() > 0
+        for i in range(n):
+            if has_null and not sa.is_valid(i):
+                continue
+            var g = Int(gv[i])
+            if best[g] == -1:
+                best[g] = i
+            else:
+                var a = sa.unsafe_get(UInt(i))
+                var b = sa.unsafe_get(UInt(best[g]))
+                var take = (a < b) if is_min else (b < a)
+                if take:
+                    best[g] = i
+        var out = BinaryLikeBuilder[T](capacity=num_groups)
+        for g in range(num_groups):
+            if best[g] == -1:
+                out.append_null()
+            else:
+                out.append(sa.unsafe_get(UInt(best[g])))
+        return out.finish().to_any()
+
+    return dispatch_over_stringlike[leaf](value.dtype())
+
+
+def count_valid_grouped(
+    gids: Int32Array, value: AnyArray, num_groups: Int
+) raises -> Int64Array:
+    """Per-group count of valid (non-null) rows over precomputed `gids`.
+
+    `count` reads only validity, so — unlike the other folds — it is defined for
+    *every* dtype. This is the non-numeric counterpart of
+    `AggState[CountKernel, V]`, keeping `COUNT(col)` / `COUNT(*)` available over
+    string, binary and nested columns that the typed numeric scatter can't
+    resolve. An empty group counts 0 (never null), matching SQL."""
+    var counts = List[Int64](length=num_groups, fill=0)
+    var gv = gids.values()
+    var has_null = value.null_count() > 0
+    for i in range(len(gids)):
+        if has_null and not value.is_valid(i):
+            continue
+        counts[Int(gv[i])] += 1
+    var out = Int64Builder(num_groups)
+    for g in range(num_groups):
+        out.append(Scalar[int64.native](counts[g]))
+    return out.finish()
+
+
+# ---------------------------------------------------------------------------
 # Runtime aggregate tags — the one place a runtime function *name* resolves to
 # a comptime `AggKernel`. Used by any runtime, multi-aggregate driver (the
 # expression layer's `AggregateProcessor`, the Python group-by binding).
@@ -513,6 +684,40 @@ def for_agg_tag[
         job[ProductKernel]()
     else:
         raise Error("unknown aggregate tag ", Int(tag))
+
+
+def agg_out_dtype(tag: UInt8, value_dtype: AnyDataType) raises -> AnyDataType:
+    """The output dtype of aggregate `tag` over a `value_dtype` column.
+
+    The single home of the rule — shared by the group-by drivers (which produce
+    the column) and by any planner that needs the aggregate's output schema
+    before the data exists:
+
+    - `count` / `count_distinct` / `approx_count_distinct` → `int64`;
+    - `mean` → `float64`;
+    - `min` / `max` are order-preserving, so they keep the *input* dtype —
+      numeric, string, or temporal (unit/tz included);
+    - the remaining folds (`sum` / `product`) widen to their accumulator dtype
+      (`AggKernel.AccType`), so narrow integers don't overflow."""
+    if tag == AGG_COUNT or agg_is_distinct(tag):
+        return AnyDataType(int64)
+    elif tag == AGG_MEAN:
+        return AnyDataType(float64)
+    elif tag == AGG_MIN or tag == AGG_MAX:
+        return value_dtype.copy()
+    else:
+        var box = List[AnyDataType]()
+
+        @parameter
+        def by_kind[K: AggKernel]() raises:
+            @parameter
+            def by_value[V: NumericType](d: V) raises:
+                box.append(AnyDataType(K.AccType[V]()))
+
+            dispatch_over_numeric[by_value](value_dtype)
+
+        for_agg_tag[by_kind](tag)
+        return box[0].copy()
 
 
 # ---------------------------------------------------------------------------

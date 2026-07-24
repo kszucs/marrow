@@ -59,9 +59,13 @@ from .dynamic import (
     ABS,
     NOT,
     IS_NULL,
+    NOT_NULL,
     IF_ELSE,
     LENGTH,
     CAST,
+    MOD,
+    FLOORDIV,
+    XOR,
 )
 from ..kernels.execution import ExecutionContext
 from .execution import (

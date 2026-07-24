@@ -200,16 +200,20 @@ marrow/
 ├── builders.mojo         # Builder, BuilderData, PrimitiveBuilder, StringBuilder,
 │                         # ListBuilder, FixedSizeListBuilder, StructBuilder
 ├── kernels/
-│   ├── arithmetic.mojo   # Element-wise add, subtract, multiply, divide
-│   ├── similarity.mojo   # Batch cosine similarity (CPU SIMD + GPU dispatch)
-│   ├── aggregate.mojo    # Sum, mean, min, max
+│   ├── arithmetic.mojo   # Element-wise add, subtract, multiply, divide, math
+│   ├── aggregate.mojo    # Sum, mean, min, max, count, product
 │   ├── boolean.mojo      # Logical operations
-│   ├── filter.mojo       # Array filtering
-│   ├── sum.mojo          # Specialized sum kernel
+│   ├── compare.mojo      # Comparisons
+│   ├── cast.mojo         # Type casting
+│   ├── filter.mojo       # Array filtering / take / drop_null
+│   ├── groupby.mojo      # Hash group-by
+│   ├── join.mojo         # Hash join
+│   ├── sort.mojo         # Sort / sort_indices
+│   ├── string.mojo       # String kernels
 │   └── tests/            # Benchmarks and GPU tests
 ├── c_data.mojo           # Arrow C Data Interface
 ├── schema.mojo           # Schema with Fields and metadata
-├── tabular.mojo          # RecordBatch
+├── tabular.mojo          # RecordBatch, Table
 ├── visitor.mojo          # DataTypeVisitor, ArrayVisitor traits
 └── tests/                # Core module tests
 python/                   # The Python module top level
@@ -229,7 +233,7 @@ Mojo lacks dynamic dispatch, so the codebase uses:
 
 ### Architecture
 
-GPU kernels live in `marrow/kernels/` and are imported lazily from CPU-side modules (e.g. `similarity.mojo`, `arithmetic.mojo`) only when a `DeviceContext` is passed. This avoids requiring GPU compilation tools for CPU-only usage.
+GPU kernels live in `marrow/kernels/` and are imported lazily from CPU-side modules (e.g. `arithmetic.mojo`) only when a `DeviceContext` is passed. This avoids requiring GPU compilation tools for CPU-only usage.
 
 The `Buffer` struct has an optional `device` field (`Optional[DeviceBuffer]`). When set, the buffer has a GPU-resident copy. GPU kernel orchestration functions (e.g. `_add_gpu`, `_cosine_similarity_gpu`) check `buffer.has_device()` to skip uploads when data is already on the GPU.
 
@@ -264,8 +268,8 @@ pixi run bench_gpu          # GPU arithmetic benchmarks
 1. **Type system**: Variant elements must be copyable; references/lifetimes still evolving
 2. **C callbacks**: Release callbacks in C Data Interface not called (Mojo limitation)
 3. **Testing**: Relies on PyArrow for conformance testing until Mojo has JSON library
-4. **Coverage**: Only bool, numeric, string, list, fixed-size list, struct types implemented
-5. **Table**: Not yet implemented (RecordBatch is available)
+4. **Coverage**: bool, numeric (int/uint/float), string/large_string, binary/large_binary, fixed_size_binary, list/large_list/fixed_size_list, struct, map, dictionary, decimal (32/64/128/256), and temporal (date/time/timestamp/duration/interval) types are implemented; union, run-end-encoded, and view layouts are not
+5. **Table**: `RecordBatch` and `Table` (schema + chunked columns) are implemented in `tabular.mojo`
 
 ## Dependencies
 
