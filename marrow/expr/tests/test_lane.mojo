@@ -48,6 +48,7 @@ def _takes_fusable[F: NumericValue](x: F) -> Bool:
     return True
 
 
+
 def _batch() raises -> RecordBatch:
     return record_batch(
         [

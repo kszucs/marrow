@@ -1577,6 +1577,13 @@ struct AnyValue(Copyable, Movable, Writable):
         writer.write(self.name())
 
 
+# NOTE: `Table[T]` (values.mojo's `t.a` schema-struct sugar) is deferred — the
+# parametric `comptime _dtype[name] = reflect[T].field[name].T` alias hits the
+# documented `reflect` resolution bug (see schema.mojo) in this module, though the
+# byte-identical code compiles in values.mojo. `col("a", int64)` is the working
+# column-reference API in the meantime.
+
+
 # ---------------------------------------------------------------------------
 # Builders
 # ---------------------------------------------------------------------------
