@@ -325,6 +325,24 @@ trait NumericValue(Value):
     def abs(self) -> Abs[Self]:
         return Abs(self.copy())
 
+    def sign(self) -> Sign[Self]:
+        return Sign(self.copy())
+
+    def floor(self) -> Floor[Self]:
+        return Floor(self.copy())
+
+    def ceil(self) -> Ceil[Self]:
+        return Ceil(self.copy())
+
+    def round(self) -> Round[Self]:
+        return Round(self.copy())
+
+    def isnan(self) -> IsNan[Self]:
+        return IsNan(self.copy())
+
+    def isinf(self) -> IsInf[Self]:
+        return IsInf(self.copy())
+
     def sqrt(self) -> Sqrt[Self]:
         return Sqrt(self.copy())
 
