@@ -1,6 +1,11 @@
 """Unit tests for the string compute kernels (marrow.kernels.string)."""
 
-from std.testing import assert_equal, assert_true, assert_false
+from std.testing import (
+    assert_equal,
+    assert_true,
+    assert_false,
+    assert_raises,
+)
 
 from marrow.testing import TestSuite
 from marrow.arrays import AnyArray, StringArray, BoolArray
@@ -33,11 +38,18 @@ def _broadcast(pat: String, n: Int) raises -> StringArray:
 
 
 def _like(s: StringArray, pat: String) raises -> BoolArray:
-    return LikeKernel.apply(s, _broadcast(pat, len(s)))
+    """Scalar-pattern LIKE, cross-checked against the array x array overload."""
+    var scalar = LikeKernel.apply(s, pat)
+    assert_true(scalar == LikeKernel.apply(s, _broadcast(pat, len(s))))
+    return scalar^
 
 
 def _ilike(s: StringArray, pat: String) raises -> BoolArray:
-    return ILikeKernel.apply(s, _broadcast(pat, len(s)))
+    """Scalar-pattern ILIKE, cross-checked against the array x array overload.
+    """
+    var scalar = ILikeKernel.apply(s, pat)
+    assert_true(scalar == ILikeKernel.apply(s, _broadcast(pat, len(s))))
+    return scalar^
 
 
 def _with_null() raises -> StringArray:
@@ -234,6 +246,112 @@ def test_like_propagates_nulls() raises:
     assert_true(r.is_valid(2))
     assert_true(r[0].value())  # 'ab' contains 'b'
     assert_false(r[2].value())  # 'cde' does not
+
+
+# --- LIKE / ILIKE with a scalar pattern (compiled once) --------------------
+
+
+def test_like_scalar_pattern_propagates_nulls() raises:
+    var r = LikeKernel.apply(_with_null(), "%b%")  # ['ab', null, 'cde']
+    assert_equal(r.null_count(), 1)
+    assert_true(r.is_valid(0))
+    assert_false(r.is_valid(1))
+    assert_true(r.is_valid(2))
+    assert_true(r[0].value())
+    assert_false(r[2].value())
+
+
+def test_like_scalar_pattern_on_slice() raises:
+    var full = _with_null()  # ['ab', null, 'cde']
+    var r = LikeKernel.apply(full.slice(1, 2), "%d%")  # [null, 'cde']
+    assert_equal(r.null_count(), 1)
+    assert_false(r.is_valid(0))
+    assert_true(r.is_valid(1))
+    assert_true(r[1].value())
+
+
+def test_like_fast_path_shapes() raises:
+    # exact / prefix / suffix / contains — the four wildcard-free shapes
+    var s = array(["abc", "abcd", "xabc", "xabcx", "ABC", ""])
+    assert_true(
+        _like(s, "abc") == array([True, False, False, False, False, False])
+    )
+    assert_true(
+        _like(s, "abc%") == array([True, True, False, False, False, False])
+    )
+    assert_true(
+        _like(s, "%abc") == array([True, False, True, False, False, False])
+    )
+    assert_true(
+        _like(s, "%abc%") == array([True, True, True, True, False, False])
+    )
+
+
+def test_like_empty_strings() raises:
+    var s = array(["", "x"])
+    assert_true(_like(s, "%%") == array([True, True]))
+    assert_true(_like(s, "_") == array([False, True]))
+    assert_true(_like(s, "%_%") == array([False, True]))
+
+
+def test_like_multibyte() raises:
+    # '_' matches one code point, not one byte
+    var s = array(["héllo", "hello", "h€llo", "hllo"])
+    assert_true(_like(s, "h_llo") == array([True, True, True, False]))
+    assert_true(_like(s, "%é%") == array([True, False, False, False]))
+    assert_true(_like(s, "h%o") == array([True, True, True, True]))
+    assert_true(_like(s, "héllo") == array([True, False, False, False]))
+    # a '%' must not split a multi-byte character in half
+    var t = array(["日本語", "日語", "語"])
+    assert_true(_like(t, "日%語") == array([True, True, False]))
+    assert_true(_like(t, "日_語") == array([True, False, False]))
+
+
+def test_like_escaped_literal_fast_paths() raises:
+    # escapes still collapse onto the literal shapes: '%\%%' is contains('%')
+    var s = array(["a%b", "ab", "%", "a_b"])
+    assert_true(_like(s, "%\\%%") == array([True, False, True, False]))
+    assert_true(_like(s, "\\%") == array([False, False, True, False]))
+    assert_true(_like(s, "%\\_%") == array([False, False, False, True]))
+    # a trailing backslash is dropped (pyarrow match_like)
+    assert_true(_like(s, "ab\\") == array([False, True, False, False]))
+
+
+def test_like_repeated_wildcards() raises:
+    var s = array(["aXbYc", "abc", "ac"])
+    assert_true(_like(s, "a%b%c") == array([True, True, False]))
+    assert_true(_like(s, "%%a%%c%%") == array([True, True, True]))
+    assert_true(_like(s, "a%_%c") == array([True, True, False]))
+
+
+def test_ilike_scalar_pattern() raises:
+    var s = array(["Google.com", "YAHOO", "gOoGlE", "none"])
+    assert_true(_ilike(s, "%google%") == array([True, False, True, False]))
+    assert_true(_ilike(s, "GOOGLE%") == array([True, False, True, False]))
+    assert_true(_ilike(s, "%COM") == array([True, False, False, False]))
+    assert_true(_ilike(s, "yahoo") == array([False, True, False, False]))
+
+
+def test_ilike_multibyte() raises:
+    var s = array(["CAFÉ", "café", "cafe"])
+    assert_true(_ilike(s, "caf_") == array([True, True, True]))
+    assert_true(_ilike(s, "%é") == array([True, True, False]))
+
+
+def test_like_dispatch_scalar_pattern() raises:
+    var s: AnyArray = array(["google.com", "yahoo.com"])
+    assert_true(
+        LikeKernel.dispatch(s, "%google%").as_bool() == array([True, False])
+    )
+    assert_true(
+        ILikeKernel.dispatch(s, "%GOOGLE%").as_bool() == array([True, False])
+    )
+
+
+def test_like_dispatch_rejects_non_string() raises:
+    var s: AnyArray = array([1, 2, 3], int32)
+    with assert_raises(contains="expected a string array"):
+        _ = LikeKernel.dispatch(s, "%a%")
 
 
 def main() raises:

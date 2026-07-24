@@ -58,6 +58,22 @@
   `ParquetFile[S: ByteSource = MappedFile]` reads through it while keeping the
   `ParquetFile(path)` convenience. Pure refactor toward streaming and remote
   (OpenDAL) scans.
+- **LIKE/ILIKE scalar-pattern kernels (compile the pattern once).**
+  `LikeKernel.apply(array, pattern)` / `.dispatch(array, pattern)` and the
+  `ILikeKernel` equivalents take the pattern as a `StringSlice` instead of a
+  broadcast array, so `col LIKE '%const%'` compiles the pattern once per call
+  rather than once per row. A new `LikePattern[ignore_case]` carries the
+  compiled form and is the single matching implementation behind both the
+  scalar and the array × array overloads: it classifies the pattern into the
+  literal shapes `foo` / `foo%` / `%foo` / `%foo%` (which match through the
+  optimized string primitives, escapes included — `%\%%` compiles to
+  `contains('%')`) and otherwise runs a backtracking wildcard matcher directly
+  over each row's UTF-8 bytes, with no per-row allocation. `ILIKE` classifies
+  each row with one byte scan and skips the microsecond-scale Unicode `lower()`
+  whenever the row is ASCII. Measured on ClickBench-style URLs
+  (`marrow/kernels/tests/bench_string.mojo`): `LIKE '%google%'` over 1M rows
+  799 ms → 7.6 ms (104x), `ILIKE '%GOOGLE%'` over 100k rows 1235 ms → 3.0 ms
+  (417x); the array × array path is 3-6x faster too.
 
 ### Tests
 
