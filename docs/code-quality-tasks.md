@@ -862,6 +862,34 @@ at 1M rows:
    the mechanism is motivated and where the number is currently losing. A fusion implementation
    that improves g10 and leaves g100k at 288 µs has missed the point.
 
+
+##### Q2.5 step 3a — MEASURED REGRESSION, must be resolved before fusion
+
+Re-measured after `2ecc58f`, two independent runs, `--competition`:
+
+| row | baseline (`319c0ca`) | after 3a |
+|---|---|---|
+| `groupby_multi[1m_g100k]` marrow | 3.02 ms | **3.28 / 3.29 ms** (+9%) |
+| `groupby_sum[1m_g100k]` marrow | 1.87 ms | 1.89 / 1.89 ms (flat) |
+
+Wins fell **12/15 -> 11/15**; the lost row is `multi[1m_g100k]`, now polars 3.09 vs marrow 3.29.
+Marginal cost per added aggregate at g100k: **288 -> 350 us** (polars 145 us), so the deficit we
+were trying to close *widened*, 2.3x -> 2.4x.
+
+**Single-aggregate flat + multi-aggregate regressed isolates the cause to `AggFunc` itself**: each
+aggregate now dispatches through an erased box holding a `grouped_fn` pointer — an indirect call
+per aggregate per column, where the tag switch previously resolved once and then ran direct. The
+erasure bought comptime *expressibility* and paid for it in dynamic-path indirection.
+
+**This is the gate the task set for itself and failed** ("the dynamic path must not regress; it is
+measured against polars and currently wins 12/15"). Do not build `FusedAggregation` on top of it
+until resolved — the fused path is supposed to *remove* indirection, so shipping a regression in
+the shared plumbing beneath it compounds. Likely fixes, cheapest first: hoist the `grouped_fn`
+resolution out of the per-column loop so the indirect call is paid once per aggregate rather than
+per chunk; or keep `AggFunc.typed` (comptime, zero indirection) as the only path the fused spec
+uses and let the dynamic path resolve directly to `agg_grouped[K]` inside its own switch, so the
+box exists only where a runtime name genuinely does.
+
 ##### Sequencing
 
 0. **Q6.1 baseline first** — record the cross-engine table *before* any change, including the
