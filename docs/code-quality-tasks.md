@@ -351,6 +351,51 @@ through the expression layer.
 as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
 was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
 
+#### `Grouping` — design notes (read before implementing)
+
+A naive `struct Grouping { gids, num_groups }` **preserves the bug it is meant to remove**.
+`HashGrouper` is incremental: `consume_keys` is called once per batch and `num_groups` grows with
+each call, so a `Grouping` built per batch carries a count that is already stale. That is exactly
+today's hazard ("read `num_groups` *after* the last `consume_keys`") wearing a struct.
+
+Constraints the design has to satisfy:
+
+- **Streaming**: `AggregateProcessor` consumes N batches, buffering one gid array per batch, and
+  only knows the final group count at the end.
+- **Single-shot**: `GroupBy._serial` groups one input and aggregates immediately.
+- **Partitioned**: the radix and thread-local paths run a grouper per partition and merge.
+- **Invariant**: every gid `< num_groups`. Validating costs O(n), so it should hold **by
+  construction** rather than by assertion — i.e. only `HashGrouper` may produce a `Grouping`.
+
+Shape that satisfies all four: make `Grouping` the *completed* result, produced at finish time,
+never mid-stream.
+
+```mojo
+struct Grouping(Movable):
+    """One group id per input row, the final group count, and the unique key
+    columns. Produced only by `HashGrouper.finish()`, so `gid < num_groups`
+    holds by construction and the count can never be read early."""
+    var _gids: List[Int32Array]      # one per consumed batch, in order
+    var _num_groups: Int
+    var _key_columns: List[AnyArray]
+```
+
+`HashGrouper.consume_keys` keeps returning the per-batch gids (the streaming path needs them as it
+goes), but the *count* is only reachable through `finish()`. That removes the ordering hazard
+structurally: there is no way to observe a partial count.
+
+Open questions to settle while implementing — do **not** guess:
+- Whether `finish()` should also absorb `key_columns()`, which is destructive today ("call once, at
+  emit time"). Folding it in makes the once-only rule structural too; keeping it separate is a
+  smaller change.
+- Whether the partitioned paths produce one `Grouping` per partition and merge, or a single
+  `Grouping` spanning partitions. The merge path remaps local group ids, so this decides where
+  that remap lives.
+
+ `(gids, num_groups)` currently travels
+as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
+was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
+
 ### Simplifications the new design should absorb
 
 **`_reduce_widened` / `_reduce_widened_typed` are the same function twice.** The typed one's own
