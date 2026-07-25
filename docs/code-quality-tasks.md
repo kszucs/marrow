@@ -351,7 +351,39 @@ through the expression layer.
 as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
 was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
 
-#### `Grouping` — design notes (read before implementing)
+#### Prior art — checked 2026-07-25 (DataFusion, DuckDB, Polars, ClickHouse)
+
+| engine | grouping representation | grouping vs aggregation |
+|---|---|---|
+| **DataFusion** | no value type — `GroupValues` is a *mutable accumulator*: `intern(cols, &mut groups)` / `len()` / `emit(EmitTo)` | separate, but `emit` is **repeatable and partial** (`EmitTo::First(n)` emits n groups and shifts the rest down) so aggregation can spill/emit incrementally |
+| **DuckDB** | no value type — `GroupedAggregateHashTable` + `RadixPartitionedHashTable` | **fused**: `AddChunk(groups, payload)` takes keys *and* aggregate payload together |
+| **ClickHouse** | no group ids at all — `HashMap<Key, AggregateDataPtr>` maps a key straight to its aggregate-state blob | **fused**: `executeOnBlock(block, AggregatedDataVariants&, key_columns, aggregate_columns)`; heavy per-key-shape specialisation (`UInt8Key`, `StringKey`, `Keys128`, two-level…) |
+| **Polars** | **has** one — `GroupsType::{ Idx, Slice { overlapping, monotonic } }` | fully separate; grouping is a first-class value |
+
+**Conclusions for marrow:**
+
+1. **Do not fold key emission into a one-shot `finish()`.** DataFusion's `EmitTo` and DuckDB's
+   scan state both exist so grouped aggregation can emit *incrementally* under memory pressure.
+   A one-shot finish forecloses that. Keep emission a separate, repeatable method on the grouper
+   — moving toward `emit(EmitTo)` if anything.
+2. **Keep the strategy hidden.** None of the four leaks partitioning to consumers; DuckDB has a
+   whole `RadixPartitionedHashTable` and still presents one logical table. Marrow's `GroupBy`
+   already does this — preserve it.
+3. **A `Grouping` value type is the minority position, and Polars' is not our shape.** Polars
+   stores *row-indices-per-group* (gather-oriented, with `overlapping`/`monotonic` flags for
+   rolling windows); marrow stores *group-id-per-row* (scatter-oriented), like DataFusion — which
+   deliberately does **not** wrap it. So the RC7 complaint (`(gids, num_groups)` as two unchecked
+   parameters) should be fixed narrowly — have the grouper own the relationship and pass *it*,
+   rather than inventing a completed-result type.
+4. **Splitting grouping from aggregation has a real cost.** DuckDB and ClickHouse deliberately
+   *fuse* them — ClickHouse skips group ids entirely, going key → state pointer. Our split (group
+   once, then typed `aggregate[K]` per column) buys the name-free kernel layer, but costs an extra
+   pass over the group ids. That is a defensible trade for the frontend split; it is **not** a
+   free win, and should be stated as such rather than assumed.
+
+The name/tag routing moving to `DynValue` is **independent of all this** and still stands.
+
+#### `Grouping` — earlier design notes (superseded in part by the prior art above)
 
 A naive `struct Grouping { gids, num_groups }` **preserves the bug it is meant to remove**.
 `HashGrouper` is incremental: `consume_keys` is called once per batch and `num_groups` grows with
