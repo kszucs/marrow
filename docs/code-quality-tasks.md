@@ -383,6 +383,58 @@ was logged as an independent cleanup; it is actually the enabling piece here, so
 
 The name/tag routing moving to `DynValue` is **independent of all this** and still stands.
 
+#### Performance: where marrow can actually beat them
+
+The survey shows all four engines paying **per-aggregate dynamic dispatch** in the inner loop:
+ClickHouse calls virtual `IAggregateFunction::add` per aggregate per row, DuckDB goes through
+function pointers, DataFusion through `dyn GroupsAccumulator`. None can inline the fold into the
+scatter loop, because none knows the aggregate set until runtime.
+
+**Marrow's AOT frontend does.** That is the differentiator worth building for: a grouped
+aggregation whose entire multi-aggregate update is monomorphised and inlined, with zero dispatch.
+
+**The fusion.** Today N aggregates mean N independent `AggState`s, so N passes over the group-id
+array and N scatter streams. With the set known at comptime, one pass suffices:
+
+```mojo
+struct FusedAggState[*Ks: AggKernel, *Vs: PrimitiveType]:
+    """One accumulator set per group, updated for every aggregate in a single
+    pass over the group ids. Each `K.combine` inlines into the loop body."""
+    def update(mut self, g: Grouping, inputs: Tuple[...]) raises
+```
+
+Feasible in Mojo today: trait-bounded variadic parameters already work here (`*Ts: Movable`,
+`marrow/utils.mojo:200`), and `comptime for` unrolls the per-aggregate body.
+
+**Layout is the second lever, and it should be comptime-selectable:**
+
+- *Column-per-aggregate* (today): each accumulator is its own contiguous column. SIMD-friendly per
+  aggregate; N random-access streams per row.
+- *Struct-of-accumulators-per-group* (ClickHouse's blob): all of a group's accumulators adjacent,
+  so one row touches **one** cache line for all N aggregates. ClickHouse pays runtime offsets and
+  virtual calls to get this; marrow can generate the struct at comptime with fixed offsets and
+  inlined combines — **strictly better than the thing being imitated**.
+
+Choose by cardinality: low-cardinality accumulators fit in cache, so columnar SIMD wins;
+high-cardinality is dominated by random access, so the blob wins. Both variants can be generated
+from the same kernel set.
+
+**The strongest form** drops group ids entirely on the AOT path: hash → slot → update the blob in
+place, never materialising a gid array (what ClickHouse does, minus the indirection). That removes
+the extra pass the grouping/aggregation split costs — see conclusion 4 above.
+
+**This does not conflict with moving name routing to `DynValue` — it is the reason to.** The two
+frontends want different execution:
+
+| frontend | aggregate set | execution |
+|---|---|---|
+| **F1 `DynValue`** | runtime | resolve name → kernel, loop calling typed `aggregate[K]` per column |
+| **F2 AOT** | comptime | one `FusedAggState[*Ks]`, single pass, zero dispatch |
+
+A kernel layer that speaks only in comptime kernels serves both: F1 loops over it, F2 fuses across
+it. A kernel layer that speaks in runtime tags can serve *only* F1's shape — which is exactly why
+the tags have to go before the fusion can be built.
+
 #### `Grouping` — earlier design notes (superseded in part by the prior art above)
 
 A naive `struct Grouping { gids, num_groups }` **preserves the bug it is meant to remove**.
