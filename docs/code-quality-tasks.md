@@ -351,6 +351,443 @@ through the expression layer.
 as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
 was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
 
+#### Prior art — checked 2026-07-25 (DataFusion, DuckDB, Polars, ClickHouse)
+
+| engine | grouping representation | grouping vs aggregation |
+|---|---|---|
+| **DataFusion** | no value type — `GroupValues` is a *mutable accumulator*: `intern(cols, &mut groups)` / `len()` / `emit(EmitTo)` | separate, but `emit` is **repeatable and partial** (`EmitTo::First(n)` emits n groups and shifts the rest down) so aggregation can spill/emit incrementally |
+| **DuckDB** | no value type — `GroupedAggregateHashTable` + `RadixPartitionedHashTable` | **fused**: `AddChunk(groups, payload)` takes keys *and* aggregate payload together |
+| **ClickHouse** | no group ids at all — `HashMap<Key, AggregateDataPtr>` maps a key straight to its aggregate-state blob | **fused**: `executeOnBlock(block, AggregatedDataVariants&, key_columns, aggregate_columns)`; heavy per-key-shape specialisation (`UInt8Key`, `StringKey`, `Keys128`, two-level…) |
+| **Polars** | **has** one — `GroupsType::{ Idx, Slice { overlapping, monotonic } }` | fully separate; grouping is a first-class value |
+
+**Conclusions for marrow:**
+
+1. **Do not fold key emission into a one-shot `finish()`.** DataFusion's `EmitTo` and DuckDB's
+   scan state both exist so grouped aggregation can emit *incrementally* under memory pressure.
+   A one-shot finish forecloses that. Keep emission a separate, repeatable method on the grouper
+   — moving toward `emit(EmitTo)` if anything.
+2. **Keep the strategy hidden.** None of the four leaks partitioning to consumers; DuckDB has a
+   whole `RadixPartitionedHashTable` and still presents one logical table. Marrow's `GroupBy`
+   already does this — preserve it.
+3. **A `Grouping` value type is the minority position, and Polars' is not our shape.** Polars
+   stores *row-indices-per-group* (gather-oriented, with `overlapping`/`monotonic` flags for
+   rolling windows); marrow stores *group-id-per-row* (scatter-oriented), like DataFusion — which
+   deliberately does **not** wrap it. So the RC7 complaint (`(gids, num_groups)` as two unchecked
+   parameters) should be fixed narrowly — have the grouper own the relationship and pass *it*,
+   rather than inventing a completed-result type.
+4. **Splitting grouping from aggregation has a real cost.** DuckDB and ClickHouse deliberately
+   *fuse* them — ClickHouse skips group ids entirely, going key → state pointer. Our split (group
+   once, then typed `aggregate[K]` per column) buys the name-free kernel layer, but costs an extra
+   pass over the group ids. That is a defensible trade for the frontend split; it is **not** a
+   free win, and should be stated as such rather than assumed.
+
+The name/tag routing moving to `DynValue` is **independent of all this** and still stands.
+
+#### Performance: where marrow can actually beat them
+
+The survey shows all four engines paying **per-aggregate dynamic dispatch** in the inner loop:
+ClickHouse calls virtual `IAggregateFunction::add` per aggregate per row, DuckDB goes through
+function pointers, DataFusion through `dyn GroupsAccumulator`. None can inline the fold into the
+scatter loop, because none knows the aggregate set until runtime.
+
+**Marrow's AOT frontend does.** That is the differentiator worth building for: a grouped
+aggregation whose entire multi-aggregate update is monomorphised and inlined, with zero dispatch.
+
+**The fusion.** Today N aggregates mean N independent `AggState`s, so N passes over the group-id
+array and N scatter streams. With the set known at comptime, one pass suffices:
+
+```mojo
+struct FusedAggState[*Ks: AggKernel, *Vs: PrimitiveType]:
+    """One accumulator set per group, updated for every aggregate in a single
+    pass over the group ids. Each `K.combine` inlines into the loop body."""
+    def update(mut self, g: Grouping, inputs: Tuple[...]) raises
+```
+
+Feasible in Mojo today: trait-bounded variadic parameters already work here (`*Ts: Movable`,
+`marrow/utils.mojo:200`), and `comptime for` unrolls the per-aggregate body.
+
+**Layout is the second lever, and it should be comptime-selectable:**
+
+- *Column-per-aggregate* (today): each accumulator is its own contiguous column. SIMD-friendly per
+  aggregate; N random-access streams per row.
+- *Struct-of-accumulators-per-group* (ClickHouse's blob): all of a group's accumulators adjacent,
+  so one row touches **one** cache line for all N aggregates. ClickHouse pays runtime offsets and
+  virtual calls to get this; marrow can generate the struct at comptime with fixed offsets and
+  inlined combines — **strictly better than the thing being imitated**.
+
+Choose by cardinality: low-cardinality accumulators fit in cache, so columnar SIMD wins;
+high-cardinality is dominated by random access, so the blob wins. Both variants can be generated
+from the same kernel set.
+
+**The strongest form** drops group ids entirely on the AOT path: hash → slot → update the blob in
+place, never materialising a gid array (what ClickHouse does, minus the indirection). That removes
+the extra pass the grouping/aggregation split costs — see conclusion 4 above.
+
+**This does not conflict with moving name routing to `DynValue` — it is the reason to.** The two
+frontends want different execution:
+
+| frontend | aggregate set | execution |
+|---|---|---|
+| **F1 `DynValue`** | runtime | resolve name → kernel, loop calling typed `aggregate[K]` per column |
+| **F2 AOT** | comptime | one `FusedAggState[*Ks]`, single pass, zero dispatch |
+
+A kernel layer that speaks only in comptime kernels serves both: F1 loops over it, F2 fuses across
+it. A kernel layer that speaks in runtime tags can serve *only* F1's shape — which is exactly why
+the tags have to go before the fusion can be built.
+
+#### Fused multi-aggregate execution — detailed design
+
+##### The shape of the problem
+
+A grouped aggregate is a scatter-fold: for each input row, find its group slot and fold the value
+into that group's accumulator. With N aggregates there are three costs, and today marrow pays all
+three N times:
+
+1. **Group-id traffic** — the gid array is re-read once per aggregate.
+2. **Random access** — each aggregate scatters into its own accumulator column, so a single input
+   row touches N unrelated cache lines.
+3. **Dispatch** — resolving *which* fold to apply. Marrow pays this once per aggregate (not per
+   row) because `AggState[K, V]` is monomorphised, which is already better than the surveyed
+   engines; but the fold still cannot be inlined *into* a shared loop, because each aggregate owns
+   its own loop.
+
+Fusion collapses all three: one pass over the gids, one slot address per row, and every fold
+inlined into that row's body.
+
+##### Accumulator layout
+
+Two viable layouts, and the choice is the main performance lever:
+
+**SoA — column per aggregate** (today). `acc_j: Buffer[A_j]` indexed by gid.
+*For*: each column is contiguous and same-typed, so a single aggregate vectorises cleanly.
+*Against*: N independent random-access streams per row; N TLB/cache working sets.
+
+**AoS — accumulator blob per group** (ClickHouse's `AggregateDataPtr`). All of a group's
+accumulators laid out adjacently, so one row computes **one** address and touches **one** cache
+line for all N aggregates.
+*For*: random access is paid once per row rather than N times — decisive at high cardinality,
+where the accumulators exceed cache and misses dominate.
+*Against*: the per-aggregate inner op is scalar (mixed types in the blob), so no cross-row SIMD.
+
+**Recommendation: build AoS first.** High-cardinality group-by is where real workloads hurt and
+where ClickHouse's design has been validated; at low cardinality the whole accumulator set fits in
+cache and the layouts converge. Add SoA later *only if* benchmarks justify it — generating both
+doubles the monomorphised code and must be weighed against the AOT binary-size gate.
+
+##### Why marrow's version is better than the thing it imitates
+
+ClickHouse gets AoS locality but pays for it: the blob's field offsets are computed at runtime,
+and each aggregate is invoked through `virtual IAggregateFunction::add`. So it wins on memory and
+loses on dispatch.
+
+Marrow can have both. With the aggregate set known at comptime the offsets are constants and the
+folds inline:
+
+```mojo
+comptime OFFSETS = _prefix_sums[size_of[K.AccType[V].native]() for each (K, V)]
+comptime STRIDE  = OFFSETS[N] rounded up to the accumulator alignment
+```
+
+Per row: one multiply-add for the slot, then N inlined `combine`s at constant offsets. No virtual
+calls, no runtime offset table, no function pointers — none of the surveyed engines can do this,
+because none knows the set before the query runs.
+
+##### Type architecture
+
+```mojo
+# ── kernel layer: comptime only, no names, no tags ────────────────────────────
+
+# single typed aggregate — the surface F1 loops over
+def aggregate[K: AggKernel, V: PrimitiveType](
+    gids: Int32Array, num_groups: Int, values: PrimitiveArray[V],
+    ctx: ExecutionContext,
+) raises -> AnyArray
+
+# fused multi-aggregate — the surface F2 generates
+struct FusedAggregation[*Ks: AggKernel, *Vs: PrimitiveType]:
+    """One accumulator blob per group; every aggregate folded in a single pass.
+
+    `Ks[j]` folds `Vs[j]`; both packs are comptime, so the slot arithmetic is
+    constant-folded and each `combine` inlines into the loop body."""
+    var _blobs: Buffer[mut=True]        # num_groups * STRIDE bytes
+    var _counts: Buffer[mut=True]       # valid-count per group, drives NULL output
+
+    def update(mut self, gids: Int32Array, inputs: Tuple[...], num_groups: Int) raises
+    def merge(mut self, other: Self, remap: Int32Array) raises   # partitioned/parallel fold
+    def finish(mut self, num_groups: Int) raises -> List[AnyArray]
+```
+
+**Mojo feasibility, checked:**
+- Trait-bounded variadic parameters already work here (`*Ts: Movable`, `marrow/utils.mojo:200`).
+- A struct cannot have a *variadic number of fields*, which is why the blob is a flat `Buffer`
+  with comptime offsets rather than a generated struct — the same conclusion ClickHouse reached,
+  minus the runtime offsets.
+- `comptime for j in range(N)` unrolls the per-aggregate body; `Ks[j]` / `Vs[j]` index the packs.
+- **Spike this before committing to the design.** Parameter-pack indexing inside a `comptime for`
+  in a struct method is the one construct not already exercised in this codebase.
+
+##### Vectorisation
+
+Naive SIMD scatter is unsound here: several lanes may target the same group, and the folds would
+race. Three options, in increasing order of payoff:
+
+1. **Scalar row loop, unrolled aggregates** (start here). One slot computation, N inlined folds.
+   This alone captures most of the win — it is what ClickHouse does, minus the virtual calls.
+2. **Run-aware**: after the radix partition, rows for one group are often contiguous; detect runs
+   and fold a whole run with a horizontal SIMD reduce before writing the slot once.
+3. **Conflict-detected SIMD**: gather W slots, detect duplicate gids in the lane block, fold the
+   conflict-free lanes vectorised and the rest scalar.
+
+(2) composes naturally with the existing radix path and is the better second step; (3) is a
+micro-optimisation to defer until profiles justify it.
+
+##### How the two frontends share this
+
+| frontend | aggregate set | path |
+|---|---|---|
+| **F1 `DynValue`** | runtime | resolve name → kernel in the expression layer, then loop `aggregate[K]` per column (SoA) |
+| **F2 AOT** | comptime | one `FusedAggregation[*Ks, *Vs]`, single pass, zero dispatch |
+
+Both consume the *same* kernel algebra (`AggKernel`), so a new aggregate is written once and both
+paths gain it. This is why the tags must leave the kernel layer first: a layer that speaks in
+runtime tags can only express F1's shape, and the fused path becomes unbuildable.
+
+##### Group ids, revisited
+
+The fused AOT path can skip materialising gids entirely — hash → slot → fold the blob in place —
+which removes the extra pass that splitting grouping from aggregation otherwise costs. That makes
+the split free on the path that matters and keeps it explicit on the path that needs it (F1).
+It also means **`Grouping` must not become mandatory**: the fused path never wants one.
+
+##### Pluggable grouping strategies
+
+Grouping already has three implementations chosen at construction — serial, thread-local partial
+aggregation, and radix partitioning — selected by `GroupBy._choose_strategy(keys, num_threads)`
+from row count plus a strided-sample cardinality estimate. The mechanism exists; what is missing
+is a **seam**, so a fourth strategy can be added for a skewed distribution without editing the
+aggregate path, and so tuning one case cannot silently cost another.
+
+**Separate the three things that are currently entangled:**
+
+```mojo
+struct GroupStats:
+    """Everything the policy is allowed to look at. Measured once, cheaply."""
+    var num_rows: Int
+    var est_groups: Int          # existing strided sample
+    var max_group_share: Float64 # NEW: largest sampled group as a fraction of the sample
+    var num_key_cols: Int
+    var num_threads: Int
+    var has_unmergeable_agg: Bool  # distinct / string min-max cannot use the merge path
+
+trait GroupStrategy:
+    comptime name: String
+    @staticmethod
+    def suitable(stats: GroupStats) -> Bool   # correctness/capability filter
+    @staticmethod
+    def rank(stats: GroupStats) -> Int        # preference among the suitable ones
+```
+
+- **Stats** — what is measured, as a value rather than as arguments threaded through.
+- **Policy** — `suitable`/`rank`, *pure functions over stats*. Today the policy is embedded in
+  `_choose_strategy` and can only be exercised by running a whole group-by; as pure functions it is
+  **unit-testable directly** ("skewed + high-cardinality + 8 threads selects X"), which is what
+  makes tuning safe.
+- **Mechanism** — one struct per strategy.
+
+**Selection stays closed.** Iterate a comptime list of registered strategies and take the
+highest-ranked suitable one. This must **not** become a runtime trait object: `marrow.aot`
+depends on closed erasure and no open dispatchers, so an open registry would break the
+binary-size property. Adding a strategy is a struct plus one entry in that list; removing one is a
+deletion.
+
+**Note this also fixes an existing wart.** `avoid_thread_local` today hand-lists "distinct, or
+string min/max" at the call site — that becomes `has_unmergeable_agg` in the stats, derived from
+comptime kernel properties, and the guard disappears into `suitable`.
+
+**Skew is the motivating case.** The current estimator answers "how many groups?" but not "are
+they even?" — a single dominant key defeats radix partitioning, since one partition gets most of
+the rows. `max_group_share` from the same strided sample is nearly free to compute, and enables
+strategies that specifically target skew (pre-aggregate hot keys before partitioning; salt a heavy
+hitter across partitions and merge). None of that should be built now — the point is that the seam
+makes it addable **without touching the aggregate path**.
+
+**This has a hard dependency on Q6.1.** "Improve one scenario without hurting others" is
+unverifiable unless each strategy can be benchmarked in isolation, so the harness must be able to
+**force a strategy** rather than only exercising whatever the policy picks. Without that, a policy
+change and a mechanism change are indistinguishable in the numbers, and a regression in a
+rarely-selected path stays invisible until someone's data hits it. Add a `strategy=` override to
+the bench entry points as part of Q6.1.
+
+**Sequence it after fusion, not before.** Fusion changes the per-row cost that the policy's
+thresholds encode, so the current cutovers (`_PARALLEL_MIN_ROWS`, `_PARALLEL_ALWAYS_ROWS`, the
+cardinality split) will need re-measuring anyway. Introducing the seam first would mean tuning a
+policy against costs that are about to change.
+
+##### Risks
+
+- **Binary size.** Fusion monomorphises per distinct aggregate-set. AOT programs contain few sets,
+  so this should be small, but the gate is `query_streaming` stripped size and must be measured
+  per step, not at the end.
+- **Merge across partitions.** `merge` has to remap local group ids into global ones while folding
+  blobs. Getting this wrong is silent wrong-answers, not a crash — it needs targeted tests before
+  the parallel paths are switched over.
+- **Numerical parity.** Fusing must not change fold order in a way that alters float results
+  versus the unfused path; parity tests should compare fused and per-column results.
+
+##### Two paths, one substrate — and both must win
+
+Both frontends must be excellent, and they are excellent in *different comparisons*. Stating the
+targets separately matters, because a design that is good for one can quietly be bad for the other.
+
+| path | who it is compared against | target |
+|---|---|---|
+| **dynamic (F1)** — Python/ibis, runtime-planned | polars, pyarrow, duckdb, chdb — all themselves runtime-planned | **match or beat.** This is the apples-to-apples comparison; it is the one an evaluator will actually run. |
+| **fused (F2)** — AOT comptime DSL | the same engines, none of which can do this | **decisively beat**, by a margin that grows with aggregate count. This is the differentiator. |
+
+**The rule that keeps the dynamic path fast: dispatch is amortised over a vector, never paid per
+row.** One resolution per `(chunk × aggregate)`, then a tight typed loop — which is precisely why
+polars and pyarrow are fast, and where an interpreter naively written would lose by an order of
+magnitude. The tag-removal step in Q2.5 is what makes this structural rather than incidental:
+once the kernel *is* the aggregate, the dynamic path resolves a kernel once per chunk and then runs
+the same typed code the fused path runs.
+
+**The rule that makes the fused path decisive: zero dispatch and one pass.** All aggregates for a
+group updated in registers, per-kernel comptime offsets into the accumulator blob, no per-aggregate
+revisit of the input. ClickHouse reaches for a JIT to approximate this; marrow gets it at comptime,
+which is the whole bet.
+
+**One substrate, or the two paths drift.** Both must bottom out in the *same* `core[W]` SIMD
+functors. If the dynamic path ever grows its own copy of the arithmetic, every optimisation has to
+be done twice, they diverge in edge cases, and the benchmark stops comparing like with like. The
+fused path is then "the same kernels with the dispatch removed and the loop fused" — not a
+different implementation. This is the property that makes "great results on both" achievable rather
+than a matter of maintaining two competing codebases.
+
+**So the benchmark table carries both as separate rows, always** — `marrow-aot` *and*
+`marrow-dynamic`, alongside every competitor. A change that speeds the fused path while regressing
+the dynamic one is a **regression**, not a trade, and only a two-row table makes that visible.
+
+**Q6.1 — Cross-engine aggregate benchmark, with the AOT path measured** · *gates every Q2.5 round* ·
+Owns: `python/marrow/tests/bench_*.py`, `marrow/kernels/tests/bench_*.mojo`,
+`benchmarks/aggregates/` (new), `pixi.toml` (bench tasks) ·
+
+**Why this exists.** The fused-aggregate work (above) is justified entirely by a performance
+claim — that comptime monomorphisation beats engines which dispatch per aggregate at runtime.
+That claim has to be *measured against them*, before and after each round, or it is just an
+assertion. "Refactor, then check nothing regressed" is not enough here: the point is to improve.
+
+**What already exists.** `python/marrow/tests/bench_groupby.py` and `bench_clickbench.py` already
+compare marrow against **pyarrow, polars and duckdb**, `--competition` prints a side-by-side
+table, and the `bench` env carries `polars`/`duckdb`/`rich`. Reuse all of it.
+
+**What is missing — and it is the important half.** Those benchmarks drive marrow through the
+*Python bindings*, i.e. the **dynamic (F1)** path. The AOT (F2) fused path — the thing that is
+supposed to be faster than everyone — is not measured at all. Each Python benchmark needs a
+**paired AOT Mojo file expressing the same query through the fused comptime DSL**:
+
+```
+python/marrow/tests/bench_groupby.py        # pyarrow · polars · duckdb · marrow-dynamic
+marrow/kernels/tests/bench_groupby_aot.mojo # marrow-AOT (fused)   ← new, the differentiator
+```
+
+Both already emit machine-readable output (`pytest-benchmark` on one side, `BenchSuite`'s `--json`
+on the other), so a small merge script can print one table across both runners rather than asking
+anyone to eyeball two.
+
+**Done when:**
+- Every table carries **both `marrow-aot` and `marrow-dynamic` rows** (see above) —
+  a fused-path win that regresses the dynamic path is a regression, and one row would hide it.
+- A **baseline is recorded in this document** — a committed table of marrow-AOT / marrow-dynamic /
+  pyarrow / polars / duckdb across the group-by shapes that matter (low- vs high-cardinality keys,
+  1 vs N aggregates, with and without nulls). N-aggregate cases are essential: they are precisely
+  what fusion targets, and a 1-aggregate benchmark would show none of the win.
+- **Correction (verified 2026-07-25, do not re-plan around the old assumption):** there is **no
+  fused aggregate path today** — `execution.mojo:697` routes through `self._tags[i]` →
+  `GroupBy.aggregate_column`, the runtime tag mechanism, *even in the fused streaming path*. So the
+  `marrow-aot` group-by row is the **deliverable of the fusion work, not a precondition**. Step 0
+  therefore records `marrow-dynamic` + competitors only; the `marrow-aot` row goes from *absent* to
+  *top of table*, which is a clean demonstration rather than a gap.
+- **The binary-size gate is currently blind to this work.** `benchmarks/binary_size/query_streaming.mojo`
+  is `SELECT a, name FROM orders WHERE a > b` — filter/project, **no aggregation at all**. Fusion
+  monomorphises per aggregate-set, precisely the change that can blow up code size, and today's gate
+  would not notice. **Add an aggregate query to the gate before starting fusion**, or the size
+  criterion protects nothing.
+- Paired `*_aot.mojo` benchmarks exist for the group-by and ClickBench shapes, following the
+  `BenchSuite`/`Benchmark` pattern in CLAUDE.md — **including `keep(data)` after `b.iter[call]()`**,
+  or ASAP destruction frees the input mid-benchmark.
+- One command prints the merged comparison.
+- Consider adding **chdb** to the `bench` feature: ClickHouse is the engine whose aggregate design
+  we are explicitly trying to beat, so it is the most informative competitor to have in the table.
+
+**How it gates Q2.5.** Re-run after *each* step and append the numbers to the table:
+
+| step | expectation |
+|---|---|
+| tags out of the kernel layer | neutral — behaviour-preserving |
+| typed `aggregate[K]` + F1 loop | neutral to slightly better (one less indirection) |
+| `FusedAggregation` (AoS, scalar unrolled) | **the step that must show a win**, growing with aggregate count |
+| run-aware vectorisation | further win on clustered/partitioned inputs |
+
+A step that does not move its number is a signal to stop and understand why, not to continue. Pair
+each measurement with `pixi run binary_size` — fusion monomorphises per aggregate-set, and the AOT
+binary is the gate.
+
+##### Sequencing
+
+0. **Q6.1 baseline first** — record the cross-engine table *before* any change, including the
+   paired AOT benchmark. Without it there is nothing to prove improvement against.
+1. Tags out of the kernel layer (prerequisite — without it the fused path cannot be expressed).
+2. Typed `aggregate[K]` surface; F1 loops over it. **Behaviour-preserving, fully testable.**
+3. Spike parameter-pack indexing; if it does not work, stop and redesign before writing more.
+4. `FusedAggregation` with AoS + comptime offsets, scalar unrolled loop.
+5. Benchmark against the per-column path across cardinalities; record the numbers in the card.
+6. Only then: run-aware vectorisation, and SoA if the data asks for it.
+
+#### `Grouping` — earlier design notes (superseded in part by the prior art above)
+
+A naive `struct Grouping { gids, num_groups }` **preserves the bug it is meant to remove**.
+`HashGrouper` is incremental: `consume_keys` is called once per batch and `num_groups` grows with
+each call, so a `Grouping` built per batch carries a count that is already stale. That is exactly
+today's hazard ("read `num_groups` *after* the last `consume_keys`") wearing a struct.
+
+Constraints the design has to satisfy:
+
+- **Streaming**: `AggregateProcessor` consumes N batches, buffering one gid array per batch, and
+  only knows the final group count at the end.
+- **Single-shot**: `GroupBy._serial` groups one input and aggregates immediately.
+- **Partitioned**: the radix and thread-local paths run a grouper per partition and merge.
+- **Invariant**: every gid `< num_groups`. Validating costs O(n), so it should hold **by
+  construction** rather than by assertion — i.e. only `HashGrouper` may produce a `Grouping`.
+
+Shape that satisfies all four: make `Grouping` the *completed* result, produced at finish time,
+never mid-stream.
+
+```mojo
+struct Grouping(Movable):
+    """One group id per input row, the final group count, and the unique key
+    columns. Produced only by `HashGrouper.finish()`, so `gid < num_groups`
+    holds by construction and the count can never be read early."""
+    var _gids: List[Int32Array]      # one per consumed batch, in order
+    var _num_groups: Int
+    var _key_columns: List[AnyArray]
+```
+
+`HashGrouper.consume_keys` keeps returning the per-batch gids (the streaming path needs them as it
+goes), but the *count* is only reachable through `finish()`. That removes the ordering hazard
+structurally: there is no way to observe a partial count.
+
+Open questions to settle while implementing — do **not** guess:
+- Whether `finish()` should also absorb `key_columns()`, which is destructive today ("call once, at
+  emit time"). Folding it in makes the once-only rule structural too; keeping it separate is a
+  smaller change.
+- Whether the partitioned paths produce one `Grouping` per partition and merge, or a single
+  `Grouping` spanning partitions. The merge path remaps local group ids, so this decides where
+  that remap lives.
+
+ `(gids, num_groups)` currently travels
+as two loose parameters across 8+ signatures with nothing checking `num_groups > max(gids)`. It
+was logged as an independent cleanup; it is actually the enabling piece here, so do it first.
+
 ### Simplifications the new design should absorb
 
 **`_reduce_widened` / `_reduce_widened_typed` are the same function twice.** The typed one's own
