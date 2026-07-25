@@ -435,6 +435,150 @@ A kernel layer that speaks only in comptime kernels serves both: F1 loops over i
 it. A kernel layer that speaks in runtime tags can serve *only* F1's shape — which is exactly why
 the tags have to go before the fusion can be built.
 
+#### Fused multi-aggregate execution — detailed design
+
+##### The shape of the problem
+
+A grouped aggregate is a scatter-fold: for each input row, find its group slot and fold the value
+into that group's accumulator. With N aggregates there are three costs, and today marrow pays all
+three N times:
+
+1. **Group-id traffic** — the gid array is re-read once per aggregate.
+2. **Random access** — each aggregate scatters into its own accumulator column, so a single input
+   row touches N unrelated cache lines.
+3. **Dispatch** — resolving *which* fold to apply. Marrow pays this once per aggregate (not per
+   row) because `AggState[K, V]` is monomorphised, which is already better than the surveyed
+   engines; but the fold still cannot be inlined *into* a shared loop, because each aggregate owns
+   its own loop.
+
+Fusion collapses all three: one pass over the gids, one slot address per row, and every fold
+inlined into that row's body.
+
+##### Accumulator layout
+
+Two viable layouts, and the choice is the main performance lever:
+
+**SoA — column per aggregate** (today). `acc_j: Buffer[A_j]` indexed by gid.
+*For*: each column is contiguous and same-typed, so a single aggregate vectorises cleanly.
+*Against*: N independent random-access streams per row; N TLB/cache working sets.
+
+**AoS — accumulator blob per group** (ClickHouse's `AggregateDataPtr`). All of a group's
+accumulators laid out adjacently, so one row computes **one** address and touches **one** cache
+line for all N aggregates.
+*For*: random access is paid once per row rather than N times — decisive at high cardinality,
+where the accumulators exceed cache and misses dominate.
+*Against*: the per-aggregate inner op is scalar (mixed types in the blob), so no cross-row SIMD.
+
+**Recommendation: build AoS first.** High-cardinality group-by is where real workloads hurt and
+where ClickHouse's design has been validated; at low cardinality the whole accumulator set fits in
+cache and the layouts converge. Add SoA later *only if* benchmarks justify it — generating both
+doubles the monomorphised code and must be weighed against the AOT binary-size gate.
+
+##### Why marrow's version is better than the thing it imitates
+
+ClickHouse gets AoS locality but pays for it: the blob's field offsets are computed at runtime,
+and each aggregate is invoked through `virtual IAggregateFunction::add`. So it wins on memory and
+loses on dispatch.
+
+Marrow can have both. With the aggregate set known at comptime the offsets are constants and the
+folds inline:
+
+```mojo
+comptime OFFSETS = _prefix_sums[size_of[K.AccType[V].native]() for each (K, V)]
+comptime STRIDE  = OFFSETS[N] rounded up to the accumulator alignment
+```
+
+Per row: one multiply-add for the slot, then N inlined `combine`s at constant offsets. No virtual
+calls, no runtime offset table, no function pointers — none of the surveyed engines can do this,
+because none knows the set before the query runs.
+
+##### Type architecture
+
+```mojo
+# ── kernel layer: comptime only, no names, no tags ────────────────────────────
+
+# single typed aggregate — the surface F1 loops over
+def aggregate[K: AggKernel, V: PrimitiveType](
+    gids: Int32Array, num_groups: Int, values: PrimitiveArray[V],
+    ctx: ExecutionContext,
+) raises -> AnyArray
+
+# fused multi-aggregate — the surface F2 generates
+struct FusedAggregation[*Ks: AggKernel, *Vs: PrimitiveType]:
+    """One accumulator blob per group; every aggregate folded in a single pass.
+
+    `Ks[j]` folds `Vs[j]`; both packs are comptime, so the slot arithmetic is
+    constant-folded and each `combine` inlines into the loop body."""
+    var _blobs: Buffer[mut=True]        # num_groups * STRIDE bytes
+    var _counts: Buffer[mut=True]       # valid-count per group, drives NULL output
+
+    def update(mut self, gids: Int32Array, inputs: Tuple[...], num_groups: Int) raises
+    def merge(mut self, other: Self, remap: Int32Array) raises   # partitioned/parallel fold
+    def finish(mut self, num_groups: Int) raises -> List[AnyArray]
+```
+
+**Mojo feasibility, checked:**
+- Trait-bounded variadic parameters already work here (`*Ts: Movable`, `marrow/utils.mojo:200`).
+- A struct cannot have a *variadic number of fields*, which is why the blob is a flat `Buffer`
+  with comptime offsets rather than a generated struct — the same conclusion ClickHouse reached,
+  minus the runtime offsets.
+- `comptime for j in range(N)` unrolls the per-aggregate body; `Ks[j]` / `Vs[j]` index the packs.
+- **Spike this before committing to the design.** Parameter-pack indexing inside a `comptime for`
+  in a struct method is the one construct not already exercised in this codebase.
+
+##### Vectorisation
+
+Naive SIMD scatter is unsound here: several lanes may target the same group, and the folds would
+race. Three options, in increasing order of payoff:
+
+1. **Scalar row loop, unrolled aggregates** (start here). One slot computation, N inlined folds.
+   This alone captures most of the win — it is what ClickHouse does, minus the virtual calls.
+2. **Run-aware**: after the radix partition, rows for one group are often contiguous; detect runs
+   and fold a whole run with a horizontal SIMD reduce before writing the slot once.
+3. **Conflict-detected SIMD**: gather W slots, detect duplicate gids in the lane block, fold the
+   conflict-free lanes vectorised and the rest scalar.
+
+(2) composes naturally with the existing radix path and is the better second step; (3) is a
+micro-optimisation to defer until profiles justify it.
+
+##### How the two frontends share this
+
+| frontend | aggregate set | path |
+|---|---|---|
+| **F1 `DynValue`** | runtime | resolve name → kernel in the expression layer, then loop `aggregate[K]` per column (SoA) |
+| **F2 AOT** | comptime | one `FusedAggregation[*Ks, *Vs]`, single pass, zero dispatch |
+
+Both consume the *same* kernel algebra (`AggKernel`), so a new aggregate is written once and both
+paths gain it. This is why the tags must leave the kernel layer first: a layer that speaks in
+runtime tags can only express F1's shape, and the fused path becomes unbuildable.
+
+##### Group ids, revisited
+
+The fused AOT path can skip materialising gids entirely — hash → slot → fold the blob in place —
+which removes the extra pass that splitting grouping from aggregation otherwise costs. That makes
+the split free on the path that matters and keeps it explicit on the path that needs it (F1).
+It also means **`Grouping` must not become mandatory**: the fused path never wants one.
+
+##### Risks
+
+- **Binary size.** Fusion monomorphises per distinct aggregate-set. AOT programs contain few sets,
+  so this should be small, but the gate is `query_streaming` stripped size and must be measured
+  per step, not at the end.
+- **Merge across partitions.** `merge` has to remap local group ids into global ones while folding
+  blobs. Getting this wrong is silent wrong-answers, not a crash — it needs targeted tests before
+  the parallel paths are switched over.
+- **Numerical parity.** Fusing must not change fold order in a way that alters float results
+  versus the unfused path; parity tests should compare fused and per-column results.
+
+##### Sequencing
+
+1. Tags out of the kernel layer (prerequisite — without it the fused path cannot be expressed).
+2. Typed `aggregate[K]` surface; F1 loops over it. **Behaviour-preserving, fully testable.**
+3. Spike parameter-pack indexing; if it does not work, stop and redesign before writing more.
+4. `FusedAggregation` with AoS + comptime offsets, scalar unrolled loop.
+5. Benchmark against the per-column path across cardinalities; record the numbers in the card.
+6. Only then: run-aware vectorisation, and SoA if the data asks for it.
+
 #### `Grouping` — earlier design notes (superseded in part by the prior art above)
 
 A naive `struct Grouping { gids, num_groups }` **preserves the bug it is meant to remove**.
