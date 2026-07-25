@@ -72,7 +72,12 @@ test_mojo_parallel = { cmd = "pytest --mojo -v -n auto --dist=loadfile" }
 test_python = { cmd = "pytest --python -v" }
 test_gpu = { cmd = "pytest --gpu -v" }
 test = { cmd = "pytest -v" }
-test_parallel = { cmd = "pytest -v -n auto --dist=loadfile" }
+# No `-v` by default: with `-n auto` the per-test lines from several workers
+# interleave and are hard to read, and the run is usually about the summary.
+# Pass it explicitly when you want it: `pixi run test_parallel -v`.
+# `--dist=loadfile` keeps every test from one `.mojo` file on the same worker so
+# the compiled runner is built once and reused.
+test_parallel = { cmd = "pytest -n auto --dist=loadfile" }
 
 # Integration — Arrow protocol conformance tests via archery.
 # All reference Arrow implementations are cloned into ./integration/arrow/ and

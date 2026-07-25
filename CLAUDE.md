@@ -48,8 +48,13 @@ that no selected test happens to import; `check <file>` then narrows to one
 test and its transitive imports. Both surface **all** errors and warnings in a
 single pass. A `pytest` run of the same file takes ~2.5 min.
 
-Note `check_lib` also compiles `*/tests/*`, so `'main()' is not supported
-within packages` lines are expected noise — every *other* error is real.
+Caveats for `check_lib`: it compiles `*/tests/*` too, so `'main()' is not
+supported within packages` lines are expected noise. It also compiles modules in
+a *package* context rather than the normal build context, which produces some
+**false positives** that do not affect real builds (currently a set of
+`invalid call to 'bitmap_and'` errors). Treat `check_lib` as a fast way to find
+*candidate* breakage, then confirm each with `check <file>` — that one matches
+how tests actually build.
 
 Switch back to `pytest` once it compiles: building is not passing.
 

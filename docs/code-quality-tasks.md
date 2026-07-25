@@ -38,12 +38,35 @@ pixi run -e dev fmt
 ```
 Tasks marked **⚠️ BINSIZE** must additionally run and report:
 ```bash
-pixi run binary_size      # fused ≈1.3MB vs runtime ≈15.7MB, ~12× — must not regress
+pixi run binary_size
+```
+Current gate numbers at `d0ecad7` (post Mojo `dev2026072406` upgrade):
+**fused `query_streaming` = 1,357,160 bytes stripped, ratio 11.7×.**
+Report before/after; the ratio must not regress.
+
+> The pre-upgrade figures (1,538,824 / 11.3×) are **stale** — the compiler upgrade alone shrank
+> both the fused and runtime binaries by ~10%. Always re-measure the baseline on your own base
+> commit rather than trusting a number written down earlier.
+```
 ```
 
 ### In-flight conflicts
 
 None — `t2.3b-aggregate` and `fu4-like-scalar` are both merged. Re-check before dispatching.
+
+### Orchestration lessons (learned the hard way, 2026-07-25)
+
+- **Run ONE lane at a time on this machine.** Three parallel Mojo worktrees all died to
+  watchdog timeouts waiting on compiles, made worse by concurrently running `binary_size` and the
+  full suite. Two produced good work that then needed manual validation; one produced nothing.
+- **Drive the gates yourself.** Mojo compile times make agent-run test suites a poor fit — an
+  agent that stalls mid-verification leaves work that looks finished but is untested. Both stalled
+  lanes had *uncommitted, unvalidated* changes; one of them was wrong.
+- **Re-measure `binary_size` on your own base commit.** The pre-upgrade figures (1,538,824 /
+  11.3×) were stale by ~12% after the compiler bump; gating against a written-down number would
+  have hidden a regression or invented one.
+- **`pytest` overstates breakage.** A whole-file runner that exits non-zero marks *every* test in
+  the file failed — one run reported 32 failures where the binary reported 2.
 
 ### Contended files (single owner per wave)
 
@@ -100,6 +123,23 @@ output column name. Add a test.
 
 ---
 
+### Accepted known defects (not scheduled)
+
+**D1** — `slice()` copies the parent's `nulls`, so a slice of an array with nulls reports the
+parent's null count even when every element in the slice is valid (probe-confirmed). Read by
+kernels and by three builder fast paths.
+
+**D2** — indexing a sliced `BoolArray` applies the offset twice (`values()` already returns an
+offset-applied view, then `__getitem__` adds it again), aborting on the bounds assert in debug and
+reading the wrong bit in release (probe-confirmed).
+
+Both are real. Every fix identified requires changing array internals, which the hard constraint
+above puts out of scope — so they are **accepted, not deferred**. Recorded here so nobody
+rediscovers them. If the constraint is ever relaxed, they are one task: a `Validity` value type
+owning bitmap+offset+length makes both unrepresentable.
+
+---
+
 ## Tier 1 — unblocks M1 and T2.4
 
 **Q1.1 — Close the dtype dispatch ladders (D5 + RC4)** · *M1 blocker* · Depends: — ·
@@ -120,6 +160,28 @@ Owns: `marrow/utils.mojo`, `marrow/dtypes.mojo`, `marrow/kernels/hashing.mojo`,
 > ladder — and wasn't. Converting them to `RapidHash` / `SortIndices` and routing through
 > `dispatch_over_*` makes the gap structurally impossible rather than currently-fixed. Adding a
 > dtype should then be a one-line change in one place; if it isn't, the abstraction is wrong.
+
+**Q1.4 — Finish the import hygiene** · *small, high leverage* · Depends: — ·
+Owns: `marrow/arrays.mojo`, `marrow/scalars.mojo`, `marrow/builders.mojo` · Done when the
+remaining `from .dtypes import *` wildcards are replaced by explicit import lists.
+
+> **Context — the cycle is already broken.** Removing `DataType.ScalarType`/`ArrayType` (they had
+> **zero consumers** tree-wide) let `dtypes.mojo` drop its imports of `arrays` and `scalars`, so
+> the dependency graph is now a DAG: `dtypes → utils`, with `arrays`/`scalars`/`builders` all
+> importing `dtypes` one-directionally. That alone removed a whole class of failure — three
+> separate incidents in a single day (a trait shadowing the builtin `Scalar`, `BoolArray` failing
+> to resolve along one import path but not another, and a "fix" that made errors go 2 → 10)
+> all had the same signature: **the same source compiling or failing depending on which file you
+> entered through**.
+>
+> The remaining wildcards are no longer a cycle, but they are still opaque — you cannot tell what
+> a module depends on by reading its head, and a name added to `dtypes` silently lands in three
+> other namespaces. Replacing them with explicit lists is mechanical and makes the next collision
+> impossible rather than merely unlikely.
+>
+> Note this contradicts CLAUDE.md's standing advice ("Mojo resolves circular imports — do not
+> reorganize code to avoid them"). That was true and is now outdated; update it as part of this
+> task.
 
 **Q1.2 — `ByteSource.read_at` → `Buffer[mut=False]` (RC5)** · *T2.4 prerequisite* ·
 Depends: — · Owns: `marrow/parquet/source.mojo`, `marrow/parquet/reader.mojo`,

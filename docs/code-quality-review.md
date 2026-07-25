@@ -481,7 +481,9 @@ to `BitmapView`/`Bitmap`/`ArrayData`.
 
 ## 8. Test-suite baseline — RESOLVED
 
-Measured at `80ebc10`: **59 failed, 1737 passed, 305 skipped**, confined to
+**Current state (`d0ecad7`): 1826 passed, 314 skipped, 0 failed.** The suite is green.
+
+Previously measured at `80ebc10`: **59 failed, 1737 passed, 305 skipped**, confined to
 `parquet/tests/test_reader.mojo` (35) and `expr/tests/test_streaming.mojo` (24).
 
 **All 59 were one bug, now fixed upstream** by the Mojo `dev2026072217 → dev2026072406`
