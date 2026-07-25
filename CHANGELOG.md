@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Refactors
+
+- **`AnyArray.view(dtype)`** — zero-copy reinterpretation of an array's buffers under
+  a same-layout dtype, mirroring `pyarrow.Array.view`. `parquet`'s `_retag` and
+  `kernels/aggregate`'s `reinterpret_array` were the same function written twice in
+  different layers; both now delegate to it.
+- **`Bitmap.intersect(a, b)`** — the optional-validity AND algebra (`None` = all-valid,
+  so it is the identity). `kernels/helpers.bitmap_and` delegates to it.
+
+
 ### Breaking
 
 - **The compute functions live only in `marrow.compute` now** — the 24 duplicates at

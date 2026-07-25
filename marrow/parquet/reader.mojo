@@ -428,9 +428,7 @@ def _retag(var arr: AnyArray, var dtype: dt.AnyDataType) raises -> AnyArray:
     """Reinterpret `arr`'s buffers under a logical `dtype` of the same layout.
     Used to give a leveled temporal column its Arrow type (the growing builder
     produces the int32/int64 storage type)."""
-    var d = arr.to_data()
-    d.dtype = dtype^
-    return AnyArray.from_data(d^)
+    return arr.view(dtype^)
 
 
 trait LeafBuilder(ImplicitlyDeletable, Movable):

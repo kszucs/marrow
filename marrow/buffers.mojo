@@ -896,6 +896,23 @@ struct Bitmap[*, mut: Bool = False](
         self.write_to(writer)
 
     # TODO: ensure that properly covered by tests
+    @staticmethod
+    def intersect(
+        a: Optional[Bitmap[mut=False]], b: Optional[Bitmap[mut=False]]
+    ) raises -> Optional[Bitmap[mut=False]]:
+        """Bitwise AND of two optional validity bitmaps.
+
+        `None` means all-valid, so it is the identity: the result is `None` only
+        when both inputs are. Output bit i is set iff both inputs have it set.
+        """
+        if not a and not b:
+            return None
+        if not a:
+            return b
+        if not b:
+            return a
+        return (a.value().view() & b.value().view()).to_immutable()
+
     def view(
         ref self, offset: Int = 0, length: Int = -1
     ) -> BitmapView[origin_of(self)]:

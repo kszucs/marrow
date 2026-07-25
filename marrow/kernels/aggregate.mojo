@@ -487,9 +487,7 @@ def reinterpret_array(array: AnyArray, dt: AnyDataType) raises -> AnyArray:
     temporal column as its integer backing and to relabel the integer result
     back to the temporal dtype, so min/max reuse the numeric aggregation path.
     """
-    var data = array.to_data()
-    data.dtype = dt.copy()
-    return AnyArray.from_data(data)
+    return array.view(dt.copy())
 
 
 def temporal_backing_dtype(dt: AnyDataType) -> AnyDataType:
