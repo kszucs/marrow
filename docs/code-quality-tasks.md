@@ -429,6 +429,37 @@ incompatible parallel-gating idioms become one.
 
 ## Tier 3 — free-function elimination (RC10)
 
+### Schedule — three waves, no file conflicts
+
+The Tier-3 tasks all want to *add accessors to the same core types*, so naively running them in
+parallel collides on `views.mojo` / `buffers.mojo` / `arrays.mojo` / `utils.mojo` / `scalars.mojo`.
+Sequencing Q3.2 first turns that contention into a dependency: it lands the accessors the others
+consume, after which they are genuinely disjoint.
+
+| wave | task | owns | why here |
+|---|---|---|---|
+| **1** | **Q3.2** core + memory | `views.mojo`, `buffers.mojo`, `arrays.mojo`, `utils.mojo`, `scalars.mojo`, `builders.mojo`, `c_data.mojo` | The hub. Lands `BitmapView.to_owned`, `Bitmap.unset_count`, `Bitmap.intersect`, `AnyArray.view(dtype)`, `ArrayData.owned_validity`, `PrimitiveArray.nulls/arange`, and moves `_apply_dispatch`/`_reduce_dispatch` onto `ExecutionContext`. **Run solo.** |
+| **2a** | **Q3.1** kernels | `marrow/kernels/*` (+ tests) | Consumes `Bitmap.intersect` (for `bitmap_and`) and `AnyArray.view`. Biggest item: delete the **20** `filter`/`take` typed delegators, keep 3. |
+| **2b** | **Q3.3** parquet + IPC | `marrow/ipc.mojo`, `marrow/parquet/*` | Consumes `LittleEndian.checked` and `AnyArray.view` from wave 1 — which is exactly what made `_read_le` and `_retag` cross-cutting before. |
+| **2c** | **Q3.4 item 3** python | `python/bindings/*`, `marrow/tabular.mojo`, `marrow/scalars.mojo` (`as_py` only) | Items 1/2/4 already landed (`81fa29a`). ⚠️ touches `scalars.mojo`, so it must follow wave 1, not run beside it. |
+| **3** | **Q3.5** expr | `marrow/expr/*` | ⚠️ BINSIZE. Consumes `owned_validity` / `to_owned` / `unset_count` from wave 1. Also contends with **Q2.5** on `expr/values.mojo` — pick one; do not run both. |
+
+**Conflict matrix** (⚠ = same file, must not run concurrently):
+
+| | Q3.1 | Q3.2 | Q3.3 | Q3.4·3 | Q3.5 |
+|---|---|---|---|---|---|
+| **Q3.1** | — | ⚠ `buffers` | · | · | · |
+| **Q3.2** | ⚠ | — | ⚠ `utils`,`arrays` | ⚠ `scalars` | ⚠ `views`,`buffers`,`arrays` |
+| **Q3.3** | · | ⚠ | — | · | · |
+| **Q3.4·3** | · | ⚠ | · | — | · |
+| **Q3.5** | · | ⚠ | · | · | — · but ⚠ **Q2.5** on `expr/values.mojo` |
+
+Wave 2's three lanes are mutually disjoint, so they can run in any order or together — subject to
+the machine limit in *Orchestration lessons* (one Mojo worktree at a time here; the disjointness
+means they can also simply be done back-to-back without rebasing).
+
+
+
 Rule to apply (from review §7). A module-level function survives **only** if:
 1. **PyArrow/ibis parity** — must name the equivalent (`pc.filter`, `pa.list_`, `pq.read_table`);
 2. **DSL entry point** (`col`, `lit`, `if_else`);
