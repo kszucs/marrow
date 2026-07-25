@@ -42,7 +42,7 @@ from ..tabular import RecordBatch
 from .values import AnyValue
 from .dynamic import DynValue, col, LOAD
 from ..kernels.execution import ExecutionContext
-from ..kernels.aggregate import agg_tag_from_name, agg_out_dtype
+from .aggregates import agg_tag_from_name, agg_out_dtype
 from .execution import (
     DEFAULT_MORSEL_SIZE,
     AnyProcessor,

@@ -27,12 +27,12 @@ from ..tabular import RecordBatch
 from ..kernels.concat import concat
 from ..kernels.filter import filter
 from ..kernels.sort import sort as sort_by_keys
-from ..kernels.groupby import HashGrouper, GroupBy
+from ..kernels.groupby import HashGrouper
 from ..kernels.aggregate import (
-    agg_tag_from_name,
     reinterpret_array,
     temporal_backing_dtype,
 )
+from .aggregates import agg_tag_from_name, aggregate_column
 from ..kernels.join import HashJoin
 from ..kernels.hashing import rapidhash
 from ..parquet import (
@@ -564,8 +564,8 @@ struct AggregateProcessor(Processor):
     Keys are grouped by a keys-only ``HashGrouper`` *as morsels arrive*, so the
     grouping is incremental; only the per-batch group ids and the evaluated value
     columns are buffered. On emit, each aggregate's chunks are ``concat``-ed once
-    and handed to ``GroupBy.aggregate_column`` — the same per-column entry point
-    the kernel-level multi-aggregate driver uses — so the whole routing (distinct
+    and handed to ``aggregate_column`` — the same per-column entry point the
+    runtime multi-aggregate driver uses — so the whole routing (distinct
     kernels, string/temporal min/max, non-numeric ``count``, typed ``AggState``
     folds) is shared rather than duplicated here. Keys and aggregate inputs are
     arbitrary ``AnyValue`` expressions, evaluated per morsel.
@@ -694,7 +694,7 @@ struct AggregateProcessor(Processor):
             var value = concat(value_chunks[i], self._ctx)
             value_chunks[i].clear()
             cols.append(
-                GroupBy.aggregate_column(gids, value, num_groups, self._tags[i])
+                aggregate_column(gids, value, num_groups, self._tags[i])
             )
         return RecordBatch(schema=self._schema.copy(), columns=cols^)
 

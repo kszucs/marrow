@@ -36,13 +36,6 @@ from .concat import concat
 from .aggregate import (
     AggKernel,
     AggState,
-    for_agg_tag,
-    agg_is_distinct,
-    AGG_MIN,
-    AGG_MAX,
-    AGG_COUNT,
-    AGG_COUNT_DISTINCT,
-    AGG_APPROX_COUNT_DISTINCT,
     SumKernel,
     ProductKernel,
     MinKernel,
@@ -50,17 +43,13 @@ from .aggregate import (
     CountKernel,
     MeanKernel,
     min_max_string_grouped,
-    count_valid_grouped,
     reinterpret_array,
     temporal_backing_dtype,
 )
 from .distinct import (
-    count_distinct,
-    approx_count_distinct,
     count_distinct_grouped,
     approx_count_distinct_grouped,
 )
-from ..scalars import AnyScalar
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +168,40 @@ comptime _PARALLEL_ALWAYS_ROWS = 200_000
 """At or above this the parallel path wins for *any* cardinality, so the
 cardinality probe is skipped."""
 
-comptime _RADIX_BITS = 6
+comptime RADIX_BITS = 6
 """Radix fanout for the high-cardinality parallel path (2**6 = 64 partitions)."""
 
 comptime _CARD_SAMPLE_ROWS = 4096
 """Rows sampled (strided) to estimate cardinality on the dispatch boundary."""
+
+
+comptime GROUP_SERIAL: UInt8 = 0
+comptime GROUP_THREAD_LOCAL: UInt8 = 1
+comptime GROUP_RADIX: UInt8 = 2
+"""Grouping execution strategies — see `GroupBy` for what each trades off.
+
+Public so a driver layered on top (the expression layer's runtime, multi-
+aggregate group-by) can reuse the same strategy decision instead of making its
+own. These name a *grouping* strategy; no aggregate identity is involved."""
+
+
+def slice_struct(
+    keys: StructArray, start: Int, length: Int
+) raises -> StructArray:
+    """Zero-copy row-range slice of a keys struct — slices each child column so
+    the per-column hashers see exactly ``[start, start+length)`` (the struct's
+    own offset/length aren't propagated to children by the hasher)."""
+    var children = List[AnyArray]()
+    for k in range(len(keys.children)):
+        children.append(keys.children[k].slice(start, length))
+    return StructArray(
+        dtype=keys.dtype.copy(),
+        length=length,
+        nulls=0,
+        offset=0,
+        bitmap=None,
+        children=children^,
+    )
 
 
 struct GroupBy(Movable):
@@ -194,10 +212,12 @@ struct GroupBy(Movable):
     / ``min`` / ``max`` / ``count`` / ``mean`` shorthands. Each aggregate is a
     statically-known ``AggKernel``, so the result is fully monomorphized (the
     input dtype ``V`` is resolved once at the boundary and the typed
-    ``AggState[K, V]`` does the work). ``aggregate_runtime`` is the runtime
-    counterpart: it applies several aggregates chosen from tags in a *single*
-    grouping pass (the keys are hashed/grouped once, not once per aggregate) —
-    used by the Python ``group_by(...).aggregate([...])`` binding.
+    ``AggState[K, V]`` does the work). ``aggregate_columns`` is the multi-column
+    counterpart: it groups once and emits one column per value column through a
+    caller-supplied *comptime* aggregator — still no runtime kernel dispatch
+    here. Resolving a runtime function *name* to a kernel is the expression
+    layer's job (``marrow.expr.aggregates``), which builds exactly such an
+    aggregator; this module never sees an aggregate name or tag.
 
     The execution **strategy** is picked once at construction — from the row
     count, the worker budget (``ctx``), and a cheap one-time cardinality estimate
@@ -216,10 +236,6 @@ struct GroupBy(Movable):
       where a key lands in one partition so groups never span threads and the
       thread-local merge would instead become an O(N) serial bottleneck.
     """
-
-    comptime _SERIAL: UInt8 = 0
-    comptime _THREAD_LOCAL: UInt8 = 1
-    comptime _RADIX: UInt8 = 2
 
     var _keys: StructArray
     var _num_threads: Int
@@ -260,20 +276,33 @@ struct GroupBy(Movable):
     def _choose_strategy(keys: StructArray, num_threads: Int) raises -> UInt8:
         var n = len(keys)
         if num_threads <= 1 or n < _PARALLEL_MIN_ROWS:
-            return Self._SERIAL
+            return GROUP_SERIAL
         var high_card = Self._is_high_cardinality(keys, n)
         if n < _PARALLEL_ALWAYS_ROWS and not high_card:
-            return Self._SERIAL
+            return GROUP_SERIAL
         if high_card:
-            return Self._RADIX
-        return Self._THREAD_LOCAL
+            return GROUP_RADIX
+        return GROUP_THREAD_LOCAL
+
+    def keys(self) -> StructArray:
+        """The key columns this grouping was built from."""
+        return self._keys.copy()
+
+    def num_threads(self) -> Int:
+        """The resolved worker budget."""
+        return self._num_threads
+
+    def strategy(self) -> UInt8:
+        """The grouping strategy chosen at construction (``GROUP_SERIAL`` /
+        ``GROUP_THREAD_LOCAL`` / ``GROUP_RADIX``)."""
+        return self._strategy
 
     def aggregate[K: AggKernel](self, value: AnyArray) raises -> RecordBatch:
         """Aggregate ``value`` per group with kernel ``K``. Returns a batch of
         the unique key columns followed by the aggregate column."""
-        if self._strategy == Self._THREAD_LOCAL:
+        if self._strategy == GROUP_THREAD_LOCAL:
             return Self._thread_local[K](self._keys, value, self._num_threads)
-        elif self._strategy == Self._RADIX:
+        elif self._strategy == GROUP_RADIX:
             return Self._radix[K](self._keys, value, self._num_threads)
         return Self._serial[K](self._keys, value)
 
@@ -288,26 +317,58 @@ struct GroupBy(Movable):
     def min(self, value: AnyArray) raises -> RecordBatch:
         """Per-group minimum (preserves the input dtype).
 
-        Numeric columns take the fully-typed `AggState` fast path; string and
-        temporal columns route through the runtime surface (bytewise min for
-        strings, integer-backing min relabelled to the temporal dtype)."""
-        if self._is_minmax_runtime(value):
-            return self._single_runtime(value, AGG_MIN)
-        return self.aggregate[MinKernel](value)
+        Numeric columns take the fully-typed `AggState` fast path. Temporal
+        columns fold over their (order-preserving) signed-integer backing and are
+        relabelled back on the way out. String columns aren't an `AggKernel`
+        fold at all, so they use the dedicated bytewise per-group scan."""
+        return self._min_max[MinKernel](value, is_min=True)
 
     def max(self, value: AnyArray) raises -> RecordBatch:
         """Per-group maximum (preserves the input dtype). See `min` for how
         string / temporal columns are routed."""
-        if self._is_minmax_runtime(value):
-            return self._single_runtime(value, AGG_MAX)
-        return self.aggregate[MaxKernel](value)
+        return self._min_max[MaxKernel](value, is_min=False)
+
+    def _min_max[
+        K: AggKernel
+    ](self, value: AnyArray, *, is_min: Bool) raises -> RecordBatch:
+        """Shared `min`/`max` routing — kernel picked by the caller at compile
+        time, never from a runtime tag."""
+        var vdt = value.dtype()
+        if vdt.is_string() or vdt.is_large_string():
+
+            @parameter
+            def bytewise(
+                _j: Int, gids: Int32Array, col: AnyArray, ng: Int
+            ) raises -> AnyArray:
+                return min_max_string_grouped(gids, col, ng, is_min)
+
+            return self._one_column[bytewise](value, K.name)
+        elif vdt.is_temporal():
+            var backing = temporal_backing_dtype(vdt)
+            var folded = self.aggregate[K](reinterpret_array(value, backing))
+            return Self._relabel_last(folded^, vdt)
+        else:
+            return self.aggregate[K](value)
 
     @staticmethod
-    def _is_minmax_runtime(value: AnyArray) raises -> Bool:
-        """String / temporal min/max go through the runtime surface rather than
-        the numeric `AggState` fast path."""
-        var dt = value.dtype()
-        return dt.is_temporal() or dt.is_string() or dt.is_large_string()
+    def _relabel_last(
+        var result: RecordBatch, dtype: AnyDataType
+    ) raises -> RecordBatch:
+        """Relabel the trailing (aggregate) column of a group-by result to
+        ``dtype`` — the inverse of the temporal-backing reinterpret."""
+        var last = result.num_columns() - 1
+        var out_fields = List[Field]()
+        var out_cols = List[AnyArray]()
+        for c in range(result.num_columns()):
+            if c == last:
+                out_fields.append(
+                    Field(result.schema.fields[c].name, dtype.copy())
+                )
+                out_cols.append(reinterpret_array(result.column(c), dtype))
+            else:
+                out_fields.append(result.schema.fields[c].copy())
+                out_cols.append(result.column(c).copy())
+        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
     def count(self, value: AnyArray) raises -> RecordBatch:
         """Per-group count of valid (non-null) values, as int64."""
@@ -319,30 +380,37 @@ struct GroupBy(Movable):
 
     def count_distinct(self, value: AnyArray) raises -> RecordBatch:
         """Per-group exact count of distinct non-null values, as int64."""
-        return self._distinct(value, AGG_COUNT_DISTINCT)
+
+        @parameter
+        def exact(
+            _j: Int, gids: Int32Array, col: AnyArray, ng: Int
+        ) raises -> AnyArray:
+            return count_distinct_grouped(gids, col, ng)
+
+        return self._one_column[exact](value, "count_distinct")
 
     def approx_count_distinct(self, value: AnyArray) raises -> RecordBatch:
         """Per-group approximate distinct count (HyperLogLog), as int64."""
-        return self._distinct(value, AGG_APPROX_COUNT_DISTINCT)
 
-    def _distinct(self, value: AnyArray, tag: UInt8) raises -> RecordBatch:
-        """Emit the unique keys plus one distinct-count column, reusing
-        ``aggregate_runtime``'s strategy dispatch (serial, or radix-parallel — the
-        thread-local path can't merge distinct state)."""
-        return self._single_runtime(value, tag)
+        @parameter
+        def approx(
+            _j: Int, gids: Int32Array, col: AnyArray, ng: Int
+        ) raises -> AnyArray:
+            return approx_count_distinct_grouped(gids, col, ng)
 
-    def _single_runtime(
-        self, value: AnyArray, tag: UInt8
-    ) raises -> RecordBatch:
-        """Run one runtime-tagged aggregate over these keys via the shared
-        multi-aggregate surface (`aggregate_runtime`) — the path for aggregates
-        that aren't the numeric `AggState` fold (distinct, string/temporal
-        min/max)."""
+        return self._one_column[approx](value, "approx_count_distinct")
+
+    def _one_column[
+        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+            _
+        ] -> AnyArray
+    ](self, value: AnyArray, name: String) raises -> RecordBatch:
+        """`aggregate_columns` for a single value column."""
         var values = List[AnyArray]()
         values.append(value.copy())
-        var tags = List[UInt8]()
-        tags.append(tag)
-        return self.aggregate_runtime(values, tags)
+        var names = List[String]()
+        names.append(name)
+        return self.aggregate_columns[col_agg](values, names)
 
     @staticmethod
     def _is_high_cardinality(keys: StructArray, n: Int) raises -> Bool:
@@ -395,25 +463,6 @@ struct GroupBy(Movable):
         )
 
     @staticmethod
-    def _slice_struct(
-        keys: StructArray, start: Int, length: Int
-    ) raises -> StructArray:
-        """Zero-copy row-range slice of a keys struct — slices each child column so
-        the per-column hashers see exactly ``[start, start+length)`` (the struct's
-        own offset/length aren't propagated to children by the hasher)."""
-        var children = List[AnyArray]()
-        for k in range(len(keys.children)):
-            children.append(keys.children[k].slice(start, length))
-        return StructArray(
-            dtype=keys.dtype.copy(),
-            length=length,
-            nulls=0,
-            offset=0,
-            bitmap=None,
-            children=children^,
-        )
-
-    @staticmethod
     def _thread_local[
         K: AggKernel
     ](
@@ -450,7 +499,7 @@ struct GroupBy(Movable):
             if start >= n:
                 return
             var length = min(chunk, n - start)
-            var kchunk = Self._slice_struct(keys, start, length)
+            var kchunk = slice_struct(keys, start, length)
             var vchunk = value.slice(start, length)
 
             var grouper = HashGrouper()
@@ -579,7 +628,7 @@ struct GroupBy(Movable):
 
         var hashes = rapidhash(keys, ctx)
         var parts = RadixPartitioner(
-            num_bits=_RADIX_BITS, num_threads=num_threads
+            num_bits=RADIX_BITS, num_threads=num_threads
         ).map_partitions[Tuple[Int32Array, AnyArray], aggregate_partition](
             hashes^
         )
@@ -615,270 +664,42 @@ struct GroupBy(Movable):
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
     # -----------------------------------------------------------------------
-    # Runtime multi-aggregate — group ONCE, apply N runtime-selected aggregates
-    # in the same pass. `tags` are `agg_tag_from_name` codes; the aggregate
-    # columns are named by kernel (callers rename as needed). This is the path
-    # the Python `group_by(...).aggregate([...])` binding uses, so a multi-agg
-    # query hashes/probes the keys once instead of once per aggregate.
+    # Generic multi-column driver — group ONCE, then produce one output column
+    # per value column through a caller-supplied, *comptime* aggregator. The
+    # aggregator is opaque to the grouper, so no aggregate identity (name, tag)
+    # ever reaches this layer; the expression layer builds one that routes a
+    # runtime function name to its kernel.
     # -----------------------------------------------------------------------
 
-    def aggregate_runtime(
-        self, values: List[AnyArray], tags: List[UInt8]
-    ) raises -> RecordBatch:
-        """Apply several aggregates over one grouping of the keys.
+    def aggregate_columns[
+        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+            _
+        ] -> AnyArray
+    ](self, values: List[AnyArray], names: List[String]) raises -> RecordBatch:
+        """Group the keys once, then emit ``col_agg(j, gids, values[j], ng)`` as
+        output column ``j``, named ``names[j]``.
 
-        ``values[j]`` is aggregated with the kernel for ``tags[j]``. Returns the
-        unique key columns followed by one column per aggregate."""
-        # Temporal min/max are order-preserving on the signed-integer backing, so
-        # reinterpret the value column to int up front. Then every downstream
-        # path — serial / thread-local / radix, `take`, `concat`, `AggState` — is
-        # fully numeric (`take` doesn't handle temporal dtypes), and the output
-        # column is relabelled back to the temporal dtype at the end.
-        var work = List[AnyArray]()
-        var relabel = List[Optional[AnyDataType]]()  # per aggregate column
-        for j in range(len(tags)):
-            var vdt = values[j].dtype()
-            if (tags[j] == AGG_MIN or tags[j] == AGG_MAX) and vdt.is_temporal():
-                var native_dt = temporal_backing_dtype(vdt)
-                work.append(reinterpret_array(values[j], native_dt))
-                relabel.append(vdt.copy())
-            else:
-                work.append(values[j].copy())
-                relabel.append(None)
-
-        # Some aggregates can't be combined by the thread-local partial + merge
-        # path, so they must take the radix (or serial) route instead:
-        #   * distinct (count_distinct / approx) carry a hash set / HLL sketch,
-        #     not a mergeable scalar;
-        #   * string min/max and non-numeric `count` are dedicated per-group
-        #     scans in `aggregate_column`, not the numeric `AggState` fold the
-        #     thread-local merge understands.
-        # The radix path partitions by key hash, so a group lands wholly in one
-        # partition and its result is final without any cross-partition merge.
-        var avoid_thread_local = False
-        for j in range(len(tags)):
-            var wdt = work[j].dtype()
-            if agg_is_distinct(tags[j]):
-                avoid_thread_local = True
-                break
-            elif tags[j] == AGG_COUNT and not wdt.is_numeric():
-                avoid_thread_local = True
-                break
-            elif (tags[j] == AGG_MIN or tags[j] == AGG_MAX) and (
-                wdt.is_string() or wdt.is_large_string()
-            ):
-                avoid_thread_local = True
-                break
-
-        var result: RecordBatch
-        if self._strategy == Self._RADIX:
-            result = Self._radix_multi(
-                self._keys, work, tags, self._num_threads
-            )
-        elif self._strategy == Self._THREAD_LOCAL:
-            if avoid_thread_local:
-                result = Self._radix_multi(
-                    self._keys, work, tags, self._num_threads
-                )
-            else:
-                result = Self._thread_local_multi(
-                    self._keys, work, tags, self._num_threads
-                )
+        Returns the unique key columns followed by one aggregate column each.
+        Runs serially or radix-partition-parallel — never thread-local: the
+        aggregator is opaque, so its per-thread partial state can't be merged.
+        (The thread-local *fold* path is `aggregate[K]`, where the kernel — and
+        therefore `AggState.merge` — is statically known.)"""
+        if len(values) != len(names):
+            raise Error("aggregate_columns: len(values) != len(names)")
+        if self._strategy == GROUP_SERIAL:
+            return Self._serial_columns[col_agg](self._keys, values, names)
         else:
-            result = Self._serial_multi(self._keys, work, tags)
-
-        return Self._relabel_temporal(result^, tags, relabel)
-
-    @staticmethod
-    def _relabel_temporal(
-        var result: RecordBatch,
-        tags: List[UInt8],
-        relabel: List[Optional[AnyDataType]],
-    ) raises -> RecordBatch:
-        """Relabel the temporal min/max aggregate columns (computed over their
-        integer backing) back to their temporal dtype. A no-op when no aggregate
-        was reinterpreted."""
-        var any_relabel = False
-        for j in range(len(relabel)):
-            if relabel[j]:
-                any_relabel = True
-                break
-        if not any_relabel:
-            return result^
-
-        var num_keys = result.num_columns() - len(tags)
-        var out_fields = List[Field]()
-        var out_cols = List[AnyArray]()
-        for c in range(result.num_columns()):
-            var agg_idx = c - num_keys
-            if agg_idx >= 0 and relabel[agg_idx]:
-                var dt = relabel[agg_idx].value().copy()
-                out_cols.append(reinterpret_array(result.column(c), dt))
-                out_fields.append(
-                    Field(result.schema.fields[c].name, dt.copy())
-                )
-            else:
-                out_fields.append(result.schema.fields[c].copy())
-                out_cols.append(result.column(c).copy())
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
-
-    @staticmethod
-    def aggregate_whole(
-        values: List[AnyArray], tags: List[UInt8], num_threads: Int = 0
-    ) raises -> RecordBatch:
-        """Whole-table aggregation — ``SELECT agg(x), ...`` with no GROUP BY.
-
-        A single implicit group, computed with the vectorized whole-array
-        reductions (SIMD ``AggKernel.reduce``, ``O(1)`` count, direct scalar
-        ``count_distinct``) rather than the grouped scatter. Returns a one-row
-        batch of the aggregate columns (named by kernel; callers rename).
-
-        Distinct aggregates get a parallel ctx (``count_distinct`` self-gates on
-        size, going radix-partition-parallel at scale); fold reductions stay
-        serial — the whole-array SIMD reduce only benefits from threads well above
-        these sizes, and that gating belongs in the reduce primitive itself."""
-        var par = ExecutionContext.parallel(num_threads)
-        var ser = ExecutionContext.serial()
-        var out_fields = List[Field]()
-        var out_cols = List[AnyArray]()
-        for j in range(len(tags)):
-            var col: AnyArray
-            if agg_is_distinct(tags[j]):
-                col = Self._whole_col(values[j], tags[j], par)
-            else:
-                col = Self._whole_col(values[j], tags[j], ser)
-            out_fields.append(
-                Field(Self._agg_name(tags[j]), col.dtype().copy())
+            return Self._radix_columns[col_agg](
+                self._keys, values, names, self._num_threads
             )
-            out_cols.append(col^)
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
     @staticmethod
-    def _whole_col(
-        value: AnyArray, tag: UInt8, ctx: ExecutionContext
-    ) raises -> AnyArray:
-        """One whole-table aggregate as a 1-row column — the SIMD/``O(1)`` scalar
-        reduction broadcast to length 1 (``AnyScalar.repeat``)."""
-        if tag == AGG_COUNT_DISTINCT:
-            return count_distinct(value, ctx).to_any().repeat(1)
-        elif tag == AGG_APPROX_COUNT_DISTINCT:
-            return approx_count_distinct(value, ctx).to_any().repeat(1)
-        elif tag == AGG_MIN or tag == AGG_MAX:
-            var vdt = value.dtype()
-            if vdt.is_string() or vdt.is_large_string():
-                # String min/max doesn't broadcast through `AnyScalar.repeat`;
-                # compute the single-group result by scanning every row into
-                # group 0.
-                var gb = Int32Builder(len(value))
-                for _ in range(len(value)):
-                    gb.append(Scalar[int32.native](0))
-                return min_max_string_grouped(
-                    gb.finish(), value, 1, tag == AGG_MIN
-                )
-            elif vdt.is_temporal():
-                # Reduce over the integer backing, then relabel to the temporal
-                # dtype (the whole-array reduce already handles all-null → null).
-                var native_dt = temporal_backing_dtype(vdt)
-                var iv = reinterpret_array(value, native_dt)
-                var tbox = List[AnyScalar]()
-
-                @parameter
-                def trun[K: AggKernel]() raises:
-                    tbox.append(K.reduce(iv, ctx))
-
-                for_agg_tag[trun](tag)
-                return reinterpret_array(tbox[0].repeat(1), vdt)
-        var box = List[AnyScalar]()
-
-        @parameter
-        def run[K: AggKernel]() raises:
-            box.append(K.reduce(value, ctx))
-
-        for_agg_tag[run](tag)
-        return box[0].repeat(1)
-
-    @staticmethod
-    def _agg_name(tag: UInt8) raises -> String:
-        """The kernel name for an aggregate tag (default output column name)."""
-        if tag == AGG_COUNT_DISTINCT:
-            return "count_distinct"
-        elif tag == AGG_APPROX_COUNT_DISTINCT:
-            return "approx_count_distinct"
-        var box = List[String]()
-
-        @parameter
-        def name[K: AggKernel]() raises:
-            box.append(String(K.name))
-
-        for_agg_tag[name](tag)
-        return box[0]
-
-    @staticmethod
-    def aggregate_column(
-        gids: Int32Array, value: AnyArray, num_groups: Int, tag: UInt8
-    ) raises -> AnyArray:
-        """Compute one aggregate column over precomputed ``gids``.
-
-        The shared per-column entry point for *every* runtime-tagged aggregate —
-        used by the multi-aggregate drivers below and by the expression layer's
-        ``AggregateProcessor``, so a caller holding group ids never repeats the
-        routing:
-
-        - distinct aggregates → the ``distinct`` kernels;
-        - string min/max → the dedicated bytewise scan;
-        - temporal min/max → its (order-preserving) signed-integer backing,
-          reinterpreted here and relabelled to the temporal dtype on the way out;
-        - non-numeric ``count`` → the validity-only per-group scan;
-        - every remaining fold → the typed ``AggState`` path.
-
-        ``aggregate_runtime`` reinterprets temporal columns *before* partitioning
-        (``take``/``concat`` don't handle temporal dtypes) and relabels the output
-        columns itself, so the temporal branch here is inert on that path."""
-        var vdt = value.dtype()
-        if tag == AGG_COUNT_DISTINCT:
-            return count_distinct_grouped(gids, value, num_groups)
-        elif tag == AGG_APPROX_COUNT_DISTINCT:
-            return approx_count_distinct_grouped(gids, value, num_groups)
-        elif tag == AGG_COUNT and not vdt.is_numeric():
-            return count_valid_grouped(gids, value, num_groups).to_any()
-        elif (tag == AGG_MIN or tag == AGG_MAX) and (
-            vdt.is_string() or vdt.is_large_string()
-        ):
-            return min_max_string_grouped(
-                gids, value, num_groups, tag == AGG_MIN
-            )
-        elif (tag == AGG_MIN or tag == AGG_MAX) and vdt.is_temporal():
-            var backing = temporal_backing_dtype(vdt)
-            var out = Self._agg_over_gids(
-                gids, reinterpret_array(value, backing), num_groups, tag
-            )
-            return reinterpret_array(out, vdt)
-        return Self._agg_over_gids(gids, value, num_groups, tag)
-
-    @staticmethod
-    def _agg_over_gids(
-        gids: Int32Array, value: AnyArray, num_groups: Int, tag: UInt8
-    ) raises -> AnyArray:
-        """Aggregate ``value`` over precomputed group ids ``gids`` (one typed
-        ``AggState`` resolved from the runtime tag + value dtype)."""
-        var box = List[AnyArray]()
-
-        @parameter
-        def run[K: AggKernel]() raises:
-            @parameter
-            def by_value[V: NumericType](d: V) raises:
-                var state = AggState[K, V]()
-                state.update(gids, value.as_primitive[V](), num_groups)
-                box.append(state.finish(num_groups).to_any())
-
-            value.dtype().dispatch_numeric[by_value]()
-
-        for_agg_tag[run](tag)
-        return box[0].copy()
-
-    @staticmethod
-    def _serial_multi(
-        keys: StructArray, values: List[AnyArray], tags: List[UInt8]
+    def _serial_columns[
+        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+            _
+        ] -> AnyArray
+    ](
+        keys: StructArray, values: List[AnyArray], names: List[String]
     ) raises -> RecordBatch:
         var grouper = HashGrouper()
         var gids = grouper.consume_keys(keys)
@@ -890,140 +711,28 @@ struct GroupBy(Movable):
             out_fields.append(kfields[k].copy())
         var out_cols = grouper.key_columns(kfields)
 
-        for j in range(len(tags)):
-            var col = Self.aggregate_column(gids, values[j], ng, tags[j])
-            out_fields.append(
-                Field(Self._agg_name(tags[j]), col.dtype().copy())
-            )
+        for j in range(len(values)):
+            var col = col_agg(j, gids, values[j], ng)
+            out_fields.append(Field(names[j], col.dtype().copy()))
             out_cols.append(col^)
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
 
     @staticmethod
-    def _thread_local_multi(
+    def _radix_columns[
+        col_agg: def(Int, Int32Array, AnyArray, Int) raises capturing[
+            _
+        ] -> AnyArray
+    ](
         keys: StructArray,
         values: List[AnyArray],
-        tags: List[UInt8],
+        names: List[String],
         num_threads: Int,
     ) raises -> RecordBatch:
-        var n = len(keys)
-        var na = len(tags)
-        var chunk = (n + num_threads - 1) // num_threads
-
-        var part_keys = List[Optional[StructArray]](
-            length=num_threads, fill=None
-        )
-        # Per (thread, aggregate) partial state, flattened as [t * na + j].
-        var part_acc = List[Optional[AnyArray]](
-            length=num_threads * na, fill=None
-        )
-        var part_cnt = List[Optional[Int64Array]](
-            length=num_threads * na, fill=None
-        )
-
-        @parameter
-        def worker(t: Int) raises:
-            var start = t * chunk
-            if start >= n:
-                return
-            var length = min(chunk, n - start)
-            var kchunk = Self._slice_struct(keys, start, length)
-
-            var grouper = HashGrouper()
-            var gids = grouper.consume_keys(kchunk)  # group this chunk ONCE
-            var ng = grouper.num_groups()
-
-            var kfields = grouper.key_fields(kchunk)
-            var kcols = grouper.key_columns(kfields)
-            part_keys[t] = StructArray(
-                dtype=keys.dtype.copy(),
-                length=ng,
-                nulls=0,
-                offset=0,
-                bitmap=None,
-                children=kcols^,
-            )
-
-            for j in range(na):
-                var vchunk = values[j].slice(start, length)
-                # Compute the flat slot in the worker's direct scope; capturing
-                # `t`/`na`/`j` through the doubly-nested `@parameter` closures
-                # below corrupts the runtime index.
-                var slot = t * na + j
-
-                @parameter
-                def run_local[K: AggKernel]() raises:
-                    @parameter
-                    def by_value[V: NumericType](d: V) raises:
-                        var state = AggState[K, V]()
-                        state.update(gids, vchunk.as_primitive[V](), ng)
-                        var parts = state.into_partials()
-                        part_acc[slot] = parts[0].copy().to_any()
-                        part_cnt[slot] = parts[1].copy()
-
-                    vchunk.dtype().dispatch_numeric[by_value]()
-
-                for_agg_tag[run_local](tags[j])
-
-        sync_parallelize[worker](num_threads)
-
-        # Merge — re-key every chunk into the global grouper ONCE (shared across
-        # aggregates), then fold each aggregate's partials at the global ids.
-        var gg = HashGrouper()
-        var l2g = List[Int32Array]()
-        for t in range(num_threads):
-            if part_keys[t]:
-                l2g.append(gg.consume_keys(part_keys[t].value()))
-            else:
-                var empty = Int32Builder(0)
-                l2g.append(empty.finish())
-        var ngg = gg.num_groups()
-
-        var kfields = gg.key_fields(keys)
-        var out_fields = List[Field]()
-        for k in range(len(kfields)):
-            out_fields.append(kfields[k].copy())
-        var out_cols = gg.key_columns(kfields)
-
-        for j in range(na):
-            var box = List[AnyArray]()
-
-            @parameter
-            def run_merge[K: AggKernel]() raises:
-                @parameter
-                def by_value[V: NumericType](d: V) raises:
-                    var gstate = AggState[K, V]()
-                    for t in range(num_threads):
-                        if not part_keys[t]:
-                            continue
-                        gstate.merge(
-                            l2g[t],
-                            part_acc[t * na + j]
-                            .value()
-                            .as_primitive[K.AccType[V]](),
-                            part_cnt[t * na + j].value(),
-                            ngg,
-                        )
-                    box.append(gstate.finish(ngg).to_any())
-
-                values[j].dtype().dispatch_numeric[by_value]()
-
-            for_agg_tag[run_merge](tags[j])
-            out_fields.append(
-                Field(Self._agg_name(tags[j]), box[0].dtype().copy())
-            )
-            out_cols.append(box[0].copy())
-
-        return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)
-
-    @staticmethod
-    def _radix_multi(
-        keys: StructArray,
-        values: List[AnyArray],
-        tags: List[UInt8],
-        num_threads: Int,
-    ) raises -> RecordBatch:
+        """Radix-partition-parallel counterpart of `_serial_columns`. A key lands
+        in exactly one partition, so per-partition groups are disjoint and every
+        partition's column is final — concatenated, never merged."""
         var ctx = ExecutionContext.parallel(num_threads)
-        var na = len(tags)
+        var na = len(values)
 
         @parameter
         def agg_partition(
@@ -1045,15 +754,12 @@ struct GroupBy(Movable):
 
             var agg_cols = List[AnyArray]()
             for j in range(na):
-                var pvals = take(values[j], rows)
-                # Groups never span partitions, so each partition's distinct
-                # counts (like its folds) are final — concatenated, never merged.
-                agg_cols.append(Self.aggregate_column(gids, pvals, ng, tags[j]))
+                agg_cols.append(col_agg(j, gids, take(values[j], rows), ng))
             return (first.finish(), agg_cols^)
 
         var hashes = rapidhash(keys, ctx)
         var parts = RadixPartitioner(
-            num_bits=_RADIX_BITS, num_threads=num_threads
+            num_bits=RADIX_BITS, num_threads=num_threads
         ).map_partitions[Tuple[Int32Array, List[AnyArray]], agg_partition](
             hashes^
         )
@@ -1076,9 +782,7 @@ struct GroupBy(Movable):
             for i in range(len(parts)):
                 chunks.append(parts[i][1][j].copy())
             var col = concat(chunks, ctx)
-            out_fields.append(
-                Field(Self._agg_name(tags[j]), col.dtype().copy())
-            )
+            out_fields.append(Field(names[j], col.dtype().copy()))
             out_cols.append(col^)
 
         return RecordBatch(schema=Schema(fields=out_fields^), columns=out_cols^)

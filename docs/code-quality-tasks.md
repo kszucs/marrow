@@ -239,6 +239,26 @@ rule that duplicates the kernel's own `AccType` algebra. 51 references outside `
    (and their `_grouped` variants) get real kernel structs, so `dispatch` covers the whole
    aggregate surface rather than special-casing them.
 
+**Step 1 done (2026-07-25).** `marrow/expr/aggregates.mojo` now owns the `AGG_*` tags,
+`agg_tag_from_name`, `agg_name_from_tag`, `agg_is_distinct`, `for_agg_tag`, `agg_out_dtype`,
+`aggregate_column`, and the runtime multi-aggregate drivers (`aggregate_grouped`,
+`aggregate_whole`, `_thread_local_multi`). `GroupBy` kept `aggregate[K]` plus a new tag-free
+`aggregate_columns[col_agg]` that groups once and delegates each output column to a
+caller-supplied comptime aggregator; the expression layer instantiates it with the tag switch.
+No `UInt8` aggregate tag reaches `marrow/kernels/` any more. Steps 2 and 3 are untouched, as is
+`AggState`'s `NumericType` bound.
+
+**The binary-size prediction was wrong — record it.** `query_streaming_agg` stayed at exactly
+**7.8x**, with `kernels::execution` 1052 / `views` 863 / `dtypes` 771 / `hashing` 225 symbols
+unchanged. Moving the tag switch between modules cannot shrink anything: `query_streaming_agg`
+builds `Aggregate(funcs=["sum", "min"])` from *runtime strings*, so `for_agg_tag` x
+`dispatch_numeric` is genuinely reachable and must be instantiated wherever it lives. The fanout
+is not caused by the tags' *location* but by the aggregate identity being runtime at all. The
+size win therefore belongs to the F1/F2 gap that `query_streaming_agg.mojo`'s own docstring
+already names: an `Aggregate` node that carries **comptime** aggregate kernels, so no
+`List[String]` of function names exists to interpret. Until such a fused aggregate spec exists,
+this gate cannot move — no amount of tag relocation will do it.
+
 **Target: the kernel is the only representation.** Exactly one runtime→comptime boundary,
 keyed on the name directly with no tag in between:
 

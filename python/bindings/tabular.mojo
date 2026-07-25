@@ -19,7 +19,11 @@ from std.builtin.type_aliases import MutAnyOrigin
 from marrow.c_data import CArrowSchema, CArrowArray, CArrowArrayStream
 from marrow.kernels.join import hash_join
 from marrow.kernels.groupby import GroupBy
-from marrow.kernels.aggregate import agg_tag_from_name
+from marrow.expr.aggregates import (
+    agg_tag_from_name,
+    aggregate_grouped,
+    aggregate_whole,
+)
 from marrow.kernels.execution import ExecutionContext
 from marrow.kernels.sort import sort as _sort_kernel
 from marrow.arrays import Int32Array
@@ -529,7 +533,7 @@ def _record_batch_group_by(
         agg_names.append(vname + "_" + func)
 
     var gb = GroupBy(key_struct, ExecutionContext.parallel(Int(py=num_threads)))
-    var res = gb.aggregate_runtime(value_cols, tags)
+    var res = aggregate_grouped(gb, value_cols, tags)
 
     # `res` is [key columns..., aggregate columns...]; rename the aggregates.
     var n_keys = len(res.columns) - len(tags)
@@ -578,7 +582,7 @@ def _record_batch_aggregate(
         tags.append(agg_tag_from_name(func))
         names.append(vname + "_" + func)
 
-    var res = GroupBy.aggregate_whole(value_cols, tags)
+    var res = aggregate_whole(value_cols, tags)
     var out_fields = List[Field]()
     var out_cols = List[AnyArray]()
     for j in range(len(tags)):

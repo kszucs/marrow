@@ -4,6 +4,22 @@
 
 ### Refactors
 
+- **Runtime aggregate routing left the kernel layer.** `marrow/kernels/aggregate.mojo`
+  documented `for_agg_tag` as "the one place a runtime function name resolves to a comptime
+  `AggKernel`" while `AggKernel`'s own docstring says such selection "lives in the expression
+  layer, never here". The `AGG_*` tags, `agg_tag_from_name`, `agg_is_distinct`, `for_agg_tag`
+  and `agg_out_dtype` now live in the new **`marrow/expr/aggregates.mojo`**, together with the
+  runtime multi-aggregate drivers that were `GroupBy.aggregate_runtime` / `aggregate_column` /
+  `aggregate_whole` / `_agg_name` / `_serial_multi` / `_radix_multi` / `_thread_local_multi`.
+  No `UInt8` aggregate tag crosses into `marrow/kernels/` any more. `GroupBy` keeps only
+  comptime-kernel-parameterised entry points: `aggregate[K]`, the
+  `sum`/`min`/`max`/`count`/`mean`/`product` shorthands, and the new tag-free
+  `aggregate_columns[col_agg]` — a multi-column driver over a caller-supplied *comptime*
+  aggregator, which the expression layer instantiates with its tag routing. String and
+  temporal `min`/`max` and the distinct counts no longer detour through the runtime surface:
+  temporal folds over its integer backing around `aggregate[K]` and relabels; string min/max
+  and the distinct counts go through `aggregate_columns`. Results, output dtypes and
+  parallel-strategy selection are unchanged.
 - **The four fold aggregates are two parameterised kernels.** `MinKernel`/`MaxKernel`
   differed only in `identity`, `combine` and an `is_min` flag; `SumKernel`/`ProductKernel`
   only in `identity` and `combine`. They are now `MinMax[Op]` and `Widening[Op]` with

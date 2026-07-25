@@ -35,6 +35,7 @@ from marrow.dtypes import (
     Float64Type,
     AnyDataType,
 )
+from marrow.arrays import Int32Array
 from marrow.kernels.groupby import GroupBy
 from marrow.kernels.aggregate import (
     SumKernel,
@@ -42,8 +43,8 @@ from marrow.kernels.aggregate import (
     MaxKernel,
     CountKernel,
     MeanKernel,
-    AGG_COUNT_DISTINCT,
 )
+from marrow.kernels.distinct import count_distinct_grouped
 
 
 # Aggregates are typed kernels: `GroupBy(keys).aggregate[K]` (or the `.sum` /
@@ -536,11 +537,17 @@ def test_groupby_count_distinct_radix_matches_serial() raises:
     )
     var values = List[AnyArray]()
     values.append(vals.copy())
-    var tags = List[UInt8]()
-    tags.append(AGG_COUNT_DISTINCT)
+    var names = List[String]()
+    names.append("count_distinct")
 
-    _assert_all_distinct_10(GroupBy._serial_multi(sa, values, tags))
-    _assert_all_distinct_10(GroupBy._radix_multi(sa, values, tags, 4))
+    @parameter
+    def exact(
+        _j: Int, gids: Int32Array, col: AnyArray, ng: Int
+    ) raises -> AnyArray:
+        return count_distinct_grouped(gids, col, ng)
+
+    _assert_all_distinct_10(GroupBy._serial_columns[exact](sa, values, names))
+    _assert_all_distinct_10(GroupBy._radix_columns[exact](sa, values, names, 4))
 
 
 # ---------------------------------------------------------------------------
