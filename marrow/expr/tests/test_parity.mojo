@@ -59,6 +59,9 @@ from marrow.expr.values import (
     Nullif,
     CaseWhen,
     Gt,
+    Lt,
+    Any,
+    All,
     Year,
     DateTrunc,
     Hour,
@@ -156,6 +159,30 @@ def test_parity_lt() raises:
 def test_parity_eq() raises:
     assert_parity(
         fcol("a", int64) == fcol("b", int64), dcol(0) == dcol(1), _ab_batch()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mixed-width comparison. The runtime `LT/GT` tags route through `compare.mojo`'s
+# `dispatch`, which *rejects* a dtype mismatch outright, so there is no
+# `DynValue` counterpart here — pin the fused result instead. `NumericCompare`
+# widens both operands to `promote[L, R]` exactly like `NumericBinary`; casting
+# only the right one into the left's type truncated (D4).
+# ---------------------------------------------------------------------------
+
+
+def _mixed_width_batch() raises -> RecordBatch:
+    var a = array([1, 2, 3], int32)
+    # 2**32 and -2**32 both truncate to 0 in int32.
+    var b = array([4294967296, -4294967296, 5], int64)
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def test_parity_mixed_width_gt() raises:
+    assert_fused(
+        Gt(fcol("a", int32), fcol("b", int64)),
+        array([False, True, False]).to_any(),
+        _mixed_width_batch(),
     )
 
 
@@ -266,6 +293,39 @@ def test_parity_or_kleene() raises:
     )
     var dyn = (dcol(0) > dlit[Int64Type](0)) | (dcol(1) > dlit[Int64Type](0))
     assert_parity(fused, dyn, _nullable_ab_batch())
+
+
+# ---------------------------------------------------------------------------
+# any/all over a mask whose NULL slots carry SET data bits (D3). The fused
+# comparison writes a mask bit for every row, valid or not, so a reduction that
+# popcounts the raw buffer answers from data the row does not own. The runtime
+# interpreter has no ANY/ALL tag, so pin the fused result.
+# ---------------------------------------------------------------------------
+
+
+def _null_bits_batch() raises -> RecordBatch:
+    # A null slot keeps its zero-filled data, so `x < 1` sets the bit there.
+    var a = array([None, 5, 7], int64)  # `<1` -> bits [T,F,F], valid [F,T,T]
+    var b = array([None, 0, 0], int64)  # `<1` -> bits [T,T,T], valid [F,T,T]
+    return record_batch([a^, b^], names=["a", "b"])
+
+
+def test_parity_any_ignores_null_bits() raises:
+    # the one set bit belongs to a null row -> False (a raw popcount says True)
+    assert_fused(
+        Any(Lt(fcol("a", int64), flit(1, int64))),
+        array([False, False, False]).to_any(),
+        _null_bits_batch(),
+    )
+
+
+def test_parity_all_ignores_null_bits() raises:
+    # every VALID row is true -> True (popcount==valid-count says False)
+    assert_fused(
+        All(Lt(fcol("b", int64), flit(1, int64))),
+        array([True, True, True]).to_any(),
+        _null_bits_batch(),
+    )
 
 
 # ---------------------------------------------------------------------------

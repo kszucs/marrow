@@ -29,6 +29,7 @@ from std.builtin.rebind import downcast
 from std.memory import OwnedPointer
 
 from .arrays import (
+    BoolArray,
     PrimitiveArray,
     StringArray,
     ListArray,
@@ -36,11 +37,8 @@ from .arrays import (
     StructArray,
     AnyArray,
 )
-from .builders import PrimitiveBuilder, StringBuilder
+from .builders import BoolBuilder, PrimitiveBuilder, StringBuilder
 from .dtypes import *
-
-# Alias the built-in Scalar[DType] to avoid shadowing by the local Scalar trait.
-
 
 # ---------------------------------------------------------------------------
 # ArrowScalar trait
@@ -104,6 +102,17 @@ struct BoolScalar(ArrowScalar):
     @staticmethod
     def null() -> Self:
         return Self(is_valid=False)
+
+    def repeat(self, times: Int) raises -> BoolArray:
+        """Broadcast this scalar into an array of length `times`."""
+        var builder = BoolBuilder(times)
+        if self._is_valid:
+            for _ in range(times):
+                builder.append(self._value)
+        else:
+            for _ in range(times):
+                builder.append_null()
+        return builder.finish()
 
     def type(self) -> AnyDataType:
         return bool_
@@ -599,6 +608,8 @@ struct AnyScalar(ConvertibleToPython, Copyable, Equatable, Movable, Writable):
             return self.as_float32().repeat(times).to_any()
         elif self.type() == float64:
             return self.as_float64().repeat(times).to_any()
+        elif self.type() == bool_:
+            return self.as_bool().repeat(times).to_any()
         raise Error(t"AnyScalar.repeat: unsupported dtype {self.type()}")
 
     def is_null(self) -> Bool:

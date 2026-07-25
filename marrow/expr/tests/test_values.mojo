@@ -280,6 +280,42 @@ def test_any_all_reductions() raises:
     assert_true(al.isa[AnyScalar]() and not al[AnyScalar].as_bool().value())
 
 
+def test_any_all_ignore_null_data_bits() raises:
+    # A null slot keeps whatever sits in its data buffer (0 here), so `x < 1`
+    # SETS the mask bit under the null. `any`/`all` must mask against validity
+    # rather than counting raw bits.
+    var b = record_batch(
+        [
+            array([None, 5, 7], int64).copy(),  # `<1` -> bits [T,F,F]
+            array([None, 0, 0], int64).copy(),  # `<1` -> bits [T,T,T]
+        ],
+        names=["a", "b"],
+    )
+    # any: the only set bit belongs to a null row -> False (raw count says True)
+    var an = (Any(Lt(col("a", int64), lit(1, int64)))).execute(b)
+    assert_true(an.isa[AnyScalar]() and not an[AnyScalar].as_bool().value())
+    # all: every VALID row is true -> True (a raw popcount==valid check says False)
+    var al = (All(Lt(col("b", int64), lit(1, int64)))).execute(b)
+    assert_true(al.isa[AnyScalar]() and al[AnyScalar].as_bool().value())
+
+
+def test_mixed_width_compare_promotes() raises:
+    # int32 > int64 must compare in the promoted (int64) domain. Truncating the
+    # right operand into int32 turns 2**32 into 0, so row 0 would read True.
+    var b = record_batch(
+        [
+            array([1, 2, 3], int32).copy(),
+            array([4294967296, -4294967296, 5], int64).copy(),
+        ],
+        names=["a", "b"],
+    )
+    var cv = (Gt(col("a", int32), col("b", int64))).execute(b)
+    assert_true(into_array(cv, 3) == array([False, True, False]).to_any())
+    # ... and the mirrored operand order goes through the same promotion.
+    var cv2 = (Lt(col("b", int64), col("a", int32))).execute(b)
+    assert_true(into_array(cv2, 3) == array([False, True, False]).to_any())
+
+
 def test_count_reduction() raises:
     # count(a) over [1,2,3,4] = 4 (int64 scalar)
     var cv = (Count(col("a", int64))).execute(_batch())
@@ -538,6 +574,15 @@ def test_anyvalue_interchange() raises:
     assert_true(
         values[1].execute(batch) == array([10, 20, 30, 40], int64).to_any()
     )
+
+
+def test_dynvalue_name_only_for_load() raises:
+    # `_name` doubles as the LIKE pattern and the date_trunc unit, so `name()`
+    # must be tag-guarded or a computed node reports a nonsense output column.
+    assert_true(dyn_col("a").name() == "a")
+    assert_true(dyn_col("a").like("%foo%").name() == "")
+    assert_true(dyn_col("ts").date_trunc("day").name() == "")
+    assert_true((dyn_col("a") + dyn_col("b")).name() == "")
 
 
 def test_anyvalue_write_to_delegates() raises:
