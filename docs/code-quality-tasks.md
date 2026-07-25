@@ -775,6 +775,40 @@ dtype × aggregate fanout to be retained. Per-module symbol counts locate it pre
 
 Tag removal should collapse these; if it does not, the premise is wrong and we should know early.
 
+
+##### Q6.1 BASELINE — N-aggregate marginal cost (added 2026-07-25, `03de4e5`+)
+
+5 aggregates (sum/min/max/count/mean) vs 1, identical data. **marrow now wins 12 of 15 rows.**
+The quantity that matters is the marginal cost of each *added* aggregate, `(multi - sum) / 4`,
+at 1M rows:
+
+| cardinality | marrow | polars | pyarrow | duckdb |
+|---|---|---|---|---|
+| g10 | **56 µs** | 399 µs | 1,075 µs | 1,415 µs |
+| g1k | **111 µs** | 160 µs | 583 µs | 2,172 µs |
+| **g100k** | **288 µs** | **125 µs** ← | 880 µs | 6,025 µs |
+
+**Two findings that redirect the fusion work.**
+
+1. *Grouping is already amortised, so the headline win is smaller than assumed.*
+   `AggregateProcessor` computes gids **once** and then calls `aggregate_column` per aggregate, so
+   only the value scan repeats — not the hash lookup. marrow's marginal cost is already 7x below
+   polars at low cardinality. Fusion therefore cannot claim the group-lookup saving in the design
+   doc's framing; what remains is the *value scan* and the accumulator traffic. Expect a smaller
+   multiple than "N aggregates → N passes collapsed to 1" implies, and do not write the card as if
+   grouping were being saved.
+
+2. *The weak spot is high cardinality, and it is the one case where polars beats us.* At 100k
+   groups marrow pays **288 µs** per added aggregate against polars' **125 µs** — a 2.3x deficit,
+   and the only marginal-cost row we lose. This is precisely the AoS-accumulator case: with 100k
+   groups the per-aggregate output arrays no longer fit in cache, so each extra aggregate is a
+   fresh pass over a large random-access footprint. A fused AoS blob touches one cache line per
+   group for *all* aggregates.
+
+   **So the fused design should be validated at high cardinality first, not low.** That is where
+   the mechanism is motivated and where the number is currently losing. A fusion implementation
+   that improves g10 and leaves g100k at 288 µs has missed the point.
+
 ##### Sequencing
 
 0. **Q6.1 baseline first** — record the cross-engine table *before* any change, including the
